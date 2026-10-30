@@ -38,6 +38,7 @@ async function gateway(
     respond,
     lacking,
     forks,
+    readsProjects,
   } = {},
 ) {
   const calls = [];
@@ -74,6 +75,7 @@ async function gateway(
     ...(checkGraphql && { checkGraphql }),
     ...(wroteWrite && { wroteWrite }),
     ...(forks && { forks }),
+    ...(readsProjects && { readsProjects }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -884,6 +886,64 @@ test("a pull request's own write goes on with the token it needs, its answer to 
   ]);
 });
 
+test("a repo granted a project: its runs' tokens read projects, and a project write writes them", async (t) => {
+  let granted = true;
+  const gw = await gateway(t, {
+    readsProjects: (repo) => {
+      assert.equal(repo, "org/repo");
+      if (granted === null) throw new Error("broken grants");
+      return granted;
+    },
+    checkGraphql: async (run, body) =>
+      body.includes("mutation")
+        ? {
+            body,
+            write: true,
+            creates: [],
+            permissions: { organization_projects: "write" },
+            pulls: [],
+          }
+        : { body, write: false, creates: [], permissions: {}, pulls: [] },
+  });
+  const { secret } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const post = (body) => gw.call("/api/graphql", { secret, method: "POST", body });
+  assert.equal((await post('{"query": "{ viewer { login } }"}')).status, 200);
+  assert.equal((await post('{"query": "mutation { m }"}')).status, 200);
+  // Not granted, or grants that can't be read: no project in its reads.
+  granted = false;
+  assert.equal((await post('{"query": "{ viewer { login } }"}')).status, 200);
+  granted = null;
+  assert.equal((await post('{"query": "{ viewer { login } }"}')).status, 200);
+  assert.deepEqual(
+    gw.minted.map(([, perms]) => perms),
+    [
+      readsOf({ organization_projects: "read" }),
+      { organization_projects: "write" },
+      readsOf(),
+      readsOf(),
+    ],
+  );
+  assert.match(gw.logged.at(-1), /org\/repo: its grants: broken grants/);
+  // Only a run whose ceiling may add an item reads them: not a review, an inbox entry or a
+  // discussion, which read outsiders' text; a brainstorm does (the issues it files).
+  granted = true;
+  for (const [mode, reads] of [
+    ["review", false],
+    ["idea", false],
+    ["discussion", false],
+    ["analyze", false],
+    ["brainstorm", true],
+  ]) {
+    const light = gw.register({ pull_requests: "read" }, { mode, issue: 1 });
+    await gw.call("/api/graphql", {
+      secret: light.secret,
+      method: "POST",
+      body: '{"query": "{ viewer { login } }"}',
+    });
+    assert.equal(gw.minted.at(-1)[1].organization_projects, reads ? "read" : undefined, mode);
+  }
+});
+
 test("an Actions log's redirect is followed by the gateway, without credentials; others go back", async (t) => {
   const stored = [];
   const storage = await serve(t, (req, res) => {
@@ -1044,6 +1104,56 @@ test("a work run's Actions log, its installation without `actions`: refused nami
   assert.match((await res.json()).message, /actions: read permission/);
   assert.match(notes.at(-1), /actions: read/);
   assert.deepEqual(checked, []);
+  assert.equal(gw.calls.length, 0);
+});
+
+test("a project write from an installation without organization_projects: refused naming it", async (t) => {
+  // The real GraphQL checks: GitHub answers null for every project the installation can't
+  // see, which a missing permission makes all of them.
+  const nodes = async (repo, ids) =>
+    ids.map((id) =>
+      id === "I_1"
+        ? { __typename: "Issue", number: 1, repository: { nameWithOwner: "Org/Repo" } }
+        : null,
+    );
+  const graphql = createGraphqlChecks({
+    nodes,
+    checkWrite: async () => ({ status: 500, message: "not reached" }),
+  });
+  let lacks = true;
+  const gw = await gateway(t, {
+    checkGraphql: graphql.check,
+    lacking: async (repo, wanted) =>
+      lacks && wanted.organization_projects
+        ? {
+            missing: ["organization_projects: write"],
+            account: "org",
+            url: "https://github.com/inst/7",
+          }
+        : null,
+  });
+  const { secret } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const add = () =>
+    gw.call("/api/graphql", {
+      secret,
+      method: "POST",
+      body: JSON.stringify({
+        query:
+          'mutation { addProjectV2ItemById(input: {contentId: "I_1", projectId: "PV_3"}) { item { id } } }',
+      }),
+    });
+  const res = await add();
+  assert.equal(res.status, 403);
+  assert.match(
+    (await res.json()).message,
+    /^Deckhand: this needs the GitHub App's organization_projects: write permission, which its installation on org lacks/,
+  );
+  // Granted: a project still not there is said as such.
+  lacks = false;
+  assert.match(
+    (await (await add()).json()).message,
+    /projectId isn't a project, or the GitHub App can't see it/,
+  );
   assert.equal(gw.calls.length, 0);
 });
 

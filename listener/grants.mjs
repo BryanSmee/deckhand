@@ -2,7 +2,8 @@
 // may reach (the only place they are listed), whether its own .deckhand.yaml may run a preview
 // hook, build its Dockerfile (and that of its pull requests' branches), have a container
 // engine next to its sandboxes, research runs on the open internet (modes.mjs), pushes that
-// change its workflow files (git-gateway.mjs), host mounts under allowed roots, and its CPU,
+// change its workflow files (git-gateway.mjs), the organization projects its runs and the
+// listener may write (github-writes.mjs, projects.mjs), host mounts under allowed roots, and its CPU,
 // memory and pids limits. It lives in the operator's GRANTS_DIR, never in a repo: a repo's
 // .deckhand.yaml may request a mount, a preview hook, a Dockerfile or an engine, but only a
 // grant here makes it happen. One file per repo, so a team can own its repos' files (CODEOWNERS), and a mistake
@@ -27,6 +28,7 @@
 //                                # only; `public` lets it on a public repository too)
 //       acknowledge_automerge_and_preview_is_highly_dangerous: true  # auto-merge with a
 //                                # granted preview hook (per repo only)
+//       allow_projects: [acme/3] # its issues and pull requests on these projects (per repo only)
 //       limits: { cpus: 4 }      # over default.yaml's, over the built-in ones
 //       mounts:                  # per repo only
 //         - root: /nfs/work
@@ -35,7 +37,7 @@ import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
 import { hostProblem } from "./egress.mjs";
-import { PLAIN_PATH, RESERVED } from "./repo-config.mjs";
+import { PLAIN_PATH, projectName, RESERVED } from "./repo-config.mjs";
 import { isMap, parseYaml } from "./yaml.mjs";
 
 // The sandbox's user (sandbox/Dockerfile): who must not be able to rewrite a read-write
@@ -106,7 +108,14 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
     throw new GrantsError(`${file}: ${error.message}`, file);
   }
   if (!isMap(value)) throw new GrantsError(`${file}: expected a mapping of grants`, file);
-  const grant = { hosts: [], cachedHosts: [], ...NO_FLAGS, mounts: [], limits: null };
+  const grant = {
+    hosts: [],
+    cachedHosts: [],
+    ...NO_FLAGS,
+    mounts: [],
+    allowProjects: [],
+    limits: null,
+  };
   for (const [key, v] of Object.entries(value)) {
     if (key === "allow_repo_hosts") {
       // Ignoring it would quietly take away the hosts the repo's .deckhand.yaml added.
@@ -133,8 +142,19 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
       fail("mounts: only a repository's own file grants mounts");
     } else if (key === "mounts") {
       parseMounts(v, grant.mounts, fail);
+    } else if (key === "allow_projects" && isDefault) {
+      // A project is outside every repository: which repo's runs write it is the operator's
+      // choice, one repo at a time.
+      fail("allow_projects: only a repository's own file grants projects");
+    } else if (key === "allow_projects") {
+      parseProjects(v, grant.allowProjects, fail);
     } else {
-      const keys = ["hosts", "cached_hosts", "limits", ...(isDefault ? [] : ["mounts"])];
+      const keys = [
+        "hosts",
+        "cached_hosts",
+        "limits",
+        ...(isDefault ? [] : ["mounts", "allow_projects"]),
+      ];
       fail(`${key}: unknown (${keys.join(", ")} or ${Object.keys(FLAGS).join(", ")})`);
     }
   }
@@ -149,6 +169,16 @@ function parseHosts(key, v, list, fail) {
   for (const host of v) {
     if (hostProblem(host)) fail(`${key}: ${JSON.stringify(host)}: ${hostProblem(host)}`);
     else list.push(host.toLowerCase());
+  }
+}
+
+// A repo grant's projects, ["acme/3"], into `list` (projectName()).
+function parseProjects(v, list, fail) {
+  if (!Array.isArray(v)) return fail("allow_projects: expected a list of <organization>/<number>");
+  for (const project of v) {
+    const name = projectName(project);
+    if (!name) fail(`allow_projects: ${JSON.stringify(project)}: expected <organization>/<number>`);
+    else if (!list.includes(name)) list.push(name);
   }
 }
 
@@ -379,6 +409,7 @@ export function grantFor(grants, config, repo) {
     cachedHosts,
     ...flags,
     mounts: own?.mounts ?? [],
+    allowProjects: own?.allowProjects ?? [],
     limits: own?.limits ?? defaults?.limits ?? config.limits,
     files: [defaults && DEFAULT_FILE, entry?.file].filter(Boolean),
     hostFiles,

@@ -469,6 +469,10 @@ export function createHttp(ctx, { dashboardDir }) {
     if (event === "pull_request") admitted(ctx.reviews.consider(event, payload, skip));
     // Deckhand's pull request that turned ready: the reviewers its repo's `review.request` names.
     if (event === "pull_request" && ctx.reviewers) admitted(ctx.reviewers.ready(event, payload));
+    // One that turned ready or merged moves its issue on the repo's projects (projects.mjs).
+    if (event === "pull_request" && ctx.projects) {
+      admitted(ctx.projects.pulled(event, payload));
+    }
     // A push to a pull request waiting for CI (`review.ci`): the wait moves to its new head.
     if (event === "pull_request") admitted(ctx.reviews.pushed(event, payload));
     // A GitHub Actions run that completed on a commit an auto-merge or a review waits on.

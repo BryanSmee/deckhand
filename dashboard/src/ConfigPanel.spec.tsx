@@ -1,7 +1,7 @@
 // A repository's config panel against a fake api/repos/<repo>/config: a config with errors
 // (each with its key, fix and line, the file's bad lines marked), and a fine one (its banner,
 // the facts at a glance, the details folded but for what the repo sets).
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { ConfigPanel } from "./ConfigPanel";
 import { mockApi } from "./testUtils";
@@ -91,6 +91,7 @@ const BROKEN: RepoConfig = {
       hosts: ["registry.npmjs.org"],
       cachedHosts: [],
       mounts: [],
+      allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },
     },
   },
@@ -262,4 +263,19 @@ test("a fine config without mounts folds its hosts and grant too", async () => {
   fireEvent.click(within(toc).getByRole("button", { name: "The operator's grant" }));
   await waitFor(() => expect(access.open).toBe(true));
   await waitFor(() => expect(scrolled).toHaveBeenCalledWith("config-grant"));
+});
+
+test("the grant's projects are listed when it has some", async () => {
+  const grant = { ...FINE.effective.grant!, allowProjects: ["acme/3", "acme/7"] };
+  config = { ...FINE, effective: { ...FINE.effective, grant } };
+  panel();
+  await screen.findByText(/Everything is fine/);
+  const lists = screen.getByRole("list", { name: "Lists" });
+  expect(lists.textContent).toContain("allow_projectsacme/3, acme/7");
+  // None: not listed.
+  config = FINE;
+  cleanup();
+  panel();
+  await screen.findByText(/Everything is fine/);
+  expect(screen.getByRole("list", { name: "Lists" }).textContent).not.toContain("allow_projects");
 });

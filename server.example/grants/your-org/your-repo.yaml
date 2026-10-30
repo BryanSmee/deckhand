@@ -19,6 +19,11 @@
 # EVEN MORE UNSAFE: auto-merge while allow_preview's hook runs the default branch as root on
 # the host. Don't.
 # acknowledge_automerge_and_preview_is_highly_dangerous: true
+# Organization projects (v2), <organization>/<number> as in their URL: its runs add their
+# issues and pull requests there, and the listener moves its issues on them from its
+# .deckhand.yaml's `projects:` (docs/repo-config.md#projects). Needs the App's Organization
+# projects permission. Never in default.yaml.
+# allow_projects: [your-org/3]
 # Its own limits, over default.yaml's.
 # limits: { cpus: 4, memory: 8g }
 # Host roots it may mount from (read-only unless read_only: false); the listener must see

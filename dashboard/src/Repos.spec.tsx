@@ -90,6 +90,7 @@ const CONFIG: RepoConfig = {
       hosts: ["pypi.org"],
       cachedHosts: [],
       mounts: [],
+      allowProjects: [],
       limits: { cpus: "2", memory: "4g", pids: 2048 },
     },
   },

@@ -54,6 +54,7 @@ const NOTHING = {
   allowAutoMerge: false,
   acknowledgeAutoMergePreview: false,
   mounts: [],
+  allowProjects: [],
   limits: config.limits,
   files: [],
   hostFiles: {},
@@ -81,6 +82,7 @@ mounts:
     allowWorkflows: false,
     allowAutoMerge: false,
     acknowledgeAutoMergePreview: false,
+    allowProjects: [],
     limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
       { root: "/nfs/work", readOnly: false },
@@ -93,6 +95,28 @@ mounts:
   // Any other repo: nothing extra, the operator's limits.
   assert.deepEqual(grantOf(files, "org/other"), NOTHING);
   assert.deepEqual(grantOf({}, "org/repo"), NOTHING);
+});
+
+test("allow_projects: a repo's own file lists <organization>/<number>, never default.yaml", () => {
+  const files = { "org/repo.yaml": "allow_projects: [Acme/3, acme/3, acme/12]\n" };
+  assert.deepEqual(grantOf(files, "org/repo").allowProjects, ["acme/3", "acme/12"]);
+  assert.deepEqual(grantOf(files, "org/other").allowProjects, []);
+  for (const bad of ["acme", "acme/0", "acme/x", "-acme/3", "a/b/3", 3]) {
+    const text = `allow_projects: [${JSON.stringify(bad)}]\n`;
+    assert.throws(
+      () => grantOf({ "org/repo.yaml": text }, "org/repo"),
+      /allow_projects: .*expected <organization>\/<number>/,
+      String(bad),
+    );
+  }
+  assert.throws(
+    () => grantOf({ "org/repo.yaml": "allow_projects: acme/3\n" }, "org/repo"),
+    /allow_projects: expected a list/,
+  );
+  assert.throws(
+    () => grantOf({ "default.yaml": "allow_projects: [acme/3]\n" }, "org/repo"),
+    /allow_projects: only a repository's own file grants projects/,
+  );
 });
 
 test("default.yaml: flags unless a repo's own file says, hosts added, limits as the base", () => {

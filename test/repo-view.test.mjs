@@ -195,6 +195,29 @@ test("docker: refused without allow_docker; granted, its engine noted when there
   assert.equal(byKey(view("").settings, "docker").value, "none");
 });
 
+test("settings: projects, and those the grant doesn't list said as not moved", () => {
+  const yaml =
+    "projects:\n  - project: acme/3\n    start: Doing\n  - project: acme/4\n    merged: Done\n";
+  const ungranted = byKey(view(yaml).settings, "projects");
+  assert.deepEqual(ungranted, {
+    key: "projects",
+    value: "acme/3 (Status: start: Doing); acme/4 (Status: merged: Done)",
+    source: "repo",
+    note: "not moved: the operator's grants don't list acme/3, acme/4 in allow_projects",
+  });
+  const some = view(yaml, { "org/app.yaml": "allow_projects: [acme/3]\n" });
+  assert.match(byKey(some.settings, "projects").note, /don't list acme\/4 in/);
+  assert.deepEqual(some.grant.allowProjects, ["acme/3"]);
+  const all = view(yaml, { "org/app.yaml": "allow_projects: [acme/3, acme/4]\n" });
+  assert.equal(byKey(all.settings, "projects").note, null);
+  assert.deepEqual(byKey(view("").settings, "projects"), {
+    key: "projects",
+    value: "none",
+    source: "operator",
+    note: null,
+  });
+});
+
 test("settings: agent, brainstorm_agent and wait_for_answers have their rows", () => {
   const withCodex = testConfig({ OPENAI_API_KEY: "sk-test" });
   const yaml = "brainstorm_agent: codex\nwait_for_answers: false\n";

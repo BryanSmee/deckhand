@@ -332,6 +332,25 @@ test("an optional permission the installation lacks: the token goes without it",
   assert.equal(gh.calls.filter((c) => c.path === "/app/installations/7").length, 1);
 });
 
+test("organization_projects: optional, so an installation that lacks it still mints run tokens", async () => {
+  assert.ok(OPTIONAL_PERMISSIONS.has("organization_projects"));
+  assert.equal(APP_PERMISSIONS.organization_projects, "write");
+  // Not every run's: only a granted repo's reads (PROJECT_READ) and project writes ask for it.
+  assert.equal(SANDBOX_PERMISSIONS.organization_projects, undefined);
+  const { app, gh, html_url } = installedWith({ ...SANDBOX_PERMISSIONS });
+  assert.equal(
+    (await app.repoToken("org/repo", { organization_projects: "write" })).token,
+    "tok-1",
+  );
+  const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
+  assert.deepEqual(JSON.parse(mint.body).permissions, SANDBOX_PERMISSIONS);
+  assert.deepEqual(await app.lacking("org/repo", { organization_projects: "write" }), {
+    missing: ["organization_projects: write"],
+    account: "org",
+    url: html_url,
+  });
+});
+
 test("a required permission the installation lacks still fails the token", async () => {
   const { app, gh } = installedWith({ ...SANDBOX_PERMISSIONS, issues: "read" });
   await assert.rejects(app.repoToken("org/repo"), { status: 422 });

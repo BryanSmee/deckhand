@@ -741,6 +741,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
     mounts: [],
+    allowProjects: [],
     limits: { cpus: "2", memory: "4g", pids: 2048 },
   });
 });

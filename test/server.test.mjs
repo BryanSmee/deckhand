@@ -107,6 +107,14 @@ async function fakeGitHub(files = {}) {
       if (req.method === "POST" && req.url === "/graphql" && body.includes("nodes(ids:")) {
         if (files.nodes) return res.end(files.nodes);
       }
+      // The listener's own GraphQL (projects.mjs): `graphql:<text>`'s answer, for the first such
+      // text its query holds, when the test sets one.
+      if (req.method === "POST" && req.url === "/graphql") {
+        const key = Object.keys(files).find(
+          (k) => k.startsWith("graphql:") && body.includes(k.slice("graphql:".length)),
+        );
+        if (key) return res.end(files[key]);
+      }
       // An issue's parent, as JSON, when the test sets it; none otherwise.
       const parent = /^\/repos\/org\/repo\/issues\/(\d+)\/parent$/.exec(req.url);
       if (req.method === "GET" && parent) {
@@ -1230,6 +1238,21 @@ caches:
     assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
   });
 
+  test("projects: a run refused as it starts (an agent the operator hasn't configured) moves nothing", async (t) => {
+    const { github, send } = await listen(
+      t,
+      { ".deckhand.yaml": "projects:\n  - project: acme/3\n    start: In progress\n" },
+      (dir) => (writeGrant(dir, "allow_projects: [acme/3]\n"), {}),
+    );
+    await send(comment("alice", "Deckhand\n/agent codex\nGo."));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(JSON.parse(reply.body).body, /can't run here|codex/i);
+    // Not even the project looked up (projects.mjs asks for it before moving anything).
+    assert.ok(!github.requests.some((r) => r.path === "/graphql" && /projectv2/i.test(r.body)));
+  });
+
   test("a config with errors stops the run and the reply says why; a broken grant, at start", async (t) => {
     // Another repo's broken grant (access.test.mjs: its runs stop): said at start, and the
     // listener starts anyway.
@@ -1753,6 +1776,120 @@ mounts:
       'mutation { deleteIssue(input: {issueId: "I_3"}) { clientMutationId } }',
     );
     assert.equal(deleted.status, 403);
+  });
+
+  test("projects: a granted project's item added by the run; the listener moves its issue at start and ready", async (t) => {
+    const node = (n) => ({ data: { nodes: n } });
+    const files = {
+      ".deckhand.yaml":
+        "projects:\n  - project: acme/3\n    start: In progress\n    ready: In review\n",
+      "issue:12": JSON.stringify({ number: 12, user: { login: "alice" }, labels: [] }),
+      "graphql:projectV2(number": JSON.stringify({
+        data: {
+          organization: {
+            projectV2: {
+              id: "PV_3",
+              field: {
+                __typename: "ProjectV2SingleSelectField",
+                id: "F_status",
+                options: [
+                  { id: "O_1", name: "In progress" },
+                  { id: "O_2", name: "In review" },
+                ],
+              },
+            },
+          },
+        },
+      }),
+      "graphql:issue(number": JSON.stringify({ data: { repository: { issue: { id: "I_12" } } } }),
+      "graphql:pullRequest(number": JSON.stringify({
+        data: { repository: { pullRequest: { id: "PR_50" } } },
+      }),
+      "graphql:mutation($project: ID!, $content": JSON.stringify({
+        data: { addProjectV2ItemById: { item: { id: "PVTI_12" } } },
+      }),
+      "graphql:updateProjectV2ItemFieldValue": JSON.stringify({
+        data: { updateProjectV2ItemFieldValue: { projectV2Item: { id: "PVTI_12" } } },
+      }),
+    };
+    const ctx = await listen(t, files, (dir) => {
+      writeGrant(dir, "allow_projects: [acme/3]\n");
+      writeFileSync(join(dir, "hold"), "");
+      return {};
+    });
+    const set = (option) => (r) =>
+      r.path === "/graphql" &&
+      r.body.includes("updateProjectV2ItemFieldValue") &&
+      JSON.parse(r.body).variables.option === option;
+    await ctx.send(comment("alice", "Deckhand"));
+    // At start: In progress, with the listener's own token.
+    const started = await ctx.github.waitFor(set("O_1"));
+    assert.equal(started.auth, "Bearer app-token");
+    assert.deepEqual(JSON.parse(started.body).variables, {
+      project: "PV_3",
+      item: "PVTI_12",
+      field: "F_status",
+      option: "O_1",
+    });
+    await ctx.listener.until("org/repo#12: projects: acme/3: In progress (start)");
+    // The run adds its issue to the granted project, never to another.
+    await until(() => exists(join(ctx.dir, "run-secret")), "the run");
+    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const add = (project) =>
+      fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/graphql`, {
+        method: "POST",
+        headers: { authorization: `token ${secret}` },
+        body: JSON.stringify({
+          query: `mutation { addProjectV2ItemById(input: {contentId: "I_12", projectId: "${project}"}) { item { id } } }`,
+        }),
+      });
+    const issue = { __typename: "Issue", number: 12, databaseId: 12 };
+    const repo = { repository: { nameWithOwner: "org/repo" } };
+    const project = (number) => ({
+      __typename: "ProjectV2",
+      number,
+      title: "Roadmap",
+      owner: { login: "acme" },
+    });
+    files.nodes = JSON.stringify(node([{ ...issue, ...repo }, project(9)]));
+    const refused = await add("PV_9");
+    assert.equal(refused.status, 403);
+    assert.match((await refused.json()).message, /write project acme\/9 \(allow_projects\)/);
+    files.nodes = JSON.stringify(node([{ ...issue, ...repo }, project(3)]));
+    assert.equal((await add("PV_3")).status, 200);
+    const mints = ctx.github.requests.filter((r) => r.body.includes("repositories"));
+    assert.equal(JSON.parse(mints.at(-1).body).permissions.organization_projects, "write");
+    // Its pull request turns ready: In review.
+    await ctx.send(
+      {
+        action: "ready_for_review",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: {
+          number: 50,
+          state: "open",
+          draft: false,
+          body: "Closes #12",
+          html_url: "https://github.com/org/repo/pull/50",
+          head: { ref: "issue-12-x", sha: "abc", repo: { full_name: "org/repo" } },
+          base: { ref: "trunk" },
+          user: { login: "deckhand-x[bot]" },
+        },
+        sender: { login: "alice" },
+      },
+      "pull_request",
+    );
+    // Its issue and itself, the bot's pull request.
+    await ctx.listener.until("org/repo#12 and #50: projects: acme/3: In review (ready)");
+    const ready = ctx.github.requests.filter(set("O_2"));
+    assert.equal(ready.length, 2);
+    const added = ctx.github.requests.filter(
+      (r) => r.path === "/graphql" && r.body.includes("$content") && r.auth === "Bearer app-token",
+    );
+    assert.deepEqual(
+      added.map((r) => JSON.parse(r.body).variables.content),
+      ["I_12", "I_12", "PR_50"],
+    );
   });
 
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {

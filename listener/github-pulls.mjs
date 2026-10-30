@@ -28,8 +28,9 @@ import { branchAllowed } from "./broker.mjs";
 // What a create may set (REST's names: github-graphql.mjs restName()).
 const CREATE_FIELDS = new Set(["title", "body", "head", "base", "draft", "maintainer_can_modify"]);
 // Actions that run none of the pull request's workflows from its branch: a comment's run from
-// the default branch (`issue_comment`).
-const UNCHECKED = new Set(["comment", "react"]);
+// the default branch (`issue_comment`), and adding it to a project (a `projects_v2_item` event
+// runs from the default branch too).
+const UNCHECKED = new Set(["comment", "react", "project"]);
 // Actions on a pull request that need its head to be one of the run's branches.
 const OWN_BRANCH = new Set(["edit", "ready", "draft", "update_branch"]);
 // What a branch update may send (REST's names: github-graphql.mjs restName()).

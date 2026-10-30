@@ -268,6 +268,20 @@ test("the ceilings: what each mode can ever write", () => {
   assert.deepEqual(aboveCeiling(ceilingOf("idea", true), "new_issue", ["create"]), []);
   assert.deepEqual(aboveCeiling(ceilingOf("bug", true), "own_issue", ["edit"]), ["edit"]);
   assert.deepEqual(ceilingOf("discussion", true), { new_issue: ["create"] });
+  // Projects: a work run's issue, pull requests, sub-issues and filed issues; a brainstorm's
+  // filed issues; nothing else's (issue #454).
+  for (const kind of ["own_issue", "own_pr", "sub_issue", "created_issue"]) {
+    assert.deepEqual(aboveCeiling(work, kind, ["project"]), [], kind);
+  }
+  assert.deepEqual(aboveCeiling(work, "other_issue", ["project"]), ["project"]);
+  assert.deepEqual(aboveCeiling(work, "pr", ["project"]), ["project"]);
+  assert.deepEqual(aboveCeiling(brainstorm, "created_issue", ["project"]), []);
+  for (const kind of ["own_issue", "sub_issue", "own_pr", "other_issue"]) {
+    assert.deepEqual(aboveCeiling(brainstorm, kind, ["project"]), ["project"], kind);
+  }
+  for (const mode of ["idea", "bug", "discussion"]) {
+    assert.ok(!Object.values(ceilingOf(mode, true)).flat().includes("project"), mode);
+  }
   // Modes that read write nothing; a repo's light modes neither, its others as work runs.
   for (const mode of ["onboarding", "analyze", "review", "research", "policy"]) {
     assert.deepEqual(ceilingOf(mode, true), {}, mode);
@@ -1818,6 +1832,52 @@ test("a rerun through the gateway: its installation's Actions permission named f
   assert.ok(!run.reruns.some((r) => r.pending));
 });
 
+test("a project write: its project checked against the grants, then in deny_github's input", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "github.rego": "package deckhand\n" },
+    messages: (input) => (input.custom_mode ? ["not in this mode"] : []),
+  });
+  let granted = () => ["acme/3"];
+  const { checkWrite } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+    policies,
+    projects: (repo) => (assert.equal(repo, "org/repo"), granted()),
+  });
+  const project = (number, owner = "acme") => ({
+    repo: "org/repo",
+    actions: ["project"],
+    target: { number: 1 },
+    project: { owner, number, title: "Roadmap" },
+    change: { fields: ["project_id"], labels_added: [], labels_removed: [] },
+  });
+  assert.equal(await checkWrite(run("work"), project(3)), null);
+  assert.deepEqual(evals.at(-1).change.project, { owner: "acme", number: 3, title: "Roadmap" });
+  assert.equal(evals.at(-1).action, "project");
+  // Not granted: refused before any policy runs.
+  const asked = evals.length;
+  assert.deepEqual(await checkWrite(run("work"), project(4)), {
+    status: 403,
+    message:
+      "the operator's grants don't let this repository's runs write project acme/4 (allow_projects)",
+  });
+  assert.equal(evals.length, asked);
+  // Grants that can't be read: refused too (fail closed).
+  granted = () => {
+    throw new Error("broken");
+  };
+  assert.deepEqual(await checkWrite(run("work"), project(3)), {
+    status: 503,
+    message: "the operator's grants can't be read",
+  });
+  // A policy may still refuse a granted one.
+  granted = () => ["acme/3"];
+  assert.match(
+    (await checkWrite(run("plan", { push: true }), project(3))).message,
+    /deny_github\): not in this mode/,
+  );
+});
+
 test("a policy's refusal reaches the agent through the gateway, in GitHub's error shape", async (t) => {
   const github = await serve(t, (req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -2130,6 +2190,72 @@ deny_github contains "this repository keeps a linear history: rebase and push in
 `;
     const none = checks(engine({ "gh-update-branch.rego": linear }));
     assert.match((await none.check(work, update(7))).message, /keeps a linear history/);
+  },
+);
+
+test(
+  "the real opa: gh-projects.rego lets work runs and brainstorms add items, a repo's modes only once it broadens it",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const files = builtIn();
+    // `repoFiles`: the repository's .deckhand/policy/ on its default branch.
+    const ask = (mode, kind, repoFiles = {}, reason = null) => {
+      const github = async (repo, method, path) => {
+        if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+          const list = Object.keys(repoFiles).map((name) => ({ type: "file", name, sha: name }));
+          return Response.json(list);
+        }
+        if (path.startsWith("/repos/org/repo/git/blobs/")) {
+          const text = repoFiles[path.split("/").pop()];
+          return Response.json({
+            content: Buffer.from(text).toString("base64"),
+            encoding: "base64",
+          });
+        }
+        return new Response("{}", { status: 404 });
+      };
+      const policies = createPolicies({
+        config: {},
+        github,
+        run: opaRunner(),
+        readBuiltIn: () => files,
+        tmp: tempDir(t),
+      });
+      return policies.deny("deny_github", "org/repo", "main", () => ({
+        repo: "org/repo",
+        mode,
+        custom_mode: !MODES[mode],
+        light: !["work", "plan"].includes(mode),
+        reason,
+        issue: 1,
+        action: "project",
+        actions: ["project"],
+        target: { kind, number: 7, labels: [], author: "a" },
+        change: {
+          fields: ["project_id"],
+          labels_added: [],
+          labels_removed: [],
+          project: { owner: "acme", number: 3, title: "Roadmap" },
+        },
+      }));
+    };
+    // Work, fix and conflict runs alike.
+    for (const reason of [null, "review-fix", "ci-fix", "conflict"]) {
+      for (const kind of ["own_issue", "own_pr", "sub_issue", "created_issue"]) {
+        assert.deepEqual(await ask("work", kind, {}, reason), [], `${reason} ${kind}`);
+      }
+    }
+    assert.deepEqual(await ask("brainstorm", "created_issue"), []);
+    assert.deepEqual(await ask("stop", "created_issue"), []);
+    assert.deepEqual(await ask("plan", "own_issue"), [
+      "mode plan doesn't add items to projects unless .deckhand/policy/gh-projects.rego allows it",
+    ]);
+    // The repository's same-name file replaces it: its modes add items too.
+    const broadened = { "gh-projects.rego": "package deckhand\n" };
+    assert.deepEqual(await ask("plan", "own_issue", broadened), []);
+    // A file of another name leaves it in place.
+    const other = { "extra.rego": "package deckhand\n" };
+    assert.equal((await ask("plan", "own_issue", other)).length, 1);
   },
 );
 

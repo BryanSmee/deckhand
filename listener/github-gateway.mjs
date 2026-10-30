@@ -34,11 +34,12 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
-import { NO_TOKEN, readsOf } from "./github-app.mjs";
+import { NO_TOKEN, PROJECT_READ, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
 import { classify } from "./github-writes.mjs";
+import { ceilingOf } from "./modes.mjs";
 import { redact } from "./redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
 import { sendJson } from "./web.mjs";
@@ -87,6 +88,14 @@ const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 // Only its own repository's, by name: another's (a public repository's CI) GitHub may answer
 // without the permission, and the run's installation isn't the one to accept it.
 export const NEEDS = [{ permission: "actions", path: /^repos\/([^/]+\/[^/]+)\/actions(?:\/|$)/i }];
+// Whether a run's mode's ceiling holds `project` on any kind (modes.mjs ceilingOf()): its token
+// may then read projects, in a repo granted one.
+function addsItems(run) {
+  return Object.values(ceilingOf(run.mode, !run.push)).some((actions) =>
+    actions.includes("project"),
+  );
+}
+
 // What a call needs of the optional permissions: its path's (NEEDS) when the path is `repo`'s,
 // read, and what a checked write needs beyond its mode's (`permissions`), at their levels.
 export function needed(path, permissions = {}, repo = "") {
@@ -260,6 +269,10 @@ export function createGithubGateway({
   // bytes up to MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues a
   // run created, the comments it posted and its reactions, the dashboard's pull requests).
   wroteWrite = () => {},
+  // repo → whether its runs' tokens read the organization's projects (v2): the operator grants
+  // it one (grants.mjs allowProjects), which `gh project item-add` looks up before it adds an
+  // item. None: they don't.
+  readsProjects = () => false,
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   maxWrite = MAX_WRITE,
@@ -487,7 +500,12 @@ export function createGithubGateway({
       }
       if (!refused && graphqlCall) {
         const checked = await checkGraphql(run, body);
-        if (checked.refused) refused = checked.refused;
+        // A refusal for what the App couldn't see (a project, without its permission): the
+        // permission's message when the installation lacks it, since GitHub's look-up alone
+        // can't tell a missing node from one it hides.
+        if (checked.refused?.needs) {
+          refused = (await unaccepted(github, run, checked.refused.needs)) ?? checked.refused;
+        } else if (checked.refused) refused = checked.refused;
         else {
           // Redacted again as printed: GraphQL's own escapes (`\u0064`) decode only now, which
           // the call's JSON hid from the redaction above.
@@ -735,7 +753,17 @@ export function createGithubGateway({
     { advertised = null, inflated = false } = {},
   ) {
     let token;
-    const permissions = writing ? { ...run.extra, ...writing } : readsOf(run.extra);
+    let extra = run.extra;
+    try {
+      // Only a run whose ceiling may add an item reads the organization's projects: a review,
+      // an inbox entry or a discussion reads outsiders' text, and nothing narrows the read to
+      // the granted projects.
+      if (addsItems(run) && (await readsProjects(run.repo))) extra = { ...extra, ...PROJECT_READ };
+    } catch (error) {
+      // Its token reads no project: what needs one fails at GitHub, the rest goes on.
+      log(`GitHub gateway: ${run.repo}: its grants: ${error.message ?? error}`);
+    }
+    const permissions = writing ? { ...extra, ...writing } : readsOf(extra);
     try {
       ({ token } = await github.repoToken(run.repo, permissions));
     } catch (error) {

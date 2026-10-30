@@ -18,6 +18,10 @@ export const APP_PERMISSIONS = {
   discussions: "write",
   // Only the git gateway's push token carries it, for repos granted `allow_workflows`.
   workflows: "write",
+  // Projects (v2) of the organizations it is installed on: the listener moves the issues of
+  // repos whose `projects:` names one, and runs add items to those granted `allow_projects`
+  // (grants.mjs). GitHub has no such permission for a user's projects.
+  organization_projects: "write",
 };
 // What workItem() routes, plus the previews' events (handled by a later hook), pushes,
 // which tell the dashboard's repository list (repos.mjs) a default branch changed, and
@@ -140,8 +144,15 @@ export function readsOf(extra = {}) {
 // them yet, or the App was created before them), rather than GitHub refusing the whole token:
 // what needs one is refused by the GitHub gateway instead, saying which (github-gateway.mjs
 // NEEDS). Any other permission stays required: a token without it fails, as it would have.
-// `actions`: reading CI runs and logs, and rerunning failed jobs, which a run can do without.
-export const OPTIONAL_PERMISSIONS = new Set(["actions"]);
+// `actions`: reading CI runs and logs, and rerunning failed jobs, which a run can do without;
+// `organization_projects`: adding items to a granted project (issue #454), which only repos
+// granted one need.
+export const OPTIONAL_PERMISSIONS = new Set(["actions", "organization_projects"]);
+// What a run's token gets in a repo granted `allow_projects`: its reads see the organization's
+// projects (`gh project item-add` looks the project up first), and a project write the GitHub
+// gateway checked writes them (github-graphql.mjs addProjectV2ItemById).
+export const PROJECT_READ = { organization_projects: "read" };
+export const PROJECT_WRITE = { organization_projects: "write" };
 // How long an installation's permissions are trusted before GitHub is asked again: an owner
 // accepting new ones is also told by an `installation` delivery (rememberPermissions()).
 export const PERMISSIONS_MS = 5 * 60000;

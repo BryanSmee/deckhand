@@ -15,8 +15,29 @@ const modeInstructions = Object.fromEntries(
     .filter(([, mode]) => mode.prompt)
     .map(([name, mode]) => [name, instructions(mode.prompt)]),
 );
-// The config's reference, in the image next to the prompts so the two can't drift apart.
-const configReference = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+// The config's reference, in the image next to the prompts so the two can't drift apart. Its
+// tables without the padding prettier aligns their columns with: the prompt goes to the sandbox
+// in TASK_PROMPT, and one environment string holds 128 KiB at most (Linux's MAX_ARG_STRLEN:
+// over it, the sandbox doesn't start, E2BIG).
+const configReference = compactTables(
+  readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8"),
+);
+
+// Markdown's table rows with one space around each cell, and three dashes in each separator
+// cell: the same table, without its alignment.
+export function compactTables(text) {
+  return text
+    .split("\n")
+    .map((line) =>
+      line.startsWith("|")
+        ? line
+            .replace(/ {2,}\|/g, " |")
+            .replace(/\| -{3,}/g, "| ---")
+            .replace(/-{3,} \|/g, "--- |")
+        : line,
+    )
+    .join("\n");
+}
 
 // Inbox entries and discussions: the entries come with the prompt, as the session is new.
 function inboxPrompt(task, mode, text) {
@@ -211,10 +232,19 @@ function workflowsNote(task, grant, branches) {
     : "GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn't grant `allow_workflows`): leave them out and say in the pull request what they need.";
 }
 
+// The projects (v2) the run may add its issue and pull request to (github-writes.mjs), so it
+// knows there are some; none: nothing to say.
+function projectsNote(grant) {
+  const projects = grant?.allowProjects ?? [];
+  if (!projects.length) return "";
+  const list = projects.map((p) => `\`${p}\``).join(", ");
+  return `The operator grants this repository the project${projects.length > 1 ? "s" : ""} ${list} (\`<organization>/<number>\`):\nadd an item there only when the issue or the repository's instructions ask for it.`;
+}
+
 function initialPrompt(task, branches = [], grant = null) {
   const { base } = task;
-  const workflows = workflowsNote(task, grant, branches);
-  const common = `${workflows && `${workflows}\n`}Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
+  const notes = [workflowsNote(task, grant, branches), projectsNote(grant)].filter(Boolean);
+  const common = `${notes.map((n) => `${n}\n`).join("")}Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
 is a blocker only the maintainer can resolve: then push your work in progress and end with

@@ -558,6 +558,9 @@ export interface Grant {
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];
   mounts: { root: string; readOnly: boolean }[];
+  // The organization projects (v2) its runs add items to and the listener moves its issues on
+  // ("acme/3"): `allow_projects`.
+  allowProjects: string[];
   limits: { cpus: string; memory: string; pids: number };
 }
 

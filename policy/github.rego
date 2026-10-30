@@ -16,6 +16,7 @@ deny_github contains msg if {
   input.mode in {"brainstorm", "stop"}
   not input.target.kind in {"own_issue", "new_issue", "label"}
   not orders_follow_ups
+  not files_follow_ups
   msg := sprintf("a brainstorm writes only its own issue, not #%d", [input.target.number])
 }
 
@@ -24,6 +25,12 @@ orders_follow_ups if {
   input.action == "link"
   input.change.blocked_by
   input.target.kind in {"sub_issue", "created_issue"}
+}
+
+# And puts the issues it filed on a granted project (gh-projects.rego, its ceiling).
+files_follow_ups if {
+  input.action == "project"
+  input.target.kind == "created_issue"
 }
 
 # Inbox entries only file issues (with their label), and link the ones they split.
