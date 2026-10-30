@@ -69,7 +69,6 @@ function prepared(t, text, comments = [comment(1), comment(2)]) {
       key: "org/repo#12",
       mode: "research",
       light: true,
-      secret: "s".repeat(32),
       record: { agent: "claude", model: "opus", effort: "high" },
       logFile: { write: () => {} },
     },
@@ -135,7 +134,8 @@ test("a research run: the base image, no mounts, caches, engine, CA, screenshots
 
 test("a research run reads its issue's thread: title, description, the last 50 comments", async (t) => {
   const many = Array.from({ length: 120 }, (_, i) => comment(i + 1));
-  many[119].body = `the run's secret: ${"s".repeat(32)}`;
+  // What redaction hides of it: a GitHub token, whoever got it (the run's own never reach it).
+  many[119].body = `a token: ghs_${"a".repeat(36)}`;
   const { run, notes } = prepared(t, "allow_research: true\n", many);
   const { digest } = await run();
   assert.match(
@@ -145,7 +145,7 @@ test("a research run reads its issue's thread: title, description, the last 50 c
   assert.match(digest, /## Comments \(the last 50 of 120\)/);
   assert.doesNotMatch(digest, /comment 70\n/);
   assert.match(digest, /### @alice, 2026-10-17 10:00 UTC\n\ncomment 71\n/);
-  assert.doesNotMatch(digest, /s{32}/);
+  assert.doesNotMatch(digest, /ghs_a{36}/);
   assert.ok(notes.includes("Thread: #12, 50 of 120 comment(s)"));
 });
 

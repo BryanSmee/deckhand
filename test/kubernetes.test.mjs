@@ -343,15 +343,15 @@ test("start: a Secret refused removes the Pod made before it", async (t) => {
   assert.equal(objects.pods.size, 0);
 });
 
-test("sandboxOf: the UID of the running sandbox pod at an address, else null", async (t) => {
+test("locate: the UID of the running sandbox pod at an address, else null", async (t) => {
   const { runner, objects } = setup(t);
   await runner.start(spec());
   const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
-  assert.equal(await runner.sandboxOf("10.244.1.7"), uid);
-  assert.equal(await runner.sandboxOf("10.244.9.9"), null);
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(await runner.locate("10.244.9.9"), null);
   // Gone with its pod: an address never names a pod that was removed.
   await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
-  assert.equal(await runner.sandboxOf("10.244.1.7"), null);
+  assert.equal(await runner.locate("10.244.1.7"), null);
 });
 
 test("start: without the namespace's NetworkPolicy, no run, and the reply says why", async (t) => {

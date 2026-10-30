@@ -282,7 +282,6 @@ export function createNetworks({ config, docker, log, now }) {
     },
     idOf,
     locate,
-    sandboxOf: async (ip) => (await locate(ip))?.sandbox ?? null,
     // For a container that joined a network: its address must be looked up again.
     forget,
     connect,

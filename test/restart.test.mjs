@@ -493,6 +493,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
       mode: "work",
       light: false,
       agentToken,
+      runTokens: first.broker.issuedOf("new"),
       branches: ["issue-1-*"],
       record: { id: "new", key: "org/repo#1", agent: "claude" },
       handled: [],
@@ -504,6 +505,8 @@ test("across a restart, a run's tokens still check, and a run from before them k
 
   const { broker, restart } = make();
   restart.restoreRuns();
+  // The token the sandbox holds is redacted at once, before it is renewed.
+  assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
   // Renewed by the next listener, bound where it was (the saved state of a listener that didn't
   // keep `sandbox` says nothing: the token presented does), and it works, as do the next ones.
   const renewed = await broker.renew(token, "10.9.0.5");

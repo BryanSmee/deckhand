@@ -98,7 +98,7 @@ export function createPreparation(ctx) {
       );
     }
     note(`Thread: #${number}, allowed users' and Deckhand's comments only`);
-    return redact(text, [task.live.secret, ...operatorSecrets(ctx)]);
+    return redact(text, operatorSecrets(ctx));
   }
 
   // A research run (modes.mjs OPEN): any public host, and nothing of the repo's (access.mjs
@@ -164,7 +164,7 @@ export function createPreparation(ctx) {
     ];
     if (!kept.length) parts.push("None.");
     note(`Thread: #${number}, ${kept.length} of ${comments.length} comment(s)`);
-    return redact(parts.join("\n\n") + "\n", [task.live.secret, ...operatorSecrets(ctx)]);
+    return redact(parts.join("\n\n") + "\n", operatorSecrets(ctx));
   }
 
   // An analysis's digest (analysis.mjs), built now from the runs picked when it was asked
@@ -194,7 +194,7 @@ export function createPreparation(ctx) {
     note(
       `Run digest: ${included.length} run(s), ${Math.round(Buffer.byteLength(text) / 1000)} KB${left.length ? `, ${left.length} left out` : ""}`,
     );
-    return redact(text, [task.live.secret, ...operatorSecrets(ctx)]);
+    return redact(text, operatorSecrets(ctx));
   }
 
   // Left over from a listener that lost track of it: wait for it, then make room.

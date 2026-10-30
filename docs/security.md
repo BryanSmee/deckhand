@@ -282,7 +282,10 @@ runner's answer for its source address, or, for a call the egress proxy relayed 
 forwarded (the broker's own calls go through it too), for the address the proxy names (`X-Deckhand-Client`, below). IDs, not addresses or names: both are
 reused, an ID never. A token that leaks, to a research run on the open web say, gets another
 sandbox neither GitHub, a push, nor calls on the operator's credentials: `403`. The run's
-container engine is on its network, so its calls count as the run's, as they did. When a run
+container engine is on its network, so its calls count as the run's, as they did; no other
+container there does (the listener's, the egress proxy's: `broker-http.mjs` `sandboxAt()`
+checks which container has the address), so a token can't ride on a call the proxy makes
+itself. When a run
 ends, the listener forgets it and removes its network (or pod): its tokens are worth nothing
 from then on, before their `exp`.
 
@@ -309,7 +312,9 @@ the file whole; a failure is retried after 30 seconds, so two may fail in a row.
 refuses to renew another sandbox's token or an ended run's, and one more than 7 days past its
 `exp` (`RENEW_GRACE_MS`): an expired token still renews, from its own sandbox, so a broker
 away for longer than a token's life doesn't end the run (below). After a restart, the token
-renewed is bound where the one presented was, and the one presented is redacted too. `deckhand-token`
+renewed is bound where the one presented was, and the one presented is redacted too. A
+renewal asked within a minute of the last token signed gets that one back: a process asking in
+a loop can't pile up valid tokens. `deckhand-token`
 prints the file, so the gh wrapper, git's credential helper, `deckhand-files` and
 `deckhand-inbox` read it again for each call: the agent is told never to keep it
 (`prompts/sandbox.md`).
@@ -333,8 +338,9 @@ that run's sandbox (or its engine), by the network's ID as a token does: the run
 looked up once by its name (or its pod's UID, by its pod's). That path goes in a later release
 ([Restarts](architecture.md#restarts)).
 
-Both kinds are redacted from runs' output: the run's tokens (its agent's, and its last few run
-tokens), as its secret was.
+Both kinds are redacted from runs' output: the run's tokens (its agent's, and every run token
+of its still valid, saved with its state so a restart redacts the one the sandbox holds), as
+its secret was.
 
 **No sandbox holds a GitHub token.** Its `GH_TOKEN`, `deckhand-token` and git credential
 helper hand out the [run token](#run-tokens), and every call to GitHub goes through the listener's GitHub

@@ -25,10 +25,11 @@
 //   relink()             joins the listener and the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
-//   sandboxOf(ip)        the ID of the run's network that address is on (its pod's UID, on
-//                        Kubernetes), or null: what the run's tokens are bound to
-//   locate(ip)           { sandbox, name }: that ID and the container that has the address
-//                        there (Kubernetes names none: the pod is the sandbox), or null
+//   locate(ip)           { sandbox, name }: the ID of the run's network that address is on (its
+//                        pod's UID, on Kubernetes) and the container that has it there
+//                        (Kubernetes names none: the pod is the sandbox), or null: what the
+//                        run's tokens are bound to, once the broker knows that container is
+//                        the run's sandbox or engine (../broker-http.mjs sandboxAt())
 //   sandboxIdOf(name, run)  the ID of a run's network (its pod's UID), or null
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
@@ -284,7 +285,6 @@ export function createDockerRunner({
     hasSession,
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
-    sandboxOf: networks.sandboxOf,
     locate: networks.locate,
     // Its network is named after the run.
     sandboxIdOf: (name, run) => networks.idOf(run).catch(() => null),

@@ -84,7 +84,7 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"], taken
           );
         }
         if (args.join(" ").includes("IPv4Address")) {
-          // Each run network's ID and its containers' addresses (networks.mjs sandboxOf()).
+          // Each run network's ID and its containers' addresses (networks.mjs locate()).
           return ok(
             args
               .slice(4)
@@ -267,7 +267,7 @@ test("start: detached, labelled, secrets by name only, its inbox at the broker",
   assert.equal(readFileSync(join(inboxDir, "dh-org-repo-12-1", "inbox.jsonl"), "utf8"), "");
 });
 
-test("start: the run's tokens bound to its network's ID, by name only; sandboxOf() finds it", async () => {
+test("start: the run's tokens bound to its network's ID, by name only; locate() finds it", async () => {
   let now = 0;
   const { r, calls } = runner({ now: () => now });
   const bound = [];
@@ -283,16 +283,18 @@ test("start: the run's tokens bound to its network's ID, by name only; sandboxOf
   assert.ok(args.includes("DECKHAND_RUN_TOKEN"));
   assert.doesNotMatch(args.join(" "), /t@/);
   assert.equal(env.DECKHAND_RUN_TOKEN, "t@id-dh-org-repo-12-1");
-  // The sandbox's address on it, and the listener's and the proxy's: that network's ID.
-  assert.equal(await r.sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
-  assert.equal(await r.sandboxOf("10.9.9.9"), null);
+  // The sandbox's address on it: that network's ID, and the container's name.
+  const sandboxOf = async (ip) => (await r.locate(ip))?.sandbox ?? null;
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  assert.equal((await r.locate("10.1.0.2")).name, "dh-org-repo-12");
+  assert.equal(await sandboxOf("10.9.9.9"), null);
   // Looked up once, until a miss lets it look again, at most every 2 seconds.
   const looks = () => calls.filter((c) => c.args.join(" ").includes("IPv4Address")).length;
-  assert.equal(await r.sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
   assert.equal(looks(), 1);
   // Gone with its network: an address never names a network that was removed.
   await r.remove("dh-org-repo-12", "dh-org-repo-12-1");
-  assert.equal(await r.sandboxOf("10.1.0.2"), null);
+  assert.equal(await sandboxOf("10.1.0.2"), null);
 });
 
 test("start: the run's own internal network, with the listener and the proxy on it", async () => {

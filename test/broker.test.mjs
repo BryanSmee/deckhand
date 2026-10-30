@@ -170,9 +170,9 @@ test("a run longer than its token's lifetime keeps working, renewing every 5 min
   }
   // An hour on, the first token expired long ago; the last one works.
   assert.match((await broker.check(first, "10.9.0.5")).message, /expired/);
-  // Its last few are kept for redaction, not every one.
-  assert.deepEqual(broker.secretsOf("run-a").slice(-4), renewals.slice(-4));
-  assert.equal(broker.secretsOf("run-a").length, 5);
+  // Those still valid are kept for redaction, with its agent's: not those expired.
+  assert.deepEqual(broker.secretsOf("run-a").slice(1), renewals.slice(-3));
+  assert.equal(broker.secretsOf("run-a").length, 4);
   // Never from another sandbox, nor for an ended run.
   assert.equal((await broker.renew(token, "10.9.1.5")).status, 403);
   broker.revoke("run-a");
@@ -216,4 +216,38 @@ test("a token expired while the broker was away still renews, from its sandbox, 
   assert.match((await broker.renew(token, "10.9.0.5")).message, /expired/);
   broker.revoke("run-a");
   assert.equal((await broker.renew(renewed.token, "10.9.0.5")).status, 401);
+});
+
+test("a renewal asked again within a minute gets the same token: nothing valid leaves the redaction list", async () => {
+  const { broker, clock } = tokenBroker();
+  broker.register("org/a", undefined, { id: "run-a" });
+  let changed = 0;
+  broker.watchChanges("run-a", () => changed++);
+  const { token, agentToken } = broker.issue("run-a", "net-a");
+  // A process asking in a loop: the token it holds back, the list unchanged.
+  for (let i = 0; i < 10; i++) {
+    clock.now += 1000;
+    assert.equal((await broker.renew(token, "10.9.0.5")).token, token);
+  }
+  assert.deepEqual(broker.secretsOf("run-a"), [agentToken, token]);
+  // A minute on, a new one; every one still valid stays listed, saved each time (changed()).
+  clock.now += 60_000;
+  const first = (await broker.renew(token, "10.9.0.5")).token;
+  assert.notEqual(first, token);
+  assert.equal((await broker.renew(first, "10.9.0.5")).token, first);
+  clock.now += 60_000;
+  const second = (await broker.renew(first, "10.9.0.5")).token;
+  assert.notEqual(second, first);
+  assert.deepEqual(broker.secretsOf("run-a"), [agentToken, token, first, second]);
+  assert.deepEqual(broker.issuedOf("run-a"), [token, first, second]);
+  assert.equal(changed, 3);
+});
+
+test("a restarted broker redacts the run tokens saved with the run, before any renewal", async () => {
+  const { broker } = tokenBroker();
+  broker.register("org/a", undefined, { id: "run-a" });
+  const { token } = broker.issue("run-a", "net-a");
+  const again = tokenBroker().broker;
+  again.register("org/a", undefined, { id: "run-a", issued: broker.issuedOf("run-a") });
+  assert.deepEqual(again.secretsOf("run-a"), [token]);
 });

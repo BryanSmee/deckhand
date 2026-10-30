@@ -171,12 +171,14 @@ export function createRestart(ctx) {
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
             .map((k) => [k, live[k]]),
         ),
+        // Its run tokens still valid, for its output's redaction after a restart (broker.mjs).
+        runTokens: ctx.broker.issuedOf?.(live.id) ?? [],
         record,
         handled: await Promise.all(live.handled.map(plain)),
         // Delivered comments are among the handled ones.
         unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
       };
-      // The run's agent token (or its secret, from before tokens) is in it: the owner's only.
+      // The run's tokens (or its secret, from before tokens) are in it: the owner's only.
       writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
     };
     live.saving = (live.saving ?? Promise.resolve())
@@ -267,6 +269,7 @@ export function createRestart(ctx) {
       secret: saved.secret ?? null,
       agentToken: saved.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
+      issued: saved.runTokens ?? [],
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).

@@ -18,7 +18,7 @@ import { createGoogleRelay } from "./google.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
-import { clientAddress, createBrokerHttp, runAt, runFrom } from "./broker-http.mjs";
+import { clientAddress, createBrokerHttp, runAt, runFrom, sandboxAt } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createForkChecks } from "./github-forks.mjs";
 import { createGithubGateway } from "./github-gateway.mjs";
@@ -376,7 +376,7 @@ Object.assign(ctx, {
   // whether it calls the broker directly or through the egress proxy.
   broker: createBroker({
     key: signingKey(config.dataDir),
-    sandboxOf: async (ip) => (await ctx.runner.sandboxOf?.(ip)) ?? null,
+    sandboxOf: (ip) => sandboxAt(ctx, ip),
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),
   }),

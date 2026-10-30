@@ -49,8 +49,20 @@ export const AGENT_TOKEN_TTL_MS = 7 * 24 * 60 * 60_000;
 // for the rest of the run. As long as the agent token, which outlives a pause of the broker anyway.
 export const RENEW_GRACE_MS = 7 * 24 * 60 * 60_000;
 
-// How many of a run's renewed tokens it keeps for redaction (secretsOf()): older ones expired.
-const KEPT_TOKENS = 4;
+// How soon after a run token was signed a renewal gets that one again rather than a new one: a
+// process that asks in a loop can't fill the run's list of tokens still valid, which its
+// output is redacted of (secretsOf()), nor push one out of it.
+export const RENEW_MIN_MS = 60_000;
+
+// A token's `exp` (ms), unchecked: for the list of a run's tokens to redact, never to trust one.
+function expOf(token) {
+  try {
+    const exp = JSON.parse(Buffer.from(String(token).split(".")[1], "base64url")).exp;
+    return Number.isFinite(exp) ? exp * 1000 : 0;
+  } catch {
+    return 0;
+  }
+}
 
 // Secrets are kept by hash: the map never holds a usable one, and lookups don't compare secrets.
 // Each run's entry does hold the installation tokens the GitHub gateway used for it (`tokens`),
@@ -102,7 +114,8 @@ export function createBroker({
   // id → { id, repo, extra, push, mode, branches, sandbox, issued, provider, credential, note,
   // pushed, apiStatus, apiReset, apiError, tokens }: `id`, the run's (its tokens' `jti`),
   // `sandbox`, the network or pod its tokens are bound to (issue()), `agentToken` and `issued`,
-  // its agent's token and its last run tokens, the newest last (secretsOf()), `provider`, where the listener sends its agent's API
+  // its agent's token and its run tokens still valid ({ token, exp, at }), the newest last
+  // (secretsOf()), `provider`, where the listener sends its agent's API
   // calls (anthropic.mjs; null: nowhere, no credential), `credential`, the one of the
   // provider's it names (`key` for `claude@anthropic:key`; null: the default one), `note`, a
   // line in its log (provide()), `pushed`, what the git gateway calls when GitHub took a push
@@ -129,7 +142,8 @@ export function createBroker({
   // ({ run_id, sha, at }). `reason`: why the listener started it itself ("review-fix",
   // "ci-fix", "conflict"), null for a comment's: the policies read it (github-writes.mjs).
   // `id`: the run's (runs.mjs), its tokens' `jti`; a restarted listener passes the same one, so
-  // they still name it, with its agent token (`agentToken`), for redaction, and the network or
+  // they still name it, with its agent token (`agentToken`) and run tokens (`issued`), for
+  // redaction, and the network or
   // pod they are bound to (`sandbox`), which its renewed ones carry. `secret`: a run's from before tokens, when a restarted listener picks
   // it up; without an `id`, a new one (the tests' runs). → the handle the other calls take: the
   // run's id, or its secret.
@@ -148,6 +162,7 @@ export function createBroker({
       secret = id ? null : random(),
       agentToken = null,
       sandbox = null,
+      issued = [],
     } = {},
   ) {
     const run = {
@@ -165,7 +180,9 @@ export function createBroker({
       branches: [],
       fork: false,
       sandbox: typeof sandbox === "string" && sandbox ? sandbox : null,
-      issued: [],
+      issued: (Array.isArray(issued) ? issued : [])
+        .filter(isToken)
+        .map((token) => ({ token, exp: expOf(token), at: 0 })),
       agentToken,
       provider: null,
       credential: null,
@@ -198,7 +215,8 @@ export function createBroker({
   }
 
   // `changed()`: called when the run created an issue, posted a comment, added or removed a
-  // reaction, or reran a workflow run (github-writes.mjs answered()), so its saved state keeps it.
+  // reaction, or reran a workflow run (github-writes.mjs answered()), or got a new run token
+  // (keep()), so its saved state keeps it.
   function watchChanges(handle, changed) {
     const run = runOf(handle);
     if (run) run.changed = changed;
@@ -243,8 +261,19 @@ export function createBroker({
       now: now(),
     });
     if (audience === AGENT_AUDIENCE) run.agentToken = token;
-    else run.issued = [...run.issued, token].slice(-KEPT_TOKENS);
+    else keep(run, token, now() + ttlMs, now());
     return token;
+  }
+
+  // A new run token in the run's list (secretsOf()), which holds every one still valid: those
+  // expired go as it comes. `at`: when it was signed (0: by a listener before a restart). Saved
+  // with the run's state (changed()), so a restart still redacts the one the sandbox holds.
+  function keep(run, token, exp, at) {
+    run.issued = [
+      ...run.issued.filter((t) => t.token !== token && t.exp > now()),
+      { token, exp, at },
+    ];
+    run.changed?.();
   }
 
   // The run's first tokens, once its sandbox's network (or pod) is known: `sandbox`, its ID.
@@ -294,22 +323,32 @@ export function createBroker({
   // RENEW_GRACE_MS past its expiry: { token } or { status, message }. An ended run's is refused
   // (check()). `from`: as check()'s. The new one is bound where the one presented was, which
   // check() just compared with the call's network: a restarted listener's record of the run
-  // doesn't know it before.
+  // doesn't know it before. Asked again within RENEW_MIN_MS of the last one signed: that one.
   async function renew(token, from) {
     if (!isToken(token)) return { status: 401, message: "only a run token is renewed" };
     const checked = await check(token, from, RUN_AUDIENCE, RENEW_GRACE_MS);
     if (!checked.run) return checked;
     const { run, claims } = checked;
     run.sandbox ??= claims.sandbox;
-    // Redacted too: after a restart, the one the sandbox held was in no list yet.
-    if (!run.issued.includes(token)) run.issued = [...run.issued, token].slice(-KEPT_TOKENS);
+    // Redacted too: after a restart, the one the sandbox held may be in no list yet.
+    if (!run.issued.some((t) => t.token === token)) {
+      run.issued = [{ token, exp: claims.exp * 1000, at: 0 }, ...run.issued];
+    }
+    const last = run.issued.at(-1);
+    if (last.at && now() - last.at < RENEW_MIN_MS && last.exp > now()) return { token: last.token };
     return { token: signed(run, RUN_AUDIENCE, TOKEN_TTL_MS) };
   }
 
   // The tokens signed for the run that its output must not publish (runs.mjs).
   function secretsOf(handle) {
     const run = runOf(handle);
-    return run ? [run.agentToken, ...run.issued].filter(Boolean) : [];
+    return run ? [run.agentToken, ...run.issued.map((t) => t.token)].filter(Boolean) : [];
+  }
+
+  // Its run tokens alone, for its saved state (restart.mjs): after a restart, the one the sandbox
+  // holds is redacted before it is next renewed.
+  function issuedOf(handle) {
+    return (runOf(handle)?.issued ?? []).map((t) => t.token);
   }
 
   // Whether `req` comes from `run`'s own sandbox: its source address, not just the secret.
@@ -338,6 +377,7 @@ export function createBroker({
     check,
     renew,
     secretsOf,
+    issuedOf,
     revoke,
     runOf,
     sentBy,

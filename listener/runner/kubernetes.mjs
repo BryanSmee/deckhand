@@ -894,7 +894,6 @@ export function createKubernetesRunner({
     installing,
     relink,
     proxyAddresses,
-    sandboxOf,
     // The pod at that address is the sandbox: no other container of a run has one of its own.
     locate: async (ip) => {
       const sandbox = await sandboxOf(ip);
