@@ -27,7 +27,9 @@ import {
 // comments there, a brainstorm on its issue and its comments (issue #458), and remove only the
 // reactions they added (github-writes.mjs). Work runs reply to, resolve and unresolve their own
 // pull requests' review threads (issue #449: ../policy/gh-review-threads.rego narrows that to
-// work runs, and resolving to Deckhand's own threads). A repo that doesn't want it refuses it with
+// work runs, and resolving to Deckhand's own threads). A work run reruns the failed GitHub
+// Actions jobs of its pull request's head (`rerun`, issue #451), which Deckhand's default policy
+// narrows to once per workflow run (../policy/gh-actions-rerun.rego). A repo that doesn't want it refuses it with
 // `deny_github`, per mode if it likes.
 const WORK_CEILING = {
   own_issue: ["edit", "comment", "label", "link", "react", "unreact"],
@@ -43,6 +45,7 @@ const WORK_CEILING = {
     "reply",
     "resolve",
     "unresolve",
+    "rerun",
   ],
   sub_issue: ["edit", "comment", "label", "link", "react", "unreact"],
   created_issue: ["edit", "comment", "label", "link", "react", "unreact"],

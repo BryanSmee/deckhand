@@ -89,7 +89,7 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
   assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
 });
 
-test("a restored run keeps the issues it created and the comments it posted, and saves those it adds next", async (t) => {
+test("a restored run keeps the issues it created, the comments it posted and the workflow runs it reran, and saves those it adds next", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});
   const ctx = {
@@ -113,6 +113,7 @@ test("a restored run keeps the issues it created and the comments it posted, and
         { number: 30, at: 5 },
         { comment: 3000000001, at: 5 },
       ],
+      reruns: [{ run_id: 70, sha: "abc", at: 4 }],
     }),
   );
   // Saved before runs kept them: none.
@@ -124,9 +125,12 @@ test("a restored run keeps the issues it created and the comments it posted, and
     { comment: 3000000001, at: 5 },
   ]);
   assert.deepEqual(broker.runOf(old).created, []);
+  // The workflow runs it reran too, which bound its next reruns (github-writes.mjs MAX_RERUNS).
+  assert.deepEqual(run.reruns, [{ run_id: 70, sha: "abc", at: 4 }]);
+  assert.deepEqual(broker.runOf(old).reruns, []);
   // What github-writes.mjs answered() does for the next one: the live state's own list.
   run.created.push({ number: 31, at: 6 }, { comment: 3000000002, at: 6 });
-  run.createdChanged();
+  run.changed();
   const task = [...ctx.tasks.values()].find((t) => t.live.secret === secret);
   await task.live.saving;
   const again = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
@@ -135,6 +139,14 @@ test("a restored run keeps the issues it created and the comments it posted, and
     { comment: 3000000001, at: 5 },
     { number: 31, at: 6 },
     { comment: 3000000002, at: 6 },
+  ]);
+  run.reruns.push({ run_id: 71, sha: "abc", at: 7 });
+  run.changed();
+  await task.live.saving;
+  const third = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
+  assert.deepEqual(third.reruns, [
+    { run_id: 70, sha: "abc", at: 4 },
+    { run_id: 71, sha: "abc", at: 7 },
   ]);
 });
 

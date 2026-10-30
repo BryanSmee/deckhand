@@ -3615,7 +3615,7 @@ mounts:
     );
     await listener.until("lacks the permission discussions: write");
     // Listed at start, before anyone opens the dashboard.
-    const start = `installation on org lacks actions: read: an owner of the account accepts the new permissions on ${installation.html_url}`;
+    const start = `installation on org lacks actions: write: an owner of the account accepts the new permissions on ${installation.html_url}`;
     await listener.until(start);
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
@@ -3637,7 +3637,7 @@ mounts:
     assert.deepEqual(app.missingPermissions, ["discussions: write"]);
     // What the App lacks is said for the App alone.
     assert.deepEqual(app.installations, [
-      { account: "org", url: installation.html_url, missing: ["actions: read"] },
+      { account: "org", url: installation.html_url, missing: ["actions: write"] },
     ]);
   });
 

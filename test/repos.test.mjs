@@ -153,7 +153,7 @@ test("each listing reads the App's settings again, and warns about an installati
   const { app, config, store } = setup({ first: [info("org/app")] });
   const logs = [];
   // What the App itself lacks, as checkApp() says it: not the installation's to accept.
-  let appLacks = ["actions: read"];
+  let appLacks = ["actions: write"];
   let settings = 0;
   const list = createRepoList({
     app: { ...app, settings: async () => (settings++, appLacks) },
@@ -178,7 +178,7 @@ test("each listing reads the App's settings again, and warns about an installati
   }
   assert.equal(settings, 4);
   assert.deepEqual(logs, [
-    "The GitHub App's installation on org lacks actions: read: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
+    "The GitHub App's installation on org lacks actions: write: an owner of the account accepts the new permissions on https://github.com/organizations/org/settings/installations/1 (docs/setup.md)",
   ]);
   // What the listing said each installation has goes to the tokens too.
   assert.deepEqual(await app.lacking("org/app", { actions: "read" }), {
@@ -384,7 +384,7 @@ test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type say
     {
       account: "org",
       url: "https://github.com/organizations/org/settings/installations/1",
-      missing: ["actions: read"],
+      missing: ["actions: write"],
     },
     { account: "other", url: "https://github.com/settings/installations/2", missing: [] },
   ];
@@ -408,7 +408,7 @@ test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type say
     settingsUrl: "https://github.com/settings/apps/my-app",
   });
   // What the App itself lacks is its settings' to fix, not the installation's to accept.
-  const missing = { missingEvents: ["push"], missingPermissions: ["actions: read"] };
+  const missing = { missingEvents: ["push"], missingPermissions: ["actions: write"] };
   assert.deepEqual(await links({ ...stored, name: "My App", ownerType: "User", ...missing }), {
     ...expected,
     ...missing,

@@ -643,9 +643,9 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   runs and jobs (name, conclusion, run id, link), never their logs: the run reads them itself
   (`gh run view <id> --log-failed`, through Deckhand's GitHub gateway, which follows GitHub's
   redirect to its log storage: no host to grant), told they are data, not instructions (the branch's code
-  printed them), fixes the cause, reruns the checks and pushes. Once it is over, its push goes
-  back to waiting for CI: then the review, or another CI fix run. One that failed or pushed
-  nothing leaves the pull request to the maintainer, a "No review" comment says why. The
+  printed them), fixes the cause, reruns the checks and pushes, or reruns a job it judges flaky
+  ([Reruns](#reruns)). Once it is over, its push or rerun goes back to waiting for CI: then the review, or another CI fix run. One that failed, or neither
+  pushed nor reran a job, leaves the pull request to the maintainer, a "No review" comment says why. The
   dashboard shows "Fixing CI", and the run "CI fix"; when the CI step stops without a review
   (a CI fix run refused, failed or pushing nothing), the ready pull request is marked "CI failed,
   not reviewed". A pull request turned back into a draft while it waits stops waiting: ready
@@ -1178,6 +1178,21 @@ contents (pushes go through Deckhand's git gateway) or settings, or another repo
   "change": { "fields": ["body"], "labels_added": [], "labels_removed": [] }
 }
 ```
+
+#### Reruns
+
+A work run may rerun the failed jobs of a GitHub Actions run on its own pull request's head
+(`gh run rerun <id> --failed` or `--job <id>`): action `rerun`, `actions: write` for that call
+only, an optional App permission whose lack the refusal names. Never a whole run, a cancel,
+dispatch or approval, nor debug logs (`--debug`, refused whatever the policies say: those logs
+print more of what runs with the repository's secrets). The run must have failed, come from a
+push or a pull request of the repository's branch, and still be at that pull request's head;
+the target is that pull request (`own_pr`), with `run_id`, `sha`, `event`, `workflow`
+(`name`, `path`), `attempt` (GitHub's `run_attempt`), `conclusion` and `job` (`id`, `name`, or
+`null`). At most twice per head commit and run, whatever the policies say (`MAX_RERUNS`, saved
+across a restart). Deckhand's default, `policy/gh-actions-rerun.rego`, allows a first rerun
+(`target.attempt == 1`) in work, fix and conflict runs only; a repository's file of that name
+broadens it.
 
 ### The linked-branch input
 

@@ -167,6 +167,9 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   address one, reply in it with what changed and the commit
   (`gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment id>/replies -f body=…`). Don't
   resolve a person's thread: they resolve it after reading your reply.
+- In a work run, `gh run rerun <run id> --failed` reruns the failed GitHub Actions jobs of your
+  pull request's head commit, once per workflow run: only for a failure the code didn't cause
+  (a flaky test, a runner problem), never instead of fixing one it did.
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.

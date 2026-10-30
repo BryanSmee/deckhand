@@ -154,6 +154,29 @@ test("a run that answered, its inbox closed, and stays silent: stopped, its answ
   assert.match(readFileSync(logPath, "utf8"), /"event":"ended",.*"after":60/);
 });
 
+test("a CI fix run that is over: the reviews get its outcome and the reruns it made", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { mode: "work" });
+  const fixed = [];
+  ctx.reviews = { runEnded: () => {}, ciFixed: async (run) => fixed.push(run) };
+  task.base = "trunk";
+  task.live.light = false;
+  task.live.handled = [{ reason: "ci-fix", replyTo: 5 }];
+  // What the GitHub gateway kept of the run's reruns (github-writes.mjs answered()).
+  task.live.reruns = [{ run_id: 7, sha: "sha-1", at: 1 }];
+  runner.out(result("Reran the flaky job."));
+  await runner.kill();
+  await following;
+  assert.deepEqual(fixed, [
+    {
+      repo: "org/repo",
+      number: 5,
+      base: "trunk",
+      status: "ok",
+      reruns: [{ run_id: 7, sha: "sha-1", at: 1 }],
+    },
+  ]);
+});
+
 test("output after the answer postpones its stop", async (t) => {
   const { runner, answers, following } = setup(t, { graceMs: 80 });
   runner.out(result("A first answer."));

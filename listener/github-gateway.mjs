@@ -397,6 +397,9 @@ export function createGithubGateway({
       return fail(res, 429, `more than ${maxInFlight} calls at once`);
     }
     if (counted) inFlight.set(run, calls + 1);
+    // A rerun's slot (github-writes.mjs reserve()): free again once the call is over, unless
+    // GitHub's answer made it a rerun done.
+    let slot = null;
     try {
       let body;
       // A fetch's: the repository whose refs GitHub's answer advertises (info/refs, ls-refs), for
@@ -520,7 +523,11 @@ export function createGithubGateway({
           graphql: false,
           pulls: pull ? [pull] : [],
         };
-        refused = await checkWrite(run, { method: req.method, path: where.path, body });
+        // The checks may add what GitHub's answer is kept with (a rerun's run: github-writes.mjs
+        // check()).
+        const asked = { method: req.method, path: where.path, body };
+        refused = await checkWrite(run, asked);
+        if (asked.rerun) watched.rerun = slot = asked.rerun;
         // A POST that writes nothing (rendering markdown) passes, with a token that only reads.
         writing = !refused && !classified?.read;
         permissions = classified?.permissions ?? {};
@@ -533,6 +540,7 @@ export function createGithubGateway({
         inflated,
       });
     } finally {
+      slot?.release?.();
       if (counted) inFlight.set(run, inFlight.get(run) - 1);
     }
   }
@@ -787,7 +795,12 @@ export function createGithubGateway({
       what: "GitHub gateway",
       idleMs,
       clock,
-      ...((watched || advertised) && { tap, answered: (code) => (status = code) }),
+      // No answer (`lost`): 0, the write may have gone out all the same (github-writes.mjs
+      // answered() counts a rerun then).
+      ...((watched || advertised) && {
+        tap,
+        answered: (code, _, lost) => (status = lost ? 0 : code),
+      }),
       ...(logs && { follow }),
     });
     if (refs && status === 200) forks.remember(run, advertised, refs.refs());

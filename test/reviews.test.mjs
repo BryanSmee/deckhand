@@ -1611,6 +1611,8 @@ const GREEN = { id: 1, name: "CI", status: "completed", conclusion: "success" };
 const RED = {
   id: 7,
   name: "Tests",
+  event: "pull_request",
+  run_attempt: 1,
   status: "completed",
   conclusion: "failure",
   html_url: "https://github.com/org/repo/actions/runs/7",
@@ -1685,8 +1687,8 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
       repository: { full_name: "org/repo" },
       workflow_run: { head_sha: sha },
     });
-  const ciFixed = (status = "ok") =>
-    reviews.ciFixed({ repo: "org/repo", number: 5, base: "trunk", status });
+  const ciFixed = (status = "ok", reruns = []) =>
+    reviews.ciFixed({ repo: "org/repo", number: 5, base: "trunk", status, reruns });
   const of = (reason) => accepted.filter((i) => i.reason === reason);
   const entry = () => reviews.entry("org/repo", 5);
   return {
@@ -1955,6 +1957,117 @@ test("review.ci: a CI fix run that failed or pushed nothing leaves it to the mai
     assert.equal(s.accepted.length, 1);
     assert.equal(s.entry().ciWaiting, undefined);
   }
+});
+
+test("review.ci: a CI fix run that reran its head's failed jobs goes back to waiting for CI", async (t) => {
+  const s = ciSetup(t, CI, { gh: { runs: [RED] } });
+  const item = await s.ready();
+  assert.match(
+    item.text,
+    /you may rerun the failed jobs of run 7 once instead of changing code: `gh run rerun <run id> --failed`\. Then/,
+  );
+  // A rerun of another commit's run counts for nothing: it pushed nothing for sha-1.
+  assert.equal(await s.ciFixed("ok", [{ run_id: 7, sha: "sha-0", at: 1 }]), null);
+  assert.match(s.replies.at(-1), /the CI fix run pushed nothing, so CI still fails on sha-1/);
+  const again = ciSetup(t, CI, { gh: { runs: [RED] } });
+  await again.ready();
+  again.gh.runs = [GOING];
+  assert.equal(await again.ciFixed("ok", [{ run_id: 7, sha: "sha-1", at: 1 }]), null);
+  assert.deepEqual(
+    [again.entry().ciWaiting.sha, again.entry().ciWaiting.afterCiFix, again.entry().ciStopped],
+    ["sha-1", "reran", undefined],
+  );
+  assert.deepEqual(again.entry().ciWaiting.reran, [7]);
+  assert.equal(again.replies.length, 1);
+  // The rerun passed: the review.
+  again.gh.runs = [GREEN];
+  await again.runDone("sha-1");
+  assert.equal(again.of("review").length, 1);
+});
+
+test("review.ci: jobs a CI fix run reran fail again: the next one is told they aren't flaky", async (t) => {
+  const s = ciSetup(t, `${CI}  ci_fix: 2\n`, { gh: { runs: [RED] } });
+  await s.ready();
+  s.gh.runs = [GOING];
+  assert.equal(await s.ciFixed("ok", [{ run_id: 7, sha: "sha-1", at: 1 }]), null);
+  // The rerun fails again, on the same commit: the second round, which reruns nothing.
+  s.gh.runs = [RED];
+  await s.runDone("sha-1");
+  const [, second] = s.of("ci-fix");
+  assert.ok(second);
+  assert.match(
+    second.text,
+    /This is CI fix run 2 of 2: the previous one reran the failed jobs of run 7 on this same commit and they failed again, so that failure isn't flaky: fix its cause in the code\./,
+  );
+  assert.doesNotMatch(second.text, /gh run rerun|what the previous one pushed/);
+  // Two failed, one rerun: only that one is said not flaky, the other may still be rerun.
+  const LINT = {
+    ...RED,
+    id: 8,
+    name: "Lint",
+    html_url: "https://github.com/org/repo/actions/runs/8",
+  };
+  const partial = ciSetup(t, `${CI}  ci_fix: 2\n`, { gh: { runs: [RED, LINT] } });
+  await partial.ready();
+  partial.gh.runs = [GOING];
+  await partial.ciFixed("ok", [{ run_id: 8, sha: "sha-1", at: 1 }]);
+  assert.deepEqual(partial.entry().ciWaiting.reran, [8]);
+  partial.gh.runs = [RED, LINT];
+  await partial.runDone("sha-1");
+  const [, again] = partial.of("ci-fix");
+  assert.match(
+    again.text,
+    /the previous one reran the failed jobs of run 8 on this same commit and they failed again, so that failure isn't flaky/,
+  );
+  assert.match(
+    again.text,
+    /rerun the failed jobs of run 7 once .*`gh run rerun <run id> --failed` \(the other runs can't be rerun here\)/,
+  );
+  // Its rerun passed, the other still fails: told so, the rerun still offered for it.
+  const other = ciSetup(t, `${CI}  ci_fix: 2\n`, { gh: { runs: [RED, LINT] } });
+  await other.ready();
+  other.gh.runs = [GOING];
+  await other.ciFixed("ok", [{ run_id: 8, sha: "sha-1", at: 1 }]);
+  other.gh.runs = [RED, { ...LINT, conclusion: "success" }];
+  await other.runDone("sha-1");
+  const [, rest] = other.of("ci-fix");
+  assert.match(
+    rest.text,
+    /the previous one reran other failed jobs on this same commit and pushed nothing, so these still fail\./,
+  );
+  assert.match(rest.text, /`gh run rerun <run id> --failed`\. Then push nothing/);
+  // One that pushed and failed again is told so, and may still rerun a flaky job.
+  const pushed = ciSetup(t, `${CI}  ci_fix: 2\n`, { gh: { runs: [RED] } });
+  await pushed.ready();
+  pushed.gh.head = "sha-2";
+  const next = await pushed.ciFixed();
+  assert.match(next.text, /CI still failed on what the previous one pushed/);
+  assert.match(next.text, /gh run rerun <run id> --failed/);
+});
+
+test("ciFixMessage: a rerun offered only for the runs the gateway and the default policy take", () => {
+  const runs = [
+    { ...RED, id: 1 },
+    { ...RED, id: 2, run_attempt: 2 },
+    { ...RED, id: 3, event: "schedule" },
+    { ...RED, id: 4, conclusion: "startup_failure" },
+    { ...RED, id: 5, conclusion: "timed_out", event: "push" },
+  ];
+  const text = ciFixMessage(
+    5,
+    "abcdef123",
+    runs.map((r) => ({ ...r, jobs: [] })),
+  );
+  assert.match(
+    text,
+    /rerun the failed jobs of run 1, 5 once .*\(the other runs can't be rerun here\)/,
+  );
+  // None of them: no offer.
+  const none = ciFixMessage(5, "abcdef123", [
+    { ...runs[1], jobs: [] },
+    { ...runs[2], jobs: [] },
+  ]);
+  assert.doesNotMatch(none, /gh run rerun/);
 });
 
 test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {

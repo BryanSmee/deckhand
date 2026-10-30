@@ -27,6 +27,11 @@
 // A "blocked by" link (issue #437) is a `link` too: its target is the blocked issue, in the
 // path, and its blocker, by its id (the body's `issue_id`, or the path's when removed), one the
 // run created, one under its issue, or any open issue of its repository (resolveBlocker()).
+// A rerun of a GitHub Actions run's failed jobs (issue #451) names the workflow run, or one of
+// its jobs: its target is the pull request whose head that run tested, looked up from GitHub
+// (resolveRerun()), and only a failed run of the head of one of its own (`own_pr`), on a push
+// or a pull request of its branch, is rerun, at most MAX_RERUNS times per head commit and run of
+// Deckhand's.
 // A reaction (issue #458) on a comment has the comment's issue or pull request for its target,
 // looked up on GitHub (resolveReacted()), the comment in `target.comment` (its id, as a
 // `created_comment`'s), `comment_author` and `comment_deckhand`. The App's
@@ -41,6 +46,19 @@
 import { branchAllowed } from "./broker.mjs";
 import { CONTENTS_WRITE, createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
 import { BUILT_IN, ceilingOf, issueLabelOf } from "./modes.mjs";
+
+// What a rerun's token needs beyond its mode's: GitHub reruns a job with `actions: write`, an
+// optional permission of the App's (github-app.mjs OPTIONAL_PERMISSIONS), which the sandbox's
+// own token never has.
+export const ACTIONS_WRITE = { actions: "write" };
+// How many reruns one run of Deckhand's makes on one head commit (its workflow runs' failed jobs,
+// or single jobs), whatever the policies allow: GitHub's own `run_attempt` counts every rerun of
+// a workflow run, the policies read it (`target.attempt`).
+export const MAX_RERUNS = 2;
+// A workflow run's or job's conclusions a rerun is for.
+export const RERUN_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
+// The events whose runs test a branch's head: a push to it, its pull request.
+export const RERUN_EVENTS = new Set(["push", "pull_request"]);
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
 // so they are refused before any look-up.
@@ -94,6 +112,14 @@ function blocker(value) {
   return Number.isSafeInteger(id) && id > 0 ? { id } : null;
 }
 
+// Whether a rerun's body turns on GitHub's runner and step debug logs (`enable_debug_logging`,
+// any value but false, however GitHub would read it): they print more of the environment and of
+// the expressions a workflow evaluates, in runs that see the repository's secrets, and the run
+// reads its logs. Refused (checkWrite()): a rerun reruns, nothing more.
+function rerunDebug(body) {
+  return "enable_debug_logging" in body && body.enable_debug_logging !== false;
+}
+
 // A comment a reaction names, by its path: an issue's or pull request's (`issue`), or a review
 // comment (`review`).
 const reactedOf = (where, id) => ({ id: +id, type: /^pulls$/i.test(where) ? "review" : "issue" });
@@ -109,7 +135,7 @@ export function reactionSubject({ number, reacted }) {
 // change, pull, thread, permissions }]: `pull`, a pull request's own write's head, base and
 // draft, or its branch update's expected head and method (github-pulls.mjs), `thread`, a review
 // thread's comment it answers, `permissions`, what its token needs beyond its mode's
-// (PULL_WRITE, CONTENTS_WRITE).
+// (PULL_WRITE, CONTENTS_WRITE, ACTIONS_WRITE).
 // `number`: an issue's or pull request's; `body`: the write's JSON.
 const ROUTES = [
   [
@@ -300,6 +326,29 @@ const ROUTES = [
       permissions: CONTENTS_WRITE,
     }),
   ],
+  // A rerun of a workflow run's failed jobs, or of one job (with those that need it): not a
+  // whole run's (`…/rerun`), nor cancelling, dispatching or approving one. `debug`: whether it
+  // asks for debug logs (rerunDebug()).
+  [
+    "POST",
+    /^actions\/runs\/(\d+)\/rerun-failed-jobs$/i,
+    (m, body) => ({
+      actions: ["rerun"],
+      target: { run_id: +m[1] },
+      permissions: ACTIONS_WRITE,
+      debug: rerunDebug(body),
+    }),
+  ],
+  [
+    "POST",
+    /^actions\/jobs\/(\d+)\/rerun$/i,
+    (m, body) => ({
+      actions: ["rerun"],
+      target: { job_id: +m[1] },
+      permissions: ACTIONS_WRITE,
+      debug: rerunDebug(body),
+    }),
+  ],
   // A reply in a review thread: GitHub takes it with `pull_requests: write`.
   [
     "POST",
@@ -361,6 +410,7 @@ export function classify(method, path, body) {
       ...(write.pull && { pull: write.pull }),
       ...(write.thread && { thread: write.thread }),
       ...(write.permissions && { permissions: write.permissions }),
+      ...(write.debug && { debug: true }),
       change: {
         fields: Array.isArray(json) ? [] : Object.keys(json),
         labels_added: [],
@@ -574,6 +624,71 @@ export function createWriteChecks({
     return null;
   }
 
+  // A rerun's workflow run, or job → { target } (resolve()'s, for the pull request whose head it
+  // tested, with the run's: `run_id`, `sha`, `event`, `workflow` { name, path }, `attempt`,
+  // `conclusion`, the job's for a job, and `job` { id, name }, else null) or { refused }: a run
+  // that failed, of a push or a pull request of a branch of the repo, whose head commit is
+  // still that of an open pull request of that branch. Whether the pull request is the run's
+  // own is its kind's, held to the ceiling as any target's.
+  async function resolveRerun(run, repo, { run_id, job_id }, get) {
+    let job = null;
+    if (job_id !== undefined) {
+      job = await get(repo, `/repos/${repo}/actions/jobs/${job_id}`);
+      if (!job) return { refused: refusal(404, `job ${job_id} isn't there`) };
+    }
+    const id = job ? job.run_id : run_id;
+    const at = Number.isSafeInteger(id)
+      ? await get(repo, `/repos/${repo}/actions/runs/${id}`)
+      : null;
+    if (!at) return { refused: refusal(404, `workflow run ${id ?? "?"} isn't there`) };
+    const what = job ? `job ${job_id}` : `workflow run ${id}`;
+    const no = (why) => ({
+      refused: refusal(
+        403,
+        `a run reruns only the failed GitHub Actions runs of its own pull request's head: ${why}`,
+      ),
+    });
+    const conclusion = (job ?? at).conclusion ?? null;
+    if (!RERUN_CONCLUSIONS.has(conclusion)) {
+      return no(`${what} ${conclusion ? `ended with ${conclusion}` : "hasn't finished"}`);
+    }
+    if (!RERUN_EVENTS.has(at.event)) {
+      return no(`workflow run ${id} ran on ${at.event}, not a push or a pull request`);
+    }
+    const branch = at.head_branch;
+    if (at.head_repository?.full_name?.toLowerCase() !== repo || typeof branch !== "string") {
+      return no(`workflow run ${id} isn't of a branch of ${repo}`);
+    }
+    const owner = repo.split("/")[0];
+    const list = await get(
+      repo,
+      `/repos/${repo}/pulls?head=${encodeURIComponent(`${owner}:${branch}`)}&state=open&per_page=100`,
+    );
+    const pr = Array.isArray(list)
+      ? list.find(
+          (p) => p?.head?.sha === at.head_sha && p.head.repo?.full_name?.toLowerCase() === repo,
+        )
+      : null;
+    if (!pr?.number || !at.head_sha) {
+      const sha = String(at.head_sha ?? "?").slice(0, 7);
+      return no(`${sha} isn't the head of an open pull request of ${branch}`);
+    }
+    const target = await resolve(run, repo, pr.number, get);
+    if (!target) return { refused: refusal(404, `#${pr.number} isn't there`) };
+    return {
+      target: {
+        ...target,
+        run_id: id,
+        sha: at.head_sha,
+        event: at.event,
+        workflow: { name: at.name ?? null, path: at.path ?? null },
+        attempt: (job ?? at).run_attempt ?? 1,
+        conclusion,
+        job: job ? { id: job_id, name: job.name ?? null } : null,
+      },
+    };
+  }
+
   // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the pull
   // requests it changed go to the dashboard (github-pulls.mjs answered()), and the issues it
   // created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
@@ -593,6 +708,18 @@ export function createWriteChecks({
     pulls
       .answered(run, call, status, answer)
       .catch((error) => log(`GitHub gateway: ${run.repo}: ${error.stack ?? error}`));
+    // GitHub answers a rerun with an empty body. Its slot is a rerun done now, or free again.
+    // No answer at all (status 0: the connection failed or was cut, the gateway's answered()):
+    // GitHub may have taken it, so it counts, fail closed.
+    if (call.rerun) {
+      // A rerun GitHub took (a 201) stays on the run (`run.reruns`, saved with it: restart.mjs) for
+      // MAX_RERUNS and the CI step (reviews.mjs afterCiFix()), with the workflow run and head
+      // commit its check resolved (check()), never asked again: a look-up failing then would
+      // leave it uncounted. Settled before the gateway's answer is over, so before the run exits.
+      if (status === 201 || status === 0) call.rerun.settle?.(at);
+      call.rerun.release?.();
+      return;
+    }
     // A reaction removed is no longer the run's: the bot's same one, added again by the listener
     // (or answered 200 to the run), isn't.
     if (!graphql && status === 204) {
@@ -658,7 +785,7 @@ export function createWriteChecks({
       const dropped = new Set(kept.slice(0, kept.length - MAX_REACTIONS));
       run.created.splice(0, run.created.length, ...run.created.filter((c) => !dropped.has(c)));
     }
-    if (added) run.createdChanged?.();
+    if (added) run.changed?.();
   }
 
   // Takes the reactions `removed` names (answered()'s: { subject, id } or { subject, content })
@@ -669,18 +796,24 @@ export function createWriteChecks({
     if (!gone.size) return;
     const left = run.created.filter((c) => !gone.has(c?.reaction));
     run.created.splice(0, run.created.length, ...left);
-    run.createdChanged?.();
+    run.changed?.();
   }
 
   // A run's REST write → null when it may go on, else { status, message }: GitHub's status and
   // why, which `gh` prints. `path`, `body`: classify()'s.
-  async function check(run, { method, path, body }) {
+  // A rerun that passed sets the call's `rerun`, its slot (reserve(): { run_id, sha, release }),
+  // as resolved here: the gateway hands it back with GitHub's answer (answered()), and releases
+  // it once the call is over.
+  async function check(run, call) {
+    const { method, path, body } = call;
     const write = classify(method, path, body);
     if (write?.read) return null;
     if (!write) {
       return refusal(403, "it can't tell what this write does, so it refuses it");
     }
-    return checkWrite(run, write);
+    const refused = await checkWrite(run, write);
+    if (!refused && write.rerun) call.rerun = write.rerun;
+    return refused;
   }
 
   // A classified write (classify()'s shape, or a GraphQL mutation's: github-graphql.mjs) → the
@@ -704,6 +837,12 @@ export function createWriteChecks({
     if (write.child?.replace_parent) {
       return refusal(403, "a run can't move an issue from another parent (replace_parent)");
     }
+    if (write.debug) {
+      return refusal(
+        403,
+        "a run reruns GitHub Actions jobs without debug logs (enable_debug_logging)",
+      );
+    }
     let target = write.target;
     // A comment's reaction: its target is the issue or pull request the comment is on.
     let reacted = null;
@@ -717,7 +856,17 @@ export function createWriteChecks({
       if (!reacted) return refusal(404, `comment ${target.reacted.id} isn't there`);
       target = { number: reacted.number };
     }
-    if (target.comment !== undefined) {
+    if (target.run_id !== undefined || target.job_id !== undefined) {
+      let found;
+      try {
+        found = await resolveRerun(run, write.repo, target, get);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo} workflow run: ${error.message ?? error}`);
+        return refusal(502, "the workflow run can't be looked up on GitHub");
+      }
+      if (found.refused) return found.refused;
+      target = found.target;
+    } else if (target.comment !== undefined) {
       // Not one the run posted: another run's, the listener's or a person's, never looked up.
       if (!postedBy(run, target.comment)) {
         return refusal(403, notPosted(write.actions, write.repo));
@@ -847,8 +996,62 @@ export function createWriteChecks({
       const { open: _, ...blocked_by } = found;
       change.blocked_by = blocked_by;
     }
+    const rerun = write.actions.includes("rerun");
+    if (rerun && reruns(run, target.sha) >= MAX_RERUNS) return tooMany(run, target.sha);
     const pulled = await pulls.check(run, write, target, get);
     if (pulled) return pulled;
+    const denied = await deny(run, write, target, change);
+    if (denied || !rerun) return denied;
+    // Counted again with no await before the slot is taken: the run's calls in flight at once
+    // (another workflow run's rerun on the same commit) each passed the count above.
+    if (reruns(run, target.sha) >= MAX_RERUNS) return tooMany(run, target.sha);
+    write.rerun = reserve(run, target);
+    return null;
+  }
+
+  // The reruns a run made on head commit `sha`, and those GitHub hasn't answered yet.
+  function reruns(run, sha) {
+    return (run.reruns ?? []).filter((r) => r.sha === sha).length;
+  }
+
+  function tooMany(run, sha) {
+    const done = reruns(run, sha);
+    return refusal(
+      403,
+      `a run reruns GitHub Actions jobs at most ${MAX_RERUNS} times per head commit, and it reran or is rerunning ${done} on ${sha.slice(0, 7)}`,
+    );
+  }
+
+  // A rerun that passed its checks holds a slot: an entry of `run.reruns` marked `pending`, saved
+  // with the run before the call goes out, so a listener restarted meanwhile still counts it
+  // (GitHub may have taken it). GitHub's answer settles it (`settle()`, answered()), or it is
+  // taken out when GitHub refused it or it never went out (`release()`: the GitHub gateway calls
+  // it once the call is over, whatever happened; a settled one stays).
+  function reserve(run, target) {
+    if (!Array.isArray(run.reruns)) run.reruns = [];
+    const entry = { run_id: target.run_id, sha: target.sha, at: Date.now(), pending: true };
+    run.reruns.push(entry);
+    run.changed?.();
+    return {
+      run_id: entry.run_id,
+      sha: entry.sha,
+      settle: (at) => {
+        if (!entry.pending) return;
+        delete entry.pending;
+        entry.at = at ?? entry.at;
+        run.changed?.();
+      },
+      release: () => {
+        if (!entry.pending) return;
+        const i = run.reruns.indexOf(entry);
+        if (i >= 0) run.reruns.splice(i, 1);
+        run.changed?.();
+      },
+    };
+  }
+
+  // The policies' `deny_github` on a write within the ceiling: null, or its refusal.
+  async function deny(run, write, target, change) {
     if (!policies) return null;
     const input = {
       repo: run.repo,

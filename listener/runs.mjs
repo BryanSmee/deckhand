@@ -132,6 +132,9 @@ export function createRuns(ctx) {
     // The issues it creates and the comments it posts, as GitHub answers its calls
     // (github-writes.mjs), saved with it.
     const created = [];
+    // The GitHub Actions runs it reruns, with their head commit, the same (github-writes.mjs
+    // MAX_RERUNS).
+    const reruns = [];
     return {
       id,
       key,
@@ -148,6 +151,7 @@ export function createRuns(ctx) {
         issue: task.number,
         base: task.base,
         created,
+        reruns,
         reason,
       }),
       asked: replyTo, // where errors go
@@ -167,6 +171,7 @@ export function createRuns(ctx) {
       // What it may push (pushBranches()), once it starts.
       branches: [],
       created,
+      reruns,
       shots: null,
       lines: { out: 0, err: 0 }, // of its output read so far, so a restart skips them
       logPhase: null, // the part of the run its log is in (runlog.mjs PHASES, enterPhase())
@@ -791,6 +796,7 @@ export function createRuns(ctx) {
           number: ciRun.replyTo,
           base: task.base,
           status: record.status,
+          reruns: live.reruns,
         })
         .catch((error) => log(`${key}: after the CI fix run: ${error.stack ?? error}`));
     }
