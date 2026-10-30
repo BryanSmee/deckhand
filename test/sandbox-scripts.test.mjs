@@ -771,6 +771,26 @@ test("draft-pr's start leaves the issue's branch alone when it has commits that 
   assert.equal(start(), "main");
 });
 
+// A repo's own mode opens no branch or draft unless the listener linked one for it
+// (TASK_BRANCH, after the policies allowed it).
+test("draft-pr does nothing for a repo's own mode without TASK_BRANCH", (t) => {
+  const fake = tempDir(t, "gh-");
+  const calls = join(fake, "calls");
+  for (const tool of ["gh", "git"]) {
+    writeFileSync(join(fake, tool), `#!/bin/sh\necho "${tool} $1" >> ${calls}\n`);
+    chmodSync(join(fake, tool), 0o755);
+  }
+  const run = (env) =>
+    spawnSync(`${bin}draft-pr.sh`, ["start"], {
+      env: { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5", TASK_MODE: "plan", ...env },
+      encoding: "utf8",
+    }).status;
+  assert.equal(run({}), 0);
+  assert.equal(existsSync(calls), false);
+  assert.equal(run({ TASK_BRANCH: "" }), 0);
+  assert.equal(existsSync(calls), false);
+});
+
 // The branch the listener created at the base's head and linked to the issue (TASK_BRANCH,
 // linked-branch.mjs): checked out over the name an earlier run kept, given its first commit,
 // pushed, and its draft opened.

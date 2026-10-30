@@ -148,6 +148,28 @@ test("an issue that has a branch already, a fix or conflict run's, gets no other
   assert.equal(await other.link(), "issue-12-cafe-bientot");
 });
 
+// TASK_BRANCH lets a repo's own mode open a branch and draft (draft-pr.sh): only one the
+// policies let the listener link, never an existing one they weren't asked about.
+test("a repo's own mode on an issue that has a branch gets none, and no policy is asked", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "branches.rego": 'package deckhand\ndeny_link_branch contains "x" if false\n' },
+  });
+  const run = { mode: "plan", push: true, reason: null };
+  const l = linker({ branches: ["issue-12-pushed"], run, policies: policy.engine });
+  assert.equal(await l.link(taskOf({ mode: "plan" }, { repo: "org/repo" })), null);
+  assert.deepEqual([l.mutations, policy.evals, l.decided], [[], [], []]);
+  // Without a branch, the policies decide: allowed here, so linked.
+  const none = linker({ run, policies: policy.engine });
+  assert.equal(
+    await none.link(taskOf({ mode: "plan" }, { repo: "org/repo" })),
+    "issue-12-cafe-bientot",
+  );
+  assert.deepEqual(
+    policy.evals.map((e) => [e.rule, e.mode]),
+    [["deny_link_branch", "plan"]],
+  );
+});
+
 test("no link for a light run, a fork's, a pull request, or a run that can't push its branch", async () => {
   for (const task of [
     taskOf({ light: true }),

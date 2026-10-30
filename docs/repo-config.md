@@ -1072,8 +1072,8 @@ it (`createLinkedBranch`, what `gh issue develop` calls), so the **listener** do
 run starts, once nothing else can stop the run (its image built, its access checked), before
 its sandbox does: when the run may push its issue's branch (`issue-<n>-*`, not a light run nor
 a fork's) and the issue has no `issue-<n>-…` branch yet. A fix or conflict run's branch, or a
-later run's, exists already: nothing is linked then, and the issue's one branch is the one the
-sandbox checks out, even if the title changed since. The branch is named from the issue's
+later run's, exists already: nothing is linked then, and for a work run the issue's one branch
+is the one the sandbox checks out, even if the title changed since. The branch is named from the issue's
 title as the sandbox names it, created at the base branch's head, and the sandbox checks it
 out and pushes its first commit through the git gateway as usual (a branch with nothing over
 the base and no pull request yet gets that commit whenever a run checks it out). A refusal or
@@ -1103,7 +1103,8 @@ Deckhand's default, `gh-linked-branch.rego`, links work runs' branches only:
 
 A repository's own mode that a policy lets link one (its `.deckhand/policy/gh-linked-branch.rego`)
 also gets its branch checked out and its draft pull request opened by the sandbox, as a work
-run does.
+run does, but only on the run that links it: the policies aren't asked about a branch that
+exists already, so a repository mode's later runs get none.
 
 ```rego
 # .deckhand/policy/gh-linked-branch.rego: work runs and the repository's `plan` mode

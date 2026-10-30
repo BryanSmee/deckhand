@@ -5,8 +5,10 @@
 // the git gateway didn't check, and the sandbox (../sandbox/draft-pr.sh, TASK_BRANCH) adds its
 // "start work" commit and pushes through the gateway as before. Only when the issue has no
 // branch yet: a fix or conflict run's, or a later run's, already exists, and GitHub links no
-// existing branch; its one branch is then the sandbox's still (a title changed since names
-// another, and an earlier link whose run never started has no commit yet). Policies may refuse it (`deny_link_branch`, ../policy/gh-linked-branch.rego).
+// existing branch; for a work run, its one branch is then the sandbox's still (a title changed
+// since names another, and an earlier link whose run never started has no commit yet). Policies
+// may refuse it (`deny_link_branch`, ../policy/gh-linked-branch.rego). TASK_BRANCH is what lets
+// a repo's own mode open its branch and draft (draft-pr.sh): only a link the policies allowed.
 // Nothing here fails the run: without a link, the sandbox creates the branch itself.
 import { branchAllowed } from "./broker.mjs";
 import { getJson } from "./github.mjs";
@@ -59,8 +61,11 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
       const names = existing
         .map((r) => r.ref?.replace(/^refs\/heads\//, ""))
         .filter((name) => branchAllowed([pattern], name));
-      // Several: the sandbox's own name (draft-pr.sh) picks among them.
-      if (names.length) return names.length === 1 ? names[0] : null;
+      // Several: the sandbox's own name (draft-pr.sh) picks among them. A repo's own mode gets
+      // none: the policies weren't asked, and its sandbox opens no branch without them.
+      if (names.length) {
+        return names.length === 1 && (run.mode ?? live.mode) === "work" ? names[0] : null;
+      }
       const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`);
       if (issue.pull_request) return null;
       const head = await getJson(github, repo, `/repos/${repo}/git/ref/heads/${refPath(base)}`);

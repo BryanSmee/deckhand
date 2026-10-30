@@ -16,11 +16,12 @@
 #                            and the pushed work find them before the sandbox stops.
 #
 # Only for work runs on an issue: TASK_ISSUE (GitHub issue number, from the listener).
-# Brainstorms and pull request runs don't set it, so nothing is created for them. TASK_BRANCH:
-# the branch the listener created at the base's head and linked to the issue
-# (listener/linked-branch.mjs), checked out and given its first commit here; with it, a repo's
-# own mode a policy let link one opens its draft too. Never fails the run: problems go to
-# stderr.
+# Brainstorms and pull request runs don't set it, so nothing is created for them. TASK_BRANCH
+# (listener/linked-branch.mjs): the branch the listener just created at the base's head and
+# linked to the issue, or a work run's issue's one existing branch, checked out here (and given
+# its first commit when it has nothing over the base). A repo's own mode gets one only when the
+# policies let the listener link it this run: then it opens its branch and draft too. Never
+# fails the run: problems go to stderr.
 set -uo pipefail
 
 base=${BASE_BRANCH:-main}

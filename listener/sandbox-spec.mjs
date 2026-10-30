@@ -123,8 +123,9 @@ export function sandboxEnv(
     // The sandbox opens the issue's branch and draft pull request (../sandbox/draft-pr.sh);
     // not for pull requests without an issue.
     TASK_ISSUE: task.kind === "issue" && !light ? String(task.number) : "",
-    // The branch the listener just created at the base's head and linked to the issue
-    // (linked-branch.mjs): draft-pr.sh checks it out and adds its first commit.
+    // The issue's branch (linked-branch.mjs): the one the listener just created at the base's
+    // head and linked to the issue, or a work run's issue's one existing branch. draft-pr.sh
+    // checks it out, and adds its first commit when it has nothing over the base.
     TASK_BRANCH: (!light && live.linkedBranch) || "",
     // Reading and answering needs no project setup.
     SANDBOX_LIGHT: light ? "1" : "",
