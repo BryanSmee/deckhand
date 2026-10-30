@@ -114,11 +114,11 @@ export interface PullRequest {
 // pull request: its review, fix run or auto-merge (listener/reviews.mjs). `messages`: the
 // reasons, capped and redacted; a failure is one "policy error: …".
 export interface PolicyDecision {
-  decision: "merge" | "review" | "fix";
+  decision: "merge" | "review" | "fix" | "link_branch";
   rule: string;
   denied: boolean;
   messages: string[];
-  // The pull request it was about.
+  // The pull request it was about; the issue, for a linked branch (listener/linked-branch.mjs).
   pr: number;
   at: number;
   // The built-in gates checked before the policies, in order ("Checks green"…); absent on

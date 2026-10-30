@@ -149,3 +149,19 @@ test("a decision about an earlier pull request of the same issue: no badge, and 
   expect(screen.queryByText("A policy kept this pull request for a human")).toBeNull();
   expect(decisions()[0].textContent).toContain("Auto-merge of #25");
 });
+
+test("a linked branch's decision is the task's issue's, not another pull request's", () => {
+  const LINK = decision({
+    decision: "link_branch",
+    rule: "deny_link_branch",
+    denied: true,
+    messages: ["mode plan doesn't link a branch to its issue"],
+    pr: 22,
+  });
+  render(<Dashboard state={withTask({ decisions: [LINK] })} error={null} />);
+  openTab();
+  const [link] = decisions();
+  expect(link.textContent).toContain("Linked branch");
+  expect(link.textContent).not.toContain("of #22");
+  expect(link.textContent).toContain("deny_link_branch · 1 reason");
+});

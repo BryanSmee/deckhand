@@ -51,6 +51,7 @@ import { createHistory } from "./history.mjs";
 import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
+import { createLinkedBranches } from "./linked-branch.mjs";
 import { builtInPolicies, createPolicies } from "./policies.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
@@ -520,6 +521,16 @@ ctx.decisions = createDecisions({
   path: join(config.dataDir, "decisions.json"),
   dryRunPath: join(config.dataDir, "dry-runs.json"),
   secrets: () => operatorSecrets(ctx),
+});
+// A work run's branch, created and linked to its issue before its sandbox starts
+// (linked-branch.mjs).
+ctx.linkedBranches = createLinkedBranches({
+  github,
+  graphql,
+  policies,
+  runOf: (secret) => ctx.broker.runOf(secret),
+  decided: (key, entry) => ctx.decisions.record(key, entry),
+  log,
 });
 ctx.reviews = createReviews({
   path: join(config.dataDir, "reviews.json"),

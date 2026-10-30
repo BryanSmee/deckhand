@@ -65,6 +65,13 @@ export function createPreparation(ctx) {
     const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent, config, true);
     live.cached = cached;
     const digest = live.mode === "review" ? await reviewDigest(task, settings, note) : undefined;
+    // Its issue's branch (linked-branch.mjs), last: once nothing above can stop the run, so a
+    // failed preparation leaves no branch behind. Created and linked now when the issue has
+    // none, or its one branch already: the sandbox checks it out (TASK_BRANCH, draft-pr.sh).
+    // Null: the sandbox names and creates it, unlinked.
+    live.linkedBranch = live.cancelled
+      ? null
+      : ((await ctx.linkedBranches?.link(task, note)) ?? null);
     return {
       // Another agent takes over: the branches are part of what it is handed.
       message: handoff ? handoffMessage({ ...handoff, branches }) : message,

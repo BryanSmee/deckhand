@@ -654,20 +654,28 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     text,
     /- `deny_github` \(sample: a brainstorm's comment on it\): \*\*denies\*\*: `not on pull requests`/,
   );
-  assert.match(text, /sample writes, not decisions on this pull request/);
+  assert.match(text, /The sample lines .* are not decisions on this pull request/);
+  // deny_link_branch on the branch its work run would have had linked.
+  assert.match(
+    text,
+    /- `deny_link_branch` \(sample: a work run's branch linked to #12\): allows \(no file defines it\)/,
+  );
   assert.match(text, /<details><summary>The input/);
   const [json, samples] = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) =>
     JSON.parse(m[1]),
   );
   // The samples' inputs, in a block of their own.
-  assert.match(text, /<details><summary>The `deny_github` samples' inputs/);
+  assert.match(text, /<details><summary>The samples' inputs/);
   assert.deepEqual(
-    samples.map((x) => [x.sample, x.input.version, x.input.mode, x.input.target.kind]),
+    samples.map((x) => [x.sample, x.input.version, x.input.mode, x.input.target?.kind]),
     [
+      ["a work run's branch linked to #12", 1, "work", undefined],
       ["a work run's comment on its pull request", 1, "work", "own_pr"],
       ["a brainstorm's comment on it", 1, "brainstorm", "pr"],
     ],
   );
+  // The issue the pull request closes.
+  assert.equal(samples[0].input.issue, 12);
   assert.equal(json.version, 1);
   assert.equal(json.decision, "merge");
   assert.equal(json.pr.additions, 12);
@@ -680,12 +688,13 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["deny_merge", "merge", true],
       ["deny_review", "review", false],
       ["deny_fix", "fix", false],
+      ["deny_link_branch", undefined, false],
       ["deny_github", undefined, false],
       ["deny_github", undefined, false],
     ],
   );
   assert.deepEqual(
-    policy.evals.slice(3).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
+    policy.evals.slice(4).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),
     [
       ["work", "comment", "own_pr", 5],
       ["brainstorm", "comment", "pr", 5],
