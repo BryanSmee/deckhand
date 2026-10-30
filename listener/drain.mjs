@@ -8,19 +8,38 @@
 // this is cut, a little before Docker kills the process, so that it exits on its own.
 export const DRAIN_MS = 280_000;
 
+// The answers a server is sending, which a drain closes the connection of once sent: call it
+// as the server is made (`createServer()`), since the drain can't find them afterwards.
+const ANSWERS = Symbol("answers");
+export function drainable(server) {
+  server[ANSWERS] = new Set();
+  server.on("request", (req, res) => {
+    server[ANSWERS].add(res);
+    res.on("close", () => server[ANSWERS].delete(res));
+  });
+  return server;
+}
+
 // Resolves true once every connection of `server` is closed, false when `graceMs` ends first.
 // `also`: servers that don't listen but are handed connections (the proxy's decrypted
 // tunnels), whose answers close their connection too.
 export function drain(server, { graceMs = DRAIN_MS, also = [], setTimer = setTimeout } = {}) {
-  // Before the handler: the answer says the connection closes, and Node closes it once sent.
   for (const s of [server, ...also]) {
+    // Before the handler: the answer says the connection closes, and Node closes it once sent.
     s.prependListener("request", (req, res) => res.setHeader("connection", "close"));
+    // Answers under way, whose headers may have said keep-alive: their connection ends once
+    // they are sent, so that no request comes after them (an agent's next turn on the same
+    // connection would start a stream that lengthens the drain).
+    for (const res of s[ANSWERS] ?? []) {
+      const socket = res.socket;
+      res.on("finish", () => socket?.destroySoon());
+    }
   }
   return new Promise((resolve) => {
     const timer = setTimer(() => resolve(false), graceMs);
     timer.unref?.();
-    // Answers started before the drain leave a kept-alive connection idle once sent: closed
-    // then, as are those idle now.
+    // Kept-alive connections idle now, and those of servers that don't track their answers once
+    // idle.
     const idle = setInterval(() => server.closeIdleConnections(), 500);
     idle.unref?.();
     server.close(() => {

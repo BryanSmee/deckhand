@@ -725,11 +725,13 @@ clone`), and the hosts an agent has relayed (`relayed` in `agents/`, Antigravity
 On SIGTERM the listener closes its ports: the dashboard's and webhooks' at once (a delivery
 missed meanwhile comes back through `redeliveries.mjs`), and the broker's drains (`drain.mjs`):
 it takes no new connection, the calls in flight finish (agents' streams, pushes, `gh` calls,
-inbox long polls), each connection closing once its answer is sent, and the listener exits once
+inbox long polls), each connection closing as soon as its answer is sent (a kept-alive one included, so that no
+request follows it), and the listener exits once
 they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)
 ends. The egress policy, which the proxy asks about every sandbox connection (to any host), has
-a port of its own (`POLICY_PORT`, 8082), which stays open until the listener exits: the
-sandboxes' other traffic goes on during the drain. Compose's `POLICY_URL` names it; the broker's
+a port of its own (`POLICY_PORT`, 8082), which stays open until the broker has drained: the
+sandboxes' other traffic goes on during the drain. It closes last, its answers in flight sent (5 s
+at most), so that the proxy's next questions are refused and waited for rather than cut. Compose's `POLICY_URL` names it; the broker's
 port answers `/egress` too, as the proxy's default `POLICY_URL` (unchanged, so a deployment that
 relied on it keeps working), but a proxy asking there makes every new connection wait while the
 broker drains.

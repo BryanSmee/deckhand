@@ -32,7 +32,7 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { drain } from "../listener/drain.mjs";
+import { drain, drainable } from "../listener/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
 // Where they were first: the tests import them from here.
@@ -340,22 +340,24 @@ export function createProxy({
   }
 
   // Requests inside an intercepted tunnel: to its host, whatever their Host header says.
-  const inside = createServer((req, res) => {
-    const { to, address, relay: toListener, from } = req.socket.deckhand;
-    req.socket.deckhand.busy++;
-    res.on("close", () => {
-      req.socket.deckhand.busy--;
-      if (draining) closeIdle();
-    });
-    if (!req.url.startsWith("/")) {
-      res.writeHead(400, { "content-type": "text/plain" });
-      return res.end("Deckhand's egress proxy: expected a path\n");
-    }
-    if (toListener) return relayed(req, res, to.host, from).catch(() => res.destroy());
-    const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
-    const url = new URL(`https://${name}:${to.port}${req.url}`);
-    relay(req, res, { address, url, host: to.host }, true);
-  });
+  const inside = drainable(
+    createServer((req, res) => {
+      const { to, address, relay: toListener, from } = req.socket.deckhand;
+      req.socket.deckhand.busy++;
+      res.on("close", () => {
+        req.socket.deckhand.busy--;
+        if (draining) closeIdle();
+      });
+      if (!req.url.startsWith("/")) {
+        res.writeHead(400, { "content-type": "text/plain" });
+        return res.end("Deckhand's egress proxy: expected a path\n");
+      }
+      if (toListener) return relayed(req, res, to.host, from).catch(() => res.destroy());
+      const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
+      const url = new URL(`https://${name}:${to.port}${req.url}`);
+      relay(req, res, { address, url, host: to.host }, true);
+    }),
+  );
 
   // Plain HTTP: the request line holds the absolute URL. The CA's certificate, the
   // listener's to hand to sandboxes, at /deckhand-ca.crt.
@@ -513,7 +515,7 @@ export function createProxy({
     );
   }
 
-  const server = createServer(forward);
+  const server = drainable(createServer(forward));
   server.on("connect", (req, client, head) => {
     tunnel(req, client, head).catch(() => client.destroy());
   });

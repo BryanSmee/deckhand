@@ -83,6 +83,9 @@ import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
 
+// How long the egress policy's answers in flight get once the broker drained: they are quick.
+const POLICY_DRAIN_MS = 5000;
+
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
@@ -740,7 +743,7 @@ const web = http.listen();
 const brokerHttp = createBrokerHttp(ctx);
 const broker = brokerHttp.listen();
 // Not drained: the egress proxy asks it about every sandbox connection until the listener exits.
-brokerHttp.listenPolicy();
+const policy = brokerHttp.listenPolicy();
 
 // Deliveries GitHub couldn't hand over (the listener down, restarting, unreachable), asked for
 // again at start and every few minutes (redeliveries.mjs).
@@ -852,5 +855,10 @@ process.on("SIGTERM", () => {
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
     // The dashboard's streams: its page reconnects to the next listener.
     .finally(() => web.closeAllConnections());
-  Promise.all([saved, drained]).finally(() => process.exit(0));
+  // Last, the egress policy: closed, so that the proxy's next questions are refused and wait for
+  // the next listener, and its answers in flight are sent, rather than cut by the exit (which
+  // the proxy would take for a refusal).
+  Promise.all([saved, drained])
+    .then(() => drain(policy, { graceMs: POLICY_DRAIN_MS }))
+    .finally(() => process.exit(0));
 });

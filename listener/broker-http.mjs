@@ -13,6 +13,7 @@ import { egressPolicy, githubContent, githubHosts, matchHost } from "./egress.mj
 import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
+import { drainable } from "./drain.mjs";
 import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "./web.mjs";
 
@@ -217,7 +218,7 @@ export function createBrokerHttp(ctx) {
   }
 
   function listen() {
-    const server = createServer(handle).listen(config.brokerPort, () => {
+    const server = drainable(createServer(handle)).listen(config.brokerPort, () => {
       // BROKER_PORT=0 (the tests): the OS picks a free port, and sandboxes are sent to that one.
       if (!config.brokerPort) {
         const url = new URL(config.brokerUrl);
@@ -235,12 +236,13 @@ export function createBrokerHttp(ctx) {
   // answer, so it stays open until the listener exits. The broker's port answers /egress too,
   // for a proxy whose POLICY_URL still names it.
   function listenPolicy() {
-    const server = createServer((req, res) => {
+    const answer = (req, res) => {
       if (req.method === "GET" && req.url.startsWith("/egress?")) {
         return egressAnswer(req, res).catch(failed(res, "Egress", false));
       }
       sendJson(res, { error: "not found" }, 404);
-    }).listen(config.policyPort, () => {
+    };
+    const server = drainable(createServer(answer)).listen(config.policyPort, () => {
       config.policyPort = server.address().port;
       log(`Egress policy on :${config.policyPort}`);
     });
