@@ -22,7 +22,7 @@
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
-//   address(name)        its addresses on its network, its engine's too
+//   address(name)        its addresses on its network (its engine's: engineAddress())
 //   engineAddress(name)  its engine's alone
 //   relink()             joins the listener and the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
@@ -258,13 +258,11 @@ export function createDockerRunner({
   }
 
   // On every network it is on: its own, or the shared one of a sandbox an older listener
-  // started. Its engine's count as its own: the engine's pulls and containers go out under
-  // the run's hosts.
+  // started. The sandbox's alone, from one inspection, as engineAddress() is the engine's: the
+  // broker counts both as the run's (broker-http.mjs hasAddress()), and can tell whether the
+  // sandbox's is known yet (#517).
   async function address(name) {
-    const found = [
-      ...((await networks.addressesOf(name)) ?? []),
-      ...((await engineAddress(name)) ?? []),
-    ];
+    const found = (await networks.addressesOf(name)) ?? [];
     return found.length ? found : null;
   }
 

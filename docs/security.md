@@ -250,8 +250,9 @@ the broker then refuses it. It also only works from that run's sandbox (or its c
 engine): the [GitHub gateway](#the-github-gateway), the git gateway and the agents' API
 endpoints `/anthropic/` and
 `/openai/` compare the request's source address (for a call the egress proxy relayed, the
-address it names, below) with that run's addresses on its networks (`docker inspect`, looked
-up once per run and forgotten when its sandbox exits) and answer `403` otherwise. A secret
+address it names, below) with that run's addresses on its networks (`docker inspect`, kept
+once they include the sandbox's own, looked up again at most every 5 seconds before a secret is
+refused, and forgotten when its sandbox exits) and answer `403` otherwise. A secret
 that leaks, to a research run on the open web say, gets another sandbox neither GitHub, a
 push, nor calls on the operator's Claude or OpenAI credential. Google's endpoints still check
 the secret alone (#254).

@@ -62,12 +62,16 @@ async function hasAddress(ctx, task, ip, { again = false } = {}) {
   if (live.ip?.includes(ip)) return true;
   const now = (ctx.now ?? Date.now)();
   if (live.ip && !(again && now - (live.ipAt ?? 0) >= ADDRESS_RETRY_MS)) return false;
-  const found = (await ctx.runner.address(task.name)) ?? [];
+  // One inspection each, so they can't disagree. The engine's count as the run's: its pulls and
+  // containers go out under the run's hosts.
+  const own = (await ctx.runner.address(task.name)) ?? [];
   const engine = await ctx.runner.engineAddress(task.name);
   if (task.live !== live || !live.hosts) return false;
-  // The engine's address is its own whenever it is known: its connections are told apart by it.
-  live.engineIp = engine;
-  if (found.some((address) => !engine?.includes(address))) {
+  // Kept as soon as known, never lost to a lookup that failed: the engine's connections are
+  // told apart by it (no decrypted HTTPS, no token).
+  if (engine?.length) live.engineIp = engine;
+  const found = [...own, ...(live.engineIp ?? [])];
+  if (own.length) {
     live.ip = found;
     live.ipAt = now;
   }

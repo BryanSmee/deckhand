@@ -18,7 +18,7 @@ function twoRuns() {
   const engines = { a: ["10.1.0.3"], b: null };
   const runner = {
     proxyAddresses: async () => ["10.0.0.9"],
-    address: async (name) => (looked.push(name), [...addresses[name], ...(engines[name] ?? [])]),
+    address: async (name) => (looked.push(name), addresses[name].length ? addresses[name] : null),
     engineAddress: async (name) => engines[name],
   };
   const task = (name, repo) => ({
@@ -82,6 +82,27 @@ test("runAt: an engine started before its sandbox isn't kept as the run's addres
   looked.length = 0;
   assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
   assert.deepEqual(looked, []);
+});
+
+test("runAt: an engine's lookup that fails loses nothing, and keeps nothing (#518)", async () => {
+  const { ctx, tasks, runOf, addresses, engines } = twoRuns();
+  const b = runOf("org/b#2");
+  const live = tasks.get("org/b#2").live;
+  engines.b = ["10.2.0.3"];
+  addresses.b = [];
+  assert.equal(await runAt(ctx, b, "10.2.0.3"), true);
+  assert.deepEqual(live.engineIp, ["10.2.0.3"]);
+  // The engine's inspection fails once (Docker busy): what was known of it stays.
+  engines.b = null;
+  assert.equal(await runAt(ctx, b, "10.2.0.3"), true);
+  assert.deepEqual(live.engineIp, ["10.2.0.3"]);
+  assert.equal(live.ip, null, "the engine's address alone is never kept");
+  // The sandbox starts while the engine's inspection still fails: both are the run's.
+  addresses.b = ["10.2.0.2"];
+  assert.equal(await runAt(ctx, b, "10.2.0.2"), true);
+  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
+  // Its engine is still told apart: no record for its anonymous calls.
+  assert.equal(await runFrom(ctx, "10.2.0.3"), null);
 });
 
 test("runAt: an address not among those kept looks them up again, at most every 5 s", async () => {
