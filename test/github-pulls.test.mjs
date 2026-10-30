@@ -112,6 +112,10 @@ const GH_READY =
   "mutation PullRequestReadyForReview($input:MarkPullRequestReadyForReviewInput!){markPullRequestReadyForReview(input: $input){pullRequest{id}}}";
 const GH_DRAFT =
   "mutation ConvertPullRequestToDraft($input:ConvertPullRequestToDraftInput!){convertPullRequestToDraft(input: $input){pullRequest{id}}}";
+const GH_UPDATE_BRANCH =
+  "mutation PullRequestUpdateBranch($input:UpdatePullRequestBranchInput!){updatePullRequestBranch(input: $input){pullRequest{id}}}";
+// The head gh read before it asks for the update.
+const HEAD = "0123456789abcdef0123456789abcdef01234567";
 
 const CREATE = {
   repositoryId: "R_repo",
@@ -318,6 +322,104 @@ test("ready with conflicts isn't ready; back to draft is fine", async () => {
     (await graphql(work, call(GH_DRAFT, { pullRequestId: "PR_10" }))).refused,
     undefined,
   );
+});
+
+test("gh pr update-branch: a merge into the run's own pull request's branch, from the head it saw, with contents: write for that call", async () => {
+  const { rest, graphql, checked } = checks();
+  const work = run();
+  const merge = await graphql(
+    work,
+    call(GH_UPDATE_BRANCH, { pullRequestId: "PR_7", expectedHeadOid: HEAD, updateMethod: "MERGE" }),
+  );
+  assert.equal(merge.refused, undefined, merge.refused?.message);
+  assert.deepEqual(merge.permissions, { contents: "write" });
+  assert.deepEqual(
+    merge.pulls.map(({ number, ready }) => ({ number, ready })),
+    [{ number: 7, ready: false }],
+  );
+  // GitHub merges when no method is named.
+  const plain = await graphql(
+    work,
+    call(GH_UPDATE_BRANCH, { pullRequestId: "PR_7", expectedHeadOid: HEAD }),
+  );
+  assert.equal(plain.refused, undefined, plain.refused?.message);
+  const path = "repos/org/repo/pulls/7/update-branch";
+  assert.equal(await rest(work, "PUT", path, { expected_head_sha: HEAD }), null);
+  const written = classify("PUT", path, json({ expected_head_sha: HEAD }));
+  assert.deepEqual(written.actions, ["update_branch"]);
+  assert.deepEqual(written.permissions, { contents: "write" });
+  // The merge's workflows, as for the other writes that run them.
+  assert.deepEqual(checked, [
+    ["org/repo", "issue-1-x", "main"],
+    ["org/repo", "issue-1-x", "main"],
+    ["org/repo", "issue-1-x", "main"],
+  ]);
+  // A comment on it still gets no more than the mode's token.
+  const comment = classify("POST", "repos/org/repo/issues/7/comments", json({ body: "x" }));
+  assert.deepEqual(permissionsOf([comment]), {});
+});
+
+test("gh pr update-branch refused: a rebase, no expected head, another field, another branch, a fork's head, a light run", async () => {
+  const { rest, graphql, checked } = checks();
+  const work = run();
+  const update = (r, input) => graphql(r, call(GH_UPDATE_BRANCH, input));
+  const refused = [
+    [
+      update(work, { pullRequestId: "PR_7", expectedHeadOid: HEAD, updateMethod: "REBASE" }),
+      403,
+      /with a merge only: a rebase rewrites the commits Deckhand checked/,
+    ],
+    [
+      rest(work, "PUT", "repos/org/repo/pulls/7/update-branch", {
+        expected_head_sha: HEAD,
+        update_method: "rebase",
+      }),
+      403,
+      /with a merge only/,
+    ],
+    [update(work, { pullRequestId: "PR_7" }), 422, /from the head it saw/],
+    [rest(work, "PUT", "repos/org/repo/pulls/7/update-branch", {}), 422, /from the head it saw/],
+    [
+      rest(work, "PUT", "repos/org/repo/pulls/7/update-branch", { expected_head_sha: "main" }),
+      422,
+      /from the head it saw/,
+    ],
+    [
+      rest(work, "PUT", "repos/org/repo/pulls/7/update-branch", {
+        expected_head_sha: HEAD,
+        merge_method: "squash",
+      }),
+      403,
+      /without its merge_method/,
+    ],
+    // Another task's pull request: not the run's own, so not in its ceiling.
+    [
+      update(work, { pullRequestId: "PR_8", expectedHeadOid: HEAD }),
+      403,
+      /can't update_branch on pr #8/,
+    ],
+    [
+      rest(work, "PUT", "repos/org/repo/pulls/8/update-branch", { expected_head_sha: HEAD }),
+      403,
+      /can't update_branch on pr #8/,
+    ],
+    // The fork's pull request the run was started on: its head isn't the run's to write.
+    [
+      update(run("work", 9), { pullRequestId: "PR_9", expectedHeadOid: HEAD }),
+      403,
+      /#9's branch, issue-1-x, is not this run's/,
+    ],
+    [update(run("brainstorm"), { pullRequestId: "PR_7", expectedHeadOid: HEAD }), 403, /ceiling/],
+    [update(run("review"), { pullRequestId: "PR_7", expectedHeadOid: HEAD }), 403, /ceiling/],
+  ];
+  for (const [pending, status, why] of refused) {
+    const out = await pending;
+    const got = out?.refused ?? out;
+    assert.ok(got?.message, String(why));
+    assert.match(got.message, why);
+    assert.equal(got.status, status, got.message);
+  }
+  assert.deepEqual(checked, []);
 });
 
 test("allow_workflows: a branch whose workflows fail merged with its base is neither opened, edited, readied nor drafted", async () => {

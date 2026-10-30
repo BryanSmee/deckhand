@@ -60,25 +60,39 @@ that file asks for, so none can:
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
 - A sandbox's token only reads pull requests (see [Tokens](#tokens)). `gh pr create`,
-  `gh pr edit` and `gh pr ready [--undo]` (GitHub's `createPullRequest`, `updatePullRequest`,
-  `markPullRequestReadyForReview`, `convertPullRequestToDraft`, or REST's `POST` and `PATCH`
-  of `…/pulls`) go through the [GitHub gateway](#the-github-gateway) as any write, with
+  `gh pr edit`, `gh pr ready [--undo]` and `gh pr update-branch` (GitHub's `createPullRequest`,
+  `updatePullRequest`, `markPullRequestReadyForReview`, `convertPullRequestToDraft`,
+  `updatePullRequestBranch`, or REST's `POST` and `PATCH` of `…/pulls` and `PUT
+…/pulls/<n>/update-branch`) go through the [GitHub gateway](#the-github-gateway) as any write, with
   every `gh` flag the ceiling holds, and only a work run's ceiling holds them, for its own
   pull requests and new ones. Then `listener/github-pulls.mjs` checks that a new pull
   request's head is a branch of the repository the run may push (above), never
   `owner:branch`, another repository's head (`head_repo`, `headRepositoryId`) or an issue
   turned into one (`issue`), and that an existing one's head is too before it is edited,
-  readied or drafted, over any endpoint (`…/issues/<n>` included, which the run's own
+  readied, drafted or has its branch updated, over any endpoint (`…/issues/<n>` included, which the run's own
   `issues: write` would reach), or its token writes more than the run's own (a run on a
   fork's pull request may still comment on it and label it, not rewrite its author's title
   and description): another task's pull request is refused, and so is opening one from another branch.
   A pull request that conflicts with its base (`mergeable_state: dirty`) is refused ready
   with a 409 until the run rebases it. Only then does that one call get the token it needs
   besides the mode's: `pull_requests: write` to open or edit one, `contents: write` to ready
-  or draft one (GitHub asks an App's token for it), which the sandbox never sees, and which
+  or draft one or update its branch (GitHub asks an App's token for it), which the sandbox never sees, and which
   carries only the document the gateway checked. Only the head is checked: a run may open
   its pull request into any base branch, which it reaches only when a maintainer merges
   it.
+- Updating a pull request's branch (`update_branch`) is the one write to a branch that
+  doesn't go through the git gateway: GitHub commits a merge of the base into it. So it is
+  held to what the gateway would hold a push to: the head must be one of the run's own
+  branches, in its repository (never a fork's), as above; it is a merge only, since a rebase
+  (`updateMethod: REBASE`) would rewrite the commits the gateway let through; and it names the
+  head it applies to (`expected_head_sha`, `expectedHeadOid`), so GitHub refuses it when the
+  branch moved since the run looked. The merge brings nothing of the run's: only the base's
+  commits, already on that branch of the repository. Its workflow files still go through the
+  same merge check as readying the pull request does ([below](#github-actions-on-deckhands-branches)),
+  since the pull request's workflows then run from that merge with a base that may have
+  changed since the last push. GitHub refuses an update with conflicts, which the run rebases
+  locally as before. The default policy (`policy/gh-update-branch.rego`) allows it to work runs
+  only.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
@@ -135,9 +149,9 @@ branch edits. A workflow that doesn't merge cleanly refuses the push until the b
 rebased. A merge's workflows are followed into the reusable workflows they call, as merged,
 even when the tip has the same caller: a branch cut from an older default branch can pair its
 caller with the base's newer callee. The same merge check runs again before the listener
-opens, edits, readies or drafts a run's pull request (into whatever base it asks for), since
-each runs its workflows from a new merge (`opened`, `edited`, `ready_for_review`,
-`converted_to_draft`).
+opens, edits, readies or drafts a run's pull request (into whatever base it asks for), or
+updates its branch, since each runs its workflows from a new merge (`opened`, `edited`,
+`ready_for_review`, `converted_to_draft`, `synchronize`).
 The push is refused, with git's `[remote rejected]` naming the file and the rule, when
 a changed workflow:
 
@@ -362,7 +376,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
     are refused before any policy runs. A work run writes its own issue, its pull requests
-    (readying and drafting them too: [The default branch](#the-default-branch)), its issue's
+    (readying, drafting them and updating their branch with a merge too: [The default branch](#the-default-branch)), its issue's
     sub-issues and the issues it created (their labels too, but for `NEEDS_INPUT_LABEL`, which
     its label writes neither add nor remove there: taking it off answers their questions; an
     edit dropping their questions section still does), replies to, resolves and unresolves its pull

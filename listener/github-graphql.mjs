@@ -115,9 +115,9 @@ function updated(input) {
 // - pull(input), permissions: a pull request's own write's head, base and draft, and what its
 //   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
 // The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
-// edited (`gh pr create` sets its labels and milestone with `updatePullRequest`), readied and
-// drafted, and its review threads replied to, resolved and unresolved. Reviews and merges are
-// in none.
+// edited (`gh pr create` sets its labels and milestone with `updatePullRequest`), readied,
+// drafted and its branch updated, and its review threads replied to, resolved and unresolved.
+// Reviews and merges are in none.
 export const MUTATIONS = {
   createIssue: {
     target: "repositoryId",
@@ -331,6 +331,15 @@ export const MUTATIONS = {
     fields: [],
     actions: () => ["unresolve"],
     permissions: PULL_WRITE,
+  },
+  // `gh pr update-branch [--rebase]`: merge only, from the head the run saw (github-pulls.mjs).
+  updatePullRequestBranch: {
+    target: "pullRequestId",
+    types: ["PullRequest"],
+    fields: ["expectedHeadOid", "updateMethod"],
+    actions: () => ["update_branch"],
+    pull: (input) => ({ expected_head: input.expectedHeadOid, method: input.updateMethod }),
+    permissions: CONTENTS_WRITE,
   },
 };
 
@@ -615,7 +624,8 @@ function idsOf(fields) {
 
 // An input field's name as a REST body would name it, so a policy on `change.fields` reads one
 // spelling for both: `labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` →
-// `milestone`, `baseRefName` → `base`, `blockingIssueId` → `issue_id`, the others in snake case
+// `milestone`, `baseRefName` → `base`, `blockingIssueId` → `issue_id`, `expectedHeadOid` →
+// `expected_head_sha`, the others in snake case
 // (`subIssueId` → `sub_issue_id`).
 const REST_NAMES = {
   blockingIssueId: "issue_id",
@@ -624,6 +634,7 @@ const REST_NAMES = {
   milestoneId: "milestone",
   baseRefName: "base",
   headRefName: "head",
+  expectedHeadOid: "expected_head_sha",
 };
 export function restName(field) {
   return REST_NAMES[field] ?? field.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);

@@ -37,6 +37,7 @@ const WORK_CEILING = {
     "label",
     "ready",
     "draft",
+    "update_branch",
     "react",
     "unreact",
     "reply",

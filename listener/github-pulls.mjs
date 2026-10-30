@@ -6,16 +6,20 @@
 // - a pull request is opened from a branch of the run's repo it may push (broker.mjs allow()),
 //   never `owner:branch` nor another repository's head, and only with the fields GitHub's create
 //   takes for that (not `issue`, which turns an issue into one);
-// - one that is opened, edited, labelled, readied or drafted runs its workflows from a new merge
-//   of its branch with its base: for a repo granted `allow_workflows`, its workflow files are
-//   checked in that merge first, as the git gateway checks a push (git-gateway.mjs
-//   checkBranch());
+// - one that is opened, edited, labelled, readied, drafted or has its branch updated runs its
+//   workflows from a new merge of its branch with its base (an update commits that merge): for
+//   a repo granted `allow_workflows`, its workflow files are checked in that merge first, as the
+//   git gateway checks a push (git-gateway.mjs checkBranch());
 // - one that is edited, readied or drafted, over any endpoint (`…/pulls/<n>`, `…/issues/<n>`,
 //   GraphQL), or whose token must write more than its mode's (`permissions`: pull requests for a
 //   create or an edit, contents for ready and draft), is from one of the run's branches, not
 //   only the pull request it was triggered on: a fork's head isn't the run's to vouch for, nor
 //   its author's title and description the run's to rewrite. A comment or a label still is;
-// - one that conflicts with its base isn't made ready.
+// - one that conflicts with its base isn't made ready;
+// - its branch is updated (`gh pr update-branch`, issue #456) with a merge only, never a rebase,
+//   which would rewrite the commits the git gateway let through, and from the head the run saw
+//   (`expected_head_sha`, `expectedHeadOid`): that write reaches the branch past the git gateway,
+//   which the head being the run's own makes up for. GitHub refuses one that conflicts.
 //
 // Each change that went on is recorded for the dashboard at once (`record`, answered()): the
 // `pull_request` delivery that follows may never come.
@@ -27,11 +31,15 @@ const CREATE_FIELDS = new Set(["title", "body", "head", "base", "draft", "mainta
 // the default branch (`issue_comment`).
 const UNCHECKED = new Set(["comment", "react"]);
 // Actions on a pull request that need its head to be one of the run's branches.
-const OWN_BRANCH = new Set(["edit", "ready", "draft"]);
+const OWN_BRANCH = new Set(["edit", "ready", "draft", "update_branch"]);
+// What a branch update may send (REST's names: github-graphql.mjs restName()).
+const UPDATE_FIELDS = new Set(["expected_head_sha", "update_method"]);
+// A commit's ID: SHA-1's, or SHA-256's.
+const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 
 // What a pull request's own write needs of its token beyond its mode's: GitHub opens and edits
-// one with `pull_requests: write`, and readies or drafts one with `contents: write` for an
-// App's token.
+// one with `pull_requests: write`, and readies, drafts or updates the branch of one with
+// `contents: write` for an App's token.
 export const PULL_WRITE = { pull_requests: "write" };
 export const CONTENTS_WRITE = { contents: "write" };
 
@@ -69,6 +77,10 @@ export function createPullChecks({
       if (typeof base !== "string" || !base) return refusal(422, "a pull request needs its base");
       return workflows(repo, head, base, repo);
     }
+    if (write.actions.includes("update_branch")) {
+      const refused = updateRefusal(write);
+      if (refused) return refused;
+    }
     const ref = `${repo}#${target.number}`;
     let pr;
     try {
@@ -101,6 +113,29 @@ export function createPullChecks({
     }
     // A fork's workflows run without the repo's secrets: nothing of the run's to check.
     return own ? workflows(repo, branch, base, ref) : null;
+  }
+
+  // Why a branch update can't go on, or null: only the fields Deckhand checks, a merge, and
+  // the head it applies to.
+  function updateRefusal(write) {
+    const extra = write.change.fields.filter((f) => !UPDATE_FIELDS.has(f));
+    if (extra.length) {
+      return refusal(403, `a run updates a pull request's branch without its ${extra.join(", ")}`);
+    }
+    const { expected_head, method } = write.pull ?? {};
+    if (method != null && String(method).toUpperCase() !== "MERGE") {
+      return refusal(
+        403,
+        "a run updates its pull request's branch with a merge only: a rebase rewrites the commits Deckhand checked (rebase locally and push with --force-with-lease instead)",
+      );
+    }
+    if (typeof expected_head !== "string" || !OID.test(expected_head)) {
+      return refusal(
+        422,
+        "a run updates its pull request's branch from the head it saw: send it (expected_head_sha, expectedHeadOid)",
+      );
+    }
+    return null;
   }
 
   // Whether `branch`'s workflows may run merged with `base`: null, else why not.

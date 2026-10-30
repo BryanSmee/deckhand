@@ -5,7 +5,7 @@
 // policies' `deny_github` (policies.mjs) refuses nothing. A write it can't classify is refused.
 // GraphQL's mutations are classified by github-graphql.mjs (#406), each into the same shape,
 // and held to the same checks (checkWrite()). A pull request's own writes (opening, editing,
-// readying, drafting one) are then held to github-pulls.mjs's checks too.
+// readying, drafting one, updating its branch) are then held to github-pulls.mjs's checks too.
 //
 // Kinds: `own_issue` (the run's issue), `own_pr` (the run's pull request, or one from a branch
 // it may push: broker.mjs allow()), `sub_issue` (an issue whose parent is the run's, in its
@@ -39,7 +39,7 @@
 // comment that answers no thread, stays `review`.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
-import { createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
+import { CONTENTS_WRITE, createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
 import { BUILT_IN, ceilingOf, issueLabelOf } from "./modes.mjs";
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
@@ -107,8 +107,9 @@ export function reactionSubject({ number, reacted }) {
 
 // [method, path under the repo (case-insensitive), (match, body, method) → { actions, target,
 // change, pull, thread, permissions }]: `pull`, a pull request's own write's head, base and
-// draft (github-pulls.mjs), `thread`, a review thread's comment it answers, `permissions`, what
-// its token needs beyond its mode's (PULL_WRITE).
+// draft, or its branch update's expected head and method (github-pulls.mjs), `thread`, a review
+// thread's comment it answers, `permissions`, what its token needs beyond its mode's
+// (PULL_WRITE, CONTENTS_WRITE).
 // `number`: an issue's or pull request's; `body`: the write's JSON.
 const ROUTES = [
   [
@@ -288,10 +289,16 @@ const ROUTES = [
     }),
   ],
   ["PUT", /^pulls\/(\d+)\/merge$/i, (m) => ({ actions: ["merge"], target: { number: +m[1] } })],
+  // `gh pr update-branch` over REST: GitHub merges the base in (github-pulls.mjs).
   [
     "PUT",
     /^pulls\/(\d+)\/update-branch$/i,
-    (m) => ({ actions: ["update_branch"], target: { number: +m[1] } }),
+    (m, body) => ({
+      actions: ["update_branch"],
+      target: { number: +m[1] },
+      pull: { expected_head: body.expected_head_sha, method: body.update_method },
+      permissions: CONTENTS_WRITE,
+    }),
   ],
   // A reply in a review thread: GitHub takes it with `pull_requests: write`.
   [
