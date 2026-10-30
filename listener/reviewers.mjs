@@ -31,10 +31,19 @@ export function readyPull(config, event, p) {
 }
 
 // Whether GitHub's pull request `pr` is Deckhand's own, open, ready and on a branch of `repo`.
-function ownReady(config, repo, pr) {
+export function ownReady(config, repo, pr) {
   const login = pr?.user?.login?.toLowerCase();
   if (!config.bot || login !== config.bot.toLowerCase()) return false;
   return pr.state === "open" && !pr.draft && headInRepo(pr, repo);
+}
+
+// Whether a run that is over asks for its pull request's reviewers again (pushed()): one that
+// could push, finished (not an error, a cancel or a stop to ask, whose `WIP:` push is
+// unfinished work), and pushed during the run (`record.lastPushAt`, the git gateway's), on a
+// task whose pull request (`pull`, pulls.mjs's) is ready. A maintainer's push followed by a
+// run that pushed nothing isn't a fix.
+export function askAfterRun({ light, record, pull }) {
+  return !light && record?.status === "ok" && !!record.lastPushAt && pull?.state === "ready";
 }
 
 // The logins to request on `pr`: the repo's `review.request`, those the operator still allows

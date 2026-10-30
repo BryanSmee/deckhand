@@ -2646,7 +2646,7 @@ modes:
     const asked = await github.waitFor(requested);
     assert.deepEqual(JSON.parse(asked.body), { reviewers: ["alice"] });
     assert.equal(asked.auth, "Bearer app-token");
-    // The fix run will have pushed: a new head, which they are asked to look at again.
+    // Someone else moves the head (the fake fix run pushes nothing through the git gateway).
     files["pull:13"] = JSON.stringify({ ...pr, head: { ...pr.head, sha: "head-2" } });
     await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/pulls/13/reviews",
@@ -2671,8 +2671,11 @@ modes:
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/13/comments",
     );
     assert.equal(github.requests.filter((r) => r.path.endsWith("/pulls/13/reviews")).length, 1);
-    await listener.until("org/repo#pr-13: reviewers requested (fix): alice");
-    assert.equal(github.requests.filter(requested).length, 2);
+    // A run that pushed nothing fixed nothing: nobody is asked again, though the head moved
+    // (reviewers.mjs askAfterRun(), unit-tested with a push there).
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    assert.equal(github.requests.filter(requested).length, 1);
+    assert.doesNotMatch(listener.output(), /reviewers requested \(fix\)/);
   });
 
   test("review.merge: a clean review of Deckhand's pull request merges it once its checks pass, with the listener's token", async (t) => {

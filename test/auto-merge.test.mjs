@@ -661,7 +661,7 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   assert.match(text, /- `deny_merge`: \*\*denies\*\*: `a 'human' merges this one`/);
   assert.match(text, /- `deny_review`: allows \(no file defines it\)/);
   assert.match(text, /- `deny_fix`: allows \(no file defines it\)/);
-  assert.match(text, /- `deny_request_review`: allows \(no file defines it\)/);
+  assert.match(text, /- `deny_request_review`: allows \(no file defines it\)\n/);
   // deny_github on sample writes: a comment on the pull request by its work run, and by a
   // brainstorm.
   assert.match(
@@ -726,12 +726,30 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     ],
   );
   assert.equal(s.accepted.length + s.merges().length + s.replies.length + s.decided.length, 0);
+  // Nobody to request, or not Deckhand's ready pull request: its "allows" says the listener
+  // wouldn't ask.
+  const none = setup(t, { policies: policy.engine });
+  const nobody = await none.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  assert.match(
+    nobody.text,
+    /- `deny_request_review`: allows \(no file defines it\), but nobody would be requested: `review\.request` names no allowed user/,
+  );
+  const draft = setup(t, {
+    policies: policy.engine,
+    pr: { draft: true },
+    yaml: `${MERGE}  request: [alice]\n`,
+  });
+  const drafted = await draft.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  assert.match(
+    drafted.text,
+    /but nobody would be requested: not Deckhand's own ready pull request/,
+  );
   // Without policies: said, no GitHub call for the pull request.
-  const none = setup(t, { policies: policyEngine(t).engine });
-  const said = await none.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  const empty = setup(t, { policies: policyEngine(t).engine });
+  const said = await empty.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
   assert.match(said.text, /No policy applies here/);
   assert.equal(said.denials, 0);
-  assert.equal(none.calls.length, 0);
+  assert.equal(empty.calls.length, 0);
 });
 
 test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's own mode", () => {

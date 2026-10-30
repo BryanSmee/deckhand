@@ -45,7 +45,7 @@ import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { INPUT_VERSION, pullInput, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
-import { requestInput, reviewersFor, runFields } from "./reviewers.mjs";
+import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -863,8 +863,10 @@ const OWNERS = { deckhand: "Deckhand's", operator: "the operator's" };
 // The reply to `/mode policy` (reviews' dryRun()): which files apply, each rule's result, and
 // the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
 // no policy applies here.
-// `results[]`: { rule, defined, messages, sample, input }: `sample` names the sample write a
-// `deny_github` result is about (or the branch a `deny_link_branch` one is), `input` its input, shown apart from the merge's (`input`).
+// `results[]`: { rule, defined, messages, sample, input, nobody }: `sample` names the sample
+// write a `deny_github` result is about (or the branch a `deny_link_branch` one is), `input`
+// its input, shown apart from the merge's (`input`); `nobody`, why `deny_request_review` would
+// request nobody whatever it says.
 export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
   const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
   if (!files.length) {
@@ -876,10 +878,12 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   if (errors.length) {
     parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
   }
-  const result = ({ rule, defined, messages, sample }) => {
+  const result = ({ rule, defined, messages, sample, nobody }) => {
     const name = `\`${rule}\`${sample ? ` (sample: ${sample})` : ""}`;
     if (messages.length) return `- ${name}: **denies**: ${messages.map(quote).join(", ")}`;
-    return `- ${name}: ${defined ? "allows" : "allows (no file defines it)"}`;
+    const allows = defined ? "allows" : "allows (no file defines it)";
+    // deny_request_review where the listener wouldn't ask (reviews' dryRun()).
+    return `- ${name}: ${allows}${nobody ? `, but nobody would be requested: ${nobody}` : ""}`;
   };
   parts.push(results.map(result).join("\n"));
   const samples = results.filter((r) => r.sample);
@@ -2156,18 +2160,25 @@ export function createReviews({
       // As the listener would ask when it turns ready, about the run that opened it.
       if (decision === "request_review") {
         const task = taskKey(repo, issue ?? prId(number));
+        const reviewers = reviewersFor(config, settings, pr);
         const own = requestInput({
           info,
           pr,
           files: prFiles,
           issue: found,
-          reviewers: reviewersFor(config, settings, pr),
+          reviewers,
           when: "ready",
           run: runFields(runOf(task, pr)),
           now,
         });
         const messages = await policies.denied(rule, repo, texts, () => own);
-        results.push({ rule, defined, messages });
+        // An "allows" the listener would never act on: it requests nobody here.
+        const nobody = !reviewers.length
+          ? "`review.request` names no allowed user"
+          : !ownReady(config, repo, pr)
+            ? "not Deckhand's own ready pull request"
+            : null;
+        results.push({ rule, defined, messages, ...(nobody && { nobody }) });
         continue;
       }
       const own = { ...input, decision };

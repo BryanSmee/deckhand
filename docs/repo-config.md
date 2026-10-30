@@ -566,9 +566,10 @@ listener requests them itself, with its own token (runs still can't use `gh pr c
   `ALLOWED_USERS` (the others are ignored, with a warning in the config check). Never a team
   (`org/team` is an error), never the pull request's author.
 - **When**: Deckhand's own pull request (opened by the App, on a branch of the repository)
-  turns ready (marked ready, or opened as ready), and again when a run that could push ends
-  on it while it is ready and its head commit moved (a fix run, a CI fix run, a conflict
-  rebase, a follow-up a maintainer asked for): what they reviewed changed. Each head commit
+  turns ready (marked ready, or opened as ready), and again when a run that pushed to it
+  ends well while it is ready (a fix run, a CI fix run, a conflict rebase, a follow-up a
+  maintainer asked for): what they reviewed changed. A run that pushed nothing, failed, was
+  stopped or stopped to ask (its `WIP:` commit is unfinished work) asks nobody. Each head commit
   is decided once, across redeliveries and restarts (`requested.json`): requested, refused by
   a rule, or refused by GitHub (`422`). A failure (GitHub's `5xx`, a `policy error`) is asked
   again at the next delivery or run's end.
@@ -959,7 +960,7 @@ when a policy applies), with `review: null`, without `fixed`, `fixes` or `checks
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `decision`    | `"request_review"`.                                                                                                                                                                                                           |
 | `reviewers`   | The logins the listener would request: `review.request`, those in `ALLOWED_USERS`, without the author.                                                                                                                        |
-| `when`        | `"ready"`: the pull request turned ready (or is asked about for the first time); `"fix"`: a run pushed to it since.                                                                                                           |
+| `when`        | `"ready"`: the pull request turned ready (or is asked about for the first time); `"fix"`: a run that pushed to it ended well (not a push of someone else's).                                                                  |
 | `mode`        | The mode of the run that opened the pull request (the newest on its task that could push and had started when GitHub created it): `"work"`, or one of the repository's `modes:`; `null` when the listener no longer knows it. |
 | `custom_mode` | `true` for a mode of the repository's `modes:`, as in [the GitHub input](#the-github-input).                                                                                                                                  |
 | `light`       | That run's `light`: always `false`, a light run pushes nothing.                                                                                                                                                               |
@@ -1387,7 +1388,7 @@ request to turn ready. The task's page shows its last one: who asked, when, how 
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review
 ran); `deny_review` and `deny_fix` get it with their own `decision`, without `checks`,
 `deny_fix` with the `round` and `rounds` the next fix run would have, `deny_request_review`
-with its `reviewers`, `when: "ready"` and the run that opened the pull request, as the listener would ask. It works without a `review` block. On an issue, a reply says to comment it on the
+with its `reviewers`, `when: "ready"` and the run that opened the pull request, as the listener would ask; its "allows" adds "but nobody would be requested" when the listener wouldn't ask (`review.request` names no allowed user, or it isn't Deckhand's own ready pull request). It works without a `review` block. On an issue, a reply says to comment it on the
 pull request.
 
 **The dashboard**: the repository's settings have a Policies tab, next to its config: the

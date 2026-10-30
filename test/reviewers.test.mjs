@@ -8,6 +8,7 @@ import { test } from "node:test";
 import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
+  askAfterRun,
   createReviewers,
   readyPull,
   requestInput,
@@ -213,6 +214,25 @@ test("a failure isn't a decision: GitHub's 5xx or a policy error is asked again"
   broken = false;
   await s.reviewers.pushed({ repo: "org/repo", base: "trunk", number: 5 });
   assert.deepEqual(s.posts(), ["alice,bob"]);
+});
+
+test("askAfterRun: a run that pushed and finished, on a ready pull request", () => {
+  const ready = { number: 5, state: "ready" };
+  const run = (status, more = {}) => ({ status, lastPushAt: 1_800_000_000_000, ...more });
+  assert.equal(askAfterRun({ light: false, record: run("ok"), pull: ready }), true);
+  for (const [what, light, record, pull] of [
+    // It stopped to ask: its WIP push is unfinished work.
+    ["needs input", false, run("needs-input"), ready],
+    ["an error", false, run("error"), ready],
+    ["cancelled", false, run("cancelled"), ready],
+    // A maintainer pushed, the run pushed nothing: no fix of the run's.
+    ["no push", false, run("ok", { lastPushAt: null }), ready],
+    ["light", true, run("ok"), ready],
+    ["a draft", false, run("ok"), { number: 5, state: "draft" }],
+    ["no pull request", false, run("ok"), null],
+  ]) {
+    assert.equal(askAfterRun({ light, record, pull }), false, what);
+  }
 });
 
 test("openerOf: the run that opened the pull request, not a later follow-up", () => {
