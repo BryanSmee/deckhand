@@ -24,7 +24,8 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
     const upstream = send(to, "GET", headers, async (answer) => {
       if (entry && answer.statusCode === 304) {
         answer.resume();
-        const meta = await cache.refresh(key, entry.meta, answer.headers);
+        // Its headers not stored this time: served as it was, so its file is closed after.
+        const meta = await cache.refresh(key, entry.meta, answer.headers).catch(() => entry.meta);
         return serve(req, res, key, { ...entry, meta }, "revalidated");
       }
       await entry?.file.close();
@@ -88,13 +89,16 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
     cache.touch(key, meta);
     const headers = { ...meta.headers, "x-deckhand-cache": how };
     if (notModified(req, meta.headers)) {
-      file.close();
+      file.close().catch(() => {});
       res.writeHead(304, headers);
       return res.end();
     }
     res.writeHead(meta.status, { ...headers, "content-length": meta.size });
     const body = file.createReadStream();
     body.on("error", () => res.destroy());
+    // A client gone before the end: the stream, and its file with it, closed now. Left to the
+    // garbage collector, an open file ends the process on Node 26 (#523).
+    res.on("close", () => body.destroy());
     body.pipe(res);
   }
 
