@@ -47,8 +47,18 @@ export const INPUT_VERSION = 1;
 
 // What every decision's input has about a pull request (docs/repo-config.md#the-merge-input),
 // reviews.mjs's and reviewers.mjs's: the repo (`info`, GET /repos/{repo}), the pull request
-// and its `files`, its linked `issue`, and the `review` when there is one.
-export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
+// and its `files`, its linked `issue`, and the `review` when there is one. `bot`: the App's
+// login (config.bot), for `pr.deckhand`.
+export function pullInput({
+  decision,
+  info,
+  pr,
+  files,
+  issue,
+  review = null,
+  bot = null,
+  now = Date.now,
+}) {
   const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
   return {
     decision,
@@ -61,6 +71,10 @@ export function pullInput({ decision, info, pr, files, issue, review = null, now
     pr: {
       number: pr.number,
       author: pr.user?.login ?? null,
+      // GitHub's account type ("User", "Bot"): policy/review.rego skips other bots' pull
+      // requests, Deckhand's own (`deckhand`) excepted.
+      author_type: pr.user?.type ?? null,
+      deckhand: !!bot && pr.user?.login?.toLowerCase() === bot.toLowerCase(),
       title: pr.title ?? "",
       labels: names(pr.labels),
       base: pr.base?.ref ?? null,

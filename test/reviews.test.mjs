@@ -1,10 +1,12 @@
 // Pull request reviews: the final message's format, the review posted from it, and which
 // pull requests get one by themselves (once per head commit).
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ciState } from "../listener/ci.mjs";
+import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   CI_NEXT,
@@ -27,6 +29,15 @@ import {
 import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
+
+const opa = (() => {
+  try {
+    execFileSync("opa", ["version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 const MESSAGE = `Adds the review mode. The token stays read-only, but one decision has no test.
 
@@ -279,7 +290,7 @@ function delivery(action = "ready_for_review", pr = {}, login = "alice") {
   };
 }
 
-test("reviewCandidate: ready pull requests of the repo, by the App or an allowed user", () => {
+test("reviewCandidate: ready pull requests of the repo, by the App, a bot or an allowed user", () => {
   const candidate = (p) => reviewCandidate(config, "pull_request", p);
   assert.deepEqual(candidate(delivery()), {
     repo: "org/repo",
@@ -296,11 +307,13 @@ test("reviewCandidate: ready pull requests of the repo, by the App or an allowed
   assert.equal(reviewCandidate(config, "issue_comment", delivery()), null);
   // Deckhand's own: no user to check.
   assert.equal(candidate(delivery("opened", {}, "deckhand-app[bot]")).author, null);
-  // Never a fork's, another bot's, an outsider's, or in a repo the operator doesn't allow.
+  // Another bot: the allowlist lists people, so policy/review.rego decides (deny_review).
+  assert.equal(candidate(delivery("opened", {}, "dependabot[bot]")).author, null);
+  // Never a fork's (a bot's neither), an outsider's, or in a repo the operator doesn't allow.
   const fork = { head: { sha: "x", repo: { full_name: "mallory/repo" } } };
   assert.equal(candidate(delivery("ready_for_review", fork)), null);
+  assert.equal(candidate(delivery("ready_for_review", fork, "dependabot[bot]")), null);
   assert.equal(candidate(delivery("ready_for_review", { head: { sha: "x" } })), null);
-  assert.equal(candidate(delivery("opened", {}, "dependabot[bot]")), null);
   assert.equal(candidate(delivery("opened", {}, "mallory")), null);
   const elsewhere = { ...config, repos: ["org/other"] };
   assert.equal(reviewCandidate(elsewhere, "pull_request", delivery()), null);
@@ -406,6 +419,61 @@ test("createReviews: off without review.on, and the repo's users narrow the oper
   assert.equal(narrowed.accepted.length, 1);
   assert.equal(narrowed.accepted[0].author, undefined);
 });
+
+// Deckhand's policy/review.rego, with the real opa, over the repo's `review` file if any.
+function reviewPolicies(t, repoFile = null) {
+  const github = async (repo, method, path) => {
+    if (path === "/repos/org/repo") return Response.json({ full_name: "org/repo" });
+    if (path.startsWith("/repos/org/repo/pulls/5/files?")) return Response.json([]);
+    if (path.startsWith("/repos/org/repo/contents/.deckhand/policy?")) {
+      if (repoFile === null) return new Response("{}", { status: 404 });
+      return Response.json([{ type: "file", name: "review.rego", sha: "blob-1" }]);
+    }
+    if (path === "/repos/org/repo/git/blobs/blob-1") {
+      return Response.json({
+        content: Buffer.from(repoFile).toString("base64"),
+        encoding: "base64",
+      });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const policies = createPolicies({
+    config: {},
+    github,
+    run: opaRunner(),
+    readBuiltIn: () => new Map([["review.rego", builtInPolicies().get("review.rego")]]),
+    readOperator: () => new Map(),
+    tmp: tempDir(t),
+  });
+  return { github, policies };
+}
+
+test(
+  "the real opa: review.rego skips other bots' pull requests, unless the repo's file drops it",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const dependabot = delivery("ready_for_review", {}, "dependabot[bot]");
+    const skips = [];
+    const s = setup(t, undefined, reviewPolicies(t));
+    await s.reviews.consider("pull_request", dependabot, (why) => skips.push(why));
+    assert.equal(s.accepted.length, 0);
+    assert.deepEqual(skips, [
+      "review: #5, the policies refuse it (`deny_review`): `dependabot[bot] is a bot: its pull requests aren't reviewed unless .deckhand/policy/review.rego lets them`",
+    ]);
+    // Deckhand's own and an allowed user's are reviewed.
+    for (const login of ["deckhand-app[bot]", "alice"]) {
+      const own = setup(t, undefined, reviewPolicies(t));
+      await own.reviews.consider("pull_request", delivery("ready_for_review", {}, login));
+      assert.equal(own.accepted.length, 1, login);
+    }
+    // A repo's review.rego with only its package: the bot's pull request is reviewed, by nobody
+    // the allowlist checks again when it runs.
+    const broad = setup(t, undefined, reviewPolicies(t, "package deckhand\n"));
+    await broad.reviews.consider("pull_request", dependabot);
+    assert.equal(broad.accepted.length, 1);
+    assert.equal(broad.accepted[0].author, undefined);
+  },
+);
 
 test("createReviews: Deckhand's pull request is its issue's task, the review goes on it", async (t) => {
   const { reviews, accepted } = setup(t);

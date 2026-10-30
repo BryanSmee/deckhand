@@ -488,7 +488,9 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   `on: manual`) turns on `/mode review` alone.
 - **By itself** with `on: ready`: when a pull request is marked ready for review, or opened as
   ready, if it is on a branch of the repository (never a fork's) and was opened by Deckhand
-  or by an allowed user (`users`); other bots' are skipped. Each head commit is reviewed by
+  or by an allowed user (`users`). Other bots' (Dependabot's, say) are skipped by Deckhand's
+  default [`review.rego`](#the-default-policies), which a repository's own
+  `.deckhand/policy/review.rego` replaces. Each head commit is reviewed by
   itself once, across redeliveries and restarts: to review it again after new pushes,
   comment `/mode review`. A [policy](#policies) can skip it (`deny_review`).
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
@@ -1003,20 +1005,20 @@ network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.matc
 issue, its Actions runs) and the review that decides it (`deny_review` and `deny_fix`
 [read most of it](#the-review-and-fix-input)):
 
-| Field               | What                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `version`           | `1`: the input's format, raised when a field changes meaning or goes.                                                                                  |
-| `decision`          | `"merge"`.                                                                                                                                             |
-| `time`              | Now, RFC 3339 in UTC (`"2026-10-26T10:00:00.000Z"`): `time.parse_rfc3339_ns(input.time)`.                                                              |
-| `repo`              | `name` (`"owner/repo"`), `private`, `default_branch`.                                                                                                  |
-| `pr`                | `number`, `author` (a login), `title`, `labels` (names), `base` and `head` (branches), `head_sha`, `draft`, `additions`, `deletions`, `changed_files`. |
-| `pr.files[]`        | `path`, `previous_path` (a rename's, else `null`), `status` (`added`, `modified`, `removed`, `renamed`…), `additions`, `deletions`.                    |
-| `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                |
-| `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                         |
-| `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
-| `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                        |
-| `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                    |
-| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.  |
+| Field               | What                                                                                                                                                                                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`           | `1`: the input's format, raised when a field changes meaning or goes.                                                                                                                                                                                    |
+| `decision`          | `"merge"`.                                                                                                                                                                                                                                               |
+| `time`              | Now, RFC 3339 in UTC (`"2026-10-26T10:00:00.000Z"`): `time.parse_rfc3339_ns(input.time)`.                                                                                                                                                                |
+| `repo`              | `name` (`"owner/repo"`), `private`, `default_branch`.                                                                                                                                                                                                    |
+| `pr`                | `number`, `author` (a login), `author_type` (GitHub's account type: `User`, `Bot`), `deckhand` (`true` when the App opened it), `title`, `labels` (names), `base` and `head` (branches), `head_sha`, `draft`, `additions`, `deletions`, `changed_files`. |
+| `pr.files[]`        | `path`, `previous_path` (a rename's, else `null`), `status` (`added`, `modified`, `removed`, `renamed`…), `additions`, `deletions`.                                                                                                                      |
+| `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                                                                                                                  |
+| `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                                                                                                                           |
+| `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                                                                                                                        |
+| `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                                                                                                                          |
+| `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                                                                                                                      |
+| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.                                                                                                    |
 
 ### The review and fix input
 
@@ -1395,7 +1397,8 @@ repository) and hold without any setup, under the operator's and the repository'
 
 - **One file per feature**: `github.rego` for the writes runs have always made (below), and a
   `gh-<feature>.rego` for each `gh` feature added since (`gh-review-threads.rego`, say;
-  `gh-linked-branch.rego`, [the linked branch](#the-linked-branch-input)),
+  `gh-linked-branch.rego`, [the linked branch](#the-linked-branch-input)), and
+  `review.rego` for the reviews that start by themselves (below),
   whose defaults its issue gives per kind of run: work runs (work, fix and conflict runs
   share theirs), brainstorms, research (it gets no GitHub token, so it never reaches the
   gateway), and the repository's own `modes:` (`custom_mode`), where a new feature is
@@ -1431,6 +1434,35 @@ The `gh-<feature>.rego` files:
 | `gh-checks.rego`    | `deny_github` (`read_checks`) | ✅                                                                                            | ✅              | ❌ (no token) | ✅ (refuses nothing: a same-name file turns it off) |
 
 Teams are never requested, whatever a policy says: `review.request` takes logins only.
+
+`review.rego` holds `deny_review` for the reviews that start by themselves
+([`review.on: ready`](#reviews)). The allowlist (`users`) lists people, so the built-in gate
+only checks a person who opens a pull request; another bot is stopped here instead:
+
+```rego
+# policy/review.rego (an excerpt)
+deny_review contains msg if {
+  input.pr.author_type == "Bot"
+  not input.pr.deckhand
+  msg := sprintf("%s is a bot: its pull requests aren't reviewed unless .deckhand/policy/review.rego lets them", [input.pr.author])
+}
+```
+
+A repository's `.deckhand/policy/review.rego` with only `package deckhand` has every bot's
+ready pull request on one of its branches reviewed (never a fork's); one rule of its own lets
+some through:
+
+```rego
+# .deckhand/policy/review.rego
+package deckhand
+
+deny_review contains msg if {
+  input.pr.author_type == "Bot"
+  not input.pr.deckhand
+  input.pr.author != "dependabot[bot]"
+  msg := sprintf("%s's pull requests aren't reviewed", [input.pr.author])
+}
+```
 
 `github.rego`, which a file of that name replaces as a whole:
 

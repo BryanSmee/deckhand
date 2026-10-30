@@ -1479,8 +1479,11 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   review's request for changes. Only the listener posts reviews, and never an approval.
 - **Who gets one by itself** (`review.on: ready`): pull requests on a branch of the
   repository, opened by the App or by a user of `ALLOWED_USERS` and the repo's `users`, when
-  they turn ready. Never a fork's, never another bot's (Dependabot, GitHub Actions), never an
-  outsider's: nobody outside the allowlist can make the operator pay for a run.
+  they turn ready. Never a fork's, never an outsider's: nobody outside the allowlist can make
+  the operator pay for a run. Another bot's (Dependabot, GitHub Actions) only when the
+  policies let it: Deckhand's default `policy/review.rego` refuses them (`deny_review`), and
+  only a file of that name, the operator's or the repository's maintainers', replaces it. A
+  bot that opens a pull request on a branch of the repository was given write access to it.
 - **Only allowed users' comments**: the review reads its thread (the pull request's
   description, comments and reviews, and the issue it closes) from a file the listener writes
   (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users`, and the App

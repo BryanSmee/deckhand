@@ -600,6 +600,7 @@ export async function mergeRefusal(
       return mergeInput({
         info,
         pr,
+        bot: config.bot,
         files,
         issue: found ?? { number: issue },
         review,
@@ -631,9 +632,19 @@ export async function mergeRefusal(
 
 // The input of `deny_merge` (docs/repo-config.md#the-merge-input), from what mergeRefusal()
 // read: names as GitHub's API spells them where they are its own, the review as parsed.
-export function mergeInput({ info, pr, files, issue, review, fixes = 0, runs, now = Date.now }) {
+export function mergeInput({
+  info,
+  pr,
+  files,
+  issue,
+  review,
+  fixes = 0,
+  runs,
+  bot = null,
+  now = Date.now,
+}) {
   return {
-    ...pullInput({ decision: "merge", info, pr, files, issue, review, now }),
+    ...pullInput({ decision: "merge", info, pr, files, issue, review, bot, now }),
     ...fixInput(fixes),
     checks: checksOf(runs),
   };
@@ -656,10 +667,10 @@ export const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
 // read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
 // without any pays no extra call. `issue`: the number of the issue the pull request closes,
 // or null; `extra`: the fix runs so far (fixInput()), and the fix's round and `reason`
-// (`review`, `ci`, `conflict`: conflicts.mjs).
+// (`review`, `ci`, `conflict`: conflicts.mjs); `bot`: the App's login.
 export async function readPullInput(
   github,
-  { decision, repo, pr, issue, review = null, now },
+  { decision, repo, pr, issue, review = null, bot = null, now },
   extra,
 ) {
   const info = await getJson(github, repo, `/repos/${repo}`);
@@ -673,7 +684,10 @@ export async function readPullInput(
         ...(await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410])),
       }
     : null;
-  return { ...pullInput({ decision, info, pr, files, issue: found, review, now }), ...extra };
+  return {
+    ...pullInput({ decision, info, pr, files, issue: found, review, bot, now }),
+    ...extra,
+  };
 }
 
 // A policy's refusal, its messages quoted as code: a message may repeat what a pull request's
@@ -1074,9 +1088,10 @@ export function notMergedText(why) {
 
 // A `pull_request` delivery that may start a review by itself → { repo, base, pr, author }, or
 // null. Only a pull request that turned ready (marked ready, or opened as ready), on a branch
-// of the repo (never a fork's), opened by the App (Deckhand's own) or an allowed user: other
-// bots and outsiders never cost a review. `author`: the user, checked again with the repo's
-// `users`; null for the App's.
+// of the repo (never a fork's), opened by the App (Deckhand's own), a bot or an allowed user:
+// outsiders never cost a review. The allowlist lists people: other bots are left to the
+// policies' `deny_review` (policy/review.rego skips them unless a repo's file lets them).
+// `author`: the user, checked again with the repo's `users`; null for the App's and a bot's.
 export function reviewCandidate(config, event, p, skip = () => null) {
   if (event !== "pull_request") return null;
   const pr = p.pull_request;
@@ -1089,11 +1104,12 @@ export function reviewCandidate(config, event, p, skip = () => null) {
   if (!headInRepo(pr, repo)) return skip(`review: #${pr.number} is from a fork`);
   const login = pr.user?.login?.toLowerCase() ?? "";
   const own = !!config.bot && login === config.bot.toLowerCase();
-  if (!own && (pr.user?.type === "Bot" || !config.users.includes(login))) {
+  const bot = !own && pr.user?.type === "Bot";
+  if (!own && !bot && !config.users.includes(login)) {
     return skip(`review: #${pr.number} by ${pr.user?.login ?? "?"}, not an allowed user`);
   }
   const base = p.repository.default_branch || "main";
-  return { repo, base, pr, author: own ? null : pr.user.login };
+  return { repo, base, pr, author: own || bot ? null : pr.user.login };
 }
 
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `accept(item)`:
@@ -1204,7 +1220,13 @@ export function createReviews({
       }
       const denied = await denyReview(repo, base, pr, [
         passed("Ready for review"),
-        passed(author ? "Opened by an allowed user" : "Deckhand's own pull request"),
+        passed(
+          author
+            ? "Opened by an allowed user"
+            : pr.user?.login?.toLowerCase() === config.bot?.toLowerCase()
+              ? "Deckhand's own pull request"
+              : "Opened by a bot (left to deny_review)",
+        ),
         passed("Not reviewed at this commit"),
       ]);
       if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
@@ -1243,7 +1265,12 @@ export function createReviews({
       "deny_review",
       repo,
       base,
-      () => readPullInput(github, { decision: "review", repo, pr, issue, now }, fixInput(fixes)),
+      () =>
+        readPullInput(
+          github,
+          { decision: "review", repo, pr, issue, bot: config.bot, now },
+          fixInput(fixes),
+        ),
       { gates },
     );
   }
@@ -1419,7 +1446,7 @@ export function createReviews({
         () =>
           readPullInput(
             github,
-            { decision: "fix", repo, pr, issue, review, now },
+            { decision: "fix", repo, pr, issue, review, bot: config.bot, now },
             { ...fixInput(fixes), ci: false, reason: "review", round, rounds },
           ),
         { gates },
@@ -2153,7 +2180,8 @@ export function createReviews({
         "deny_fix",
         repo,
         base,
-        () => readPullInput(github, { decision: "fix", repo, pr, issue, now }, extra),
+        () =>
+          readPullInput(github, { decision: "fix", repo, pr, issue, bot: config.bot, now }, extra),
         { gates },
       );
       if (denied.length) return stop(policyWhy("deny_fix", denied));
@@ -2354,6 +2382,7 @@ export function createReviews({
       review: null,
       fixes,
       runs,
+      bot: config.bot,
       now,
     });
     const results = [];
@@ -2390,6 +2419,7 @@ export function createReviews({
           reviewers,
           when: "ready",
           run: runFields(runOf(task, pr)),
+          bot: config.bot,
           now,
         });
         const messages = await policies.denied(rule, repo, texts, () => own);

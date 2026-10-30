@@ -13,6 +13,7 @@ import {
   MAX_TEXT,
   opaRunner,
   operatorPolicies,
+  pullInput,
   restrictedCapabilities,
   TIMEOUT_MS,
 } from "../listener/policies.mjs";
@@ -178,7 +179,7 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   const own = builtInPolicies();
   assert.ok(own.has("github.rego"));
   for (const [name, text] of own) {
-    assert.match(name, /^(github|gh-[a-z0-9-]+)\.rego$/, name);
+    assert.match(name, /^(github|review|gh-[a-z0-9-]+)\.rego$/, name);
     // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
     // alone: comments and the package, nothing else.
     const bare = text.replace(/^\s*#.*$/gm, "").trim() === "package deckhand";
@@ -764,7 +765,7 @@ test("mergeInput: what deny_merge reads", () => {
     pr: {
       number: 5,
       title: "Add a thing",
-      user: { login: "deckhand-app[bot]" },
+      user: { login: "Deckhand-App[bot]", type: "Bot" },
       labels: [{ name: "bug" }],
       base: { ref: "main" },
       head: { ref: "issue-12-thing", sha: "sha-1" },
@@ -784,6 +785,7 @@ test("mergeInput: what deny_merge reads", () => {
     },
     fixes: 2,
     runs: [{ name: "CI", status: "completed", conclusion: "success", id: 1 }],
+    bot: "deckhand-app[bot]",
     now: () => Date.parse("2026-10-26T10:00:00Z"),
   });
   assert.deepEqual(doc, {
@@ -792,7 +794,9 @@ test("mergeInput: what deny_merge reads", () => {
     repo: { name: "org/repo", private: true, default_branch: "main" },
     pr: {
       number: 5,
-      author: "deckhand-app[bot]",
+      author: "Deckhand-App[bot]",
+      author_type: "Bot",
+      deckhand: true,
       title: "Add a thing",
       labels: ["bug"],
       base: "main",
@@ -817,6 +821,26 @@ test("mergeInput: what deny_merge reads", () => {
     fixes: 2,
     checks: [{ name: "CI", status: "completed", conclusion: "success" }],
   });
+});
+
+test("pullInput: the author's type, and whether the pull request is Deckhand's own", () => {
+  const pr = (login, type) => ({ number: 5, user: { login, type } });
+  const author = (p, bot = "deckhand-app[bot]") => {
+    const { author_type, deckhand } = pullInput({
+      decision: "review",
+      info: {},
+      pr: p,
+      files: [],
+      bot,
+    }).pr;
+    return [author_type, deckhand];
+  };
+  assert.deepEqual(author(pr("dependabot[bot]", "Bot")), ["Bot", false]);
+  assert.deepEqual(author(pr("alice", "User")), ["User", false]);
+  assert.deepEqual(author(pr("deckhand-app[bot]", "Bot")), ["Bot", true]);
+  // Without the App's login, nothing is Deckhand's own.
+  assert.deepEqual(author(pr("deckhand-app[bot]", "Bot"), null), ["Bot", false]);
+  assert.deepEqual(author({ number: 5 }), [null, false]);
 });
 
 const FAKE = new URL("fixtures/fake-opa.sh", import.meta.url).pathname;
