@@ -8,7 +8,7 @@
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
-import { egressPolicy, githubContent, githubHosts } from "./egress.mjs";
+import { egressPolicy, githubContent, githubHosts, matchHost } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
@@ -148,13 +148,15 @@ export function createBrokerHttp(ctx) {
     const live = task?.live;
     // Its pod still installs its agent (an init container, runner/kubernetes.mjs): the
     // install's hosts only, tunnelled, until the sandbox itself starts. Once it has, the run
-    // never asks again: no API call per connection. The API failing to tell: the run's own
-    // hosts, for this connection only.
+    // never asks again: no API call per connection. The API failing to tell (null): only what
+    // either may reach, the install's hosts that are the run's too, tunnelled, for this
+    // connection alone: never the run's own hosts for an installer.
     const installs = task && !live.pastInstall ? await ctx.runner.installing?.(task.name) : false;
     if (installs === false && live) live.pastInstall = true;
-    if (installs) {
+    if (installs || installs === null) {
       const hosts = agentFor(live.record?.agent).install(config).hosts ?? [];
       const answer = egressPolicy(host, hosts, [], [], [], { decrypt: false });
+      if (installs === null && matchHost(host, live.hosts) === null) answer.allowed = false;
       if (!answer.allowed)
         log(`Egress: refused ${host} for ${taskKey(task.repo, task.id)}'s agent install`);
       return sendJson(res, answer);

@@ -178,7 +178,7 @@ export const SETTINGS = {
   // with its credentials, and the BuildKit daemon that builds them (buildctl's --addr).
   KUBERNETES_REGISTRY: { default: null, parse: registrySetting },
   KUBERNETES_REGISTRY_SECRET: { default: null },
-  KUBERNETES_BUILDKIT: { default: "tcp://buildkitd:1234" },
+  KUBERNETES_BUILDKIT: { default: "tcp://buildkitd:1234", parse: buildkitAddress },
   // More hosts the BuildKit daemon reaches while it pulls and pushes (a registry's token
   // service, the storage it sends layers from), beyond those runner/kube-images.mjs knows.
   KUBERNETES_REGISTRY_HOSTS: { type: "list", default: [], parse: hostList },
@@ -483,7 +483,7 @@ function sandboxConfig(env, s) {
 function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(
-      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to push and delete (docs/setup.md, Repo images on Kubernetes)",
+      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/setup.md, Repo images on Kubernetes)",
     );
   }
 }
@@ -561,6 +561,27 @@ function registrySetting(text, { label }) {
   if (m && (m[1].includes(".") || m[2] || m[1] === "localhost")) return value.toLowerCase();
   throw new ConfigError(
     `${label}: expected a registry host and an optional path (registry.example.com/deckhand), got ${text}`,
+  );
+}
+
+// "tcp://buildkitd:1234": its host is the name of the daemon's Service in the namespace, which
+// the listener finds its pods by (runner/kube-images.mjs builderIsolation()): a single DNS
+// label, not a full name or an address, or every build would be refused.
+function buildkitAddress(text, { label }) {
+  const value = text.trim();
+  let url;
+  try {
+    url = new URL(value);
+  } catch {}
+  if (
+    url?.protocol === "tcp:" &&
+    /^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$/.test(url.hostname) &&
+    url.port
+  ) {
+    return value;
+  }
+  throw new ConfigError(
+    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the namespace by its short name, got ${text} (docs/setup.md, Repo images on Kubernetes)`,
   );
 }
 

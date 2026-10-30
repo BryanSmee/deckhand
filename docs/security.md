@@ -1106,10 +1106,7 @@ host's Docker with its network (on Kubernetes, by the cluster's BuildKit daemon,
 egress proxy with the repo's hosts only, and pushed to the operator's registry; the listener
 refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
-listener can't see. The registry has to require credentials to push and delete (the listener
-doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs
-in its repository's sandboxes, so whoever could push over its tag would run code with that
-repository's grant:
+listener can't see. The registry has to require credentials to pull, push and delete (the listener doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
 [Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `preview` without
 `allow_preview`, or `dockerfile` without `allow_dockerfile`, gets neither: its runs stop
 and the reply on the issue says which grant is missing, like refused mounts, and its preview

@@ -442,6 +442,27 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
   );
 });
 
+test("KUBERNETES_BUILDKIT: tcp:// and the daemon's Service by its short name, else the listener stops", () => {
+  assert.equal(
+    loadConfig({ ALLOWED_USERS: "a", KUBERNETES_BUILDKIT: "tcp://builder:1234" }).kubernetes
+      .buildkit,
+    "tcp://builder:1234",
+  );
+  for (const bad of [
+    "tcp://buildkitd.deckhand.svc.cluster.local:1234",
+    "tcp://10.96.0.20:1234",
+    "unix:///run/buildkit/buildkitd.sock",
+    "tcp://buildkitd",
+    "buildkitd:1234",
+  ]) {
+    assert.throws(
+      () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_BUILDKIT: bad }),
+      /KUBERNETES_BUILDKIT: expected tcp:\/\/<the daemon's Service name>:<port>/,
+      bad,
+    );
+  }
+});
+
 test("KUBERNETES_REGISTRY without KUBERNETES_REGISTRY_SECRET stops the listener: pushes need credentials", () => {
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY: "registry.example.com/dh" }),

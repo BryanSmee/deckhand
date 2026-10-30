@@ -240,9 +240,21 @@ test("egress: the runner's builder and installs answered by the images, an insta
     relay: false,
   });
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
-  // The API can't tell: the run's own hosts for that connection, and it asks again.
+  // The API can't tell: neither the run's own hosts for an installer, nor install hosts for
+  // the sandbox, only those that are both, tunnelled; and it asks again.
   installing = null;
-  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
+  assert.equal((await ask("10.1.0.2", "registry.npmjs.org")).allowed, false);
+  const { live } = ctx.tasks.get("org/a#1");
+  live.hosts.push("registry.npmjs.org");
+  assert.deepEqual(await ask("10.1.0.2", "registry.npmjs.org"), {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: false,
+  });
+  live.hosts.pop();
   installing = true;
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
   installing = false;
