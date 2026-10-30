@@ -1044,44 +1044,59 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
 });
 
-test("a maintainer's review of a loop CI stopped: the loop shows it, and Fix follows", async (t) => {
+test("a maintainer's review of a loop CI stopped: the loop shows it, Fix follows, ready again still runs the CI step", async (t) => {
   // Two fix runs, then CI failed on what the second pushed and its CI fix run pushed nothing:
   // no review of sha-3.
-  const path = join(tempDir(t), "reviews.json");
   const at = 1_800_000_000_000;
-  const round = (n, head) => ({ round: n, at, head, counts: { high: 1 }, blocking: 1 });
-  const entry = {
-    head: "sha-3",
-    at,
-    fixes: 2,
-    reviewedFixes: 2,
-    fixRounds: 2,
-    rounds: [round(0, "sha-1"), round(1, "sha-2")],
-    ciStopped: { sha: "sha-3", at },
-  };
-  writeFileSync(path, JSON.stringify({ "org/repo#pr-5": entry }));
-  const s = setup(t, "review:\n  on: ready\n  fix: 2\n", {
-    path,
-    github: async () => Response.json({ labels: [] }),
-  });
-  const loop = () => reviewLoop(s.reviews.entry("org/repo", 5));
-  assert.equal(loop().loop, "ci-failed");
-  // The dashboard's Review of sha-3 finds a high one: rounds out, no longer "CI failed".
-  const run = {
-    repo: "org/repo",
-    number: 5,
-    base: "trunk",
-    settings: s.read.settings,
-    auto: false,
+  const stopped = () => {
+    const path = join(tempDir(t), "reviews.json");
+    const round = (n, head) => ({
+      round: n,
+      at: at - 2000,
+      head,
+      counts: { high: 1 },
+      blocking: 1,
+    });
+    const entry = {
+      head: "sha-3",
+      at,
+      fixes: 2,
+      reviewedFixes: 2,
+      fixRounds: 2,
+      rounds: [round(0, "sha-1"), round(1, "sha-2")],
+      ciStopped: { sha: "sha-3", at: at - 1000 },
+    };
+    writeFileSync(path, JSON.stringify({ "org/repo#pr-5": entry }));
+    const s = setup(t, "review:\n  on: ready\n  fix: 2\n", { path, github: open5 });
+    const run = {
+      repo: "org/repo",
+      number: 5,
+      base: "trunk",
+      settings: s.read.settings,
+      auto: false,
+    };
+    return { ...s, run, loop: () => reviewLoop(s.reviews.entry("org/repo", 5)) };
   };
   const head = { head: { sha: "sha-3", repo: { full_name: "org/repo" } } };
-  assert.equal(await s.reviews.settle(run, posted(HIGH_ONE, head)), null);
-  assert.deepEqual(
-    [loop().loop, loop().history.at(-1).head, s.reviews.entry("org/repo", 5).ciStopped],
-    ["rounds-out", "sha-3", undefined],
-  );
+  const s = stopped();
+  assert.equal(s.loop().loop, "ci-failed");
+  // The dashboard's Review of sha-3 finds a high one: rounds out, no longer "CI failed".
+  assert.equal(await s.reviews.settle(s.run, posted(HIGH_ONE, head)), null);
+  assert.deepEqual([s.loop().loop, s.loop().history.at(-1).head], ["rounds-out", "sha-3"]);
+  // The CI step's mark stays: it wasn't the loop's own review.
+  assert.equal(s.reviews.entry("org/repo", 5).ciStopped.sha, "sha-3");
   const { item } = await askFix(s, HIGH_ONE, "alice", head);
   assert.deepEqual([item.round, item.rounds], [3, 3]);
+  // A review of an older head that ended after CI stopped on sha-3: still "CI failed".
+  const older = stopped();
+  const sha2 = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };
+  await older.reviews.settle(older.run, posted(HIGH_ONE, sha2));
+  assert.equal(older.loop().loop, "ci-failed");
+  // Ready again at sha-3 after that review: the loop's own review runs, as before it.
+  const again = stopped();
+  await again.reviews.settle(again.run, posted(HIGH_ONE, head));
+  const ready = delivery("ready_for_review", { ...posted().pr, ...head });
+  assert.equal((await again.reviews.consider("pull_request", ready)).reason, "review");
 });
 
 // Pull request #5's entry in a new reviews.json: `fixes` fix runs, each reviewed, the last
@@ -1155,6 +1170,19 @@ test("dashboard Fix: refused when the loop starts again during the App's comment
     announce: async () => assert.fail("nothing posted"),
   });
   assert.match(refused.why, /latest review couldn't be read from GitHub/);
+  // A maintainer's review of the same head that GitHub refused, posted as a comment: GitHub's
+  // latest review is the older one, at the same head.
+  const asComment = await loopSetup(t);
+  await asComment.review(HIGH_ONE);
+  await asComment.fixed();
+  const manual = { ...run, settings: asComment.read.settings, auto: false };
+  await asComment.reviews.settle(manual, { ...posted(HIGH_TWO), event: null });
+  assert.equal(asComment.loop().history.at(-1).comment, true);
+  const sameHead = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-1" } };
+  assert.match(
+    (await askFixWith(asComment, sameHead)).why,
+    /latest review couldn't be read from GitHub/,
+  );
   const same = { ...posted(HIGH_ONE), review: { ...parseReview(HIGH_ONE), head: "sha-1" } };
   assert.equal((await askFixWith(stale, same)).item.round, 2);
 });

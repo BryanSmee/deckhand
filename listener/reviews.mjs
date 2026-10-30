@@ -852,7 +852,8 @@ const ROUNDS_KEPT = 20;
 //   ci-fix             a CI fix run (`review.ci`) is queued or running
 //   ci                 the review waits for the head commit's Actions runs (`review.ci`)
 //   ci-failed          CI failed and the CI step stopped without a review: a CI fix run was
-//                      refused, failed or pushed nothing (`ciStopped`)
+//                      refused, failed or pushed nothing (`ciStopped`), and no maintainer's
+//                      review came since
 //   checks             the auto-merge waits for the reviewed commit's Actions runs
 //   clean              the last review had nothing above the tolerance
 //   rounds-out         the review after the last fix run `review.fix` allows still blocks
@@ -884,7 +885,13 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   if (step === "review-fix") return { loop: "fixing", ...at };
   if (step === "ci-fix") return { loop: "ci-fix", ...at };
   if (step === "ci" || entry?.ciWaiting) return { loop: "ci", ...at };
-  if (entry?.ciStopped) return { loop: "ci-failed", ...at };
+  // A maintainer's review of that head since (recordRound()) is the latest: the loop goes by
+  // it. Not an older head's review that ended after CI stopped on a push. The mark stays, for
+  // consider(): ready again at that head runs the CI step again.
+  const ci = entry?.ciStopped;
+  if (ci && !(last && last.head === ci.sha && last.at > (ci.at ?? 0))) {
+    return { loop: "ci-failed", ...at };
+  }
   if (entry.waiting && !entry.mergeAt) return { loop: "checks", ...at };
   if (!last.blocking) return { loop: "clean", ...at };
   if (entry.unreviewedFix === fixes && last.round < fixes) {
@@ -1380,7 +1387,8 @@ export function createReviews({
     // shows last: one GitHub refused, posted as a plain comment instead, leaves an older one
     // there, whose findings may be fixed already.
     const last = entry.rounds?.at(-1);
-    if (asked && review.head && last?.head && review.head !== last.head) {
+    const stale = last?.comment || (review.head && last?.head && review.head !== last.head);
+    if (asked && stale) {
       return skip("its latest review couldn't be read from GitHub: ask for a review first");
     }
     const fixes = fixesOf(entry);
@@ -1509,17 +1517,12 @@ export function createReviews({
       // so that what the task page offers follows it. Not a loop round: it counts no fix run
       // and starts no loop. With `review.fix`, it may start a fix run while rounds are left:
       // decided as the loop's steps are (deciding()), so a dashboard Fix meanwhile waits.
-      // A CI step stopped without a review (`ciStopped`, `ciDropped`) has one now: the loop
-      // shows it, as queueReview() would.
+      // A CI step stopped without a review (`ciStopped`) shows it too (reviewLoop()), its mark
+      // kept: it isn't the loop's own review, which ready again at that head still runs.
       const manual = async () => {
         const shown = reviewed.get(key);
         if (shown?.rounds?.length || shown?.ciStopped) {
-          const allowed = await tolerance({ ...run, auto: true });
-          const entry = reviewed.get(key);
-          if (posted?.review && (entry?.ciStopped || entry?.ciDropped)) {
-            remember(key, entry.head ?? null, { ciStopped: undefined, ciDropped: undefined });
-          }
-          recordRound(run, posted, allowed);
+          recordRound(run, posted, await tolerance({ ...run, auto: true }));
         }
         return (await startFix(run, posted)).item;
       };
@@ -1561,7 +1564,10 @@ export function createReviews({
     );
     const blocking = above(review, allowed).length;
     const rounds = (entry.rounds ?? []).filter((r) => r.round !== round || r.head !== head);
-    rounds.push({ round, at: now(), head, counts, blocking });
+    // Posted as a plain comment (GitHub refused the review): not on GitHub's list of reviews,
+    // which the dashboard's Fix reads (latestReview()).
+    const comment = posted.event === null ? { comment: true } : {};
+    rounds.push({ round, at: now(), head, counts, blocking, ...comment });
     remember(key, entry.head ?? null, {
       rounds: rounds.slice(-ROUNDS_KEPT),
       fixRounds: limitOf(settings, entry),

@@ -235,6 +235,8 @@ export interface ReviewRound {
   // (`review.max_allowed_severity`).
   counts: Record<Severity, number>;
   blocking: number;
+  // Posted as a plain comment, GitHub having refused the review.
+  comment?: boolean;
 }
 
 export type Severity = "critical" | "high" | "medium" | "low";
