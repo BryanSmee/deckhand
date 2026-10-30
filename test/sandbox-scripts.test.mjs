@@ -771,6 +771,40 @@ test("draft-pr's start leaves the issue's branch alone when it has commits that 
   assert.equal(start(), "main");
 });
 
+// The branch the listener created at the base's head and linked to the issue (TASK_BRANCH,
+// linked-branch.mjs): checked out over the name an earlier run kept, given its first commit,
+// pushed, and its draft opened.
+test("draft-pr's start checks out the listener's linked branch and gives it its first commit", (t) => {
+  const { sh, origin, clone } = resetClone(t);
+  const fake = tempDir(t, "gh-");
+  const calls = join(fake, "calls");
+  writeFileSync(
+    join(fake, "gh"),
+    `#!/bin/sh\necho "$1 $2" >> ${calls}\n[ "$1 $2" = "issue view" ] && echo "A title"\nexit 0\n`,
+  );
+  chmodSync(join(fake, "gh"), 0o755);
+  const script = readFileSync(`${bin}draft-pr.sh`, "utf8");
+  const fns = ["info", "ensure", "start"]
+    .map((name) => new RegExp(`^${name}\\(\\) \\{[^]*?^\\}$`, "m").exec(script)[0])
+    .join("\n");
+  sh(origin, "git branch issue-5-a-title main");
+  sh(clone, `echo '{"title":"t","branch":"issue-5-old"}' > .git/deckhand-task.json`);
+  const branch = sh(
+    clone,
+    `base=main\ncache=.git/deckhand-task.json\n${fns}\nstart\ngit branch --show-current`,
+    { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5", TASK_BRANCH: "issue-5-a-title" },
+  );
+  assert.equal(branch, "issue-5-a-title");
+  assert.equal(sh(origin, "git log -1 --format=%s issue-5-a-title"), "#5: start work");
+  assert.equal(sh(origin, "git rev-parse issue-5-a-title~1"), sh(origin, "git rev-parse main"));
+  assert.equal(sh(clone, "jq -r .branch .git/deckhand-task.json"), "issue-5-a-title");
+  assert.deepEqual(readFileSync(calls, "utf8").trim().split("\n"), [
+    "issue view",
+    "pr list",
+    "pr create",
+  ]);
+});
+
 // The entrypoint's fetch of the run's files (fetch_run_files()), against a fake deckhand-files:
 // the variables name the fetched files, a path stays as it is, a failed fetch stops the run.
 test("the entrypoint fetches the CA and digest from the broker, and stops when it can't", (t) => {

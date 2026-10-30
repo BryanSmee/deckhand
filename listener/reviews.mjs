@@ -914,7 +914,7 @@ const OWNERS = { deckhand: "Deckhand's", operator: "the operator's" };
 // the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
 // no policy applies here.
 // `results[]`: { rule, defined, messages, sample, input }: `sample` names the sample write a
-// `deny_github` result is about, `input` its input, shown apart from the merge's (`input`).
+// `deny_github` result is about (or the branch a `deny_link_branch` one is), `input` its input, shown apart from the merge's (`input`).
 export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
   const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
   if (!files.length) {
@@ -935,7 +935,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   const samples = results.filter((r) => r.sample);
   if (samples.length) {
     parts.push(
-      "The `deny_github` lines are sample writes, not decisions on this pull request: they aren't counted as denials.",
+      "The sample lines (`deny_github`'s writes, `deny_link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
     );
   }
   parts.push(
@@ -946,7 +946,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   );
   if (samples.length) {
     const inputs = samples.map((r) => ({ sample: r.sample, input: r.input }));
-    parts.push(details("The `deny_github` samples' inputs", inputs));
+    parts.push(details("The samples' inputs", inputs));
   }
   return parts.join("\n\n");
 }
@@ -1001,6 +1001,28 @@ export function githubSamples(repo, pr, modes = {}) {
     samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true, light }));
   }
   return samples;
+}
+
+// The branch a dry run asks `deny_link_branch` about: the pull request's head, as the work run
+// on `issue` (GitHub's, the one it closes, else the pull request itself) would have had it
+// linked, at its base's head (docs/repo-config.md#the-linked-branch-input). → { what, input }
+export function linkSample(repo, pr, issue = null) {
+  const number = issue?.number ?? pr.number;
+  return {
+    what: `a work run's branch linked to #${number}`,
+    input: {
+      repo: repo.toLowerCase(),
+      mode: "work",
+      custom_mode: false,
+      light: false,
+      reason: null,
+      issue: number,
+      labels: (issue?.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),
+      branch: pr.head?.ref ?? null,
+      base: pr.base?.ref ?? null,
+      oid: pr.base?.sha ?? null,
+    },
+  };
 }
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
@@ -2167,6 +2189,14 @@ export function createReviews({
           const input = { version: INPUT_VERSION, ...sample.input };
           results.push({ rule, defined, messages, sample: sample.what, input });
         }
+        continue;
+      }
+      // No branch to link either: one for the issue the pull request closes, by its work run.
+      if (rule === "deny_link_branch") {
+        const sample = linkSample(repo, pr, found);
+        const messages = await policies.denied(rule, repo, texts, () => sample.input);
+        const input = { version: INPUT_VERSION, ...sample.input };
+        results.push({ rule, defined, messages, sample: sample.what, input });
         continue;
       }
       const decision = rule.replace(/^deny_/, "");

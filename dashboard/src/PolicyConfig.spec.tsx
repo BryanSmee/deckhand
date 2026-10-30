@@ -131,6 +131,7 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   expect(fix.textContent).toContain("No rule of its own, but refused too");
   expect(fix.textContent).toContain("none in any file");
   expect(within(card("GitHub writes")).getByText("Refused")).toBeTruthy();
+  expect(within(card("Linked branch")).getByText("Refused")).toBeTruthy();
   // Its row, and its source: open, the bad line marked with its error.
   const payments = rows().find((r) => r.textContent!.includes("payments.rego"))!;
   expect(within(payments).getByText("Error")).toBeTruthy();

@@ -14,6 +14,7 @@ const DECISIONS: Record<PolicyDecision["decision"], string> = {
   merge: "Auto-merge",
   review: "Automatic review",
   fix: "Fix run",
+  link_branch: "Linked branch",
 };
 
 // listener/decisions.mjs MAX_DECISIONS and KEEP_MS.
@@ -51,7 +52,8 @@ export function PolicyTab({ task: t, now }: { task: Task; now: number }) {
                 key={`${d.at}-${d.rule}`}
                 decision={d}
                 open={d === first}
-                own={d.pr === t.pr?.number}
+                // A linked branch is the task's own issue's, never another's.
+                own={d.decision === "link_branch" || d.pr === t.pr?.number}
                 now={now}
               />
             ))}

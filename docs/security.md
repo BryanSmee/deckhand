@@ -45,6 +45,18 @@ that file asks for, so none can:
   `gh-pages` or `release/*`, tags, signed and compressed pushes. The refusal shows in git's
   output as `[remote rejected] … (Deckhand: …)`.
 
+- **One branch is created outside the git gateway**: a work run's own, by the listener, as
+  the run starts, so its issue's Development sidebar links it (`listener/linked-branch.mjs`,
+  GitHub's `createLinkedBranch`, which creates the branch it links: GitHub links no existing
+  one). It carries no code the gateway didn't check: the listener creates it at the base
+  branch's head, read from GitHub, with its own token, never the sandbox's, and only when
+  the run may push `issue-<n>-*` (not a light run, nor one where a fork's code runs), the issue
+  has no `issue-<n>-…` branch yet, and the name it gets back matches `issue-<n>-*`. The
+  run asks for nothing: no sandbox can create or link a branch through the GitHub gateway
+  (`createLinkedBranch` isn't among its known mutations). Its first commit goes through the git
+  gateway like any push. Policies may refuse it (`deny_link_branch`, Deckhand's default
+  `gh-linked-branch.rego`: work runs only); then, or if GitHub refuses, the sandbox creates
+  its branch itself, as before.
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
 - A sandbox's token only reads pull requests (see [Tokens](#tokens)). `gh pr create`,
@@ -1490,7 +1502,8 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
 last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
-review's fix run; `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
+review's fix run; `deny_link_branch`, the branch the listener links to a work run's issue
+([The default branch](#the-default-branch)); `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
 ceiling: [The GitHub gateway](#the-github-gateway)). Deckhand ships its own in the listener's
 image ([the default policies](repo-config.md#the-default-policies): `github.rego`, and a
 `gh-<feature>.rego` per `gh` feature), which hold without any setup. Yours are the `*.rego`
@@ -1528,7 +1541,8 @@ default replaces it, others add to them.
   of strings refuses the decision with a `policy error: …` reason; so does a policy folder
   that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
   human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
-  `deny_fix`, no fix run starts and a comment says why; for `deny_github`, the run's write is
+  `deny_fix`, no fix run starts and a comment says why; for `deny_link_branch`, no branch
+  is linked (the sandbox creates it, unlinked); for `deny_github`, the run's write is
   refused, so a broken policy stops every run's writes in that repository. Deckhand's own
   `github.rego` defines `deny_github` everywhere, so every run's GitHub write starts an `opa`
   process: an `opa` that is missing or fails (its temp folder unwritable, say) stops the runs'

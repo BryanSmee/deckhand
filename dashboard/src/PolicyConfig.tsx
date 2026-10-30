@@ -80,6 +80,13 @@ const DECISIONS: {
     refused: (until) => `Every fix run is refused ${until}.`,
   },
   {
+    rule: "deny_link_branch",
+    name: "Linked branch",
+    denies:
+      "A denial links no branch to the issue as a work run starts; the run creates its branch itself.",
+    refused: (until) => `No branch is linked to an issue ${until}.`,
+  },
+  {
     rule: "deny_github",
     name: "GitHub writes",
     denies:

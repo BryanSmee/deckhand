@@ -126,6 +126,19 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && pull && files[`pull:${pull[1]}`]) {
         return res.end(files[`pull:${pull[1]}`]);
       }
+      // An issue's branches, as JSON, when the test sets them (linked-branch.mjs).
+      const branches = /^\/repos\/org\/repo\/git\/matching-refs\/heads\/issue-(\d+)-$/.exec(
+        req.url,
+      );
+      if (req.method === "GET" && branches && files[`branches:${branches[1]}`]) {
+        return res.end(files[`branches:${branches[1]}`]);
+      }
+      // The branch the listener creates and links: named as asked.
+      if (req.method === "POST" && req.url === "/graphql" && body.includes("createLinkedBranch")) {
+        const { name } = JSON.parse(body).variables.input;
+        const linkedBranch = { ref: { name } };
+        return res.end(JSON.stringify({ data: { createLinkedBranch: { linkedBranch } } }));
+      }
       // A branch's latest commit, when the test sets it (the conflict watcher's base).
       const ref = /^\/repos\/org\/repo\/git\/ref\/heads\/(.+)$/.exec(req.url);
       if (req.method === "GET" && ref && files[`ref:${ref[1]}`]) {
@@ -163,7 +176,9 @@ async function fakeGitHub(files = {}) {
       }
       // Onboarding: the repo, its new issue, and the pull request the work run opened.
       if (req.method === "GET" && req.url === "/repos/org/repo") {
-        return res.end(JSON.stringify({ default_branch: "trunk", has_issues: true }));
+        return res.end(
+          JSON.stringify({ node_id: "R_1", default_branch: "trunk", has_issues: true }),
+        );
       }
       if (req.method === "POST" && req.url === "/repos/org/repo/issues") {
         return res.end(JSON.stringify({ number: 30 }));
@@ -1771,6 +1786,34 @@ mounts:
     await ctx.restart();
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
     await check();
+  });
+
+  test("a work run on an issue without a branch: the listener creates and links it, TASK_BRANCH", async (t) => {
+    const { dir, github, send } = await listen(t, {
+      "branches:12": "[]",
+      "ref:trunk": "base-sha",
+      "issue:12": JSON.stringify({ number: 12, node_id: "I_12", title: "Add a thing", labels: [] }),
+    });
+    await send(comment("alice"));
+    await until(() => exists(join(dir, "run-env")), "the run");
+    assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_BRANCH=issue-12-add-a-thing$/m);
+    const link = github.requests.find(
+      (r) => r.path === "/graphql" && r.body.includes("createLinkedBranch"),
+    );
+    // As the listener, at the base's head, before the sandbox started.
+    assert.equal(link.auth, "Bearer app-token");
+    assert.deepEqual(JSON.parse(link.body).variables.input, {
+      issueId: "I_12",
+      oid: "base-sha",
+      name: "issue-12-add-a-thing",
+      repositoryId: "R_1",
+    });
+    // Deckhand's gh-linked-branch.rego was asked: the task's page keeps its decision.
+    const decisions = JSON.parse(readFileSync(join(dir, "decisions.json"), "utf8"));
+    assert.deepEqual(
+      decisions["org/repo#12"].map((d) => [d.rule, d.denied]),
+      [["deny_link_branch", false]],
+    );
   });
 
   test("a restart during a run: it goes on, a new comment reaches it, one reply", async (t) => {

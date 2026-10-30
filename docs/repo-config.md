@@ -843,14 +843,15 @@ rule, that decision runs no `opa` (and the task's page keeps none of it); the re
 folder is listed once, then again only after a push to its default branch (or 10 minutes).
 
 **The rules**: one set of strings per decision, each string a reason shown to the
-maintainer. Four decisions:
+maintainer. Five decisions:
 
-| Rule          | When                                                                                                                                                                     | A message does                                                                                                                                                                                                                                                                                                                                        |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                       |
-| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                              |
-| `deny_fix`    | A [`review.fix`](#reviews) run, or a [CI fix run](#ci-before-the-review), after its own checks, right before it is queued.                                               | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. |
-| `deny_github` | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                               |
+| Rule               | When                                                                                                                                                                     | A message does                                                                                                                                                                                                                                                                                                                                        |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_merge`       | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                       |
+| `deny_review`      | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                              |
+| `deny_fix`         | A [`review.fix`](#reviews) run, or a [CI fix run](#ci-before-the-review), after its own checks, right before it is queued.                                               | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. |
+| `deny_link_branch` | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).  | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                   |
+| `deny_github`      | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                               |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -1063,6 +1064,54 @@ go through Deckhand's git gateway) or settings, or another repository.
 }
 ```
 
+### The linked-branch input
+
+A work run's branch shows in its issue's Development sidebar from the run's start, not only
+once its pull request says `Closes #n`. GitHub links a branch to an issue only as it creates
+it (`createLinkedBranch`, what `gh issue develop` calls), so the **listener** does it as a work
+run starts, before its sandbox does: when the run may push its issue's branch
+(`issue-<n>-*`, not a light run nor a fork's) and the issue has no `issue-<n>-…` branch yet. A
+fix or conflict run's branch, or a later run's, exists already: nothing is linked then. The
+branch is named from the issue's title as the sandbox names it, created at the base branch's
+head, and the sandbox checks it out and pushes its first commit through the git gateway as
+usual. A refusal or a failure links nothing and fails no run: the sandbox creates the branch
+itself, unlinked.
+
+`input` of `deny_link_branch`:
+
+| Field         | What                                                                                                        |
+| ------------- | ----------------------------------------------------------------------------------------------------------- |
+| `version`     | `1`.                                                                                                        |
+| `repo`        | `"owner/repo"`, in lower case.                                                                              |
+| `mode`        | The run's mode: `work`, or one of the repository's `modes:` that isn't light.                               |
+| `custom_mode` | `true` for one of the repository's `modes:`, as in [the GitHub input](#the-github-input).                   |
+| `light`       | `false`: a light run gets no branch.                                                                        |
+| `reason`      | Why the listener started the run itself (`"review-fix"`, `"ci-fix"`, `"conflict"`), `null` for a comment's. |
+| `issue`       | The issue's number.                                                                                         |
+| `labels`      | The issue's labels (names).                                                                                 |
+| `branch`      | The branch it would create: `issue-<n>-<slug of the title>`.                                                |
+| `base`        | The base branch.                                                                                            |
+| `oid`         | The base branch's head commit, where the branch is created.                                                 |
+
+Deckhand's default, `gh-linked-branch.rego`, links work runs' branches only:
+
+| Work, fix, conflict | Brainstorm            | Research              | Repository modes                                   |
+| ------------------- | --------------------- | --------------------- | -------------------------------------------------- |
+| ✅ linked           | ❌ (no branch: light) | ❌ (no branch: light) | ❌ refused, broadened by a `gh-linked-branch.rego` |
+
+A repository's own mode that a policy lets link one (its `.deckhand/policy/gh-linked-branch.rego`)
+also gets its branch checked out and its draft pull request opened by the sandbox, as a work
+run does.
+
+```rego
+# .deckhand/policy/gh-linked-branch.rego: work runs and the repository's `plan` mode
+package deckhand
+
+deny_link_branch contains "only work and plan runs link a branch" if {
+  not input.mode in {"work", "plan"}
+}
+```
+
 ### The default policies
 
 The ceilings leave room for what a prompt may need one day; Deckhand's default policies narrow
@@ -1070,7 +1119,8 @@ them to what its prompts ask for. They ship in the listener's image (`policy/` i
 repository) and hold without any setup, under the operator's and the repository's files:
 
 - **One file per feature**: `github.rego` for the writes runs have always made (below), and a
-  `gh-<feature>.rego` for each `gh` feature added since (`gh-review-threads.rego`, say),
+  `gh-<feature>.rego` for each `gh` feature added since (`gh-review-threads.rego`, say;
+  `gh-linked-branch.rego`, [the linked branch](#the-linked-branch-input)),
   whose defaults its issue gives per kind of run: work runs (work, fix and conflict runs
   share theirs), brainstorms, research (it gets no GitHub token, so it never reaches the
   gateway), and the repository's own `modes:` (`custom_mode`), where a new feature is
@@ -1175,7 +1225,9 @@ without the rule on `delete`, say): never past the ceiling.
 `deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on
 sample writes (a comment on it by the work run whose pull request it is, one by a brainstorm
 of another issue, `issue: null`, and, when the repository has `modes:`, one by a run in the
-first of them that isn't light, else the first, `custom_mode: true`), and replies with each rule's result (denies, with
+first of them that isn't light, else the first, `custom_mode: true`), `deny_link_branch` on a
+sample (the pull request's head branch, as its work run on the issue it closes would have had it
+linked), and replies with each rule's result (denies, with
 its messages, or allows), the merge's input and the samples' inputs, in collapsed blocks. The
 samples' results are labelled as such and aren't counted as denials. Nothing is
 reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull

@@ -49,6 +49,9 @@ export function createPreparation(ctx) {
     // trust what they find (prepareImage(), sandbox-spec.mjs).
     live.fork = fork;
     ctx.broker.allow(live.secret, live.branches, fork);
+    // Its issue's branch, created and linked to the issue now when it has none: the sandbox
+    // checks it out (TASK_BRANCH, draft-pr.sh). Null: the sandbox creates one, unlinked.
+    live.linkedBranch = (await ctx.linkedBranches?.link(task, note)) ?? null;
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });

@@ -16,8 +16,11 @@
 #                            and the pushed work find them before the sandbox stops.
 #
 # Only for work runs on an issue: TASK_ISSUE (GitHub issue number, from the listener).
-# Brainstorms and pull request runs don't set it, so nothing is created for them. Never
-# fails the run: problems go to stderr.
+# Brainstorms and pull request runs don't set it, so nothing is created for them. TASK_BRANCH:
+# the branch the listener created at the base's head and linked to the issue
+# (listener/linked-branch.mjs), checked out and given its first commit here; with it, a repo's
+# own mode a policy let link one opens its draft too. Never fails the run: problems go to
+# stderr.
 set -uo pipefail
 
 base=${BASE_BRANCH:-main}
@@ -46,7 +49,7 @@ fi
 # In .git: survives between runs of the same issue, never committed.
 cache=/workspace/.git/deckhand-task.json
 
-[ "${TASK_MODE:-work}" = work ] || exit 0
+[ "${TASK_MODE:-work}" = work ] || [ -n "${TASK_BRANCH:-}" ] || exit 0
 [ -n "${TASK_ISSUE:-}" ] || exit 0
 cd /workspace || exit 0
 
@@ -58,16 +61,18 @@ slug() {
     .slice(0, 50).replace(/-+$/, "") || "task")'
 }
 
-# Title and branch name of the issue, as JSON, looked up once.
+# Title and branch name of the issue, as JSON, looked up once. The listener's TASK_BRANCH
+# over a name kept from an earlier run.
 info() {
-  if [ -s "$cache" ]; then
+  local kept title branch
+  kept=$([ -s "$cache" ] && jq -r .branch "$cache")
+  if [ -n "$kept" ] && [ "${TASK_BRANCH:-$kept}" = "$kept" ]; then
     cat "$cache"
     return
   fi
-  local title branch
   title=$(gh issue view "$TASK_ISSUE" --json title --jq .title) || return 1
   branch=issue-$TASK_ISSUE-$(slug <<< "$title")
-  branch=${branch%-}
+  branch=${TASK_BRANCH:-${branch%-}}
   jq -n --arg title "$title" --arg branch "$branch" '{title: $title, branch: $branch}' |
     tee "$cache"
 }
@@ -111,6 +116,11 @@ start() {
     git checkout --quiet "$branch"
   elif git fetch --quiet origin "$branch" 2> /dev/null; then
     git checkout --quiet -b "$branch" --track "origin/$branch"
+    # The listener's, at the base's head: its first commit, so a pull request can open.
+    if [ "$branch" = "${TASK_BRANCH:-}" ] && [ -z "$(git rev-list "origin/$base..HEAD")" ]; then
+      git commit --quiet --allow-empty -m "#$TASK_ISSUE: start work"
+      git push --quiet origin "$branch" || return 0
+    fi
   else
     git checkout --quiet -b "$branch" "origin/$base"
     git commit --quiet --allow-empty -m "#$TASK_ISSUE: start work"
