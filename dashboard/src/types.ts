@@ -37,9 +37,11 @@ export interface Run {
   // work, brainstorm, idea, bug, discussion or one of the repo's own modes
   taskMode: string | null;
   // Why the listener started it itself ("conflict": a pull request to rebase, "review": one
-  // that turned ready, "review-fix": one whose review requested changes); null for comments.
+  // that turned ready, "review-fix": one whose review requested changes, "ci-fix": one whose CI
+  // failed before its review); null for comments.
   reason?: string | null;
-  // A review fix run's round, of how many the repo's `review.fix` allows; null otherwise.
+  // A review fix run's round, of how many the repo's `review.fix` allows (a CI fix run's, of
+  // `review.ci_fix`); null otherwise.
   round?: number | null;
   rounds?: number | null;
   // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
@@ -196,11 +198,20 @@ export interface Task {
 }
 
 // Where a pull request's review-and-fix loop is: a review or fix run of it queued or running,
-// the auto-merge waiting for checks, or how it ended (clean; rounds-out: the review after the
+// the auto-merge waiting for checks, the review waiting for CI (ci) or a CI fix run queued or
+// running (ci-fix), or how it ended (clean; rounds-out: the review after the
 // last fix run still blocks; fixed: by design nothing reviewed its one fix run, `review.fix:
 // true` without `merge`; stopped: it blocks, and no fix run follows).
 export type LoopState =
-  "reviewing" | "fixing" | "checks" | "clean" | "rounds-out" | "fixed" | "stopped";
+  | "reviewing"
+  | "fixing"
+  | "checks"
+  | "ci"
+  | "ci-fix"
+  | "clean"
+  | "rounds-out"
+  | "fixed"
+  | "stopped";
 
 export interface ReviewLoop {
   loop: LoopState;

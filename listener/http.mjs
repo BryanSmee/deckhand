@@ -24,6 +24,7 @@ import { fetchPull } from "./github.mjs";
 import { isLight, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { previewHook } from "./previews.mjs";
+import { LOOP_STEPS } from "./reviews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
 import { refreshFor } from "./repos.mjs";
 import { staleFor } from "./work.mjs";
@@ -101,9 +102,9 @@ export function waitEdges(shown, waits) {
 }
 
 // The queued items' fix loop step, for board(): { reason, others }, `reason` the last loop
-// item's ("review", "review-fix") or null, `others` whether any other item waits.
+// item's ("review", "review-fix", "ci-fix") or null, `others` whether any other item waits.
 export function loopStep(pending) {
-  const steps = pending.filter((i) => ["review", "review-fix"].includes(i.reason));
+  const steps = pending.filter((i) => LOOP_STEPS.includes(i.reason));
   return { reason: steps.at(-1)?.reason ?? null, others: steps.length < pending.length };
 }
 
@@ -157,7 +158,7 @@ export function createHttp(ctx, { dashboardDir }) {
         mode: t.pending.at(-1).mode,
         repo: t.repo,
         replyTo: t.pending.at(-1).replyTo,
-        // A fix loop's step among them ("review", "review-fix", the last one's), and whether
+        // A fix loop's step among them ("review", "review-fix", "ci-fix", the last one's), and whether
         // anything else waits too (a maintainer's comment): then the task is queued, not in
         // review (board.mjs).
         ...loopStep(t.pending),
@@ -464,7 +465,9 @@ export function createHttp(ctx, { dashboardDir }) {
     }
     // A pull request that turned ready, in a repo whose `review.on` asks for a review.
     if (event === "pull_request") admitted(ctx.reviews.consider(event, payload, skip));
-    // A GitHub Actions run that completed on a commit an auto-merge waits on.
+    // A push to a pull request waiting for CI (`review.ci`): the wait moves to its new head.
+    if (event === "pull_request") admitted(ctx.reviews.pushed(event, payload));
+    // A GitHub Actions run that completed on a commit an auto-merge or a review waits on.
     if (event === "workflow_run") admitted(ctx.reviews.checksDone(event, payload));
     const preview = previewEvent(config, event, payload, skip);
     if (preview) {

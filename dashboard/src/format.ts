@@ -94,17 +94,20 @@ export function inChip(chip: ChipId, t: Task): boolean {
 // on it is over (inLoop()).
 export const isReady = (t: Pick<Task, "pr" | "review">) => t.pr?.state === "ready" && !inLoop(t);
 
-// The loop's states while it goes on: a review or fix run of it queued or running, or its
-// auto-merge waiting for checks (listener/reviews.mjs reviewLoop()).
-const LOOPING: LoopState[] = ["reviewing", "fixing", "checks"];
+// The loop's states while it goes on: a review or fix run of it queued or running, its
+// auto-merge waiting for checks, its review waiting for CI or a CI fix run (listener/reviews.mjs
+// reviewLoop()).
+const LOOPING: LoopState[] = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
 export const inLoop = (t: Pick<Task, "review">) => !!t.review && LOOPING.includes(t.review.loop);
 
 // A loop still going, for a row: "Review · first review", "Review · round 2 of 3", "Review ·
-// waiting for checks"; null otherwise.
+// waiting for checks", "Review · waiting for CI", "Review · fixing CI"; null otherwise.
 export function loopLine(t: Pick<Task, "review">): string | null {
   const r = t.review;
   if (!r || !inLoop(t)) return null;
   if (r.loop === "checks") return "Review · waiting for checks";
+  if (r.loop === "ci") return "Review · waiting for CI";
+  if (r.loop === "ci-fix") return "Review · fixing CI";
   if (!r.round) return "Review · first review";
   return r.rounds ? `Review · round ${r.round} of ${r.rounds}` : `Review · round ${r.round}`;
 }
@@ -388,7 +391,8 @@ export function runName(r: Run): string {
     r.mode ?? ""
   ];
   const fix = r.round && (r.rounds ?? 1) > 1 ? `Review fix ${r.round}/${r.rounds}` : "Review fix";
-  const why = { conflict: "Conflict", "review-fix": fix }[r.reason ?? ""] ?? null;
+  const ci = r.round && (r.rounds ?? 1) > 1 ? `CI fix ${r.round}/${r.rounds}` : "CI fix";
+  const why = { conflict: "Conflict", "review-fix": fix, "ci-fix": ci }[r.reason ?? ""] ?? null;
   return [why, own, what ?? "Run"].filter(Boolean).join(" · ");
 }
 

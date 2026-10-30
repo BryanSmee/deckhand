@@ -370,6 +370,7 @@ const REASONS = {
   conflict: "Rebasing a pull request in conflict",
   review: "Reviewing a pull request that turned ready",
   "review-fix": "Addressing the findings of a review that requested changes",
+  "ci-fix": "Fixing the CI that failed on a pull request, before its review",
 };
 
 // The listener's own lines: a run's first line (what it is), notes and delivered comments.

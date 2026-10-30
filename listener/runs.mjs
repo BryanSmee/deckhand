@@ -311,6 +311,8 @@ export function createRuns(ctx) {
       branches: live.branches,
       pull: live.replyTo,
       allowed,
+      // A review the CI step queued before CI passed (reviews.mjs ciDecide()).
+      ciNote: live.mode === "review" ? (items.findLast((i) => i.ciNote)?.ciNote ?? null) : null,
     });
     // A research run mounts nothing (researchAccess()).
     if (!OPEN.has(live.mode)) recheckMounts(agent, settings, access);
@@ -762,6 +764,21 @@ export function createRuns(ctx) {
       ctx.reviews
         ?.fixed({ repo: task.repo, number: fixRun.replyTo, base: task.base, status: record.status })
         .catch((error) => log(`${key}: after the fix run: ${error.stack ?? error}`));
+    }
+    // A CI fix run that is over: what it pushed goes back to waiting for CI (reviews.mjs
+    // ciFixed()).
+    const ciRun = live.handled.find(
+      (item) => item.reason === "ci-fix" && !task.pending.includes(item),
+    );
+    if (ciRun) {
+      ctx.reviews
+        ?.ciFixed({
+          repo: task.repo,
+          number: ciRun.replyTo,
+          base: task.base,
+          status: record.status,
+        })
+        .catch((error) => log(`${key}: after the CI fix run: ${error.stack ?? error}`));
     }
     // Comments put back for the next run keep their 👀 until that one is over. Light runs
     // ask questions all along, like for the label: their replies are "done".

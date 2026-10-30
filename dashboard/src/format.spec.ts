@@ -158,6 +158,8 @@ test("run names: why the listener started a run itself", () => {
   expect(runName({ ...run, reason: "review-fix", round: 2, rounds: 3 })).toBe(
     "Review fix 2/3 · Continue",
   );
+  expect(runName({ ...run, reason: "ci-fix" })).toBe("CI fix · Continue");
+  expect(runName({ ...run, reason: "ci-fix", round: 1, rounds: 2 })).toBe("CI fix 1/2 · Continue");
   expect(runName({ mode: "start", taskMode: "review", reason: "review" } as Run)).toBe(
     "Review · Start",
   );
