@@ -933,7 +933,9 @@ const askFix = (s, message = HIGH_ONE, user = "alice", pr = {}) => {
 };
 
 test("dashboard Fix: one round more once they ran out, counted before it is queued", async (t) => {
-  const s = await loopSetup(t);
+  // The fix run queued makes the issue busy until it ends, as the queue does.
+  let queued = false;
+  const s = await loopSetup(t, undefined, { busy: () => queued });
   await s.review(HIGH_TWO);
   await s.fixed("sha-2");
   await s.review(HIGH_ONE);
@@ -942,6 +944,7 @@ test("dashboard Fix: one round more once they ran out, counted before it is queu
   assert.equal(s.loop().loop, "rounds-out");
   const before = s.accepted.length;
   const { item, said } = await askFix(s);
+  queued = true;
   assert.deepEqual(said, [[3, 3, "1 high finding"]]);
   assert.equal(s.accepted.length, before + 1);
   assert.deepEqual(
@@ -952,11 +955,16 @@ test("dashboard Fix: one round more once they ran out, counted before it is queu
   const entry = s.reviews.entry("org/repo", 5);
   assert.deepEqual([entry.fixes, entry.granted, entry.fixRounds], [3, 1, 3]);
   assert.deepEqual([s.loop("review-fix").loop, s.loop("review-fix").rounds], ["fixing", 3]);
-  // A second click, or the same after a restart: the round is on its way, nothing more.
+  // A second click, or the same after a restart (its run back in the queue): the round is on
+  // its way, nothing more.
   const again = await askFix(s);
   assert.equal(again.item, null);
-  assert.match(again.why, /review loop is still going/);
-  const restarted = setup(t, "review:\n  on: ready\n  fix: 2\n", { path: s.path });
+  assert.match(again.why, /has a run going or queued/);
+  const restarted = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    path: s.path,
+    busy: () => true,
+    github: async () => Response.json({ labels: [] }),
+  });
   const run = { repo: "org/repo", number: 5, base: "trunk", settings: restarted.read.settings };
   const after = await restarted.reviews.fixAsked(run, posted(HIGH_ONE), {
     user: "alice",
@@ -965,6 +973,7 @@ test("dashboard Fix: one round more once they ran out, counted before it is queu
   assert.equal(after.item, null);
   assert.equal(restarted.accepted.length, 0);
   // Its push is reviewed as any round's, and the loop ends again at R3.
+  queued = false;
   assert.equal((await s.fixed("sha-4")).reason, "review");
   assert.equal(await s.review(HIGH_ONE), null);
   const out = s.loop();
@@ -1023,6 +1032,26 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   });
   assert.match((await askFix(asking)).why, /waits for the maintainer's input/);
   assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
+});
+
+test("dashboard Fix after the loop's review run failed: its step left over doesn't hold it", async (t) => {
+  let busy = false;
+  const s = await loopSetup(t, undefined, { busy: () => busy });
+  await s.review(HIGH_TWO);
+  // The review of what the fix pushed is queued, then its run fails: nothing is posted, so
+  // nothing settles it, and its step stays in reviews.json.
+  assert.equal((await s.fixed("sha-2")).reason, "review");
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review");
+  // While it is queued or running, the issue is busy: no Fix.
+  busy = true;
+  assert.match((await askFix(s, HIGH_TWO)).why, /has a run going or queued/);
+  busy = false;
+  assert.deepEqual([s.loop().loop, s.loop().history.at(-1).blocking], ["stopped", 2]);
+  const { item } = await askFix(s, HIGH_TWO);
+  assert.deepEqual([item.round, item.rounds], [2, 2]);
+  assert.equal(s.reviews.entry("org/repo", 5).next, "review-fix");
+  // While the listener decides what follows a run, it still waits.
+  assert.equal((await s.fixed("sha-3")).reason, "review");
 });
 
 test("dashboard Fix after a maintainer's review: a fix that pushed nothing stops the loop", async (t) => {

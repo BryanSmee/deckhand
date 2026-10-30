@@ -1359,7 +1359,10 @@ export function createReviews({
       return { item: null, why };
     };
     const entry = reviewed.get(key) ?? {};
-    if (asked && (entry.next || decisions.has(key) || entry.waiting || entry.ciWaiting)) {
+    // The loop going on: what follows a run being decided, the auto-merge or CI waited for. Its
+    // step's run queued or running is busy() below; `next` alone isn't: a review run that
+    // failed posts nothing, and its step stays until a restart (forgetSteps()).
+    if (asked && (decisions.has(key) || entry.waiting || entry.ciWaiting)) {
       return skip("its review loop is still going");
     }
     const fixes = fixesOf(entry);
