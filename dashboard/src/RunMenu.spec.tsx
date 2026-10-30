@@ -27,7 +27,13 @@ const show = (n: number, run?: string, over: Partial<Task> = {}) => {
   const task = makeTask({ number: 70, runs, ...over });
   const q = `?task=${encodeURIComponent(KEY)}${run ? `&run=${run}` : ""}`;
   history.replaceState(null, "", `#/acme/app${q}`);
-  render(<Dashboard state={makeState({}, [task])} error={null} />);
+  const view = render(<Dashboard state={makeState({}, [task])} error={null} />);
+  // The same task with a run more, started since.
+  return () => {
+    const more = makeRuns(KEY, n + 1, base.now - (n + 1) * 3_600_000);
+    const next = { ...task, runs: more };
+    view.rerender(<Dashboard state={makeState({}, [next])} error={null} />);
+  };
 };
 const tabs = (name = "Runs") =>
   within(screen.getByRole("tablist", { name }))
@@ -106,6 +112,23 @@ test("the menu's keys: arrows and End move, Enter picks, Escape closes", () => {
   expect(screen.queryByRole("listbox")).toBeNull();
 });
 
+test("a run starting while the list is open: Enter still picks the row focused", () => {
+  const started = show(15);
+  fireEvent.click(allRuns()!);
+  fireEvent.keyDown(document.activeElement!, { key: "End" });
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+  expect(document.activeElement!.textContent).toMatch(/^#2 /);
+  started();
+  expect(options()).toHaveLength(16);
+  expect(document.activeElement!.textContent).toMatch(/^#2 /);
+  expect((document.activeElement as HTMLElement).tabIndex).toBe(0);
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+  expect(document.activeElement!.textContent).toMatch(/^#1 /);
+  fireEvent.keyDown(document.activeElement!, { key: "ArrowUp" });
+  fireEvent.keyDown(document.activeElement!, { key: "Enter" });
+  expect(location.hash).toMatch(new RegExp(`run=${ID(2)}$`));
+});
+
 test("[ and ] go through every run, those without a tab too", () => {
   show(15);
   fireEvent.keyDown(document.body, { key: "]" });
@@ -136,7 +159,7 @@ test("on a phone, All runs opens in a Sheet", () => {
   expect(location.hash).toMatch(new RegExp(`run=${ID(1)}$`));
 });
 
-test("with a Policies tab: All runs beside the runs, outside the tablist; a pick keeps it", () => {
+test("with a Policies tab: All runs last, outside the tablist; a pick keeps it", () => {
   const decision: PolicyDecision = {
     decision: "merge",
     rule: "deny_merge",

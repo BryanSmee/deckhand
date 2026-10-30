@@ -1,8 +1,7 @@
 // Tabs (the work queue's, a task's runs): a tablist whose arrows, Home and End move between
 // the tabs, and pick them, as the ARIA pattern has it. Only the picked tab is in the Tab order.
-// `extra` (a task's All runs button) sits in the row, outside the tablist, shown before the tab
-// `extraBefore`, else last: the tablist's box gives way to the row's (display: contents), and
-// its tabs from `extraBefore` on are ordered after `extra`.
+// `extra` (a task's All runs button) sits last in the row, outside the tablist, whose box gives
+// way to the row's (display: contents): its tabs and `extra` share the row's width.
 import type { ComponentChildren, JSX } from "preact";
 import { useRef } from "preact/hooks";
 import { Count } from "./Count";
@@ -27,7 +26,6 @@ interface Props<T extends string> {
   panel?: string;
   class?: string;
   extra?: ComponentChildren;
-  extraBefore?: T;
 }
 
 const MOVES: Record<string, (i: number, n: number) => number> = {
@@ -45,7 +43,6 @@ export function Tabs<T extends string>({
   panel,
   class: className,
   extra,
-  extraBefore,
 }: Props<T>) {
   const list = useRef<HTMLDivElement>(null);
   const onKeyDown = (e: KeyboardEvent) => {
@@ -58,7 +55,6 @@ export function Tabs<T extends string>({
     list.current?.querySelectorAll<HTMLElement>("[role=tab]")[next]?.focus();
   };
   const row = [styles.tabs, className].filter(Boolean).join(" ");
-  const from = tabs.findIndex((t) => t.id === extraBefore);
   const tablist = (
     <div
       ref={list}
@@ -67,14 +63,13 @@ export function Tabs<T extends string>({
       aria-label={label}
       onKeyDown={onKeyDown}
     >
-      {tabs.map((t, i) => (
+      {tabs.map((t) => (
         <button
           {...t.attrs}
           key={t.id}
           type="button"
           role="tab"
           class={[styles.tab, t.attrs?.class].filter(Boolean).join(" ")}
-          style={extra && from >= 0 && i >= from ? { order: 2 } : undefined}
           aria-selected={t.id === selected}
           aria-controls={panel}
           tabIndex={t.id === selected ? 0 : -1}

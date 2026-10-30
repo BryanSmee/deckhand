@@ -438,7 +438,6 @@ export function Detail({
                   />
                 )
               }
-              extraBefore={POLICIES}
             />
           )}
         </header>

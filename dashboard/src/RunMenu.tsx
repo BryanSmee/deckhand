@@ -1,4 +1,4 @@
-// A task's All runs: the button at the end of its run tabs, and the list of every run it opens,
+// A task's All runs: the button at the end of its tab row, and the list of every run it opens,
 // newest first and numbered from the oldest (#1), the one shown ticked. A popover under the
 // button on a desktop, a Sheet on a phone. A listbox: arrows, Home and End move, Enter picks,
 // Escape closes (Tab too, the popover); focus goes back to the button. Detail.tsx shows it past 3 runs.
@@ -111,19 +111,19 @@ const MOVES: Record<string, (i: number, n: number) => number> = {
 
 function RunList({ runs, current, now, touch, onPick }: Props & { onPick: (id: string) => void }) {
   const list = useRef<HTMLDivElement>(null);
-  // The option in the Tab order, which the arrows move: the run shown's at first.
-  const [active, setActive] = useState(() =>
-    Math.max(
-      0,
-      runs.findIndex((x) => x.id === current),
-    ),
+  // The option in the Tab order, which the arrows move: the run shown's at first. By its id: a
+  // run that starts while the list is open puts every row a place lower.
+  const [activeId, setActiveId] = useState(current ?? runs[0]?.id);
+  const active = Math.max(
+    0,
+    runs.findIndex((x) => x.id === activeId),
   );
   const onKeyDown = (e: KeyboardEvent) => {
     const move = MOVES[e.key];
     if (move) {
       e.preventDefault();
       const next = move(active, runs.length);
-      setActive(next);
+      setActiveId(runs[next]?.id);
       list.current?.querySelectorAll<HTMLElement>("[role=option]")[next]?.focus();
     } else if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -147,7 +147,7 @@ function RunList({ runs, current, now, touch, onPick }: Props & { onPick: (id: s
           class={styles.option}
           title={x.id}
           onClick={() => onPick(x.id)}
-          onFocus={() => setActive(i)}
+          onFocus={() => setActiveId(x.id)}
         >
           <span class={styles.number}>#{runs.length - i}</span>{" "}
           <StatusDot state={x.status} label={stateName(x.status)} />{" "}
