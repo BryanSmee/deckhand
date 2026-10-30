@@ -423,6 +423,60 @@ test("conflicts: invalid values and unknown keys are errors", () => {
   assert.equal(typo.settings.conflicts, null);
 });
 
+test("projects: none by default; each entry's project, field (Status) and steps", () => {
+  const parse = (text) => parseRepoConfig(text, config);
+  assert.deepEqual(parse("trigger: go").settings.projects, []);
+  const { settings, errors } = parse(
+    [
+      "projects:",
+      "  - project: Acme/3",
+      "    start: In progress",
+      "    ready: In review",
+      "    merged: Done",
+      "  - project: acme/7",
+      "    field: Stage",
+      "    merged: Shipped",
+    ].join("\n"),
+  );
+  assert.deepEqual(errors, []);
+  assert.deepEqual(settings.projects, [
+    {
+      project: "acme/3",
+      field: "Status",
+      start: "In progress",
+      ready: "In review",
+      merged: "Done",
+    },
+    { project: "acme/7", field: "Stage", start: null, ready: null, merged: "Shipped" },
+  ]);
+});
+
+test("projects: invalid entries, unknown keys, a project twice and no step are errors", () => {
+  const errors = (text) => parseRepoConfig(text, config).errors.join("; ");
+  assert.match(errors("projects: acme/3"), /projects: expected a list/);
+  assert.match(errors("projects: [acme/3]"), /projects\[0\]: expected \{ project/);
+  assert.match(
+    errors("projects:\n  - project: acme\n    start: Doing"),
+    /projects\[0\]\.project: expected <organization>\/<number>/,
+  );
+  assert.match(
+    errors("projects:\n  - project: acme/3\n    begin: Doing"),
+    /projects\[0\]\.begin: unknown key/,
+  );
+  assert.match(
+    errors("projects:\n  - project: acme/3"),
+    /projects\[0\]: expected at least one of start, ready, merged/,
+  );
+  assert.match(
+    errors("projects:\n  - project: acme/3\n    start: 3"),
+    /projects\[0\]\.start: expected the name of an option/,
+  );
+  assert.match(
+    errors("projects:\n  - project: acme/3\n    start: A\n  - project: ACME/3\n    merged: B"),
+    /projects\[1\]\.project: acme\/3 is listed twice/,
+  );
+});
+
 test("wait_for_answers: on by default, a boolean or an error", () => {
   assert.equal(defaultSettings(config).waitForAnswers, true);
   assert.equal(parseRepoConfig("trigger: go", config).settings.waitForAnswers, true);

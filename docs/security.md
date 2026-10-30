@@ -393,6 +393,18 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     content): the listener notes each one before it asks GitHub (`reactions.json`, issue #458). No ceiling holds closing, merging, reviews, deleting anything else,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
+  - an item added to a project (v2) (`addProjectV2ItemById`, issue #454) is a `project` on
+    its content: a work run's issue, pull requests, sub-issues and the issues it created, a
+    brainstorm's created issues. A project is outside every repository, so per-repo config
+    can't name one: its project, looked up from its node ID with the listener's token, must
+    be one the operator's grants list for the repository (`allow_projects`), or it is refused
+    before any policy, which can't reach another. Only that write's token gets
+    `organization_projects: write`; a granted repository's runs read the organization's
+    projects (the App can't narrow its token to one project: their titles, fields and the
+    items it can see, which GitHub redacts for repositories the token doesn't cover). Setting
+    an item's fields, removing or archiving it, and the project's settings, fields and views
+    are in no ceiling: the listener moves the repository's issues itself, from its
+    `projects:` ([Projects](repo-config.md#projects)), on granted projects only;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
 
   A **rerun** (`POST …/actions/runs/<id>/rerun-failed-jobs`, `…/actions/jobs/<id>/rerun`,
@@ -437,7 +449,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   fields at most (gh sends one), each response key checked once (GitHub runs it once), and
   the targets of one call looked up once each: a call can't spend the installation's rate
   limit on look-ups. Each field of a mutation, aliases and fragments included, must
-  be one of the mutations Deckhand knows, setting only the input fields it checks, whatever their value, `null` too (projects,
+  be one of the mutations Deckhand knows, setting only the input fields it checks, whatever their value, `null` too (classic projects,
   a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused), except the empty fields gh always sends, which set nothing
   (`createIssue`'s `projectIds` as `null` or `[]`, issue #422; one with a project is refused): a mutation
   GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
@@ -1058,6 +1070,10 @@ allow_auto_merge: true
 # default branch as root on the host, so what an unread merge changes may run as root. Per
 # repository only.
 acknowledge_automerge_and_preview_is_highly_dangerous: true
+# Organization projects (v2), <organization>/<number>, its runs add their issues and pull
+# requests to, and the listener moves its issues on (see Projects in repo-config.md). Needs the
+# App's Organization projects permission. Per repository only.
+allow_projects: [acme/3]
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
 limits: { cpus: 4, memory: 8g, pids: 4096 }
 # Roots it may mount from (read-only unless read_only: false).
@@ -1068,8 +1084,8 @@ mounts:
 ```
 
 `default.yaml` takes the same keys but `mounts`, `allow_docker`, `allow_workflows`,
-`allow_auto_merge` and `acknowledge_automerge_and_preview_is_highly_dangerous`, for every
-repository:
+`allow_auto_merge`, `acknowledge_automerge_and_preview_is_highly_dangerous` and
+`allow_projects`, for every repository:
 
 ```yaml
 # default.yaml
@@ -1084,9 +1100,9 @@ cached_hosts: [deb.debian.org]
 limits: { memory: 8g }
 ```
 
-`mounts`, `allow_docker`, `allow_workflows`, `allow_auto_merge` and
-`acknowledge_automerge_and_preview_is_highly_dangerous` in `default.yaml` are errors: a root, a container engine, workflow files run with the Actions secrets or merges
-nobody reviewed, for every repository, are too broad to grant by accident, so they are
+`mounts`, `allow_docker`, `allow_workflows`, `allow_auto_merge`,
+`acknowledge_automerge_and_preview_is_highly_dangerous` and `allow_projects` in `default.yaml` are errors: a root, a container engine, workflow files run with the Actions secrets, merges
+nobody reviewed, or a project outside every repository, for every repository, are too broad to grant by accident, so they are
 granted one repository at a time.
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository

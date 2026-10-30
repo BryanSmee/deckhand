@@ -18,6 +18,7 @@
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { REACTION_ENUM } from "./comments.mjs";
+import { PROJECT_WRITE } from "./github-app.mjs";
 import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
 import { labelNames, reactionSubject } from "./github-writes.mjs";
 import {
@@ -112,8 +113,10 @@ function updated(input) {
 // - child: a link's sub-issue field; blocker: a "blocked by" link's blocking issue field;
 // - reaction: `add` or `remove`, a reaction's (its subject may be a comment: REACTABLE_COMMENTS);
 // - thread: its target is a review thread, written to as its pull request (writeOf());
-// - pull(input), permissions: a pull request's own write's head, base and draft, and what its
-//   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
+// - project: the project (v2) field of an item it adds, which must be a granted one
+//   (github-writes.mjs);
+// - pull(input): a pull request's own write's head, base and draft (github-pulls.mjs);
+// - permissions: what its token needs beyond its mode's (github-writes.mjs classify()'s).
 // The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
 // edited (`gh pr create` sets its labels and milestone with `updatePullRequest`), readied,
 // drafted and its branch updated, and its review threads replied to, resolved and unresolved.
@@ -126,6 +129,8 @@ export const MUTATIONS = {
     // Not `issueTemplate`: GitHub would add its labels and assignees, which no check sees.
     fields: ["title", "body", "labelIds", "assigneeIds", "milestoneId"],
     // gh issue create sends `projectIds: null` whenever it resolves any metadata (a label).
+    // They are classic projects', which GitHub retired: gh adds a project (v2) item after the
+    // create, with addProjectV2ItemById.
     empty: ["projectIds"],
     actions: (input) => [
       "create",
@@ -259,6 +264,19 @@ export const MUTATIONS = {
     actions: () => ["unreact"],
     reaction: "remove",
   },
+  // An item on a project (v2), as `gh project item-add`, `gh issue create --project` and
+  // `gh issue/pr edit --add-project` add it: its content is the target, an issue or a pull
+  // request of the run's, and its project one the operator grants the repo (issue #454). Not
+  // deleteProjectV2Item, archiving, an item's field values (the listener sets them:
+  // projects.mjs), nor the project's own settings, fields or views.
+  addProjectV2ItemById: {
+    target: "contentId",
+    types: ISSUE_OR_PR,
+    fields: ["projectId"],
+    actions: () => ["project"],
+    project: "projectId",
+    permissions: PROJECT_WRITE,
+  },
   createPullRequest: {
     target: "repositoryId",
     repo: true,
@@ -354,6 +372,7 @@ const NODES = `query($ids: [ID!]!) {
     ... on Label { name repository { nameWithOwner } }
     ... on IssueComment { fullDatabaseId }
     ... on PullRequestReviewComment { fullDatabaseId }
+    ... on ProjectV2 { number title owner { __typename ... on Organization { login } ... on User { login } } }
     ... on RepositoryNode { repository { nameWithOwner } }
     ... on Reactable { reactionGroups { content viewerHasReacted } }
     ... on PullRequestReviewThread {
@@ -603,6 +622,9 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
     if (spec.blocker && typeof set[spec.blocker] !== "string") {
       return { refused: refusal(400, `${name} without its ${spec.blocker}`) };
     }
+    if (spec.project && typeof set[spec.project] !== "string") {
+      return { refused: refusal(400, `${name} without its ${spec.project}`) };
+    }
     const entry = { name, key, spec, input: set, nodes: [field] };
     byKey.set(key, entry);
     out.push(entry);
@@ -610,13 +632,15 @@ export function mutationFields({ doc, op, coerced }, schema = githubSchema()) {
   return out;
 }
 
-// The node IDs a call's mutations name: their targets, sub-issues, blockers and labels.
+// The node IDs a call's mutations name: their targets, sub-issues, blockers, projects and
+// labels.
 function idsOf(fields) {
   const ids = new Set();
   for (const { spec, input } of fields) {
     ids.add(input[spec.target]);
     if (spec.child) ids.add(input[spec.child]);
     if (spec.blocker) ids.add(input[spec.blocker]);
+    if (spec.project) ids.add(input[spec.project]);
     for (const id of spec.labels ? (input[spec.labels.field] ?? []) : []) ids.add(id);
   }
   return [...ids];
@@ -785,6 +809,25 @@ export function writeOf({ name, spec, input }, nodes, repo) {
   if (spec.pull) write.pull = spec.pull(set);
   if (thread) write.thread = thread;
   if (spec.permissions) write.permissions = spec.permissions;
+  // The project an item goes on: outside the repository, so not refused as elsewhere. Which
+  // ones the run may write is the grant's (github-writes.mjs). GitHub answers null for a
+  // project the App can't see (without organization_projects, say).
+  if (spec.project) {
+    const project = nodes.get(input[spec.project]);
+    if (project?.__typename !== "ProjectV2") {
+      return {
+        refused: refusal(
+          403,
+          `${name}'s ${spec.project} isn't a project, or the GitHub App can't see it`,
+        ),
+      };
+    }
+    write.project = {
+      owner: String(project.owner?.login ?? "").toLowerCase(),
+      number: project.number,
+      title: project.title ?? null,
+    };
+  }
   // The other issue a link names, its sub-issue or its blocker: in the run's repo (GitHub
   // allows cross-repository ones, a run doesn't), an issue.
   const linked = (field) => {

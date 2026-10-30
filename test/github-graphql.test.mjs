@@ -118,6 +118,9 @@ const NODES = {
   PRRT_h: thread(7, 41),
   PRRT_e: { ...thread(7, 0), comments: { nodes: [] } },
   PRRT_o: { ...thread(7, 40), repository: { nameWithOwner: "org/other" } },
+  // Projects (v2): outside any repository, named by their owner and number.
+  PV_3: { __typename: "ProjectV2", number: 3, title: "Roadmap", owner: { login: "Acme" } },
+  PV_9: { __typename: "ProjectV2", number: 9, title: "Other", owner: { login: "acme" } },
 };
 function thread(number, comment, repo = "Org/Repo") {
   return {
@@ -211,7 +214,12 @@ const run = (mode, issue = 1, { push = mode === "work", reason = null } = {}) =>
 });
 
 // The checks, with the writes they held and the IDs they looked up.
-function checks({ checkWrite, needsInputLabel = () => null, policies = null } = {}) {
+function checks({
+  checkWrite,
+  needsInputLabel = () => null,
+  policies = null,
+  projects = () => ["acme/3"],
+} = {}) {
   const writes = [];
   const asked = [];
   // The REST look-ups the write checks made.
@@ -221,6 +229,7 @@ function checks({ checkWrite, needsInputLabel = () => null, policies = null } = 
     lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
     bot: () => "deckhand[bot]",
     policies,
+    projects,
   }).checkWrite;
   const { check } = createGraphqlChecks({
     nodes: async (repo, ids) => (asked.push([repo, ids]), ids.map((id) => NODES[id] ?? null)),
@@ -870,6 +879,79 @@ test("a blocked-by link: its blocker resolved from its node, an issue of the run
     ).refused.message,
     /blockingIssueId/,
   );
+});
+
+// gh's own (cli/cli: api/queries_pr.go UpdateProjectV2Items(), what `gh issue create --project`
+// and `gh issue/pr edit --add-project` send; `gh project item-add` sends one field the same).
+const GH_PROJECT_ADD =
+  "mutation UpdateProjectV2Items($input_000: AddProjectV2ItemByIdInput!) { add_000: addProjectV2ItemById(input: $input_000) { item { id } } }";
+const addItem = (contentId, projectId = "PV_3") =>
+  call(GH_PROJECT_ADD, { input_000: { contentId, projectId } });
+
+test("a project item: its content one of the run's, its project one the grants list", async () => {
+  const { check, writes, asked } = checks();
+  const work = run("work");
+  // Its issue, its pull request, its sub-issue: added, with a token that writes projects.
+  for (const id of ["I_1", "PR_7", "I_2"]) {
+    const checked = await check(work, addItem(id));
+    assert.equal(checked.write, true, id);
+    assert.deepEqual(checked.permissions, { organization_projects: "write" });
+  }
+  assert.deepEqual(asked.at(-1), ["org/repo", ["I_2", "PV_3"]]);
+  assert.deepEqual(writes.at(-1).actions, ["project"]);
+  assert.deepEqual(writes.at(-1).change.fields, ["project_id"]);
+  assert.deepEqual(writes.at(-1).project, { owner: "acme", number: 3, title: "Roadmap" });
+  // Someone else's issue: above the ceiling.
+  assert.match(
+    (await check(work, addItem("I_3"))).refused.message,
+    /can't project on other_issue #3 \(its ceiling\)/,
+  );
+  // A project the grants don't list, or none granted at all: refused, whatever the policies.
+  assert.match(
+    (await check(work, addItem("I_1", "PV_9"))).refused.message,
+    /don't let this repository's runs write project acme\/9 \(allow_projects\)/,
+  );
+  const none = checks({ projects: () => [] });
+  assert.match((await none.check(work, addItem("I_1"))).refused.message, /allow_projects/);
+  // Not a project (or one the App can't see), or without one.
+  assert.match(
+    (await check(work, addItem("I_1", "I_2"))).refused.message,
+    /projectId isn't a project, or the GitHub App can't see it/,
+  );
+  assert.match(
+    (await check(work, addItem("I_1", "PV_x"))).refused.message,
+    /isn't a project, or the GitHub App can't see it/,
+  );
+  // Another repository's issue.
+  assert.match((await check(work, addItem("I_o"))).refused.message, /contentId isn't in the run's/);
+  // A brainstorm adds the issues it filed only; a repo's light mode, nothing.
+  const brainstorm = { ...run("brainstorm"), created: [{ number: 5, at: 0 }] };
+  assert.equal((await check(brainstorm, addItem("I_5"))).write, true);
+  assert.match((await check(brainstorm, addItem("I_1"))).refused.message, /its ceiling/);
+  assert.match((await check(run("ask"), addItem("I_1"))).refused.message, /its ceiling/);
+  // Setting an item's field, removing or archiving one: the listener's, never a run's.
+  for (const name of [
+    "updateProjectV2ItemFieldValue",
+    "clearProjectV2ItemFieldValue",
+    "deleteProjectV2Item",
+    "archiveProjectV2Item",
+    "updateProjectV2",
+  ]) {
+    const field = MUTATIONS[name];
+    assert.equal(field, undefined, name);
+  }
+  const edit = call(
+    'mutation { updateProjectV2ItemFieldValue(input: { projectId: "PV_3", itemId: "PVTI_1", fieldId: "F", value: { text: "x" } }) { clientMutationId } }',
+  );
+  assert.match(
+    (await check(work, edit)).refused.message,
+    /Deckhand doesn't let a run send updateProjectV2ItemFieldValue/,
+  );
+  // createIssue's projectIds are classic projects': still only empty.
+  const create = call(GH_CREATE, {
+    input: { repositoryId: "R_repo", title: "t", projectIds: ["PV_3"] },
+  });
+  assert.match((await check(work, create)).refused.message, /createIssue's projectIds/);
 });
 
 test("lookupNodes: GitHub's nodes in order, a missing one null; a failed answer throws", async () => {

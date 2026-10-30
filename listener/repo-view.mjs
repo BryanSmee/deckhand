@@ -113,6 +113,7 @@ function grantRows(grant) {
     hosts: grant.hosts,
     cachedHosts: grant.cachedHosts,
     mounts: grant.mounts.map(({ root, readOnly }) => ({ root, readOnly })),
+    allowProjects: grant.allowProjects,
     limits: grant.limits,
   };
 }

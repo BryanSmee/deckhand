@@ -688,6 +688,7 @@ function GrantCard({ grant }: { grant: Grant }) {
     const roots = grant.mounts.map((m) => `${m.root}${m.readOnly ? " (read-only)" : ""}`);
     lists.push(["mounts", roots.join(", ")]);
   }
+  if (grant.allowProjects.length) lists.push(["allow_projects", grant.allowProjects.join(", ")]);
   lists.push(["limits", `${cpus} CPUs · ${memory} memory · ${pids} processes`]);
   return (
     <div class={styles.card}>

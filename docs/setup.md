@@ -62,7 +62,7 @@ What the App asks for:
 | Deployments, Discussions: read and write        | `pull_request_review`                         |
 | Workflows, Actions: read and write              | `pull_request_review_comment`, `workflow_run` |
 | Metadata: read                                  | `discussion`, `discussion_comment`            |
-|                                                 | `push`                                        |
+| Organization projects: read and write           | `push`                                        |
 
 An App created before Deckhand answered discussions lacks the `discussion` events and the
 Discussions permission: add them in the App's settings (_Permissions & events_), then accept
@@ -87,6 +87,16 @@ checks first ([repository config](repo-config.md#reruns)): the sandbox's own tok
 reads them. An App created before reruns has Actions: read only: set it to **read and
 write** in the App's settings, then accept it on each installation. Until then a run's rerun
 is refused with a message naming the permission, and everything else works.
+
+Organization projects lets the listener move a repository's issues on an organization's
+project (v2), and its runs add their issues and pull requests there, for the repositories
+whose grants file lists the project in `allow_projects` only
+([Projects](repo-config.md#projects)). An App created before then lacks it, which only
+matters once you grant a project: add **Organization projects: read and write** under
+_Organization permissions_ in the App's settings, then accept it on the organization's
+installation. Until then, the listener's moves fail (said in its log and the run's) and a
+run's project writes are refused with a message naming the permission; nothing else
+changes. A GitHub App can't reach a project owned by a user account.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
@@ -121,7 +131,7 @@ shows the same: a _Missing in its settings_ row for the App's events and permiss
 what each installation lacks beside it.
 
 Until then, the permissions a feature added later are optional (`OPTIONAL_PERMISSIONS`,
-`actions` for now): a run's token goes without one its installation lacks, and the GitHub
+`actions` and `organization_projects` for now): a run's token goes without one its installation lacks, and the GitHub
 gateway refuses its repository's calls that need it with a `Deckhand:` message naming the permission and
 the page that accepts it, instead of every token failing. The others are required: a token
 asking for `issues`, `contents` or `pull_requests` that the installation lacks fails, as

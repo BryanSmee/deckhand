@@ -132,6 +132,15 @@ conflicts:
 
 # Start work on an issue with open questions only once they are answered (see below).
 wait_for_answers: true
+
+# Move this repo's issues on an organization's project (v2) as their work goes (see Projects
+# below). Only projects the operator grants it (allow_projects).
+projects:
+  - project: acme/3 # https://github.com/orgs/acme/projects/3
+    field: Status # a single select field; Status by default
+    start: In progress # a work run starts on the issue
+    ready: In review # its pull request turns ready for review
+    merged: Done # its pull request merges
 ```
 
 ## Keys
@@ -170,6 +179,7 @@ wait_for_answers: true
 | `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                 |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)               |
 | `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                         |
+| `projects`                              | none                                    | organization projects (v2) the listener moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see Projects)   |
 
 ## Network and mounts
 
@@ -858,6 +868,55 @@ It is off without the key, and each conflict found is a run, so a bill.
   one try per pair, busy and needs-input tasks skipped) and says how many rebase runs it
   started. A pull request GitHub is still computing is checked a minute later, as above.
 
+## Projects
+
+Teams that track work on a GitHub project (v2) can have Deckhand move its issues there.
+Two things go together:
+
+- **The operator grants the project** in the repository's grants file:
+  `allow_projects: [acme/3]` in `grants/<owner>/<repo>.yaml` (never `default.yaml`), as
+  `<organization>/<number>`, the number in the project's URL
+  (`https://github.com/orgs/acme/projects/3`). A project is outside every repository, so
+  only the operator says which repository may write it. Without the grant, nothing is
+  written to any project.
+- **The repository says what to move**, with `projects:` in its `.deckhand.yaml`:
+
+```yaml
+projects:
+  - project: acme/3
+    field: Status # a single select field of the project, Status by default
+    start: In progress
+    ready: In review
+    merged: Done
+```
+
+The listener then moves the issue's item, with the App's own token:
+
+- **`start`**: when a work run starts on the issue (a work run, or one of the repository's
+  modes that isn't light; not a brainstorm or any light run), the issue is added to the
+  project if it isn't there yet, and its field set to that option. Each new work run on it
+  sets it again.
+- **`ready`**: when a pull request that closes the issue (`Closes #12`, from a branch of the
+  repository, never a fork's) is opened ready or marked ready for review.
+- **`merged`**: when that pull request merges.
+
+Each step is optional: one without an option moves nothing at that step. Options are matched
+by name, whatever their case. A project the grant doesn't list, a field or an option that
+isn't there, or a GitHub error never stops a run: the move is skipped, said in the listener's
+log and the run's, and the dashboard's config panel names the projects the grant lacks. Only
+issues move this way; a task on a pull request with no issue isn't on any project.
+
+Runs only **add** items, to a granted project: a work run its issue, its pull request, its
+issue's sub-issues and the issues it files (`gh project item-add <number> --owner <org> --url
+<url>`, or `gh issue create --project`), a brainstorm the issues it files. They never set an
+item's fields, remove or archive items, or change the project. This is the `project` action
+of [the GitHub input](#the-github-input); a repository's own modes don't add items unless its
+policy says so (`gh-projects.rego`, [the default policies](#the-default-policies)).
+
+Projects need the App's **Organization projects: Read and write** permission, accepted on the
+organization's installation ([setup](setup.md)); a project owned by a user can't be reached by
+a GitHub App at all.
+
 ## Policies
 
 Rules of your own, written as code in [Rego](https://www.openpolicyagent.org/docs/policy-language)
@@ -1071,12 +1130,12 @@ commands) goes through the same checks, field by field:
    `removeSubIssue`, `reprioritizeSubIssue`, `addBlockedBy`, `removeBlockedBy`,
    `addLabelsToLabelable`,
    `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
-   `closeIssue`, `reopenIssue`, `addReaction`, `removeReaction`, `createPullRequest`,
+   `closeIssue`, `reopenIssue`, `addReaction`, `removeReaction`, `addProjectV2ItemById`, `createPullRequest`,
    `updatePullRequest`,
    `markPullRequestReadyForReview`, `convertPullRequestToDraft`,
    `addPullRequestReviewThreadReply`, `resolveReviewThread`, `unresolveReviewThread`,
-   `updatePullRequestBranch`), setting only the
-   input fields Deckhand checks (no projects, no `parentIssueId` or `issueTemplate`, a sub-issue by its
+   `updatePullRequestBranch`, `addProjectV2ItemById`), setting only the
+   input fields Deckhand checks (no classic `projectIds`, no `parentIssueId` or `issueTemplate`, a sub-issue by its
    `subIssueId` only): any other is refused before any policy runs, even sent as `null`, which
    GitHub may read as clearing it.
 3. **Its targets are GitHub's:** the node IDs it names, inline or in its variables, are looked
@@ -1113,13 +1172,23 @@ brainstorm's or an inbox entry's `issues: write` never reaches anything else. A 
 own write gets what GitHub needs for it besides: `pull_requests: write` to open or edit one,
 or to reply to, resolve or unresolve one of its review threads, `contents: write` to ready or draft one, or to update its branch.
 
-| Mode                                                            | Ceiling                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`, `react`, `unreact`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`                                                                                                                                                                                                                                                   |
-| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                                                                                                                                                                                                                                |
-| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`, `react`, `unreact`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`, `update_branch`, `react`, `unreact`; its sub-issues and the issues it created: `edit`, `comment`, `label`, `link`, `react`, `unreact`; the comments it posted: `edit`, `delete`; new issues, labels and pull requests (from its branches): `create`; its pull requests' review threads: `reply`, `resolve`, `unresolve` |
+**An item added to a project (v2)** (GraphQL's `addProjectV2ItemById`, what `gh project
+item-add` and `gh issue create --project` send) is a `project` on its content, the target, held
+to the ceiling as any write. Past the ceiling, before `deny_github`, its project (looked up
+from its node ID) must be one the operator's grants list for the repository
+(`allow_projects`): no policy can reach another. Its token gets `organization_projects:
+write` for that write alone, and a granted repository's runs read the organization's projects
+(`gh` looks a project up before it adds to it). Setting an item's fields
+(`updateProjectV2ItemFieldValue`), removing or archiving one, and the project's own settings
+are refused: [the listener moves the items](#projects).
+
+| Mode                                                            | Ceiling                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`, `react`, `unreact`; its sub-issues: `edit`, `comment`, `link`; the issues it created: `edit`, `comment`, `link`, `project`; new issues and labels: `create`; other issues and pull requests: `comment`                                                                                                                                                                                                                                                 |
+| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                                                                                                                                                                                                                                                                 |
+| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`, `react`, `unreact`, `project`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`, `update_branch`, `react`, `unreact`, `project`; its sub-issues and the issues it created: `edit`, `comment`, `label`, `link`, `react`, `unreact`, `project`; the comments it posted: `edit`, `delete`; new issues, labels and pull requests (from its branches): `create`; its pull requests' review threads: `reply`, `resolve`, `unresolve` |
 
 `react` and `unreact` on an issue or pull request hold for the comments on it too, and
 `unreact` only for the reactions the run added ([Reactions](#reactions)).
@@ -1138,30 +1207,31 @@ contents (pushes go through Deckhand's git gateway) or settings, or another repo
 
 `input` of `deny_github`:
 
-| Field                                              | What                                                                                                                                                                                                                                                                                                                                                                    |
-| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                                          | `1`.                                                                                                                                                                                                                                                                                                                                                                    |
-| `repo`                                             | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                                                                          |
-| `mode`                                             | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                                                                              |
-| `custom_mode`                                      | `true` for one of the repository's `modes:`, `false` for Deckhand's own: a rule needn't list the built-in modes, which change as Deckhand adds some.                                                                                                                                                                                                                    |
-| `light`                                            | The mode's `light`: `true` for a run without a branch (it can't push), `false` for a work run or a repository mode that isn't light.                                                                                                                                                                                                                                    |
-| `reason`                                           | Why the listener started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                                                                          |
-| `issue`                                            | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                                                                                        |
-| `action`                                           | What the write does: `create`, `edit`, `comment`, `label`, `link`, `ready`, `draft`, `delete` (a comment the run posted), `react` (adds a reaction), `unreact` (removes one), `reply`, `resolve`, `unresolve` (a review thread), `update_branch`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
-| `actions`                                          | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                                                                               |
-| `target.kind`                                      | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens), `label` (a label it creates), `created_comment` (a comment the run posted).                                                                                                                      |
-| `target.number`                                    | The issue's or pull request's (for `created_comment`, the one the comment is on), `null` for `new_issue`, `new_pr` and `label`.                                                                                                                                                                                                                                         |
-| `target.comment`                                   | A `created_comment`'s id, or the id of the comment a reaction is on (its target then being the issue or pull request the comment is on). Absent from other targets.                                                                                                                                                                                                     |
-| `target.comment_author`, `target.comment_deckhand` | A reaction's comment's author (its login), and whether the App's bot wrote it. Absent from other writes.                                                                                                                                                                                                                                                                |
-| `target.labels`                                    | Its labels' names, as GitHub has them now (none for a comment).                                                                                                                                                                                                                                                                                                         |
-| `target.author`                                    | Its author's login.                                                                                                                                                                                                                                                                                                                                                     |
-| `target.thread`                                    | A `reply`'s, `resolve`'s or `unresolve`'s review thread: `author`, its first comment's author's login, and `deckhand`, whether that is Deckhand's bot (a thread Deckhand's review opened). Absent from other writes.                                                                                                                                                    |
-| `change.fields`                                    | The keys of the write's JSON body (`["title", "body"]`), or the input fields a GraphQL mutation sets, its target's aside, named as REST names them (`labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` → `milestone`, `baseRefName` → `base`, `expectedHeadOid` → `expected_head_sha`, the others in snake case): one spelling for both.                 |
-| `change.labels_added`                              | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                                                                                                                                                                                                          |
-| `change.labels_removed`                            | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                                                                                                                                                                                                     |
-| `change.sub_issue`                                 | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                                                                                                                                                                                                      |
-| `change.content`                                   | A reaction's, as REST names it: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` (GraphQL's `THUMBS_UP` is `+1`); for `unreact`, the one the run added. Absent from other writes.                                                                                                                                                                   |
-| `change.blocked_by`                                | A "blocked by" link's blocker: `id`, `number`, `kind` (`sub_issue`, `created_issue`, or an open issue's kind as a target's: `own_issue`, `other_issue`). Absent from other writes.                                                                                                                                                                                      |
+| Field                                              | What                                                                                                                                                                                                                                                                                                                                                                                                        |
+| -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`                                          | `1`.                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `repo`                                             | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                                                                                                              |
+| `mode`                                             | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                                                                                                                  |
+| `custom_mode`                                      | `true` for one of the repository's `modes:`, `false` for Deckhand's own: a rule needn't list the built-in modes, which change as Deckhand adds some.                                                                                                                                                                                                                                                        |
+| `light`                                            | The mode's `light`: `true` for a run without a branch (it can't push), `false` for a work run or a repository mode that isn't light.                                                                                                                                                                                                                                                                        |
+| `reason`                                           | Why the listener started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                                                                                                              |
+| `issue`                                            | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                                                                                                                            |
+| `action`                                           | What the write does: `create`, `edit`, `comment`, `label`, `link`, `ready`, `draft`, `delete` (a comment the run posted), `react` (adds a reaction), `unreact` (removes one), `reply`, `resolve`, `unresolve` (a review thread), `update_branch`, `project` (adding it to a project). A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first. |
+| `actions`                                          | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                                                                                                                   |
+| `target.kind`                                      | `own_issue`, `own_pr`, `sub_issue`, `created_issue` (one the run created), `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens), `label` (a label it creates), `created_comment` (a comment the run posted).                                                                                                                                                          |
+| `target.number`                                    | The issue's or pull request's (for `created_comment`, the one the comment is on), `null` for `new_issue`, `new_pr` and `label`.                                                                                                                                                                                                                                                                             |
+| `target.comment`                                   | A `created_comment`'s id, or the id of the comment a reaction is on (its target then being the issue or pull request the comment is on). Absent from other targets.                                                                                                                                                                                                                                         |
+| `target.comment_author`, `target.comment_deckhand` | A reaction's comment's author (its login), and whether the App's bot wrote it. Absent from other writes.                                                                                                                                                                                                                                                                                                    |
+| `target.labels`                                    | Its labels' names, as GitHub has them now (none for a comment).                                                                                                                                                                                                                                                                                                                                             |
+| `target.author`                                    | Its author's login.                                                                                                                                                                                                                                                                                                                                                                                         |
+| `target.thread`                                    | A `reply`'s, `resolve`'s or `unresolve`'s review thread: `author`, its first comment's author's login, and `deckhand`, whether that is Deckhand's bot (a thread Deckhand's review opened). Absent from other writes.                                                                                                                                                                                        |
+| `change.fields`                                    | The keys of the write's JSON body (`["title", "body"]`), or the input fields a GraphQL mutation sets, its target's aside, named as REST names them (`labelIds` → `labels`, `assigneeIds` → `assignees`, `milestoneId` → `milestone`, `baseRefName` → `base`, `expectedHeadOid` → `expected_head_sha`, the others in snake case): one spelling for both.                                                     |
+| `change.labels_added`                              | The labels it adds (or sets, for a `PUT` or a `PATCH` with `labels`, or creates, for `label`).                                                                                                                                                                                                                                                                                                              |
+| `change.labels_removed`                            | The labels it removes: those a `PUT` or a `PATCH` with `labels` leaves out of the issue's, or the one it deletes; `["*"]` when it deletes them all.                                                                                                                                                                                                                                                         |
+| `change.sub_issue`                                 | A link's child: `id`, `number`, `kind` (`sub_issue` or `created_issue`). Absent from other writes.                                                                                                                                                                                                                                                                                                          |
+| `change.content`                                   | A reaction's, as REST names it: `+1`, `-1`, `laugh`, `confused`, `heart`, `hooray`, `rocket`, `eyes` (GraphQL's `THUMBS_UP` is `+1`); for `unreact`, the one the run added. Absent from other writes.                                                                                                                                                                                                       |
+| `change.blocked_by`                                | A "blocked by" link's blocker: `id`, `number`, `kind` (`sub_issue`, `created_issue`, or an open issue's kind as a target's: `own_issue`, `other_issue`). Absent from other writes.                                                                                                                                                                                                                          |
+| `change.project`                                   | A `project`'s project: `owner` (lower case), `number`, `title`, one the operator grants. Absent from other writes.                                                                                                                                                                                                                                                                                          |
 
 ```json
 {
@@ -1269,6 +1339,15 @@ repository) and hold without any setup, under the operator's and the repository'
 - **Each default file is evaluated with the real `opa`** by Deckhand's tests, on every kind of
   mode.
 
+| `gh-projects.rego`: the `project` action ([Projects](#projects))           | work, fix, conflict                        | brainstorm                           | research    | repository modes                      |
+| -------------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------ | ----------- | ------------------------------------- |
+| add its issue, pull request, sub-issues, filed issues to a granted project | ✅ allowed                                 | ✅ the issues it files (its ceiling) | ❌ no token | ❌ denied, the repository may broaden |
+| set an item's field, remove or archive one                                 | ❌ in no ceiling: the listener moves items | ❌                                   | ❌          | ❌, whatever a policy says            |
+
+A repository's `.deckhand/policy/gh-projects.rego` with only `package deckhand` lets its
+modes that aren't light add items too; one with a rule on `input.action == "project"`
+refuses it to every run. Neither reaches a project the grant doesn't name.
+
 The Policies tab lists them as `deckhand/policy/<name>`, with the operator's or the
 repository's file that replaces one.
 
@@ -1304,6 +1383,7 @@ deny_github contains msg if {
   input.mode in {"brainstorm", "stop"}
   not input.target.kind in {"own_issue", "new_issue", "label"}
   not orders_follow_ups
+  not files_follow_ups
   msg := sprintf("a brainstorm writes only its own issue, not #%d", [input.target.number])
 }
 
@@ -1312,6 +1392,12 @@ orders_follow_ups if {
   input.action == "link"
   input.change.blocked_by
   input.target.kind in {"sub_issue", "created_issue"}
+}
+
+# And puts the issues it filed on a granted project (gh-projects.rego, its ceiling).
+files_follow_ups if {
+  input.action == "project"
+  input.target.kind == "created_issue"
 }
 
 # Inbox entries only file issues (with their label), and link the ones they split.

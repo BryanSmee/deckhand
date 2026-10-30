@@ -27,6 +27,21 @@ export const RESERVED = [
 // Docker's --mount is comma-separated: host and cache paths stay within these characters.
 export const PLAIN_PATH = /^\/[\w./@+-]*$/;
 
+// "<organization>/<number>": a project (v2), as GitHub's URLs name it (…/orgs/acme/projects/3).
+const PROJECT = /^([A-Za-z0-9][A-Za-z0-9-]{0,38})\/([1-9]\d{0,8})$/;
+
+// A project's name as the grants and `projects:` write it → "acme/3", the owner lower case
+// (GitHub's logins are case-insensitive), or null when it isn't one.
+export function projectName(value) {
+  const m = typeof value === "string" ? PROJECT.exec(value.trim()) : null;
+  return m ? `${m[1].toLowerCase()}/${m[2]}` : null;
+}
+
+// The steps a `projects:` entry moves its issue at (projects.mjs): a work run starting on it,
+// its pull request turning ready, and merging.
+export const PROJECT_STEPS = ["start", "ready", "merged"];
+const PROJECT_KEYS = ["project", "field", ...PROJECT_STEPS];
+
 const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort", "speed"];
 
 const REVIEW_KEYS = [
@@ -337,6 +352,61 @@ function parseConflicts(value, { key, settings, config, fail, warn }) {
     warn(`conflicts.check_minutes: below CONFLICT_CHECK_MINUTES, checked every ${floor} minutes`);
   }
   if (ok) settings.conflicts = { checkMinutes: Math.max(minutes, floor) };
+}
+
+// The projects (v2) the listener puts the repo's issues on, and the option of their field (by
+// default Status) it sets at each step (projects.mjs): [{ project, field, start, ready, merged }],
+// each step's value null when it isn't moved then. Only a project the operator grants the repo
+// (`allow_projects`, grants.mjs) is written: another one is said on the dashboard, not an error.
+function parseProjects(value, { key, settings, fail }) {
+  if (!Array.isArray(value))
+    return fail(key, "expected a list of { project, field, start, ready, merged }");
+  const projects = [];
+  value.forEach((entry, i) => {
+    const at = `${key}[${i}]`;
+    if (!isMap(entry)) return fail(at, "expected { project, field, start, ready, merged }");
+    let ok = true;
+    for (const other of Object.keys(entry)) {
+      if (!PROJECT_KEYS.includes(other)) {
+        ok = false;
+        fail(`${at}.${other}`, `unknown key (expected ${PROJECT_KEYS.join(", ")})`);
+      }
+    }
+    const project = projectName(entry.project);
+    if (!project) {
+      ok = false;
+      fail(`${at}.project`, "expected <organization>/<number>, as in its URL");
+    } else if (projects.some((p) => p.project === project)) {
+      ok = false;
+      fail(`${at}.project`, `${project} is listed twice`);
+    }
+    const name = (k) => {
+      const v = entry[k];
+      if (v === undefined || v === null) return null;
+      if (typeof v === "string" && v.trim()) return v.trim();
+      ok = false;
+      fail(`${at}.${k}`, "expected the name of an option");
+      return null;
+    };
+    const field = entry.field === undefined || entry.field === null ? "Status" : name("field");
+    const steps = Object.fromEntries(PROJECT_STEPS.map((step) => [step, name(step)]));
+    if (ok && !PROJECT_STEPS.some((step) => steps[step])) {
+      ok = false;
+      fail(at, `expected at least one of ${PROJECT_STEPS.join(", ")}`);
+    }
+    if (ok) projects.push({ project, field, ...steps });
+  });
+  settings.projects = projects;
+}
+
+function projectsText(projects) {
+  if (!projects.length) return "none";
+  return projects
+    .map(({ project, field, ...steps }) => {
+      const moves = PROJECT_STEPS.filter((s) => steps[s]).map((s) => `${s}: ${steps[s]}`);
+      return `${project} (${field}: ${moves.join(", ")})`;
+    })
+    .join("; ");
 }
 
 // Opt-in: the built-in review mode (modes.mjs, reviews.mjs), `true` for "/mode review" only.
@@ -682,6 +752,20 @@ export const KEYS = {
           : null;
       const model = mode ? `${mode.model}/${mode.effort}` : null;
       return row(reviewText(value), [model, merge].filter(Boolean).join("; ") || null);
+    },
+  },
+  // Not refused when ungranted: runs go on, only the board isn't moved (projects.mjs).
+  projects: {
+    field: "projects",
+    default: () => [],
+    parse: parseProjects,
+    display: ({ value, grant, known, row, unknown }) => {
+      if (value.length && !known) return unknown(projectsText(value));
+      const missing = value.filter((p) => !grant.allowProjects?.includes(p.project));
+      const note = missing.length
+        ? `not moved: the operator's grants don't list ${missing.map((p) => p.project).join(", ")} in allow_projects`
+        : null;
+      return row(projectsText(value), note);
     },
   },
   // One row per mode: only the repo's file defines them.

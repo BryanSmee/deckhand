@@ -42,6 +42,9 @@
 // GitHub, must be on that pull request, and its first comment's author goes to the policies
 // (resolveThread(); their default: ../policy/gh-review-threads.rego). A new review, or a review
 // comment that answers no thread, stays `review`.
+// An item added to a project (v2) is a `project` on its content (issue #454), over GraphQL only
+// (github-graphql.mjs addProjectV2ItemById): its project must be one the operator's grants list
+// for the repository (`allow_projects`), whatever the policies say.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { CONTENTS_WRITE, createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
@@ -455,11 +458,14 @@ const MAX_HOPS = 5;
 // policies.mjs's, null without; `pulls`: github-pulls.mjs's checks (its workflow check and
 // record, none by default); `needsInputLabel()`: NEEDS_INPUT_LABEL, null when unset;
 // `listenerReacted(repo, subject, content)`: whether the listener added that reaction
-// (comments.mjs), which a run never removes; `log`: the listener's.
+// (comments.mjs), which a run never removes;
+// `projects(repo)`: the projects the operator's grants let its runs write, ["acme/3"] (grants.mjs
+// allowProjects), none by default; `log`: the listener's.
 export function createWriteChecks({
   lookup,
   bot = () => null,
   needsInputLabel,
+  projects = () => [],
   policies = null,
   pulls = createPullChecks({ lookup }),
   listenerReacted = () => false,
@@ -998,6 +1004,23 @@ export function createWriteChecks({
     }
     const rerun = write.actions.includes("rerun");
     if (rerun && reruns(run, target.sha) >= MAX_RERUNS) return tooMany(run, target.sha);
+    if (write.project) {
+      const name = `${write.project.owner}/${write.project.number}`;
+      let granted;
+      try {
+        granted = await projects(run.repo);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo}: its grants: ${error.message ?? error}`);
+        return refusal(503, "the operator's grants can't be read");
+      }
+      if (!Array.isArray(granted) || !granted.includes(name)) {
+        return refusal(
+          403,
+          `the operator's grants don't let this repository's runs write project ${name} (allow_projects)`,
+        );
+      }
+      change.project = write.project;
+    }
     const pulled = await pulls.check(run, write, target, get);
     if (pulled) return pulled;
     const denied = await deny(run, write, target, change);

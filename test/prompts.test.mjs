@@ -243,6 +243,15 @@ test("prompts: work runs are told whether their pushes may change workflow files
   assert.doesNotMatch(promptFor(pr, { ...fork, ...mode, branches: [] }), /workflows/);
 });
 
+test("prompts: a work run is told the projects the operator grants, none: nothing", () => {
+  const granted = { ...grant, allowProjects: ["acme/3", "acme/7"] };
+  assert.match(
+    promptFor(issue, { mode: "work", settings, grant: granted }),
+    /grants this repository the projects `acme\/3`, `acme\/7` \(`<organization>\/<number>`\):\nadd an item there only when the issue or the repository's instructions ask for it\./,
+  );
+  assert.doesNotMatch(promptFor(issue, { mode: "work", settings, grant }), /projects? `/);
+});
+
 test("prompts: a pull request's run is told the one branch it may push, or none for a fork", () => {
   const own = promptFor(pr, { mode: "work", settings, branches: ["feature/x"] });
   assert.match(own, /and push to its branch, `feature\/x`: Deckhand refuses pushes to any other\./);

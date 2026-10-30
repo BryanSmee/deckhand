@@ -211,10 +211,19 @@ function workflowsNote(task, grant, branches) {
     : "GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn't grant `allow_workflows`): leave them out and say in the pull request what they need.";
 }
 
+// The projects (v2) the run may add its issue and pull request to (github-writes.mjs), so it
+// knows there are some; none: nothing to say.
+function projectsNote(grant) {
+  const projects = grant?.allowProjects ?? [];
+  if (!projects.length) return "";
+  const list = projects.map((p) => `\`${p}\``).join(", ");
+  return `The operator grants this repository the project${projects.length > 1 ? "s" : ""} ${list} (\`<organization>/<number>\`):\nadd an item there only when the issue or the repository's instructions ask for it.`;
+}
+
 function initialPrompt(task, branches = [], grant = null) {
   const { base } = task;
-  const workflows = workflowsNote(task, grant, branches);
-  const common = `${workflows && `${workflows}\n`}Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
+  const notes = [workflowsNote(task, grant, branches), projectsNote(grant)].filter(Boolean);
+  const common = `${notes.map((n) => `${n}\n`).join("")}Follow the repository's AGENTS.md and CLAUDE.md if it has them, with tests where the
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
 is a blocker only the maintainer can resolve: then push your work in progress and end with

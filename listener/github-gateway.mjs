@@ -34,7 +34,7 @@
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
-import { NO_TOKEN, readsOf } from "./github-app.mjs";
+import { NO_TOKEN, PROJECT_READ, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
@@ -260,6 +260,10 @@ export function createGithubGateway({
   // bytes up to MAX_ANSWER, `at` when it was sent (github-writes.mjs answered(): the issues a
   // run created, the comments it posted and its reactions, the dashboard's pull requests).
   wroteWrite = () => {},
+  // repo → whether its runs' tokens read the organization's projects (v2): the operator grants
+  // it one (grants.mjs allowProjects), which `gh project item-add` looks up before it adds an
+  // item. None: they don't.
+  readsProjects = () => false,
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   maxWrite = MAX_WRITE,
@@ -735,7 +739,14 @@ export function createGithubGateway({
     { advertised = null, inflated = false } = {},
   ) {
     let token;
-    const permissions = writing ? { ...run.extra, ...writing } : readsOf(run.extra);
+    let extra = run.extra;
+    try {
+      if (await readsProjects(run.repo)) extra = { ...extra, ...PROJECT_READ };
+    } catch (error) {
+      // Its token reads no project: what needs one fails at GitHub, the rest goes on.
+      log(`GitHub gateway: ${run.repo}: its grants: ${error.message ?? error}`);
+    }
+    const permissions = writing ? { ...extra, ...writing } : readsOf(extra);
     try {
       ({ token } = await github.repoToken(run.repo, permissions));
     } catch (error) {

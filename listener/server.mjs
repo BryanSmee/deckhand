@@ -25,6 +25,7 @@ import { createGithubGateway } from "./github-gateway.mjs";
 import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
 import { createPullChecks } from "./github-pulls.mjs";
 import { createWriteChecks } from "./github-writes.mjs";
+import { createProjects } from "./projects.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
@@ -389,11 +390,15 @@ const pullChecks = createPullChecks({
   },
   log,
 });
+// The projects the operator grants a repo's runs (allow_projects), read again at each write
+// like the grants: one taken back applies to the next.
+const grantedProjects = (repo) => grantFor(loadGrants(config), config, repo).allowProjects;
 const writeChecks = createWriteChecks({
   lookup,
   bot: () => config.bot,
   listenerReacted: (...args) => ctx.listenerReacted(...args),
   needsInputLabel: () => config.needsInputLabel,
+  projects: grantedProjects,
   policies,
   pulls: pullChecks,
   log,
@@ -434,6 +439,7 @@ ctx.githubGateway = createGithubGateway({
   // Their creates' and comments' answers: the issues each run created, for its links, and the
   // comments it posted, which it may edit.
   wroteWrite: writeChecks.answered,
+  readsProjects: (repo) => grantedProjects(repo).length > 0,
   log,
 });
 // Their pushes, on the broker's port: to the run's own branches only, never the default one.
@@ -590,6 +596,22 @@ ctx.reviewers = createReviewers({
   runOf: (key, pr) => openerOf(ctx.runs, key, pr),
   policies,
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
+  log,
+});
+// The repos' issues on their projects (v2), moved as their work starts, turns ready and merges
+// (`projects:`), on the projects the operator grants them.
+ctx.projects = createProjects({
+  config,
+  graphql,
+  repoSettings,
+  grantOf: (repo) => {
+    try {
+      return grantFor(loadGrants(config), config, repo);
+    } catch (error) {
+      log(`${repo}: its grants: ${error.message}`);
+      return null;
+    }
+  },
   log,
 });
 // Comments that wait for other issues to be done ("/after #12").

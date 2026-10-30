@@ -29,10 +29,14 @@ import {
 // pull requests' review threads (issue #449: ../policy/gh-review-threads.rego narrows that to
 // work runs, and resolving to Deckhand's own threads). A work run reruns the failed GitHub
 // Actions jobs of its pull request's head (`rerun`, issue #451), which Deckhand's default policy
-// narrows to once per workflow run (../policy/gh-actions-rerun.rego). A repo that doesn't want it refuses it with
-// `deny_github`, per mode if it likes.
+// narrows to once per workflow run (../policy/gh-actions-rerun.rego). `project`: adding the
+// item to a project (v2) the operator grants the repo (`allow_projects`, github-writes.mjs;
+// issue #454): work runs their issue, pull request, sub-issues and the issues they file,
+// brainstorms the issues they file. Setting an item's fields is in no ceiling: the listener
+// moves them (projects.mjs). A repo that doesn't want any of it refuses it with `deny_github`,
+// per mode if it likes.
 const WORK_CEILING = {
-  own_issue: ["edit", "comment", "label", "link", "react", "unreact"],
+  own_issue: ["edit", "comment", "label", "link", "react", "unreact", "project"],
   own_pr: [
     "edit",
     "comment",
@@ -46,9 +50,10 @@ const WORK_CEILING = {
     "resolve",
     "unresolve",
     "rerun",
+    "project",
   ],
-  sub_issue: ["edit", "comment", "label", "link", "react", "unreact"],
-  created_issue: ["edit", "comment", "label", "link", "react", "unreact"],
+  sub_issue: ["edit", "comment", "label", "link", "react", "unreact", "project"],
+  created_issue: ["edit", "comment", "label", "link", "react", "unreact", "project"],
   created_comment: ["edit", "delete"],
   new_issue: ["create"],
   new_pr: ["create"],
@@ -57,7 +62,7 @@ const WORK_CEILING = {
 const BRAINSTORM_CEILING = {
   own_issue: ["edit", "comment", "link", "react", "unreact"],
   sub_issue: ["edit", "comment", "link"],
-  created_issue: ["edit", "comment", "link"],
+  created_issue: ["edit", "comment", "link", "project"],
   new_issue: ["create"],
   label: ["create"],
   own_pr: ["comment"],

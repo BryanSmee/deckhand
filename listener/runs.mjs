@@ -199,6 +199,8 @@ export function createRuns(ctx) {
       await ctx.label(task.repo, task.number, false);
     }
     const note = writeHeader(task, run);
+    // Its issue on the repo's projects, at `start` (projects.mjs): never in the run's way.
+    ctx.projects?.started(task, note);
     enterPhase(task.live, "setup");
     validateRun(agentOf(task), task, run, note);
     const parts = await prepareRun(task, items, run, note);

@@ -38,6 +38,7 @@ async function gateway(
     respond,
     lacking,
     forks,
+    readsProjects,
   } = {},
 ) {
   const calls = [];
@@ -74,6 +75,7 @@ async function gateway(
     ...(checkGraphql && { checkGraphql }),
     ...(wroteWrite && { wroteWrite }),
     ...(forks && { forks }),
+    ...(readsProjects && { readsProjects }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -882,6 +884,46 @@ test("a pull request's own write goes on with the token it needs, its answer to 
     [false, [], 200],
     [false, [], 200],
   ]);
+});
+
+test("a repo granted a project: its runs' tokens read projects, and a project write writes them", async (t) => {
+  let granted = true;
+  const gw = await gateway(t, {
+    readsProjects: (repo) => {
+      assert.equal(repo, "org/repo");
+      if (granted === null) throw new Error("broken grants");
+      return granted;
+    },
+    checkGraphql: async (run, body) =>
+      body.includes("mutation")
+        ? {
+            body,
+            write: true,
+            creates: [],
+            permissions: { organization_projects: "write" },
+            pulls: [],
+          }
+        : { body, write: false, creates: [], permissions: {}, pulls: [] },
+  });
+  const { secret } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const post = (body) => gw.call("/api/graphql", { secret, method: "POST", body });
+  assert.equal((await post('{"query": "{ viewer { login } }"}')).status, 200);
+  assert.equal((await post('{"query": "mutation { m }"}')).status, 200);
+  // Not granted, or grants that can't be read: no project in its reads.
+  granted = false;
+  assert.equal((await post('{"query": "{ viewer { login } }"}')).status, 200);
+  granted = null;
+  assert.equal((await post('{"query": "{ viewer { login } }"}')).status, 200);
+  assert.deepEqual(
+    gw.minted.map(([, perms]) => perms),
+    [
+      readsOf({ organization_projects: "read" }),
+      { organization_projects: "write" },
+      readsOf(),
+      readsOf(),
+    ],
+  );
+  assert.match(gw.logged.at(-1), /org\/repo: its grants: broken grants/);
 });
 
 test("an Actions log's redirect is followed by the gateway, without credentials; others go back", async (t) => {
