@@ -1,5 +1,7 @@
 // Tabs (the work queue's, a task's runs): a tablist whose arrows, Home and End move between
 // the tabs, and pick them, as the ARIA pattern has it. Only the picked tab is in the Tab order.
+// `extra` (a task's All runs button) sits in the row before the tab `extraBefore`, else last;
+// the arrows leave it out.
 import type { ComponentChildren, JSX } from "preact";
 import { useRef } from "preact/hooks";
 import { Count } from "./Count";
@@ -23,6 +25,8 @@ interface Props<T extends string> {
   // The panel the tabs show (its id).
   panel?: string;
   class?: string;
+  extra?: ComponentChildren;
+  extraBefore?: T;
 }
 
 const MOVES: Record<string, (i: number, n: number) => number> = {
@@ -39,11 +43,15 @@ export function Tabs<T extends string>({
   onSelect,
   panel,
   class: className,
+  extra,
+  extraBefore,
 }: Props<T>) {
   const list = useRef<HTMLDivElement>(null);
   const onKeyDown = (e: KeyboardEvent) => {
     const move = MOVES[e.key];
-    if (!move) return;
+    // Not `extra`'s keys.
+    const on = e.target as HTMLElement;
+    if (!move || (on !== list.current && on.getAttribute("role") !== "tab")) return;
     e.preventDefault();
     const i = tabs.findIndex((t) => t.id === selected);
     const next = move(Math.max(i, 0), tabs.length);
@@ -58,7 +66,8 @@ export function Tabs<T extends string>({
       aria-label={label}
       onKeyDown={onKeyDown}
     >
-      {tabs.map((t) => (
+      {tabs.map((t) => [
+        t.id === extraBefore && extra,
         <button
           {...t.attrs}
           key={t.id}
@@ -73,8 +82,9 @@ export function Tabs<T extends string>({
           {t.label}
           {t.count !== undefined && " "}
           {t.count !== undefined && <Count n={t.count} hot={t.hot} />}
-        </button>
-      ))}
+        </button>,
+      ])}
+      {!tabs.some((t) => t.id === extraBefore) && extra}
     </div>
   );
 }
