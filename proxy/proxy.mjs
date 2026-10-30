@@ -101,6 +101,13 @@ export function relayTarget(relayUrl, host, path) {
   return url.origin === base.origin && url.pathname.startsWith(base.pathname) ? url : null;
 }
 
+// Where relayed requests go without RELAY_URL: the broker's /relay, on POLICY_URL's host.
+export function defaultRelayUrl(policyUrl) {
+  const relay = new URL("/relay", policyUrl);
+  if (relay.port === "8082") relay.port = "8081";
+  return relay.href;
+}
+
 class Refused extends Error {}
 
 // A connection to `url`'s host, once made (over TLS for https:, verified against `ca`).
@@ -488,7 +495,8 @@ export function createProxy({
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const url = process.env.POLICY_URL || "http://listener:8081/egress";
+  // The listener's egress policy, on a port of its own that stays open while its broker drains.
+  const url = process.env.POLICY_URL || "http://listener:8082/egress";
   const port = Number(process.env.PORT ?? 3128);
   const log = (...args) => console.log(new Date().toISOString(), ...args);
   const dir = process.env.EGRESS_CACHE_DIR || "/cache";
@@ -507,8 +515,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     log(`HTTPS isn't cached or relayed: no CA (${error.message})`);
     authority = null;
   }
-  // The listener's broker, where POLICY_URL is: relayed requests go to its /relay/.
-  const relayUrl = (process.env.RELAY_URL || new URL("/relay", url).href).replace(/\/$/, "");
+  // The listener's broker, where POLICY_URL is (on 8081 beside the policy's 8082, else POLICY_URL
+  // names the broker's port, as before it had its own): relayed requests go to its /relay/.
+  const relayUrl = (process.env.RELAY_URL || defaultRelayUrl(url)).replace(/\/$/, "");
   const https = authority ? ", HTTPS too" : "";
   const proxy = createProxy({ policy: listenerPolicy(url), cache, authority, relayUrl, log });
   proxy.listen(port, () =>

@@ -1,5 +1,6 @@
 // The broker's HTTP server, on the runs' networks only (compose.yaml doesn't publish its
-// port): the egress proxy's questions (may this sandbox reach this host?), the GitHub gateway
+// port): the egress proxy's questions (may this sandbox reach this host?, on a port of their
+// own too, listenPolicy()), the GitHub gateway
 // (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
 // (git-gateway.mjs) and the agents' API endpoints
 // (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
@@ -229,5 +230,22 @@ export function createBrokerHttp(ctx) {
     return server;
   }
 
-  return { listen };
+  // The egress policy alone, on its own port: the broker's drains on SIGTERM (drain.mjs) while
+  // the calls in flight finish, but every sandbox connection, to any host, waits on this
+  // answer, so it stays open until the listener exits. The broker's port answers /egress too,
+  // for a proxy whose POLICY_URL still names it.
+  function listenPolicy() {
+    const server = createServer((req, res) => {
+      if (req.method === "GET" && req.url.startsWith("/egress?")) {
+        return egressAnswer(req, res).catch(failed(res, "Egress", false));
+      }
+      sendJson(res, { error: "not found" }, 404);
+    }).listen(config.policyPort, () => {
+      config.policyPort = server.address().port;
+      log(`Egress policy on :${config.policyPort}`);
+    });
+    return server;
+  }
+
+  return { listen, listenPolicy };
 }

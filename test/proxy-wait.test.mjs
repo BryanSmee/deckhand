@@ -1,9 +1,10 @@
 // The egress proxy waiting for a listener that restarts (proxy/wait.mjs): a connection that
-// wasn't made is tried again, with an injected clock, for up to 90 seconds; any other failure,
+// wasn't made is tried again, with an injected clock, for up to 5 minutes; any other failure,
 // a request already sent among them, is not.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { listenerPolicy } from "../proxy/proxy.mjs";
+import { DRAIN_MS } from "../listener/drain.mjs";
+import { defaultRelayUrl, listenerPolicy } from "../proxy/proxy.mjs";
 import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
 import { serve } from "./helpers.mjs";
 
@@ -32,7 +33,7 @@ test("a refused connection is tried again, with a growing delay, until the liste
   assert.deepEqual(clock.sleeps, [250, 500, 1000, 2000]);
 });
 
-test("the wait gives up after 90 seconds, with the last error", async () => {
+test("the wait gives up after 5 minutes, the listener's drain and a start, with the last error", async () => {
   const clock = fakeClock();
   let tries = 0;
   await assert.rejects(
@@ -42,10 +43,11 @@ test("the wait gives up after 90 seconds, with the last error", async () => {
     }, clock),
     /ECONNREFUSED/,
   );
-  assert.equal(LISTENER_WAIT_MS, 90_000);
-  assert.equal(clock.t, 90_000);
-  // The delay stops growing at 5 s: about twenty tries.
-  assert.ok(tries > 15 && tries < 25, `${tries} tries`);
+  assert.equal(LISTENER_WAIT_MS, 300_000);
+  assert.ok(LISTENER_WAIT_MS > DRAIN_MS);
+  assert.equal(clock.t, 300_000);
+  // The delay stops growing at 5 s: about sixty-five tries.
+  assert.ok(tries > 55 && tries < 75, `${tries} tries`);
   assert.ok(clock.sleeps.every((ms) => ms <= 5000));
 });
 
@@ -117,10 +119,20 @@ test("the policy waits for the listener rather than refusing every host", async 
   assert.deepEqual(asked, ["/egress?ip=10.0.0.2&host=api.github.com"]);
   assert.equal(clock.sleeps.length, 2);
 
-  // Gone for good: refused after 90 seconds, as a listener that says no.
+  // Gone for good: refused after 5 minutes, as a listener that says no.
   await new Promise((resolve) => server.close(resolve));
   const later = fakeClock();
   const gone = listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, later);
   assert.deepEqual(await gone("10.0.0.2", "api.github.com"), { allowed: false });
-  assert.equal(later.t, 90_000);
+  assert.equal(later.t, LISTENER_WAIT_MS);
+});
+
+test("relayed requests go to the broker's port beside the policy's, without RELAY_URL", () => {
+  assert.equal(defaultRelayUrl("http://listener:8082/egress"), "http://listener:8081/relay");
+  // A POLICY_URL that names the broker's port, as before the policy had its own.
+  assert.equal(defaultRelayUrl("http://listener:8081/egress"), "http://listener:8081/relay");
+  assert.equal(
+    defaultRelayUrl("http://broker.internal:9000/egress"),
+    "http://broker.internal:9000/relay",
+  );
 });

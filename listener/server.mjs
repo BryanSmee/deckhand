@@ -737,7 +737,10 @@ const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });
 const web = http.listen();
-const broker = createBrokerHttp(ctx).listen();
+const brokerHttp = createBrokerHttp(ctx);
+const broker = brokerHttp.listen();
+// Not drained: the egress proxy asks it about every sandbox connection until the listener exits.
+brokerHttp.listenPolicy();
 
 // Deliveries GitHub couldn't hand over (the listener down, restarting, unreachable), asked for
 // again at start and every few minutes (redeliveries.mjs).
@@ -827,7 +830,7 @@ if (ctx.app) {
 // saved with the 👀 ids, the runs' state is written, and the next listener carries on. The
 // broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
 // listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
-// inbox polls) before it exits (drain.mjs).
+// inbox polls) before it exits (drain.mjs). The egress policy's port answers until then.
 process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();

@@ -360,12 +360,12 @@ test("a relayed host while the listener restarts: waited for, sent once, never a
   assert.equal(relayed.length, 1);
   assert.equal(clock.sleeps, 2);
 
-  // Gone for good: the sandbox hears it after 90 seconds.
+  // Gone for good: the sandbox hears it after 5 minutes.
   await new Promise((resolve) => listener.close(resolve));
   const before = clock.t;
   const late = await post("push");
   assert.equal(late.status, 502);
-  assert.equal(clock.t - before, 90_000);
+  assert.equal(clock.t - before, 300_000);
 });
 
 test("a draining proxy: no new tunnel, a relayed stream in flight finishes, then it ends", async (t) => {

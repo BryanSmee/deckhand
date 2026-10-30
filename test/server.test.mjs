@@ -334,13 +334,13 @@ function start(env) {
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
 describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, () => {
-  // The ports a listener bound, from its log: its own, then its broker's.
+  // The ports a listener bound, from its log: its own, its broker's, its egress policy's.
   async function ports(listener) {
     const bound = async (name) => {
       const re = new RegExp(`${name} on :(\\d+)\n`);
       return Number((await listener.until(re)).match(re)[1]);
     };
-    return [await bound("Listening"), await bound("Token broker")];
+    return [await bound("Listening"), await bound("Token broker"), await bound("Egress policy")];
   }
 
   // A listener with an App, a fake Docker and a fake GitHub serving `files`; `extra`: more
@@ -381,6 +381,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       ALLOWED_USERS: "alice,bob",
       PORT: "0",
       BROKER_PORT: "0",
+      POLICY_PORT: "0",
       BROKER_URL: "http://127.0.0.1",
       GITHUB_API: github.url,
       PUBLIC_URL: "https://hooks.example.com",
@@ -398,11 +399,12 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       egress.close();
       stopSandboxes(dir);
     });
-    const [port, brokerPort] = await ports(listener);
+    const [port, brokerPort, policyPort] = await ports(listener);
     // Restarts keep them: the sandboxes still running talk to the broker at a fixed URL.
     Object.assign(settings, {
       PORT: String(port),
       BROKER_PORT: String(brokerPort),
+      POLICY_PORT: String(policyPort),
       BROKER_URL: `http://127.0.0.1:${brokerPort}`,
     });
     // `id`: its GUID (X-GitHub-Delivery), for a redelivery.
@@ -437,6 +439,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       },
       port,
       brokerPort,
+      policyPort,
       send,
       restart,
     };
@@ -1965,7 +1968,7 @@ mounts:
 
   test("on SIGTERM the broker takes no new call, one in flight finishes, then the listener exits", async (t) => {
     const ctx = await holding(t);
-    const { dir, github, brokerPort, listener } = ctx;
+    const { dir, github, brokerPort, policyPort, listener } = ctx;
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     // A sandbox's call the GitHub gateway relays, left unanswered (an agent's stream, a push).
     const slow = (r) => r.method === "GET" && r.path === "/repos/org/repo/commits/held";
@@ -1989,6 +1992,10 @@ mounts:
       }),
       (error) => error.cause?.code === "ECONNREFUSED",
     );
+    // The egress policy still answers on its own port: the sandboxes' other connections go on.
+    const asked = await fetch(`http://127.0.0.1:${policyPort}/egress?ip=10.9.0.5&host=github.com`);
+    assert.equal(asked.status, 200);
+    assert.equal((await asked.json()).allowed, true);
     // The queue and the runs are saved, but the listener waits for the call in flight.
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(listener.child.exitCode, null);

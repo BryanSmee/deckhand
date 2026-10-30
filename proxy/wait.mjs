@@ -2,8 +2,10 @@
 // refused, or that failed before it was made, never reached it, so trying again is safe for
 // any call, a push or a POST too. Once a request is sent on a connection, it never is again.
 
-// How long a call waits for the listener before the sandbox hears it is unreachable.
-export const LISTENER_WAIT_MS = 90_000;
+// How long a call waits for the listener before the sandbox hears it is unreachable: as long as
+// the previous one may drain (DRAIN_MS, ../listener/drain.mjs) and the next one start, as with
+// one copy of each (compose) the next only starts once the previous one has exited.
+export const LISTENER_WAIT_MS = 300_000;
 
 // The errors of a connection that wasn't made: refused (a listener stopped or draining), reset
 // while connecting, or no such host (its container gone, Docker's DNS has no name for it).

@@ -727,20 +727,22 @@ missed meanwhile comes back through `redeliveries.mjs`), and the broker's drains
 it takes no new connection, the calls in flight finish (agents' streams, pushes, `gh` calls,
 inbox long polls), each connection closing once its answer is sent, and the listener exits once
 they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)
-ends. The egress proxy waits for the next listener meanwhile (`proxy/wait.mjs`): a connection
-the listener refused, or that failed before it was made (reset while connecting, its name
-unknown while its container is gone), never reached it, so the proxy tries again, with a growing
-delay (0.25 s doubling up to 5 s), for up to 90 s before it answers `502` (or, for the policy it
-asks for each connection, refuses the host). That holds for any method, a POST included: a
-request is only sent once a connection is made, and never sent again (a listener that dies with
-it gives the sandbox a `502`). The direct calls aren't waited for: they fail at once until the
-next listener answers. The inbox and the run's files try again on their own (`deckhand-inbox`,
-`deckhand-files`); an agent's call or a push is up to the agent's CLI or to git.
+ends. The egress policy, which the proxy asks about every sandbox connection (to any host), has
+a port of its own (`POLICY_PORT`, 8082), which stays open until the listener exits: the
+sandboxes' other traffic goes on during the drain. The broker's port answers `/egress` too, for
+a proxy whose `POLICY_URL` still names it.
 
-With one copy of each (compose), the next listener only starts once the previous one has
-exited: the wait covers the drain and the next start when they take less than 90 s together. A
-call that comes while a long one (an agent's stream) holds the old listener longer fails as
-before once its 90 s are up; two copies handing over (#499) close that gap.
+The egress proxy waits for the next listener meanwhile (`proxy/wait.mjs`): a connection the
+listener refused, or that failed before it was made (reset while connecting, its name unknown
+while its container is gone), never reached it, so the proxy tries again, with a growing delay
+(0.25 s doubling up to 5 s), for up to 5 minutes before it answers `502` (or, for the policy,
+refuses the host). That is as long as the drain and the next listener's start: with one copy of
+each (compose), the next listener only starts once the previous one has exited. It holds for
+any method, a POST included: a request is only sent once a connection is made, and never sent
+again (a listener that dies with it gives the sandbox a `502`). The direct calls aren't waited
+for: they fail at once until the next listener answers (#511 routes them through the proxy). The
+inbox and the run's files try again on their own (`deckhand-inbox`, `deckhand-files`); an
+agent's call or a push is up to the agent's CLI or to git.
 
 The egress proxy drains on SIGTERM too, for 25 s (compose's `stop_grace_period` for it is 30 s):
 no new tunnel, the requests in flight finish, and the decrypted tunnels close once their

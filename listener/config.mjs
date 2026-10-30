@@ -372,6 +372,9 @@ export function loadConfig(env, file = NO_FILE) {
     port: wholeNumber(env.PORT, 8080, "PORT", "a port"),
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
     brokerPort,
+    // The egress proxy's questions (/egress), on a port of their own: open until the listener
+    // exits, while the broker's drains (docs/architecture.md#restarts).
+    policyPort: wholeNumber(env.POLICY_PORT, 8082, "POLICY_PORT", "a port"),
     // How sandboxes reach the broker on their network (compose service name by default).
     brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
