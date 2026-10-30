@@ -1577,6 +1577,73 @@ test(
 );
 
 test(
+  "the real opa: policy/gh-update-branch.rego, per mode, and a repository's file of the same name broadening or refusing it",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const engine = (repoFiles = {}) =>
+      createPolicies({
+        config: {},
+        github: async (repo, method, path) => {
+          if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+            const names = Object.keys(repoFiles);
+            if (!names.length) return new Response("{}", { status: 404 });
+            return Response.json(names.map((name) => ({ type: "file", name, sha: name })));
+          }
+          const blob = /\/git\/blobs\/(.+)$/.exec(path);
+          if (blob) {
+            const text = repoFiles[blob[1]];
+            return Response.json({
+              content: Buffer.from(text).toString("base64"),
+              encoding: "base64",
+            });
+          }
+          return new Response("{}", { status: 404 });
+        },
+        run: opaRunner(),
+        // Deckhand's defaults as the image ships them: github.rego beside it.
+        readOperator: () => new Map(),
+        readBuiltIn: builtIn,
+        tmp: tempDir(t),
+      });
+    const checks = (policies) =>
+      createWriteChecks({
+        needsInputLabel: () => null,
+        lookup: fakeLookup(GITHUB).lookup,
+        policies,
+      });
+    const update = (n) =>
+      write("PUT", `repos/org/repo/pulls/${n}/update-branch`, {
+        expected_head_sha: "0123456789abcdef0123456789abcdef01234567",
+      });
+    const work = run("work");
+    const deploy = run("deploy", { push: true });
+    const { check } = checks(engine());
+    // Work runs (fix and conflict runs are work runs): allowed.
+    assert.equal(await check(work, update(7)), null);
+    // The repository's modes: refused, though their ceiling holds it.
+    assert.match(
+      (await check(deploy, update(7))).message,
+      /a deploy run doesn't update its pull request's branch unless \.deckhand\/policy\/gh-update-branch\.rego lets it/,
+    );
+    // A repository's file of the same name replaces the default: its modes too…
+    const broad = checks(engine({ "gh-update-branch.rego": "package deckhand\n" }));
+    assert.equal(await broad.check(deploy, update(7)), null);
+    // …but never past the ceiling: a brainstorm, another pull request's branch.
+    assert.match((await broad.check(run("brainstorm"), update(7))).message, /its ceiling/);
+    assert.match((await broad.check(work, update(8))).message, /can't update_branch on pr #8/);
+    // A repository that keeps its history linear refuses it everywhere.
+    const linear = `package deckhand
+
+deny_github contains "this repository keeps a linear history: rebase and push instead" if {
+  input.action == "update_branch"
+}
+`;
+    const none = checks(engine({ "gh-update-branch.rego": linear }));
+    assert.match((await none.check(work, update(7))).message, /keeps a linear history/);
+  },
+);
+
+test(
   "the real opa: a repo narrows label creation to one of its modes",
   { skip: !opa && "no opa on the PATH" },
   async (t) => {
