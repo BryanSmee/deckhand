@@ -80,7 +80,9 @@ async function hasAddress(ctx, task, ip, { again = false } = {}) {
 
 // Whether the run has an engine, or may have one, whose address isn't known yet. `live.engine`
 // says whether it started one (runs.mjs launch()); a run saved by a listener from before it
-// was there may have one.
+// was there may have one, so it's treated as one whose engine is missing: kept 5 s after its
+// sandbox's address, then looked up every 5 s until it ends. That costs the runs going across
+// that one update, Kubernetes' included, and only them.
 const noEngineYet = (live) => live.engine !== false && !live.engineIp?.length;
 
 // The run's addresses now → its sandbox's and its engine's, kept in `live` once complete, or
