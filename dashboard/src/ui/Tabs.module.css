@@ -7,9 +7,12 @@
   scrollbar-width: none;
 }
 
-/* With something beside its tabs: the row's box, theirs. */
-.contents {
-  display: contents;
+/* With something beside its tabs: the row's border and scroll, a list that shrinks in it. */
+.list {
+  display: flex;
+  flex: 0 1 auto;
+  gap: 2px;
+  min-width: 0;
 }
 
 .extra {

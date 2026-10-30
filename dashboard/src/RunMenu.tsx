@@ -26,6 +26,8 @@ interface Props {
 
 export function RunMenu({ runs, current, onPick, now, touch }: Props) {
   const [open, setOpen] = useState(false);
+  // Bumped when a scroll moves the button: the popover moves with it.
+  const [moved, setMoved] = useState(0);
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const pick = (id: string) => {
@@ -38,6 +40,7 @@ export function RunMenu({ runs, current, onPick, now, touch }: Props) {
     box,
     button: () => button.current,
     fixed: true,
+    onMove: () => setMoved((n) => n + 1),
   });
   const list = <RunList runs={runs} current={current} now={now} touch={touch} onPick={pick} />;
   return (
@@ -63,40 +66,39 @@ export function RunMenu({ runs, current, onPick, now, touch }: Props) {
             {list}
           </Sheet>
         ) : (
-          <Popover anchor={button}>{list}</Popover>
+          <Popover anchor={button} moved={moved}>
+            {list}
+          </Popover>
         ))}
     </div>
   );
 }
 
-// Under its button, kept on the screen; fixed, so the tab row's scroll doesn't clip it. Focus
-// starts on the run shown.
+// Under its button, kept on the screen, and moved with it; fixed, so the tab row's scroll
+// doesn't clip it. Focus starts on the run shown.
 function Popover({
   anchor,
+  moved,
   children,
 }: {
   anchor: { current: HTMLElement | null };
+  moved: number;
   children: ComponentChildren;
 }) {
   const box = useRef<HTMLDivElement>(null);
-  const [at] = useState(() => {
-    const r = anchor.current?.getBoundingClientRect();
-    return { top: (r?.bottom ?? 0) + 4, left: r?.left ?? 0 };
-  });
   useLayoutEffect(() => {
     const el = box.current;
-    if (!el) return;
-    const over = el.getBoundingClientRect().right - (window.innerWidth - 8);
-    if (over > 0) el.style.left = `${Math.max(8, at.left - over)}px`;
-    el.querySelector<HTMLElement>("[role=option][tabindex='0']")?.focus();
+    const r = anchor.current?.getBoundingClientRect();
+    if (!el || !r) return;
+    const right = window.innerWidth - 8 - el.getBoundingClientRect().width;
+    el.style.top = `${r.bottom + 4}px`;
+    el.style.left = `${Math.max(8, Math.min(r.left, right))}px`;
+  }, [moved]);
+  useLayoutEffect(() => {
+    box.current?.querySelector<HTMLElement>("[role=option][tabindex='0']")?.focus();
   }, []);
   return (
-    <div
-      ref={box}
-      class={styles.popover}
-      data-popup
-      style={{ top: `${at.top}px`, left: `${at.left}px` }}
-    >
+    <div ref={box} class={styles.popover} data-popup>
       {children}
     </div>
   );

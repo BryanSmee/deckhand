@@ -129,6 +129,28 @@ test("a run starting while the list is open: Enter still picks the row focused",
   expect(location.hash).toMatch(new RegExp(`run=${ID(2)}$`));
 });
 
+test("a scroll that moves All runs (a live log following its end): the list moves with it", () => {
+  show(15);
+  const button = allRuns()!;
+  // The task's page, which scrolls: the box the button is in.
+  const page = button.closest("header")!.parentElement!;
+  const rect = (top: number, bottom: number, left = 0) =>
+    ({ top, bottom, left, right: left + 100, width: 100, height: bottom - top }) as DOMRect;
+  page.getBoundingClientRect = () => rect(0, 800);
+  button.getBoundingClientRect = () => rect(200, 238, 300);
+  fireEvent.click(button);
+  const popup = screen.getByRole("listbox").parentElement!;
+  expect(popup.style.top).toBe("242px");
+  button.getBoundingClientRect = () => rect(180, 218, 300);
+  fireEvent.scroll(page);
+  expect(screen.getByRole("listbox")).toBeTruthy();
+  expect(popup.style.top).toBe("222px");
+  // Scrolled out of view: it closes rather than float over the log.
+  button.getBoundingClientRect = () => rect(-50, -12, 300);
+  fireEvent.scroll(page);
+  expect(screen.queryByRole("listbox")).toBeNull();
+});
+
 test("[ and ] go through every run, those without a tab too", () => {
   show(15);
   fireEvent.keyDown(document.body, { key: "]" });

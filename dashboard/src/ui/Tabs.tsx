@@ -1,7 +1,7 @@
 // Tabs (the work queue's, a task's runs): a tablist whose arrows, Home and End move between
 // the tabs, and pick them, as the ARIA pattern has it. Only the picked tab is in the Tab order.
-// `extra` (a task's All runs button) sits last in the row, outside the tablist, whose box gives
-// way to the row's (display: contents): its tabs and `extra` share the row's width.
+// `extra` (a task's All runs button) sits last in the row, outside the tablist, which shrinks
+// beside it: its tabs share what `extra` leaves.
 import type { ComponentChildren, JSX } from "preact";
 import { useRef } from "preact/hooks";
 import { Count } from "./Count";
@@ -58,7 +58,7 @@ export function Tabs<T extends string>({
   const tablist = (
     <div
       ref={list}
-      class={extra ? styles.contents : row}
+      class={extra ? styles.list : row}
       role="tablist"
       aria-label={label}
       onKeyDown={onKeyDown}

@@ -247,13 +247,14 @@
   .refused {
     margin: 12px 16px 0;
   }
-  /* The run tabs share a phone's width with All runs, neither squeezed by the other: how long
-     ago is in the run's facts. */
+  /* The run tabs share a phone's width with All runs, neither squeezed by the other (a share of
+     the row's width, the screen's less the page's padding: a percentage would be of the tab
+     list's own); how long ago is in the run's facts. */
   .ago {
     display: none;
   }
   .runTab {
-    max-width: 36%;
+    max-width: calc((100vw - 32px) * 0.36);
   }
   .runView {
     gap: 12px;
