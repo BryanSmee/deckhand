@@ -1303,6 +1303,19 @@ test("dashboard Fix after a maintainer's review: a fix that pushed nothing stops
   const again = await askFix(s, HIGH_ONE, "alice", at("sha-2"));
   assert.equal(again.item.round, 3);
   assert.equal((await s.fixed("sha-3")).reason, "review");
+  // The same up to the fix that pushed nothing, then draft and ready again at sha-2: no
+  // automatic review saw sha-2, so the loop's own review runs.
+  const ready = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  await ready.review(HIGH_ONE);
+  await ready.fixed("sha-2");
+  await ready.reviews.settle(
+    { ...run, settings: ready.read.settings },
+    posted(HIGH_ONE, at("sha-2")),
+  );
+  await askFix(ready, HIGH_ONE, "alice", at("sha-2"));
+  assert.equal(await ready.fixed(), null);
+  const delivered = delivery("ready_for_review", { ...posted().pr, ...at("sha-2") });
+  assert.equal((await ready.reviews.consider("pull_request", delivered)).reason, "review");
 });
 
 test("dashboard Fix: a round left on fix: true is reviewed, though the loop's own isn't", async (t) => {

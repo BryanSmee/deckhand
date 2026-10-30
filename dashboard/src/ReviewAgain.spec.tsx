@@ -123,6 +123,8 @@ test("Review only: a clean loop, a fixed one, CI failed, no review.fix, an answe
     { state: "needs-input" },
     // The listener refuses a draft's Fix: its push wouldn't be reviewed.
     { pr: { ...PR, state: "draft" as const } },
+    // The last review went out as a plain comment: the listener can't read it back to fix.
+    { review: loop({ history: [round(0, 3), round(1, 2), { ...round(2, 2), comment: true }] }) },
   ];
   for (const over of cases) {
     const shown = show(over);

@@ -1131,7 +1131,7 @@ export function createReviews({
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
   // waiting, rounds, fixRounds, next, nextAt, unreviewedFix, ciWaiting, ciFixes, ciFixedAt,
-  // ciSettled, grantedTo, asked } of its last automatic review,
+  // ciSettled, grantedTo, asked, askedFrom } of its last automatic review,
   // how many fix runs it had and when the last one was queued, how many of them had their
   // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
   // refused), or the auto-merge waiting for its checks (decide()); each automatic review's
@@ -1455,18 +1455,18 @@ export function createReviews({
     if (asked && fixesOf(reviewed.get(key)) !== fixes) return skip("another fix run was queued");
     if (asked && moved(key, entry)) return skip("its review loop started again meanwhile");
     // Before queuing: whatever happens next, never this round twice.
-    // A maintainer's Fix starts from the pull request's head now, which no automatic review
-    // may have seen (a maintainer's review of it, an unreviewed `fix: true` push): what it
-    // pushed is compared with that (reviewFix()), so a fix that pushed nothing stops the loop.
-    const from = (asked && pr?.head?.sha) || reviewed.get(key)?.head || null;
-    remember(key, from, {
+    remember(key, reviewed.get(key)?.head ?? null, {
       fixes: round,
       fixedAt: now(),
       next: "review-fix",
       nextAt: now(),
       ...(asked && {
-        // Its push is reviewed whatever `review.fix` says (reviewFix()).
+        // Its push is reviewed whatever `review.fix` says, and compared with the head it starts
+        // from, which no automatic review may have seen (a maintainer's review of it, an
+        // unreviewed `fix: true` push), so a fix that pushed nothing stops the loop
+        // (reviewFix()). Apart from `head`, the loop's own review's, which consider() goes by.
         asked: round,
+        askedFrom: pr?.head?.sha ?? null,
         ...(grant && { grantedTo: round }),
         fixRounds: rounds,
         mergeAt: undefined,
@@ -1930,7 +1930,8 @@ export function createReviews({
     }
     if (!pr || pr.state !== "open") return null;
     const head = pr.head?.sha ?? null;
-    if (!head || head === entry.head) {
+    const from = entry.asked === fixes && entry.askedFrom ? entry.askedFrom : entry.head;
+    if (!head || head === from) {
       return stop("the fix run pushed nothing, so the review's findings still stand");
     }
     // The review after a fix run is an automatic one too: refused, the merge is the maintainer's.
