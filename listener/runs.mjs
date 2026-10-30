@@ -128,7 +128,8 @@ export function createRuns(ctx) {
         logDir: ctx.logDir,
       },
     );
-    // The issues it creates, as GitHub answers its calls (github-writes.mjs), saved with it.
+    // The issues it creates and the comments it posts, as GitHub answers its calls
+    // (github-writes.mjs), saved with it.
     const created = [];
     return {
       id,

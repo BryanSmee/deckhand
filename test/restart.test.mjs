@@ -89,7 +89,7 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
   assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
 });
 
-test("a restored run keeps the issues it created, and saves those it creates next", async (t) => {
+test("a restored run keeps the issues it created and the comments it posted, and saves those it adds next", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});
   const ctx = {
@@ -107,23 +107,34 @@ test("a restored run keeps the issues it created, and saves those it creates nex
   const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
   writeFileSync(
     join(dir, "r1.live.json"),
-    JSON.stringify({ ...saved, created: [{ number: 30, at: 5 }] }),
+    JSON.stringify({
+      ...saved,
+      created: [
+        { number: 30, at: 5 },
+        { comment: 3000000001, at: 5 },
+      ],
+    }),
   );
   // Saved before runs kept them: none.
   const old = saveRun(dir, "r2", 2, { agent: "claude" });
   createRestart(ctx).restoreRuns();
   const run = broker.runOf(secret);
-  assert.deepEqual(run.created, [{ number: 30, at: 5 }]);
+  assert.deepEqual(run.created, [
+    { number: 30, at: 5 },
+    { comment: 3000000001, at: 5 },
+  ]);
   assert.deepEqual(broker.runOf(old).created, []);
   // What github-writes.mjs answered() does for the next one: the live state's own list.
-  run.created.push({ number: 31, at: 6 });
+  run.created.push({ number: 31, at: 6 }, { comment: 3000000002, at: 6 });
   run.createdChanged();
   const task = [...ctx.tasks.values()].find((t) => t.live.secret === secret);
   await task.live.saving;
   const again = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
   assert.deepEqual(again.created, [
     { number: 30, at: 5 },
+    { comment: 3000000001, at: 5 },
     { number: 31, at: 6 },
+    { comment: 3000000002, at: 6 },
   ]);
 });
 

@@ -145,6 +145,10 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   what this kind of run may do (a work run writes only its own issue, its pull requests, its
   issue's sub-issues and the issues it created): a refusal starts with `Deckhand:` and says why; don't look for a
   way around it.
+- To correct a comment you posted, edit it rather than posting another:
+  `gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id> -f body=…`, with the id that ends
+  the URL gh printed for it (`#issuecomment-<id>`). Not `--edit-last`: it picks the bot's last
+  comment, which may be Deckhand's own, and only yours can be edited.
 - Commits and comments come from the GitHub App's bot; the git identity is already set.
 - Pushes go through Deckhand, which only lets this task's branch through (the issue's
   `issue-<n>-…`, or the pull request's own), never the base branch or another one, and

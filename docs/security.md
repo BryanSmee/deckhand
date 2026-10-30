@@ -325,7 +325,12 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   with any issue; no older than that call; written by the
   App's bot, which files issues for every run and for the listener, so that alone says
   nothing; saved with the run across restarts), another issue
-  or pull request. A sub-issue link's child, named by its id, must be one the run created or
+  or pull request. A comment by its id (`…/issues/comments/<id>`, GraphQL's
+  `updateIssueComment` and `deleteIssueComment`) must be one the run posted (issue #455): GitHub
+  answered one of its own comments with it (REST's `201`, or `addComment`'s
+  `commentEdge { node { url } }`, under the same rules on response keys and aliases as
+  `createIssue`'s), saved with the run, and it is still the App's bot's on GitHub. Any other,
+  the listener's own included (the same bot writes them), is refused before any look-up. A sub-issue link's child, named by its id, must be one the run created or
   one already under its issue, and moving an issue from
   another parent (`replace_parent` with any value but `false`) is refused: a link could
   otherwise take any issue under the run's, where its ceiling lets it edit. A "blocked by"
@@ -341,7 +346,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     sub-issues and the issues it created (their labels too, but for `NEEDS_INPUT_LABEL`, which
     its label writes neither add nor remove there: taking it off answers their questions; an
     edit dropping their questions section still does), and creates labels, issues, and
-    pull requests from its own branches, nothing else: not other issues and pull requests, though its token could. No ceiling holds closing, merging, reviews, deleting,
+    pull requests from its own branches, and edits and deletes the comments it posted (the
+    default policy, `policy/gh-own-comments.rego`, refuses deleting them), nothing else: not other issues and pull requests, though its token could. No ceiling holds closing, merging, reviews, deleting anything else,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
