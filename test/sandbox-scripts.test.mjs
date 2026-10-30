@@ -136,6 +136,38 @@ test("deckhand-tagged: one writer, whole lines; a long stdout line and stderr li
   ]);
 });
 
+// A reader slower than the command (the runtime's, a slow disk): the command waits, as on a
+// full pipe, rather than its output piling up in the wrapper, inside the sandbox's memory.
+test("deckhand-tagged: a slow reader holds the command back, the wrapper's memory bounded", async () => {
+  const { spawn } = await import("node:child_process");
+  const script = `
+    const line = "x".repeat(1023) + "\\n";
+    let n = 0;
+    const go = () => {
+      while (n < 200000) {
+        n++;
+        if (!process.stdout.write(line)) return process.stdout.once("drain", go);
+      }
+    };
+    go();`;
+  const wrapper = spawn(`${bin}deckhand-tagged`, [process.execPath, "-e", script], {
+    stdio: ["ignore", "pipe", "inherit"],
+  });
+  wrapper.stdout.pause();
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  const rss = Number(
+    readFileSync(`/proc/${wrapper.pid}/status`, "utf8").match(/VmRSS:\s+(\d+)/)[1],
+  );
+  // Failing, it would wait on its reader for good: it goes first.
+  if (rss >= 150 * 1024) wrapper.kill("SIGKILL");
+  assert.ok(rss < 150 * 1024, `wrapper RSS ${Math.round(rss / 1024)} MB`);
+  let bytes = 0;
+  wrapper.stdout.on("data", (d) => (bytes += d.length));
+  wrapper.stdout.resume();
+  assert.equal(await new Promise((resolve) => wrapper.on("close", resolve)), 0);
+  assert.equal(bytes, 200000 * 1024);
+});
+
 test("deckhand-tagged: SIGTERM reaches the command, whose status comes back", async () => {
   const { spawn } = await import("node:child_process");
   const child = spawn(

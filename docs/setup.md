@@ -1026,6 +1026,13 @@ be allowed to reach them, and every run would be refused.
   warning), and a `podPidsLimit`, as Kubernetes only limits processes per node (grants'
   `limits.pids` don't apply).
 
+`SANDBOX_IMAGE` has to be a reference the nodes can pull, from a registry
+(`ghcr.io/bryansmee/deckhand-sandbox:<version>`, not the default `<NAME_PREFIX>-sandbox`),
+ideally a version tag or a digest. A `:latest` or untagged one is pulled again at every
+start; a node keeps a pinned one. The sandbox image has to match the listener's version: an
+older entrypoint doesn't tag its stderr lines, and its setup output would read as the
+agent's.
+
 Each sandbox pod meets Pod Security `restricted` (uid 1000, no capability, no privilege gain,
 the runtime's seccomp profile), gets no ServiceAccount token, and runs with its grant's CPU and
 memory as both its requests and its limits. Its environment is in a Secret of its own, deleted

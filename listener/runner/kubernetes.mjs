@@ -207,7 +207,9 @@ export function podSpec(
         {
           name: CONTAINER,
           image,
-          imagePullPolicy: "IfNotPresent",
+          // No imagePullPolicy: Kubernetes' default pulls a :latest or untagged image again
+          // at every start, so nodes don't keep an old base image (and its entrypoint) after
+          // an update, and keeps a pinned tag or digest.
           envFrom: [{ secretRef: { name: secret } }],
           env: Object.entries(env).map(([k, v]) => ({ name: k, value: String(v) })),
           // As much as it may use is held for it: a node without the room leaves it Pending

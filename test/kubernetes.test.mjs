@@ -293,6 +293,8 @@ test("podSpec: Pod Security restricted, no token, no restart, the grant's limits
       seccompProfile: { type: "RuntimeDefault" },
     });
     assert.equal(c.ports, undefined);
+    // Kubernetes' default: a :latest image is pulled again, a pinned one kept.
+    assert.equal(c.imagePullPolicy, undefined);
     assert.deepEqual(c.resources, {
       limits: { cpu: "2", memory: "4Gi" },
       requests: { cpu: "2", memory: "4Gi" },

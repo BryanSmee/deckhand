@@ -31,13 +31,28 @@ const child = spawn(command, args, { stdio: ["inherit", "pipe", "pipe"] });
 
 // Each line goes out in one write, whole, in order. Writes may be queued (a runtime's FIFO
 // that takes them slower), so the process ends on its own once they are out, never through
-// process.exit() with lines still queued.
+// process.exit() with lines still queued. While they are queued past the stream's buffer,
+// both sources pause, so the command waits as on a full pipe under Docker, rather than its
+// output filling this process's memory (the sandbox's memory limit counts it).
+const sources = [child.stdout, child.stderr];
+let held = false;
+function hold() {
+  if (held) return;
+  held = true;
+  for (const source of sources) source.pause();
+  process.stdout.once("drain", () => {
+    held = false;
+    for (const source of sources) source.resume();
+  });
+}
+
 function lines(stream, prefix) {
   let parts = [];
   let size = 0;
   let cut = false;
   const write = () => {
-    process.stdout.write(Buffer.concat([Buffer.from(prefix), ...parts, Buffer.from("\n")]));
+    const line = Buffer.concat([Buffer.from(prefix), ...parts, Buffer.from("\n")]);
+    if (!process.stdout.write(line)) hold();
     parts = [];
     size = 0;
     cut = false;
