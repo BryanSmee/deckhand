@@ -926,11 +926,10 @@ test("hasSession, address and proxyAddresses", async (t) => {
   assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), false);
   await runner.start(spec());
   assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
-  assert.deepEqual(await runner.address("dh-org-repo-12-abc"), ["10.244.1.7"]);
-  objects.pods.get("dh-org-repo-12-abc").status = { phase: "Pending" };
-  assert.equal(await runner.address("dh-org-repo-12-abc"), null);
-  assert.equal(await runner.address("dh-gone"), null);
-  assert.equal(await runner.engineAddress("dh-org-repo-12-abc"), null);
+  const { uid } = objects.pods.get("dh-org-repo-12-abc").metadata;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(await runner.sandboxIdOf("dh-org-repo-12-abc"), uid);
+  assert.equal(await runner.sandboxIdOf("dh-gone"), null);
   assert.deepEqual(await runner.proxyAddresses(), ["10.244.2.3", "10.244.3.4"]);
   assert.ok(
     calls.at(-1).endsWith("endpointslices?labelSelector=kubernetes.io%2Fservice-name%3Degress"),

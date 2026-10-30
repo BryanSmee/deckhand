@@ -190,14 +190,17 @@ export function createNetworks({ config, docker, log, now }) {
     return addresses;
   }
 
-  // The ID of the run's network an address is on (a sandbox's, its engine's), or null: what a
-  // run's tokens are bound to (../broker.mjs check()). IDs, not names or addresses: both are
-  // reused, an ID never. Cached, as each call to the broker asks; forgotten whenever a network
-  // is created or removed, so an address never names a network that is gone. One not found
-  // makes the runner look again, at most every PROXY_RETRY_MS.
+  // Where an address is on the runs' networks: { sandbox, name }, the ID of the network and the
+  // name of the container that has it there (a sandbox, its engine, the listener, the proxy), or
+  // null: what a run's tokens are bound to (../broker.mjs check()), and what the egress policy
+  // finds a connection's run by (../broker-http.mjs taskWhere()). IDs, not names or addresses:
+  // both are reused, an ID never. Cached, as each call to the broker asks; forgotten whenever a
+  // network is created or removed or a container joins one, so an address never names a
+  // network that is gone. One not found makes the runner look again, at most every
+  // PROXY_RETRY_MS.
   let sandboxes = { at: -Infinity, byAddress: new Map() };
   let generation = 0; // counts forget()s
-  async function sandboxOf(ip) {
+  async function locate(ip) {
     const age = now() - sandboxes.at;
     const known = sandboxes.byAddress.get(ip);
     if (known && age < PROXY_TTL_MS) return known;
@@ -206,7 +209,7 @@ export function createNetworks({ config, docker, log, now }) {
     const seen = generation;
     const byAddress = new Map();
     try {
-      for (const [address, id] of await runAddresses()) byAddress.set(address, id);
+      for (const [address, where] of await runAddresses()) byAddress.set(address, where);
     } catch (error) {
       log(`Looking up the runs' networks: ${error.message}`);
     }
@@ -215,7 +218,8 @@ export function createNetworks({ config, docker, log, now }) {
     return byAddress.get(ip) ?? null;
   }
 
-  // [address, network ID] of every container on this deployment's runs' networks.
+  // [address, { sandbox: network ID, name }] of every container on this deployment's runs'
+  // networks. Neither a container's name nor an address has a space or a "|".
   async function runAddresses() {
     const { out } = checked(
       await docker([
@@ -237,15 +241,20 @@ export function createNetworks({ config, docker, log, now }) {
       "network",
       "inspect",
       "--format",
-      "{{.Id}}{{range .Containers}} {{.IPv4Address}} {{.IPv6Address}}{{end}}",
+      "{{.Id}}{{range .Containers}} {{.Name}}|{{.IPv4Address}}|{{.IPv6Address}}{{end}}",
       ...ids,
     ]);
     return listed.out
       .split("\n")
       .filter(Boolean)
       .flatMap((line) => {
-        const [id, ...addresses] = line.split(" ").filter(Boolean);
-        return addresses.map((a) => [a.replace(/\/\d+$/, ""), id]);
+        const [id, ...containers] = line.split(" ").filter(Boolean);
+        return containers.flatMap((c) => {
+          const [name, ...addresses] = c.split("|");
+          return addresses
+            .filter(Boolean)
+            .map((a) => [a.replace(/\/\d+$/, ""), { sandbox: id, name }]);
+        });
       });
   }
 
@@ -272,7 +281,8 @@ export function createNetworks({ config, docker, log, now }) {
       }
     },
     idOf,
-    sandboxOf,
+    locate,
+    sandboxOf: async (ip) => (await locate(ip))?.sandbox ?? null,
     // For a container that joined a network: its address must be looked up again.
     forget,
     connect,

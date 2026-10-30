@@ -434,6 +434,8 @@ export function createKubernetesRunner({
         }),
       );
       made.push(podPath(name));
+      // Its address, once it has one, may have been asked about meanwhile: nobody's then.
+      uids = new Map();
       const bound = tokens ? await tokens(pod?.metadata?.uid) : {};
       // Unset values stay unset in the sandbox, as under Docker.
       const env = Object.fromEntries(
@@ -800,22 +802,16 @@ export function createKubernetesRunner({
     return !init?.state?.terminated;
   }
 
-  // Its pod's IPs, what the egress proxy and the broker see it call from.
-  async function address(name) {
-    const status = (await api.find(podPath(name)))?.status;
-    const found = (status?.podIPs ?? []).map((p) => p.ip).filter(Boolean);
-    if (!found.length && status?.podIP) found.push(status.podIP);
-    return found.length ? found : null;
-  }
-
   // The UID of the sandbox's pod that has an IP, or null: what the run's tokens are bound to
   // (../broker.mjs check()). A UID, not the pod's name (each of the issue's runs has the same)
-  // nor its IP (reused). Cached for PROXY_TTL_MS, as each call to the broker asks, and
-  // forgotten as a sandbox is removed.
+  // nor its IP (reused). Cached for PROXY_TTL_MS, as each call to the broker asks, an address
+  // with no sandbox for PROXY_RETRY_MS (a token replayed from elsewhere asks the API that often
+  // at most), and forgotten as a sandbox starts or is removed.
   let uids = new Map(); // ip → { uid, at }
   async function sandboxOf(ip) {
     const known = uids.get(ip);
-    if (known && now() - known.at < PROXY_TTL_MS) return known.uid;
+    const age = known ? now() - known.at : Infinity;
+    if (known && age < (known.uid ? PROXY_TTL_MS : PROXY_RETRY_MS)) return known.uid;
     let uid = null;
     try {
       const { items = [] } = await api.get("pods", {
@@ -831,8 +827,18 @@ export function createKubernetesRunner({
       return null;
     }
     if (uids.size > 1000) uids = new Map();
-    if (uid) uids.set(ip, { uid, at: now() });
+    uids.set(ip, { uid, at: now() });
     return uid;
+  }
+
+  // The UID of the task's pod, or null: a run's from before tokens (../broker-http.mjs).
+  async function sandboxIdOf(name) {
+    try {
+      return (await api.find(podPath(name)))?.metadata?.uid ?? null;
+    } catch (error) {
+      log(`${name}: its pod's UID: ${error.message}`);
+      return null;
+    }
   }
 
   // The IPs of the pods behind the egress Service, ready or not (one starting still relays).
@@ -885,12 +891,16 @@ export function createKubernetesRunner({
     kill,
     remove,
     hasSession,
-    address,
-    engineAddress: async () => null,
     installing,
     relink,
     proxyAddresses,
     sandboxOf,
+    // The pod at that address is the sandbox: no other container of a run has one of its own.
+    locate: async (ip) => {
+      const sandbox = await sandboxOf(ip);
+      return sandbox ? { sandbox, name: null } : null;
+    },
+    sandboxIdOf,
   };
 }
 

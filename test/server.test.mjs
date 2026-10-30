@@ -4923,18 +4923,19 @@ mounts:
       return { SANDBOX_ENGINE: "podman" };
     });
     const { dir, github } = ctx;
-    // Whether the running run started an engine, from its saved state: the broker keeps its
-    // addresses only once it knows the engine's too (broker-http.mjs hasAddress()).
-    const savedEngine = async () => {
+    // The network its tokens are bound to, from its saved state: what the egress policy finds
+    // its sandbox and its engine by (broker-http.mjs taskWhere()).
+    const savedSandbox = async () => {
       const state = await until(() => {
         const live = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json"));
         const saved = live && JSON.parse(readFileSync(join(dir, "logs", live), "utf8"));
-        return saved && "engine" in saved ? saved : null;
+        return saved?.sandbox ? saved : null;
       }, "the run's saved state, after its start");
-      return state.engine;
+      return state;
     };
     await ctx.send(comment("alice"));
-    assert.equal(await savedEngine(), true);
+    const saved = await savedSandbox();
+    assert.equal(saved.sandbox, `id-${saved.id}`);
     writeFileSync(join(dir, "go"), "");
     await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
@@ -4971,7 +4972,8 @@ mounts:
     const payload = comment("alice");
     payload.issue = { number: 41, pull_request: {} };
     await ctx.send(payload);
-    assert.equal(await savedEngine(), false);
+    // Started: its saved state has its network.
+    await savedSandbox();
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("org/repo#pr-41: done (ok)");
     assert.throws(() => readFileSync(join(dir, "engine-args")));

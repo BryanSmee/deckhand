@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBroker } from "../listener/broker.mjs";
+import { createBroker, RENEW_GRACE_MS } from "../listener/broker.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
 import { sandboxAt } from "./helpers.mjs";
 
@@ -170,7 +170,6 @@ test("a run longer than its token's lifetime keeps working, renewing every 5 min
   }
   // An hour on, the first token expired long ago; the last one works.
   assert.match((await broker.check(first, "10.9.0.5")).message, /expired/);
-  assert.match((await broker.renew(first, "10.9.0.5")).message, /expired/);
   // Its last few are kept for redaction, not every one.
   assert.deepEqual(broker.secretsOf("run-a").slice(-4), renewals.slice(-4));
   assert.equal(broker.secretsOf("run-a").length, 5);
@@ -199,4 +198,22 @@ test("a run from before tokens keeps its secret, bound to its sandbox's address"
   assert.equal(broker.runOf("new").secret, undefined);
   broker.revoke("new");
   assert.throws(() => broker.issue("new", "net-a"), /ended/);
+});
+
+test("a token expired while the broker was away still renews, from its sandbox, within the grace", async () => {
+  const { broker, clock } = tokenBroker();
+  broker.register("org/a", undefined, { id: "run-a" });
+  const { token } = broker.issue("run-a", "net-a");
+  // The broker unreachable for an hour (a slow update, a host reboot): the token expired.
+  clock.now += 60 * 60_000;
+  assert.match((await broker.check(token, "10.9.0.5")).message, /expired/);
+  // Its calls fail until the broker is back, then the next renewal brings the run back.
+  const renewed = await broker.renew(token, "10.9.0.5");
+  assert.equal((await broker.check(renewed.token, "10.9.0.5")).run.id, "run-a");
+  // Never from another sandbox, never past the grace, never for an ended run.
+  assert.equal((await broker.renew(token, "10.9.1.5")).status, 403);
+  clock.now += RENEW_GRACE_MS;
+  assert.match((await broker.renew(token, "10.9.0.5")).message, /expired/);
+  broker.revoke("run-a");
+  assert.equal((await broker.renew(renewed.token, "10.9.0.5")).status, 401);
 });

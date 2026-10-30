@@ -81,8 +81,8 @@ case "$1" in
               printf 'id-%s' "$net"
               while IFS= read -r m; do
                 [ -f "$c/$m/run" ] || continue
-                printf ' 10.9.0.5/24'
-                [ -e "$dir/elsewhere" ] || printf ' 127.0.0.1/8'
+                printf ' %s|10.9.0.5/24|' "$m"
+                [ -e "$dir/elsewhere" ] || printf ' %s|127.0.0.1/8|' "$m"
               done < "$dir/nets/$net"
               echo
             done

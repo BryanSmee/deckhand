@@ -338,13 +338,24 @@ export function createGitGateway({
     const service = path[3];
 
     // Git only sends credentials once asked: a 401 asks for them (again).
-    const { run, status, message } = await broker.check(secretOf(req), req);
+    const { run, claims, status, message } = await broker.check(secretOf(req), req);
     if (!run) {
       const challenge = status === 401 ? { "www-authenticate": 'Basic realm="Deckhand"' } : {};
       return fail(res, status, `Deckhand: ${message}`, challenge);
     }
-    if (run.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${run.repo}`);
-    if (!run.push) return fail(res, 403, "Deckhand: this run can't push");
+    // What it may push, from its token's claims, which the broker signed (a run from before
+    // tokens: its record): its repo and branches. A run that can't push has none (broker.mjs
+    // allow()).
+    const may = claims
+      ? {
+          repo: claims.repo,
+          branches: Array.isArray(claims.branches) ? claims.branches : [],
+          push: Array.isArray(claims.branches) && claims.branches.length > 0,
+          fork: claims.fork === true,
+        }
+      : { repo: run.repo, branches: run.branches, push: run.push, fork: run.fork };
+    if (may.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${may.repo}`);
+    if (!may.push) return fail(res, 403, "Deckhand: this run can't push");
 
     if (service === "info/refs") {
       if (req.method !== "GET" || url.searchParams.get("service") !== "git-receive-pack") {
@@ -361,7 +372,7 @@ export function createGitGateway({
 
     const github = app();
     if (!github) return fail(res, 503, "Deckhand: the GitHub App is not set up");
-    return { repo, service, run, github };
+    return { repo, service, run, may, github };
   }
 
   // The push's refs refused with `reasons` (ref → why): what's left of the pack is read and
@@ -384,7 +395,7 @@ export function createGitGateway({
   // A push whose every ref update the run may make: { body, token, done, parsed }, `token` the
   // gateway's own for it, `done` what to call once it is forwarded and `parsed` its ref updates
   // (commands()), or nothing once the push is refused.
-  async function checkPush(req, res, { repo, run, github }) {
+  async function checkPush(req, res, { repo, run, may, github }) {
     let parsed;
     try {
       parsed = await commands(req);
@@ -402,7 +413,7 @@ export function createGitGateway({
     }
     const reasons = new Map();
     for (const ref of parsed.refs) {
-      const why = refusal(ref, base, run.branches);
+      const why = refusal(ref, base, may.branches);
       if (why) reasons.set(ref, why);
     }
     if (reasons.size) return refuse(req, res, repo, parsed, reasons);
@@ -410,7 +421,7 @@ export function createGitGateway({
     // what it carries or the repository has (mirrors.connect()): GitHub keeps a fork network's
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
     // tree, needn't carry them, and its next fetch would bring them as the repository's own.
-    const strict = forks?.restricted(run) === true;
+    const strict = forks?.restricted(may) === true;
     const workflows = workflowsGranted(repo);
     if (!strict && !workflows) return { body: parsed.body, token: null, parsed };
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.

@@ -402,8 +402,8 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   every run but research trusts) and relays them to the GitHub gateway (`github-gateway.mjs`,
   on `BROKER_PORT`, only on the runs' networks), with the address of the sandbox they came
   from, which the listener believes from the proxy alone. The gateway finds the run by its
-  token (bound to that address's network) or, without one, by its sandbox's address (never its
-  engine's); refuses finished, foreign,
+  token (bound to that address's network) or, without one, by the network that address is
+  on (`runner.locate()`, never its engine's); refuses finished, foreign,
   research and push calls and a review's reads of its thread; refuses a work run that isn't a
   fork's what would bring a fork's code (`github-forks.mjs`: a fork's repository, a fork's
   pull request's head, a commit that isn't the repository's, by git, the API, an archive, a
@@ -741,8 +741,9 @@ calls during a run reaches the listener's broker port through the egress proxy, 
   inbox and the run's files. The proxy recognises the broker's origin (its own `BROKER_URL`,
   by default `RELAY_URL`'s), asks the policy whether that client may reach the broker (a
   running sandbox or its engine: `broker=1`), and sends the request on as it is, naming
-  the sandbox in `x-deckhand-client` as for a relayed one; the broker's secrets are bound to
-  that address (`broker.mjs` `sentBy()`, through `broker-http.mjs` `clientAddress()`). It
+  the sandbox in `x-deckhand-client` as for a relayed one; the runs' tokens (and the secrets of
+  runs from before them) are bound to that address's network (`broker.mjs` `check()`, through
+  `broker-http.mjs` `clientAddress()`). It
   refuses `/egress` there (`403`): the broker answers it to the proxy alone, which would
   otherwise ask on the sandbox's behalf.
 
@@ -795,9 +796,10 @@ A run's tokens outlive a restart: they are signed with `run-token.key`, in the d
 name the run by its id, which `logs/<run>.live.json` keeps (with its agent token, for
 redaction), so the next listener checks and renews them as the last one did. A renewal is a
 direct call: during a drain and the next start (5 minutes at most) it fails, and
-`deckhand-token` asks again every 30 s, within the token's 15 minutes. Runs started before run
+`deckhand-token` asks again every 30 s; a token that expired meanwhile still renews, from its
+own sandbox, for 7 days (`RENEW_GRACE_MS`), and the renewed one is bound where it was. Runs started before run
 tokens (#493) keep the random secret they started with and no renewal loop: the listener
-keeps accepting it (by hash, from its own sandbox's address, `broker.mjs` `sentBy()`) until
+keeps accepting it (by hash, from its own sandbox's network, `broker.mjs` `sentBy()`) until
 those runs end. That path goes in a later release, once no such run can still be going.
 
 ### Run files

@@ -43,6 +43,12 @@ export const RENEW_EVERY_S = 5 * 60;
 // is, it dies with the run; this is only a ceiling.
 export const AGENT_TOKEN_TTL_MS = 7 * 24 * 60 * 60_000;
 
+// How long past its expiry a run token still renews, from its own sandbox and while its run
+// lasts: a broker unreachable for longer than a token's life (a slow update, a host reboot)
+// leaves the sandbox nothing else to present, so its calls fail until the broker is back, not
+// for the rest of the run. As long as the agent token, which outlives a pause of the broker anyway.
+export const RENEW_GRACE_MS = 7 * 24 * 60 * 60_000;
+
 // How many of a run's renewed tokens it keeps for redaction (secretsOf()): older ones expired.
 const KEPT_TOKENS = 4;
 
@@ -123,7 +129,8 @@ export function createBroker({
   // ({ run_id, sha, at }). `reason`: why the listener started it itself ("review-fix",
   // "ci-fix", "conflict"), null for a comment's: the policies read it (github-writes.mjs).
   // `id`: the run's (runs.mjs), its tokens' `jti`; a restarted listener passes the same one, so
-  // they still name it, with its agent token (`agentToken`), for redaction. `secret`: a run's from before tokens, when a restarted listener picks
+  // they still name it, with its agent token (`agentToken`), for redaction, and the network or
+  // pod they are bound to (`sandbox`), which its renewed ones carry. `secret`: a run's from before tokens, when a restarted listener picks
   // it up; without an `id`, a new one (the tests' runs). → the handle the other calls take: the
   // run's id, or its secret.
   function register(
@@ -140,6 +147,7 @@ export function createBroker({
       id = null,
       secret = id ? null : random(),
       agentToken = null,
+      sandbox = null,
     } = {},
   ) {
     const run = {
@@ -156,7 +164,7 @@ export function createBroker({
       // No branch until allow() names them: a run that can push still pushes nothing else.
       branches: [],
       fork: false,
-      sandbox: null,
+      sandbox: typeof sandbox === "string" && sandbox ? sandbox : null,
       issued: [],
       agentToken,
       provider: null,
@@ -256,7 +264,7 @@ export function createBroker({
   // { run, claims } or { status, message }. `from`: the call (its request: the address is
   // clientOf()'s, the one the egress proxy names for a call it relayed or forwarded) or the
   // address it came from; `audience`: the service's.
-  async function check(credential, from, audience = RUN_AUDIENCE) {
+  async function check(credential, from, audience = RUN_AUDIENCE, graceMs = 0) {
     const ip = typeof from === "string" ? from : from ? await clientOf(from) : "";
     const unknown = { status: 401, message: "unknown or finished run" };
     if (!credential) return unknown;
@@ -268,7 +276,7 @@ export function createBroker({
     }
     let claims;
     try {
-      claims = verifyToken(credential, { keys, audience, now: now() });
+      claims = verifyToken(credential, { keys, audience, now: now(), graceMs });
     } catch (error) {
       if (!(error instanceof TokenError)) throw error;
       return { status: 401, message: `this run token is refused: ${error.message}` };
@@ -282,13 +290,20 @@ export function createBroker({
     return { run, claims };
   }
 
-  // A new run token for the one the sandbox holds, checked as any call's: { token } or
-  // { status, message }. An ended run's is refused (check()). `from`: as check()'s.
+  // A new run token for the one the sandbox holds, checked as any call's, but taken up to
+  // RENEW_GRACE_MS past its expiry: { token } or { status, message }. An ended run's is refused
+  // (check()). `from`: as check()'s. The new one is bound where the one presented was, which
+  // check() just compared with the call's network: a restarted listener's record of the run
+  // doesn't know it before.
   async function renew(token, from) {
     if (!isToken(token)) return { status: 401, message: "only a run token is renewed" };
-    const checked = await check(token, from, RUN_AUDIENCE);
+    const checked = await check(token, from, RUN_AUDIENCE, RENEW_GRACE_MS);
     if (!checked.run) return checked;
-    return { token: signed(checked.run, RUN_AUDIENCE, TOKEN_TTL_MS) };
+    const { run, claims } = checked;
+    run.sandbox ??= claims.sandbox;
+    // Redacted too: after a restart, the one the sandbox held was in no list yet.
+    if (!run.issued.includes(token)) run.issued = [...run.issued, token].slice(-KEPT_TOKENS);
+    return { token: signed(run, RUN_AUDIENCE, TOKEN_TTL_MS) };
   }
 
   // The tokens signed for the run that its output must not publish (runs.mjs).

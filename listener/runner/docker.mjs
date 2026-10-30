@@ -22,13 +22,14 @@
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
-//   address(name)        its addresses on its network (its engine's: engineAddress())
-//   engineAddress(name)  its engine's alone
 //   relink()             joins the listener and the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
 //   sandboxOf(ip)        the ID of the run's network that address is on (its pod's UID, on
 //                        Kubernetes), or null: what the run's tokens are bound to
+//   locate(ip)           { sandbox, name }: that ID and the container that has the address
+//                        there (Kubernetes names none: the pod is the sandbox), or null
+//   sandboxIdOf(name, run)  the ID of a run's network (its pod's UID), or null
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
 // run's other files, which the sandbox fetches from the broker rather than mounts),
@@ -47,7 +48,7 @@ import {
   volumeArgs,
   volumeExists,
 } from "../docker.mjs";
-import { engineEnv, engineName } from "./engine.mjs";
+import { engineEnv } from "./engine.mjs";
 import { createRelink } from "./gc.mjs";
 import { createInbox } from "./inbox.mjs";
 import { splitLines } from "./lines.mjs";
@@ -130,6 +131,8 @@ export function createDockerRunner({
         Object.entries({ ...bound, ...values }).filter(([, v]) => v !== undefined),
       );
       if (engine) started = await engines.start(run, name, labels, engine);
+      // The engine's address is new on the network.
+      if (started) networks.forget();
       // Not secrets: where the engine and the run's files are, as values.
       const engineVars = {
         ...(started ? engineEnv(started.backend) : {}),
@@ -265,21 +268,6 @@ export function createDockerRunner({
     return volumeExists(docker, `${name}-${agent.session.volume}`);
   }
 
-  // On every network it is on: its own, or the shared one of a sandbox an older listener
-  // started. The sandbox's alone, from one inspection, as engineAddress() is the engine's: the
-  // broker counts both as the run's (broker-http.mjs hasAddress()), and can tell whether the
-  // sandbox's is known yet (#517).
-  async function address(name) {
-    const found = (await networks.addressesOf(name)) ?? [];
-    return found.length ? found : null;
-  }
-
-  // Its engine's alone: the egress proxy never decrypts their HTTPS, as the engine's builds
-  // and containers don't trust Deckhand's CA.
-  async function engineAddress(name) {
-    return networks.addressesOf(engineName(name));
-  }
-
   return {
     start,
     list,
@@ -294,10 +282,11 @@ export function createDockerRunner({
     kill,
     remove,
     hasSession,
-    address,
-    engineAddress,
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
     sandboxOf: networks.sandboxOf,
+    locate: networks.locate,
+    // Its network is named after the run.
+    sandboxIdOf: (name, run) => networks.idOf(run).catch(() => null),
   };
 }

@@ -15,22 +15,24 @@
 //                                     only the run's log (the watcher's, the Stop hook's), so a
 //                                     later call still tells the agent.
 "use strict";
+const { execFileSync } = require("node:child_process");
 const { readdirSync, readFileSync, renameSync, statSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
 const broker = process.env.DECKHAND_BROKER_URL ?? "";
-// The run token, read again for each request: deckhand-token renews it every few minutes. A
-// run's secret from before tokens without its file.
+// The run token, from deckhand-token for each request: it renews it every few minutes (or a
+// run's secret from before tokens). None outside a run: the broker refuses the request.
 function headers() {
-  let token = process.env.DECKHAND_RUN_SECRET ?? "";
+  let token = "";
   try {
-    if (process.env.DECKHAND_TOKEN_FILE) {
-      token = readFileSync(process.env.DECKHAND_TOKEN_FILE, "utf8").trim();
-    }
+    token = execFileSync("deckhand-token", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
   } catch {
-    // No file: the secret, if any.
+    // No token: refused, said by the caller.
   }
-  return { authorization: `Bearer ${token}` };
+  return { authorization: `Bearer ${token.trim()}` };
 }
 const SHOT = /^[\w.-]+\.(png|jpe?g|webp)$/;
 // What the file itself makes the broker refuse (its name, its size, its type): final until it

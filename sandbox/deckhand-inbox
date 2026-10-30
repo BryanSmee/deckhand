@@ -7,7 +7,8 @@
 // restarts meanwhile is asked again, from the same offset, so no line is lost or printed
 // twice. A file path (a sandbox started by hand) is followed instead.
 "use strict";
-const { closeSync, openSync, readFileSync, readSync } = require("node:fs");
+const { execFileSync } = require("node:child_process");
+const { closeSync, openSync, readSync } = require("node:fs");
 
 const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
 const source = process.argv[2];
@@ -37,18 +38,19 @@ function followFile() {
   poll();
 }
 
-// The run token, read again for each request: deckhand-token renews it every few minutes. A
-// run's secret from before tokens without its file.
+// The run token, from deckhand-token for each request: it renews it every few minutes (or a
+// run's secret from before tokens). None outside a run: the broker refuses the request.
 function headers() {
-  let token = process.env.DECKHAND_RUN_SECRET ?? "";
+  let token = "";
   try {
-    if (process.env.DECKHAND_TOKEN_FILE) {
-      token = readFileSync(process.env.DECKHAND_TOKEN_FILE, "utf8").trim();
-    }
+    token = execFileSync("deckhand-token", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
   } catch {
-    // No file: the secret, if any.
+    // No token: refused, said by the caller.
   }
-  return { authorization: `Bearer ${token}` };
+  return { authorization: `Bearer ${token.trim()}` };
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

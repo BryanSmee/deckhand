@@ -113,7 +113,9 @@ file backend on one node, Redis on several (#509).
 - **Run tokens** (#493): **where**, the services are reachable from the runs' networks only
   through the proxy, so a token leaked to the internet opens nothing; **who**, it is bound to
   its sandbox's network, which the proxy vouches for, so another sandbox can't replay it; **how
-  long**, 15 minutes at most, and nothing once its network is removed.
+  long**, 15 minutes at most, and nothing once its network is removed. The agent's own token,
+  which its CLI reads once at start and can't renew, lasts the run instead (7 days at most), bound
+  the same way and for the agents' endpoints alone (security.md, Run tokens).
 - **Service tokens** (#500): signed by the broker, with `sub` (the caller) and `aud` (the
   service called), short-lived, and bound to the caller: its pod's service account on
   Kubernetes, the network a call arrives on with Docker (one network per caller and callee).

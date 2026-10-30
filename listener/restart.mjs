@@ -160,6 +160,7 @@ export function createRestart(ctx) {
             "light",
             "secret",
             "agentToken",
+            "sandbox",
             "asked",
             "replyTo",
             "replied",
@@ -168,7 +169,6 @@ export function createRestart(ctx) {
           ]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
-            .concat(["engine"])
             .map((k) => [k, live[k]]),
         ),
         record,
@@ -241,8 +241,6 @@ export function createRestart(ctx) {
       open: !saved.cancelled && !saved.overflow && !ctx.runner.closed(saved.id),
       // A run started before the proxy decrypted HTTPS doesn't trust its CA: nothing cached.
       cached: saved.uncached ? saved.cached : [],
-      ip: null,
-      engineIp: null,
       handled,
       unanswered: saved.unanswered.map((i) => handled[i]).filter(Boolean),
       // State saved before runs kept the issues they created: none.
@@ -268,6 +266,7 @@ export function createRestart(ctx) {
       id: saved.id,
       secret: saved.secret ?? null,
       agentToken: saved.agentToken ?? null,
+      sandbox: saved.sandbox ?? null,
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).

@@ -286,6 +286,19 @@ container engine is on its network, so its calls count as the run's, as they did
 ends, the listener forgets it and removes its network (or pod): its tokens are worth nothing
 from then on, before their `exp`.
 
+The same lookup finds a connection's run for **the egress policy** and for **GitHub calls
+that carry no token** (git's first request, a `curl` download): the runner tells which network
+(or pod) the address is on now, and which container has it there, the sandbox or its engine
+(`runner.locate()`, `broker-http.mjs` `taskWhere()`); nothing per run is kept, so another
+run's engine starting before its sandbox changes nothing for anyone (#517). The runner caches
+its answers for a few seconds, and forgets them whenever a network is created or removed or a
+container joins one.
+
+**What a push may do** is the git gateway's decision from the token's claims (`repo`,
+`branches`, `fork`), not the broker's record. The services still need the run to be one the
+broker knows, which in the listener costs nothing; once they run apart (#492) the network's
+removal at the run's end is what refuses its tokens there.
+
 **Lifetime.** The run token lasts **15 minutes**. It is a file on a tmpfs
 (`/dev/shm/deckhand/run-token`, `DECKHAND_TOKEN_FILE`) rather than an environment variable,
 which a running process never reads again. `sandbox/entrypoint.sh` writes the first one
@@ -293,7 +306,10 @@ which a running process never reads again. `sandbox/entrypoint.sh` writes the fi
 `DECKHAND_RUN_TOKEN`, then unset) and starts `deckhand-token --renew`, which asks the broker
 (`POST /run/token`, presenting the current token) for a new one every 5 minutes and replaces
 the file whole; a failure is retried after 30 seconds, so two may fail in a row. The broker
-refuses to renew an expired token, another sandbox's, or an ended run's. `deckhand-token`
+refuses to renew another sandbox's token or an ended run's, and one more than 7 days past its
+`exp` (`RENEW_GRACE_MS`): an expired token still renews, from its own sandbox, so a broker
+away for longer than a token's life doesn't end the run (below). After a restart, the token
+renewed is bound where the one presented was, and the one presented is redacted too. `deckhand-token`
 prints the file, so the gh wrapper, git's credential helper, `deckhand-files` and
 `deckhand-inbox` read it again for each call: the agent is told never to keep it
 (`prompts/sandbox.md`).
@@ -307,16 +323,14 @@ for that run's agent's calls alone ([What the API endpoints forward](#what-the-a
 and nothing at the gateways.
 
 **The broker unreachable.** Running sandboxes keep working until their token expires, then
-their calls fail until it is back. While the services run in the listener, that is the
+their calls fail until it is back, when the next renewal (every 30 seconds by then) brings
+them back. While the services run in the listener, that is the
 listener being down anyway.
 
 **Runs from before tokens** keep the random secret they started with (`DECKHAND_RUN_SECRET`),
 and no renewal: the broker keeps it by hash, until the run ends, and it still only works from
-that run's sandbox (or its engine), by address: the call's (or, through the egress proxy, the
-one it names) against that run's addresses on its networks (`docker inspect`, kept once they
-include the sandbox's own and, for a run with a container engine, the engine's, which the
-sandbox's wait for 5 seconds at most; looked up again at most every 5 seconds before a secret
-is refused, and forgotten when its sandbox exits). That path goes in a later release
+that run's sandbox (or its engine), by the network's ID as a token does: the run's network's,
+looked up once by its name (or its pod's UID, by its pod's). That path goes in a later release
 ([Restarts](architecture.md#restarts)).
 
 Both kinds are redacted from runs' output: the run's tokens (its agent's, and its last few run
@@ -1852,9 +1866,10 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   [The GitHub gateway](#the-github-gateway) and
   [The Antigravity CLI's login](#the-antigravity-clis-login)). Every other `CONNECT` stays a
   tunnel the proxy can't read.
-- The listener forgets a sandbox's address as soon as it sees the sandbox exit, before
-  posting its reply: Docker may give the address to another sandbox, which must not get the
-  finished run's hosts.
+- The listener stops answering for a run as soon as it sees its sandbox exit, before posting
+  its reply, and finds a connection's run by the ID of the network its address is on now,
+  never by an address it kept: Docker may give the address to another sandbox, which must not
+  get the finished run's hosts.
 - The proxy forwards plain HTTP to the listener's broker (`BROKER_URL`'s origin: the agents'
   APIs, pushes, the run's files) once the policy, asked about the broker (`broker=1`), allows
   it: only for a running sandbox or its engine, never a build or an install's own pod, nor

@@ -103,6 +103,8 @@ export function tokenEnv({ config, task, agent, broker }, sandbox) {
   const { live } = task;
   const { token, agentToken } = broker.issue(live.id, sandbox);
   live.agentToken = agentToken;
+  // What the egress policy and its anonymous GitHub calls find the run by (broker-http.mjs).
+  live.sandbox = String(sandbox);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
     ...agent.env(config, agentToken, provider, live.record.credential ?? null),

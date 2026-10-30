@@ -110,8 +110,9 @@ export function signToken(claims, { privateKey, kid, audience, ttlMs, now = Date
 }
 
 // `token`'s claims once checked, or a TokenError saying why not. `keys`: kid → public key (a
-// KeyObject or PEM); `audience`: the one service checking.
-export function verifyToken(token, { keys, audience, now = Date.now() }) {
+// KeyObject or PEM); `audience`: the one service checking; `graceMs`: how long past its `exp`
+// it is still taken (0 but for a renewal, broker.mjs renew()).
+export function verifyToken(token, { keys, audience, now = Date.now(), graceMs = 0 }) {
   if (!isToken(token)) throw new TokenError("not a run token");
   const [head, body, signature] = token.split(".");
   const header = json(head);
@@ -132,7 +133,8 @@ export function verifyToken(token, { keys, audience, now = Date.now() }) {
   if (typeof claims.aud !== "string" || claims.aud !== audience) {
     throw new TokenError("not meant for this service");
   }
-  if (!Number.isFinite(claims.exp) || claims.exp * 1000 <= now) throw new TokenError("expired");
+  if (!Number.isFinite(claims.exp) || claims.exp * 1000 + graceMs <= now)
+    throw new TokenError("expired");
   if (claims.ver !== TOKEN_VERSION) throw new TokenError(`claims of version ${claims.ver}`);
   return claims;
 }

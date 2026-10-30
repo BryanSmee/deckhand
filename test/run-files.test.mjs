@@ -15,6 +15,9 @@ import { signingKey } from "../listener/run-token.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { listening, serve, tempDir, testConfig } from "./helpers.mjs";
 
+// The sandbox's scripts, deckhand-token among them, on the PATH of those the tests run.
+const sandboxBin = new URL("../sandbox", import.meta.url).pathname;
+
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 const image = (head, size = 64) => Buffer.concat([head, Buffer.alloc(size - head.length)]);
 
@@ -123,7 +126,14 @@ test("deckhand-inbox over the broker: a listener restart loses and repeats nothi
     const child = execFile(
       script,
       [`${first.url}/run/inbox`],
-      { timeout: 20000, env: { ...process.env, DECKHAND_TOKEN_FILE: tokenFile } },
+      {
+        timeout: 20000,
+        env: {
+          ...process.env,
+          PATH: `${sandboxBin}:${process.env.PATH}`,
+          DECKHAND_TOKEN_FILE: tokenFile,
+        },
+      },
       (error, out) => (error ? reject(error) : resolve(out)),
     );
     child.stdout.once("data", printed);
@@ -228,6 +238,7 @@ test("deckhand-files: get fetches a run file, shots uploads new and changed imag
   writeFileSync(tokenFile, secret("a"));
   const env = {
     ...process.env,
+    PATH: `${sandboxBin}:${process.env.PATH}`,
     DECKHAND_BROKER_URL: url,
     DECKHAND_TOKEN_FILE: tokenFile,
     SCREENSHOT_DIR: shots,
@@ -308,7 +319,12 @@ test("deckhand-inbox: a refusal it keeps getting is said once on stderr", async 
   const { ctx } = fixture(t);
   const { url } = await start(t, ctx);
   const script = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
-  const env = { ...process.env, DECKHAND_RUN_SECRET: "unknown" };
+  const env = {
+    ...process.env,
+    PATH: `${sandboxBin}:${process.env.PATH}`,
+    DECKHAND_TOKEN_FILE: "/nonexistent/run-token",
+    DECKHAND_RUN_SECRET: "unknown",
+  };
   const child = execFile(script, [`${url}/run/inbox`], { env, timeout: 20000 });
   let err = "";
   child.stderr.on("data", (d) => (err += d));
