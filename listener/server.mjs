@@ -361,6 +361,7 @@ const pullChecks = createPullChecks({
 const writeChecks = createWriteChecks({
   lookup,
   bot: () => config.bot,
+  needsInputLabel: () => config.needsInputLabel,
   policies,
   pulls: pullChecks,
   log,

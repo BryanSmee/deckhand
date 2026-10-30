@@ -317,6 +317,7 @@ const SKEW_MS = 2 * 60_000;
 export function createWriteChecks({
   lookup,
   bot = () => null,
+  needsInputLabel = () => null,
   policies = null,
   pulls = createPullChecks({ lookup }),
   log = () => {},
@@ -521,6 +522,23 @@ export function createWriteChecks({
       change.labels_removed = target.labels.filter((l) => !kept.has(l.toLowerCase()));
     }
     delete change.labels_set;
+    // The needs-input label stays the listener's on the issues a run labels besides its own:
+    // taking it off answers their questions and starts what waited for them (questions.mjs
+    // labelInput()), which only an allowed user does.
+    const waiting = needsInputLabel()?.toLowerCase();
+    if (waiting && OTHERS_LABELLED.has(target.kind)) {
+      const has = (list) => list.some((l) => l.toLowerCase() === waiting);
+      const removed = has(change.labels_removed) || change.labels_removed.includes("*");
+      // As GitHub has it now: setting it again where it is, or removing it where it isn't,
+      // changes nothing.
+      if (has(target.labels) ? removed : has(change.labels_added)) {
+        const on = `${target.kind} #${target.number}`;
+        return refusal(
+          403,
+          `a run doesn't add or remove ${waiting} on ${on}: an allowed user does`,
+        );
+      }
+    }
     if (write.child) {
       let sub;
       try {
@@ -594,3 +612,5 @@ function inRepo(issue, repo) {
 }
 
 const refusal = (status, message) => ({ status, message });
+// The issues a run labels besides its own, which never get or lose the needs-input label from it.
+const OTHERS_LABELLED = new Set(["sub_issue", "created_issue"]);

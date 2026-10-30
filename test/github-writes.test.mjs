@@ -835,3 +835,57 @@ deny_github contains "only plan runs create labels" if {
     assert.equal(await check(run("work"), sub), null);
   },
 );
+
+test("the needs-input label: a run neither adds nor removes it on its sub-issues and the issues it created", async () => {
+  const waiting = [{ name: "Needs-Input" }];
+  const { lookup } = fakeLookup({
+    ...GITHUB,
+    issues: {
+      ...GITHUB.issues,
+      2: { ...GITHUB.issues[2], labels: waiting },
+      30: { ...GITHUB.issues[30], labels: waiting },
+    },
+  });
+  const { check, answered } = createWriteChecks({
+    lookup,
+    bot: BOT,
+    needsInputLabel: () => "needs-input",
+  });
+  const work = run("work");
+  answered(work, GRAPHQL_CREATE, 200, created(30));
+  for (const n of [2, 30]) {
+    const refused = [
+      write("DELETE", `repos/org/repo/issues/${n}/labels/needs-input`),
+      write("DELETE", `repos/org/repo/issues/${n}/labels`),
+      write("PUT", `repos/org/repo/issues/${n}/labels`, ["ui"]),
+      write("PATCH", `repos/org/repo/issues/${n}`, { labels: ["ui"] }),
+    ];
+    for (const w of refused) {
+      const got = await check(work, w);
+      assert.equal(got?.status, 403, `${w.method} ${w.path}`);
+      assert.match(got.message, /doesn't add or remove needs-input on \w+ #\d+/);
+    }
+    // Its other labels are the run's, the needs-input label kept.
+    const kept = write("PUT", `repos/org/repo/issues/${n}/labels`, ["ui", "needs-input"]);
+    assert.equal(await check(work, kept), null);
+    assert.equal(
+      await check(work, write("POST", `repos/org/repo/issues/${n}/labels`, { labels: ["ui"] })),
+      null,
+    );
+  }
+  // Nor added where it isn't.
+  const bare = createWriteChecks({
+    lookup: fakeLookup(GITHUB).lookup,
+    needsInputLabel: () => "needs-input",
+  });
+  const add = write("POST", "repos/org/repo/issues/2/labels", { labels: ["Needs-Input"] });
+  assert.match(
+    (await bare.check(work, add)).message,
+    /doesn't add or remove needs-input on sub_issue #2/,
+  );
+  // Its own issue is labelled as before.
+  assert.equal(
+    await check(work, write("POST", "repos/org/repo/issues/1/labels", { labels: ["needs-input"] })),
+    null,
+  );
+});

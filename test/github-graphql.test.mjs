@@ -54,6 +54,12 @@ const NODES = {
     databaseId: 201,
     repository: { nameWithOwner: "org/other" },
   },
+  I_5: {
+    __typename: "Issue",
+    number: 5,
+    databaseId: 105,
+    repository: { nameWithOwner: "Org/Repo" },
+  },
   PR_7: { __typename: "PullRequest", number: 7, repository: { nameWithOwner: "Org/Repo" } },
   IC_1: { __typename: "IssueComment", repository: { nameWithOwner: "Org/Repo" } },
   L_idea: { __typename: "Label", name: "idea", repository: { nameWithOwner: "Org/Repo" } },
@@ -63,12 +69,19 @@ const NODES = {
 };
 
 // GitHub's REST answers the write checks look up (github-writes.mjs resolve()): #1 the run's,
-// #2 a sub-issue of it, #3 someone else's, #4 someone else's closed, #7 a pull request.
+// #2 a sub-issue of it, #3 someone else's, #4 someone else's closed, #5 the bot's (one a run
+// created, when its `created` says so), #7 a pull request.
 const ISSUES = {
   1: { number: 1, user: { login: "alice" }, labels: [] },
   2: { number: 2, user: { login: "bob" }, labels: [{ name: "idea" }] },
   3: { number: 3, state: "open", user: { login: "bob" }, labels: [] },
   4: { number: 4, state: "closed", user: { login: "bob" }, labels: [] },
+  5: {
+    number: 5,
+    user: { login: "deckhand[bot]" },
+    created_at: "2026-01-01T00:00:00Z",
+    labels: [],
+  },
   7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
 };
 async function lookup(repo, path) {
@@ -838,7 +851,7 @@ test("createLabel: a label of the run's repository, the same write as REST's, fo
   }
 });
 
-test("a work run labels its sub-issues over GraphQL as over REST, not another's issue", async () => {
+test("a work run labels its sub-issues and the issues it created over GraphQL as over REST, not another's issue", async () => {
   const { check, writes } = checks();
   const work = run("work");
   const add =
@@ -850,6 +863,11 @@ test("a work run labels its sub-issues over GraphQL as over REST, not another's 
     const other = await check(work, call(query.replace("ID", "I_3")));
     assert.match(other.refused.message, /can't label on other_issue #3/);
   }
+  // #5, once GitHub answered the run's create with it.
+  const filed = { ...work, created: [{ number: 5, at: Date.parse("2026-01-01T00:00:00Z") }] };
+  assert.equal((await check(work, call(add.replace("ID", "I_5")))).refused?.status, 403);
+  assert.equal((await check(filed, call(add.replace("ID", "I_5")))).refused, undefined);
+  assert.equal((await check(filed, call(remove.replace("ID", "I_5")))).refused, undefined);
   const set = await check(work, call(GH_EDIT, { input: { id: "I_2", labelIds: ["L_bug"] } }));
   assert.equal(set.refused, undefined);
   assert.deepEqual(writes.at(-1).actions, ["label"]);
