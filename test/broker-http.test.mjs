@@ -30,9 +30,10 @@ function twoRuns() {
     ["org/a#1", task("a", "org/a")],
     ["org/b#2", task("b", "org/b")],
   ]);
-  const ctx = { broker, runner, tasks };
+  const clock = { t: 1_000_000 };
+  const ctx = { broker, runner, tasks, now: () => clock.t };
   const runOf = (key) => broker.runOf(tasks.get(key).live.secret);
-  return { ctx, tasks, runOf, looked };
+  return { ctx, tasks, runOf, looked, addresses, engines, clock };
 }
 
 test("runAt: a run's record from its own sandbox or engine, not from another sandbox", async () => {
@@ -60,6 +61,51 @@ test("runAt: a finished run (finish() cleared its hosts and addresses) is nobody
   live.ip = null;
   assert.equal(await runAt(ctx, a, "10.1.0.2"), false);
   assert.equal(live.ip, null, "not looked up again");
+});
+
+test("runAt: an engine started before its sandbox isn't kept as the run's addresses (#517)", async () => {
+  const { ctx, tasks, runOf, addresses, engines, looked } = twoRuns();
+  // B's engine runs, its sandbox doesn't exist yet: only the engine has an address.
+  engines.b = ["10.2.0.3"];
+  addresses.b = [];
+  // Another sandbox connects meanwhile: the broker asks about every task (taskAt(), runFrom()).
+  assert.equal(await runFrom(ctx, "10.9.0.2"), null);
+  const live = tasks.get("org/b#2").live;
+  assert.equal(live.ip, null, "the engine's address alone isn't kept");
+  assert.deepEqual(live.engineIp, ["10.2.0.3"]);
+  // The engine's own calls are B's.
+  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.3"), true);
+  // The sandbox starts: its first call is B's, and its addresses are kept from then on.
+  addresses.b = ["10.2.0.2"];
+  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
+  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
+  looked.length = 0;
+  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
+  assert.deepEqual(looked, []);
+});
+
+test("runAt: an address not among those kept looks them up again, at most every 5 s", async () => {
+  const { ctx, runOf, addresses, looked, clock } = twoRuns();
+  const a = runOf("org/a#1");
+  assert.equal(await runAt(ctx, a, "10.1.0.2"), true);
+  // Another address (a replayed secret, or one the list missed): no again within 5 s.
+  addresses.a = ["10.1.0.2", "10.1.0.4"];
+  looked.length = 0;
+  assert.equal(await runAt(ctx, a, "10.1.0.4"), false);
+  clock.t += 4_999;
+  assert.equal(await runAt(ctx, a, "10.1.0.4"), false);
+  assert.deepEqual(looked, []);
+  // Then looked up again: there now.
+  clock.t += 1;
+  assert.equal(await runAt(ctx, a, "10.1.0.4"), true);
+  assert.deepEqual(looked, ["a"]);
+  // Still another sandbox's address: no, and no lookup before the next 5 s.
+  assert.equal(await runAt(ctx, a, "10.2.0.2"), false);
+  assert.deepEqual(looked, ["a"]);
+  // Asking about every task (an egress question) never looks a kept list up again.
+  clock.t += 60_000;
+  assert.equal(await runFrom(ctx, "10.9.0.2"), null);
+  assert.deepEqual(looked, ["a", "b"]);
 });
 
 test("runFrom: the record of the running task whose sandbox has the address, never its engine", async () => {
