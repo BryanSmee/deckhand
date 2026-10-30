@@ -392,7 +392,8 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   research and push calls and a review's reads of its thread; refuses a work run that isn't a
   fork's what would bring a fork's code (`github-forks.mjs`: a fork's repository, a fork's
   pull request's head, a commit that isn't the repository's, by git, the API, an archive, a
-  page (any other of the repository's refused) or a file, GitHub's content hosts
+  page (any other of the repository's refused) or a file, Actions logs fetched from where
+  GitHub redirects them (`ACTIONS_LOGS`, no credential sent there), GitHub's content hosts
   (`*.githubusercontent.com`) relayed too for such a run and sent on without a token; no branch
   it pushes reaching a fork's objects (the git gateway); its clone is whole, as a blob fetched
   by its id is refused to it);

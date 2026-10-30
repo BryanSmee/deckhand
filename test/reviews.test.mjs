@@ -1084,6 +1084,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
   };
   const accepted = [];
   const replies = [];
+  const scheduled = [];
   const read = parseRepoConfig(yaml, config);
   const reviews = createReviews({
     path: path ?? join(tempDir(t), "reviews.json"),
@@ -1095,6 +1096,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     policies,
     reply: async (repo, number, text) => replies.push(text),
     now: () => time,
+    later: (work, ms) => scheduled.push({ work, ms }),
   });
   const ready = () =>
     reviews.consider(
@@ -1127,6 +1129,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     ciFixed,
     of,
     entry,
+    scheduled,
     advance: (ms) => (time += ms),
   };
 }
@@ -1185,11 +1188,19 @@ test("review.ci: passed or no run starts the review; no run waits a minute first
   assert.equal((await passed.ready()).reason, "review");
   const none = ciSetup(t, CI, { gh: { runs: [] } });
   assert.equal(await none.ready(), null);
+  // Asked again once the minute is over, not at the next tick.
+  assert.deepEqual(
+    none.scheduled.map((x) => x.ms),
+    [60_000],
+  );
   none.advance(30_000);
   await none.reviews.tick();
   assert.equal(none.accepted.length, 0);
-  none.advance(31_000);
-  await none.reviews.tick();
+  none.advance(30_000);
+  none.scheduled[0].work();
+  for (let i = 0; i < 50 && !none.accepted.length; i++) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
   assert.equal(none.of("review").length, 1);
   // Without review.ci, nothing is asked of CI.
   const off = ciSetup(t, "review:\n  on: ready\n  fix: true\n");

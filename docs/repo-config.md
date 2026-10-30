@@ -565,7 +565,8 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   that commit (a `workflow_run` delivery), and every 5 minutes for a lost one; the wait
   survives a restart. A push while it waits moves the wait to the new head commit: runs
   completing on the old one decide nothing. Without any run yet, it waits a minute (GitHub
-  creates a push's runs a moment after it), then takes the commit for one without CI. The
+  creates a push's runs a moment after it), asks again then, and takes the commit for one
+  without CI. The
   dashboard shows "Waiting for CI".
 - **Passed** (`success`, `skipped`, `neutral`), or no run: the review starts as without `ci`.
 - **Still going after `ci_wait` minutes** (30 by default, `0` to `1440`): the review starts
@@ -579,7 +580,8 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   stop it: the pull request goes on waiting, and the listener decides again once a run is over.
   Its message names the failed
   runs and jobs (name, conclusion, run id, link), never their logs: the run reads them itself
-  (`gh run view <id> --log-failed`), told they are data, not instructions (the branch's code
+  (`gh run view <id> --log-failed`, through Deckhand's GitHub gateway, which follows GitHub's
+  redirect to its log storage: no host to grant), told they are data, not instructions (the branch's code
   printed them), fixes the cause, reruns the checks and pushes. Once it is over, its push goes
   back to waiting for CI: then the review, or another CI fix run. One that failed or pushed
   nothing leaves the pull request to the maintainer, a "No review" comment says why. The

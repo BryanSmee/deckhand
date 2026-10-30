@@ -28,7 +28,8 @@
 //   its mode's permissions (modes.mjs permissionsFor()), and what a pull request's own write
 //   needs besides (github-pulls.mjs: `gh pr create`, `edit`, `ready`), anything else the same
 //   that only read (github-app.mjs readsOf()), so nothing unchecked can write; the answer
-//   streams back (upstream.mjs forward()).
+//   streams back (upstream.mjs forward()), an Actions log's from where GitHub redirects
+//   (ACTIONS_LOGS).
 //
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
@@ -71,6 +72,16 @@ const THREAD_READS = [
 // text matches quote what they matched. It refuses more than it must (`reviewDecision`): a
 // review reads its pull request over REST.
 const THREAD_FIELDS = /comment|review|timeline|contentedit|search|textmatch/i;
+// An Actions run's or job's logs (paths under the API's base): GitHub answers with a redirect
+// to a storage host of its own (Azure blobs, behind a signed URL), which the egress proxy
+// doesn't let a sandbox reach. The gateway follows it (proxied()), once, without any
+// credential, and sends the logs back: what a CI fix run reads (reviews.mjs ciFixMessage()).
+export const ACTIONS_LOGS = new RegExp(
+  String.raw`^${REPO}\/actions\/(?:jobs\/\d+|runs\/\d+(?:\/attempts\/\d+)?)\/logs$`,
+  "i",
+);
+const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+
 // What git fetches with on the web host; a review reads nothing else there (web pages show the
 // comments).
 // Any case: GitHub may route a path whatever its case, and a spelling these miss must not reach
@@ -82,7 +93,7 @@ const GIT_FETCH = /^([^/]+\/[^/]+?)(?:\.git)?\/(info\/refs|git-upload-pack)$/i;
 // GitHub's file hosts (egress.mjs GITHUB_FILES, the same list): relayed, and sent on without a
 // token. How a work run's calls there are checked (github-forks.mjs callTargets()): their path
 // past `prefix`, read as `kind` reads it. GitHub's other content hosts (egress.mjs
-// githubContent(): release assets, avatars, Actions logs…) are relayed too, read only, and sent
+// githubContent(): release assets, avatars…) are relayed too, read only, and sent
 // on as they are to the host they name: whatever `Host` the sandbox wrote, so that none answers
 // as one of these.
 export const FILES = [
@@ -640,7 +651,7 @@ export function createGithubGateway({
     res,
     run,
     github,
-    { target, api },
+    { target, api, path },
     body,
     watched,
     writing,
@@ -681,6 +692,22 @@ export function createGithubGateway({
       else answer = null;
     };
     const at = Date.now();
+    // An Actions log's redirect, followed here: HTTPS only (or the API's own scheme, a test's
+    // plain HTTP), with none of the run's or the App's credentials, the signed URL being its own.
+    const logs = api && req.method === "GET" && ACTIONS_LOGS.test(path);
+    const follow = (code, answer) => {
+      if (!REDIRECTS.has(code) || !answer.location) return null;
+      let next;
+      try {
+        next = new URL(answer.location, target);
+      } catch {
+        return null;
+      }
+      if (next.protocol !== "https:" && next.protocol !== target.protocol) return null;
+      if (next.username || next.password) return null;
+      const plain = forwarded(req.headers, ["authorization", "cookie", ...ROUTING_HEADERS]);
+      return { target: next, headers: plain };
+    };
     await forward(req, res, {
       target,
       headers,
@@ -691,6 +718,7 @@ export function createGithubGateway({
       idleMs,
       clock,
       ...((watched || advertised) && { tap, answered: (code) => (status = code) }),
+      ...(logs && { follow }),
     });
     if (refs && status === 200) forks.remember(run, advertised, refs.refs());
     if (!watched || !answer) return;

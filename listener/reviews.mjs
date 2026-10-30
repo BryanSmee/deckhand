@@ -1017,6 +1017,9 @@ export function createReviews({
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  // `work()` in `ms`, for the CI step's grace (ciDecide()): not waited for, nor keeping the
+  // process up.
+  later = (work, ms) => setTimeout(work, ms).unref?.(),
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
   // waiting, rounds, fixRounds, next, nextAt, unreviewedFix, ciWaiting, ciFixes, ciFixedAt,
@@ -1796,8 +1799,13 @@ export function createReviews({
       return review(ciNoteText(`its GitHub Actions runs couldn't be read (${read.status})`));
     }
     const { state, failed, going } = ciState(read.runs);
-    if (state === "none" && waited < Math.min(CI_GRACE_MS, minutes * 60_000)) {
+    const grace = Math.min(CI_GRACE_MS, minutes * 60_000);
+    if (state === "none" && waited < grace) {
       log(`${key}: no Actions run on ${short(sha)} yet, waiting for CI`);
+      // Asked again once the grace is over, rather than at the next tick(), minutes later.
+      later(() => {
+        ciRecheck(key).catch((error) => log(`${key}: CI step: ${error.stack ?? error}`));
+      }, grace - waited);
       return null;
     }
     if (state === "passed" || state === "none") {

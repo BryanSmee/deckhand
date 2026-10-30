@@ -26,7 +26,8 @@ export function githubHosts(config) {
 }
 
 // GitHub's content hosts (`*.githubusercontent.com`: raw files, LFS files, diffs, release
-// assets, avatars, Actions logs…), all on one CDN, which serves any of them whatever name the
+// assets, avatars…; Actions logs are stored elsewhere, fetched by the GitHub gateway:
+// github-gateway.mjs ACTIONS_LOGS), all on one CDN, which serves any of them whatever name the
 // connection was made to: a tunnel to avatars.githubusercontent.com answers as
 // raw.githubusercontent.com when asked so (`Host`). So for a run the GitHub gateway checks they
 // are all relayed to it (broker-http.mjs), never tunnelled: it checks GITHUB_FILES' and sends
