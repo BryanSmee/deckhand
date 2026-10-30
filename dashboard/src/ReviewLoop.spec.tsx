@@ -52,6 +52,10 @@ test("a loop's lines: its round while it goes on, what it left once it ended blo
   // Both are on its way: not ready yet.
   expect(isReady(ready(loop({ loop: "ci", round: 0, history: [] })))).toBe(false);
   expect(isReady(ready(loop({ loop: "ci-fix" })))).toBe(false);
+  // Stopped before any review: the ready row says CI failed, nothing was reviewed.
+  const stopped = { review: loop({ loop: "ci-failed", round: 0, history: [] }) };
+  expect(loopLine(stopped)).toBeNull();
+  expect(findingsLeft(stopped)).toBe("CI failed, not reviewed");
   expect(loopLine({ review: loop() })).toBeNull();
   // Only the blocking ones, most severe first.
   expect(findingsLeft({ review: loop() })).toBe("2 high findings left after 2 fix rounds");

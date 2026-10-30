@@ -713,8 +713,14 @@ export function roundsOutText(review, fixes) {
 
 // A failed run's line in a comment: its name as code (the branch's workflow file names it, so
 // it mustn't mention anyone or format the comment), linked, with its conclusion.
+// A name from the branch's files on one line: a blank line would end the code span quoting it.
+const oneLine = (name) =>
+  String(name ?? "a run")
+    .replace(/\s+/g, " ")
+    .trim() || "a run";
+
 const runLine = (r) =>
-  `${r.html_url ? `[${quote(r.name ?? "a run")}](${r.html_url})` : quote(r.name ?? "a run")} (${r.conclusion})`;
+  `${r.html_url ? `[${quote(oneLine(r.name))}](${r.html_url})` : quote(oneLine(r.name))} (${r.conclusion})`;
 
 // What the CI step says on the pull request when CI failed on `sha` (`failed`: the failed
 // runs), then what follows (`next`, a sentence).
@@ -741,9 +747,9 @@ export const CI_NEXT = {
 // (`review.ci_fix`).
 export function ciFixMessage(number, sha, failed, { round = 1, rounds = 1 } = {}) {
   const lines = failed.flatMap((r) => [
-    `- Run ${r.id ?? "?"}: ${r.name ?? "?"} (${r.conclusion})${r.html_url ? ` ${r.html_url}` : ""}`,
+    `- Run ${r.id ?? "?"}: ${oneLine(r.name)} (${r.conclusion})${r.html_url ? ` ${r.html_url}` : ""}`,
     ...(r.jobs ?? []).map(
-      (j) => `  - Job: ${j.name ?? "?"} (${j.conclusion})${j.html_url ? ` ${j.html_url}` : ""}`,
+      (j) => `  - Job: ${oneLine(j.name)} (${j.conclusion})${j.html_url ? ` ${j.html_url}` : ""}`,
     ),
   ]);
   const list = lines.join("\n");
@@ -798,6 +804,8 @@ const ROUNDS_KEPT = 20;
 //   reviewing, fixing  a review or fix run of the loop is queued or running
 //   ci-fix             a CI fix run (`review.ci`) is queued or running
 //   ci                 the review waits for the head commit's Actions runs (`review.ci`)
+//   ci-failed          CI failed and the CI step stopped without a review: a CI fix run was
+//                      refused, failed or pushed nothing (`ciStopped`)
 //   checks             the auto-merge waits for the reviewed commit's Actions runs
 //   clean              the last review had nothing above the tolerance
 //   rounds-out         the review after the last fix run `review.fix` allows still blocks
@@ -820,7 +828,7 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
   if (!step && own && entry?.next === settling.reason) step = settling.reason;
   const looping = LOOP_STEPS.includes(step) || !!entry?.ciWaiting;
-  if (!history.length && !looping) return null;
+  if (!history.length && !looping && !entry?.ciStopped) return null;
   const fixes = fixesOf(entry);
   const rounds = entry?.fixRounds ?? 0;
   const last = history.at(-1);
@@ -829,6 +837,7 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   if (step === "review-fix") return { loop: "fixing", ...at };
   if (step === "ci-fix") return { loop: "ci-fix", ...at };
   if (step === "ci" || entry?.ciWaiting) return { loop: "ci", ...at };
+  if (entry?.ciStopped) return { loop: "ci-failed", ...at };
   if (entry.waiting && !entry.mergeAt) return { loop: "checks", ...at };
   if (!last.blocking) return { loop: "clean", ...at };
   if (entry.unreviewedFix === fixes && last.round < fixes) {
@@ -1061,7 +1070,9 @@ export function createReviews({
     const { repo, base, pr, author } = found;
     const key = taskKey(repo, prId(pr.number));
     const head = pr.head?.sha ?? null;
-    if (head && reviewed.get(key)?.head === head) {
+    // A wait for CI dropped at this head (ciDecide()) reviewed nothing.
+    const known = reviewed.get(key);
+    if (head && known?.head === head && known.ciDropped !== head) {
       return skip(`review: #${pr.number} at ${head.slice(0, 7)} was reviewed already`);
     }
     // The repo's settings and the policies may take a while: the pull request is in review
@@ -1157,7 +1168,11 @@ export function createReviews({
     // Deckhand's own pull request is its issue's task, like a comment on it (events.mjs).
     const issue = linkedIssue(pr, repo, config.bot);
     const queued = issue ? linkTo(item, issue) : item;
-    nextStep(taskKey(repo, prId(pr.number)), "review");
+    const key = taskKey(repo, prId(pr.number));
+    if (reviewed.get(key)?.ciStopped || reviewed.get(key)?.ciDropped) {
+      remember(key, reviewed.get(key).head ?? null, { ciStopped: undefined, ciDropped: undefined });
+    }
+    nextStep(key, "review");
     await accept(queued);
     return queued;
   }
@@ -1597,6 +1612,17 @@ export function createReviews({
     await ciRecheck(key).catch((error) => log(`${key}: CI step: ${error.stack ?? error}`));
   }
 
+  // A run of `repo` is over (runs.mjs cleanUp()): its pull requests waiting for CI are decided
+  // again, a CI fix run having waited for the issue's task (ciFailed()). Not waited for.
+  function runEnded(repo) {
+    const keys = [...reviewed]
+      .filter(([k, v]) => v.ciWaiting && sameRepo(parseKey(k)?.repo, repo))
+      .map(([k]) => k);
+    for (const key of keys) {
+      ciRecheck(key).catch((error) => log(`${key}: CI step: ${error.stack ?? error}`));
+    }
+  }
+
   // Every pull request still waiting, decided again: past `review.merge_wait`, refused; past
   // `review.ci_wait`, reviewed; and what a lost `workflow_run` delivery would have decided.
   async function tick() {
@@ -1700,7 +1726,11 @@ export function createReviews({
     if (!ciOn(settings)) return queueReview({ repo, base, pr, settings, author });
     const key = taskKey(repo, prId(pr.number));
     const sha = pr.head?.sha ?? null;
-    remember(key, sha, { ciWaiting: { sha, since: now(), base, author } });
+    remember(key, sha, {
+      ciWaiting: { sha, since: now(), base, author },
+      ciDropped: undefined,
+      ciStopped: undefined,
+    });
     return ciRecheck(key);
   }
 
@@ -1731,8 +1761,9 @@ export function createReviews({
     const { repo, number } = at;
     const { base } = waiting;
     const author = waiting.author ?? null;
+    // The head it waited on was never reviewed: ready again at it, consider() reviews it.
     const drop = (why) => {
-      remember(key, entry.head ?? null, { ciWaiting: undefined });
+      remember(key, entry.head ?? null, { ciWaiting: undefined, ciDropped: entry.head ?? null });
       log(`${key}: no longer waiting for CI, ${why}`);
       return null;
     };
@@ -1807,8 +1838,14 @@ export function createReviews({
   // someone else's pull request): the review anyway, told CI failed. Refused otherwise: the
   // pull request waits for a maintainer.
   async function ciFailed(key, { repo, number, base, pr, settings, author, sha, runs, failed }) {
-    // Decided: whatever follows, this head commit's wait is over.
-    remember(key, sha, { ciWaiting: undefined });
+    // Decided: whatever follows, this head commit's wait is over. Not while the issue's task is
+    // busy: the work run whose `gh pr ready` got here may still be going, after a quick CI
+    // failure. The wait stays, decided again when a run ends (runEnded()) or by tick().
+    const decided = (fields = {}) => remember(key, sha, { ciWaiting: undefined, ...fields });
+    const later = (why) => {
+      log(`${key}: CI failed on ${short(sha)}, ${why}: deciding again once it is over`);
+      return null;
+    };
     const say = async (next) => {
       try {
         await reply(repo, number, ciFailedText(sha, failed, next));
@@ -1816,14 +1853,16 @@ export function createReviews({
         log(`${key}: saying CI failed: ${error.message ?? error}`);
       }
     };
-    const names = failed.slice(0, 5).map((r) => `${r.name ?? "a run"} (${r.conclusion})`);
+    const names = failed.slice(0, 5).map((r) => `${oneLine(r.name)} (${r.conclusion})`);
     const anyway = async (next) => {
+      decided();
       log(`${key}: CI failed on ${short(sha)}, reviewing anyway`);
       await say(next);
       const ciNote = ciNoteText(`GitHub Actions runs on ${short(sha)} failed: ${names.join(", ")}`);
       return queueReview({ repo, base, pr, settings, author, ciNote });
     };
     const stop = async (why) => {
+      decided({ ciStopped: { sha, at: now() } });
       log(`${key}: CI failed on ${short(sha)}, no CI fix run, ${why}`);
       await say(CI_NEXT.stop(why));
       return null;
@@ -1842,7 +1881,7 @@ export function createReviews({
     const issue = own && headInRepo(pr, repo) ? linkedIssue(pr, repo, config.bot) : null;
     if (!issue) return anyway(CI_NEXT.none("it isn't Deckhand's own pull request"));
     const task = taskKey(repo, String(issue));
-    if (busy(task)) return stop(`#${issue} has a run going or queued`);
+    if (busy(task)) return later(`#${issue} has a run going or queued`);
     if (await waitsForInput(github, config, repo, pr, issue)) {
       return stop(`it or #${issue} waits for the maintainer's input`);
     }
@@ -1872,9 +1911,9 @@ export function createReviews({
     }
     const withJobs = await failedJobs(repo, failed);
     // Checked again: a comment may have come during the calls above.
-    if (busy(task)) return stop(`#${issue} has a run going or queued`);
+    if (busy(task)) return later(`#${issue} has a run going or queued`);
     // Before queuing: whatever happens next, never this round twice.
-    remember(key, sha, { ciFixes: round, ciFixedAt: now(), next: "ci-fix", nextAt: now() });
+    decided({ ciFixes: round, ciFixedAt: now(), next: "ci-fix", nextAt: now() });
     log(`${key}: CI failed on ${short(sha)}, starting a CI fix run (${round} of ${rounds})`);
     const item = {
       repo,
@@ -1954,6 +1993,7 @@ export function createReviews({
     if (!fixes || (entry.ciSettled ?? 0) >= fixes) return null;
     remember(key, entry.head ?? null, { ciSettled: fixes });
     const stop = async (why) => {
+      remember(key, reviewed.get(key)?.head ?? null, { ciStopped: { at: now() } });
       log(`${key}: no review after the CI fix run, ${why}`);
       await reply(repo, number, ciStoppedText(why));
       return null;
@@ -2094,6 +2134,7 @@ export function createReviews({
     checksDone,
     pushed,
     ciFixed,
+    runEnded,
     tick,
     start,
     stop,

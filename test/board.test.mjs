@@ -546,12 +546,18 @@ test("the CI step: waiting for CI and a CI fix run, in review between runs", () 
   const pr = { number: 5, state: "ready" };
   // Waiting for CI before the first review; a CI fix run over, the listener deciding what
   // follows; a CI fix run queued.
-  const entries = { 1: { ciWaiting: { sha: "a" } }, 2: { next: "ci-fix", nextAt: 0 }, 3: {} };
+  const entries = {
+    1: { ciWaiting: { sha: "a" } },
+    2: { next: "ci-fix", nextAt: 0 },
+    3: {},
+    4: { ciStopped: { sha: "a", at: 1 } },
+  };
   const shown = board({
     runs: [
       run("acme/api#1", 30),
       run("acme/api#2", 20, { reason: "ci-fix", round: 1, rounds: 2 }),
       run("acme/api#3", 10),
+      run("acme/api#4", 5),
     ],
     queued: [{ key: "acme/api#3", kind: "issue", repo: "acme/api", reason: "ci-fix" }],
     brainstorms: [],
@@ -562,6 +568,8 @@ test("the CI step: waiting for CI and a CI fix run, in review between runs", () 
   assert.deepEqual([of("acme/api#1").state, of("acme/api#1").review.loop], ["in-review", "ci"]);
   assert.deepEqual([of("acme/api#2").state, of("acme/api#2").review.loop], ["in-review", "ci-fix"]);
   assert.deepEqual([of("acme/api#3").state, of("acme/api#3").review.loop], ["in-review", "ci-fix"]);
+  // The CI step stopped before any review: done, its loop saying CI failed, never plain ready.
+  assert.deepEqual([of("acme/api#4").state, of("acme/api#4").review.loop], ["done", "ci-failed"]);
 });
 
 test("in review: a maintainer's comment queued meanwhile stays queued; a loop run over, in review", () => {

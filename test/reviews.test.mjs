@@ -1337,17 +1337,29 @@ test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {
     alice.replies[0],
     /No CI fix run \(it isn't Deckhand's own pull request\): reviewing anyway\./,
   );
-  // A run going on the issue, or the maintainer's input awaited: nothing, said so.
-  const busy = ciSetup(t, CI, { gh: { runs: [RED] }, busy: (key) => key === "org/repo#12" });
+  // The work run that marked it ready still going, CI already failed (a quick lint): no
+  // comment yet, still waiting; once a run is over, the CI fix run.
+  let going = true;
+  const busy = ciSetup(t, CI, {
+    gh: { runs: [RED] },
+    busy: (key) => going && key === "org/repo#12",
+  });
   assert.equal(await busy.ready(), null);
-  assert.match(
-    busy.replies[0],
-    /No CI fix run: #12 has a run going or queued\. It waits for a maintainer\.$/,
-  );
+  assert.deepEqual([busy.replies, busy.accepted], [[], []]);
+  assert.equal(busy.entry().ciWaiting.sha, "sha-1");
+  await busy.reviews.tick();
+  assert.equal(busy.replies.length, 0);
+  going = false;
+  busy.reviews.runEnded("org/repo");
+  await busy.reviews.tick();
+  assert.equal(busy.of("ci-fix").length, 1);
+  assert.equal(busy.replies.length, 1);
+  // The maintainer's input awaited: nothing, said so, and the loop shows CI failed.
   const input = ciSetup(t, CI, { gh: { runs: [RED] } });
   input.gh.issueLabels = [{ name: "needs-input" }];
   assert.equal(await input.ready(), null);
   assert.match(input.replies[0], /No CI fix run: it or #12 waits for the maintainer's input\./);
+  assert.equal(reviewLoop(input.entry()).loop, "ci-failed");
   // deny_fix, asked with `ci: true`: refused, said, the round not used.
   const policy = policyEngine(t, {
     ref: "trunk",
@@ -1387,4 +1399,44 @@ test("review loop: waiting for CI and fixing CI, before any review too", () => {
     new Map([["t", { repo: "org/repo", pending: [{ reason: "ci-fix", replyTo: 5 }] }]]),
   );
   assert.equal(going("org/repo", 5), true);
+});
+
+test("review.ci: a wait dropped (a draft again) reviewed nothing: ready again at that head reviews", async (t) => {
+  const s = ciSetup(t);
+  await s.ready();
+  // A push while waiting, then back to draft: the wait is dropped.
+  s.gh.head = "sha-2";
+  await s.reviews.tick();
+  s.gh.pr.draft = true;
+  await s.reviews.tick();
+  assert.equal(s.entry().ciWaiting, undefined);
+  // Ready again at that head: it waits for CI again, then reviews.
+  s.gh.pr.draft = false;
+  s.gh.runs = [GREEN];
+  assert.equal((await s.ready()).reason, "review");
+  // Reviewed now: the same head again is skipped.
+  await s.ready();
+  assert.equal(s.of("review").length, 1);
+});
+
+test("review.ci: a CI fix run that pushed nothing shows the loop as CI failed, until a review", async (t) => {
+  const s = ciSetup(t, CI, { gh: { runs: [RED] } });
+  await s.ready();
+  await s.ciFixed();
+  assert.equal(reviewLoop(s.entry()).loop, "ci-failed");
+  // Ready again with a new head that passes: the mark goes.
+  s.gh.head = "sha-3";
+  s.gh.runs = [GREEN];
+  await s.ready();
+  assert.equal(s.entry().ciStopped, undefined);
+  assert.equal(reviewLoop(s.entry(), "review").loop, "reviewing");
+});
+
+test("ciFailedText: a name with blank lines stays in one code span", () => {
+  const run = { ...RED, name: "Tests\n\n@team [x](y)" };
+  assert.match(ciFailedText("abcdef123", [run], "x"), /\[`Tests @team \[x\]\(y\)`\]\(/);
+  assert.match(
+    ciFixMessage(5, "abcdef123", [{ ...run, jobs: [] }]),
+    /- Run 7: Tests @team \[x\]\(y\) \(failure\)/,
+  );
 });

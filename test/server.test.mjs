@@ -2766,6 +2766,49 @@ modes:
     assert.ok(!github.requests.some((r) => r.path.endsWith("/pulls/13/reviews")));
   });
 
+  test("review.ci: CI failed while the work run that marked it ready still runs, the CI fix run after it", async (t) => {
+    const pr = {
+      number: 13,
+      body: "Closes #12",
+      state: "open",
+      draft: false,
+      labels: [],
+      user: { login: "deckhand-x[bot]", type: "Bot" },
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+    };
+    const files = {
+      ".deckhand.yaml": "wait_for_answers: false\nreview:\n  on: ready\n  fix: true\n  ci: wait\n",
+      "pull:13": JSON.stringify(pr),
+      runs: JSON.stringify({
+        workflow_runs: [{ id: 5, name: "Lint", status: "completed", conclusion: "failure" }],
+      }),
+    };
+    const { dir, listener, send } = await listen(t, files, (dir) => {
+      writeFileSync(join(dir, "hold"), "");
+      return {};
+    });
+    // The work run on #12 is going when its pull request turns ready, CI already failed.
+    await send(comment("alice", "Deckhand\nFix it."));
+    await listener.until("org/repo#12: queued");
+    await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
+    await send(
+      {
+        action: "ready_for_review",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        pull_request: pr,
+        sender: { login: "deckhand-x[bot]", type: "Bot" },
+      },
+      "pull_request",
+    );
+    await listener.until(
+      "org/repo#pr-13: CI failed on head-1, #12 has a run going or queued: deciding again once it is over",
+    );
+    // The work run ends: the CI fix run follows it.
+    writeFileSync(join(dir, "go"), "");
+    await listener.until("org/repo#pr-13: CI failed on head-1, starting a CI fix run (1 of 1)");
+  });
+
   test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
     const { dir, github, listener, send } = await listen(
       t,

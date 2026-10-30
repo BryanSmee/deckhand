@@ -119,6 +119,8 @@ const SEVERITIES = ["critical", "high", "medium", "low"] as const;
 // null when it ended clean or still goes on. The blocking findings are the most severe ones.
 export function findingsLeft(t: Pick<Task, "review">): string | null {
   const r = t.review;
+  // The CI step stopped before any review of this head: CI fails, nothing was reviewed.
+  if (r?.loop === "ci-failed") return "CI failed, not reviewed";
   const last = r?.history.at(-1);
   if (!r || !["rounds-out", "stopped"].includes(r.loop) || !last?.blocking) return null;
   const parts: string[] = [];

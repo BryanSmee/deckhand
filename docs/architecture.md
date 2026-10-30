@@ -553,7 +553,11 @@ its `round` of `rounds`) whose text is `ciFixMessage()` (failed runs and jobs, r
 or no CI fix possible, the review anyway. A CI fix run's end (`cleanUp()`) calls `ciFixed()`,
 once per run (`ciSettled`): its push goes back to `reviewAfterCi()`, or a comment says it
 failed or pushed nothing. `reviewLoop()` shows `ci` while `ciWaiting` and `ci-fix` while that
-run is queued, running or settling.
+run is queued, running or settling, and `ci-failed` once the CI step stopped without a review
+(`ciStopped`, cleared when a review is queued). A CI fix run waits for the issue's task to be
+free: `ciFailed()` keeps `ciWaiting` while it is busy, and `runEnded()`, called by `cleanUp()`
+after every run, decides again. A wait dropped (closed, a draft again) sets `ciDropped` to the
+head it never reviewed, so `consider()` doesn't skip that head as reviewed already.
 
 The dashboard follows the loop. Before `startFix()`, `settle()` appends each automatic review
 to its pull request's `rounds` in `reviews.json` (`recordRound()`): `{ round, at, head,

@@ -770,6 +770,9 @@ export function createRuns(ctx) {
     const ciRun = live.handled.find(
       (item) => item.reason === "ci-fix" && !task.pending.includes(item),
     );
+    // Any run's end: a CI fix run may have waited for the issue's task to be free (reviews.mjs
+    // runEnded()).
+    ctx.reviews?.runEnded(task.repo);
     if (ciRun) {
       ctx.reviews
         ?.ciFixed({
