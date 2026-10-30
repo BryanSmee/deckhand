@@ -730,7 +730,8 @@ calls during a run reaches the listener's broker port through the egress proxy, 
   `NO_PROXY`): the agents' APIs set to the broker (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
   `GOOGLE_GEMINI_BASE_URL`), pushes (the git gateway, `pushInsteadOf` in `entrypoint.sh`), the
   inbox and the run's files. The proxy recognises the broker's origin (its own `BROKER_URL`,
-  by default `RELAY_URL`'s), asks no policy for it, and sends the request on as it is, naming
+  by default `RELAY_URL`'s), asks the policy whether that client may reach the broker (a
+  running sandbox or its engine: `broker=1`), and sends the request on as it is, naming
   the sandbox in `x-deckhand-client` as for a relayed one; the broker's secrets are bound to
   that address (`broker.mjs` `sentBy()`, through `broker-http.mjs` `clientAddress()`). It
   refuses `/egress` there (`403`): the broker answers it to the proxy alone, which would

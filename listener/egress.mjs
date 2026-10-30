@@ -18,6 +18,12 @@ function hostOf(url) {
   return new URL(url).hostname.toLowerCase();
 }
 
+// The broker's host, as sandboxes call it (BROKER_URL): the egress proxy forwards their plain
+// HTTP to it (../proxy/proxy.mjs, its own BROKER_URL), once the policy allowed it (broker-http.mjs).
+export function brokerHost(config) {
+  return hostOf(config.brokerUrl);
+}
+
 // The GitHub hosts the listener is configured with, the web's and the API's (one, on GitHub
 // Enterprise Server): what git and gh use. The egress proxy relays them to the listener's GitHub
 // gateway (github-gateway.mjs), which holds the token: never a raw tunnel from a sandbox.
@@ -51,7 +57,8 @@ export const GITHUB_FILES = [
 // What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. Raw files
 // and release downloads come from *.githubusercontent.com, which carries no token: allowed,
 // relayed for the runs the gateway checks (githubContent()), plain hosts for the others.
-// The listener (the broker) is no host of theirs: the proxy forwards its calls without asking.
+// The listener (the broker) is no host of theirs: the proxy forwards its calls, for its runs'
+// sandboxes and engines only (broker-http.mjs).
 export function mandatoryHosts(config, agent = agentFor(config.agent)) {
   return [...agent.hosts, ...githubHosts(config), "*.githubusercontent.com"];
 }

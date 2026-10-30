@@ -268,3 +268,60 @@ test("egress: the runner's builder and installs answered by the images, an insta
   // Anyone else: refused.
   assert.equal((await ask("10.7.7.7", "pypi.org")).allowed, false);
 });
+
+test("egress: the broker's host only for a run's sandbox the proxy forwards, never a build; a proxy's other BROKER_URL said", async (t) => {
+  const config = testConfig();
+  config.brokerPort = 0;
+  config.brokerUrl = "http://listener.test:0";
+  const broker = createBroker({});
+  const logged = [];
+  const ctx = {
+    config,
+    broker,
+    log: (line) => logged.push(line),
+    runner: {
+      // The test is the egress proxy.
+      proxyAddresses: async () => ["127.0.0.1"],
+      address: async () => ["10.1.0.2"],
+      engineAddress: async () => null,
+      installing: async () => false,
+    },
+    // The builder may reach anything: never the broker through the proxy all the same.
+    images: { egressFor: async (ip) => (ip === "10.9.9.9" ? { allowed: true } : null) },
+    tasks: new Map([
+      [
+        "org/a#1",
+        {
+          name: "a",
+          repo: "org/a",
+          id: "1",
+          live: { secret: broker.register("org/a"), hosts: ["github.com"], trusted: [] },
+        },
+      ],
+    ]),
+  };
+  const server = createBrokerHttp(ctx).listen();
+  await once(server, "listening");
+  t.after(() => server.close());
+  const ask = async (ip, extra = "&broker=1") =>
+    (
+      await fetch(
+        `http://127.0.0.1:${config.brokerPort}/egress?ip=${ip}&host=listener.test${extra}`,
+      )
+    ).json();
+  assert.deepEqual(await ask("10.1.0.2"), {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: false,
+  });
+  assert.equal((await ask("10.9.9.9")).allowed, false);
+  assert.equal((await ask("10.7.7.7")).allowed, false);
+  // Asked as any other host: the proxy's BROKER_URL isn't the listener's. Refused, and said once.
+  assert.equal((await ask("10.1.0.2", "")).allowed, false);
+  assert.equal((await ask("10.1.0.2", "")).allowed, false);
+  const warnings = logged.filter((line) => line.includes("its BROKER_URL must be the listener's"));
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /http:\/\/listener\.test:\d+/);
+});

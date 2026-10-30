@@ -320,7 +320,13 @@ test("a sandbox's calls through the egress proxy are its own: the broker believe
   const { ctx, secret } = fixture(t, { a: "10.1.0.2", b: "127.0.0.2" });
   ctx.runner.proxyAddresses = async () => ["127.0.0.1"];
   const { url } = await start(t, ctx);
-  const proxy = createProxy({ policy: async () => ({ allowed: false }), brokerUrl: url });
+  // The listener's policy: the broker for its runs' sandboxes.
+  const proxy = createProxy({
+    policy: async (ip, host, { broker } = {}) => ({
+      allowed: broker === true && ["10.1.0.2", "127.0.0.2"].includes(ip),
+    }),
+    brokerUrl: url,
+  });
   const proxyPort = await listening(proxy);
   t.after(() => proxy.close());
   // From B's sandbox, through the proxy → [status, body].

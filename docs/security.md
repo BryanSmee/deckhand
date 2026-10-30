@@ -1782,11 +1782,14 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   posting its reply: Docker may give the address to another sandbox, which must not get the
   finished run's hosts.
 - The proxy forwards plain HTTP to the listener's broker (`BROKER_URL`'s origin: the agents'
-  APIs, pushes, the run's files) without asking the policy, naming the sandbox it came from
-  (`x-deckhand-client`, replaced whatever the sandbox sent), as for a relayed call: the broker
-  binds a run's secret to that address, and believes the header from the proxy's addresses
-  alone. It refuses the broker's `/egress` there, its URL parsed first (`..`, `%2e`): the
-  listener answers it to the proxy only.
+  APIs, pushes, the run's files) once the policy, asked about the broker (`broker=1`), allows
+  it: only for a running sandbox or its engine, never a build or an install's own pod, nor
+  anyone else. It names the sandbox it came from (`x-deckhand-client`, replaced whatever the
+  sandbox sent), as for a relayed call: the broker binds a run's secret to that address, and
+  believes the header from the proxy's addresses alone. The path and query are set on the
+  broker's own URL, never parsed as a URL again, so a path such as `//host/x` stays a path
+  on the broker and never names another host. The proxy refuses the broker's `/egress` there,
+  its URL parsed first (`..`, `%2e`): the listener answers it to the proxy only.
 - Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, and the
   run's container engine) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
