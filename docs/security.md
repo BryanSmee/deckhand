@@ -91,8 +91,9 @@ that file asks for, so none can:
   same merge check as readying the pull request does ([below](#github-actions-on-deckhands-branches)),
   since the pull request's workflows then run from that merge with a base that may have
   changed since the last push. GitHub refuses an update with conflicts, which the run rebases
-  locally as before. The default policy (`policy/gh-update-branch.rego`) allows it to work runs
-  only.
+  locally as before. Deckhand's default policy for it, `policy/gh-update-branch.rego` (shipped
+  in the listener's image), allows it to work runs only: a repository's own modes are refused
+  unless its `.deckhand/policy/gh-update-branch.rego` lets them.
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
