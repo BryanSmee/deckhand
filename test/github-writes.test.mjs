@@ -160,6 +160,11 @@ test("the ceilings: what each mode can ever write", () => {
   assert.deepEqual(aboveCeiling(work, "own_issue", ["edit", "comment", "label"]), []);
   assert.deepEqual(aboveCeiling(work, "own_pr", ["edit", "label"]), []);
   assert.deepEqual(aboveCeiling(work, "sub_issue", ["link", "edit"]), []);
+  // It manages the issues it files as a brainstorm does: their labels, and new labels.
+  assert.deepEqual(aboveCeiling(work, "sub_issue", ["label"]), []);
+  assert.deepEqual(aboveCeiling(work, "created_issue", ["label"]), []);
+  assert.deepEqual(aboveCeiling(work, "label", ["create"]), []);
+  assert.deepEqual(aboveCeiling(work, "other_issue", ["label"]), ["label"]);
   assert.deepEqual(aboveCeiling(work, "other_issue", ["comment"]), ["comment"]);
   assert.deepEqual(aboveCeiling(work, "pr", ["comment"]), ["comment"]);
   assert.deepEqual(aboveCeiling(work, "own_issue", ["close"]), ["close"]);
@@ -184,6 +189,8 @@ test("the ceilings: what each mode can ever write", () => {
         assert.ok(!actions.includes(out), `${mode}: ${out}`);
       }
     }
+    // A label's settings: created only, never edited or deleted.
+    assert.deepEqual(aboveCeiling(ceiling, "label", ["edit", "delete"]), ["edit", "delete"], mode);
   }
 });
 
@@ -275,7 +282,11 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     write("PATCH", "repos/org/repo/pulls/7", { title: "x" }),
     write("POST", "repos/org/repo/issues/7/comments", { body: "x" }),
     write("PATCH", "repos/org/repo/issues/2", { body: "x" }),
+    write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] }),
+    write("PATCH", "repos/org/repo/issues/2", { labels: ["a"] }),
+    write("DELETE", "repos/org/repo/issues/2/labels/a"),
     write("POST", "repos/org/repo/issues", { title: "x" }),
+    write("POST", "repos/org/repo/labels", { name: "a", color: "fff" }),
   ];
   for (const w of allowed) assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
   const refused = [
@@ -286,9 +297,14 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
     [write("PATCH", "repos/org/repo/issues/3", { body: "x" }), /can't edit on other_issue #3/],
     [write("POST", "repos/org/repo/issues/8/comments", { body: "x" }), /can't comment on pr #8/],
     [
-      write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] }),
-      /can't label on sub_issue #2/,
+      write("POST", "repos/org/repo/issues/3/labels", { labels: ["a"] }),
+      /can't label on other_issue #3/,
     ],
+    [
+      write("PATCH", "repos/org/repo/labels/a", { color: "fff" }),
+      /can't edit on label \(its ceiling\)/,
+    ],
+    [write("DELETE", "repos/org/repo/labels/a"), /can't delete here/],
     [write("PATCH", "repos/org/repo/issues/1", { state: "closed" }), /can't close here/],
     [write("PUT", "repos/org/repo/pulls/7/merge"), /can't merge here/],
     [write("POST", "repos/org/repo/pulls/7/reviews", { event: "APPROVE" }), /can't review here/],
@@ -505,6 +521,10 @@ test("a sub-issue link: its child is one the run created or already under its is
   answered(work, REST_CREATE, 201, restIssue(35));
   for (const id of [900, 905]) assert.equal(await check(work, link(1, { sub_issue_id: id })), null);
   assert.equal(await check(work, write("PATCH", "repos/org/repo/issues/30", { body: "x" })), null);
+  assert.equal(
+    await check(work, write("POST", "repos/org/repo/issues/30/labels", { labels: ["a"] })),
+    null,
+  );
   // The bot's issue another run or an analysis filed meanwhile isn't this run's: the App's
   // authorship says nothing.
   assert.match((await check(work, link(1, { sub_issue_id: 904 }))).message, /links only/);
@@ -773,6 +793,40 @@ test(
     assert.deepEqual(await ask("bug", "comment", "own_issue"), ["bug entries only file issues"]);
     // Work runs and discussions: their ceilings, as they are.
     assert.deepEqual(await ask("work", "comment", "own_pr"), []);
+    assert.deepEqual(await ask("work", "create", "label", ["a"]), []);
+    assert.deepEqual(await ask("plan", "create", "label", ["a"]), []);
+    assert.deepEqual(await ask("work", "label", "sub_issue", ["a"]), []);
     assert.deepEqual(await ask("discussion", "create", "new_issue"), []);
+  },
+);
+
+test(
+  "the real opa: a repo narrows label creation to one of its modes",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const rego = `package deckhand
+
+deny_github contains "only plan runs create labels" if {
+  input.target.kind == "label"
+  input.mode != "plan"
+}
+`;
+    const policies = createPolicies({
+      config: {},
+      github: async () => new Response("{}", { status: 404 }),
+      run: opaRunner(),
+      readOperator: () => new Map([["github.rego", rego]]),
+      tmp: tempDir(t),
+    });
+    const { check } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup, policies });
+    const label = write("POST", "repos/org/repo/labels", { name: "a", color: "fff" });
+    assert.equal(await check(run("plan", { push: true }), label), null);
+    assert.deepEqual(await check(run("work"), label), {
+      status: 403,
+      message: "the policies refuse it (deny_github): only plan runs create labels",
+    });
+    // Labelling its sub-issue is still the work run's.
+    const sub = write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] });
+    assert.equal(await check(run("work"), sub), null);
   },
 );

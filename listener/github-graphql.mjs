@@ -95,6 +95,7 @@ function updated(input) {
 // - actions(input): what it does, as github-writes.mjs names actions;
 // - labels: the input field of label IDs it adds (`added`) or removes (`removed`), or sets in
 //   place of the issue's (`set`);
+// - named: the input field of the label it creates' name, its `labels_added` as REST's;
 // - child: a link's sub-issue field; blocker: a "blocked by" link's blocking issue field;
 // - pull(input), permissions: a pull request's own write's head, base and draft, and what its
 //   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
@@ -116,6 +117,16 @@ export const MUTATIONS = {
       ...("milestoneId" in input ? ["milestone"] : []),
     ],
     labels: { field: "labelIds", as: "added" },
+  },
+  // A label of the run's repository, as `gh label create` makes it over REST. Not
+  // updateLabel or deleteLabel: a label's settings are in no ceiling.
+  createLabel: {
+    target: "repositoryId",
+    repo: true,
+    kind: "label",
+    fields: ["name", "color", "description"],
+    actions: () => ["create"],
+    named: "name",
   },
   updateIssue: {
     target: "id",
@@ -630,6 +641,7 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     else change.labels_added = names;
     if (spec.labels.as === "set") change.labels_set = true;
   }
+  if (spec.named) change.labels_added = [input[spec.named]];
   const write = { repo, actions, target, change };
   if (spec.pull) Object.assign(write, { pull: spec.pull(set), permissions: spec.permissions });
   // The other issue a link names, its sub-issue or its blocker: in the run's repo (GitHub

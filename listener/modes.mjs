@@ -17,14 +17,17 @@ import {
 // link is a `link` on the blocked issue, its blocker one of those or any open issue of the
 // repo (github-writes.mjs resolveBlocker()). Brainstorms
 // comment elsewhere in theirs, which the default policy refuses
-// (docs/repo-config.md#the-github-input).
+// (docs/repo-config.md#the-github-input). Work runs, and the repo's modes that aren't light,
+// manage the issues they file as a brainstorm does: they label them and create the labels
+// (issue #443); a repo that doesn't want it refuses it with `deny_github`, per mode if it likes.
 const WORK_CEILING = {
   own_issue: ["edit", "comment", "label", "link"],
   own_pr: ["edit", "comment", "label", "ready", "draft"],
-  sub_issue: ["edit", "comment", "link"],
-  created_issue: ["edit", "comment", "link"],
+  sub_issue: ["edit", "comment", "label", "link"],
+  created_issue: ["edit", "comment", "label", "link"],
   new_issue: ["create"],
   new_pr: ["create"],
+  label: ["create"],
 };
 const BRAINSTORM_CEILING = {
   own_issue: ["edit", "comment", "link"],

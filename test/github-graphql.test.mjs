@@ -798,3 +798,59 @@ test("an argument graphql-js refuses after validation: the call refused, nothing
   assert.match(out.refused.message, /^its GraphQL arguments: .*not to be null/);
   assert.deepEqual(asked, []);
 });
+
+test("createLabel: a label of the run's repository, the same write as REST's, for the modes whose ceiling holds it", async () => {
+  const { check, writes } = checks();
+  const GH_LABEL =
+    "mutation LabelCreate($input: CreateLabelInput!) { createLabel(input: $input) { label { id } } }";
+  const input = { repositoryId: "R_repo", name: "ui", color: "fff", description: "UI" };
+  // Its fields in the schema's order, as graphql-js reads them.
+  const rest = classify(
+    "POST",
+    "repos/org/repo/labels",
+    json({ color: "fff", name: "ui", description: "UI" }),
+  );
+  const plan = { ...run("plan"), push: true };
+  for (const r of [run("work"), plan, run("brainstorm"), run("idea", null), run("bug", null)]) {
+    const out = await check(r, call(GH_LABEL, { input }));
+    assert.equal(out.refused, undefined, r.mode);
+    assert.equal(out.write, true);
+    assert.deepEqual(writes.at(-1), rest, r.mode);
+  }
+  assert.deepEqual(rest.change.labels_added, ["ui"]);
+  // Light modes, reviews and analyses write no label.
+  for (const mode of ["review", "analyze", "onboarding", "discussion", "plan"]) {
+    const out = await check(run(mode), call(GH_LABEL, { input }));
+    assert.match(out.refused?.message ?? "", /its ceiling/, mode);
+  }
+  // Only in the run's repository.
+  for (const repositoryId of ["R_other", "I_1", "R_404"]) {
+    const out = await check(run("work"), call(GH_LABEL, { input: { ...input, repositoryId } }));
+    assert.equal(out.refused?.status, 403, repositoryId);
+  }
+  // A label's settings are in no ceiling: no mutation changes them.
+  for (const name of ["updateLabel", "deleteLabel"]) {
+    const out = await check(
+      run("work"),
+      call(`mutation { ${name}(input: { id: "L_idea" }) { clientMutationId } }`),
+    );
+    assert.match(out.refused.message, new RegExp(`doesn't let a run send ${name}`));
+  }
+});
+
+test("a work run labels its sub-issues over GraphQL as over REST, not another's issue", async () => {
+  const { check, writes } = checks();
+  const work = run("work");
+  const add =
+    'mutation { addLabelsToLabelable(input: { labelableId: "ID", labelIds: ["L_bug"] }) { clientMutationId } }';
+  const remove =
+    'mutation { removeLabelsFromLabelable(input: { labelableId: "ID", labelIds: ["L_idea"] }) { clientMutationId } }';
+  for (const query of [add, remove]) {
+    assert.equal((await check(work, call(query.replace("ID", "I_2")))).refused, undefined);
+    const other = await check(work, call(query.replace("ID", "I_3")));
+    assert.match(other.refused.message, /can't label on other_issue #3/);
+  }
+  const set = await check(work, call(GH_EDIT, { input: { id: "I_2", labelIds: ["L_bug"] } }));
+  assert.equal(set.refused, undefined);
+  assert.deepEqual(writes.at(-1).actions, ["label"]);
+});

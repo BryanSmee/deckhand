@@ -903,7 +903,7 @@ commands) goes through the same checks, field by field:
    either (`gh issue view` selects a `state` of two types from an issue or a pull request); a
    mutation is.
 2. **Queries go on.** Each field of a mutation, through its fragments and under any alias,
-   must be one Deckhand knows (`createIssue`, `updateIssue`, `addComment`, `addSubIssue`,
+   must be one Deckhand knows (`createIssue`, `createLabel`, `updateIssue`, `addComment`, `addSubIssue`,
    `removeSubIssue`, `reprioritizeSubIssue`, `addBlockedBy`, `removeBlockedBy`,
    `addLabelsToLabelable`,
    `removeLabelsFromLabelable`, `addAssigneesToAssignable`, `removeAssigneesFromAssignable`,
@@ -936,13 +936,13 @@ brainstorm's or an inbox entry's `issues: write` never reaches anything else. A 
 own write gets what GitHub needs for it besides: `pull_requests: write` to open or edit one,
 `contents: write` to ready or draft one.
 
-| Mode                                                            | Ceiling                                                                                                                                                                                                                                         |
-| --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`                                                           |
-| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                    |
-| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                            |
-| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                         |
-| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and pull requests (from its branches): `create` |
+| Mode                                                            | Ceiling                                                                                                                                                                                                                                                          |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brainstorm`, `stop`                                            | its issue: `edit`, `comment`, `link`; its sub-issues and the issues it created: `edit`, `comment`, `link`; new issues and labels: `create`; other issues and pull requests: `comment`                                                                            |
+| `idea`, `bug`                                                   | new issues (with the `idea` or `bug` label) and labels: `create`; the issues it created: `link` (the parents it files); its issue: `comment`                                                                                                                     |
+| `discussion`                                                    | new issues: `create`                                                                                                                                                                                                                                             |
+| `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                                          |
+| `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`; its sub-issues and the issues it created: `edit`, `comment`, `label`, `link`; new issues, labels and pull requests (from its branches): `create` |
 
 No ceiling holds closing or reopening (GitHub closes an issue when its pull request merges),
 merging, reviews and their comments, assignees and milestones (an issue created with them
