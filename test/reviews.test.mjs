@@ -452,7 +452,7 @@ function reviewPolicies(t, repoFile = null) {
 
 test(
   "the real opa: review.rego skips other bots' pull requests, unless the repo's file drops it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const dependabot = delivery("ready_for_review", {}, "dependabot[bot]");
     const skips = [];

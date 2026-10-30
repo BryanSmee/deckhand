@@ -249,7 +249,7 @@ test("deny_link_branch: its input, a denial links nothing, the decision kept for
 // The real `opa`, when the PATH has it (the listener's image does).
 test(
   "the real opa: gh-linked-branch.rego links work runs' branches only, and a repo broadens it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const builtIn = builtInPolicies();
     assert.ok(builtIn.has("gh-linked-branch.rego"));

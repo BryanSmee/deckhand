@@ -898,7 +898,7 @@ test("a run edits and deletes the comments it posted, never the listener's, anot
 
 test(
   "the real opa: Deckhand's gh-own-comments.rego lets work runs edit their comments, and a repo's same-name file lets them delete",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     // Deckhand's own, as the image ships it.
     const rego = builtInPolicies().get("gh-own-comments.rego");
@@ -2125,7 +2125,7 @@ const builtIn = () => builtInPolicies();
 
 test(
   "the real opa: each of Deckhand's default policies compiles and answers for every kind of mode",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const files = builtIn();
     assert.ok(files.size);
@@ -2168,7 +2168,7 @@ test(
 
 test(
   "the real opa: Deckhand's github.rego narrows the ceilings as docs/repo-config.md says",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
     const [, shown] =
@@ -2243,7 +2243,7 @@ test(
 
 test(
   "the real opa: Deckhand's gh-actions-rerun.rego allows a first rerun, in work runs only",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const rerunPolicies = (repo = {}) =>
       createPolicies({
@@ -2318,7 +2318,7 @@ test(
 
 test(
   "the real opa: policy/gh-update-branch.rego, per mode, and a repository's file of the same name broadening or refusing it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const engine = (repoFiles = {}) =>
       createPolicies({
@@ -2385,7 +2385,7 @@ deny_github contains "this repository keeps a linear history: rebase and push in
 
 test(
   "the real opa: gh-projects.rego lets work runs and brainstorms add items, a repo's modes only once it broadens it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const files = builtIn();
     // `repoFiles`: the repository's .deckhand/policy/ on its default branch.
@@ -2451,7 +2451,7 @@ test(
 
 test(
   "the real opa: Deckhand's defaults let every kind of run read checks; a same-name file refuses it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const files = builtIn();
     assert.ok(files.has("gh-checks.rego"));
@@ -2509,7 +2509,7 @@ deny_github contains "repository modes don't read checks" if {
 
 test(
   "the real opa: a repo narrows label creation to one of its modes",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const rego = `package deckhand
 
@@ -2544,7 +2544,7 @@ deny_github contains "only plan runs create labels" if {
 
 test(
   "the real opa: policy/gh-reactions.rego lets work runs and brainstorms react, and a repo's same-name file its own modes",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const rego = readFileSync(join(import.meta.dirname, "..", "policy", "gh-reactions.rego"));
     const shaOf = (text) => createHash("sha1").update(text).digest("hex");
@@ -2622,7 +2622,7 @@ test(
 
 test(
   "the real opa: policy/gh-assign-milestone.rego, per mode, and a repository's file of the same name broadening it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     // The repository's own, docs/repo-config.md's example: work runs assign the issue's author,
     // and set milestones.
@@ -2831,7 +2831,7 @@ test("review threads: a work run replies to and resolves its own pull request's,
 
 test(
   "the real opa: Deckhand's gh-review-threads.rego, per mode, and a file of the same name broadening it",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     assert.ok(builtIn().has("gh-review-threads.rego"));
     // The repository's own: only the first rule, its modes kept out.

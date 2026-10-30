@@ -333,7 +333,7 @@ const asked = (policies, mode, { custom_mode = false, reason = null, when = "rea
 
 test(
   "the real opa: gh-reviewers.rego requests on work runs' pull requests only",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const policies = defaults(t);
     for (const reason of [null, "review-fix", "ci-fix", "conflict"]) {

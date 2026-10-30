@@ -916,7 +916,7 @@ test("opaRunner: an empty environment, the input on stdin, killed at its timeout
 
 test(
   "the real opa: a denial, no network, a compile error",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const tmp = tempDir(t);
     const policies = createPolicies({
@@ -959,7 +959,7 @@ test(
 
 test(
   "the real opa: a repo file drops the operator's of its name, a slow policy times out",
-  { skip: !hasOpa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     // The operator's size.rego denies; the repo's, only `package deckhand`, drops it.
     const merged = setup(t, {
