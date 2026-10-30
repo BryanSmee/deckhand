@@ -81,6 +81,17 @@ export const ACTIONS_LOGS = new RegExp(
   "i",
 );
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+// Where an Actions log's redirect is followed to: GitHub's log storage (Azure blobs, its content
+// hosts), or GitHub's own host (an Enterprise Server's storage behind it). The listener isn't
+// behind the egress proxy: any other host goes back to the sandbox, which can't reach it.
+export function logStorage(host, github) {
+  const name = String(host).toLowerCase().replace(/\.$/, "");
+  return (
+    name === String(github).toLowerCase() ||
+    /^(?:[a-z0-9-]+\.)+blob\.core\.windows\.net$/.test(name) ||
+    githubContent(name)
+  );
+}
 
 // What git fetches with on the web host; a review reads nothing else there (web pages show the
 // comments).
@@ -705,6 +716,7 @@ export function createGithubGateway({
       }
       if (next.protocol !== "https:" && next.protocol !== target.protocol) return null;
       if (next.username || next.password) return null;
+      if (!logStorage(next.hostname, target.hostname)) return null;
       const plain = forwarded(req.headers, ["authorization", "cookie", ...ROUTING_HEADERS]);
       return { target: next, headers: plain };
     };

@@ -408,7 +408,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 - **Actions logs** (`/actions/runs/{id}/logs`, `/actions/jobs/{id}/logs`, an attempt's):
   GitHub redirects their download to a storage host of its own, behind a signed URL, which
   the egress proxy doesn't open. The gateway follows that one redirect itself (HTTPS, no
-  credential sent, the signed URL being its own) and streams the log back
+  credential sent, the signed URL being its own), only to GitHub's log storage
+  (`*.blob.core.windows.net`, `*.githubusercontent.com`) or GitHub's own host
+  (`logStorage()`: the listener isn't behind the egress proxy) and streams the log back
   (`github-gateway.mjs` `ACTIONS_LOGS`); any other redirect goes back to the sandbox as it
   came.
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel

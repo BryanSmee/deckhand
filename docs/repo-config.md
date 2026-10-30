@@ -572,9 +572,9 @@ pull request's head commit (other checks and commit statuses aren't read, as for
 - **Still going after `ci_wait` minutes** (30 by default, `0` to `1440`): the review starts
   anyway, its prompt saying CI hadn't finished.
 - **Failed** (any other conclusion: `failure`, `cancelled`, `timed_out`…), even while other
-  runs go on: no review. Only the newest run of each workflow and event counts, here and for
-  auto-merge: a run a newer one replaced (`cancel-in-progress` when turning ready starts the
-  workflow again) decides nothing. A "CI failed" comment names the failed runs, linked. With `fix`, a
+  runs go on: no review. A run cancelled and replaced by a newer one of its workflow and event
+  (`cancel-in-progress` when turning ready starts the workflow again) decides nothing, here
+  and for auto-merge; any other failure does, whatever ran after it. A "CI failed" comment names the failed runs, linked. With `fix`, a
   **CI fix run** follows: a work run in the issue's session, with the same conditions as a
   review's fix run (Deckhand's own open pull request, no run going or queued on the issue, no
   needs-input label, and `deny_fix`, its input with `ci: true`). A run going or queued on the
@@ -880,7 +880,7 @@ issue, its Actions runs) and the review that decides it (`deny_review` and `deny
 | `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
 | `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                        |
 | `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                    |
-| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`.                                                                                 |
+| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.  |
 
 ### The review and fix input
 

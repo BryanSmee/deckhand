@@ -390,11 +390,11 @@ const PASSED = new Set(["success", "skipped", "neutral"]);
 
 // GitHub Actions runs on a commit → { state, failed, going }: `failed` when one completed with
 // any other conclusion (even while others go on), else `running` while one hasn't completed,
-// else `passed`, or `none` without any run. One rule for the merge gate and the CI step. Only
-// the newest run of each workflow and event counts (latestRuns()): one a newer run replaced
-// (`cancel-in-progress` when `gh pr ready` starts it again) decides nothing.
+// else `passed`, or `none` without any run. One rule for the merge gate and the CI step. A run
+// cancelled and replaced by a newer one of its workflow and event (`cancel-in-progress` when
+// `gh pr ready` starts it again) decides nothing (countedRuns()); any other failure still does.
 export function ciState(all) {
-  const runs = latestRuns(all);
+  const runs = countedRuns(all);
   const failed = runs.filter((r) => r.status === "completed" && !PASSED.has(r.conclusion));
   const going = runs.filter((r) => r.status !== "completed");
   const state = failed.length
@@ -407,9 +407,11 @@ export function ciState(all) {
   return { state, failed, going };
 }
 
-// The newest run of each workflow and event among `runs` (by `run_number`, then `created_at`,
-// then `id`); a run without `workflow_id` stands alone.
-export function latestRuns(runs) {
+// `runs` without those cancelled and replaced: a newer run of the same workflow and event (by
+// `run_number`, then `created_at`, then `id`) exists. Only `cancelled`: a newer run that passes
+// or is skipped (a label starting the workflow again, its jobs skipped) never hides a failure.
+// A run without `workflow_id` stands alone.
+export function countedRuns(runs) {
   const newest = new Map();
   const order = (r) => [r.run_number ?? 0, String(r.created_at ?? ""), r.id ?? 0];
   const newer = (a, b) => {
@@ -422,7 +424,8 @@ export function latestRuns(runs) {
     const kept = newest.get(key);
     if (!kept || newer(r, kept)) newest.set(key, r);
   });
-  return [...newest.values()];
+  const latest = new Set(newest.values());
+  return runs.filter((r) => latest.has(r) || r.conclusion !== "cancelled");
 }
 
 // The GitHub Actions runs on commit `sha` → { ok, status, runs }: not ok when GitHub refuses
@@ -605,9 +608,10 @@ export function mergeInput({ info, pr, files, issue, review, fixes = 0, runs, no
   };
 }
 
-// Actions runs as the policies' inputs have them (`checks[]`).
+// Actions runs as the policies' inputs have them (`checks[]`): those the gate counts
+// (countedRuns()), so a policy never refuses for a run the gate let go.
 const checksOf = (runs) =>
-  runs.map((r) => ({
+  countedRuns(runs).map((r) => ({
     name: r.name ?? null,
     status: r.status ?? null,
     conclusion: r.conclusion ?? null,
@@ -766,8 +770,9 @@ export const CI_NEXT = {
 // run id, URL), never their logs. The run reads those itself (`gh run view --log-failed`):
 // the branch's code printed them, and a workflow's or job's name comes from the branch too,
 // so all of it is data, fenced off, as fixMessage()'s findings. `round` of `rounds`
-// (`review.ci_fix`).
-export function ciFixMessage(number, sha, failed, { round = 1, rounds = 1 } = {}) {
+// (`review.ci_fix`); `again`: CI failed on what the previous CI fix run pushed (its count goes
+// across the pull request's commits: a review fix run's push may fail for another reason).
+export function ciFixMessage(number, sha, failed, { round = 1, rounds = 1, again = false } = {}) {
   const lines = failed.flatMap((r) => [
     `- Run ${r.id ?? "?"}: ${oneLine(r.name)} (${r.conclusion})${r.html_url ? ` ${r.html_url}` : ""}`,
     ...(r.jobs ?? []).map(
@@ -779,7 +784,7 @@ export function ciFixMessage(number, sha, failed, { round = 1, rounds = 1 } = {}
   const fence = "`".repeat(Math.max(3, longest + 1));
   const which =
     rounds > 1
-      ? ` This is CI fix run ${round} of ${rounds}${round > 1 ? ": CI still failed after the previous one, so look again at why its fix didn't clear it" : ""}.`
+      ? ` This is CI fix run ${round} of ${rounds}${again ? ": CI still failed on what the previous one pushed, so look again at why its fix didn't clear it" : ""}.`
       : "";
   return `CI failed on pull request #${number} at ${short(sha)}: the failed GitHub Actions runs and jobs are below, between the fences. Read their logs yourself (\`gh run view <run id> --log-failed\`), fix the cause, rerun the checks locally and push. No review ran: it comes once CI passes.${which}
 
@@ -1749,12 +1754,14 @@ export function createReviews({
   // (`ciWaiting`, kept in reviews.json: a restart goes on waiting), decided now, then again by
   // checksDone(), pushed() and tick() (ciDecide()). → the review queued, a CI fix run's item,
   // or null (waiting, or stopped).
-  async function reviewAfterCi({ repo, base, pr, settings, author = null }) {
+  // `afterCiFix`: `pr`'s head is what a CI fix run pushed (afterCiFix()), for the next one's
+  // message.
+  async function reviewAfterCi({ repo, base, pr, settings, author = null, afterCiFix = false }) {
     if (!ciOn(settings)) return queueReview({ repo, base, pr, settings, author });
     const key = taskKey(repo, prId(pr.number));
     const sha = pr.head?.sha ?? null;
     remember(key, sha, {
-      ciWaiting: { sha, since: now(), base, author },
+      ciWaiting: { sha, since: now(), base, author, ...(afterCiFix && { afterCiFix: true }) },
       ciDropped: undefined,
       ciStopped: undefined,
     });
@@ -1799,8 +1806,13 @@ export function createReviews({
     if (pr.draft) return drop("the pull request is a draft again");
     const sha = pr.head?.sha ?? null;
     if (sha !== waiting.sha) {
-      remember(key, sha, { ciWaiting: { ...waiting, sha, since: now() } });
+      const { afterCiFix: _, ...moved } = waiting;
+      remember(key, sha, { ciWaiting: { ...moved, sha, since: now() } });
       log(`${key}: pushed while waiting for CI, now waiting on ${short(sha)}`);
+      // Its runs may not exist yet: asked again once the grace is over, not at the next tick().
+      later(() => {
+        ciRecheck(key).catch((error) => log(`${key}: CI step: ${error.stack ?? error}`));
+      }, CI_GRACE_MS);
       return null;
     }
     const { settings, errors } = await repoSettings(repo, base);
@@ -1859,6 +1871,7 @@ export function createReviews({
       sha,
       runs: read.runs,
       failed,
+      again: !!waiting.afterCiFix,
     });
   }
 
@@ -1869,7 +1882,10 @@ export function createReviews({
   // `deny_fix` (`ci: true`). Out of rounds, or no CI fix run possible here (`review.fix` off,
   // someone else's pull request): the review anyway, told CI failed. Refused otherwise: the
   // pull request waits for a maintainer.
-  async function ciFailed(key, { repo, number, base, pr, settings, author, sha, runs, failed }) {
+  async function ciFailed(
+    key,
+    { repo, number, base, pr, settings, author, sha, runs, failed, again = false },
+  ) {
     // Decided: whatever follows, this head commit's wait is over. Not while the issue's task is
     // busy: the work run whose `gh pr ready` got here may still be going, after a quick CI
     // failure. The wait stays, decided again when a run ends (runEnded()) or by tick().
@@ -1955,7 +1971,7 @@ export function createReviews({
       title: null,
       trigger: "work",
       modeLine: null,
-      text: ciFixMessage(number, sha, withJobs, { round, rounds }),
+      text: ciFixMessage(number, sha, withJobs, { round, rounds, again }),
       replyTo: number,
       comment: null,
       base,
@@ -2056,7 +2072,7 @@ export function createReviews({
     if (denied.length) return stop(policyWhy("deny_review", denied));
     remember(key, head);
     log(`${key}: CI fix run ${fixes} pushed ${short(head)}, back to waiting for CI`);
-    return reviewAfterCi({ repo, base, pr, settings });
+    return reviewAfterCi({ repo, base, pr, settings, afterCiFix: true });
   }
 
   // Rekeyed with spelled() (restart.mjs unifySpellings()). Both spellings of one pull request:

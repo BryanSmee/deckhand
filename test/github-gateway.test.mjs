@@ -9,6 +9,7 @@ import { NO_TOKEN, readsOf } from "../listener/github-app.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
+  logStorage,
   readsThread,
   redactBody,
   secretOf,
@@ -830,11 +831,14 @@ test("an Actions log's redirect is followed by the gateway, without credentials;
     respond: (req, res) => {
       if (!/\/logs$|\/elsewhere$/.test(req.url.split("?")[0])) return false;
       // Job 1's storage isn't plain HTTP(S), job 2's URL holds credentials: neither followed.
+      // Job 3's goes to a host that isn't GitHub's log storage.
       const location = req.url.includes("/jobs/1/")
         ? "ftp://storage.example/job-logs.txt"
         : req.url.includes("/jobs/2/")
           ? `${storage.url.replace("//", "//user:pass@")}/job-logs.txt`
-          : `${storage.url}/actions-results/job-logs.txt?sig=signed`;
+          : req.url.includes("/jobs/3/")
+            ? "https://storage.example/job-logs.txt"
+            : `${storage.url}/actions-results/job-logs.txt?sig=signed`;
       res.writeHead(302, { location });
       res.end();
       return true;
@@ -869,6 +873,7 @@ test("an Actions log's redirect is followed by the gateway, without credentials;
   for (const [job, location] of [
     [1, "ftp://storage.example/job-logs.txt"],
     [2, `${storage.url.replace("//", "//user:pass@")}/job-logs.txt`],
+    [3, "https://storage.example/job-logs.txt"],
   ]) {
     const res = await gw.call(`/api/v3/repos/org/repo/actions/jobs/${job}/logs`, {
       secret,
@@ -877,4 +882,17 @@ test("an Actions log's redirect is followed by the gateway, without credentials;
     assert.deepEqual([res.status, res.headers.get("location")], [302, location]);
   }
   assert.equal(stored.length, 3);
+});
+
+test("logStorage: GitHub's log storage and its own host, nothing else", () => {
+  for (const host of [
+    "productionresultssa8.blob.core.windows.net",
+    "pipelines.actions.githubusercontent.com",
+    "GITHUB.EXAMPLE.COM",
+  ]) {
+    assert.equal(logStorage(host, "github.example.com"), true, host);
+  }
+  for (const host of ["blob.core.windows.net.evil.example", "evil.example", "windows.net"]) {
+    assert.equal(logStorage(host, "github.example.com"), false, host);
+  }
 });

@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   CI_NEXT,
+  mergeInput,
   ciFailedText,
   ciFixMessage,
   ciState,
@@ -1164,6 +1165,23 @@ test("ciState: failed, running, passed or none, one rule for the merge and the C
   assert.deepEqual([replaced.state, replaced.failed], ["passed", []]);
   assert.equal(ciState([wf(2, 2, "success"), wf(1, 1, "cancelled")]).state, "passed");
   assert.equal(ciState([wf(1, 1, "success"), wf(2, 2, "cancelled")]).state, "failed");
+  // Only a cancelled run is left out: a failure stays, whatever newer run of its workflow and
+  // event passed or was skipped (a label starting it again, its jobs skipped).
+  for (const later of ["success", "skipped", "neutral"]) {
+    const stays = ciState([wf(1, 1, "failure"), wf(2, 2, later)]);
+    assert.deepEqual([stays.state, stays.failed.map((r) => r.id)], ["failed", [1]], later);
+  }
+  assert.equal(ciState([wf(1, 1, "timed_out"), wf(2, 2, "success")]).state, "failed");
+  // The policies' `checks[]` list what the gate counts: the replaced run left out.
+  const input = mergeInput({
+    info: {},
+    pr: { number: 5 },
+    files: [],
+    issue: null,
+    review: null,
+    runs: [wf(1, 1, "cancelled", { name: "CI" }), wf(2, 2, "success", { name: "CI" })],
+  });
+  assert.deepEqual(input.checks, [{ name: "CI", status: "completed", conclusion: "success" }]);
   assert.equal(
     ciState([wf(1, 1, "cancelled"), wf(2, 2, null, { status: "in_progress" })]).state,
     "running",
@@ -1266,6 +1284,11 @@ test("review.ci: a push while it waits moves the wait; the old head's runs decid
   assert.deepEqual(
     [s.entry().ciWaiting.sha, s.entry().ciWaiting.since, s.entry().head],
     ["sha-2", 1_800_000_600_000, "sha-2"],
+  );
+  // Asked again once the new head's grace is over, not at the next tick.
+  assert.deepEqual(
+    s.scheduled.map((x) => x.ms),
+    [60_000],
   );
   s.gh.runs = [RED];
   await s.runDone("sha-1");
@@ -1425,8 +1448,17 @@ test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {
 
 test("ciFixMessage and ciFailedText: names fenced or quoted, they can't format or mention", () => {
   const run = { ...RED, name: "@team ```break``` [x](y)" };
-  const text = ciFixMessage(5, "abcdef123", [{ ...run, jobs: [] }], { round: 2, rounds: 3 });
-  assert.match(text, /This is CI fix run 2 of 3: CI still failed after the previous one/);
+  const text = ciFixMessage(5, "abcdef123", [{ ...run, jobs: [] }], {
+    round: 2,
+    rounds: 3,
+    again: true,
+  });
+  assert.match(text, /This is CI fix run 2 of 3: CI still failed on what the previous one pushed/);
+  // Not on what the previous CI fix run pushed (a review fix run's push failing for another
+  // reason): no word of the previous one.
+  const other = ciFixMessage(5, "abcdef123", [{ ...run, jobs: [] }], { round: 2, rounds: 3 });
+  assert.match(other, /This is CI fix run 2 of 3\.\n/);
+  assert.doesNotMatch(other, /previous one/);
   assert.match(text, /````text\n- Run 7: @team ```break```/);
   assert.equal(
     ciFailedText("abcdef123", [run], CI_NEXT.fix(1, 1)),
@@ -1486,4 +1518,24 @@ test("ciFailedText: a name with blank lines stays in one code span", () => {
     ciFixMessage(5, "abcdef123", [{ ...run, jobs: [] }]),
     /- Run 7: Tests @team \[x\]\(y\) \(failure\)/,
   );
+});
+
+test("review.ci: a second CI fix run on what the first pushed is told so; on another push, not", async (t) => {
+  const s = ciSetup(t, `${CI}  ci_fix: 3\n`, { gh: { runs: [RED] } });
+  const first = await s.ready();
+  assert.doesNotMatch(first.text, /previous one/);
+  s.gh.head = "sha-2";
+  const second = await s.ciFixed();
+  assert.equal(second.reason, "ci-fix");
+  assert.match(second.text, /CI fix run 2 of 3: CI still failed on what the previous one pushed/);
+  // A push of someone else's while it waited for CI on the CI fix run's push: not its failure.
+  s.gh.head = "sha-3";
+  s.gh.runs = [GOING];
+  assert.equal(await s.ciFixed(), null);
+  s.gh.head = "sha-4";
+  await s.reviews.tick();
+  s.gh.runs = [RED];
+  const third = await s.reviews.tick().then(() => s.of("ci-fix").at(-1));
+  assert.equal(third.round, 3);
+  assert.doesNotMatch(third.text, /previous one/);
 });
