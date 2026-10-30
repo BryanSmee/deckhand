@@ -1012,6 +1012,8 @@ next run.
 
 ## Modules
 
+Where they are headed once the listener is split into services: [services.md](services.md).
+
 `server.mjs` only wires the listener together: its settings, the GitHub App, the shared `ctx`
 and the modules, then it starts the servers, restores runs and handles SIGTERM. The stateful
 modules are `createX(ctx)` factories sharing one `ctx` object (the settings, the GitHub App,
