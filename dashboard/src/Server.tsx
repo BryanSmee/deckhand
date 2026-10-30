@@ -305,13 +305,48 @@ function App({
               <span key={i.url}>
                 <span class={styles.mono}>{i.account ?? "An account"}</span>
                 {" · "}
+                {i.missing.length > 0 && (
+                  <>
+                    <span class={styles.bad}>lacks {i.missing.join(", ")}</span>
+                    {" · "}
+                  </>
+                )}
                 <a href={i.url} target="_blank" rel="noreferrer">
-                  configure ↗
+                  {i.missing.length > 0 ? "accept new permissions ↗" : "configure ↗"}
                 </a>
               </span>
             ))}
           </dd>
         </div>
+        {app && (app.missingPermissions.length > 0 || app.missingEvents.length > 0) && (
+          <div>
+            <dt>Missing in its settings</dt>
+            <dd class={styles.wrap}>
+              {app.missingPermissions.length > 0 && (
+                <span>
+                  <span class={styles.bad}>
+                    {plural(app.missingPermissions.length, "permission")}:{" "}
+                    {app.missingPermissions.join(", ")}
+                  </span>
+                  {app.missingPermissions.length > 1
+                    ? " · add them under Permissions, then accept them on each installation"
+                    : " · add it under Permissions, then accept it on each installation"}
+                </span>
+              )}
+              {app.missingEvents.length > 0 && (
+                <span>
+                  <span class={styles.bad}>
+                    {plural(app.missingEvents.length, "event")}: {app.missingEvents.join(", ")}
+                  </span>
+                  {` · turn ${app.missingEvents.length > 1 ? "them" : "it"} on under Subscribe to events`}
+                </span>
+              )}
+              <a href={app.settingsUrl} target="_blank" rel="noreferrer">
+                App settings ↗
+              </a>
+            </dd>
+          </div>
+        )}
         <div>
           <dt>Webhook deliveries</dt>
           <dd class={styles.wrap}>

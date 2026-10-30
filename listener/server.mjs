@@ -31,7 +31,7 @@ import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import {
-  checkAppEvents,
+  checkAppSettings,
   createGitHubApp,
   loadCredentials,
   saveCredentials,
@@ -176,13 +176,26 @@ function useApp(credentials) {
   if (credentials) useApp(credentials);
 }
 
-// Events the App's settings miss (without `issues`, open questions get no label), and who
-// owns it, which the link to its settings needs.
+// Events and permissions the App's settings miss (without `issues`, open questions get no
+// label), and who owns it, which the link to its settings needs. Read at start and with each
+// listing of the repositories (repos.mjs), each warning logged only when it is new. Resolves to
+// the permissions the App lacks, or null when GitHub didn't say.
+let appWarnings = new Set();
 function checkApp() {
   const app = ctx.app;
-  checkAppEvents(app.asApp, log, { githubUrl: config.githubUrl, credentials: app.credentials })
-    .then(({ app: info }) => ctx.app === app && info && (ctx.appInfo = info))
-    .catch((error) => log(`The GitHub App's events: ${error.message ?? error}`));
+  const lines = [];
+  return checkAppSettings(app.asApp, (line) => lines.push(line), {
+    githubUrl: config.githubUrl,
+    credentials: app.credentials,
+  })
+    .then(({ app: info, missing, permissions }) => {
+      if (ctx.app !== app || !info) return null;
+      for (const line of lines) if (!appWarnings.has(line)) log(line);
+      appWarnings = new Set(lines);
+      ctx.appInfo = { ...info, missingEvents: missing, missingPermissions: permissions };
+      return permissions;
+    })
+    .catch((error) => (log(`The GitHub App's settings: ${error.message ?? error}`), null));
 }
 
 // The App as the dashboard links to it: the stored credentials' public parts (never its
@@ -268,6 +281,8 @@ const repoList = createRepoList({
     asInstallation: (...args) => ctx.app.asInstallation(...args),
     request: github,
     remember: (...args) => ctx.app.remember(...args),
+    rememberPermissions: (...args) => ctx.app.rememberPermissions(...args),
+    settings: checkApp,
   },
   config,
   store: onboarded,
@@ -753,13 +768,17 @@ if (ctx.app) checkApp();
 // Pull requests that changed while the listener was down, or whose delivery was lost. After
 // redeliveries.start(): its first scan is shared, and counted in the last sync.
 if (ctx.app) ctx.sync(null);
-// Labels added or removed while the listener was down.
-if (ctx.app && config.needsInputLabel) {
-  repoList
-    .names()
-    .then((repos) => inputs.sync(repos))
-    .then((found) => titles.seed(found))
-    .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+if (ctx.app) {
+  // The repositories listed at start (without their configs): the listing also warns about
+  // the permissions an installation hasn't accepted (repos.mjs).
+  const listed = repoList.names();
+  // Labels added or removed while the listener was down.
+  if (config.needsInputLabel) {
+    listed
+      .then((repos) => inputs.sync(repos))
+      .then((found) => titles.seed(found))
+      .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+  } else listed.catch((error) => log(`Listing the repositories: ${error.message ?? error}`));
 }
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it

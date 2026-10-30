@@ -24,7 +24,7 @@ import {
   loadGrants,
   refusedByGrants,
 } from "./grants.mjs";
-import { appSettingsUrl } from "./github-app.mjs";
+import { appSettingsUrl, missingPermissions } from "./github-app.mjs";
 import {
   CONFIG_FILE,
   defaultSettings,
@@ -74,22 +74,31 @@ export function repoStatus(info, found, onboarded) {
 }
 
 // The dashboard's Manage App links, all on GitHub: { name, installUrl, settingsUrl,
-// installations: [{ account, url }] }. `app`: the stored credentials ({ slug, owner, html_url })
-// with what GET /app said at start ({ name, owner, ownerType }, github-app.mjs
-// checkAppEvents()), which may not have answered yet. `installUrl`: GitHub's install page,
-// which lists every account the App can be installed on, with Configure on those where it is;
-// an installation's `url` is that account's Configure page.
+// missingEvents, missingPermissions, installations: [{ account, url, missing }] }. `app`: the
+// stored credentials ({ slug, owner, html_url }) with what GET /app said last ({ name,
+// owner, ownerType, missingEvents, missingPermissions }, github-app.mjs checkAppSettings(), at
+// start and with each listing), which may not have answered yet. `installUrl`: GitHub's install page, which lists every account the
+// App can be installed on, with Configure on those where it is; an installation's `url` is
+// that account's Configure page, where an owner accepts the App's new permissions, and its
+// `missing` what it has yet to accept: what the App itself lacks is the App's settings' to fix.
 export function appLinks(githubUrl, app, installations = []) {
   const page = app.html_url ?? `${githubUrl}/apps/${encodeURIComponent(app.slug)}`;
+  const missingPermissions = app.missingPermissions ?? [];
   return {
     name: app.name ?? app.slug,
     installUrl: `${page}/installations/new`,
     settingsUrl: appSettingsUrl(githubUrl, app),
-    installations,
+    missingEvents: app.missingEvents ?? [],
+    missingPermissions,
+    installations: installations.map(({ missing = [], ...i }) => ({
+      ...i,
+      missing: missing.filter((p) => !missingPermissions.includes(p)),
+    })),
   };
 }
 
-// `app`: asApp(), asInstallation(), request() and remember() (github-app.mjs). `store`: the
+// `app`: asApp(), asInstallation(), request(), remember() and rememberPermissions()
+// (github-app.mjs), and settings(), which reads the App's settings again (server.mjs checkApp()). `store`: the
 // onboarding store (onboarding.mjs). `grants()` and `fs` (realpath, stat): what a run reads
 // too, the operator's grants folder and the listener's filesystem.
 export function createRepoList({
@@ -103,17 +112,33 @@ export function createRepoList({
 }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
-  // The installations as last listed, [{ account, url }]: the Manage App links.
+  // The installations as last listed, [{ account, url, missing }]: the Manage App links.
   let installed = [];
+  // installation id → what it lacked when last warned about ("" for nothing).
+  const warned = new Map();
   // "owner/repo" → { at, base, has, errors, settings }: the parsed settings are kept (not the
   // text) so the grant checks run again at each list, without asking GitHub.
   const configs = new Map();
 
   async function fetchRepos() {
+    // The App's settings read again first (server.mjs checkApp()): the links filter what its
+    // installations lack by what it lacks itself, as it is now.
+    // Null when GitHub didn't say: an installation's warnings are then left for the next
+    // listing, as what it lacks may be the App's own, which no owner can accept.
+    const appLacks = (await app.settings?.()) ?? null;
     const installations = await paginate((path) => app.asApp("GET", path), "/app/installations");
     const infos = [];
-    installed = installations.map((i) => ({ account: i.account?.login ?? null, url: i.html_url }));
+    installed = installations.map((i) => ({
+      account: i.account?.login ?? null,
+      url: i.html_url,
+      // None when GitHub didn't say: the warnings are for what it says is missing.
+      missing: i.permissions ? missingPermissions(i.permissions) : [],
+    }));
+    if (appLacks) {
+      installations.forEach((i, n) => warnInstallation(i, installed[n].missing, appLacks));
+    }
     for (const installation of installations) {
+      app.rememberPermissions?.(installation);
       const repos = await paginate(
         (path) => app.asInstallation(installation.id, "GET", path),
         "/installation/repositories",
@@ -126,6 +151,18 @@ export function createRepoList({
       }
     }
     return infos.sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }
+
+  // What an installation lacks of what its App has: an owner of its account has yet to accept
+  // it (docs/setup.md). Logged when it changes, not at each listing.
+  function warnInstallation(installation, missing, appLacks) {
+    const lacks = missing.filter((p) => !appLacks.includes(p)).join(", ");
+    if (lacks && warned.get(installation.id) !== lacks) {
+      log(
+        `The GitHub App's installation on ${installation.account?.login ?? installation.id} lacks ${lacks}: an owner of the account accepts the new permissions on ${installation.html_url} (docs/setup.md)`,
+      );
+    }
+    warned.set(installation.id, lacks);
   }
 
   function repos() {

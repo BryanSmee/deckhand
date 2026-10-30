@@ -41,29 +41,49 @@ export function appSettingsUrl(githubUrl, { slug, owner, ownerType }) {
     : `${githubUrl}/settings/apps/${app}`;
 }
 
-// The App's settings, read at start (`asApp`, the App's own calls): a warning for each event of
-// APP_EVENTS it isn't subscribed to. An App created before a feature lacks its events, and
-// nothing else tells the operator (docs/setup.md). Resolves to the missing ones and what the
-// dashboard's links need, { missing, app: { name, owner, ownerType } } (app null when GitHub
-// refused). `credentials`: the stored App, the fallback for its slug and owner.
-export async function checkAppEvents(asApp, log, { githubUrl, credentials = {} } = {}) {
+// The permissions of APP_PERMISSIONS that `has` (an App's or an installation's, as GitHub lists
+// them) lacks, or holds at a lower level: ["actions: read", …].
+export function missingPermissions(has = {}, wanted = APP_PERMISSIONS) {
+  return Object.entries(wanted)
+    .filter(([name, level]) => !covers(has?.[name], level))
+    .map(([name, level]) => `${name}: ${level}`);
+}
+
+const LEVELS = ["read", "write", "admin"];
+const covers = (has, level) => LEVELS.indexOf(has) >= Math.max(LEVELS.indexOf(level), 0);
+
+// The App's settings (`asApp`, the App's own calls), read at start and with each listing of its
+// repositories (repos.mjs): a warning for each event of APP_EVENTS it isn't subscribed to, and
+// each permission of APP_PERMISSIONS it lacks. An App created before a feature lacks its events
+// and permissions, and nothing else tells the operator (docs/setup.md); what its installations
+// have yet to accept is the listing's to say. Resolves to the missing ones and what the
+// dashboard's links need, { missing, permissions, app: { name, owner, ownerType } } (app null
+// when GitHub refused). `credentials`: the stored App, the fallback for its slug and owner.
+export async function checkAppSettings(asApp, log, { githubUrl, credentials = {} } = {}) {
   const res = await asApp("GET", "/app");
-  if (!res.ok) return { missing: [], app: null };
-  const { events = [], name, slug, owner: account } = await res.json();
+  if (!res.ok) return { missing: [], permissions: [], app: null };
+  const { events = [], permissions: has = {}, name, slug, owner: account } = await res.json();
   const app = {
     name: name ?? credentials.slug ?? null,
     slug: slug ?? credentials.slug ?? null,
     owner: account?.login ?? credentials.owner ?? null,
     ownerType: account?.type ?? null,
   };
+  const where = githubUrl && app.slug ? ` (${appSettingsUrl(githubUrl, app)})` : "";
   const missing = APP_EVENTS.filter((e) => !events.includes(e));
   if (missing.length) {
-    const where = githubUrl && app.slug ? ` (${appSettingsUrl(githubUrl, app)})` : "";
     log(
       `The GitHub App isn't subscribed to ${missing.join(", ")}: turn ${missing.length > 1 ? "them" : "it"} on under Subscribe to events in its settings${where} (docs/setup.md)`,
     );
   }
-  return { missing, app };
+  const permissions = missingPermissions(has);
+  if (permissions.length) {
+    const them = permissions.length > 1 ? "them" : "it";
+    log(
+      `The GitHub App lacks the permission${permissions.length > 1 ? "s" : ""} ${permissions.join(", ")}: add ${them} under Permissions in its settings${where}, then accept ${them} on each installation (docs/setup.md)`,
+    );
+  }
+  return { missing, permissions, app };
 }
 
 // A sandbox gets less than the App: no deployments, nothing outside its repo, and its code
@@ -114,6 +134,16 @@ export function readsOf(extra = {}) {
   );
 }
 
+// Permissions a run's token goes without when its installation lacks them (it hasn't accepted
+// them yet, or the App was created before them), rather than GitHub refusing the whole token:
+// what needs one is refused by the GitHub gateway instead, saying which (github-gateway.mjs
+// NEEDS). Any other permission stays required: a token without it fails, as it would have.
+// `actions`: reading CI runs and logs, which a run can do without.
+export const OPTIONAL_PERMISSIONS = new Set(["actions"]);
+// How long an installation's permissions are trusted before GitHub is asked again: an owner
+// accepting new ones is also told by an `installation` delivery (rememberPermissions()).
+export const PERMISSIONS_MS = 5 * 60000;
+
 // Installation tokens last an hour: a cached one is renewed when less than this is left, so
 // whoever gets it can use it for at least that long.
 export const REFRESH_MS = 10 * 60000;
@@ -153,6 +183,10 @@ export function createGitHubApp({
   log = () => {},
 }) {
   const installations = new Map(); // "owner/repo" → installation id
+  // installation id → { permissions, url, account, at }, as GitHub last said; and the ones
+  // being asked.
+  const granted = new Map();
+  const asking = new Map();
   const tokens = new Map(); // "<installation>:<repo or *>" → Promise<{ token, expiresAt }>
 
   function jwt() {
@@ -204,31 +238,89 @@ export function createGitHubApp({
     if (!installations.has(key)) {
       const found = await json(await call("GET", `/repos/${key}/installation`, jwt()), repo);
       installations.set(key, found.id);
+      rememberPermissions(found);
     }
     return installations.get(key);
   }
 
-  // `repo`: a token for that repo alone, with the sandbox's permissions (and `extra`); none:
-  // the whole installation with the App's, for the listener's own calls.
-  function token(installationId, repo, extra = {}) {
-    // The levels too: a read-only token is not a writing one.
-    const levels = Object.entries(extra).map(([name, level]) => `${name}=${level}`);
-    const key = `${installationId}:${repo ?? "*"}:${levels.sort().join(",")}`;
-    const cached = tokens.get(key);
-    if (cached) {
-      const still = cached.then((t) => (t.expiresAt - now() > REFRESH_MS ? t : null));
-      return still.then((t) => t ?? mint(key, installationId, repo, extra));
-    }
-    return mint(key, installationId, repo, extra);
+  // An installation as GitHub describes it (a lookup's answer, an `installation` delivery's):
+  // what it was granted, until PERMISSIONS_MS later.
+  function rememberPermissions(installation) {
+    if (!installation?.id || !installation.permissions) return;
+    granted.set(installation.id, {
+      permissions: installation.permissions,
+      url: installation.html_url ?? null,
+      account: installation.account?.login ?? null,
+      at: now(),
+    });
   }
 
-  function mint(key, installationId, repo, extra) {
-    const body = repo
-      ? {
-          repositories: [repo.split("/")[1]],
-          permissions: { ...SANDBOX_PERMISSIONS, ...extra },
+  // What the installation was granted, or null when GitHub couldn't say: then a token asks
+  // for everything, as before optional permissions. Asked once at a time.
+  async function grantedTo(installationId) {
+    const known = granted.get(installationId);
+    if (known && now() - known.at < PERMISSIONS_MS) return known;
+    if (!asking.has(installationId)) {
+      const pending = askGranted(installationId).finally(() => asking.delete(installationId));
+      asking.set(installationId, pending);
+    }
+    return (await asking.get(installationId)) ?? known ?? null;
+  }
+
+  async function askGranted(installationId) {
+    try {
+      const res = await call("GET", `/app/installations/${installationId}`, jwt());
+      if (!res.ok) {
+        log(`GitHub GET /app/installations/${installationId}: ${res.status} ${await res.text()}`);
+        return null;
+      }
+      rememberPermissions({ ...(await res.json()), id: installationId });
+    } catch (error) {
+      log(`GitHub GET /app/installations/${installationId}: ${error.message ?? error}`);
+    }
+    return granted.get(installationId) ?? null;
+  }
+
+  // The optional permissions of `wanted` (name → level) the repo's installation lacks:
+  // { missing: ["actions: read"], account, url } (its page, where an owner accepts them), or
+  // null when it lacks none, or GitHub couldn't say.
+  async function lacking(repo, wanted) {
+    const optional = Object.entries(wanted).filter(([name]) => OPTIONAL_PERMISSIONS.has(name));
+    if (!optional.length) return null;
+    const found = await grantedTo(await installationOf(repo));
+    const missing = found && missingPermissions(found.permissions, Object.fromEntries(optional));
+    return missing?.length ? { missing, account: found.account, url: found.url } : null;
+  }
+
+  // `repo`: a token for that repo alone, with the sandbox's permissions (and `extra`), but for
+  // the optional ones its installation lacks; none: the whole installation with the App's, for
+  // the listener's own calls.
+  async function token(installationId, repo, extra = {}) {
+    let permissions;
+    if (repo) {
+      permissions = { ...SANDBOX_PERMISSIONS, ...extra };
+      const optional = Object.keys(permissions).some((name) => OPTIONAL_PERMISSIONS.has(name));
+      const found = optional && (await grantedTo(installationId));
+      for (const [name, level] of Object.entries(permissions)) {
+        if (found && OPTIONAL_PERMISSIONS.has(name) && !covers(found.permissions[name], level)) {
+          delete permissions[name];
         }
-      : undefined;
+      }
+    }
+    // The levels too: a read-only token is not a writing one.
+    const levels = Object.entries(permissions ?? {}).map(([name, level]) => `${name}=${level}`);
+    const key = `${installationId}:${repo ?? "*"}:${levels.sort().join(",")}`;
+    const cached = tokens.get(key);
+    // A failing mint fails every caller waiting on it: one call to GitHub, not one each.
+    if (cached) {
+      const still = await cached.then((t) => (t.expiresAt - now() > REFRESH_MS ? t : null));
+      if (still) return still;
+    }
+    return mint(key, installationId, repo, permissions);
+  }
+
+  function mint(key, installationId, repo, permissions) {
+    const body = repo ? { repositories: [repo.split("/")[1]], permissions } : undefined;
     const minted = call("POST", `/app/installations/${installationId}/access_tokens`, jwt(), body)
       .then((res) => json(res, `token for installation ${installationId}`))
       .then((t) => ({ token: t.token, expiresAt: Date.parse(t.expires_at) }));
@@ -280,7 +372,9 @@ export function createGitHubApp({
   return {
     jwt,
     remember,
+    rememberPermissions,
     installationOf,
+    lacking,
     token,
     repoToken,
     request,

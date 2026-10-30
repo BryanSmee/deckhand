@@ -10,6 +10,7 @@ import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
   logStorage,
+  needed,
   readsThread,
   redactBody,
   secretOf,
@@ -35,6 +36,8 @@ async function gateway(
     checkGraphql = async (run, body) => ({ body, write: false, creates: [] }),
     wroteWrite,
     respond,
+    lacking,
+    forks,
   } = {},
 ) {
   const calls = [];
@@ -54,6 +57,7 @@ async function gateway(
   const minted = [];
   const fake = {
     repoToken: async (repo, extra) => (minted.push([repo, extra]), { token: TOKEN }),
+    ...(lacking && { lacking }),
   };
   const logged = [];
   let anonymous = null;
@@ -69,6 +73,7 @@ async function gateway(
     ...(checkWrite && { checkWrite }),
     ...(checkGraphql && { checkGraphql }),
     ...(wroteWrite && { wroteWrite }),
+    ...(forks && { forks }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it.
@@ -929,6 +934,121 @@ test("an Actions log's redirect is followed by the gateway, without credentials;
     assert.deepEqual([res.status, res.headers.get("location")], [302, location]);
   }
   assert.equal(stored.length, 3);
+});
+
+test("a call needing an optional permission the installation lacks is refused, naming it", async (t) => {
+  const asked = [];
+  const gw = await gateway(t, {
+    lacking: async (repo, wanted) => {
+      asked.push([repo, wanted]);
+      return wanted.actions
+        ? { missing: ["actions: read"], account: "org", url: "https://github.com/inst/7" }
+        : null;
+    },
+  });
+  const { secret, notes } = gw.register({ actions: "read" });
+  const res = await gw.call("/api/v3/repos/Org/Repo/actions/runs?branch=x", { secret });
+  assert.equal(res.status, 403);
+  const { message } = await res.json();
+  assert.match(message, /^Deckhand: this needs the GitHub App's actions: read permission/);
+  assert.match(
+    message,
+    /installation on org lacks: .* accepts it on https:\/\/github\.com\/inst\/7/,
+  );
+  assert.match(notes.at(-1), /refused the run's GitHub call .*actions: read/);
+  assert.equal(gw.calls.length, 0);
+  assert.deepEqual(asked, [["org/repo", { actions: "read" }]]);
+  // Anything else goes on, asking for none.
+  assert.equal((await gw.call("/api/v3/repos/org/repo/issues", { secret })).status, 200);
+  assert.deepEqual(asked.at(-1), ["org/repo", {}]);
+  assert.equal(gw.calls.length, 1);
+});
+
+test("a work run's Actions log, its installation without `actions`: refused naming it, before the fork check", async (t) => {
+  const checked = [];
+  const gw = await gateway(t, {
+    lacking: async (repo, wanted) =>
+      wanted.actions ? { missing: ["actions: read"], account: "org", url: null } : null,
+    // The fork check reads GitHub with the same permission: it would answer a 502.
+    forks: {
+      restricted: (run) => run.push,
+      checkCall: async (run, call) => {
+        checked.push(call.path);
+        return { status: 502, message: "couldn't check whether it is a fork's; try again" };
+      },
+    },
+  });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  const res = await gw.call("/api/v3/repos/org/repo/actions/runs/1/logs", { secret });
+  assert.equal(res.status, 403);
+  assert.match((await res.json()).message, /actions: read permission/);
+  assert.match(notes.at(-1), /actions: read/);
+  assert.deepEqual(checked, []);
+  assert.equal(gw.calls.length, 0);
+});
+
+test("needed: its own repository's path's optional permission, read, and a write's own", () => {
+  const repo = "Org/Repo";
+  assert.deepEqual(needed("repos/org/repo/actions/runs/1/logs", {}, repo), { actions: "read" });
+  assert.deepEqual(needed("repos/ORG/repo/ACTIONS", {}, repo), { actions: "read" });
+  // Another repository's (a public one's CI), or one by id: GitHub's to answer.
+  assert.deepEqual(needed("repos/cli/cli/actions/runs", {}, repo), {});
+  assert.deepEqual(needed("repositories/12/actions", {}, repo), {});
+  assert.deepEqual(needed("repos/org/repo/actions/runs/1/rerun", { actions: "write" }, repo), {
+    actions: "write",
+  });
+  assert.deepEqual(needed("repos/org/repo/issues", { issues: "write" }, repo), {
+    issues: "write",
+  });
+  assert.deepEqual(needed("repos/org/repo/actionsx", {}, repo), {});
+});
+
+test("a checked write needing an optional permission the installation lacks: refused, REST or GraphQL", async (t) => {
+  // `pull_requests` stands for an optional permission here: no route carries one yet.
+  const lacking = async (repo, wanted) => {
+    const missing = Object.entries(wanted)
+      .filter(([name, level]) => ["pull_requests", "actions"].includes(name) && level === "write")
+      .map(([name, level]) => `${name}: ${level}`);
+    return missing.length ? { missing, account: "org", url: null } : null;
+  };
+  let graphql = { write: true, permissions: { actions: "write" } };
+  const gw = await gateway(t, {
+    lacking,
+    checkGraphql: async (run, body) => ({ body, creates: [], ...graphql }),
+  });
+  const { secret, notes } = gw.register(undefined, { mode: "work", push: true, issue: 1 });
+  // A pull request's own write: its route's permissions (PULL_WRITE).
+  const pull = await gw.call("/api/v3/repos/org/repo/pulls/12", {
+    secret,
+    method: "PATCH",
+    body: '{"title": "T"}',
+  });
+  assert.equal(pull.status, 403);
+  assert.match((await pull.json()).message, /pull_requests: write permission/);
+  assert.match(notes.at(-1), /refused the run's GitHub write PATCH .*pulls\/12/);
+  const mutation = await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "mutation { x }"}',
+  });
+  assert.equal(mutation.status, 403);
+  assert.match((await mutation.json()).message, /actions: write permission/);
+  assert.equal(gw.calls.length, 0);
+  // A query, and a write that needs none of them, go on.
+  graphql = { write: false, permissions: { actions: "write" } };
+  const query = await gw.call("/api/graphql", {
+    secret,
+    method: "POST",
+    body: '{"query": "{ viewer { login } }"}',
+  });
+  assert.equal(query.status, 200);
+  const issue = await gw.call("/api/v3/repos/org/repo/issues/1", {
+    secret,
+    method: "PATCH",
+    body: '{"title": "T"}',
+  });
+  assert.equal(issue.status, 200);
+  assert.equal(gw.calls.length, 2);
 });
 
 test("logStorage: GitHub's log storage and its own host, nothing else", () => {

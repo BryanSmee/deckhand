@@ -472,13 +472,18 @@ export interface Repo {
 
 // Where the App is managed on GitHub (repos.mjs appLinks()). installUrl: GitHub's page that
 // installs it on an account, or configures an installation; settingsUrl: its permissions,
-// events and webhook. installations: each account it is installed on, with that
-// installation's own page.
+// events and webhook. missingEvents, missingPermissions: what its settings lack of what Deckhand
+// asks for (listener/github-app.mjs APP_EVENTS, APP_PERMISSIONS: "actions: read"), as read at
+// the listener's start and with each listing of the repositories. installations: each account it is installed on, with that
+// installation's own page, where an owner accepts the App's new permissions, and those it has
+// yet to accept (`missing`).
 export interface AppLinks {
   name: string;
   installUrl: string;
   settingsUrl: string;
-  installations: { account: string | null; url: string }[];
+  missingEvents: string[];
+  missingPermissions: string[];
+  installations: { account: string | null; url: string; missing: string[] }[];
 }
 
 // GET api/repos, and POST api/repos/refresh (429 when refreshed a moment ago).

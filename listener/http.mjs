@@ -430,6 +430,8 @@ export function createHttp(ctx, { dashboardDir }) {
     // Only the repository list's: nothing runs on a push.
     if (event === "push") return;
     if (event === "installation" || event === "installation_repositories") {
+      // Its permissions as they are now: accepting new ones sends `new_permissions_accepted`.
+      app.rememberPermissions?.(payload.installation);
       const added = [...(payload.repositories ?? []), ...(payload.repositories_added ?? [])];
       for (const r of added) app.remember(r.full_name, payload.installation?.id);
       const repos = onboardingTargets(config, event, payload, skip);
