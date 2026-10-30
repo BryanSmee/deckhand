@@ -46,7 +46,7 @@ import {
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { INPUT_VERSION, pullInput, RULES } from "./policies.mjs";
+import { denyKept, INPUT_VERSION, passed, pullInput, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
@@ -684,9 +684,6 @@ export function policyWhy(rule, messages) {
 
 const short = (sha) => (sha ? sha.slice(0, 7) : "?");
 
-// A built-in gate that passed, as a decision lists it (decisions.mjs).
-const passed = (name) => ({ name, passed: true });
-
 // The comments an auto-merge posts on the pull request, for the maintainer to find later.
 // `fixes`: how many fix runs came before (a boolean in waits saved before the rounds).
 export function mergedText(sha, method, fixes, review = null) {
@@ -1223,27 +1220,13 @@ export function createReviews({
   function asking(pr) {
     if (!policies) return null;
     return {
-      deny: async (rule, repo, ref, input, { gates = [] } = {}) => {
-        const { applied, messages, input: saw } = await policies.decide(rule, repo, ref, input);
-        if (applied) {
-          const decision = rule.replace(/^deny_/, "");
-          const entry = {
-            decision,
-            rule,
-            denied: messages.length > 0,
-            messages,
-            pr: pr.number,
-            gates,
-            ...(saw && { input: saw }),
-          };
-          try {
-            decided(repo, pr, entry);
-          } catch (error) {
-            log(`${repo}#${pr.number}: keeping its ${rule} decision: ${error.message ?? error}`);
-          }
-        }
-        return messages;
-      },
+      deny: (rule, repo, ref, input, { gates = [] } = {}) =>
+        denyKept(policies, rule, repo, ref, input, {
+          pr,
+          gates,
+          keep: (entry) => decided(repo, pr, entry),
+          log,
+        }),
     };
   }
 

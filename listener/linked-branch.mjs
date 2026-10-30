@@ -13,6 +13,7 @@
 import { branchAllowed } from "./broker.mjs";
 import { getJson } from "./github.mjs";
 import { runTraits } from "./github-writes.mjs";
+import { denyKept, passed } from "./policies.mjs";
 
 // "Café : bientôt" → "issue-12-cafe-bientot", as draft-pr.sh names it from the title. A title
 // with no Latin letter or digit gives "task": the gateway takes issue-<n>-<something> only.
@@ -103,33 +104,28 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
     if (!policies) return [];
     const { repo, number, base, live } = task;
     const rule = "deny_link_branch";
-    const { applied, messages, input } = await policies.decide(rule, repo, base, () => ({
-      repo: repo.toLowerCase(),
-      mode: run.mode ?? live.mode,
-      ...runTraits(run),
-      issue: number,
-      labels: (issue.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),
-      branch: name,
+    return denyKept(
+      policies,
+      rule,
+      repo,
       base,
-      oid,
-    }));
-    if (applied) {
-      const passed = (name) => ({ name, passed: true });
-      try {
-        decided(live.key, {
-          decision: "link_branch",
-          rule,
-          denied: messages.length > 0,
-          messages,
-          pr: number,
-          gates: [passed("A work run on its issue"), passed("No branch of the issue yet")],
-          ...(input && { input }),
-        });
-      } catch (error) {
-        log(`${live.key}: keeping its ${rule} decision: ${error.message ?? error}`);
-      }
-    }
-    return messages;
+      () => ({
+        repo: repo.toLowerCase(),
+        mode: run.mode ?? live.mode,
+        ...runTraits(run),
+        issue: number,
+        labels: (issue.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),
+        branch: name,
+        base,
+        oid,
+      }),
+      {
+        pr: { number },
+        gates: [passed("A work run on its issue"), passed("No branch of the issue yet")],
+        keep: (entry) => decided(live.key, entry),
+        log,
+      },
+    );
   }
 
   return { link };

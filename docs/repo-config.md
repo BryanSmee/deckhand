@@ -858,7 +858,8 @@ It is off without the key, and each conflict found is a run, so a bill.
 - A conflict run is a fix run too: the [policies](#policies) are asked first (`deny_fix`,
   with [`reason: "conflict"`](#the-review-and-fix-input)). A refusal starts nothing: a "No
   rebase run" comment on the pull request quotes the messages, and the pair counts as tried,
-  so it isn't asked again until a push or a new base commit. Without a policy that defines
+  so it isn't asked again until a push or a new base commit. Refused again for the same
+  messages, it isn't said again. Without a policy that defines
   `deny_fix` (Deckhand's defaults don't), conflict runs start as before.
 - The operator's `CONFLICT_CHECK_MINUTES` (default 5) is the shortest interval: a smaller
   `check_minutes` gets that one (with a warning in the run logs), and `0` turns conflict

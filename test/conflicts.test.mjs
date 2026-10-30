@@ -50,12 +50,14 @@ function setup({
   sleep,
   policies = null,
   fixes = 0,
+  reply = null,
 } = {}) {
   let time = 1_800_000_000_000;
   const calls = [];
   const accepted = [];
   const replies = [];
   const decided = [];
+  const logged = [];
   const routes = {
     "/repos/org/repo/pulls/31/files?per_page=100&page=1": [
       { filename: "migrations/1.sql", status: "modified", additions: 3, deletions: 1 },
@@ -74,6 +76,7 @@ function setup({
     accepted,
     replies,
     decided,
+    logged,
     advance: (ms) => (time += ms),
   };
   w.conflicts = createConflicts({
@@ -95,7 +98,8 @@ function setup({
     policies,
     decided: (key, entry) => decided.push({ key, ...entry }),
     fixes: (repo, number) => (repo === "org/repo" && number === 31 ? fixes : 0),
-    reply: async (repo, number, text) => replies.push({ repo, number, text }),
+    reply: reply ?? (async (repo, number, text) => replies.push({ repo, number, text })),
+    log: (line) => logged.push(line),
     now: () => time,
     ...(sleep ? { sleep } : {}),
   });
@@ -628,13 +632,14 @@ test("deny_fix allows: the rebase run starts, asked with reason conflict", async
 });
 
 test("deny_fix refuses: no run, one comment quoting why, the pair not asked again", async (t) => {
+  let reason = "conflicts in `migrations/` wait for a human";
   const policy = policyEngine(t, {
     files: { "fix.rego": "package deckhand" },
     messages: (i, rule) =>
       rule === "deny_fix" &&
       i.reason === "conflict" &&
       i.pr.files.some((f) => f.path.startsWith("migrations/"))
-        ? ["conflicts in `migrations/` wait for a human"]
+        ? [reason]
         : [],
   });
   const w = setup({ policies: policy.engine });
@@ -658,11 +663,38 @@ test("deny_fix refuses: no run, one comment quoting why, the pair not asked agai
   await w.conflicts.check();
   assert.equal(policy.evals.length, 1);
   assert.equal(w.replies.length, 1);
-  // The base moved: asked again, refused again.
+  // The base moved: asked again, refused again for the same reason, not said again.
   w.baseSha = "base-2";
   await w.conflicts.check();
   assert.equal(policy.evals.length, 2);
+  assert.equal(w.replies.length, 1);
+  assert.equal(w.decided.length, 2);
+  // Another reason: said.
+  reason = "on hold";
+  w.baseSha = "base-3";
+  await w.conflicts.check();
   assert.equal(w.replies.length, 2);
+  assert.match(w.replies[1].text, /`on hold`/);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("deny_fix refuses and the comment fails: logged, no run, the pair still tried", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    messages: (i, rule) => (rule === "deny_fix" ? ["no"] : []),
+  });
+  const w = setup({
+    policies: policy.engine,
+    reply: async () => {
+      throw new Error("GitHub said 502");
+    },
+  });
+  await w.conflicts.tick();
+  assert.deepEqual(w.accepted, []);
+  assert.ok(w.logged.includes("org/repo#30: saying no rebase run: GitHub said 502"));
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(policy.evals.length, 1);
   assert.deepEqual(w.accepted, []);
 });
 

@@ -10,11 +10,13 @@
 // for a new push or a new base commit.
 //
 // Before a run starts, the repo's policies are asked (`deny_fix`, `reason: "conflict"`): a
-// refusal starts nothing, says why on the pull request, and keeps the pair as an attempt.
+// refusal starts nothing, says why on the pull request (once for the same reasons: a base
+// that keeps moving doesn't repeat it), and keeps the pair as an attempt.
 import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
 import { parseKey, headInRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
+import { denyKept, passed } from "./policies.mjs";
 import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
@@ -208,17 +210,21 @@ export function createConflicts({
     if (!baseSha) return null;
     const pair = { pr: number, head: pr.head.sha, base: baseSha };
     const last = attempts.get(key);
+    // What the last attempt's policies said, when they refused it: the same refusal again
+    // isn't said again.
+    const before = last?.pr === number ? last.denied : undefined;
     if (last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base) {
       return null;
     }
     const denied = await deny(repo, key, pr, issue, base);
     // Checked again: a comment may have come during the calls above.
     if (busy(key)) return null;
-    attempts.set(key, { ...pair, at: now() });
+    attempts.set(key, { ...pair, at: now(), ...(denied.length && { denied }) });
     attempts.save();
     if (denied.length) {
       const why = policyWhy("deny_fix", denied);
       log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, no rebase run, ${why}`);
+      if (JSON.stringify(before) === JSON.stringify(denied)) return null;
       try {
         await reply(repo, number, noRebaseText(why, pr.base.ref));
       } catch (error) {
@@ -254,34 +260,29 @@ export function createConflicts({
   async function deny(repo, key, pr, issue, ref) {
     if (!policies) return [];
     const extra = { ...fixInput(fixes(repo, pr.number)), ci: false, reason: "conflict" };
-    const { applied, messages, input } = await policies.decide("deny_fix", repo, ref, () =>
-      readPullInput(
-        github,
-        { decision: "fix", repo, pr, issue, now },
-        { ...extra, round: null, rounds: null },
-      ),
+    return denyKept(
+      policies,
+      "deny_fix",
+      repo,
+      ref,
+      () =>
+        readPullInput(
+          github,
+          { decision: "fix", repo, pr, issue, now },
+          { ...extra, round: null, rounds: null },
+        ),
+      {
+        pr,
+        gates: [
+          passed("In conflict with its base"),
+          passed("No run going"),
+          passed("Nobody's input awaited"),
+          passed("Not tried at this head and base"),
+        ],
+        keep: (entry) => decided(key, entry),
+        log,
+      },
     );
-    if (applied) {
-      try {
-        decided(key, {
-          decision: "fix",
-          rule: "deny_fix",
-          denied: messages.length > 0,
-          messages,
-          pr: pr.number,
-          gates: [
-            { name: "In conflict with its base", passed: true },
-            { name: "No run going", passed: true },
-            { name: "Nobody's input awaited", passed: true },
-            { name: "Not tried at this head and base", passed: true },
-          ],
-          ...(input && { input }),
-        });
-      } catch (error) {
-        log(`${key}: keeping its deny_fix decision: ${error.message ?? error}`);
-      }
-    }
-    return messages;
   }
 
   // The base branch's latest commit: a pull request's own base.sha can lag behind it.

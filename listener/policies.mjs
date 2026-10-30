@@ -97,6 +97,35 @@ export function pullInput({ decision, info, pr, files, issue, review = null, now
   };
 }
 
+// A built-in gate that passed, as a decision lists it (decisions.mjs).
+export const passed = (name) => ({ name, passed: true });
+
+// `rule` asked of `policies` (createPolicies()) about pull request `pr` ({ number }: an
+// issue's, for deny_link_branch): its messages, as deny()'s. When a policy applied, the
+// decision is kept for the task's page: `keep(entry)` (decisions.mjs record()) with the
+// built-in `gates` that passed before ([{ name, passed }]) and the input the rules saw.
+// reviews.mjs, conflicts.mjs and linked-branch.mjs share it, so their entries stay alike.
+export async function denyKept(policies, rule, repo, ref, input, { pr, gates = [], keep, log }) {
+  const { applied, messages, input: saw } = await policies.decide(rule, repo, ref, input);
+  if (applied) {
+    const entry = {
+      decision: rule.replace(/^deny_/, ""),
+      rule,
+      denied: messages.length > 0,
+      messages,
+      pr: pr.number,
+      gates,
+      ...(saw && { input: saw }),
+    };
+    try {
+      keep(entry);
+    } catch (error) {
+      log(`${repo}#${pr.number}: keeping its ${rule} decision: ${error.message ?? error}`);
+    }
+  }
+  return messages;
+}
+
 // One decision's evaluation, compile included. Long enough for `opa` to start and load a few
 // files, short enough that a loop in a policy doesn't hold a merge decision for long.
 export const TIMEOUT_MS = 2000;
