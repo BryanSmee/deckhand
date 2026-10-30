@@ -488,7 +488,9 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   `on: manual`) turns on `/mode review` alone.
 - **By itself** with `on: ready`: when a pull request is marked ready for review, or opened as
   ready, if it is on a branch of the repository (never a fork's) and was opened by Deckhand
-  or by an allowed user (`users`); other bots' are skipped. Each head commit is reviewed by
+  or by an allowed user (`users`). Other bots' (Dependabot's, say) are skipped by Deckhand's
+  default [`review.rego`](#the-default-policies), which a repository's own
+  `.deckhand/policy/review.rego` replaces. Each head commit is reviewed by
   itself once, across redeliveries and restarts: to review it again after new pushes,
   comment `/mode review`. A [policy](#policies) can skip it (`deny_review`).
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
@@ -980,7 +982,7 @@ maintainer. Six decisions:
 | Rule                  | When                                                                                                                                                                                                | A message does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `deny_merge`          | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                                        | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                                                                                                                                 |
-| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for.                            | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                                                                                                                                        |
+| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for.                            | Skips the review: the listener's log says why, nothing is posted; a policy error (not a rule's message) is asked again 10 seconds later first, then, on a pull request that turned ready, 5 minutes apart, 3 times. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                      |
 | `deny_fix`            | A [`review.fix`](#reviews) run, a [CI fix run](#ci-before-the-review), or a [conflict](#conflicts)'s rebase run, after its own checks, right before it is queued (`input.reason` tells them apart). | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. A conflict run refused: a "No rebase run" comment quotes them, and that head and base aren't tried again. |
 | `deny_link_branch`    | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).                             | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                                                                                                                             |
 | `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before the listener requests them on Deckhand's ready pull request, and again after a fix pushed to it.                                            | Requests nobody at that head commit: the listener's log says why, nothing is posted.                                                                                                                                                                                                                                                                                                                                                                            |
@@ -1003,20 +1005,20 @@ network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.matc
 issue, its Actions runs) and the review that decides it (`deny_review` and `deny_fix`
 [read most of it](#the-review-and-fix-input)):
 
-| Field               | What                                                                                                                                                   |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `version`           | `1`: the input's format, raised when a field changes meaning or goes.                                                                                  |
-| `decision`          | `"merge"`.                                                                                                                                             |
-| `time`              | Now, RFC 3339 in UTC (`"2026-10-26T10:00:00.000Z"`): `time.parse_rfc3339_ns(input.time)`.                                                              |
-| `repo`              | `name` (`"owner/repo"`), `private`, `default_branch`.                                                                                                  |
-| `pr`                | `number`, `author` (a login), `title`, `labels` (names), `base` and `head` (branches), `head_sha`, `draft`, `additions`, `deletions`, `changed_files`. |
-| `pr.files[]`        | `path`, `previous_path` (a rename's, else `null`), `status` (`added`, `modified`, `removed`, `renamed`…), `additions`, `deletions`.                    |
-| `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                |
-| `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                         |
-| `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
-| `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                        |
-| `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                    |
-| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.  |
+| Field               | What                                                                                                                                                                                                                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `version`           | `1`: the input's format, raised when a field changes meaning or goes.                                                                                                                                                                                    |
+| `decision`          | `"merge"`.                                                                                                                                                                                                                                               |
+| `time`              | Now, RFC 3339 in UTC (`"2026-10-26T10:00:00.000Z"`): `time.parse_rfc3339_ns(input.time)`.                                                                                                                                                                |
+| `repo`              | `name` (`"owner/repo"`), `private`, `default_branch`.                                                                                                                                                                                                    |
+| `pr`                | `number`, `author` (a login), `author_type` (GitHub's account type: `User`, `Bot`), `deckhand` (`true` when the App opened it), `title`, `labels` (names), `base` and `head` (branches), `head_sha`, `draft`, `additions`, `deletions`, `changed_files`. |
+| `pr.files[]`        | `path`, `previous_path` (a rename's, else `null`), `status` (`added`, `modified`, `removed`, `renamed`…), `additions`, `deletions`.                                                                                                                      |
+| `issue`             | The issue the pull request closes: `number`, `title`, `labels` (names).                                                                                                                                                                                  |
+| `review`            | The review that decides the merge: `verdict` (`approve`, `comment`), `rating` (out of 10), `allowed` (`max_allowed_severity`).                                                                                                                           |
+| `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                                                                                                                        |
+| `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                                                                                                                          |
+| `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                                                                                                                      |
+| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.                                                                                                    |
 
 ### The review and fix input
 
@@ -1400,6 +1402,8 @@ repository) and hold without any setup, under the operator's and the repository'
   share theirs), brainstorms, research (it gets no GitHub token, so it never reaches the
   gateway), and the repository's own `modes:` (`custom_mode`), where a new feature is
   refused unless its issue says otherwise.
+- **`review.rego`** for the reviews that start by themselves: it skips other bots' pull
+  requests ([below](#reviewrego)), which no allowlist stops, as the allowlist lists people.
 - **Broadening one feature**: a file with the same name replaces Deckhand's: the operator's
   `policy/gh-review-threads.rego` for every repository, or a repository's
   `.deckhand/policy/gh-review-threads.rego` for its own (a file with only `package deckhand`
@@ -1431,6 +1435,56 @@ The `gh-<feature>.rego` files:
 | `gh-checks.rego`    | `deny_github` (`read_checks`) | ✅                                                                                            | ✅              | ❌ (no token) | ✅ (refuses nothing: a same-name file turns it off) |
 
 Teams are never requested, whatever a policy says: `review.request` takes logins only.
+
+#### review.rego
+
+`review.rego` holds `deny_review` for the reviews that start by themselves
+([`review.on: ready`](#reviews)). The allowlist (`users`) lists people, so the built-in gate
+only checks a person who opens a pull request; another bot (Dependabot, GitHub Actions) is
+stopped here instead:
+
+<!-- review.rego: test/reviews.test.mjs checks this block is in policy/review.rego, and evaluates the next one with the real opa -->
+
+```rego
+# policy/review.rego (its rule)
+deny_review contains msg if {
+  input.pr.author_type == "Bot"
+  not input.pr.deckhand
+  msg := sprintf("%s is a bot: its pull requests aren't reviewed unless .deckhand/policy/review.rego lets them", [input.pr.author])
+}
+```
+
+A repository has a bot's ready pull requests on its branches reviewed (never a fork's) with a
+`.deckhand/policy/review.rego` of its own, which replaces this one. To review Dependabot's
+only:
+
+```rego
+# .deckhand/policy/review.rego
+package deckhand
+
+deny_review contains msg if {
+  input.pr.author_type == "Bot"
+  not input.pr.deckhand
+  input.pr.author != "dependabot[bot]"
+  msg := sprintf("%s's pull requests aren't reviewed", [input.pr.author])
+}
+```
+
+To review every bot's, a file with no rule, its comment naming `author_type` (the config check
+warns of a replacement that doesn't, below):
+
+```rego
+# .deckhand/policy/review.rego: every bot's pull requests are reviewed, whatever its author_type.
+package deckhand
+```
+
+**Upgrading with a `review.rego` of your own**: one written before this default (a
+`deny_review` on wip labels, say) replaces it, and other bots' ready pull requests are then
+reviewed, at the operator's cost. The config check warns of a `review.rego` that replaces
+Deckhand's and never names `author_type`, naming the file: the grants folder's at the start
+and on every repository's Policies tab (where no file of the repository's replaces it), a
+repository's at its onboarding check and on its Policies tab. Copy the rule above into it, or
+name `author_type` in a comment if bots' pull requests should be reviewed.
 
 `github.rego`, which a file of that name replaces as a whole:
 

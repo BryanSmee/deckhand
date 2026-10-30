@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ciState } from "../listener/ci.mjs";
+import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   CI_NEXT,
@@ -24,7 +25,7 @@ import {
   reviewLoop,
   stepsGoing,
 } from "../listener/reviews.mjs";
-import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
+import { policyEngine, tempDir, testConfig, hasOpa } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
 
@@ -279,13 +280,15 @@ function delivery(action = "ready_for_review", pr = {}, login = "alice") {
   };
 }
 
-test("reviewCandidate: ready pull requests of the repo, by the App or an allowed user", () => {
+test("reviewCandidate: ready pull requests of the repo, by the App, a bot or an allowed user", () => {
   const candidate = (p) => reviewCandidate(config, "pull_request", p);
   assert.deepEqual(candidate(delivery()), {
     repo: "org/repo",
     base: "trunk",
     pr: delivery().pull_request,
     author: "alice",
+    own: false,
+    bot: false,
   });
   // Opened as ready, or marked ready; not a draft, a push, an edit or a reopening.
   assert.ok(candidate(delivery("opened")));
@@ -295,12 +298,23 @@ test("reviewCandidate: ready pull requests of the repo, by the App or an allowed
   }
   assert.equal(reviewCandidate(config, "issue_comment", delivery()), null);
   // Deckhand's own: no user to check.
-  assert.equal(candidate(delivery("opened", {}, "deckhand-app[bot]")).author, null);
-  // Never a fork's, another bot's, an outsider's, or in a repo the operator doesn't allow.
+  const own = candidate(delivery("opened", {}, "deckhand-app[bot]"));
+  assert.deepEqual([own.author, own.own, own.bot], [null, true, false]);
+  // Another bot: the allowlist lists people, so policy/review.rego decides (deny_review).
+  const bot = candidate(delivery("opened", {}, "dependabot[bot]"));
+  assert.deepEqual([bot.author, bot.own, bot.bot], [null, false, true]);
+  // Without the App's login, its pull requests are another bot's.
+  const unknown = reviewCandidate(
+    { ...config, bot: null },
+    "pull_request",
+    delivery("opened", {}, "deckhand-app[bot]"),
+  );
+  assert.deepEqual([unknown.own, unknown.bot], [false, true]);
+  // Never a fork's (a bot's neither), an outsider's, or in a repo the operator doesn't allow.
   const fork = { head: { sha: "x", repo: { full_name: "mallory/repo" } } };
   assert.equal(candidate(delivery("ready_for_review", fork)), null);
+  assert.equal(candidate(delivery("ready_for_review", fork, "dependabot[bot]")), null);
   assert.equal(candidate(delivery("ready_for_review", { head: { sha: "x" } })), null);
-  assert.equal(candidate(delivery("opened", {}, "dependabot[bot]")), null);
   assert.equal(candidate(delivery("opened", {}, "mallory")), null);
   const elsewhere = { ...config, repos: ["org/other"] };
   assert.equal(reviewCandidate(elsewhere, "pull_request", delivery()), null);
@@ -333,6 +347,7 @@ function setup(
     policies,
     reply,
     now: () => time,
+    sleep: async () => {},
   });
   return { reviews, accepted, path, read, advance: (ms) => (time += ms) };
 }
@@ -405,6 +420,95 @@ test("createReviews: off without review.on, and the repo's users narrow the oper
   await narrowed.reviews.consider("pull_request", delivery("opened", {}, "deckhand-app[bot]"));
   assert.equal(narrowed.accepted.length, 1);
   assert.equal(narrowed.accepted[0].author, undefined);
+});
+
+// Deckhand's policy/review.rego, with the real opa, over the repo's `review` file if any.
+function reviewPolicies(t, repoFile = null) {
+  const github = async (repo, method, path) => {
+    if (path === "/repos/org/repo") return Response.json({ full_name: "org/repo" });
+    if (path.startsWith("/repos/org/repo/pulls/5/files?")) return Response.json([]);
+    if (path.startsWith("/repos/org/repo/contents/.deckhand/policy?")) {
+      if (repoFile === null) return new Response("{}", { status: 404 });
+      return Response.json([{ type: "file", name: "review.rego", sha: "blob-1" }]);
+    }
+    if (path === "/repos/org/repo/git/blobs/blob-1") {
+      return Response.json({
+        content: Buffer.from(repoFile).toString("base64"),
+        encoding: "base64",
+      });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const policies = createPolicies({
+    config: {},
+    github,
+    run: opaRunner(),
+    readBuiltIn: () => new Map([["review.rego", builtInPolicies().get("review.rego")]]),
+    readOperator: () => new Map(),
+    tmp: tempDir(t),
+  });
+  return { github, policies };
+}
+
+test(
+  "the real opa: review.rego skips other bots' pull requests, unless the repo's file drops it",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const dependabot = delivery("ready_for_review", {}, "dependabot[bot]");
+    const skips = [];
+    const s = setup(t, undefined, reviewPolicies(t));
+    await s.reviews.consider("pull_request", dependabot, (why) => skips.push(why));
+    assert.equal(s.accepted.length, 0);
+    assert.deepEqual(skips, [
+      "review: #5, the policies refuse it (`deny_review`): `dependabot[bot] is a bot: its pull requests aren't reviewed unless .deckhand/policy/review.rego lets them`",
+    ]);
+    // Deckhand's own and an allowed user's are reviewed.
+    for (const login of ["deckhand-app[bot]", "alice"]) {
+      const own = setup(t, undefined, reviewPolicies(t));
+      await own.reviews.consider("pull_request", delivery("ready_for_review", {}, login));
+      assert.equal(own.accepted.length, 1, login);
+    }
+    // A repo's review.rego with only its package: the bot's pull request is reviewed, by nobody
+    // the allowlist checks again when it runs.
+    const broad = setup(t, undefined, reviewPolicies(t, "package deckhand\n"));
+    await broad.reviews.consider("pull_request", dependabot);
+    assert.equal(broad.accepted.length, 1);
+    assert.equal(broad.accepted[0].author, undefined);
+    // The docs' examples (docs/repo-config.md#reviewrego): Dependabot's only, then every bot's,
+    // neither warned of by the config check.
+    const [, dependabotOnly, everyBot] = docsReviewBlocks();
+    const renovate = delivery("ready_for_review", {}, "renovate[bot]");
+    for (const [file, reviewed] of [
+      [dependabotOnly, [true, false]],
+      [everyBot, [true, true]],
+    ]) {
+      const got = [];
+      for (const pr of [dependabot, renovate]) {
+        const one = setup(t, undefined, reviewPolicies(t, file));
+        await one.reviews.consider("pull_request", pr);
+        got.push(one.accepted.length === 1);
+      }
+      assert.deepEqual(got, reviewed, file);
+      const { policies } = reviewPolicies(t, file);
+      assert.deepEqual(await policies.checkRepo("org/repo", "main"), { errors: [], warnings: [] });
+    }
+  },
+);
+
+// docs/repo-config.md's ```rego blocks under its review.rego marker, their text.
+function docsReviewBlocks() {
+  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+  const from = docs.indexOf("<!-- review.rego:");
+  const until = docs.indexOf("**Upgrading with a `review.rego`", from);
+  assert.ok(from > 0 && until > from);
+  return [...docs.slice(from, until).matchAll(/```rego\n([\s\S]*?)```/g)].map((m) => m[1]);
+}
+
+test("docs/repo-config.md's review.rego rule is policy/review.rego's", () => {
+  const [excerpt] = docsReviewBlocks();
+  const rule = excerpt.replace(/^# policy\/review\.rego.*\n/, "");
+  assert.ok(rule.startsWith("deny_review contains"));
+  assert.ok(builtInPolicies().get("review.rego").includes(rule));
 });
 
 test("createReviews: Deckhand's pull request is its issue's task, the review goes on it", async (t) => {
@@ -1557,6 +1661,7 @@ test("review loop: in review while a ready pull request's review is decided, bef
     busy: () => false,
     policies,
     now: () => 1_800_000_000_000,
+    sleep: async () => {},
   });
   await s.reviews.consider("pull_request", delivery());
   assert.deepEqual(seen, ["reviewing", "reviewing"]);
@@ -1671,6 +1776,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     policies,
     reply: async (repo, number, text) => replies.push(text),
     now: () => time,
+    sleep: async () => {},
     later: (work, ms) => scheduled.push({ work, ms }),
   });
   const ready = () =>

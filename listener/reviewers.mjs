@@ -11,7 +11,7 @@ import { repoAllowed } from "./config.mjs";
 import { headInRepo, linkedIssue, prId, taskKey } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { BUILT_IN } from "./modes.mjs";
-import { pullInput } from "./policies.mjs";
+import { isPolicyError, pullInput } from "./policies.mjs";
 import { sameTask } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -88,17 +88,24 @@ export function openerOf(runs, key, pr) {
 // The input of `deny_request_review` (docs/repo-config.md#the-reviewers-input): the pull
 // request's (pullInput(), no review), the `reviewers` to request, `when` ("ready": it turned
 // ready; "fix": a run pushed to it since), and the run's fields (runFields()).
-export function requestInput({ info, pr, files, issue, reviewers, when, run, now = Date.now }) {
+export function requestInput({
+  info,
+  pr,
+  files,
+  issue,
+  reviewers,
+  when,
+  run,
+  bot = null,
+  now = Date.now,
+}) {
   return {
-    ...pullInput({ decision: "request_review", info, pr, files, issue, now }),
+    ...pullInput({ decision: "request_review", info, pr, files, issue, bot, now }),
     reviewers,
     when,
     ...run,
   };
 }
-
-// A failure's message (policies.mjs failure()), not a rule's.
-const isPolicyError = (message) => /^policy error/i.test(message);
 
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `github`: the App's
 // calls; `runOf(key, pr)`: the record of the run whose pull request `pr` is, on task `key`
@@ -207,7 +214,17 @@ export function createReviewers({
             ...(await getJson(github, repo, `/repos/${repo}/issues/${issue}`, [404, 410])),
           }
         : null;
-      return requestInput({ info, pr, files, issue: found, reviewers, when, run, now });
+      return requestInput({
+        info,
+        pr,
+        files,
+        issue: found,
+        reviewers,
+        when,
+        run,
+        bot: config.bot,
+        now,
+      });
     };
     const rule = "deny_request_review";
     const { applied, messages, input: saw } = await policies.decide(rule, repo, base, input);

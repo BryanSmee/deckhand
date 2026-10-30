@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -13,11 +12,12 @@ import {
   MAX_TEXT,
   opaRunner,
   operatorPolicies,
+  pullInput,
   restrictedCapabilities,
   TIMEOUT_MS,
 } from "../listener/policies.mjs";
 import { mergeInput } from "../listener/reviews.mjs";
-import { tempDir } from "./helpers.mjs";
+import { tempDir, hasOpa } from "./helpers.mjs";
 
 const CAPABILITIES = {
   builtins: [
@@ -178,7 +178,7 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   const own = builtInPolicies();
   assert.ok(own.has("github.rego"));
   for (const [name, text] of own) {
-    assert.match(name, /^(github|gh-[a-z0-9-]+)\.rego$/, name);
+    assert.match(name, /^(github|review|gh-[a-z0-9-]+)\.rego$/, name);
     // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
     // alone: comments and the package, nothing else.
     const bare = text.replace(/^\s*#.*$/gm, "").trim() === "package deckhand";
@@ -518,6 +518,49 @@ test("deny: no policy anywhere, one listing until the default branch moves", asy
   assert.equal(opa.calls.length, 0);
 });
 
+test("check: a review.rego that replaces Deckhand's without a word on bots is warned of", async (t) => {
+  const own = builtInPolicies().get("review.rego");
+  const wip = 'package deckhand\ndeny_review contains "wip" if "wip" in input.pr.labels\n';
+  const warned = async (operator, repoFiles = null) => {
+    const { policies } = setup(t, { builtIn: { "review.rego": own }, operator, repoFiles });
+    const operatorSide = (await policies.checkOperator()).warnings;
+    const repoSide = repoFiles ? (await policies.checkRepo("org/repo", "main")).warnings : [];
+    const described = (await policies.describe("org/repo", "main")).warnings;
+    return [operatorSide.length, repoSide.length, described.length];
+  };
+  // Deckhand's alone, or replaced by a file that names author_type (a comment will do): nothing.
+  assert.deepEqual(await warned({}), [0, 0, 0]);
+  assert.deepEqual(
+    await warned({ "review.rego": `${wip}# input.pr.author_type: bots too\n` }),
+    [0, 0, 0],
+  );
+  // An operator's or a repo's written before the default: said at start, at the onboarding
+  // check and on the Policies tab, each naming the file its owner changes. A repo's onboarding
+  // check doesn't repeat the operator's, which the start said.
+  const other = { "a.rego": 'package deckhand\ndeny_merge contains "x" if false\n' };
+  assert.deepEqual(await warned({ "review.rego": wip }), [1, 0, 1]);
+  assert.deepEqual(await warned({ "review.rego": wip }, other), [1, 0, 1]);
+  assert.deepEqual(await warned({}, { "review.rego": wip }), [0, 1, 1]);
+  const operator = setup(t, { builtIn: { "review.rego": own }, operator: { "review.rego": wip } });
+  const start = (await operator.policies.checkOperator()).warnings[0];
+  assert.match(
+    start,
+    /^The grants folder's policy\/review\.rego replaces Deckhand's default without a rule on `input\.pr\.author_type`: other bots' ready pull requests .* are reviewed by themselves in every repository without its own\./,
+  );
+  assert.deepEqual((await operator.policies.describe("org/repo", "main")).warnings, [start]);
+  const repo = setup(t, { builtIn: { "review.rego": own }, repoFiles: { "review.rego": wip } });
+  const [onboarding] = (await repo.policies.checkRepo("org/repo", "main")).warnings;
+  assert.match(onboarding, /^\.deckhand\/policy\/review\.rego replaces .* by themselves here\./);
+  assert.deepEqual((await repo.policies.describe("org/repo", "main")).warnings, [onboarding]);
+  // The repo's own replaces the operator's: the repo's is the one said on its tab.
+  const both = setup(t, {
+    builtIn: { "review.rego": own },
+    operator: { "review.rego": wip },
+    repoFiles: { "review.rego": `${wip}# author_type: bots too\n` },
+  });
+  assert.deepEqual((await both.policies.describe("org/repo", "main")).warnings, []);
+});
+
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
   const opa = fakeOpa({
     checked: (files) =>
@@ -764,7 +807,7 @@ test("mergeInput: what deny_merge reads", () => {
     pr: {
       number: 5,
       title: "Add a thing",
-      user: { login: "deckhand-app[bot]" },
+      user: { login: "Deckhand-App[bot]", type: "Bot" },
       labels: [{ name: "bug" }],
       base: { ref: "main" },
       head: { ref: "issue-12-thing", sha: "sha-1" },
@@ -784,6 +827,7 @@ test("mergeInput: what deny_merge reads", () => {
     },
     fixes: 2,
     runs: [{ name: "CI", status: "completed", conclusion: "success", id: 1 }],
+    bot: "deckhand-app[bot]",
     now: () => Date.parse("2026-10-26T10:00:00Z"),
   });
   assert.deepEqual(doc, {
@@ -792,7 +836,9 @@ test("mergeInput: what deny_merge reads", () => {
     repo: { name: "org/repo", private: true, default_branch: "main" },
     pr: {
       number: 5,
-      author: "deckhand-app[bot]",
+      author: "Deckhand-App[bot]",
+      author_type: "Bot",
+      deckhand: true,
       title: "Add a thing",
       labels: ["bug"],
       base: "main",
@@ -817,6 +863,26 @@ test("mergeInput: what deny_merge reads", () => {
     fixes: 2,
     checks: [{ name: "CI", status: "completed", conclusion: "success" }],
   });
+});
+
+test("pullInput: the author's type, and whether the pull request is Deckhand's own", () => {
+  const pr = (login, type) => ({ number: 5, user: { login, type } });
+  const author = (p, bot = "deckhand-app[bot]") => {
+    const { author_type, deckhand } = pullInput({
+      decision: "review",
+      info: {},
+      pr: p,
+      files: [],
+      bot,
+    }).pr;
+    return [author_type, deckhand];
+  };
+  assert.deepEqual(author(pr("dependabot[bot]", "Bot")), ["Bot", false]);
+  assert.deepEqual(author(pr("alice", "User")), ["User", false]);
+  assert.deepEqual(author(pr("deckhand-app[bot]", "Bot")), ["Bot", true]);
+  // Without the App's login, nothing is Deckhand's own.
+  assert.deepEqual(author(pr("deckhand-app[bot]", "Bot"), null), ["Bot", false]);
+  assert.deepEqual(author({ number: 5 }), [null, false]);
 });
 
 const FAKE = new URL("fixtures/fake-opa.sh", import.meta.url).pathname;
@@ -846,18 +912,11 @@ test("opaRunner: an empty environment, the input on stdin, killed at its timeout
   assert.match(missing.stderr, /ENOENT/);
 });
 
-// With the real binary on the PATH (the listener's image has it): the policy as written.
-let opa = null;
-try {
-  execFileSync("opa", ["version"], { stdio: "ignore" });
-  opa = "opa";
-} catch {
-  // Not here: the fakes above cover the listener's side.
-}
+// With the real binary on the PATH (hasOpa): the policy as written.
 
 test(
   "the real opa: a denial, no network, a compile error",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const tmp = tempDir(t);
     const policies = createPolicies({
@@ -900,7 +959,7 @@ test(
 
 test(
   "the real opa: a repo file drops the operator's of its name, a slow policy times out",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     // The operator's size.rego denies; the repo's, only `package deckhand`, drops it.
     const merged = setup(t, {

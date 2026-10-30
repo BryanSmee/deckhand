@@ -1479,8 +1479,11 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   review's request for changes. Only the listener posts reviews, and never an approval.
 - **Who gets one by itself** (`review.on: ready`): pull requests on a branch of the
   repository, opened by the App or by a user of `ALLOWED_USERS` and the repo's `users`, when
-  they turn ready. Never a fork's, never another bot's (Dependabot, GitHub Actions), never an
-  outsider's: nobody outside the allowlist can make the operator pay for a run.
+  they turn ready. Never a fork's, never an outsider's: nobody outside the allowlist can make
+  the operator pay for a run. Another bot's (Dependabot, GitHub Actions) only when the
+  policies let it: Deckhand's default `policy/review.rego` refuses them (`deny_review`), and
+  only a file of that name, the operator's or the repository's maintainers', replaces it. A
+  bot that opens a pull request on a branch of the repository was given write access to it.
 - **Only allowed users' comments**: the review reads its thread (the pull request's
   description, comments and reviews, and the issue it closes) from a file the listener writes
   (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users`, and the App
@@ -1631,8 +1634,8 @@ review's fix run, a CI fix run or a conflict's rebase run; `deny_link_branch`, t
 requests on Deckhand's ready pull request (`review.request`, allowed users only, never a team,
 and never at a run's request); `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
 ceiling: [The GitHub gateway](#the-github-gateway)). Deckhand ships its own in the listener's
-image ([the default policies](repo-config.md#the-default-policies): `github.rego`, and a
-`gh-<feature>.rego` per `gh` feature), which hold without any setup. Yours are the `*.rego`
+image ([the default policies](repo-config.md#the-default-policies): `github.rego`, a
+`gh-<feature>.rego` per `gh` feature, and `review.rego`), which hold without any setup. Yours are the `*.rego`
 files of `policy/` in the grants folder, read again at each decision: one with the same name as
 Deckhand's replaces it, others add to them; together, the defaults of every repository. A
 repository's own are in `.deckhand/policy/` on its default branch; one with the same name as a
@@ -1644,7 +1647,10 @@ default replaces it, others add to them.
   default files, by its file name only drops the refusals that file added, never a gate's or
   a mode's ceiling (a light repository mode still writes nothing). If a rule must hold for every
   repository whatever it says, it belongs in a grant or a built-in gate, not in a default
-  policy.
+  policy. One default stands where a gate was: `review.rego` skips other bots' pull requests,
+  which the review's allowlist (people only) used to stop. Replacing it is how a repository, or
+  the operator for all of them, has those reviewed: a `review.rego` that does without a word
+  on `author_type` gets a warning from the config check.
 - **A pull request can't change them for itself**: they are read from the default branch, and
   `.deckhand/` is among the files Deckhand trusts, so a pull request that changes a policy is
   never merged by itself.

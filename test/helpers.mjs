@@ -1,12 +1,29 @@
 // What the test files share: servers on a port the OS picks, temp dirs that don't outlive
 // their test, a config, a fake GitHub's fetch. `node --test` loads it as a file of its own too
 // (everything under test/ matches its patterns), where it finds no test.
+import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
+
+// Whether the real `opa` is on the PATH (the listener's image has it): the tests that evaluate
+// Deckhand's policies as written skip without it, the fakes cover the listener's side. Asked
+// once, by those tests only: the other files importing this one don't start a process for it.
+let opaFound;
+export function hasOpa() {
+  if (opaFound === undefined) {
+    try {
+      execFileSync("opa", ["version"], { stdio: "ignore" });
+      opaFound = true;
+    } catch {
+      opaFound = false;
+    }
+  }
+  return opaFound;
+}
 
 // Listens on 127.0.0.1, on a port the OS picks; resolves to that port.
 export async function listening(server) {

@@ -42,13 +42,27 @@ export const RULES = [
   "deny_github",
 ];
 
+// Deckhand's default for the reviews that start by themselves, which skips other bots' pull
+// requests: replacing it without a word about them gets a warning (botsReviewed()).
+const BOT_REVIEWS = "review.rego";
+
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
 
 // What every decision's input has about a pull request (docs/repo-config.md#the-merge-input),
 // reviews.mjs's and reviewers.mjs's: the repo (`info`, GET /repos/{repo}), the pull request
-// and its `files`, its linked `issue`, and the `review` when there is one.
-export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
+// and its `files`, its linked `issue`, and the `review` when there is one. `bot`: the App's
+// login (config.bot), for `pr.deckhand`.
+export function pullInput({
+  decision,
+  info,
+  pr,
+  files,
+  issue,
+  review = null,
+  bot = null,
+  now = Date.now,
+}) {
   const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
   return {
     decision,
@@ -61,6 +75,10 @@ export function pullInput({ decision, info, pr, files, issue, review = null, now
     pr: {
       number: pr.number,
       author: pr.user?.login ?? null,
+      // GitHub's account type ("User", "Bot"): policy/review.rego skips other bots' pull
+      // requests, Deckhand's own (`deckhand`) excepted.
+      author_type: pr.user?.type ?? null,
+      deckhand: !!bot && pr.user?.login?.toLowerCase() === bot.toLowerCase(),
       title: pr.title ?? "",
       labels: names(pr.labels),
       base: pr.base?.ref ?? null,
@@ -134,6 +152,10 @@ export async function denyKept(
   }
   return { messages, unread: !!unread };
 }
+
+// A failure's message (failure() below: GitHub couldn't give the input, a policy that didn't
+// compile or timed out), not a rule's: asked again later rather than held.
+export const isPolicyError = (message) => /^policy error/i.test(message);
 
 // One decision's evaluation, compile included. Long enough for `opa` to start and load a few
 // files, short enough that a loop in a policy doesn't hold a merge decision for long.
@@ -569,11 +591,40 @@ export function createPolicies({
     return { errors, warnings };
   }
 
+  // A review.rego that replaces Deckhand's and never names `author_type`: other bots' pull
+  // requests, which the default skips, are reviewed now, at the operator's cost. Said, as a
+  // file of that name written before the default (wip labels, docs only) drops it unseen. A
+  // file that names it, a comment saying so will do, decided. `text`: the file's, `source`
+  // the layer it is in ("operator", "repo"), which the warning names: only its owner changes
+  // it. → the warning, or null.
+  function botsReviewed(text, source) {
+    let own = null;
+    try {
+      own = ownDefaults().get(BOT_REVIEWS);
+    } catch {
+      // Deckhand's can't be read: describe() says so.
+    }
+    if (text === undefined || !own || text === own || /\bauthor_type\b/.test(text)) return null;
+    const [file, where] =
+      source === "operator"
+        ? [`The grants folder's policy/${BOT_REVIEWS}`, "in every repository without its own"]
+        : [`${POLICY_DIR}/${BOT_REVIEWS}`, "here"];
+    return `${file} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves ${where}. To keep them skipped, copy the default's rule into it; to say they should be reviewed, name \`author_type\` in a comment there`;
+  }
+
+  // check()'s, with botsReviewed()'s warning about `layer` (name → text: the operator's or the
+  // repo's own files, `source`), whose review.rego is the active one.
+  async function checkWith(files, layer, source) {
+    const checked = await check(files);
+    const bots = botsReviewed(layer.get(BOT_REVIEWS), source);
+    return bots ? { ...checked, warnings: [...checked.warnings, bots] } : checked;
+  }
+
   // The operator's policies over Deckhand's, checked: errors to say at start. None: no `opa`
   // call.
   async function checkOperator() {
     try {
-      return await check(defaults());
+      return await checkWith(defaults(), readOperator(), "operator");
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
     }
@@ -590,7 +641,8 @@ export function createPolicies({
     } catch {
       // Said at start: the repo's own are what this check is about.
     }
-    return check(new Map([...under, ...own]));
+    // The operator's review.rego is said at start, and on the repo's Policies tab.
+    return checkWith(new Map([...under, ...own]), own, "repo");
   }
 
   // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
@@ -628,10 +680,12 @@ export function createPolicies({
     );
     const policies = new Map(files.filter((f) => f.active).map((f) => [f.name, f.text]));
     const checked = await compile(policies);
+    const review = files.find((f) => f.active && f.name === BOT_REVIEWS);
+    const bots = review && botsReviewed(review.text, review.source);
     return {
       files: files.map(({ text, ...f }) => ({ ...f, rules: deniesOf(text), ...shown(text) })),
       errors: [...errors, ...checked.errors],
-      warnings: checked.warnings,
+      warnings: bots ? [...checked.warnings, bots] : checked.warnings,
       policies,
     };
   }
