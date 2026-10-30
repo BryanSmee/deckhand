@@ -28,6 +28,13 @@
 //                                         the task's last run, failed, interrupted or
 //                                         cancelled, again:
 //                                         its mode and comments (board.mjs rerunnable())
+//   POST /api/repos/<owner>/<repo>/review { number, action: "review" | "fix" }
+//                                         a pull request whose review-and-fix loop is over
+//                                         (reviews.mjs), from the task's page: "review", a
+//                                         review of its head now, as `/mode review` would
+//                                         (no loop round, nothing tolerated); "fix", one fix
+//                                         run more on the App's latest review's findings,
+//                                         with `review.fix` only (reviews' startFix())
 //   POST /api/repos/<owner>/<repo>/dismiss { runId, undo? }
 //                                         the task's last run, failed, interrupted or
 //                                         cancelled, stops asking for attention until
@@ -63,7 +70,17 @@ import { FAILED } from "./board.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createOrder } from "./order.mjs";
 import { fromDashboard } from "./discussions.mjs";
-import { inboxItem, issueItem, parseKey, prId, sameRepo, taskKey, unmarked } from "./events.mjs";
+import {
+  inboxItem,
+  issueItem,
+  linkedIssue,
+  linkTo,
+  parseKey,
+  prId,
+  sameRepo,
+  taskKey,
+  unmarked,
+} from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
@@ -71,6 +88,7 @@ import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
 import { leadsTo, planSummary, readTree, waitsOf } from "./plans.mjs";
 import { isLight } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
+import { latestReview } from "./reviews.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
 import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
@@ -85,6 +103,8 @@ const MAX_BODY = 4096;
 // The answers' text, and the JSON around it (escapes, indexes).
 const MAX_ANSWER_BODY = 4 * MAX_TEXT;
 const ACTIONS = ["start", "queue", "plan", "dequeue", "stop", "cancel"];
+// The task page's buttons on a pull request whose review loop is over.
+const REVIEW_ACTIONS = ["review", "fix"];
 // An inbox entry's kind, and the repo config's key for its issue.
 const INBOXES = { idea: "ideas", bug: "bugs" };
 // An action's fields, checked (a body's, or answers' `then`): { action, number, after, mode,
@@ -125,7 +145,8 @@ export function checkAction(body) {
 // `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
 // `dismissals`: the failed runs dismissed from the dashboard (dismissals.mjs).
 // `order`: the run order (order.mjs); `queueOrder()`: the tasks waiting for a slot, in the
-// order they start (tasks.mjs).
+// order they start (tasks.mjs). `reviews`: the review loop (reviews.mjs createReviews()), for
+// the dashboard's Fix.
 export function createWorkApi({
   config,
   github,
@@ -146,6 +167,7 @@ export function createWorkApi({
   dismissals = createDismissals(),
   order = createOrder(),
   queueOrder = () => [],
+  reviews = null,
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
   fromKey = () => null,
@@ -760,6 +782,64 @@ export function createWorkApi({
     return `Rerun of #${number} queued.`;
   }
 
+  // The dashboard's Review or Fix on pull request `number`, checked as a comment is (the
+  // repo's users, the pull request open, nothing running or queued on it or its issue), then
+  // the App's comment, the record of who asked and where the run's reactions go, and the run
+  // queued here: bot comments never reach admit().
+  async function reviewAgain(repo, user, number, action) {
+    const { settings, base } = await checkedRepo(repo, user);
+    if (!settings.review) refuse(422, `${repo} has no \`review\` in its ${CONFIG_FILE}.`);
+    if (action === "fix" && !settings.review.fix) {
+      refuse(422, `${repo}'s \`review.fix\` is off: its findings start no fix run.`);
+    }
+    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    if (!pr) refuse(404, `#${number} isn't a pull request of ${repo}.`);
+    if (pr.state !== "open") refuse(409, `#${number} is closed.`);
+    const issue = linkedIssue(pr, repo, config.bot);
+    if (busy(taskKey(repo, prId(number))) || (issue && busy(taskKey(repo, String(issue))))) {
+      refuse(409, `#${number} has a run going or queued.`);
+    }
+    if (action === "fix") return fixAgain(repo, user, { number, pr, settings, base });
+    const posted = await comment(repo, number, `Review from the dashboard by @${user}.`);
+    const item = {
+      repo,
+      id: prId(number),
+      kind: "pr",
+      number,
+      title: pr.title ?? null,
+      // What `/mode review` on the pull request queues.
+      trigger: "work",
+      modeLine: "review",
+      after: null,
+      text: "",
+      replyTo: number,
+      comment: posted,
+      author: user,
+      base,
+      settings,
+    };
+    await accept(issue ? linkTo(item, issue) : item);
+    return `Review of #${number} queued.`;
+  }
+
+  // One fix run more on the findings of the App's latest review, read back from GitHub with
+  // the repo's tolerance: reviews' startFix() decides, counts the round and queues it.
+  async function fixAgain(repo, user, { number, pr, settings, base }) {
+    if (!reviews) refuse(503, "Reviews aren't set up on this listener.");
+    const allowed = settings.review.maxAllowedSeverity;
+    const review = await latestReview(github, config, repo, number, allowed);
+    if (!review) refuse(409, `#${number} has no review of Deckhand's to fix.`);
+    const announce = (round, rounds, left) =>
+      comment(repo, number, `Fix round ${round} from the dashboard by @${user}: ${left} left.`);
+    const started = await reviews.fixAsked(
+      { repo, number, base, settings },
+      { review, pr },
+      { user, announce },
+    );
+    if (!started.item) refuse(409, `No fix run on #${number}: ${started.why}.`);
+    return `Fix round ${started.item.round} of #${number} queued.`;
+  }
+
   // The task's last run, failed, lost or cancelled, no longer asks for attention: its task
   // leaves Waiting on you and the Error chip until another run (board.mjs). Checked as
   // rerun() is, but nothing is posted or started: the repo's users only, any kind of task.
@@ -853,6 +933,16 @@ export function createWorkApi({
       refuse(400, "`runId` is a run's id.");
     log(`Work area: ${user} reruns ${repo} ${runId}`);
     send(res, 200, { message: await rerun(repo, user, runId) });
+  }
+
+  async function reviewing(req, res, user, repo) {
+    const { number, action } = (await readJsonBody(req, MAX_BODY)) ?? {};
+    if (!REVIEW_ACTIONS.includes(action)) refuse(400, "`action` is review or fix.");
+    if (!Number.isSafeInteger(number) || number <= 0) {
+      refuse(400, "`number` is a pull request number.");
+    }
+    log(`Work area: ${user} asks for a ${action} of ${repo}#${number}`);
+    send(res, 200, { message: await reviewAgain(repo, user, number, action) });
   }
 
   async function dismissal(req, res, user, repo) {
@@ -960,13 +1050,13 @@ export function createWorkApi({
     );
   }
 
-  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /dismiss, /inbox, /lane,
-  // /order and /analyze; false for any other path.
+  // Handles /api/repos/<owner>/<repo>/issues, /work, /answer, /rerun, /review, /dismiss, /inbox,
+  // /lane, /order and /analyze; false for any other path.
   const handle = apiRoute({
     name: "Work area",
     route: (pathname) => {
       const one =
-        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|dismiss|inbox|lane|order|analyze)$/.exec(
+        /^\/api\/repos\/([\w.-]+)\/([\w.-]+)\/(issues|work|answer|rerun|review|dismiss|inbox|lane|order|analyze)$/.exec(
           pathname,
         );
       return one && { repo: `${one[1]}/${one[2]}`, what: one[3] };
@@ -975,6 +1065,7 @@ export function createWorkApi({
       work,
       answer: answers,
       rerun: reruns,
+      review: reviewing,
       dismiss: dismissal,
       inbox,
       lane,

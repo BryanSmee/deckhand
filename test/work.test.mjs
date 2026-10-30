@@ -37,6 +37,8 @@ function setup({
   cancels = {},
   history = [],
   queue = [],
+  pulls = {},
+  reviews = {},
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob",
@@ -57,6 +59,9 @@ function setup({
     tasks,
     runs,
     events,
+    pulls,
+    reviews,
+    asked: [],
     listed: new Map(),
     cancelled: [],
     logs: [],
@@ -113,6 +118,15 @@ function setup({
             : r,
         ),
       );
+    }
+    // Pull requests (`pulls`) and the reviews on them (`reviews`), by number.
+    const pull = /\/pulls\/(\d+)(\/reviews\?.*)?$/.exec(path);
+    if (pull) {
+      if (pull[2]) return Response.json(path.includes("page=1") ? (w.reviews[pull[1]] ?? []) : []);
+      const pr = w.pulls[pull[1]];
+      return pr
+        ? Response.json({ number: Number(pull[1]), ...pr })
+        : new Response("{}", { status: 404 });
     }
     const timeline = /\/issues\/(\d+)\/events\?/.exec(path)?.[1];
     if (timeline) return Response.json(w.events[timeline] ?? []);
@@ -198,6 +212,18 @@ function setup({
     dismissals: w.dismissals,
     order: w.order,
     queueOrder,
+    // The review loop's Fix (reviews.mjs startFix(), tested there): what it was asked, and
+    // round 4 queued with the App's comment, or `w.noFix`'s reason.
+    reviews: {
+      fixAsked: async (run, posted, asked) => {
+        w.asked.push({ run, posted, user: asked.user });
+        if (w.noFix) return { item: null, why: w.noFix };
+        const comment = await asked.announce(4, 4, "2 high findings");
+        const item = { reason: "review-fix", round: 4, comment };
+        await w.accepted.push(item);
+        return { item };
+      },
+    },
     publicUrl: () => ORIGIN,
     now: () => w.clock,
     log: (line) => w.logs.push(line),
@@ -2111,4 +2137,104 @@ test("ticked in a run's reply: the boxes it came with are the agent's, only a pe
     w.comments[0][1],
     /1\. \*\*Phones\*\*\n {3}- \[x\] Top to bottom\n2\. \*\*Phones\*\*\n {3}- \[x\] Top to bottom/,
   );
+});
+
+// The task page's Review and Fix on a pull request whose review loop is over: Deckhand's own
+// #8, which closes #5.
+const OWN_PR = {
+  state: "open",
+  title: "Eight",
+  body: "Closes #5",
+  user: { login: "deckhand[bot]", type: "Bot" },
+  head: { sha: "s8", repo: { full_name: "org/app" } },
+};
+const REVIEWED = `**Verdict: request changes** · Rating: 4/10
+
+### 🟠 High (2)
+
+- \`a.mjs:1\`: a hole.
+- \`b.mjs:2\`: another.
+
+f
+
+${MARKER}`;
+const LOOP = { review: { on: "ready", fix: true, fixRounds: 3, maxAllowedSeverity: "medium" } };
+const reviewSetup = (opts = {}) =>
+  setup({
+    pulls: { 8: OWN_PR },
+    reviews: { 8: [{ user: { login: "deckhand[bot]" }, body: REVIEWED }] },
+    settings: LOOP,
+    ...opts,
+  });
+const review = (w, body, opts = {}) =>
+  call(w.api, "POST", "/api/repos/org/app/review", { body, ...opts });
+
+test("review: the App comments, then a review of the pull request is queued as /mode review", async () => {
+  const w = reviewSetup();
+  const res = await review(w, { number: 8, action: "review" });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.message, "Review of #8 queued.");
+  assert.deepEqual(w.comments, [[8, "Review from the dashboard by @alice."]]);
+  const [item] = w.accepted;
+  // On its issue's task, replying on the pull request; no loop reason: nothing tolerated.
+  assert.deepEqual(
+    [item.id, item.kind, item.number, item.replyTo, item.modeLine, item.author, item.reason],
+    ["5", "issue", 5, 8, "review", "alice", undefined],
+  );
+  assert.equal(item.comment.id, 501);
+  // Someone else's pull request: its own task.
+  const theirs = reviewSetup({ pulls: { 8: { ...OWN_PR, user: { login: "bob" }, head: {} } } });
+  await review(theirs, { number: 8, action: "review" });
+  assert.deepEqual([theirs.accepted[0].id, theirs.accepted[0].kind], ["pr-8", "pr"]);
+});
+
+test("review fix: the App's latest review read back, then the review loop's fix run", async () => {
+  const w = reviewSetup();
+  const res = await review(w, { number: 8, action: "fix" });
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.message, "Fix round 4 of #8 queued.");
+  assert.deepEqual(w.comments, [
+    [8, "Fix round 4 from the dashboard by @alice: 2 high findings left."],
+  ]);
+  const [{ run, posted, user }] = w.asked;
+  assert.deepEqual([run.repo, run.number, run.base, user], ["org/app", 8, "main", "alice"]);
+  assert.equal(posted.pr.number, 8);
+  // Read with the repo's tolerance.
+  assert.deepEqual(
+    [posted.review.allowed, posted.review.findings.map((f) => f.path)],
+    ["medium", ["a.mjs", "b.mjs"]],
+  );
+  assert.equal(w.accepted[0].comment.id, 501);
+});
+
+test("review refused: users, action, closed, busy, no review block, no review.fix, no review, the loop's reason", async () => {
+  const refused = async (opts, body, expected, user = "alice") => {
+    const w = reviewSetup(opts);
+    const res = await review(w, body, { user });
+    assert.equal(res.status, expected, JSON.stringify(res.body));
+    assert.deepEqual(w.comments, []);
+    assert.deepEqual(w.accepted, []);
+    return res.body.error;
+  };
+  const fix = { number: 8, action: "fix" };
+  await refused({}, fix, 403, "carol");
+  await refused({ settings: { ...LOOP, users: ["bob"] } }, fix, 403);
+  await refused({ errors: ["bad"] }, fix, 409);
+  await refused({}, { number: 8, action: "merge" }, 400);
+  await refused({}, { number: "8", action: "fix" }, 400);
+  await refused({ pulls: {} }, fix, 404);
+  await refused({ pulls: { 8: { ...OWN_PR, state: "closed" } } }, fix, 409);
+  assert.match(await refused({ busy: ["org/app#5"] }, fix, 409), /run going or queued/);
+  await refused({ busy: ["org/app#pr-8"] }, { number: 8, action: "review" }, 409);
+  assert.match(await refused({ settings: {} }, { number: 8, action: "review" }, 422), /`review`/);
+  const off = { review: { ...LOOP.review, fix: false } };
+  assert.match(await refused({ settings: off }, fix, 422), /`review\.fix` is off/);
+  assert.match(await refused({ reviews: {} }, fix, 409), /no review of Deckhand's/);
+  // The review loop's own refusal, as it says it.
+  const w = reviewSetup();
+  w.noFix = "it waits for the maintainer's input";
+  const res = await review(w, fix);
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "No fix run on #8: it waits for the maintainer's input.");
+  assert.deepEqual(w.comments, []);
 });

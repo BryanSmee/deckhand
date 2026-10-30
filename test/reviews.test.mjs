@@ -13,6 +13,8 @@ import {
   ciState,
   createReviews,
   fixMessage,
+  latestReview,
+  parsePostedReview,
   parseReview,
   postReview,
   reviewThread,
@@ -849,6 +851,162 @@ test("review loop: fix: true without merge, its one fix run unreviewed by design
   await failed.review(HIGH_ONE);
   await failed.fixed("sha-2", "error");
   assert.equal(failed.loop().loop, "stopped");
+});
+
+test("parsePostedReview: the review posted, read back with its findings and verdict", () => {
+  const review = parseReview(MESSAGE);
+  const blob = "https://github.com/org/repo/blob/abc";
+  // GitHub keeps the body as postReview() sent it: the footer, then the marker.
+  const body = `${reviewBody(review, MESSAGE, "Footer line.\n- not a finding")}\n\n<!-- deckhand -->`;
+  const linked = `${reviewBody(review, MESSAGE, "f", blob)}\n\n<!-- deckhand -->`;
+  for (const text of [body, linked]) {
+    const back = parsePostedReview(text, { allowed: "medium" });
+    assert.deepEqual([back.rating, back.verdict, back.allowed], [5, "request-changes", "medium"]);
+    const bySeverity = (list) => [...list].sort((a, b) => a.text.localeCompare(b.text));
+    assert.deepEqual(bySeverity(back.findings), bySeverity(review.findings));
+    // The fix run's message is the one the loop would have built.
+    assert.equal(fixMessage(back, 5), fixMessage(review, 5));
+  }
+  assert.equal(reviewEvent(parsePostedReview(body)), "REQUEST_CHANGES");
+  const clean = parseReview("All good.\n\nRating: 9/10\nVerdict: approve");
+  const none = parsePostedReview(reviewBody(clean, "", "f"));
+  assert.deepEqual([none.findings, none.verdict, reviewEvent(none)], [[], "approve", "COMMENT"]);
+  // A raw review, or anything else: not one.
+  assert.equal(parsePostedReview(reviewBody(null, "LGTM", "f")), null);
+  assert.equal(parsePostedReview(undefined), null);
+});
+
+test("latestReview: the App's last review with the marker, not anyone else's", async () => {
+  const review = parseReview(MESSAGE);
+  const body = (r) => `${reviewBody(r, "", "f")}\n\n<!-- deckhand -->`;
+  const older = parseReview("- **low** `a.mjs:1`: old.\n\nRating: 9/10\nVerdict: comment");
+  const app = { login: "deckhand-app[bot]", type: "Bot" };
+  const list = [
+    { user: app, body: body(older) },
+    { user: app, body: body(review) },
+    { user: { login: "alice", type: "User" }, body: body(older) },
+    { user: app, body: "A plain review without the marker." },
+  ];
+  const paths = [];
+  const github = async (repo, method, path) => {
+    paths.push(path);
+    return Response.json(path.includes("page=1") ? list : []);
+  };
+  const found = await latestReview(github, config, "org/repo", 5, "medium");
+  assert.equal(found.findings.length, 3);
+  assert.equal(found.allowed, "medium");
+  assert.match(paths[0], /^\/repos\/org\/repo\/pulls\/5\/reviews\?/);
+  const empty = async () => Response.json([]);
+  assert.equal(await latestReview(empty, config, "org/repo", 5), null);
+  assert.equal(await latestReview(github, { ...config, bot: null }, "org/repo", 5), null);
+});
+
+// A maintainer's Fix from the dashboard on pull request #5 (work.mjs): `announce` records
+// the App's comment it would post.
+const askFix = (s, message = HIGH_ONE, user = "alice") => {
+  const said = [];
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings };
+  const started = s.reviews.fixAsked(run, posted(message), {
+    user,
+    announce: async (...args) => {
+      said.push(args);
+      return { id: 77, html_url: "c/77", node_id: "N" };
+    },
+  });
+  return started.then((result) => ({ ...result, said }));
+};
+
+test("dashboard Fix: one round more once they ran out, counted before it is queued", async (t) => {
+  const s = await loopSetup(t);
+  await s.review(HIGH_TWO);
+  await s.fixed("sha-2");
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-3");
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.equal(s.loop().loop, "rounds-out");
+  const before = s.accepted.length;
+  const { item, said } = await askFix(s);
+  assert.deepEqual(said, [[3, 3, "1 high finding"]]);
+  assert.equal(s.accepted.length, before + 1);
+  assert.deepEqual(
+    [item.reason, item.round, item.rounds, item.id, item.replyTo, item.author, item.comment.id],
+    ["review-fix", 3, 3, "12", 5, "alice", 77],
+  );
+  assert.equal(item.text, fixMessage(parseReview(HIGH_ONE), 5, { round: 3, rounds: 3 }));
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.deepEqual([entry.fixes, entry.granted, entry.fixRounds], [3, 1, 3]);
+  assert.deepEqual([s.loop("review-fix").loop, s.loop("review-fix").rounds], ["fixing", 3]);
+  // A second click, or the same after a restart: the round is on its way, nothing more.
+  const again = await askFix(s);
+  assert.equal(again.item, null);
+  assert.match(again.why, /review loop is still going/);
+  const restarted = setup(t, "review:\n  on: ready\n  fix: 2\n", { path: s.path });
+  const run = { repo: "org/repo", number: 5, base: "trunk", settings: restarted.read.settings };
+  const after = await restarted.reviews.fixAsked(run, posted(HIGH_ONE), {
+    user: "alice",
+    announce: async () => assert.fail("nothing posted"),
+  });
+  assert.equal(after.item, null);
+  assert.equal(restarted.accepted.length, 0);
+  // Its push is reviewed as any round's, and the loop ends again at R3.
+  assert.equal((await s.fixed("sha-4")).reason, "review");
+  assert.equal(await s.review(HIGH_ONE), null);
+  const out = s.loop();
+  assert.deepEqual([out.loop, out.round, out.rounds], ["rounds-out", 3, 3]);
+  assert.deepEqual(
+    out.history.map((r) => r.round),
+    [0, 1, 2, 3],
+  );
+  // Another click grants one more: each grants one round at most.
+  assert.deepEqual((await askFix(s)).said, [[4, 4, "1 high finding"]]);
+  assert.equal(s.reviews.entry("org/repo", 5).granted, 2);
+});
+
+test("dashboard Fix: two clicks at once start one fix run", async (t) => {
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-2", "error");
+  assert.equal(s.loop().loop, "stopped");
+  const before = s.accepted.length;
+  const [one, two] = await Promise.all([askFix(s), askFix(s)]);
+  assert.equal([one, two].filter((r) => r.item).length, 1);
+  assert.match([one, two].find((r) => !r.item).why, /being started already/);
+  assert.equal(s.accepted.length, before + 1);
+  // `fix: true`: its one round was used, this one is granted, and its push is reviewed.
+  assert.equal(s.reviews.entry("org/repo", 5).granted, 1);
+  assert.equal((await s.fixed("sha-3")).reason, "review");
+});
+
+test("dashboard Fix: a round left is used, not granted; refusals say why", async (t) => {
+  // The fix run pushed nothing: the loop stopped with a round left.
+  const s = await loopSetup(t);
+  await s.review(HIGH_ONE);
+  await s.fixed();
+  assert.equal(s.loop().loop, "stopped");
+  const { item, said } = await askFix(s);
+  assert.deepEqual([item.round, item.rounds, said], [2, 2, [[2, 2, "1 high finding"]]]);
+  assert.equal(s.reviews.entry("org/repo", 5).granted, 0);
+  // Nothing blocking, or `review.fix` off.
+  const clean = await loopSetup(t);
+  await clean.review(HIGH_ONE);
+  await clean.fixed();
+  assert.match((await askFix(clean, CLEAN)).why, /nothing blocking/);
+  const off = await loopSetup(t, "review:\n  on: ready\n");
+  await off.review(HIGH_ONE);
+  assert.match((await askFix(off)).why, /review\.fix/);
+  // Busy, or waiting for the maintainer's input.
+  const busy = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    busy: () => true,
+    github: async () => Response.json({ labels: [] }),
+  });
+  assert.match((await askFix(busy)).why, /has a run going or queued/);
+  const label = { ...config, needsInputLabel: "needs-input" };
+  const asking = setup(t, "review:\n  on: ready\n  fix: 2\n", {
+    settings: label,
+    github: async () => Response.json({ labels: [{ name: "needs-input" }] }),
+  });
+  assert.match((await askFix(asking)).why, /waits for the maintainer's input/);
+  assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
 });
 
 // The task's last run, over: one of `reason`, started at `startedAt` (by default, after its

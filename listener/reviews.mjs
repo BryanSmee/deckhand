@@ -15,7 +15,8 @@
 // `synchronize`, which starts no review by itself. The loop stops at a review with nothing
 // above `review.max_allowed_severity`, when the rounds run out (roundsOut()), or at a fix that
 // ended badly, a policy's refusal, a busy task or one waiting for input: at most N fix runs
-// and N reviews after them, kept across restarts.
+// and N reviews after them, kept across restarts. Once it is over, a maintainer's Fix on the
+// dashboard (work.mjs) grants one more round at a time (`granted`), counted the same way.
 //
 // Auto-merge (`review.merge`, with the operator's per-repo `allow_auto_merge`): the listener,
 // never a sandbox, merges Deckhand's pull request after a review with nothing blocking, at the
@@ -148,6 +149,47 @@ export function parseReview(text, { allowed = "low" } = {}) {
   };
 }
 
+// A review the listener posted (reviewBody()'s, as GitHub keeps it) → parseReview()'s
+// { summary, findings, rating, verdict, allowed }, or null when it isn't one (the raw text of
+// an unparsed review). The findings are read back from their sections, their links taken off;
+// the summary isn't kept: a fix run's message has the findings only (fixMessage()).
+// `allowed`: the tolerance it is read with now.
+export function parsePostedReview(body, { allowed = "low" } = {}) {
+  const text = String(body ?? "");
+  const head =
+    /^\*\*Verdict: (approve|comment|request changes)\*\* · Rating: (\d{1,2}(?:\.\d)?)\/10$/m.exec(
+      text,
+    );
+  if (!head) return null;
+  const findings = [];
+  // The section's severity, from its heading to the blank line after its last finding (a
+  // finding's own blank lines are indented): what follows the sections is the footer.
+  let severity = null;
+  let current = null;
+  for (const line of text.slice(head.index + head[0].length).split(/\r?\n/)) {
+    const heading = /^### \S+ (Critical|High|Medium|Low) \(\d+\)$/.exec(line);
+    if (heading) {
+      severity = heading[1].toLowerCase();
+      current = null;
+    } else if (!line) {
+      if (current) severity = current = null;
+    } else if (severity && line.startsWith("- ")) {
+      const unlinked = line.slice(2).replace(/^\[(`[^`]+`)\]\([^)\s]*\)/, "$1");
+      current = { severity, ...located(unlinked) };
+      findings.push(current);
+    } else if (current && line.startsWith("  ")) {
+      current.text = `${current.text}\n${line.slice(2)}`.trim();
+    }
+  }
+  return {
+    summary: "",
+    findings,
+    rating: Number(head[2]),
+    verdict: head[1].replace(" ", "-"),
+    allowed,
+  };
+}
+
 // "`listener/x.mjs:42`: what" → { path, line, text }; no location: path and line null.
 function located(text) {
   const m = /^`([^`\s]+?):(\d+)(?:[-–]\d+)?`\s*[:–—-]?\s*/.exec(text);
@@ -270,6 +312,32 @@ export async function postReview(
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
   await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
   return { event: null, review, pr };
+}
+
+// The latest review the App posted on pull request `number` (postReview(), with its marker),
+// read back from GitHub with tolerance `allowed` (parsePostedReview()), or null: none, or not
+// in the review's format. `config.bot`: the App's login.
+export async function latestReview(github, config, repo, number, allowed = "low") {
+  const bot = config.bot?.toLowerCase();
+  if (!bot) return null;
+  const all = await paginate(
+    (path) => github(repo, "GET", path),
+    `/repos/${repo}/pulls/${number}/reviews`,
+  );
+  const own = all.filter(
+    (r) => r.user?.login?.toLowerCase() === bot && (r.body ?? "").includes(MARKER),
+  );
+  return parsePostedReview(own.at(-1)?.body, { allowed });
+}
+
+// "2 high and 1 medium findings": the findings of `review` that block, by severity.
+export function blockingText(review) {
+  const left = above(review, review.allowed);
+  const parts = SEVERITIES.map((s) => [s, left.filter((f) => f.severity === s).length])
+    .filter(([, n]) => n)
+    .map(([s, n]) => `${n} ${s}`);
+  const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
+  return `${what} ${left.length === 1 ? "finding" : "findings"}`;
 }
 
 // What a review reads of a thread: the last comments, each clipped.
@@ -846,6 +914,13 @@ export function stepsGoing(tasks) {
 const roundsOf = (settings) =>
   settings?.review?.fix ? Math.max(1, settings.review.fixRounds ?? 1) : 0;
 
+// How many fix runs pull request `entry` may have: `review.fix`'s, and one more for each fix
+// round a maintainer granted from the dashboard (`granted`, startFix()), with `review.fix` only.
+const limitOf = (settings, entry) => {
+  const rounds = roundsOf(settings);
+  return rounds ? rounds + (entry?.granted ?? 0) : 0;
+};
+
 // Whether the CI step is on (`review.ci: wait`, with `review.on: ready`), and how many CI fix
 // runs it allows per pull request (`review.ci_fix`, with `review.fix` only).
 const ciOn = (settings) => settings?.review?.on === "ready" && settings.review.ci === "wait";
@@ -1046,20 +1121,24 @@ export function createReviews({
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
   // waiting, rounds, fixRounds, next, nextAt, unreviewedFix, ciWaiting, ciFixes, ciFixedAt,
-  // ciSettled } of its last automatic review,
+  // ciSettled, granted } of its last automatic review,
   // how many fix runs it had and when the last one was queued, how many of them had their
   // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
   // refused), or the auto-merge waiting for its checks (decide()); each automatic review's
   // counts and the fix runs allowed, the loop's step on its way and when it was queued, and
   // the fix run nothing reviews, for the dashboard (recordRound(), nextStep(), reviewLoop());
   // the CI step's wait ({ sha, since, base, author }), its CI fix runs, when the last one was
-  // queued and how many of them were settled (reviewAfterCi(), ciFailed(), ciFixed()).
+  // queued and how many of them were settled (reviewAfterCi(), ciFailed(), ciFixed()); the
+  // fix rounds maintainers granted from the dashboard beyond `review.fix` (startFix()).
   // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
   // dashboard's, no `rounds`.
   const reviewed = persistentMap(path);
   // Pull request key → { step } while the listener decides about its loop's step, in memory
   // (deciding()): a webhook's review until it is queued, a run's end until what follows it is.
   const decisions = new Map();
+  // Pull request keys whose fix run a maintainer asked for is being started (startFix()): a
+  // second click meanwhile starts nothing.
+  const granting = new Set();
 
   // `work()`, with the loop of pull request `key` at `step` meanwhile ("review", "review-fix"),
   // for the dashboard: its GitHub calls and policies may outlast a poll. Its own mark only is
@@ -1238,19 +1317,50 @@ export function createReviews({
     return (await startFix(run, posted)).item;
   }
 
-  // fix()'s work → { item, denied }: `denied`, why the policies refused the fix run.
-  async function startFix({ repo, number, base, settings }, posted) {
+  // fix()'s work → { item, denied, why }: `denied`, why the policies refused the fix run;
+  // `why`, why no fix run was queued.
+  // `asked`: a maintainer's Fix from the dashboard (work.mjs), { user, announce(round, rounds,
+  // left) } where announce() posts the App's comment and returns it, for the run's reactions.
+  // Its fix run is one round more than `review.fix` allows when they are used up (`granted`,
+  // counted with the round before it is queued, limitOf()), and the review loop goes on from
+  // it as from any round: its push is reviewed, its auto-merge decided again (mergeAt, and the
+  // comment saying the rounds ran out, cleared). Nothing is posted when it is refused: the
+  // dashboard says why.
+  async function startFix({ repo, number, base, settings }, posted, asked = null) {
     const key = taskKey(repo, prId(number));
     const skip = (why) => {
       log(`${key}: no fix run, ${why}`);
-      return { item: null };
+      return { item: null, why };
     };
     const { review, pr } = posted ?? {};
-    if (!settings?.review?.fix) return { item: null };
+    if (!settings?.review?.fix) return { item: null, why: "`review.fix` is off" };
     if (!review) return skip("the review couldn't be read");
-    if (reviewEvent(review) !== "REQUEST_CHANGES") return { item: null };
-    const rounds = roundsOf(settings);
-    const fixes = fixesOf(reviewed.get(key));
+    if (reviewEvent(review) !== "REQUEST_CHANGES") {
+      return { item: null, why: "the last review has nothing blocking" };
+    }
+    if (asked && granting.has(key)) return skip("a fix run is being started already");
+    granting.add(key);
+    try {
+      return await queueFix({ key, repo, number, base, settings, review, pr }, asked);
+    } finally {
+      granting.delete(key);
+    }
+  }
+
+  // startFix()'s work, the review read and requesting changes.
+  async function queueFix({ key, repo, number, base, settings, review, pr }, asked) {
+    const skip = (why) => {
+      log(`${key}: no fix run, ${why}`);
+      return { item: null, why };
+    };
+    const entry = reviewed.get(key) ?? {};
+    if (asked && (entry.next || decisions.has(key) || entry.waiting || entry.ciWaiting)) {
+      return skip("its review loop is still going");
+    }
+    const fixes = fixesOf(entry);
+    // A maintainer's Fix with the rounds used up: one more.
+    const grant = !!asked && fixes >= limitOf(settings, entry);
+    const rounds = limitOf(settings, entry) + (grant ? 1 : 0);
     if (fixes >= rounds) {
       return skip(
         rounds > 1 ? `it had its ${rounds} fix runs already` : "it had its fix run already",
@@ -1272,7 +1382,13 @@ export function createReviews({
       const gates = [
         passed("Review requests changes"),
         passed("Deckhand's own pull request, open"),
-        passed(rounds > 1 ? `Fix round ${round} of ${rounds}` : "First fix run"),
+        passed(
+          grant
+            ? `Fix round ${round}, granted from the dashboard by @${asked.user}`
+            : rounds > 1
+              ? `Fix round ${round} of ${rounds}`
+              : "First fix run",
+        ),
         passed("No run going"),
         passed("Nobody's input awaited"),
       ];
@@ -1291,21 +1407,32 @@ export function createReviews({
       if (denied.length) {
         const why = policyWhy("deny_fix", denied);
         skip(why);
-        await reply(repo, number, noFixText(why));
-        return { item: null, denied: why };
+        if (!asked) await reply(repo, number, noFixText(why));
+        return { item: null, denied: why, why };
       }
     }
     // Checked again: a comment may have come during the calls above.
     if (busy(task)) return skip(`#${issue} has a run going or queued`);
+    const comment = asked ? await asked.announce(round, rounds, blockingText(review)) : null;
     // Before queuing: whatever happens next, never this round twice.
     remember(key, reviewed.get(key)?.head ?? null, {
       fixes: round,
       fixedAt: now(),
       next: "review-fix",
       nextAt: now(),
+      ...(asked && {
+        granted: (entry.granted ?? 0) + (grant ? 1 : 0),
+        fixRounds: rounds,
+        mergeAt: undefined,
+        roundsOutAt: undefined,
+      }),
     });
     const of = rounds > 1 ? ` (${round} of ${rounds})` : "";
-    log(`${key}: the review requests changes, starting a fix run${of}`);
+    log(
+      asked
+        ? `${key}: @${asked.user} asks for a fix run from the dashboard${of}`
+        : `${key}: the review requests changes, starting a fix run${of}`,
+    );
     const item = {
       repo,
       id: String(issue),
@@ -1316,11 +1443,13 @@ export function createReviews({
       modeLine: null,
       text: fixMessage(review, number, { round, rounds }),
       replyTo: number,
-      comment: null,
+      comment,
       base,
       settings,
       // From the listener, for a task an allowed user started: no comment, nobody to check.
+      // From the dashboard: the maintainer who asked, checked again when it runs.
       sender: null,
+      ...(asked && { author: asked.user }),
       reason: "review-fix",
       // For the dashboard's "Review fix 2/3" (runs.mjs newLive()).
       round,
@@ -1374,7 +1503,7 @@ export function createReviews({
     rounds.push({ round, at: now(), head, counts, blocking });
     remember(key, entry.head ?? null, {
       rounds: rounds.slice(-ROUNDS_KEPT),
-      fixRounds: roundsOf(settings),
+      fixRounds: limitOf(settings, entry),
     });
   }
 
@@ -1389,7 +1518,7 @@ export function createReviews({
     const fixes = fixesOf(entry);
     if (!fixes || entry.roundsOutAt) return null;
     const { settings, errors } = await repoSettings(repo, base);
-    if (errors.length || fixes < roundsOf(settings)) return null;
+    if (errors.length || fixes < limitOf(settings, entry)) return null;
     remember(key, entry.head ?? null, { roundsOutAt: now() });
     log(`${key}: no more fix runs, ${fixes} ran`);
     await reply(repo, number, roundsOutText(review, fixes));
@@ -1453,7 +1582,7 @@ export function createReviews({
     if (!review) return refuse(key, repo, number, "the review's format couldn't be read");
     const fixes = fixesOf(entry);
     // Blocking findings end the loop here when there was no fix run left to start.
-    const outOfRounds = fixes >= roundsOf(settings);
+    const outOfRounds = fixes >= limitOf(settings, entry);
     const allowed = settings.review.maxAllowedSeverity;
     const blockers = mergeBlockers(review, allowed);
     const after = fixes ? ` ${afterFixes(fixes)}` : "";
@@ -1678,8 +1807,9 @@ export function createReviews({
 
   // A fix run is over (runs.mjs cleanUp(), `status` its outcome): one more review of what it
   // pushed, once per fix run (reviewedFixes), whose end starts the next fix run or stops the
-  // loop (settle()). In auto-merge mode, or with more than one round: `fix: true` without
-  // `merge` reviews nothing after its one fix run, as before the rounds (issue #376). A fix that
+  // loop (settle()). In auto-merge mode, or with more than one round (a round granted from the
+  // dashboard counts): `fix: true` without `merge` reviews nothing after its one fix run, as
+  // before the rounds (issue #376). A fix that
   // failed or pushed nothing leaves the pull request to the maintainer: in auto-merge mode, a
   // comment says why it isn't merged.
   async function fixed(run) {
@@ -1709,7 +1839,7 @@ export function createReviews({
     const mode = await mergeMode(repo, base);
     // `fix: true` without `merge`: by design, nothing reviews what it pushed. Kept, so the
     // dashboard doesn't take the review before it for what is left (reviewLoop()).
-    if (!mode && roundsOf(settings) < 2) {
+    if (!mode && limitOf(settings, entry) < 2) {
       if (status === "ok") remember(key, entry.head ?? null, { unreviewedFix: fixes });
       return null;
     }
@@ -2081,6 +2211,7 @@ export function createReviews({
       const fixes = Math.max(fixesOf(a), fixesOf(b));
       const reviewedFixes = Math.max(reviewedFixesOf(a), reviewedFixesOf(b));
       const ciFixes = Math.max(a.ciFixes ?? 0, b.ciFixes ?? 0);
+      const granted = Math.max(a.granted ?? 0, b.granted ?? 0);
       // The last fix run's time goes with the count.
       const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
       return {
@@ -2089,6 +2220,7 @@ export function createReviews({
         ...(fixedAt && { fixedAt }),
         ...(reviewedFixes && { reviewedFixes }),
         ...(ciFixes && { ciFixes }),
+        ...(granted && { granted }),
       };
     };
     if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();
@@ -2121,7 +2253,8 @@ export function createReviews({
       : null;
     const sha = pr.head?.sha;
     const runs = sha ? (await actionsRuns(github, repo, sha)).runs : [];
-    const fixes = fixesOf(reviewed.get(taskKey(repo, prId(number))));
+    const entry = reviewed.get(taskKey(repo, prId(number)));
+    const fixes = fixesOf(entry);
     const { settings } = await repoSettings(repo, base);
     // The merge's input is the fullest: review and fix get the same without `checks`, and
     // with their own `decision`; fix with the round it would be.
@@ -2184,7 +2317,7 @@ export function createReviews({
       const own = { ...input, decision };
       if (decision !== "merge") delete own.checks;
       if (decision === "fix") {
-        Object.assign(own, { ci: false, round: fixes + 1, rounds: roundsOf(settings) });
+        Object.assign(own, { ci: false, round: fixes + 1, rounds: limitOf(settings, entry) });
       }
       const messages = await policies.denied(rule, repo, texts, () => own);
       results.push({ rule, defined, messages });
@@ -2206,6 +2339,8 @@ export function createReviews({
     consider,
     dryRun,
     fix,
+    // A maintainer's Fix from the dashboard (work.mjs): startFix() with `asked`.
+    fixAsked: (run, posted, asked) => startFix(run, posted, asked),
     settle,
     fixed,
     tolerance,

@@ -648,6 +648,7 @@ ctx.workApi = createWorkApi({
   dismissals,
   order,
   queueOrder: () => ctx.queueOrder(),
+  reviews: ctx.reviews,
   publicUrl,
   fromKey: dashboardKey,
   log,
