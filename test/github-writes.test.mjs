@@ -1189,6 +1189,12 @@ test("a rerun GitHub took is kept on the run, as its check resolved it, without 
   };
   const job = await checked("repos/org/repo/actions/jobs/500/rerun");
   assert.deepEqual([job.rerun.run_id, job.rerun.sha], [100, "aaa"]);
+  // Its slot is on the run, saved, before the call goes out: a restart meanwhile still counts it.
+  assert.deepEqual(
+    work.reruns.map((r) => [r.run_id, r.sha, r.pending]),
+    [[100, "aaa", true]],
+  );
+  assert.equal(saved, 1);
   // Refused by GitHub: not counted, its slot free again.
   const refused = await checked("repos/org/repo/actions/runs/100/rerun-failed-jobs");
   answered(work, refused, 403, json({}));
@@ -1207,14 +1213,15 @@ test("a rerun GitHub took is kept on the run, as its check resolved it, without 
     { run_id: 100, sha: "aaa", at: START },
     { run_id: 107, sha: "aaa", at: START },
   ]);
-  assert.equal(work.rerunsPending.size, 0);
-  assert.equal(saved, 2);
+  assert.ok(!work.reruns.some((r) => r.pending));
+  // Saved as each slot is taken, settled or freed.
+  assert.equal(saved, 6);
   // A refused check holds no slot and sets nothing to keep.
   down = false;
   const other = write("POST", "repos/org/repo/actions/runs/101/rerun-failed-jobs");
   assert.ok(await check(work, other));
   assert.equal(other.rerun, undefined);
-  assert.equal(work.rerunsPending.size, 0);
+  assert.ok(!work.reruns.some((r) => r.pending));
 });
 
 test("reruns at the same time: each takes a slot once its checks pass, so the bound holds", async () => {
@@ -1799,7 +1806,7 @@ test("a rerun through the gateway: its installation's Actions permission named f
   assert.match((await res.json()).message, /the GitHub App's actions: write permission/);
   assert.ok(looked.includes("/repos/org/repo/actions/runs/100"));
   const run = broker.runOf(secret);
-  assert.deepEqual([run.reruns, run.rerunsPending.size], [[], 0]);
+  assert.deepEqual(run.reruns, []);
   // Write: it goes out, and no answer comes back. GitHub may have taken it: counted.
   has = "write";
   res = await rerun();
@@ -1808,7 +1815,7 @@ test("a rerun through the gateway: its installation's Actions permission named f
     run.reruns.map((r) => [r.run_id, r.sha]),
     [[100, "aaa"]],
   );
-  assert.equal(run.rerunsPending.size, 0);
+  assert.ok(!run.reruns.some((r) => r.pending));
 });
 
 test("a policy's refusal reaches the agent through the gateway, in GitHub's error shape", async (t) => {

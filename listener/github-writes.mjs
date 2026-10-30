@@ -689,16 +689,6 @@ export function createWriteChecks({
     };
   }
 
-  // A rerun GitHub took (a 201), kept on the run (`run.reruns`, saved with it: restart.mjs) for
-  // MAX_RERUNS and the CI step (reviews.mjs afterCiFix()): its workflow run and head commit as
-  // its check resolved them (`rerun`, check()), never asked again: a look-up failing then would
-  // leave it uncounted. Kept before the gateway's answer is over, so before the run can exit.
-  function rerunAnswered(run, rerun, at) {
-    if (!rerun || !Number.isSafeInteger(rerun.run_id) || !Array.isArray(run.reruns)) return;
-    run.reruns.push({ run_id: rerun.run_id, sha: rerun.sha, at });
-    run.changed?.();
-  }
-
   // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the pull
   // requests it changed go to the dashboard (github-pulls.mjs answered()), and the issues it
   // created, from a REST create (201, its JSON) or a GraphQL `createIssue` (what `gh issue
@@ -722,8 +712,12 @@ export function createWriteChecks({
     // No answer at all (status 0: the connection failed or was cut, the gateway's answered()):
     // GitHub may have taken it, so it counts, fail closed.
     if (call.rerun) {
+      // A rerun GitHub took (a 201) stays on the run (`run.reruns`, saved with it: restart.mjs) for
+      // MAX_RERUNS and the CI step (reviews.mjs afterCiFix()), with the workflow run and head
+      // commit its check resolved (check()), never asked again: a look-up failing then would
+      // leave it uncounted. Settled before the gateway's answer is over, so before the run exits.
+      if (status === 201 || status === 0) call.rerun.settle?.(at);
       call.rerun.release?.();
-      if (status === 201 || status === 0) rerunAnswered(run, call.rerun, at);
       return;
     }
     // A reaction removed is no longer the run's: the bot's same one, added again by the listener
@@ -1017,8 +1011,7 @@ export function createWriteChecks({
 
   // The reruns a run made on head commit `sha`, and those GitHub hasn't answered yet.
   function reruns(run, sha) {
-    const pending = [...(run.rerunsPending ?? [])];
-    return [...(run.reruns ?? []), ...pending].filter((r) => r.sha === sha).length;
+    return (run.reruns ?? []).filter((r) => r.sha === sha).length;
   }
 
   function tooMany(run, sha) {
@@ -1029,18 +1022,32 @@ export function createWriteChecks({
     );
   }
 
-  // A rerun that passed its checks holds a slot (`run.rerunsPending`, in memory: a call in
-  // flight doesn't outlive the listener) until GitHub answers it (answered()), or it never goes
-  // out (`release()`: the GitHub gateway calls it once the call is over, whatever happened).
+  // A rerun that passed its checks holds a slot: an entry of `run.reruns` marked `pending`, saved
+  // with the run before the call goes out, so a listener restarted meanwhile still counts it
+  // (GitHub may have taken it). GitHub's answer settles it (`settle()`, answered()), or it is
+  // taken out when GitHub refused it or it never went out (`release()`: the GitHub gateway calls
+  // it once the call is over, whatever happened; a settled one stays).
   function reserve(run, target) {
-    run.rerunsPending ??= new Set();
-    const slot = {
-      run_id: target.run_id,
-      sha: target.sha,
-      release: () => run.rerunsPending.delete(slot),
+    if (!Array.isArray(run.reruns)) run.reruns = [];
+    const entry = { run_id: target.run_id, sha: target.sha, at: Date.now(), pending: true };
+    run.reruns.push(entry);
+    run.changed?.();
+    return {
+      run_id: entry.run_id,
+      sha: entry.sha,
+      settle: (at) => {
+        if (!entry.pending) return;
+        delete entry.pending;
+        entry.at = at ?? entry.at;
+        run.changed?.();
+      },
+      release: () => {
+        if (!entry.pending) return;
+        const i = run.reruns.indexOf(entry);
+        if (i >= 0) run.reruns.splice(i, 1);
+        run.changed?.();
+      },
     };
-    run.rerunsPending.add(slot);
-    return slot;
   }
 
   // The policies' `deny_github` on a write within the ceiling: null, or its refusal.

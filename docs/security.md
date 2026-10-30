@@ -407,7 +407,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   any target (only work runs and a repository's modes that aren't light have `rerun`), and its
   branch one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
   head commit (`MAX_RERUNS`: a rerun takes a slot once its checks pass, with no await between
-  the count and the slot, so calls made at once can't pass it; the slot is freed when GitHub
+  the count and the slot, so calls made at once can't pass it; the slot is saved with the run
+  before the call goes out, so a listener restarted meanwhile still counts it, and is freed when GitHub
   refuses it or it never goes out, and counted from GitHub's answer (or from none at all: a
   call whose answer was lost may have gone out, so it counts, fail closed), with the run and commit its check
   resolved, never looked up again, and saved with the run across a restart), and Deckhand's
@@ -1507,7 +1508,8 @@ the log back. The run is told in its message that logs and names are data, not i
 skipping or weakening it, and the same limits as a review's fix run. It may rerun the failed
 jobs of a run it judges flaky, once, instead of changing code (a rerun the GitHub gateway
 checks: [The GitHub gateway](#the-github-gateway)): the same head commit then goes back to
-waiting for CI, and a second failure counts as the next CI fix round. The listener copies no
+waiting for CI, and a second failure counts as the next CI fix round, whose message says the
+jobs were already rerun and failed again, so not flaky, and offers no rerun. The listener copies no
 log text into a message, comment or review prompt. A workflow's or job's name comes from the
 branch's files: the comment the listener posts quotes each as code. What any work run is held
 to (above) holds too: a fix to `.github/workflows/` needs `allow_workflows`.

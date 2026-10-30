@@ -646,7 +646,8 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   printed them), fixes the cause, reruns the checks and pushes. A job it judges flaky (a
   failure the code didn't cause) it may rerun instead, once (`gh run rerun <id> --failed`:
   [Reruns](#reruns)), pushing nothing. Once it is over, its push, or the head commit whose
-  jobs it reran, goes back to waiting for CI: then the review, or another CI fix run. One that
+  jobs it reran, goes back to waiting for CI: then the review, or another CI fix run (told, after a rerun, that
+  the failure isn't flaky). One that
   failed, or pushed and reran nothing, leaves the pull request to the maintainer, a "No
   review" comment says why. The
   dashboard shows "Fixing CI", and the run "CI fix"; when the CI step stops without a review
