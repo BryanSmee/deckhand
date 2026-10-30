@@ -1,5 +1,6 @@
 /* All runs: a tab-like button, its popover (a desktop's) and its list of runs. */
-.button {
+.menu {
+  display: flex;
   flex: none;
 }
 

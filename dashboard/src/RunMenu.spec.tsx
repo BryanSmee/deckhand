@@ -5,6 +5,7 @@ import { fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
 import { makeRuns, makeState, makeTask } from "./testUtils";
+import type { PolicyDecision, Task } from "./types";
 
 const KEY = "acme/app#70";
 const base = makeState();
@@ -21,20 +22,21 @@ beforeEach(() => {
 });
 
 // The task with `n` runs, the latest still going, opened on `run` if given.
-const show = (n: number, run?: string) => {
-  const task = makeTask({ number: 70, runs: makeRuns(KEY, n, base.now - (n + 1) * 3_600_000) });
+const show = (n: number, run?: string, over: Partial<Task> = {}) => {
+  const runs = makeRuns(KEY, n, base.now - (n + 1) * 3_600_000);
+  const task = makeTask({ number: 70, runs, ...over });
   const q = `?task=${encodeURIComponent(KEY)}${run ? `&run=${run}` : ""}`;
   history.replaceState(null, "", `#/acme/app${q}`);
   render(<Dashboard state={makeState({}, [task])} error={null} />);
 };
-const tabs = () =>
-  within(screen.getByRole("tablist", { name: "Runs" }))
+const tabs = (name = "Runs") =>
+  within(screen.getByRole("tablist", { name }))
     .getAllByRole("tab")
     .map((b) => b.textContent!.split(" ")[0]);
 const allRuns = () => screen.queryByRole("button", { name: /^All runs/ });
 const options = () => screen.getAllByRole("option");
 
-test("1 and 3 runs: a tab each, numbered, no All runs", () => {
+test("1 run: its tab, numbered, no All runs", () => {
   show(1);
   expect(tabs()).toEqual(["#1"]);
   expect(allRuns()).toBeNull();
@@ -94,6 +96,10 @@ test("the menu's keys: arrows and End move, Enter picks, Escape closes", () => {
   fireEvent.keyDown(document.activeElement!, { key: "Escape" });
   expect(screen.queryByRole("listbox")).toBeNull();
   expect(document.activeElement).toBe(allRuns());
+  // Tab too: the popover isn't modal.
+  fireEvent.click(allRuns()!);
+  fireEvent.keyDown(document.activeElement!, { key: "Tab" });
+  expect(screen.queryByRole("listbox")).toBeNull();
   // A click elsewhere closes it too.
   fireEvent.click(allRuns()!);
   fireEvent.pointerDown(document.body);
@@ -128,4 +134,26 @@ test("on a phone, All runs opens in a Sheet", () => {
   fireEvent.click(within(sheet).getAllByRole("option")[14]);
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(location.hash).toMatch(new RegExp(`run=${ID(1)}$`));
+});
+
+test("with a Policies tab: All runs beside the runs, outside the tablist; a pick keeps it", () => {
+  const decision: PolicyDecision = {
+    decision: "merge",
+    rule: "deny_merge",
+    denied: true,
+    messages: ["too big"],
+    pr: 71,
+    at: base.now - 60_000,
+  };
+  show(15, undefined, { decisions: [decision] });
+  const list = screen.getByRole("tablist", { name: "Runs and policies" });
+  expect(tabs("Runs and policies")).toEqual(["#15", "Policies"]);
+  const button = allRuns()!;
+  expect(list.contains(button)).toBe(false);
+  fireEvent.click(button);
+  fireEvent.click(options()[14]);
+  expect(tabs("Runs and policies")).toEqual(["#15", "#1", "Policies"]);
+  // The same button, focused again: not one mounted anew.
+  expect(allRuns()).toBe(button);
+  expect(document.activeElement).toBe(button);
 });

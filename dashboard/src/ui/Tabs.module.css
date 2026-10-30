@@ -7,6 +7,16 @@
   scrollbar-width: none;
 }
 
+/* With something beside its tabs: the row's box, theirs. */
+.contents {
+  display: contents;
+}
+
+.extra {
+  order: 1;
+  display: flex;
+}
+
 .tab {
   display: inline-flex;
   align-items: center;

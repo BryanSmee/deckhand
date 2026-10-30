@@ -1,14 +1,14 @@
 // A task's All runs: the button at the end of its run tabs, and the list of every run it opens,
 // newest first and numbered from the oldest (#1), the one shown ticked. A popover under the
 // button on a desktop, a Sheet on a phone. A listbox: arrows, Home and End move, Enter picks,
-// Escape closes; focus goes back to the button (modal.ts). Detail.tsx shows it past 3 runs.
+// Escape closes (Tab too, the popover); focus goes back to the button. Detail.tsx shows it past 3 runs.
 import type { ComponentChildren } from "preact";
-import { useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
 import { dayTime, duration, runName } from "./format";
 import type { Run } from "./types";
 import { Count } from "./ui/Count";
 import * as Icon from "./ui/icons";
-import { useFocusTrap } from "./ui/modal";
+import { usePopup } from "./ui/popup";
 import { Sheet } from "./ui/Sheet";
 import { StatusDot, stateName } from "./ui/Status";
 import tabStyles from "./ui/Tabs.module.css";
@@ -26,14 +26,22 @@ interface Props {
 
 export function RunMenu({ runs, current, onPick, now, touch }: Props) {
   const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const pick = (id: string) => {
+    button.current?.focus();
     setOpen(false);
     onPick(id);
   };
+  // A Sheet is modal and has its own keys; the popover is a popup's (ui/popup.ts).
+  usePopup(open && !touch, () => setOpen(false), {
+    box,
+    button: () => button.current,
+    fixed: true,
+  });
   const list = <RunList runs={runs} current={current} now={now} touch={touch} onPick={pick} />;
   return (
-    <>
+    <div ref={box} class={styles.menu}>
       <button
         ref={button}
         type="button"
@@ -55,23 +63,19 @@ export function RunMenu({ runs, current, onPick, now, touch }: Props) {
             {list}
           </Sheet>
         ) : (
-          <Popover anchor={button} onClose={() => setOpen(false)}>
-            {list}
-          </Popover>
+          <Popover anchor={button}>{list}</Popover>
         ))}
-    </>
+    </div>
   );
 }
 
-// Under its button, kept on the screen; fixed, so the tab row's scroll doesn't clip it. A
-// click elsewhere closes it, and so does the page scrolling or resizing under it.
+// Under its button, kept on the screen; fixed, so the tab row's scroll doesn't clip it. Focus
+// starts on the run shown.
 function Popover({
   anchor,
-  onClose,
   children,
 }: {
   anchor: { current: HTMLElement | null };
-  onClose: () => void;
   children: ComponentChildren;
 }) {
   const box = useRef<HTMLDivElement>(null);
@@ -79,25 +83,12 @@ function Popover({
     const r = anchor.current?.getBoundingClientRect();
     return { top: (r?.bottom ?? 0) + 4, left: r?.left ?? 0 };
   });
-  useFocusTrap(box, { onClose, first: box });
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
     const over = el.getBoundingClientRect().right - (window.innerWidth - 8);
     if (over > 0) el.style.left = `${Math.max(8, at.left - over)}px`;
-  }, []);
-  useEffect(() => {
-    const inside = (e: Event) =>
-      box.current?.contains(e.target as Node) || anchor.current?.contains(e.target as Node);
-    const away = (e: Event) => !inside(e) && onClose();
-    window.addEventListener("pointerdown", away);
-    window.addEventListener("resize", onClose);
-    document.addEventListener("scroll", away, true);
-    return () => {
-      window.removeEventListener("pointerdown", away);
-      window.removeEventListener("resize", onClose);
-      document.removeEventListener("scroll", away, true);
-    };
+    el.querySelector<HTMLElement>("[role=option][tabindex='0']")?.focus();
   }, []);
   return (
     <div
