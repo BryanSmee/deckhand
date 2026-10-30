@@ -715,7 +715,7 @@ test("deny_fix: GitHub failing to give the input starts nothing, keeps no pair, 
   assert.equal(started, 0);
   assert.equal(errors.length, 1);
   assert.match(errors[0], /^org\/repo: #31: .*policy error: its input can't be built/);
-  assert.deepEqual([w.accepted, w.replies, policy.evals], [[], [], []]);
+  assert.deepEqual([w.accepted, w.replies, policy.evals, w.decided], [[], [], [], []]);
   // GitHub answers again: the same pair is asked, allowed, and its run starts.
   w.files = [];
   w.advance(10 * MIN);
@@ -746,4 +746,26 @@ test("without any policy, the rebase run starts and no opa runs", async (t) => {
   assert.equal(w.accepted.length, 1);
   assert.deepEqual(policy.evals, []);
   assert.deepEqual([w.replies, w.decided], [[], []]);
+});
+
+test("deny_fix: GitHub failing to list the policies starts nothing, keeps no pair, asks again", async (t) => {
+  let status = 502;
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    listFails: () => status,
+  });
+  const w = setup({ policies: policy.engine });
+  const { started, errors } = await w.conflicts.tick();
+  assert.equal(started, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^org\/repo: #31: .*policy error: the policies can't be read/);
+  // No run, no comment, no rule asked, no refusal for the task's page.
+  assert.deepEqual([w.accepted, w.replies, policy.evals, w.decided], [[], [], [], []]);
+  // GitHub answers again: the same pair is asked, allowed, and its run starts.
+  status = null;
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(policy.evals.length, 1);
+  assert.equal(w.accepted.length, 1);
+  assert.equal(w.decided.length, 1);
 });

@@ -491,7 +491,7 @@ the review and fix input of `reviews.mjs` `readPullInput()`, through `policies.m
 kept as the pair's attempt: a "No rebase run" comment quotes its messages, and once posted they
 are kept with it (`said`), so a later pair refused for the same ones isn't said again (a base
 that keeps moving says it once). A refusal because GitHub couldn't be read (`unread`: the
-policies or the input) keeps no pair: it is the repo's error for that pass, asked again at the
+policies or the input) keeps no pair, nor a decision for the task's page (`keepUnread: false`): it is the repo's error for that pass, asked again at the
 next check, as any GitHub error there.
 
 The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due

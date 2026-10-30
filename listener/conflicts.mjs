@@ -287,6 +287,8 @@ export function createConflicts({
         ],
         keep: (entry) => decided(key, entry),
         log,
+        // GitHub failing is asked again at the next check: no refusal kept for the page.
+        keepUnread: false,
       },
     );
   }

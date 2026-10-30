@@ -103,11 +103,20 @@ export const passed = (name) => ({ name, passed: true });
 // `rule` asked of `policies` (createPolicies()) about pull request `pr` ({ number }: an
 // issue's, for deny_link_branch) → { messages, unread }, as decide()'s. When a policy applied, the
 // decision is kept for the task's page: `keep(entry)` (decisions.mjs record()) with the
-// built-in `gates` that passed before ([{ name, passed }]) and the input the rules saw.
+// built-in `gates` that passed before ([{ name, passed }]) and the input the rules saw;
+// without `keepUnread`, not when GitHub couldn't be read: a caller that asks again at its next
+// check (conflicts.mjs) shows no refusal that holds nothing.
 // reviews.mjs, conflicts.mjs and linked-branch.mjs share it, so their entries stay alike.
-export async function denyKept(policies, rule, repo, ref, input, { pr, gates = [], keep, log }) {
+export async function denyKept(
+  policies,
+  rule,
+  repo,
+  ref,
+  input,
+  { pr, gates = [], keep, log, keepUnread = true },
+) {
   const { applied, messages, input: saw, unread } = await policies.decide(rule, repo, ref, input);
-  if (applied) {
+  if (applied && (keepUnread || !unread)) {
     const entry = {
       decision: rule.replace(/^deny_/, ""),
       rule,

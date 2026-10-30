@@ -83,17 +83,27 @@ export function recordingFetch(answer) {
 }
 
 // The policies' engine (policies.mjs) with a fake `opa` and org/repo's policy `files` (name →
-// text) on `ref`, the operator's `operator` (likewise): each rule says `messages(input, rule)`, or fails as `failure` says. `evals`:
+// text) on `ref`, the operator's `operator` (likewise): each rule says `messages(input, rule)`, or fails as `failure` says;
+// `listFails()`, a status GitHub answers the repo's policy folder with instead (null: none). `evals`:
 // the inputs it was asked about, with their `rule`.
 export function policyEngine(
   t,
-  { files = null, operator = {}, messages = () => [], failure = null, ref = "main" } = {},
+  {
+    files = null,
+    operator = {},
+    messages = () => [],
+    failure = null,
+    ref = "main",
+    listFails = () => null,
+  } = {},
 ) {
   const evals = [];
   const engine = createPolicies({
     config: {},
     github: async (repo, method, path) => {
-      if (files && path === `/repos/org/repo/contents/.deckhand/policy?ref=${ref}`) {
+      const listed = path === `/repos/org/repo/contents/.deckhand/policy?ref=${ref}`;
+      if (listed && listFails()) return new Response("{}", { status: listFails() });
+      if (files && listed) {
         return Response.json(Object.keys(files).map((name) => ({ type: "file", name, sha: name })));
       }
       if (files && path.startsWith("/repos/org/repo/git/blobs/")) {

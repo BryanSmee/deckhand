@@ -8,6 +8,7 @@ import {
   builtInPolicies,
   createPolicies,
   deniesOf,
+  denyKept,
   MAX_MESSAGE_LENGTH,
   MAX_TEXT,
   opaRunner,
@@ -441,6 +442,37 @@ test("deny: fail closed, each failure one policy error", async (t) => {
     tmp: tempDir(t),
   });
   assert.match((await operator.deny("deny_merge", "org/repo", "main", input))[0], /EACCES/);
+  // GitHub's part is told apart (`unread`): a caller may ask again rather than keep the refusal.
+  const unread = async (p, i) => (await p.decide("deny_merge", "org/repo", "main", i)).unread;
+  assert.deepEqual(
+    [await unread(down.policies, input), await unread(broken.policies, failing)],
+    [true, true],
+  );
+  // So is an operator's folder that can't be read: no rule refused anything either.
+  assert.equal(await unread(operator, input), true);
+  // A rule's own failure isn't: opa answering nonsense is the policy's.
+  const nonsense = setup(t, {
+    opa: fakeOpa({ answer: () => ({ code: 0, stdout: "not json" }) }),
+    repoFiles: { "a.rego": DENY },
+  });
+  assert.equal(await unread(nonsense.policies, input), undefined);
+  // denyKept() keeps those for the task's page unless told not to; a rule's refusal always.
+  const kept = [];
+  const ask = (p, i, keepUnread) =>
+    denyKept(p, "deny_fix", "org/repo", "main", i, {
+      pr: { number: 5 },
+      keep: (entry) => kept.push(entry),
+      log: () => {},
+      keepUnread,
+    });
+  assert.equal((await ask(down.policies, input, false)).unread, true);
+  assert.equal((await ask(broken.policies, failing, false)).unread, true);
+  assert.deepEqual(kept, []);
+  assert.equal((await ask(down.policies, input, true)).unread, true);
+  assert.deepEqual(
+    [kept.length, kept[0].rule, kept[0].denied, kept[0].pr],
+    [1, "deny_fix", true, 5],
+  );
 });
 
 test("deny: failures are capped and redacted like messages", async (t) => {
