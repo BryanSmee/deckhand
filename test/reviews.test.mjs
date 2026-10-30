@@ -1025,6 +1025,36 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
 });
 
+test("dashboard Fix after a maintainer's review: a fix that pushed nothing stops the loop", async (t) => {
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n");
+  const at = (sha) => ({ head: { sha, repo: { full_name: "org/repo" } } });
+  await s.review(HIGH_ONE);
+  // The loop's one fix run pushes sha-2, which nothing reviews by design.
+  assert.equal(await s.fixed("sha-2"), null);
+  assert.equal(s.loop().loop, "fixed");
+  // The dashboard's Review of sha-2 finds it still there: Fix grants round 2, from sha-2.
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  await s.reviews.settle(run, posted(HIGH_ONE, at("sha-2")));
+  assert.equal(s.loop().loop, "rounds-out");
+  const { item } = await askFix(s, HIGH_ONE, "alice", at("sha-2"));
+  assert.equal(item.round, 2);
+  // It pushed nothing: no review of sha-2 again, the loop stops there.
+  const queued = s.accepted.length;
+  assert.equal(await s.fixed(), null);
+  assert.equal(s.accepted.length, queued);
+  assert.deepEqual([s.loop().loop, s.loop().history.map((r) => r.round)], ["stopped", [0, 1]]);
+  // A fix that did push is reviewed.
+  const again = await askFix(s, HIGH_ONE, "alice", at("sha-2"));
+  assert.equal(again.item.round, 3);
+  assert.equal((await s.fixed("sha-3")).reason, "review");
+});
+
 test("dashboard Fix: a round left on fix: true is reviewed, though the loop's own isn't", async (t) => {
   let busy = true;
   const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n", { busy: () => busy });

@@ -1420,7 +1420,11 @@ export function createReviews({
     if (busy(task)) return skip(`#${issue} has a run going or queued`);
     const comment = asked ? await asked.announce(round, rounds, blockingText(review)) : null;
     // Before queuing: whatever happens next, never this round twice.
-    remember(key, reviewed.get(key)?.head ?? null, {
+    // A maintainer's Fix starts from the pull request's head now, which no automatic review
+    // may have seen (a maintainer's review of it, an unreviewed `fix: true` push): what it
+    // pushed is compared with that (reviewFix()), so a fix that pushed nothing stops the loop.
+    const from = (asked && pr?.head?.sha) || reviewed.get(key)?.head || null;
+    remember(key, from, {
       fixes: round,
       fixedAt: now(),
       next: "review-fix",
