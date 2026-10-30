@@ -118,7 +118,7 @@ export const BACKLOG: Backlog = {
 export function makePolicyFile(over: Partial<PolicyFile> & Pick<PolicyFile, "name">): PolicyFile {
   return {
     source: "repo",
-    replaces: false,
+    replaces: null,
     active: true,
     rules: [],
     url: null,

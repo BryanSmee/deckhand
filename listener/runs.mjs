@@ -146,6 +146,7 @@ export function createRuns(ctx) {
         issue: task.number,
         base: task.base,
         created,
+        reason,
       }),
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took

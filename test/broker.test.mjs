@@ -4,6 +4,13 @@ import { createBroker } from "../listener/broker.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
 import { sandboxAt } from "./helpers.mjs";
 
+test("a run keeps why the listener started it, which deny_github reads", () => {
+  const broker = createBroker({ sentFrom: sandboxAt() });
+  const fix = broker.register("org/c", undefined, { mode: "work", push: true, reason: "conflict" });
+  assert.equal(broker.runOf(fix).reason, "conflict");
+  assert.equal(broker.runOf(broker.register("org/c")).reason, null);
+});
+
 test("a run's secret names its run until the run ends, and only from its own sandbox", async () => {
   const sentFrom = sandboxAt("10.9.0.5");
   const broker = createBroker({ sentFrom });

@@ -8,9 +8,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { createGithubGateway } from "../listener/github-gateway.mjs";
-import { aboveCeiling, classify, createWriteChecks } from "../listener/github-writes.mjs";
+import {
+  aboveCeiling,
+  classify,
+  createWriteChecks,
+  runTraits,
+} from "../listener/github-writes.mjs";
 import { ceilingOf, MODES } from "../listener/modes.mjs";
-import { createPolicies, opaRunner } from "../listener/policies.mjs";
+import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { policyEngine, sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
@@ -675,6 +680,9 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
     version: 1,
     repo: "org/repo",
     mode: "brainstorm",
+    custom_mode: false,
+    light: true,
+    reason: null,
     issue: 1,
     action: "comment",
     actions: ["comment"],
@@ -702,6 +710,23 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
     write("POST", "repos/org/repo/issues/2/dependencies/blocked_by", { issue_id: 903 }),
   );
   assert.deepEqual(evals.at(-1).change.blocked_by, { id: 903, number: 3, kind: "other_issue" });
+  // A work run the listener started itself, and one in the repo's own modes, light or not.
+  await check(
+    { ...work, reason: "ci-fix" },
+    write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
+  );
+  assert.deepEqual(
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
+    ["work", false, false, "ci-fix"],
+  );
+  await check(
+    run("plan", { push: true }),
+    write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
+  );
+  assert.deepEqual(
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
+    ["plan", true, false, null],
+  );
   // Above the ceiling: refused before any policy runs.
   const asked = evals.length;
   await check(brainstorm, write("PATCH", "repos/org/repo/issues/3", { body: "x" }));
@@ -758,23 +783,88 @@ try {
   opa = true;
 } catch {}
 
+test("runTraits: a repo's own mode, light without push, the listener's reason", () => {
+  assert.deepEqual(runTraits(run("work")), { custom_mode: false, light: false, reason: null });
+  assert.deepEqual(runTraits({ ...run("brainstorm"), reason: "x" }), {
+    custom_mode: false,
+    light: true,
+    reason: "x",
+  });
+  // The repo's review block is a built-in mode; a repo's own, light or not; no mode at all.
+  assert.equal(runTraits(run("review")).custom_mode, false);
+  assert.deepEqual(runTraits(run("ask")), { custom_mode: true, light: true, reason: null });
+  assert.equal(runTraits(run("plan", { push: true })).light, false);
+  assert.equal(runTraits(run(null)).custom_mode, false);
+});
+
+// Deckhand's own default policies (policy/*.rego), as the image ships them.
+const builtIn = () => builtInPolicies();
+
 test(
-  "the real opa: the default policy of docs/repo-config.md narrows the ceilings as it says",
+  "the real opa: each of Deckhand's default policies compiles and answers for every kind of mode",
   { skip: !opa && "no opa on the PATH" },
   async (t) => {
-    const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
-    const [, template] = /<!-- github\.rego:[^\n]*-->\n\n```rego\n([\s\S]*?)```/.exec(docs);
+    const files = builtIn();
+    assert.ok(files.size);
     const policies = createPolicies({
       config: {},
       github: async () => new Response("{}", { status: 404 }),
       run: opaRunner(),
-      readOperator: () => new Map([["github.rego", template]]),
+      readBuiltIn: () => files,
+      tmp: tempDir(t),
+    });
+    assert.deepEqual(await policies.checkOperator(), { errors: [], warnings: [] });
+    for (const [name, text] of files) {
+      const one = new Map([[name, text]]);
+      for (const [mode, light] of [
+        ["work", false],
+        ["brainstorm", true],
+        ["idea", true],
+        ["plan", false],
+        ["ask", true],
+      ]) {
+        for (const kind of ["own_issue", "own_pr", "other_issue", "new_issue"]) {
+          const messages = await policies.denied("deny_github", "org/repo", one, () => ({
+            repo: "org/repo",
+            mode,
+            custom_mode: !MODES[mode],
+            light,
+            reason: null,
+            issue: 1,
+            action: "comment",
+            actions: ["comment"],
+            target: { kind, number: kind.startsWith("new") ? null : 7, labels: [], author: "a" },
+            change: { fields: ["body"], labels_added: [], labels_removed: [] },
+          }));
+          assert.ok(!messages.some((m) => m.startsWith("policy error")), `${name}: ${messages}`);
+        }
+      }
+    }
+  },
+);
+
+test(
+  "the real opa: Deckhand's github.rego narrows the ceilings as docs/repo-config.md says",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
+    const [, shown] =
+      /<!-- github\.rego:[^\n]*-->\n\n```rego\n# policy\/github\.rego\n([\s\S]*?)```/.exec(docs);
+    assert.equal(shown, builtIn().get("github.rego"));
+    const policies = createPolicies({
+      config: {},
+      github: async () => new Response("{}", { status: 404 }),
+      run: opaRunner(),
+      readBuiltIn: () => new Map([["github.rego", builtIn().get("github.rego")]]),
       tmp: tempDir(t),
     });
     const ask = (mode, action, kind, labels_added = [], more = {}) =>
       policies.deny("deny_github", "org/repo", "main", () => ({
         repo: "org/repo",
         mode,
+        custom_mode: !MODES[mode],
+        light: !["work", "plan"].includes(mode),
+        reason: null,
         issue: 1,
         action,
         actions: [action],

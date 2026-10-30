@@ -1,9 +1,9 @@
 // Rules as code (issue #292): Rego policies that can only add refusals after the listener's
 // built-in gates, evaluated by the pinned `opa` binary (listener/Dockerfile), one process per
-// decision. The operator's defaults are GRANTS_DIR/policy/*.rego, read again at each decision
-// like the grants; a repo's are .deckhand/policy/*.rego on its default branch, like its
-// .deckhand.yaml. A repo file with the same name as an operator file replaces it, any other
-// name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
+// decision. Three layers, by file name: Deckhand's own defaults (BUILT_IN_DIR, in the image:
+// issue #448), the operator's, GRANTS_DIR/policy/*.rego, read again at each decision like the
+// grants, and a repo's, .deckhand/policy/*.rego on its default branch, like its .deckhand.yaml.
+// A file with the same name as one of a layer below replaces it, any other name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
 // `deny_review`, `deny_fix`, and `deny_github` for a run's GitHub writes: github-writes.mjs),
 // whose strings are the reasons shown to the maintainer (or the run, for `deny_github`).
 //
@@ -18,12 +18,17 @@ import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { accessSync, constants, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getJson } from "./github.mjs";
 import { redact } from "./redact.mjs";
 
 // Where a repo's policies are, on its default branch, and the operator's, in GRANTS_DIR.
 export const POLICY_DIR = ".deckhand/policy";
 const OPERATOR_DIR = "policy";
+// Deckhand's own defaults (../policy/, copied into the image at the same relative path): one
+// file per `gh` feature (gh-<feature>.rego) and github.rego, which narrow the modes' ceilings to
+// what the prompts ask for. Without the operator's setup: they hold unless replaced.
+export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url));
 
 // The rules the listener evaluates: another `deny_*` rule is a mistake the config check says.
 export const RULES = ["deny_merge", "deny_review", "deny_fix", "deny_github"];
@@ -149,6 +154,21 @@ export function operatorPolicies(config, read = (path) => readFileSync(path, "ut
   return files;
 }
 
+// Deckhand's own policies: `dir`'s *.rego, name → text, read once by createPolicies(). No
+// folder: none. A file that can't be read throws, as the operator's.
+export function builtInPolicies(dir = BUILT_IN_DIR, read = (path) => readFileSync(path, "utf8")) {
+  const files = new Map();
+  let names;
+  try {
+    names = readdirSync(dir).sort((a, b) => a.localeCompare(b));
+  } catch (error) {
+    if (error.code === "ENOENT") return files;
+    throw new Error(`Deckhand's policies can't be read (${error.code})`);
+  }
+  for (const name of names) if (FILE.test(name)) files.set(name, read(join(dir, name)));
+  return files;
+}
+
 // The `deny_*` rules a file defines at the start of a line, in package `deckhand`: what the
 // config check compares with RULES. A rule written otherwise is only missed by the check.
 export function deniesOf(text) {
@@ -196,13 +216,16 @@ const LISTING_MS = 10 * 60_000;
 
 // `github`: the App's calls; `run(args, { input, cwd })`: opaRunner()'s; `secrets()`: what
 // redaction hides of the messages (secrets.mjs); `readOperator()`: the operator's policies
-// (operatorPolicies()); `tmp`: where each decision's files go; `now`: the clock, for listings.
+// (operatorPolicies()); `readBuiltIn()`: Deckhand's own (builtInPolicies(), none by default:
+// server.mjs passes them); `tmp`: where each decision's files go; `now`: the clock, for
+// listings.
 export function createPolicies({
   config,
   github,
   run = opaRunner(),
   secrets = () => [],
   readOperator = () => operatorPolicies(config),
+  readBuiltIn = () => new Map(),
   tmp = tmpdir(),
   log = () => {},
   now = Date.now,
@@ -215,6 +238,11 @@ export function createPolicies({
   const listings = new Map();
   // restrictedCapabilities() of the binary, once it answered.
   let capabilities = null;
+  // Deckhand's own policies, read once: they are part of the image.
+  let builtIn = null;
+  const ownDefaults = () => (builtIn ??= readBuiltIn());
+  // The defaults under the operator's: name → text.
+  const defaults = () => new Map([...ownDefaults(), ...readOperator()]);
 
   async function listing(repo, ref, cached) {
     const key = repo.toLowerCase();
@@ -253,9 +281,20 @@ export function createPolicies({
     return new Map((await repoFiles(repo, ref, cached)).map((f) => [f.name, f.text]));
   }
 
-  // The operator's policies with the repo's over them, by file name. Empty: nothing applies.
+  // Deckhand's policies, the operator's over them, then the repo's, by file name. Empty: nothing
+  // applies.
   async function policiesFor(repo, ref) {
-    return new Map([...readOperator(), ...(await repoPolicies(repo, ref, { cached: true }))]);
+    return new Map([...defaults(), ...(await repoPolicies(repo, ref, { cached: true }))]);
+  }
+
+  // Whether `files` hold only Deckhand's own policies, none of them defining `rule`: then
+  // nothing would deny it, and no policy is asked (no `opa` call, no decision kept), as when
+  // there is none. Deckhand's files are known: deniesOf() reads them right.
+  function onlyBuiltInWithout(rule, files) {
+    const own = ownDefaults();
+    return [...files].every(
+      ([name, text]) => own.get(name) === text && !deniesOf(text).includes(rule),
+    );
   }
 
   async function capabilitiesFile() {
@@ -361,7 +400,7 @@ export function createPolicies({
         messages: failure(`the policies can't be read (${error.message ?? error})`),
       };
     }
-    if (!files.size) return { applied: false, messages: [] };
+    if (!files.size || onlyBuiltInWithout(rule, files)) return { applied: false, messages: [] };
     return { applied: true, ...(await evaluated(rule, repo, files, input)) };
   }
 
@@ -425,58 +464,63 @@ export function createPolicies({
     return { errors, warnings };
   }
 
-  // The operator's policies, checked: errors to say at start. None: no `opa` call.
+  // The operator's policies over Deckhand's, checked: errors to say at start. None: no `opa`
+  // call.
   async function checkOperator() {
     try {
-      return await check(readOperator());
+      return await check(defaults());
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
     }
   }
 
-  // A repo's policies on `ref` (a branch), checked, operator's included: what the onboarding
+  // A repo's policies on `ref` (a branch), checked, the defaults included: what the onboarding
   // pull request's reply says (onboarding.mjs branchConfigReport()).
   async function checkRepo(repo, ref) {
     const own = await repoPolicies(repo, ref);
     if (!own.size) return { errors: [], warnings: [] };
-    let operator = new Map();
+    let under = new Map();
     try {
-      operator = readOperator();
+      under = defaults();
     } catch {
       // Said at start: the repo's own are what this check is about.
     }
-    return check(new Map([...operator, ...own]));
+    return check(new Map([...under, ...own]));
   }
 
   // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
   // dashboard's config panel and `/mode policy`: { files: [{ name, source, replaces, active,
-  // rules, url, text, truncated }], errors, warnings }, the operator's files first. A repo file
-  // `replaces` an operator one of its name, listed too, not `active`: deny() doesn't evaluate
-  // it. `text`: the file's, redacted and cut at MAX_TEXT (`truncated`). `errors`: compile()'s
-  // of the active files, and why the operator's can't be read (every decision refuses then).
-  // `policies`: name → text, what deny() would evaluate. No policy anywhere: no `opa` call.
+  // rules, url, text, truncated }], errors, warnings }, Deckhand's files first ("deckhand"),
+  // then the operator's, then the repo's. A file `replaces` one of a layer below with its name
+  // (that layer's source, the nearest; null for none), listed too, not `active`: deny() doesn't evaluate it. `text`: the file's, redacted and cut at
+  // MAX_TEXT (`truncated`). `errors`: compile()'s of the active files, and why the operator's
+  // can't be read (every decision refuses then). `policies`: name → text, what deny() would
+  // evaluate. No policy anywhere: no `opa` call.
   async function describe(repo, ref) {
-    let operator = new Map();
     const errors = [];
+    const layers = [];
+    const said = (text) => errors.push({ file: null, row: null, message: text, text });
     try {
-      operator = readOperator();
+      layers.push(entries("deckhand", ownDefaults()));
     } catch (error) {
-      const text = `the operator's policies can't be read: ${error.message ?? error}`;
-      errors.push({ file: null, row: null, message: text, text });
+      said(`Deckhand's policies can't be read: ${error.message ?? error}`);
     }
-    const own = await repoFiles(repo, ref, false);
-    const names = new Set(own.map((f) => f.name));
-    const files = [
-      ...[...operator].map(([name, text]) => ({
-        name,
-        source: "operator",
-        replaces: false,
-        active: !names.has(name),
-        text,
-        url: null,
+    try {
+      layers.push(entries("operator", readOperator()));
+    } catch (error) {
+      said(`the operator's policies can't be read: ${error.message ?? error}`);
+    }
+    layers.push(
+      await repoFiles(repo, ref, false).then((own) => own.map((f) => ({ ...f, source: "repo" }))),
+    );
+    const has = (layer, name) => layer.some((f) => f.name === name);
+    const files = layers.flatMap((layer, i) =>
+      layer.map((f) => ({
+        ...f,
+        replaces: layers.slice(0, i).findLast((below) => has(below, f.name))?.[0].source ?? null,
+        active: !layers.slice(i + 1).some((above) => has(above, f.name)),
       })),
-      ...own.map((f) => ({ ...f, source: "repo", replaces: operator.has(f.name), active: true })),
-    ];
+    );
     const policies = new Map(files.filter((f) => f.active).map((f) => [f.name, f.text]));
     const checked = await compile(policies);
     return {
@@ -486,6 +530,10 @@ export function createPolicies({
       policies,
     };
   }
+
+  // A layer's files (name → text) as describe() lists them.
+  const entries = (source, files) =>
+    [...files].map(([name, text]) => ({ name, source, text, url: null }));
 
   // A file's text as the dashboard shows it: without the operator's secrets, cut at MAX_TEXT
   // (after the redaction, so a cut never leaves part of a secret).

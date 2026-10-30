@@ -141,7 +141,7 @@ beforeEach(() => {
           makePolicyFile({
             name: "base.rego",
             source: "repo",
-            replaces: true,
+            replaces: "operator",
             rules: ["deny_merge", "deny_review"],
             url: "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
           }),

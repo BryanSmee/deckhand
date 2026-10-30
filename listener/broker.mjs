@@ -65,12 +65,22 @@ export function createBroker({
   // a review and its writes' ceiling. `issue`: the number of its issue or pull request, and
   // `base`, its repo's default branch, for what its writes may reach (github-writes.mjs), and
   // `created`, the list of the issues it created ({ number, at }), which the GitHub gateway adds
-  // to: the run's live state's own list, saved with it (restart.mjs).
+  // to: the run's live state's own list, saved with it (restart.mjs). `reason`: why the listener
+  // started it itself ("review-fix", "ci-fix", "conflict"), null for a comment's: the policies
+  // read it (github-writes.mjs).
   // `secret`: a run's own again, when a restarted listener picks it up.
   function register(
     repo,
     extra,
-    { push = false, mode = null, issue = null, base = null, created = [], secret = random() } = {},
+    {
+      push = false,
+      mode = null,
+      issue = null,
+      base = null,
+      created = [],
+      reason = null,
+      secret = random(),
+    } = {},
   ) {
     // No branch until allow() names them: a run that can push still pushes nothing else.
     runs.set(hash(secret), {
@@ -81,6 +91,7 @@ export function createBroker({
       issue: Number.isInteger(issue) ? issue : null,
       base,
       created: Array.isArray(created) ? created : [],
+      reason: typeof reason === "string" ? reason : null,
       branches: [],
       fork: false,
       provider: null,

@@ -834,10 +834,12 @@ deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
 
 **The files**: every `*.rego` file of `.deckhand/policy/` on the default branch (not its
 subfolders), in package `deckhand`; a file in another package is a library the others can
-import. The operator can ship defaults in their grants folder's `policy/` folder
-([security model](security.md#policies)): a repository file **with the same name** as an
-operator file replaces it (a file with only `package deckhand` drops it), any other name adds
-to them. With no policy anywhere, nothing changes: `opa` isn't run, and the repository's
+import. Three layers, by file name: [Deckhand's own defaults](#the-default-policies), in the
+listener's image; the operator's, in their grants folder's `policy/` folder
+([security model](security.md#policies)); then the repository's. A file **with the same name**
+as one of a layer below replaces it (a file with only `package deckhand` drops it), any other
+name adds to them. When no file but Deckhand's applies and none of them defines a decision's
+rule, that decision runs no `opa` (and the task's page keeps none of it); the repository's
 folder is listed once, then again only after a push to its default branch (or 10 minutes).
 
 **The rules**: one set of strings per decision, each string a reason shown to the
@@ -1025,6 +1027,9 @@ go through Deckhand's git gateway) or settings, or another repository.
 | `version`               | `1`.                                                                                                                                                                                                                                                                                                           |
 | `repo`                  | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                 |
 | `mode`                  | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                     |
+| `custom_mode`           | `true` for one of the repository's `modes:`, `false` for Deckhand's own: a rule needn't list the built-in modes, which change as Deckhand adds some.                                                                                                                                                           |
+| `light`                 | The mode's `light`: `true` for a run without a branch (it can't push), `false` for a work run or a repository mode that isn't light.                                                                                                                                                                           |
+| `reason`                | Why the listener started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                 |
 | `issue`                 | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                               |
 | `action`                | What the write does: `create`, `edit`, `comment`, `label`, `link`, `ready`, `draft`. A write that does several (a `PATCH` setting labels and a title) has them all in `actions`, `action` being the first.                                                                                                     |
 | `actions`               | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                      |
@@ -1043,6 +1048,9 @@ go through Deckhand's git gateway) or settings, or another repository.
   "version": 1,
   "repo": "owner/repo",
   "mode": "brainstorm",
+  "custom_mode": false,
+  "light": true,
+  "reason": null,
   "issue": 12,
   "action": "comment",
   "actions": ["comment"],
@@ -1051,15 +1059,42 @@ go through Deckhand's git gateway) or settings, or another repository.
 }
 ```
 
-**The default policy**: the ceilings leave room for what a prompt may need one day; this
-template narrows them to what Deckhand's prompts ask for. Put it in the grants folder's
-`policy/github.rego` for every repository (a repository's own `.deckhand/policy/github.rego`
-then replaces it), or in a repository's `.deckhand/policy/`:
+### The default policies
 
-<!-- github.rego: test/github-writes.test.mjs evaluates this block with the real opa -->
+The ceilings leave room for what a prompt may need one day; Deckhand's default policies narrow
+them to what its prompts ask for. They ship in the listener's image (`policy/` in Deckhand's
+repository) and hold without any setup, under the operator's and the repository's files:
+
+- **One file per feature**: `github.rego` for the writes runs have always made (below), and a
+  `gh-<feature>.rego` for each `gh` feature added since (`gh-review-threads.rego`, say),
+  whose defaults its issue gives per kind of run: work runs (work, fix and conflict runs
+  share theirs), brainstorms, research (it gets no GitHub token, so it never reaches the
+  gateway), and the repository's own `modes:` (`custom_mode`), where a new feature is
+  refused unless its issue says otherwise.
+- **Broadening one feature**: a file with the same name replaces Deckhand's: the operator's
+  `policy/gh-review-threads.rego` for every repository, or a repository's
+  `.deckhand/policy/gh-review-threads.rego` for its own (a file with only `package deckhand`
+  drops every default refusal of that feature). The other features keep their defaults.
+- **Broadening stops at the ceiling**: a file can only drop refusals. Past it, the mode's
+  built-in ceiling still holds: a light repository mode writes nothing, and the modes with no
+  write ceiling (inbox entries, discussions, onboarding, analyses, reviews) stay refused,
+  whatever a policy says.
+- **Each default file is evaluated with the real `opa`** by Deckhand's tests, on every kind of
+  mode.
+
+The Policies tab lists them as `deckhand/policy/<name>`, with the operator's or the
+repository's file that replaces one.
+
+`github.rego`, which a file of that name replaces as a whole:
+
+<!-- github.rego: test/github-writes.test.mjs checks this block is policy/github.rego, and evaluates it with the real opa -->
 
 ```rego
 # policy/github.rego
+# Deckhand's default policy for a run's GitHub writes (docs/repo-config.md#the-default-policies):
+# the modes' ceilings leave room for what a prompt may need one day, this narrows them to what
+# Deckhand's prompts ask for. A grants folder's policy/github.rego replaces it, and a
+# repository's .deckhand/policy/github.rego replaces both.
 package deckhand
 
 # Brainstorms edit their own issue's description, and file and link their follow-ups: the
@@ -1102,9 +1137,10 @@ deny_github contains msg if {
 ### A dry run and the dashboard
 
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates `deny_merge`,
-`deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on two
-sample writes (a comment on it by the work run whose pull request it is, and one by a
-brainstorm of another issue, `issue: null`), and replies with each rule's result (denies, with
+`deny_review` and `deny_fix` on the pull request as it is now, and `deny_github` on
+sample writes (a comment on it by the work run whose pull request it is, one by a brainstorm
+of another issue, `issue: null`, and, when the repository has `modes:`, one by a run in the
+first of them, `custom_mode: true`), and replies with each rule's result (denies, with
 its messages, or allows), the merge's input and the samples' inputs, in collapsed blocks. The
 samples' results are labelled as such and aren't counted as denials. Nothing is
 reviewed, fixed or merged, and it is no decision: it debugs a rule without waiting for a pull
@@ -1116,9 +1152,9 @@ pull request.
 
 **The dashboard**: the repository's settings have a Policies tab, next to its config: the
 config check's errors first (each linked to its line), what each decision gets (its rules and
-their files, or refused while the check fails), the policy files that apply (the operator's
-and the repository's, read from the default branch when the page opens: which one replaces
-which, the `deny_*` rules each defines, whether it compiles), and each file's source. A task's page shows its pull
+their files, or refused while the check fails), the policy files that apply (Deckhand's
+defaults, the operator's and the repository's, read from the default branch when the page
+opens: which one replaces which, the `deny_*` rules each defines, whether it compiles), and each file's source. A task's page shows its pull
 request's last policy decisions (the rule, whether it denied, its messages, when), the last
 10 of them; a decision is kept only when a policy was asked, so a repository without
 policies shows none. Each lists the built-in gates that passed before the policies were asked

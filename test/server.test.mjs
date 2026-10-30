@@ -36,6 +36,8 @@ const RW_MOUNT = "/usr";
 // (fixtures/fake-docker.sh says how).
 function fakeDocker(dir) {
   symlinkSync(new URL("fixtures/fake-docker.sh", import.meta.url).pathname, join(dir, "docker"));
+  // And an `opa` that denies nothing (fixtures/allow-opa.sh), for Deckhand's default policies.
+  symlinkSync(new URL("fixtures/allow-opa.sh", import.meta.url).pathname, join(dir, "opa"));
 }
 
 // Stops the fake sandboxes a test leaves running.

@@ -588,14 +588,16 @@ export interface RepoConfig {
   readAt: number;
 }
 
-// A policy file: `replaces`, a repo file with the name of an operator one, which it replaces.
-// That operator file is listed too, not `active`: no decision evaluates it. `rules`: the
+// A policy file: Deckhand's own defaults ("deckhand", in its image), the operator's, or the
+// repo's, each layer over the one before. `replaces`: the source of the file of a layer below
+// with its name, which it replaces (the nearest), null for none. That file is listed too, not
+// `active`: no decision evaluates it. `rules`: the
 // `deny_*` rules it defines. `url`: the repo's file on GitHub. `text`: its source, redacted, cut
 // at 20 KB (`truncated`); sent by the config endpoint only, never in api/state.
 export interface PolicyFile {
   name: string;
-  source: "operator" | "repo";
-  replaces: boolean;
+  source: "deckhand" | "operator" | "repo";
+  replaces: "deckhand" | "operator" | null;
   active: boolean;
   rules: string[];
   url: string | null;

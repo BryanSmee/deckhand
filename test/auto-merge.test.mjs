@@ -9,6 +9,7 @@ import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   createReviews,
   dryRunText,
+  githubSamples,
   mergeBlockers,
   mergeRefusal,
   parseReview,
@@ -699,13 +700,36 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   assert.equal(none.calls.length, 0);
 });
 
-test("dryRunText: an operator file replaced, the check's errors, a long input cut", () => {
+test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's own mode", () => {
+  const pr = { number: 5, labels: [{ name: "ui" }], user: { login: "bob" } };
+  const traits = (samples) =>
+    samples.map((x) => [x.input.mode, x.input.custom_mode, x.input.light, x.input.reason]);
+  assert.deepEqual(traits(githubSamples("Org/Repo", pr)), [
+    ["work", false, false, null],
+    ["brainstorm", false, true, null],
+  ]);
+  const own = githubSamples("Org/Repo", pr, { ask: { light: true }, plan: { light: false } });
+  assert.deepEqual(traits(own).at(-1), ["ask", true, true, null]);
+  assert.equal(own.length, 3);
+  assert.equal(own[2].what, "a comment on it in the repository's mode ask");
+  assert.deepEqual(own[2].input.target, {
+    kind: "own_pr",
+    number: 5,
+    labels: ["ui"],
+    author: "bob",
+  });
+});
+
+test("dryRunText: the files replaced, the check's errors, a long input cut", () => {
   const text = dryRunText({
     number: 5,
     sha: "abcdef123",
     files: [
-      { name: "a.rego", source: "operator", replaces: false, rules: [] },
-      { name: "b.rego", source: "repo", replaces: true, rules: ["deny_merge"] },
+      { name: "github.rego", source: "deckhand", replaces: null, rules: ["deny_github"] },
+      { name: "gh-x.rego", source: "operator", replaces: "deckhand", rules: [] },
+      { name: "a.rego", source: "operator", replaces: null, rules: [] },
+      { name: "b.rego", source: "repo", replaces: "operator", rules: ["deny_merge"] },
+      { name: "gh-y.rego", source: "repo", replaces: "deckhand", rules: [] },
     ],
     errors: ["policy error: b.rego:2: unexpected eof"],
     results: [
@@ -713,7 +737,10 @@ test("dryRunText: an operator file replaced, the check's errors, a long input cu
     ],
     input: { pr: { title: "```".repeat(2) + "x".repeat(60_000) } },
   });
-  assert.match(text, /`a\.rego` \(operator\), `b\.rego` \(repo, replaces the operator's\)/);
+  assert.match(
+    text,
+    /Policies: `github\.rego` \(Deckhand's default\), `gh-x\.rego` \(operator, replaces Deckhand's\), `a\.rego` \(operator\), `b\.rego` \(repo, replaces the operator's\), `gh-y\.rego` \(repo, replaces Deckhand's\)\./,
+  );
   assert.match(text, /The config check has errors:\n\n- `policy error: b\.rego:2: unexpected eof`/);
   // A fence longer than any backticks of the input, and the input cut under GitHub's limit.
   assert.match(text, /```````json\n/);

@@ -905,6 +905,11 @@ const ciRoundsOf = (settings) => (settings?.review?.fix ? (settings.review.ciFix
 // "none" for "no CI": GitHub creates the runs of a push a moment after it.
 const CI_GRACE_MS = 60_000;
 
+// A policy file's source (policies.mjs describe()), as the dry run names it, and whose file
+// it replaces.
+const SOURCES = { deckhand: "Deckhand's default", operator: "operator", repo: "repo" };
+const OWNERS = { deckhand: "Deckhand's", operator: "the operator's" };
+
 // The reply to `/mode policy` (reviews' dryRun()): which files apply, each rule's result, and
 // the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
 // no policy applies here.
@@ -916,7 +921,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
     return `${head}\n\nNo policy applies here: neither \`.deckhand/policy/\` on the default branch nor the operator's policies have a file.`;
   }
   const source = (f) =>
-    f.source === "operator" ? "operator" : f.replaces ? "repo, replaces the operator's" : "repo";
+    `${SOURCES[f.source]}${f.replaces ? `, replaces ${OWNERS[f.replaces]}` : ""}`;
   const parts = [head, `Policies: ${files.map((f) => `\`${f.name}\` (${source(f)})`).join(", ")}.`];
   if (errors.length) {
     parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
@@ -957,9 +962,10 @@ function details(summary, value) {
 }
 
 // The writes a dry run asks `deny_github` about, on pull request `pr` (GitHub's): a comment by
-// a work run whose pull request it is, and by a brainstorm on another issue. → [{ what, input }]
+// a work run whose pull request it is, by a brainstorm on another issue, and by a run in the
+// repo's first own mode (`modes`: its settings' `modes:`), if it has one. → [{ what, input }]
 // (docs/repo-config.md#the-github-input).
-export function githubSamples(repo, pr) {
+export function githubSamples(repo, pr, modes = {}) {
   const target = (kind) => ({
     kind,
     number: pr.number,
@@ -967,11 +973,14 @@ export function githubSamples(repo, pr) {
     author: pr.user?.login ?? null,
   });
   const change = { fields: ["body"], labels_added: [], labels_removed: [] };
-  const sample = (what, mode, kind, issue) => ({
+  const sample = (what, mode, kind, issue, { custom_mode = false, light = false } = {}) => ({
     what,
     input: {
       repo: repo.toLowerCase(),
       mode,
+      custom_mode,
+      light,
+      reason: null,
       issue,
       action: "comment",
       actions: ["comment"],
@@ -979,10 +988,21 @@ export function githubSamples(repo, pr) {
       change,
     },
   });
-  return [
+  const samples = [
     sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
-    sample("a brainstorm's comment on it", "brainstorm", "pr", null),
+    sample("a brainstorm's comment on it", "brainstorm", "pr", null, { light: true }),
   ];
+  const [own] = Object.keys(modes ?? {});
+  if (own) {
+    const light = !!modes[own].light;
+    samples.push(
+      sample(`a comment on it in the repository's mode ${own}`, own, "own_pr", pr.number, {
+        custom_mode: true,
+        light,
+      }),
+    );
+  }
+  return samples;
 }
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
@@ -2104,7 +2124,7 @@ export function createReviews({
   async function dryRun({ repo, base, number }) {
     if (!policies) return { text: dryRunText({ number, files: [] }), denials: 0 };
     const described = await policies.describe(repo, base);
-    // What deny() evaluates: an operator file a repo file replaces isn't.
+    // What deny() evaluates: a file another layer replaces isn't.
     const files = described.files.filter((f) => f.active);
     const errors = described.errors.map((e) => e.text);
     const texts = described.policies;
@@ -2144,7 +2164,7 @@ export function createReviews({
       // No write to decide on: a comment on this pull request, by a run whose own it is and
       // by a brainstorm elsewhere.
       if (rule === "deny_github") {
-        for (const sample of githubSamples(repo, pr)) {
+        for (const sample of githubSamples(repo, pr, settings?.modes)) {
           const messages = await policies.denied(rule, repo, texts, () => sample.input);
           const input = { version: INPUT_VERSION, ...sample.input };
           results.push({ rule, defined, messages, sample: sample.what, input });

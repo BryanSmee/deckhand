@@ -26,7 +26,7 @@
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
-import { ceilingOf, issueLabelOf } from "./modes.mjs";
+import { BUILT_IN, ceilingOf, issueLabelOf } from "./modes.mjs";
 
 // Actions on another target than an issue or pull request by number: no ceiling holds them,
 // so they are refused before any look-up.
@@ -584,6 +584,7 @@ export function createWriteChecks({
     const input = {
       repo: run.repo,
       mode: run.mode,
+      ...runTraits(run),
       issue: run.issue ?? null,
       action: write.actions[0],
       actions: write.actions,
@@ -596,6 +597,18 @@ export function createWriteChecks({
   }
 
   return { check, checkWrite, answered };
+}
+
+// What the policies read of a run besides its mode (issue #448): `custom_mode`, whether the mode
+// is one of the repo's `modes:` (a policy needn't list the built-in ones), `light`, whether it
+// runs without a branch (it can't push: broker.mjs), and `reason`, why the listener started it
+// itself ("review-fix", "ci-fix", "conflict"), null for a comment's.
+export function runTraits(run) {
+  return {
+    custom_mode: !!run.mode && !BUILT_IN.has(run.mode),
+    light: run.push !== true,
+    reason: run.reason ?? null,
+  };
 }
 
 // An issue of GitHub's answer → its number, when it is in `repo`: its `url` (GraphQL's is the

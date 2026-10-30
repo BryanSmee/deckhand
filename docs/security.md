@@ -1485,15 +1485,19 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 [Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
 last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
 review's fix run; `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
-ceiling: [The GitHub gateway](#the-github-gateway)). Yours are the `*.rego` files of `policy/` in the grants folder,
-read again at each decision: the defaults of every repository. A repository's own are in
-`.deckhand/policy/` on its default branch; one with the same name as yours replaces it, others
-add to them.
+ceiling: [The GitHub gateway](#the-github-gateway)). Deckhand ships its own in the listener's
+image ([the default policies](repo-config.md#the-default-policies): `github.rego`, and a
+`gh-<feature>.rego` per `gh` feature), which hold without any setup. Yours are the `*.rego`
+files of `policy/` in the grants folder, read again at each decision: one with the same name as
+Deckhand's replaces it, others add to them; together, the defaults of every repository. A
+repository's own are in `.deckhand/policy/` on its default branch; one with the same name as a
+default replaces it, others add to them.
 
 - **They can't widen anything**: they run after every built-in gate and can only add refusals.
   The grants (`allow_auto_merge` and the rest) and the built-in gates stay what they are, so
-  any repository may have policies, with no grant: overriding one of yours by its file name
-  only drops a refusal you added, never one of Deckhand's. If a rule must hold for every
+  any repository may have policies, with no grant: overriding one of yours, or of Deckhand's
+  default files, by its file name only drops the refusals that file added, never a gate's or
+  a mode's ceiling (a light repository mode still writes nothing). If a rule must hold for every
   repository whatever it says, it belongs in a grant or a built-in gate, not in a default
   policy.
 - **A pull request can't change them for itself**: they are read from the default branch, and
