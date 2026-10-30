@@ -161,15 +161,34 @@ test("a research run without allow_research stops before anything is asked for",
 // A work run on issue #12 asked from pull request #7, from `head` (a repo's full name), and
 // what it asked of the images. `imageFor`: the images' own, `written`: what goes to its log,
 // `ca`: the egress proxy's CA certificate, or null.
-async function workRun(t, head, { imageFor, written = [], ca = "the CA" } = {}) {
+// `runner`: RUNNER; `grant`: the repo's file in the grants folder; `yaml`: its config;
+// `keepsCaches`: the images'.
+async function workRun(
+  t,
+  head,
+  {
+    imageFor,
+    written = [],
+    ca = "the CA",
+    runner = "docker",
+    grant,
+    yaml = "setup: npm ci\ncaches: [/home/node/.npm]\n",
+    keepsCaches,
+  } = {},
+) {
   const dir = realpathSync(tempDir(t));
-  const config = testConfig({ GRANTS_DIR: dir });
+  if (grant) {
+    mkdirSync(join(dir, "org"));
+    writeFileSync(join(dir, "org/repo.yaml"), grant);
+  }
+  const config = testConfig({ GRANTS_DIR: dir, RUNNER: runner });
   const calls = [];
   const ctx = {
     config,
     log: () => {},
     shotsDir: tempDir(t),
     images: {
+      keepsCaches,
       installAgent: async () => {},
       imageFor: imageFor ?? (async () => config.image),
       caches: async (repo, paths) => {
@@ -201,7 +220,7 @@ async function workRun(t, head, { imageFor, written = [], ca = "the CA" } = {}) 
       logFile: { write: (text) => written.push(text) },
     },
   };
-  const { settings } = parseRepoConfig("setup: npm ci\ncaches: [/home/node/.npm]\n", config);
+  const { settings } = parseRepoConfig(yaml, config);
   const parts = await createPreparation(ctx).prepareRun(
     task,
     [{ replyTo: 7 }],
@@ -227,6 +246,26 @@ test("a work run with a comment from the repo's own pull request keeps its cache
   assert.deepEqual(calls, ["caches /home/node/.npm"]);
   assert.ok(!notes.some((n) => /fork/.test(n)));
   assert.deepEqual(task.live.branches, ["issue-12-*", "feat"]);
+});
+
+test("on the Kubernetes runner, a granted Dockerfile stops the run with a reply naming it", async (t) => {
+  await assert.rejects(
+    workRun(t, "org/repo", {
+      runner: "kubernetes",
+      grant: "allow_dockerfile: true\n",
+      yaml: "dockerfile: Dockerfile\n",
+    }),
+    (error) =>
+      error instanceof RunError &&
+      /^Claude can't run here: the operator runs sandboxes on the kubernetes runner, which doesn't support its own image \(`dockerfile`\) yet/.test(
+        error.message,
+      ),
+  );
+});
+
+test("on a runner that keeps no caches, a work run goes without and says so", async (t) => {
+  const { notes } = await workRun(t, "org/repo", { runner: "kubernetes", keepsCaches: false });
+  assert.ok(notes.includes("No caches: the kubernetes runner keeps none yet"));
 });
 
 test("a work run trusts the egress proxy's CA without cached hosts: its GitHub calls are relayed", async (t) => {

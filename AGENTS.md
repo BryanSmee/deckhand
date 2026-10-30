@@ -56,7 +56,7 @@ started before you finish.
 
 ```
 listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
-              runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker backend),
+              runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
               agents/ (each agent's specifics: install, env, hosts, session, normalize())
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in the listener's image
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git credential
