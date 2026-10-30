@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BUILT_IN, entryRun, MODES, sessionName } from "../listener/modes.mjs";
+import { BUILT_IN, ceilingOf, entryRun, MODES, sessionName } from "../listener/modes.mjs";
 import { modeNames, RESERVED_MODES } from "../listener/repo-config.mjs";
 
 test("built-in modes: one list, which the dashboard's copy follows", () => {
@@ -68,4 +68,34 @@ test("work runs and the repo's other modes label their issues and create labels;
   // Not another's issue, and never a label's settings.
   assert.equal(work.other_issue, undefined);
   assert.ok(!work.label.includes("edit") && !work.label.includes("delete"));
+});
+
+// It checks that the actions are named, not under which kind of target: the rows are prose
+// ("its pull requests: the same but `link`, and …"), which a parser would have to follow.
+test("docs/repo-config.md's ceiling table and `action` list name every action of every ceiling", () => {
+  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+  const input = docs.slice(docs.indexOf("### The GitHub input"));
+  const table = input.slice(
+    input.indexOf("| Mode "),
+    input.indexOf("\n\n", input.indexOf("| Mode ")),
+  );
+  const rows = table.split("\n").map((line) => ({ line, first: line.split("|")[1] ?? "" }));
+  const actions = /^\| `action` .*$/m.exec(input)?.[0] ?? "";
+  const ceilings = Object.entries(MODES)
+    .filter(([, mode]) => mode.ceiling)
+    .map(([name, mode]) => [name, `\`${name}\``, mode.ceiling]);
+  // A repository's mode that isn't light writes as work runs do: its row says so.
+  ceilings.push([
+    "a non-light modes: entry",
+    "a `modes:` entry that isn't light",
+    ceilingOf("x", false),
+  ]);
+  for (const [name, cell, ceiling] of ceilings) {
+    const row = rows.find(({ first }) => first.includes(cell));
+    assert.ok(row, `the table has a row for ${name}`);
+    for (const action of new Set(Object.values(ceiling).flat())) {
+      assert.ok(row.line.includes(`\`${action}\``), `${name}'s row names ${action}`);
+      assert.ok(actions.includes(`\`${action}\``), `the action list names ${action}`);
+    }
+  }
 });
