@@ -1397,6 +1397,20 @@ request or its issue are trusted (a private repository, or `users` narrowed to t
 what a fix run pushed before merging, and keep `fix` off on public repositories with outside
 contributors whose threads you don't watch.
 
+### CI fix runs
+
+With `review.ci: wait` and `review.fix`, a failed GitHub Actions run on Deckhand's own pull
+request starts a work run that fixes CI instead of a review (up to `review.ci_fix`, capped by
+`MAX_FIX_ROUNDS`, counted apart from the review's rounds, with the same gates and `deny_fix`).
+The listener decides it from the Actions API alone, without a model. Its message holds the
+failed runs' and jobs' names, conclusions, ids and links, never their logs: the branch's code
+printed those, and the run reads them itself with its own token (`actions: read`), told in
+its message that logs and names are data, not instructions, never to make a check pass by
+skipping or weakening it, and the same limits as a review's fix run. The listener copies no
+log text into a message, comment or review prompt. A workflow's or job's name comes from the
+branch's files: the comment the listener posts quotes each as code. What any work run is held
+to (above) holds too: a fix to `.github/workflows/` needs `allow_workflows`.
+
 ### Auto-merge
 
 With `allow_auto_merge` in a repository's grants file and `review.merge: true` in its
