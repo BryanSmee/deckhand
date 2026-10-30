@@ -4905,10 +4905,23 @@ mounts:
   test("a granted repo's work runs get a container engine, never for a fork's pull request", async (t) => {
     const ctx = await listen(t, { ".deckhand.yaml": "docker:\n  cache: true\n" }, (dir) => {
       writeGrant(dir, "allow_docker: true\nlimits: { cpus: 3 }\n");
+      writeFileSync(join(dir, "hold"), "");
       return { SANDBOX_ENGINE: "podman" };
     });
     const { dir, github } = ctx;
+    // Whether the running run started an engine, from its saved state: the broker keeps its
+    // addresses only once it knows the engine's too (broker-http.mjs hasAddress()).
+    const savedEngine = async () => {
+      const state = await until(() => {
+        const live = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json"));
+        const saved = live && JSON.parse(readFileSync(join(dir, "logs", live), "utf8"));
+        return saved && "engine" in saved ? saved : null;
+      }, "the run's saved state, after its start");
+      return state.engine;
+    };
     await ctx.send(comment("alice"));
+    assert.equal(await savedEngine(), true);
+    writeFileSync(join(dir, "go"), "");
     await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
     );
@@ -4936,9 +4949,16 @@ mounts:
 
     // A fork's pull request: no engine.
     rmSync(join(dir, "engine-args"));
+    rmSync(join(dir, "go"));
+    await until(
+      () => !readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json")),
+      "the first run's saved state removed",
+    );
     const payload = comment("alice");
     payload.issue = { number: 41, pull_request: {} };
     await ctx.send(payload);
+    assert.equal(await savedEngine(), false);
+    writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("org/repo#pr-41: done (ok)");
     assert.throws(() => readFileSync(join(dir, "engine-args")));
     assert.doesNotMatch(readFileSync(join(dir, "run-args"), "utf8"), /DOCKER_HOST/);

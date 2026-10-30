@@ -45,17 +45,64 @@ function oldPrAnswer(match) {
   };
 }
 
-// Whether the running task's sandbox (or its engine) has address `ip`. Addresses are looked up
-// once per run, the first time its sandbox connects, and forgotten once it exits (runs.mjs
-// finish()): Docker may give the address to another sandbox.
-async function hasAddress(ctx, task, ip) {
+// How often a run's kept addresses are looked up again: for a secret sent from an address that
+// isn't among them (runAt()), or while its engine's is missing. And how long a sandbox's are
+// kept waiting for its engine's.
+const ADDRESS_RETRY_MS = 5_000;
+
+// Whether the running task's sandbox (or its engine) has address `ip`. Addresses are kept once
+// they hold the sandbox's own, and forgotten once it exits (runs.mjs finish()): Docker may give
+// the address to another sandbox. Until then they are looked up at each question: a run with an
+// engine starts it before its sandbox, and the broker asks about every task whenever any
+// sandbox connects (taskAt(), runFrom()), so a list kept then would hold the engine's alone and
+// refuse the sandbox for good (#517). A run that may have an engine waits for the engine's too,
+// or its engine's connections would be nobody's, but ADDRESS_RETRY_MS at most (an engine gone
+// mid-run is never found): then its list is kept, and looked up again at most every
+// ADDRESS_RETRY_MS until the engine's is in it. `again`: an address not among those kept looks
+// them up again, at most every ADDRESS_RETRY_MS, before the answer is no. One lookup at a time
+// per run: the calls that miss meanwhile share it.
+async function hasAddress(ctx, task, ip, { again = false } = {}) {
   const live = task.live;
   if (!live?.hosts) return false;
-  if (!live.ip) {
-    live.ip = await ctx.runner.address(task.name);
-    live.engineIp = await ctx.runner.engineAddress(task.name);
+  if (live.ip?.includes(ip)) return true;
+  if (!live.looking) {
+    const now = (ctx.now ?? Date.now)();
+    const retry = again || noEngineYet(live);
+    if (live.ip && !(retry && now - (live.ipAt ?? 0) >= ADDRESS_RETRY_MS)) return false;
+    // From the lookup's start, whatever it finds: parallel calls, or a sandbox already gone,
+    // don't get around the limit.
+    if (live.ip) live.ipAt = now;
+    live.looking = lookUp(ctx, task, live, now).finally(() => (live.looking = null));
   }
-  return task.live === live && !!live.hosts && !!live.ip?.includes(ip);
+  const found = await live.looking;
+  return task.live === live && !!live.hosts && found.includes(ip);
+}
+
+// Whether the run has an engine, or may have one, whose address isn't known yet. `live.engine`
+// says whether it started one (runs.mjs launch()); a run saved by a listener from before it
+// was there may have one, so it's treated as one whose engine is missing: kept 5 s after its
+// sandbox's address, then looked up every 5 s until it ends. That costs the runs going across
+// that one update, Kubernetes' included, and only them.
+const noEngineYet = (live) => live.engine !== false && !live.engineIp?.length;
+
+// The run's addresses now → its sandbox's and its engine's, kept in `live` once complete, or
+// once its sandbox's have waited ADDRESS_RETRY_MS for its engine's.
+async function lookUp(ctx, task, live, now) {
+  // One inspection each, so they can't disagree. The engine's count as the run's: its pulls and
+  // containers go out under the run's hosts.
+  const own = (await ctx.runner.address(task.name)) ?? [];
+  const engine = await ctx.runner.engineAddress(task.name);
+  if (task.live !== live || !live.hosts) return [];
+  // Kept as soon as known, never lost to a lookup that failed: the engine's connections are
+  // told apart by it (no decrypted HTTPS, no token).
+  if (engine?.length) live.engineIp = engine;
+  const found = [...own, ...(live.engineIp ?? [])];
+  if (own.length) live.ownAt ??= now;
+  if (own.length && (!noEngineYet(live) || now - live.ownAt >= ADDRESS_RETRY_MS)) {
+    live.ip = found;
+    live.ipAt = now;
+  }
+  return found;
 }
 
 // The header in which the egress proxy names the sandbox a call it relays came from
@@ -99,7 +146,7 @@ export async function runFrom(ctx, ip) {
 // so no secret is compared here.
 export async function runAt(ctx, run, ip) {
   const task = taskOf(ctx, run);
-  return task ? hasAddress(ctx, task, ip) : false;
+  return task ? hasAddress(ctx, task, ip, { again: true }) : false;
 }
 
 // The running task whose run the broker's record `run` is, or null.

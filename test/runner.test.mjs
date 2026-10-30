@@ -895,8 +895,9 @@ test("start: the engine first, on the run's network as `engine`, then the sandbo
     "deckhand.engine": "dh-a-1",
   });
   assert.equal(containers.get("dh-a-engine").volume, "dh-a-1-engine");
-  // The engine's address is the run's too, for the egress proxy, which tells it apart.
-  assert.deepEqual(await r.address("dh-a"), ["10.1.0.2", "10.1.0.3"]);
+  // The sandbox's and the engine's, each from its own inspection: the broker counts both as the
+  // run's, and tells the engine apart (broker-http.mjs hasAddress()).
+  assert.deepEqual(await r.address("dh-a"), ["10.1.0.2"]);
   assert.deepEqual(await r.engineAddress("dh-a"), ["10.1.0.3"]);
 });
 
