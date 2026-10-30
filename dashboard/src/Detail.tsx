@@ -7,8 +7,9 @@
 // its thread first, to read and reply to, with the last reply and Rerun, then its runs. A
 // Policies tab when its pull request's policies decided something (with a badge when one kept
 // it from merging by itself). A phone's log search takes the header's place. Its shortcuts: O
-// opens it on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), [ and ]
-// go through its thread, every run (those without a tab too) and its policies.
+// opens it on GitHub, A goes to its questions, R reruns, Shift S stops (asking first), Shift R
+// reviews its pull request again and Shift F asks for one more fix round once its review loop
+// is over, [ and ] go through its thread, every run (those without a tab too) and its policies.
 import { useEffect, useRef, useState } from "preact/hooks";
 import { sendCancel, sendDismiss, sendRerun, sendReview, useRunLog } from "./api";
 import {

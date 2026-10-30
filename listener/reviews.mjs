@@ -174,7 +174,8 @@ export function parsePostedReview(body, { allowed = "low" } = {}) {
     } else if (!line) {
       if (current) severity = current = null;
     } else if (severity && line.startsWith("- ")) {
-      const unlinked = line.slice(2).replace(/^\[(`[^`]+`)\]\([^)\s]*\)/, "$1");
+      // The link ends at its line's anchor: a path may have parentheses ("app/(shop)/x.tsx").
+      const unlinked = line.slice(2).replace(/^\[(`[^`]+`)\]\(\S*?#L\d+\)/, "$1");
       current = { severity, ...located(unlinked) };
       findings.push(current);
     } else if (current && line.startsWith("  ")) {
@@ -1121,7 +1122,7 @@ export function createReviews({
 }) {
   // "org/repo#pr-5" → { head, at, fixes, fixedAt, reviewedFixes, roundsOutAt, mergeAt,
   // waiting, rounds, fixRounds, next, nextAt, unreviewedFix, ciWaiting, ciFixes, ciFixedAt,
-  // ciSettled, granted } of its last automatic review,
+  // ciSettled, granted, asked } of its last automatic review,
   // how many fix runs it had and when the last one was queued, how many of them had their
   // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
   // refused), or the auto-merge waiting for its checks (decide()); each automatic review's
@@ -1129,7 +1130,8 @@ export function createReviews({
   // the fix run nothing reviews, for the dashboard (recordRound(), nextStep(), reviewLoop());
   // the CI step's wait ({ sha, since, base, author }), its CI fix runs, when the last one was
   // queued and how many of them were settled (reviewAfterCi(), ciFailed(), ciFixed()); the
-  // fix rounds maintainers granted from the dashboard beyond `review.fix` (startFix()).
+  // fix rounds maintainers granted from the dashboard beyond `review.fix`, and the last round
+  // one asked for there, whose push is always reviewed (startFix()).
   // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
   // dashboard's, no `rounds`.
   const reviewed = persistentMap(path);
@@ -1338,7 +1340,10 @@ export function createReviews({
     if (reviewEvent(review) !== "REQUEST_CHANGES") {
       return { item: null, why: "the last review has nothing blocking" };
     }
-    if (asked && granting.has(key)) return skip("a fix run is being started already");
+    // A maintainer's Fix being started holds the pull request: a second click, or the
+    // automatic path meanwhile, starts nothing.
+    if (granting.has(key)) return skip("a fix run asked from the dashboard is being started");
+    if (!asked) return queueFix({ key, repo, number, base, settings, review, pr }, asked);
     granting.add(key);
     try {
       return await queueFix({ key, repo, number, base, settings, review, pr }, asked);
@@ -1421,6 +1426,8 @@ export function createReviews({
       next: "review-fix",
       nextAt: now(),
       ...(asked && {
+        // Its push is reviewed whatever `review.fix` says (reviewFix()).
+        asked: round,
         granted: (entry.granted ?? 0) + (grant ? 1 : 0),
         fixRounds: rounds,
         mergeAt: undefined,
@@ -1464,7 +1471,19 @@ export function createReviews({
   // comment saying why not (null); without, the comment when the rounds ran out (roundsOut()).
   async function settle(run, posted) {
     const key = taskKey(run.repo, prId(run.number));
-    if (!run.auto) return (await startFix(run, posted)).item;
+    if (!run.auto) {
+      // A maintainer's review (`/mode review`, the dashboard's Review) of a pull request whose
+      // loop the dashboard shows: its latest round, read with the tolerance the dashboard's Fix
+      // reads it with, so that what the task page offers follows it. Not a loop round: it
+      // counts no fix run and starts no loop.
+      if (reviewed.get(key)?.rounds?.length) {
+        const allowed = run.settings?.review?.fix
+          ? run.settings.review.maxAllowedSeverity
+          : undefined;
+        recordRound(run, posted, allowed);
+      }
+      return (await startFix(run, posted)).item;
+    }
     const since = reviewed.get(key)?.nextAt;
     recordRound(run, posted);
     let item = null;
@@ -1487,8 +1506,9 @@ export function createReviews({
   // An automatic review posted on pull request `number`: its round of the fix loop, kept in
   // its entry's `rounds` for the dashboard (reviewLoop()), before startFix() counts the next
   // fix run. Counts only, never the findings' text. The same round at the same head again
-  // replaces it; `fixRounds`: how many fix runs the repo allows now.
-  function recordRound({ repo, number, settings }, posted) {
+  // replaces it; `fixRounds`: how many fix runs the repo allows now. `allowed`: the tolerance
+  // its blocking findings are counted with, the review's own by default.
+  function recordRound({ repo, number, settings }, posted, allowed = posted?.review?.allowed) {
     const review = posted?.review;
     if (!review) return;
     const key = taskKey(repo, prId(number));
@@ -1498,7 +1518,7 @@ export function createReviews({
     const counts = Object.fromEntries(
       SEVERITIES.map((s) => [s, review.findings.filter((f) => f.severity === s).length]),
     );
-    const blocking = above(review, review.allowed).length;
+    const blocking = above(review, allowed).length;
     const rounds = (entry.rounds ?? []).filter((r) => r.round !== round || r.head !== head);
     rounds.push({ round, at: now(), head, counts, blocking });
     remember(key, entry.head ?? null, {
@@ -1838,8 +1858,9 @@ export function createReviews({
     if (!fixes || reviewedFixesOf(entry) >= fixes || entry.mergeAt || entry.waiting) return null;
     const mode = await mergeMode(repo, base);
     // `fix: true` without `merge`: by design, nothing reviews what it pushed. Kept, so the
-    // dashboard doesn't take the review before it for what is left (reviewLoop()).
-    if (!mode && limitOf(settings, entry) < 2) {
+    // dashboard doesn't take the review before it for what is left (reviewLoop()). A round a
+    // maintainer asked for from the dashboard (`asked`) is always reviewed.
+    if (!mode && limitOf(settings, entry) < 2 && entry.asked !== fixes) {
       if (status === "ok") remember(key, entry.head ?? null, { unreviewedFix: fixes });
       return null;
     }

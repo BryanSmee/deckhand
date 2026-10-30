@@ -317,6 +317,7 @@ function setup(
     busy = () => false,
     settings = config,
     policies = null,
+    reply = async () => {},
   } = {},
 ) {
   let time = 1_800_000_000_000;
@@ -330,6 +331,7 @@ function setup(
     github,
     busy,
     policies,
+    reply,
     now: () => time,
   });
   return { reviews, accepted, path, read, advance: (ms) => (time += ms) };
@@ -720,11 +722,19 @@ const CLEAN = "- **low** `c.mjs:3`: a typo.\n\nRating: 9/10\nVerdict: approve";
 
 // Its pull request turned ready at sha-1: the first review was queued.
 // `during(path)`: called on each GitHub call, while the listener decides what follows a run.
-async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n", { during } = {}) {
+// `busy`, `policies`, `reply`: as setup()'s.
+async function loopSetup(
+  t,
+  yaml = "review:\n  on: ready\n  fix: 2\n",
+  { during, busy, policies, reply } = {},
+) {
   let head = "sha-1";
   const github = async (repo, method, path) => {
     during?.(path);
     if (path === "/repos/org/repo/issues/12") return Response.json({ labels: [] });
+    // What a policy's input reads (readPullInput()).
+    if (path === "/repos/org/repo") return Response.json({ private: true });
+    if (path.startsWith("/repos/org/repo/pulls/5/files?")) return Response.json([]);
     if (path === "/repos/org/repo/pulls/5")
       return Response.json({
         ...posted().pr,
@@ -732,7 +742,13 @@ async function loopSetup(t, yaml = "review:\n  on: ready\n  fix: 2\n", { during 
       });
     return new Response("{}", { status: 404 });
   };
-  const s = setup(t, yaml, { github, path: join(tempDir(t), "reviews.json") });
+  const s = setup(t, yaml, {
+    github,
+    path: join(tempDir(t), "reviews.json"),
+    ...(busy && { busy }),
+    policies,
+    ...(reply && { reply }),
+  });
   await s.reviews.consider("pull_request", delivery("ready_for_review", posted().pr));
   const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings, auto: true };
   // A review posted at the current head, then its fix run pushing `next`.
@@ -903,10 +919,10 @@ test("latestReview: the App's last review with the marker, not anyone else's", a
 
 // A maintainer's Fix from the dashboard on pull request #5 (work.mjs): `announce` records
 // the App's comment it would post.
-const askFix = (s, message = HIGH_ONE, user = "alice") => {
+const askFix = (s, message = HIGH_ONE, user = "alice", pr = {}) => {
   const said = [];
   const run = { repo: "org/repo", number: 5, base: "trunk", settings: s.read.settings };
-  const started = s.reviews.fixAsked(run, posted(message), {
+  const started = s.reviews.fixAsked(run, posted(message, pr), {
     user,
     announce: async (...args) => {
       said.push(args);
@@ -970,7 +986,7 @@ test("dashboard Fix: two clicks at once start one fix run", async (t) => {
   const before = s.accepted.length;
   const [one, two] = await Promise.all([askFix(s), askFix(s)]);
   assert.equal([one, two].filter((r) => r.item).length, 1);
-  assert.match([one, two].find((r) => !r.item).why, /being started already/);
+  assert.match([one, two].find((r) => !r.item).why, /being started/);
   assert.equal(s.accepted.length, before + 1);
   // `fix: true`: its one round was used, this one is granted, and its push is reviewed.
   assert.equal(s.reviews.entry("org/repo", 5).granted, 1);
@@ -1007,6 +1023,105 @@ test("dashboard Fix: a round left is used, not granted; refusals say why", async
   });
   assert.match((await askFix(asking)).why, /waits for the maintainer's input/);
   assert.equal(busy.accepted.length + asking.accepted.length + clean.accepted.length, 2);
+});
+
+test("dashboard Fix: a round left on fix: true is reviewed, though the loop's own isn't", async (t) => {
+  let busy = true;
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: true\n", { busy: () => busy });
+  // The issue was busy: the review's fix run never started, its round is left.
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.equal(s.loop().loop, "stopped");
+  busy = false;
+  const { item } = await askFix(s);
+  assert.deepEqual([item.round, item.rounds], [1, 1]);
+  assert.equal(s.reviews.entry("org/repo", 5).granted, 0);
+  // Its push is reviewed, and the loop goes on from that review.
+  assert.equal((await s.fixed("sha-2")).reason, "review");
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.deepEqual([s.loop().loop, s.loop().history.map((r) => r.round)], ["rounds-out", [0, 1]]);
+});
+
+test("dashboard Fix refused: deny_fix, someone else's pull request; nothing posted or queued", async (t) => {
+  const replies = [];
+  const policy = policyEngine(t, {
+    ref: "trunk",
+    files: { "fix.rego": "package deckhand" },
+    messages: (i, rule) => (rule === "deny_fix" ? ["no fixes on Fridays"] : []),
+  });
+  const s = await loopSetup(t, "review:\n  on: ready\n  fix: 2\n", {
+    policies: policy.engine,
+    reply: async (...args) => replies.push(args),
+  });
+  // The loop's own fix run, refused: said on the pull request, as before.
+  assert.equal(await s.review(HIGH_ONE), null);
+  assert.equal(replies.length, 1);
+  const before = s.accepted.length;
+  const denied = await askFix(s);
+  assert.equal(denied.item, null);
+  assert.equal(denied.why, "the policies refuse it (`deny_fix`): `no fixes on Fridays`");
+  assert.deepEqual(denied.said, []);
+  // The dashboard says why: nothing more on the pull request, nothing queued, no round used.
+  assert.equal(replies.length, 1);
+  assert.equal(s.accepted.length, before);
+  assert.equal(s.reviews.entry("org/repo", 5).fixes, undefined);
+  const asked = policy.evals.filter((e) => e.rule === "deny_fix").at(-1);
+  assert.deepEqual([asked.round, asked.rounds], [1, 2]);
+  // Another author's pull request, or one from a fork: not Deckhand's own.
+  const own = await loopSetup(t);
+  await own.review(HIGH_ONE);
+  await own.fixed();
+  const queued = own.accepted.length;
+  for (const pr of [
+    { user: { login: "alice", type: "User" } },
+    { head: { sha: "x", repo: { full_name: "mallory/repo" } } },
+  ]) {
+    const refused = await askFix(own, HIGH_ONE, "alice", pr);
+    assert.equal(refused.item, null);
+    assert.equal(refused.why, "not an open pull request of Deckhand's own");
+    assert.deepEqual(refused.said, []);
+  }
+  assert.equal(own.accepted.length, queued);
+});
+
+test("a maintainer's review of a pull request in a loop: its round, so the page follows it", async (t) => {
+  const s = await loopSetup(
+    t,
+    "review:\n  on: ready\n  fix: true\n  max_allowed_severity: medium\n",
+  );
+  await s.review(HIGH_ONE);
+  await s.fixed("sha-2");
+  assert.equal(s.loop().loop, "fixed");
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  const at = (sha) => ({ head: { sha, repo: { full_name: "org/repo" } } });
+  // The dashboard's Review of what the fix pushed finds a high one: findings left, Fix offered.
+  assert.equal(await s.reviews.settle(run, posted(HIGH_ONE, at("sha-2"))), null);
+  const left = s.loop();
+  assert.deepEqual(
+    [left.loop, left.history.at(-1)],
+    ["rounds-out", { ...left.history.at(-1), round: 1, head: "sha-2", blocking: 1 }],
+  );
+  // Medium findings only, counted with the repo's tolerance as Fix reads them: nothing left.
+  const medium = "- **medium** `a.mjs:1`: slow.\n\nRating: 7/10\nVerdict: comment";
+  await s.reviews.settle(run, posted(medium, at("sha-2")));
+  assert.deepEqual([s.loop().loop, s.loop().history.length], ["clean", 2]);
+});
+
+test("parsePostedReview: a path with parentheses, linked to its line", () => {
+  const review = parseReview(
+    "- **high** `app/(shop)/page.tsx:3`: no check.\n\nRating: 4/10\nVerdict: request-changes",
+  );
+  const blob = "https://github.com/org/repo/blob/abc";
+  const body = reviewBody(review, "", "f", blob);
+  assert.match(body, /\(shop\)\/page\.tsx#L3\)/);
+  assert.deepEqual(parsePostedReview(body).findings, [
+    { severity: "high", path: "app/(shop)/page.tsx", line: 3, text: "no check." },
+  ]);
 });
 
 // The task's last run, over: one of `reason`, started at `startedAt` (by default, after its

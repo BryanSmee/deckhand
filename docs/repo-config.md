@@ -547,7 +547,11 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
     running or queued and no needs-input label; `deny_fix` applies, its refusal shown on the
     dashboard.
 
-  Both are refused, the dashboard saying why, for someone outside the repo's `users`, a
+  A review a maintainer asks for (either way) on a pull request whose loop the dashboard
+  shows is listed in its history as the latest round, its blocking findings counted with
+  `max_allowed_severity` as Fix reads them, so the buttons follow it; it still isn't a loop
+  round and counts no fix run. A Fix's push is reviewed even when it uses a round `fix: true`
+  left. Both are refused, the dashboard saying why, for someone outside the repo's `users`, a
   closed pull request or one with a run going or queued.
 
 - **Security risk of `fix`**: the review's findings, a model's output, become the message of a
