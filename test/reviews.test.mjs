@@ -1358,7 +1358,7 @@ test("dashboard Fix refused: deny_fix, someone else's pull request; nothing post
   assert.equal(s.accepted.length, before);
   assert.equal(s.reviews.entry("org/repo", 5).fixes, undefined);
   const asked = policy.evals.filter((e) => e.rule === "deny_fix").at(-1);
-  assert.deepEqual([asked.round, asked.rounds], [1, 2]);
+  assert.deepEqual([asked.round, asked.rounds, asked.reason, asked.ci], [1, 2, "review", false]);
   // Another author's pull request, or one from a fork: not Deckhand's own.
   const own = await loopSetup(t);
   await own.review(HIGH_ONE);
@@ -2123,8 +2123,16 @@ test("review.ci: the CI fix run's gates, as a review fix run's", async (t) => {
   assert.equal(denied.entry().ciFixes, undefined);
   const fix = policy.evals.find((e) => e.rule === "deny_fix");
   assert.deepEqual(
-    [fix.decision, fix.ci, fix.round, fix.rounds, fix.review, fix.checks],
-    ["fix", true, 1, 1, null, [{ name: "Tests", status: "completed", conclusion: "failure" }]],
+    [fix.decision, fix.ci, fix.reason, fix.round, fix.rounds, fix.review, fix.checks],
+    [
+      "fix",
+      true,
+      "ci",
+      1,
+      1,
+      null,
+      [{ name: "Tests", status: "completed", conclusion: "failure" }],
+    ],
   );
   assert.equal(denied.accepted.length, 0);
 });

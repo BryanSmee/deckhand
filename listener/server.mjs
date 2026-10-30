@@ -558,6 +558,11 @@ ctx.conflicts = createConflicts({
   repoSettings,
   busy: taskBusy,
   accept: (item) => ctx.accept(item),
+  // A conflict run is a fix run too: `deny_fix`, its refusal said on the pull request.
+  policies,
+  decided: (key, entry) => ctx.decisions.record(key, entry),
+  fixes: (repo, number) => ctx.reviews.fixes(repo, number),
+  reply: ctx.reply,
   log,
 });
 // Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review

@@ -8,10 +8,14 @@
 // No loops: each attempt's (head, base) pair is kept in conflicts.json, and the same pair
 // never starts a second run, across restarts: a rebase that failed or stopped to ask waits
 // for a new push or a new base commit.
+//
+// Before a run starts, the repo's policies are asked (`deny_fix`, `reason: "conflict"`): a
+// refusal starts nothing, says why on the pull request, and keeps the pair as an attempt.
 import { repoAllowed } from "./config.mjs";
 import { waitsForInput } from "./comments.mjs";
 import { parseKey, headInRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
+import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -34,10 +38,18 @@ export function rebaseMessage(base) {
   return `This pull request conflicts with \`${base}\`: rebase it on \`origin/${base}\`, resolve the conflicts, rerun the checks and push with \`--force-with-lease\`. If the conflicts can't be resolved safely, stop and ask.`;
 }
 
+// What a conflict run the policies refused (`deny_fix`) says on the pull request.
+export function noRebaseText(why, base) {
+  return `**No rebase run** (\`conflicts.check_minutes\`): ${why}. The conflict with \`${base}\` waits for a maintainer, or a new push or base commit.`;
+}
+
 // `github(repo, method, path, body, expected)`: the App's calls (server.mjs).
 // `repoSettings(repo, base)`: the repo's settings from its default branch.
 // `busy(key)`: the task has a run going or queued. `accept(item)`: queues a work item (tasks.mjs).
-// `sleep(ms)`: soon()'s wait.
+// `sleep(ms)`: soon()'s wait. `policies`: the policies' engine (policies.mjs), none without;
+// `decided(key, entry)`: a decision a policy was asked for, for the task's page (decisions.mjs);
+// `fixes(repo, number)`: the pull request's fix runs so far (reviews.mjs);
+// `reply(repo, number, text)`: a comment with the App's token.
 export function createConflicts({
   path,
   config,
@@ -46,6 +58,10 @@ export function createConflicts({
   repoSettings,
   busy,
   accept,
+  policies = null,
+  decided = () => {},
+  fixes = () => 0,
+  reply = async () => {},
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()),
@@ -195,10 +211,21 @@ export function createConflicts({
     if (last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base) {
       return null;
     }
+    const denied = await deny(repo, key, pr, issue, base);
     // Checked again: a comment may have come during the calls above.
     if (busy(key)) return null;
     attempts.set(key, { ...pair, at: now() });
     attempts.save();
+    if (denied.length) {
+      const why = policyWhy("deny_fix", denied);
+      log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, no rebase run, ${why}`);
+      try {
+        await reply(repo, number, noRebaseText(why, pr.base.ref));
+      } catch (error) {
+        log(`${key}: saying no rebase run: ${error.message ?? error}`);
+      }
+      return null;
+    }
     log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, starting a rebase run`);
     await accept({
       repo,
@@ -218,6 +245,43 @@ export function createConflicts({
       reason: "conflict",
     });
     return "started";
+  }
+
+  // Why the policies refuse a conflict run on `pr` (`deny_fix`, `reason: "conflict"`): their
+  // messages, or [] (always without policies). The decision is kept for the task's page.
+  // `issue`: the task's issue, or null for a pull request of its own; `ref`: the repo's
+  // default branch, where its policies are.
+  async function deny(repo, key, pr, issue, ref) {
+    if (!policies) return [];
+    const extra = { ...fixInput(fixes(repo, pr.number)), ci: false, reason: "conflict" };
+    const { applied, messages, input } = await policies.decide("deny_fix", repo, ref, () =>
+      readPullInput(
+        github,
+        { decision: "fix", repo, pr, issue, now },
+        { ...extra, round: null, rounds: null },
+      ),
+    );
+    if (applied) {
+      try {
+        decided(key, {
+          decision: "fix",
+          rule: "deny_fix",
+          denied: messages.length > 0,
+          messages,
+          pr: pr.number,
+          gates: [
+            { name: "In conflict with its base", passed: true },
+            { name: "No run going", passed: true },
+            { name: "Nobody's input awaited", passed: true },
+            { name: "Not tried at this head and base", passed: true },
+          ],
+          ...(input && { input }),
+        });
+      } catch (error) {
+        log(`${key}: keeping its deny_fix decision: ${error.message ?? error}`);
+      }
+    }
+    return messages;
   }
 
   // The base branch's latest commit: a pull request's own base.sha can lag behind it.

@@ -2,10 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createConflicts, intoDefaultBranch, rebaseMessage } from "../listener/conflicts.mjs";
+import {
+  createConflicts,
+  intoDefaultBranch,
+  noRebaseText,
+  rebaseMessage,
+} from "../listener/conflicts.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { busyTask } from "../listener/tasks.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
 
 const MIN = 60_000;
 const config = testConfig({ CONFLICT_CHECK_MINUTES: "5" });
@@ -43,11 +48,18 @@ function setup({
   path = tempPath(),
   routes: more = {},
   sleep,
+  policies = null,
+  fixes = 0,
 } = {}) {
   let time = 1_800_000_000_000;
   const calls = [];
   const accepted = [];
+  const replies = [];
+  const decided = [];
   const routes = {
+    "/repos/org/repo/pulls/31/files?per_page=100&page=1": [
+      { filename: "migrations/1.sql", status: "modified", additions: 3, deletions: 1 },
+    ],
     "/repos/org/repo": { default_branch: "main" },
     "/repos/org/repo/git/ref/heads/main": () => ({ object: { sha: w.baseSha } }),
     "/repos/org/repo/issues/30": () => w.issue,
@@ -60,6 +72,8 @@ function setup({
     settings,
     calls,
     accepted,
+    replies,
+    decided,
     advance: (ms) => (time += ms),
   };
   w.conflicts = createConflicts({
@@ -78,6 +92,10 @@ function setup({
     repoSettings: async () => w.settings,
     busy,
     accept: async (item) => accepted.push(item),
+    policies,
+    decided: (key, entry) => decided.push({ key, ...entry }),
+    fixes: (repo, number) => (repo === "org/repo" && number === 31 ? fixes : 0),
+    reply: async (repo, number, text) => replies.push({ repo, number, text }),
     now: () => time,
     ...(sleep ? { sleep } : {}),
   });
@@ -578,4 +596,96 @@ test("an auto-merge checks conflicts only when it went into the default branch",
   assert.equal(intoDefaultBranch(pr("main", {})), false);
   assert.equal(intoDefaultBranch(pr("main", null)), false);
   assert.equal(intoDefaultBranch({}), false);
+});
+
+test("deny_fix allows: the rebase run starts, asked with reason conflict", async (t) => {
+  const policy = policyEngine(t, { files: { "fix.rego": "package deckhand" } });
+  const w = setup({ policies: policy.engine, fixes: 2 });
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  assert.deepEqual(w.replies, []);
+  const asked = policy.evals.filter((e) => e.rule === "deny_fix");
+  assert.equal(asked.length, 1);
+  const [input] = asked;
+  assert.deepEqual(
+    [input.decision, input.reason, input.ci, input.review, input.round, input.rounds],
+    ["fix", "conflict", false, null, null, null],
+  );
+  assert.deepEqual(
+    [input.fixed, input.fixes, input.pr.number, input.issue.number],
+    [true, 2, 31, 30],
+  );
+  assert.deepEqual(
+    input.pr.files.map((f) => f.path),
+    ["migrations/1.sql"],
+  );
+  // Kept for the task's page, allowed.
+  assert.equal(w.decided.length, 1);
+  assert.deepEqual(
+    [w.decided[0].key, w.decided[0].rule, w.decided[0].denied, w.decided[0].pr],
+    ["org/repo#30", "deny_fix", false, 31],
+  );
+});
+
+test("deny_fix refuses: no run, one comment quoting why, the pair not asked again", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    messages: (i, rule) =>
+      rule === "deny_fix" &&
+      i.reason === "conflict" &&
+      i.pr.files.some((f) => f.path.startsWith("migrations/"))
+        ? ["conflicts in `migrations/` wait for a human"]
+        : [],
+  });
+  const w = setup({ policies: policy.engine });
+  assert.deepEqual(await w.conflicts.tick(), { started: 0, pending: 0, errors: [] });
+  assert.deepEqual(w.accepted, []);
+  assert.deepEqual(w.replies, [
+    {
+      repo: "org/repo",
+      number: 31,
+      text: noRebaseText(
+        "the policies refuse it (`deny_fix`): `conflicts in 'migrations/' wait for a human`",
+        "main",
+      ),
+    },
+  ]);
+  assert.match(w.replies[0].text, /^\*\*No rebase run\*\* \(`conflicts.check_minutes`\)/);
+  assert.equal(w.decided[0].denied, true);
+  // Same head and base, at the next check and from the dashboard's Sync: nothing asked again.
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  await w.conflicts.check();
+  assert.equal(policy.evals.length, 1);
+  assert.equal(w.replies.length, 1);
+  // The base moved: asked again, refused again.
+  w.baseSha = "base-2";
+  await w.conflicts.check();
+  assert.equal(policy.evals.length, 2);
+  assert.equal(w.replies.length, 2);
+  assert.deepEqual(w.accepted, []);
+});
+
+test("deny_fix: a policy error refuses the rebase run too", async (t) => {
+  const policy = policyEngine(t, {
+    files: { "fix.rego": "package deckhand" },
+    failure: { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value: 3 }] }] }) },
+  });
+  const w = setup({ policies: policy.engine });
+  await w.conflicts.tick();
+  assert.deepEqual(w.accepted, []);
+  assert.equal(w.replies.length, 1);
+  assert.match(w.replies[0].text, /`policy error: 'deny_fix' must be a set of strings`/);
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(w.replies.length, 1);
+});
+
+test("without any policy, the rebase run starts and no opa runs", async (t) => {
+  const policy = policyEngine(t);
+  const w = setup({ policies: policy.engine });
+  await w.conflicts.tick();
+  assert.equal(w.accepted.length, 1);
+  assert.deepEqual(policy.evals, []);
+  assert.deepEqual([w.replies, w.decided], [[], []]);
 });
