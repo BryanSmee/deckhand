@@ -572,7 +572,9 @@ pull request's head commit (other checks and commit statuses aren't read, as for
 - **Still going after `ci_wait` minutes** (30 by default, `0` to `1440`): the review starts
   anyway, its prompt saying CI hadn't finished.
 - **Failed** (any other conclusion: `failure`, `cancelled`, `timed_out`…), even while other
-  runs go on: no review. A "CI failed" comment names the failed runs, linked. With `fix`, a
+  runs go on: no review. Only the newest run of each workflow and event counts, here and for
+  auto-merge: a run a newer one replaced (`cancel-in-progress` when turning ready starts the
+  workflow again) decides nothing. A "CI failed" comment names the failed runs, linked. With `fix`, a
   **CI fix run** follows: a work run in the issue's session, with the same conditions as a
   review's fix run (Deckhand's own open pull request, no run going or queued on the issue, no
   needs-input label, and `deny_fix`, its input with `ci: true`). A run going or queued on the

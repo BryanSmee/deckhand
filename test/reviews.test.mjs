@@ -1150,6 +1150,32 @@ test("ciState: failed, running, passed or none, one rule for the merge and the C
   const mixed = ciState([run("in_progress"), run("completed", "failure")]);
   assert.deepEqual([mixed.state, mixed.failed.length, mixed.going.length], ["failed", 1, 1]);
   assert.equal(ciState([run("completed", "success"), run("queued")]).state, "running");
+  // A run a newer one of the same workflow and event replaced (cancel-in-progress when the
+  // pull request turned ready) decides nothing; another event's or workflow's still does.
+  const wf = (id, n, conclusion, more = {}) => ({
+    id,
+    workflow_id: 9,
+    event: "pull_request",
+    run_number: n,
+    ...run("completed", conclusion),
+    ...more,
+  });
+  const replaced = ciState([wf(1, 1, "cancelled"), wf(2, 2, "success")]);
+  assert.deepEqual([replaced.state, replaced.failed], ["passed", []]);
+  assert.equal(ciState([wf(2, 2, "success"), wf(1, 1, "cancelled")]).state, "passed");
+  assert.equal(ciState([wf(1, 1, "success"), wf(2, 2, "cancelled")]).state, "failed");
+  assert.equal(
+    ciState([wf(1, 1, "cancelled"), wf(2, 2, null, { status: "in_progress" })]).state,
+    "running",
+  );
+  assert.equal(
+    ciState([wf(1, 1, "failure", { event: "push" }), wf(2, 2, "success")]).state,
+    "failed",
+  );
+  assert.equal(
+    ciState([wf(1, 1, "failure", { workflow_id: 8 }), wf(2, 2, "success")]).state,
+    "failed",
+  );
 });
 
 test("review.ci: no review while runs go; a completed run on the head decides, after a restart too", async (t) => {

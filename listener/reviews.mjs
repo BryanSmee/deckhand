@@ -390,8 +390,11 @@ const PASSED = new Set(["success", "skipped", "neutral"]);
 
 // GitHub Actions runs on a commit → { state, failed, going }: `failed` when one completed with
 // any other conclusion (even while others go on), else `running` while one hasn't completed,
-// else `passed`, or `none` without any run. One rule for the merge gate and the CI step.
-export function ciState(runs) {
+// else `passed`, or `none` without any run. One rule for the merge gate and the CI step. Only
+// the newest run of each workflow and event counts (latestRuns()): one a newer run replaced
+// (`cancel-in-progress` when `gh pr ready` starts it again) decides nothing.
+export function ciState(all) {
+  const runs = latestRuns(all);
   const failed = runs.filter((r) => r.status === "completed" && !PASSED.has(r.conclusion));
   const going = runs.filter((r) => r.status !== "completed");
   const state = failed.length
@@ -402,6 +405,24 @@ export function ciState(runs) {
         ? "passed"
         : "none";
   return { state, failed, going };
+}
+
+// The newest run of each workflow and event among `runs` (by `run_number`, then `created_at`,
+// then `id`); a run without `workflow_id` stands alone.
+export function latestRuns(runs) {
+  const newest = new Map();
+  const order = (r) => [r.run_number ?? 0, String(r.created_at ?? ""), r.id ?? 0];
+  const newer = (a, b) => {
+    const [x, y] = [order(a), order(b)];
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i];
+    return false;
+  };
+  runs.forEach((r, i) => {
+    const key = r.workflow_id == null ? `run:${i}` : `${r.workflow_id}:${r.event ?? ""}`;
+    const kept = newest.get(key);
+    if (!kept || newer(r, kept)) newest.set(key, r);
+  });
+  return [...newest.values()];
 }
 
 // The GitHub Actions runs on commit `sha` → { ok, status, runs }: not ok when GitHub refuses
@@ -1853,7 +1874,7 @@ export function createReviews({
     // busy: the work run whose `gh pr ready` got here may still be going, after a quick CI
     // failure. The wait stays, decided again when a run ends (runEnded()) or by tick().
     const decided = (fields = {}) => remember(key, sha, { ciWaiting: undefined, ...fields });
-    const later = (why) => {
+    const waitForTask = (why) => {
       log(`${key}: CI failed on ${short(sha)}, ${why}: deciding again once it is over`);
       return null;
     };
@@ -1892,7 +1913,7 @@ export function createReviews({
     const issue = own && headInRepo(pr, repo) ? linkedIssue(pr, repo, config.bot) : null;
     if (!issue) return anyway(CI_NEXT.none("it isn't Deckhand's own pull request"));
     const task = taskKey(repo, String(issue));
-    if (busy(task)) return later(`#${issue} has a run going or queued`);
+    if (busy(task)) return waitForTask(`#${issue} has a run going or queued`);
     if (await waitsForInput(github, config, repo, pr, issue)) {
       return stop(`it or #${issue} waits for the maintainer's input`);
     }
@@ -1922,7 +1943,7 @@ export function createReviews({
     }
     const withJobs = await failedJobs(repo, failed);
     // Checked again: a comment may have come during the calls above.
-    if (busy(task)) return later(`#${issue} has a run going or queued`);
+    if (busy(task)) return waitForTask(`#${issue} has a run going or queued`);
     // Before queuing: whatever happens next, never this round twice.
     decided({ ciFixes: round, ciFixedAt: now(), next: "ci-fix", nextAt: now() });
     log(`${key}: CI failed on ${short(sha)}, starting a CI fix run (${round} of ${rounds})`);
