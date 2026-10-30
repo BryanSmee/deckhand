@@ -161,6 +161,10 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   `gh pr create`, `gh pr edit` and `gh pr ready` only work on this task's pull request
   (and not with reviewers, assignees, a milestone or projects). That token only reads the code and pull requests: no tags, no merging or
   reviewing pull requests, no writing files through the API.
+- In a work run, review threads on your pull request (inline review comments): when you
+  address one, reply in it with what changed and the commit
+  (`gh api repos/<owner>/<repo>/pulls/<n>/comments/<comment id>/replies -f body=…`). Don't
+  resolve a person's thread: they resolve it after reading your reply.
 - Rewriting history (rebase, `git push --force-with-lease`) is fine on the task's own branch,
   never on any other branch. Rebase it on the base branch before `gh pr ready`: Deckhand
   refuses to mark a pull request with conflicts ready.

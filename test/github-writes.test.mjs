@@ -151,7 +151,21 @@ test("classify: a write's actions, its target and what it changes", () => {
       { actions: ["unreact"], target: { reacted: { id: 5, type: "review" } } },
     ],
     ["POST", "repos/org/repo/pulls/3/reviews", { event: "APPROVE" }, { actions: ["review"] }],
-    ["POST", "repos/org/repo/pulls/3/comments/4/replies", { body: "x" }, { actions: ["review"] }],
+    // A reply in a review thread, on its pull request; a review comment outside one stays a review.
+    [
+      "POST",
+      "repos/org/repo/pulls/3/comments/4/replies",
+      { body: "x" },
+      { actions: ["reply"], target: { number: 3 }, fields: ["body"] },
+    ],
+    ["POST", "repos/org/repo/pulls/3/comments", { body: "x" }, { actions: ["review"] }],
+    [
+      "POST",
+      "repos/org/repo/pulls/3/comments",
+      { body: "x", in_reply_to: 4 },
+      { actions: ["review"] },
+    ],
+    ["PATCH", "repos/org/repo/pulls/3/comments/4/replies", { body: "x" }, { actions: ["review"] }],
     ["PUT", "repos/org/repo/pulls/3/merge", null, { actions: ["merge"], target: { number: 3 } }],
     ["POST", "repos/org/repo/pulls", { head: "issue-1-x" }, { target: { kind: "new_pr" } }],
     // Spelled another way: its case, a trailing slash.
@@ -178,6 +192,11 @@ test("classify: a write's actions, its target and what it changes", () => {
   ]) {
     assert.deepEqual(classify(method, path, body).blocker, { id: 9 }, method);
   }
+  // A reply names its thread's comment, and gets the token pull requests' writes get.
+  const reply = classify("POST", "repos/org/repo/pulls/3/comments/4/replies", json({ body: "x" }));
+  assert.deepEqual(reply.thread, { comment: 4 });
+  assert.deepEqual(reply.permissions, { pull_requests: "write" });
+  assert.equal(reply.pull, undefined);
   assert.equal(
     classify("PUT", "repos/org/repo/issues/12/labels", json(["a"])).change.labels_set,
     true,
@@ -237,6 +256,10 @@ test("the ceilings: what each mode can ever write", () => {
   // It edits and deletes the comments it posted; another's are refused before (checkWrite()).
   assert.deepEqual(aboveCeiling(work, "created_comment", ["edit", "delete"]), []);
   assert.deepEqual(aboveCeiling(work, "comment", ["edit"]), ["edit"]);
+  // Review threads: its own pull requests' only.
+  const threads = ["reply", "resolve", "unresolve"];
+  assert.deepEqual(aboveCeiling(work, "own_pr", threads), []);
+  assert.deepEqual(aboveCeiling(work, "pr", threads), threads);
   const brainstorm = ceilingOf("brainstorm", true);
   assert.deepEqual(aboveCeiling(brainstorm, "created_comment", ["edit"]), ["edit"]);
   assert.deepEqual(aboveCeiling(brainstorm, "other_issue", ["comment"]), []);
@@ -262,6 +285,14 @@ test("the ceilings: what each mode can ever write", () => {
     // Deleting: only the comments a work run posted (the default policy refuses it).
     for (const [kind, actions] of Object.entries(ceiling)) {
       if (kind !== "created_comment") assert.ok(!actions.includes("delete"), `${mode}: ${kind}`);
+    }
+    // Review threads: a work run's own pull requests' only.
+    for (const [kind, actions] of Object.entries(ceiling)) {
+      if (ceiling !== work || kind !== "own_pr") {
+        for (const a of ["reply", "resolve", "unresolve"]) {
+          assert.ok(!actions.includes(a), `${mode} ${kind}: ${a}`);
+        }
+      }
     }
     // A label's settings: created only, never edited or deleted.
     assert.deepEqual(aboveCeiling(ceiling, "label", ["edit", "delete"]), ["edit", "delete"], mode);
@@ -376,8 +407,30 @@ const GITHUB = {
       issue_url: "https://api.github.com/repos/org/other/issues/1",
     },
   },
-  // On its pull request #7, and on #8, another branch's.
+  // On its pull request #7, and on #8, another branch's. Review threads: on #7, Deckhand's
+  // review's (40), a person's (41) and a reply in it (42); on #8, another pull request's (43).
   reviewComments: {
+    40: {
+      id: 40,
+      user: { login: "Deckhand[bot]" },
+      pull_request_url: "https://api.github.com/repos/Org/Repo/pulls/7",
+    },
+    41: {
+      id: 41,
+      user: { login: "alice" },
+      pull_request_url: "https://api.github.com/repos/Org/Repo/pulls/7",
+    },
+    42: {
+      id: 42,
+      in_reply_to_id: 41,
+      user: { login: "deckhand[bot]" },
+      pull_request_url: "https://api.github.com/repos/Org/Repo/pulls/7",
+    },
+    43: {
+      id: 43,
+      user: { login: "bob" },
+      pull_request_url: "https://api.github.com/repos/Org/Repo/pulls/8",
+    },
     17: {
       id: 17,
       user: { login: "bob" },
@@ -1693,3 +1746,160 @@ test("the needs-input label: a run neither adds nor removes it on its sub-issues
 test("createWriteChecks: the needs-input label is required, so a caller can't leave it unguarded", () => {
   assert.throws(() => createWriteChecks({ lookup: fakeLookup(GITHUB).lookup }), /needsInputLabel/);
 });
+
+// A GraphQL resolveReviewThread on #7's thread whose first comment is `comment`, as
+// github-graphql.mjs writeOf() makes it.
+const resolveWrite = (comment, number = 7) => ({
+  repo: "org/repo",
+  actions: ["resolve"],
+  target: { number },
+  change: { fields: [], labels_added: [], labels_removed: [] },
+  thread: { comment },
+  permissions: { pull_requests: "write" },
+});
+const unresolveWrite = (comment) => ({ ...resolveWrite(comment), actions: ["unresolve"] });
+const replyTo = (number, comment) =>
+  write("POST", `repos/org/repo/pulls/${number}/comments/${comment}/replies`, { body: "Fixed." });
+
+test("review threads: a work run replies to and resolves its own pull request's, by their first comment", async (t) => {
+  // The operator's file of the default's name replaces it: the ceiling alone here.
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "gh-review-threads.rego": "package deckhand\n" },
+  });
+  const { lookup, calls } = fakeLookup(GITHUB);
+  const { check, checkWrite } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: BOT,
+    policies,
+  });
+  const work = run("work");
+  // Deckhand's thread, a person's, and a reply in it, followed up to its first comment.
+  for (const [comment, thread] of [
+    [40, { author: "Deckhand[bot]", deckhand: true }],
+    [41, { author: "alice", deckhand: false }],
+    [42, { author: "alice", deckhand: false }],
+  ]) {
+    assert.equal(await check(work, replyTo(7, comment)), null, `${comment}`);
+    const input = evals.at(-1);
+    assert.equal(input.action, "reply");
+    assert.deepEqual(input.target, {
+      number: 7,
+      labels: [],
+      author: "deckhand[bot]",
+      kind: "own_pr",
+      thread,
+    });
+  }
+  assert.ok(calls.includes("/repos/org/repo/pulls/comments/41"));
+  assert.equal(await checkWrite(work, resolveWrite(41)), null);
+  assert.deepEqual(evals.at(-1).target.thread, { author: "alice", deckhand: false });
+  assert.equal(evals.at(-1).action, "resolve");
+  // A repository's own mode that isn't light: the work ceiling.
+  assert.equal(await check(run("deploy", { push: true }), replyTo(7, 40)), null);
+  const asked = evals.length;
+  const refused = [
+    // Another pull request's thread: not the run's.
+    [work, replyTo(8, 43), 403, /can't reply on pr #8/],
+    [work, resolveWrite(43, 8), 403, /can't resolve on pr #8/],
+    // A thread that isn't on the pull request the path names, or isn't there.
+    [work, replyTo(7, 43), 404, /#7 has no such review thread/],
+    [work, replyTo(7, 99), 404, /#7 has no such review thread/],
+    // Modes whose ceiling holds neither.
+    [run("brainstorm"), replyTo(7, 40), 403, /a brainstorm run can't reply here/],
+    [run("review"), replyTo(7, 40), 403, /a review run can't reply here/],
+    [run("triage", { push: false }), replyTo(7, 40), 403, /can't reply here/],
+  ];
+  for (const [r, w, status, why] of refused) {
+    const got = await (w.method ? check(r, w) : checkWrite(r, w));
+    assert.ok(got, `${r.mode} ${w.path ?? w.actions}`);
+    assert.equal(got.status, status, got.message);
+    assert.match(got.message, why);
+  }
+  // Refused before any policy ran.
+  assert.equal(evals.length, asked);
+});
+
+test(
+  "the real opa: Deckhand's gh-review-threads.rego, per mode, and a file of the same name broadening it",
+  { skip: !opa && "no opa on the PATH" },
+  async (t) => {
+    assert.ok(builtIn().has("gh-review-threads.rego"));
+    // The repository's own: only the first rule, its modes kept out.
+    const broader = `package deckhand
+
+deny_github contains "only work runs answer review threads" if {
+  input.action in {"reply", "resolve", "unresolve"}
+  input.custom_mode
+}
+`;
+    const engine = (repoFiles = {}, operator = new Map()) =>
+      createPolicies({
+        config: {},
+        github: async (repo, method, path) => {
+          if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+            const names = Object.keys(repoFiles);
+            if (!names.length) return new Response("{}", { status: 404 });
+            return Response.json(names.map((name) => ({ type: "file", name, sha: name })));
+          }
+          const blob = /\/git\/blobs\/(.+)$/.exec(path);
+          if (blob) {
+            const text = repoFiles[blob[1]];
+            return Response.json({
+              content: Buffer.from(text).toString("base64"),
+              encoding: "base64",
+            });
+          }
+          return new Response("{}", { status: 404 });
+        },
+        run: opaRunner(),
+        readBuiltIn: builtIn,
+        readOperator: () => operator,
+        tmp: tempDir(t),
+      });
+    const checks = (policies) =>
+      createWriteChecks({
+        needsInputLabel: () => null,
+        lookup: fakeLookup(GITHUB).lookup,
+        bot: BOT,
+        policies,
+      });
+    const { check, checkWrite } = checks(engine());
+    const work = run("work");
+    // Work runs (fix and conflict runs are work runs): reply, and resolve Deckhand's threads.
+    assert.equal(await check(work, replyTo(7, 41)), null);
+    assert.equal(await checkWrite(work, resolveWrite(40)), null);
+    assert.match(
+      (await checkWrite(work, resolveWrite(41))).message,
+      /resolves only Deckhand's own review threads, not @alice's/,
+    );
+    // The repository's modes: refused, though their ceiling holds them.
+    const deploy = run("deploy", { push: true });
+    assert.match(
+      (await check(deploy, replyTo(7, 40))).message,
+      /a deploy run doesn't answer review threads unless \.deckhand\/policy\/gh-review-threads\.rego lets it/,
+    );
+    assert.match(
+      (await checkWrite(deploy, resolveWrite(40))).message,
+      /a deploy run doesn't answer/,
+    );
+    assert.equal(await checkWrite(work, unresolveWrite(41)), null);
+    // A light repository mode: no ceiling, whatever the policy.
+    assert.match((await check(run("ask", { push: false }), replyTo(7, 40))).message, /its ceiling/);
+    // The operator's file of its name replaces Deckhand's, for every repository.
+    const operator = new Map([["gh-review-threads.rego", "package deckhand\n"]]);
+    const open = checks(engine({}, operator));
+    assert.equal(await open.checkWrite(work, resolveWrite(41)), null);
+    assert.equal(await open.check(deploy, replyTo(7, 40)), null);
+    // A repository's file of the same name replaces the default: a person's thread resolved.
+    const broad = checks(engine({ "gh-review-threads.rego": broader }));
+    assert.equal(await broad.checkWrite(work, resolveWrite(41)), null);
+    assert.match(
+      (await broad.checkWrite(deploy, resolveWrite(41))).message,
+      /only work runs answer review threads/,
+    );
+    // Never past the ceiling: a brainstorm still can't, nor another pull request's thread.
+    assert.match((await broad.check(run("brainstorm"), replyTo(7, 40))).message, /its ceiling/);
+    assert.match((await broad.check(work, replyTo(8, 43))).message, /can't reply on pr #8/);
+  },
+);
