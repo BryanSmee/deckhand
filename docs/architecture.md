@@ -392,7 +392,8 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   research and push calls and a review's reads of its thread; refuses a work run that isn't a
   fork's what would bring a fork's code (`github-forks.mjs`: a fork's repository, a fork's
   pull request's head, a commit that isn't the repository's, by git, the API, an archive, a
-  page (any other of the repository's refused) or a file, GitHub's content hosts
+  page (any other of the repository's refused) or a file, Actions logs fetched from where
+  GitHub redirects them (`ACTIONS_LOGS`, no credential sent there), GitHub's content hosts
   (`*.githubusercontent.com`) relayed too for such a run and sent on without a token; no branch
   it pushes reaching a fork's objects (the git gateway); its clone is whole, as a blob fetched
   by its id is refused to it);
@@ -539,6 +540,27 @@ one more review of what it pushed, once per fix run (`reviewedFixes`;
 (`settle()`), or, in auto-merge mode, a comment when it failed or pushed nothing. At start,
 `server.mjs` logs a warning for each repository granted `allow_auto_merge`.
 
+With `review.ci: wait`, every automatic review goes through `reviewAfterCi()` first
+(`consider()`, `reviewFix()`, and the end of a CI fix run): it keeps `ciWaiting` ({ sha, since,
+base, author }) in `reviews.json` and decides with `ciDecide()` (one at a time per pull request,
+a promise chain), again on a `workflow_run` `completed` delivery for that sha (`checksDone()`),
+on a `pull_request` `synchronize` (`pushed()`, which moves the wait to the new head) and from
+`tick()`. `ciState()` sorts the head commit's Actions runs into `failed`, `running`, `passed`
+or `none`, the same rule `mergeRefusal()` uses. Passed, none (after a minute's grace), or
+`review.ci_wait` gone: `queueReview()`, the item's `ciNote` (why CI hadn't passed) going to
+`reviewPrompt()`. Failed: `ciFailed()` comments, then queues a work item (`reason: "ci-fix"`,
+its `round` of `rounds`) whose text is `ciFixMessage()` (failed runs and jobs, read from
+`/actions/runs/{id}/jobs`, no logs), counted in `ciFixes` before it is queued; out of rounds,
+or no CI fix possible, the review anyway. A CI fix run's end (`cleanUp()`) calls `ciFixed()`,
+once per run (`ciSettled`): its push goes back to `reviewAfterCi()`, or a comment says it
+failed or pushed nothing. `reviewLoop()` shows `ci` while `ciWaiting` and `ci-fix` while that
+run is queued, running or settling, and `ci-failed` once the CI step stopped without a review
+(`ciStopped`, cleared when a review is queued). A CI fix run waits for the issue's task to be
+free: `ciFailed()` keeps `ciWaiting` while it is busy, and `runEnded()`, called by `cleanUp()`
+after every run, decides again. A wait dropped (closed, a draft again) sets `ciDropped` to the
+head it never reviewed, and a stopped CI step keeps its head in `ciStopped.sha`: `consider()`
+skips neither head as reviewed already.
+
 The dashboard follows the loop. Before `startFix()`, `settle()` appends each automatic review
 to its pull request's `rounds` in `reviews.json` (`recordRound()`): `{ round, at, head,
 counts: { critical, high, medium, low }, blocking }`, `round` the fix runs before it (0 for the
@@ -556,7 +578,8 @@ while the task's last run is that step's own (started after `nextAt`) and over, 
 still there; an earlier run of the same kind isn't, when the step queued since never ran
 (cancelled, refused). At start, after the runs going and the queue are back, `forgetSteps()`
 drops the `next` of pull requests with no review or fix run reattached or queued
-(`stepsGoing()`): a listener stopped while it decided never will. While `consider()` (from
+(`stepsGoing()`, a CI fix run's `next: "ci-fix"` too): a listener stopped while it decided never
+will. While `consider()` (from
 its settings read on), `settle()` or `fixed()` decide (policies and GitHub calls), an
 in-memory mark says so too (`deciding()`, the entry's `deciding`), so a pull request turning
 ready is in review before its review is queued. The board takes the loop's step from the

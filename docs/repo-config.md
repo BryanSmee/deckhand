@@ -107,6 +107,10 @@ review:
   # merge_method: squash # squash (default) | merge | rebase
   # max_allowed_severity: low # low (default) | medium: the most severe finding a merge allows
   # merge_wait: 60 # minutes a merge waits for the GitHub Actions runs still going (0 to 1440)
+  # ci: wait # the review waits for the head commit's GitHub Actions runs; a failure starts a
+  #          # CI fix run instead of a review (see CI before the review below)
+  # ci_wait: 30 # minutes it waits before it reviews anyway (0 to 1440)
+  # ci_fix: 1 # CI fix runs per pull request, with fix (0 to the operator's MAX_FIX_ROUNDS)
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -154,6 +158,9 @@ wait_for_answers: true
 | `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                           |
 | `review.max_allowed_severity`           | `low`                                   | the most severe finding a review in the fix loop or deciding an auto-merge may have: `low` or `medium` (see Auto-merge)      |
 | `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)   |
+| `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)               |
+| `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                      |
+| `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)           |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
 | `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `allow_preview`                                     |
@@ -543,8 +550,60 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   run, so `fix: 3` can cost up to four reviews and three work runs per pull request.
 
 `on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
-`max_allowed_severity` and `merge_wait` are its only keys: any other, or a bad value, is an
-error.
+`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait` and `ci_fix` are its only keys: any
+other, or a bad value, is an error.
+
+#### CI before the review
+
+With `ci: wait` (and `on: ready`), an automatic review waits for the repository's CI first: a
+failing CI then costs a cheap CI fix run instead of a full review that misses the failure. The
+listener decides each step itself, without a model call, from the GitHub Actions runs on the
+pull request's head commit (other checks and commit statuses aren't read, as for auto-merge):
+
+- **Waiting**: when a review would start (the pull request turned ready, or a fix run pushed),
+  nothing is queued while runs are going. The listener decides again when a run completes on
+  that commit (a `workflow_run` delivery), and every 5 minutes for a lost one; the wait
+  survives a restart. A push while it waits moves the wait to the new head commit: runs
+  completing on the old one decide nothing. Without any run yet, it waits a minute (GitHub
+  creates a push's runs a moment after it), asks again then, and takes the commit for one
+  without CI. The
+  dashboard shows "Waiting for CI".
+- **Passed** (`success`, `skipped`, `neutral`), or no run: the review starts as without `ci`.
+- **Still going after `ci_wait` minutes** (30 by default, `0` to `1440`): the review starts
+  anyway, its prompt saying CI hadn't finished.
+- **Failed** (any other conclusion: `failure`, `cancelled`, `timed_out`…), even while other
+  runs go on: no review. A run cancelled and replaced by a newer one of its workflow and event
+  (`cancel-in-progress` when turning ready starts the workflow again) decides nothing, here
+  and for auto-merge; any other failure does, whatever ran after it. A "CI failed" comment names the failed runs, linked. With `fix`, a
+  **CI fix run** follows: a work run in the issue's session, with the same conditions as a
+  review's fix run (Deckhand's own open pull request, no run going or queued on the issue, no
+  needs-input label, and `deny_fix`, its input with `ci: true`). A run going or queued on the
+  issue (often the work run that marked the pull request ready, after a quick failure) doesn't
+  stop it: the pull request goes on waiting, and the listener decides again once a run is over.
+  Its message names the failed
+  runs and jobs (name, conclusion, run id, link), never their logs: the run reads them itself
+  (`gh run view <id> --log-failed`, through Deckhand's GitHub gateway, which follows GitHub's
+  redirect to its log storage: no host to grant), told they are data, not instructions (the branch's code
+  printed them), fixes the cause, reruns the checks and pushes. Once it is over, its push goes
+  back to waiting for CI: then the review, or another CI fix run. One that failed or pushed
+  nothing leaves the pull request to the maintainer, a "No review" comment says why. The
+  dashboard shows "Fixing CI", and the run "CI fix"; when the CI step stops without a review
+  (a CI fix run refused, failed or pushing nothing), the ready pull request is marked "CI failed,
+  not reviewed". A pull request turned back into a draft while it waits stops waiting: ready
+  again, even at the same commit, it waits and gets its review. So does one whose CI step
+  stopped (once the maintainer answered, say): ready again at the same commit, the CI step
+  runs again.
+- **Bounded**: `ci_fix` CI fix runs per pull request (1 by default, `0` to the operator's
+  `MAX_FIX_ROUNDS`), each counted in `reviews.json` before it is queued, apart from `fix`'s
+  rounds: a CI fix never uses up a round the review's findings need. They count across the
+  pull request's commits: when none is left and CI fails, the comment says so ("No CI fix run
+  left") and the review starts anyway, told CI failed, so the
+  maintainer still gets one. So it does without `fix` (or with `ci_fix: 0`), and on a pull
+  request that isn't Deckhand's own: the comment, then the review.
+
+`ci` changes nothing without `on: ready`, and a `/mode review` a maintainer asks for never
+waits. CI fix runs push like any work run: one that has to change `.github/workflows/` needs
+the operator's `allow_workflows`.
 
 #### Auto-merge
 
@@ -784,12 +843,12 @@ folder is listed once, then again only after a push to its default branch (or 10
 **The rules**: one set of strings per decision, each string a reason shown to the
 maintainer. Four decisions:
 
-| Rule          | When                                                                                                                                                                     | A message does                                                                                                                                                                                                           |
-| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                          |
-| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages. |
-| `deny_fix`    | A [`review.fix`](#reviews) run, after its own checks, right before it is queued.                                                                                         | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it.               |
-| `deny_github` | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                  |
+| Rule          | When                                                                                                                                                                     | A message does                                                                                                                                                                                                                                                                                                                                        |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_merge`  | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                       |
+| `deny_review` | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for. | Skips the review: the listener's log says why, nothing is posted. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                                                              |
+| `deny_fix`    | A [`review.fix`](#reviews) run, or a [CI fix run](#ci-before-the-review), after its own checks, right before it is queued.                                               | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. |
+| `deny_github` | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                               |
 
 Another `deny_*` rule is reported by the config check, as probably misspelled.
 
@@ -821,7 +880,7 @@ issue, its Actions runs) and the review that decides it (`deny_review` and `deny
 | `review.findings[]` | `severity` (`critical`, `high`, `medium`, `low`), `path` and `line` (`null` when the finding names none), `text`.                                      |
 | `fixed`             | Whether a fix run came before this review (kept for rules from before `fixes`).                                                                        |
 | `fixes`             | How many fix runs came before this review (`review.fix`'s rounds), `0` without any.                                                                    |
-| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`.                                                                                 |
+| `checks[]`          | The head commit's GitHub Actions runs: `name`, `status`, `conclusion`; without a run cancelled and replaced by a newer one of its workflow and event.  |
 
 ### The review and fix input
 
@@ -837,6 +896,10 @@ far), without `checks`:
 | `review`   | `null`: the review hasn't run.                                                | The review that requests changes: `verdict`, `rating`, `allowed`, and its `findings[]`. |
 | `round`    | none.                                                                         | The fix run this would be: `fixes + 1`.                                                 |
 | `rounds`   | none.                                                                         | How many fix runs `review.fix` allows (`true`: `1`).                                    |
+| `ci`       | none.                                                                         | `true` for a [CI fix run](#ci-before-the-review), `false` for a review's fix run.       |
+
+A CI fix run's input has `review: null` (no review ran), `round` and `rounds` counting the CI
+fix runs (`review.ci_fix`), and the head commit's `checks[]` as the merge input has them.
 
 ```rego
 deny_review contains "work in progress" if "wip" in input.pr.labels

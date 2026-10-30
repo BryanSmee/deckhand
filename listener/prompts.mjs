@@ -91,16 +91,18 @@ function verdictRule(text, allowed) {
 // A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
 // closes. Its thread is the run's file TASK_DIGEST names (reviews.mjs reviewThread()).
 // `instructions`: the repo's `review.instructions` file, if any; `text`: what the
-// "/mode review" comment adds; `allowed`: the review's tolerance (verdictRule()).
-function reviewPrompt(task, pull, instructions, text, allowed = "low") {
+// "/mode review" comment adds; `allowed`: the review's tolerance (verdictRule()); `ciNote`: why
+// CI hadn't passed when the listener queued it (`review.ci`, reviews.mjs ciNoteText()).
+function reviewPrompt(task, pull, instructions, text, allowed = "low", ciNote = null) {
   const own = instructions?.trim()
     ? `\n\nThe repository's review instructions:\n\n${instructions.trim()}`
     : "";
   const asked = text ? `\n\nThe maintainer asks:\n\n${text}` : "";
+  const ci = ciNote ? `\n\n${ciNote}` : "";
   const rules = verdictRule(modeInstructions.review.replaceAll("<n>", String(pull)), allowed);
   return `Review pull request #${pull} of ${task.repo}.
 
-${rules}${own}${asked}`;
+${rules}${ci}${own}${asked}`;
 }
 
 function brainstormPrompt(task) {
@@ -281,7 +283,7 @@ ${instructions.trim()}`;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
 // repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches());
 // `pull`: the issue or pull request the reply goes to, the one a review reads; `allowed`: a
-// review's tolerance (reviews' tolerance()).
+// review's tolerance (reviews' tolerance()); `ciNote`: a review's CI note (reviewPrompt()).
 export function promptFor(
   task,
   {
@@ -296,6 +298,7 @@ export function promptFor(
     branches,
     pull,
     allowed,
+    ciNote = null,
   },
 ) {
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
@@ -303,7 +306,7 @@ export function promptFor(
   if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "research") return researchPrompt(task);
   if (mode === "review")
-    return reviewPrompt(task, pull ?? task.number, instructions, text, allowed);
+    return reviewPrompt(task, pull ?? task.number, instructions, text, allowed, ciNote);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   if (own) return modePrompt(task, own, instructions, branches, grant);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches, grant);

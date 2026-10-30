@@ -40,6 +40,9 @@ const REVIEW_KEYS = [
   "merge_method",
   "max_allowed_severity",
   "merge_wait",
+  "ci",
+  "ci_wait",
+  "ci_fix",
 ];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
@@ -54,6 +57,12 @@ export const ALLOWED_SEVERITIES = ["low", "medium"];
 // going on the reviewed commit (reviews.mjs), at most a day; 0 refuses at once.
 const MERGE_WAIT_MINUTES = 60;
 const MAX_MERGE_WAIT_MINUTES = 24 * 60;
+// `review.ci: wait`: an automatic review waits for the head commit's GitHub Actions runs, and a
+// failed one starts a CI fix run instead (reviews.mjs). `review.ci_wait`: how many minutes it
+// waits before it reviews anyway, with merge_wait's bounds; `review.ci_fix`: how many CI fix
+// runs per pull request (with `review.fix`), up to the operator's MAX_FIX_ROUNDS.
+const CI_WAIT_MINUTES = 30;
+const CI_FIX_RUNS = 1;
 
 // The listener's own modes (modes.mjs): a repo's `modes:` can't take these names.
 export { customMode, RESERVED_MODES };
@@ -347,6 +356,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     mergeMethod: "squash",
     maxAllowedSeverity: "low",
     mergeWait: MERGE_WAIT_MINUTES,
+    ci: false,
+    ciWait: CI_WAIT_MINUTES,
+    ciFix: CI_FIX_RUNS,
   };
   if (value === true) {
     settings.review = review;
@@ -388,6 +400,16 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     } else if (k === "merge_wait") {
       if (Number.isInteger(v) && v >= 0 && v <= MAX_MERGE_WAIT_MINUTES) review.mergeWait = v;
       else bad(k, `expected a whole number of minutes from 0 to ${MAX_MERGE_WAIT_MINUTES}`);
+    } else if (k === "ci") {
+      if (v === "wait" || v === false) review.ci = v;
+      else bad(k, "expected wait or false");
+    } else if (k === "ci_wait") {
+      if (Number.isInteger(v) && v >= 0 && v <= MAX_MERGE_WAIT_MINUTES) review.ciWait = v;
+      else bad(k, `expected a whole number of minutes from 0 to ${MAX_MERGE_WAIT_MINUTES}`);
+    } else if (k === "ci_fix") {
+      const cap = config.maxFixRounds;
+      if (Number.isInteger(v) && v >= 0 && v <= cap) review.ciFix = v;
+      else bad(k, `expected a whole number of CI fix runs from 0 to ${cap}`);
     } else if (k === "agent") {
       review.agent = agentName(v, `review.${k}`, config, (_, what, fix) => bad(k, what, fix));
     } else if (k === "model") {
@@ -403,6 +425,12 @@ function parseReview(value, { key, settings, config, fail, warn }) {
   if (ok && review.merge && review.on !== "ready") {
     warn("review.merge: needs `review.on: ready`, nothing is merged");
   }
+  if (ok && review.ci && review.on !== "ready") {
+    warn("review.ci: needs `review.on: ready`, nothing waits for CI");
+  }
+  if (ok && value.ci_fix && !review.fix) {
+    warn("review.ci_fix: needs `review.fix`, no CI fix run starts");
+  }
   if (ok) settings.review = review;
 }
 
@@ -415,12 +443,16 @@ export function reviewText(review) {
       ? `up to ${review.fixRounds} fix runs per pull request`
       : "one fix run per pull request");
   const merge = review.merge && `auto-merge (${review.mergeMethod})`;
+  const ci =
+    review.ci === "wait" &&
+    review.on === "ready" &&
+    `waits for CI (${review.ciWait} min${review.fix && review.ciFix ? `, up to ${review.ciFix} CI fix run${review.ciFix > 1 ? "s" : ""}` : ""})`;
   // The fix loop's threshold and the merge's.
   const medium =
     (review.fix || review.merge) &&
     review.maxAllowedSeverity === "medium" &&
     "medium findings allowed";
-  return [when, fix, merge, medium, review.instructions].filter(Boolean).join(" · ");
+  return [when, ci, fix, merge, medium, review.instructions].filter(Boolean).join(" · ");
 }
 
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.

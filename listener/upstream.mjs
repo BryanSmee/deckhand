@@ -81,6 +81,9 @@ export function baseOf(upstream) {
 // `clock`'s timers: a stalled provider doesn't hold a listener every run shares. `body`: what
 // is sent in place of the request's own, already read (github-gateway.mjs's redacted writes).
 // `tap(chunk)`: each chunk of the answer too, as it goes on (github-gateway.mjs's writes).
+// `follow(status, headers)`: { target, headers } to fetch instead with a GET, its answer sent
+// back in place of this one (github-gateway.mjs's Actions logs, a redirect to a storage host
+// the sandbox can't reach), or null; asked of the first answer only.
 export function forward(
   req,
   res,
@@ -95,9 +98,10 @@ export function forward(
     clock = globalThis,
     body,
     tap,
+    follow,
   },
 ) {
-  const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+  const sender = (url) => (url.protocol === "https:" ? httpsRequest : httpRequest);
   return new Promise((done) => {
     let timer = null;
     let ended = false;
@@ -107,7 +111,17 @@ export function forward(
       req.off("data", idle);
       done();
     };
-    const out = send(target, { method: req.method, headers }, (answer) => {
+    const onAnswer = (answer, first) => {
+      const next = first ? follow?.(answer.statusCode, answer.headers) : null;
+      if (next) {
+        answer.resume();
+        out = sender(next.target)(next.target, { method: "GET", headers: next.headers }, (again) =>
+          onAnswer(again, false),
+        );
+        out.on("error", failed);
+        out.end();
+        return;
+      }
       answered(answer.statusCode, answer.headers);
       res.writeHead(answer.statusCode, forwarded(answer.headers));
       // Server-sent events: each chunk goes on as it arrives.
@@ -116,7 +130,10 @@ export function forward(
       answer.pipe(res);
       answer.on("end", resolve);
       answer.on("error", () => (res.destroy(), resolve()));
-    });
+    };
+    let out = sender(target)(target, { method: req.method, headers }, (answer) =>
+      onAnswer(answer, true),
+    );
     function idle() {
       if (ended) return;
       clock.clearTimeout(timer);
@@ -128,14 +145,15 @@ export function forward(
     }
     idle();
     req.on("data", idle);
-    out.on("error", (error) => {
+    function failed(error) {
       log(`${what}: ${req.method} ${target.pathname}: ${error.message}`);
       if (!res.headersSent) {
         answered(502, {});
         unreachable();
       } else res.destroy();
       resolve();
-    });
+    }
+    out.on("error", failed);
     // The agent gave up (an interrupt, the run's end): so does the request upstream.
     res.on("close", () => {
       if (!res.writableFinished) out.destroy();

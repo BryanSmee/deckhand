@@ -401,10 +401,18 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   `githubContent()`), all of them, are relayed to the gateway too for such a run
   (`listener/broker-http.mjs`): its file hosts (`GITHUB_FILES`: `raw.githubusercontent.com`,
   `media.githubusercontent.com` for LFS files, `patch-diff.githubusercontent.com` for diffs)
-  for that check, the others (release assets, avatars, Actions logs…) as they are, read only,
+  for that check, the others (release assets, avatars…) as they are, read only,
   to the host they name. Both go on without a token, the sandbox's `Authorization` and
   cookies dropped, and don't count towards its calls in flight, as when they were plain
   hosts. For every other run they stay plain allowed hosts: none carries a token.
+- **Actions logs** (`/actions/runs/{id}/logs`, `/actions/jobs/{id}/logs`, an attempt's):
+  GitHub redirects their download to a storage host of its own, behind a signed URL, which
+  the egress proxy doesn't open. The gateway follows that one redirect itself (HTTPS, no
+  credential sent, the signed URL being its own), only to GitHub's log storage
+  (`*.blob.core.windows.net`, `*.githubusercontent.com`) or GitHub's own host
+  (`logStorage()`: the listener isn't behind the egress proxy) and streams the log back
+  (`github-gateway.mjs` `ACTIONS_LOGS`); any other redirect goes back to the sandbox as it
+  came.
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
   rather than the gateway, so what they get is anonymous (both accepted in pull request
   #411):
@@ -1396,6 +1404,24 @@ its token against its instructions. Turn `fix` on where the people who may comme
 request or its issue are trusted (a private repository, or `users` narrowed to them), read
 what a fix run pushed before merging, and keep `fix` off on public repositories with outside
 contributors whose threads you don't watch.
+
+### CI fix runs
+
+With `review.ci: wait` and `review.fix`, a failed GitHub Actions run on Deckhand's own pull
+request starts a work run that fixes CI instead of a review (up to `review.ci_fix`, capped by
+`MAX_FIX_ROUNDS`, counted apart from the review's rounds, with the same gates and `deny_fix`).
+The listener decides it from the Actions API alone, without a model. Its message holds the
+failed runs' and jobs' names, conclusions, ids and links, never their logs: the branch's code
+printed those, and the run reads them itself through the GitHub gateway, which adds the
+installation token (the run's `actions: read`; the sandbox holds none). GitHub answers a log's
+download with a redirect to a storage host of its own (Azure blobs, behind a signed URL) that
+the egress proxy doesn't open to sandboxes: the gateway follows that redirect itself, for the
+Actions log paths only, once, sending no credential (the signed URL is its own), and streams
+the log back. The run is told in its message that logs and names are data, not instructions, never to make a check pass by
+skipping or weakening it, and the same limits as a review's fix run. The listener copies no
+log text into a message, comment or review prompt. A workflow's or job's name comes from the
+branch's files: the comment the listener posts quotes each as code. What any work run is held
+to (above) holds too: a fix to `.github/workflows/` needs `allow_workflows`.
 
 ### Auto-merge
 

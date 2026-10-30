@@ -636,11 +636,11 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix",
   ]);
 });
 
@@ -691,6 +691,37 @@ test("review.merge_wait: 60 minutes by default, 0 to a day", () => {
       "review.merge_wait: expected a whole number of minutes from 0 to 1440",
     ]);
   }
+});
+
+test("review.ci, ci_wait and ci_fix: off, 30 minutes and one CI fix run by default, checked", () => {
+  const off = parseRepoConfig("review:\n  on: ready\n", config).settings.review;
+  assert.deepEqual([off.ci, off.ciWait, off.ciFix], [false, 30, 1]);
+  const on = parseRepoConfig(
+    "review:\n  on: ready\n  fix: true\n  ci: wait\n  ci_wait: 0\n  ci_fix: 5\n",
+    config,
+  );
+  assert.deepEqual([on.errors, on.warnings], [[], []]);
+  assert.deepEqual(
+    [on.settings.review.ci, on.settings.review.ciWait, on.settings.review.ciFix],
+    ["wait", 0, 5],
+  );
+  assert.equal(
+    reviewText(on.settings.review),
+    "when a pull request is ready · waits for CI (0 min, up to 5 CI fix runs) · one fix run per pull request",
+  );
+  assert.equal(parseRepoConfig("review:\n  ci: false\n", config).settings.review.ci, false);
+  // Nothing waits without on: ready, and no CI fix run starts without fix: the check says so.
+  assert.deepEqual(parseRepoConfig("review:\n  ci: wait\n  ci_fix: 2\n", config).warnings, [
+    "review.ci: needs `review.on: ready`, nothing waits for CI",
+    "review.ci_fix: needs `review.fix`, no CI fix run starts",
+  ]);
+  const bad = parseRepoConfig("review:\n  ci: true\n  ci_wait: 1441\n  ci_fix: 6\n", config);
+  assert.deepEqual(bad.errors, [
+    "review.ci: expected wait or false",
+    "review.ci_wait: expected a whole number of minutes from 0 to 1440",
+    `review.ci_fix: expected a whole number of CI fix runs from 0 to ${config.maxFixRounds}`,
+  ]);
+  assert.equal(bad.settings.review, null);
 });
 
 test("review.fix: true (one round) or a number of rounds up to MAX_FIX_ROUNDS, off by default", () => {

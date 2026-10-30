@@ -9,6 +9,7 @@ import { NO_TOKEN, readsOf } from "../listener/github-app.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
+  logStorage,
   readsThread,
   redactBody,
   secretOf,
@@ -33,6 +34,7 @@ async function gateway(
     checkWrite = async () => null,
     checkGraphql = async (run, body) => ({ body, write: false, creates: [] }),
     wroteWrite,
+    respond,
   } = {},
 ) {
   const calls = [];
@@ -43,6 +45,7 @@ async function gateway(
       const body = Buffer.concat(chunks);
       calls.push({ method: req.method, url: req.url, headers: req.headers, body });
       if (hold) await hold;
+      if (respond?.(req, res)) return;
       res.writeHead(200, { "content-type": "application/json", "x-github-request-id": "R1" });
       res.end(JSON.stringify({ url: req.url }));
     });
@@ -76,10 +79,11 @@ async function gateway(
     return { secret, notes, run: broker.runOf(secret) };
   };
   // A call as the proxy relays it: /relay/<host><path>.
-  const call = (path, { secret, auth, method = "GET", body, headers = {} } = {}) =>
+  const call = (path, { secret, auth, method = "GET", body, headers = {}, redirect } = {}) =>
     fetch(`${url}/relay/127.0.0.1${path}`, {
       method,
       body,
+      ...(redirect && { redirect }),
       headers: {
         ...headers,
         ...(auth ? { authorization: auth } : secret ? { authorization: `token ${secret}` } : {}),
@@ -814,4 +818,81 @@ test("a pull request's own write goes on with the token it needs, its answer to 
     [false, [{ key: null, number: null, head: "issue-1-x", ready: true }], 200],
     [false, [], 200],
   ]);
+});
+
+test("an Actions log's redirect is followed by the gateway, without credentials; others go back", async (t) => {
+  const stored = [];
+  const storage = await serve(t, (req, res) => {
+    stored.push({ url: req.url, headers: req.headers });
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end("Error: 2 tests failed\n");
+  });
+  const gw = await gateway(t, {
+    respond: (req, res) => {
+      if (!/\/logs$|\/elsewhere$/.test(req.url.split("?")[0])) return false;
+      // Job 1's storage isn't plain HTTP(S), job 2's URL holds credentials: neither followed.
+      // Job 3's goes to a host that isn't GitHub's log storage.
+      const location = req.url.includes("/jobs/1/")
+        ? "ftp://storage.example/job-logs.txt"
+        : req.url.includes("/jobs/2/")
+          ? `${storage.url.replace("//", "//user:pass@")}/job-logs.txt`
+          : req.url.includes("/jobs/3/")
+            ? "https://storage.example/job-logs.txt"
+            : `${storage.url}/actions-results/job-logs.txt?sig=signed`;
+      res.writeHead(302, { location });
+      res.end();
+      return true;
+    },
+  });
+  const { secret } = gw.register({ actions: "read" });
+  for (const path of [
+    "/api/v3/repos/org/repo/actions/jobs/124/logs",
+    "/api/v3/repos/org/repo/actions/runs/41/logs",
+    "/api/v3/repos/org/repo/actions/runs/41/attempts/2/logs",
+  ]) {
+    // "manual": the sandbox's client follows nothing here, the gateway does.
+    const res = await gw.call(path, { secret, headers: { cookie: "c=1" }, redirect: "manual" });
+    assert.equal(res.status, 200, path);
+    assert.equal(await res.text(), "Error: 2 tests failed\n");
+  }
+  assert.equal(stored.length, 3);
+  assert.equal(stored[0].url, "/actions-results/job-logs.txt?sig=signed");
+  // Neither the App's token nor the run's secret, nor the sandbox's cookie, goes to the storage.
+  for (const { headers } of stored) {
+    assert.equal(headers.authorization, undefined);
+    assert.equal(headers.cookie, undefined);
+    assert.ok(!JSON.stringify(headers).includes(secret));
+  }
+  // GitHub itself got the token, as for any read.
+  assert.equal(gw.calls[0].headers.authorization, `token ${TOKEN}`);
+  // Any other path's redirect goes back to the sandbox as it came.
+  const other = await gw.call("/api/v3/repos/org/repo/elsewhere", { secret, redirect: "manual" });
+  assert.equal(other.status, 302);
+  assert.equal(stored.length, 3);
+  // A redirect it refuses to follow goes back as it came too.
+  for (const [job, location] of [
+    [1, "ftp://storage.example/job-logs.txt"],
+    [2, `${storage.url.replace("//", "//user:pass@")}/job-logs.txt`],
+    [3, "https://storage.example/job-logs.txt"],
+  ]) {
+    const res = await gw.call(`/api/v3/repos/org/repo/actions/jobs/${job}/logs`, {
+      secret,
+      redirect: "manual",
+    });
+    assert.deepEqual([res.status, res.headers.get("location")], [302, location]);
+  }
+  assert.equal(stored.length, 3);
+});
+
+test("logStorage: GitHub's log storage and its own host, nothing else", () => {
+  for (const host of [
+    "productionresultssa8.blob.core.windows.net",
+    "pipelines.actions.githubusercontent.com",
+    "GITHUB.EXAMPLE.COM",
+  ]) {
+    assert.equal(logStorage(host, "github.example.com"), true, host);
+  }
+  for (const host of ["blob.core.windows.net.evil.example", "evil.example", "windows.net"]) {
+    assert.equal(logStorage(host, "github.example.com"), false, host);
+  }
 });

@@ -700,6 +700,11 @@ test("prompts: a review reads the pull request, the repo's instructions after th
   assert.doesNotMatch(asked, /review instructions/);
   // Its input is in the prompt: the first message is empty.
   assert.equal(firstMessage({ mode: "review", text: "Focus on the tests." }), "");
+  // Queued before CI passed (`review.ci`): told so, before the repo's instructions.
+  const note = "The repository's CI hadn't passed when this review started: x.";
+  const early = promptFor(issue, { mode: "review", pull: 31, instructions: "Mind.", ciNote: note });
+  assert.match(early, /started: x\.\n\nThe repository's review instructions:\n\nMind\.$/);
+  assert.doesNotMatch(prompt, /CI hadn't passed/);
 });
 
 test("prompts: a review's verdict rule says what its tolerance lets through", () => {

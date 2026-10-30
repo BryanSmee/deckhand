@@ -26,7 +26,7 @@
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
 import { LIGHT } from "./modes.mjs";
-import { reviewLoop } from "./reviews.mjs";
+import { LOOP_STEPS, reviewLoop } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -250,9 +250,9 @@ function settle(t, q, b, w, input) {
 }
 
 // The loop's states, between two of its runs: the task is in review, not queued or done.
-const LOOPING = ["reviewing", "fixing", "checks"];
+const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
 // The reasons of the loop's own runs (reviews.mjs).
-const STEPS = ["review", "review-fix"];
+const STEPS = LOOP_STEPS;
 
 // The fix loop of the task's pull request `p` (reviews.mjs reviewLoop()) as its `review`,
 // from the reason of its run going or queued (`q`), or, its last run one of the loop's and

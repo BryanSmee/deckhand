@@ -47,6 +47,15 @@ test("a loop's lines: its round while it goes on, what it left once it ended blo
     "Review · round 2 of 3",
   );
   expect(loopLine({ review: loop({ loop: "checks" }) })).toBe("Review · waiting for checks");
+  expect(loopLine({ review: loop({ loop: "ci" }) })).toBe("Review · waiting for CI");
+  expect(loopLine({ review: loop({ loop: "ci-fix" }) })).toBe("Review · fixing CI");
+  // Both are on its way: not ready yet.
+  expect(isReady(ready(loop({ loop: "ci", round: 0, history: [] })))).toBe(false);
+  expect(isReady(ready(loop({ loop: "ci-fix" })))).toBe(false);
+  // Stopped before any review: the ready row says CI failed, nothing was reviewed.
+  const stopped = { review: loop({ loop: "ci-failed", round: 0, history: [] }) };
+  expect(loopLine(stopped)).toBeNull();
+  expect(findingsLeft(stopped)).toBe("CI failed, not reviewed");
   expect(loopLine({ review: loop() })).toBeNull();
   // Only the blocking ones, most severe first.
   expect(findingsLeft({ review: loop() })).toBe("2 high findings left after 2 fix rounds");
@@ -132,6 +141,27 @@ test("a clean loop: plain Ready for review, its rounds still listed", () => {
   const rounds = screen.getByRole("region", { name: "Review loop" });
   expect(within(rounds).getByText(/Nothing blocking/)).toBeTruthy();
   expect(within(rounds).queryByText("no progress")).toBeNull();
+});
+
+test("the CI step on the task: waiting for CI on its row, fixing CI in Detail's loop", () => {
+  const pr = { ...state.tasks.find((t) => t.key === KEY)!.pr!, state: "ready" as const };
+  const waiting = loop({ loop: "ci", round: 0, history: [] });
+  const { rerender } = render(
+    <Dashboard
+      state={withReview(state, { state: "in-review", pr, review: waiting })}
+      error={null}
+    />,
+  );
+  expect(screen.getAllByText("Review · waiting for CI").length).toBeGreaterThan(0);
+  const fixing = loop({ loop: "ci-fix", round: 1, history: [HISTORY[0]] });
+  rerender(
+    <Dashboard
+      state={withReview(state, { state: "in-review", pr, review: fixing })}
+      error={null}
+    />,
+  );
+  const rounds = screen.getByRole("region", { name: "Review loop" });
+  expect(within(rounds).getByText(/Fixing CI/)).toBeTruthy();
 });
 
 test("the Overview's ready row carries what the loop left; one in review isn't listed", () => {
