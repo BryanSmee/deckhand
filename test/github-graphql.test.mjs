@@ -16,6 +16,7 @@ import {
   restName,
 } from "../listener/github-graphql.mjs";
 import { classify, createWriteChecks } from "../listener/github-writes.mjs";
+import { policyEngine } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 const call = (query, variables, operationName) => json({ query, variables, operationName });
@@ -106,18 +107,19 @@ async function lookup(repo, path) {
   return ISSUES[n] ?? null;
 }
 
-const run = (mode, issue = 1) => ({
+const run = (mode, issue = 1, { push = mode === "work", reason = null } = {}) => ({
   repo: "org/repo",
   mode,
-  push: mode === "work",
+  push,
   issue,
   base: "main",
-  branches: mode === "work" ? ["issue-1-*"] : [],
+  branches: push ? ["issue-1-*"] : [],
   created: [],
+  reason,
 });
 
 // The checks, with the writes they held and the IDs they looked up.
-function checks({ checkWrite, needsInputLabel = () => null } = {}) {
+function checks({ checkWrite, needsInputLabel = () => null, policies = null } = {}) {
   const writes = [];
   const asked = [];
   // The REST look-ups the write checks made.
@@ -126,6 +128,7 @@ function checks({ checkWrite, needsInputLabel = () => null } = {}) {
     needsInputLabel,
     lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
     bot: () => "deckhand[bot]",
+    policies,
   }).checkWrite;
   const { check } = createGraphqlChecks({
     nodes: async (repo, ids) => (asked.push([repo, ids]), ids.map((id) => NODES[id] ?? null)),
@@ -905,4 +908,33 @@ test("the needs-input label of a sub-issue: neither removed nor added over Graph
     ),
   );
   assert.equal(kept.refused, undefined);
+});
+
+test("deny_github over GraphQL: the run's mode, whether it is the repo's own, light, and its reason", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "gh-x.rego": "package deckhand\n" },
+    messages: (input) =>
+      input.custom_mode && input.reason === "conflict" ? ["not in a rebase"] : [],
+  });
+  const { check } = checks({ policies });
+  const comment = call(GH_COMMENT, { input: { subjectId: "I_1", body: "x" } });
+  assert.equal((await check(run("work", 1, { reason: "review-fix" }), comment)).write, true);
+  assert.deepEqual(
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
+    ["work", false, false, "review-fix"],
+  );
+  assert.equal((await check(run("brainstorm"), comment)).write, true);
+  assert.deepEqual(
+    [evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
+    [false, true, null],
+  );
+  // A repo's own mode, not light: a work run's ceiling, and the policies know it is one.
+  const plan = run("plan", 1, { push: true, reason: "conflict" });
+  const refused = await check(plan, comment);
+  assert.equal(refused.refused.status, 403);
+  assert.match(refused.refused.message, /the policies refuse it \(deny_github\): not in a rebase/);
+  assert.deepEqual(
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light],
+    ["plan", true, false],
+  );
 });

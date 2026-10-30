@@ -245,6 +245,7 @@ export function createRestart(ctx) {
       base: task.base,
       // The same list as its live state's, which saveLive() writes.
       created: task.live.created,
+      reason: record.reason ?? null,
       secret: saved.secret,
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they

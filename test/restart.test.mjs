@@ -43,11 +43,18 @@ test("a restored run's calls go to its provider, or its agent's own when none wa
     broker,
     running: 0,
   };
-  const fallback = saveRun(dir, "r1", 1, { agent: "claude", provider: "openrouter" });
+  const fallback = saveRun(dir, "r1", 1, {
+    agent: "claude",
+    provider: "openrouter",
+    reason: "review-fix",
+  });
   const codex = saveRun(dir, "r2", 2, { agent: "codex" });
   const old = saveRun(dir, "r3", 3, {});
   createRestart(ctx).restoreRuns();
   assert.equal(broker.runOf(fallback).provider, "openrouter");
+  // Why the listener started it, for the policies, as before the restart.
+  assert.equal(broker.runOf(fallback).reason, "review-fix");
+  assert.equal(broker.runOf(codex).reason, null);
   assert.equal(broker.runOf(codex).provider, "openai");
   // Saved before records named their agent: Claude Code's.
   assert.equal(broker.runOf(old).provider, "anthropic");

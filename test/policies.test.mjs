@@ -4,6 +4,8 @@ import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  BUILT_IN_DIR,
+  builtInPolicies,
   createPolicies,
   deniesOf,
   MAX_MESSAGE_LENGTH,
@@ -103,7 +105,15 @@ const evalResult = (value) => ({
 
 function setup(
   t,
-  { repoFiles = null, operator = {}, opa = fakeOpa(), secrets = [], status, now } = {},
+  {
+    repoFiles = null,
+    operator = {},
+    builtIn = {},
+    opa = fakeOpa(),
+    secrets = [],
+    status,
+    now,
+  } = {},
 ) {
   const gh = fakeGitHub(repoFiles, { status });
   const logs = [];
@@ -113,6 +123,7 @@ function setup(
     run: opa.run,
     secrets: () => secrets,
     readOperator: () => new Map(Object.entries(operator)),
+    readBuiltIn: () => new Map(Object.entries(builtIn)),
     tmp: tempDir(t),
     log: (line) => logs.push(line),
     ...(now ? { now } : {}),
@@ -160,6 +171,114 @@ test("operatorPolicies: the grants folder's policy/*.rego, symlinks only inside 
   writeFileSync(outside, "package deckhand\n");
   symlinkSync(outside, join(grants, "policy", "out.rego"));
   assert.throws(() => operatorPolicies({ grantsDir: grants }), /out\.rego leads outside/);
+});
+
+test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no folder, none", (t) => {
+  const own = builtInPolicies();
+  assert.ok(own.has("github.rego"));
+  for (const [name, text] of own) {
+    assert.match(name, /^(github|gh-[a-z0-9-]+)\.rego$/, name);
+    assert.ok(deniesOf(text).length, `${name} defines a deny_* rule of package deckhand`);
+  }
+  assert.equal(BUILT_IN_DIR, join(import.meta.dirname, "..", "policy/"));
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "a.rego"), DENY);
+  writeFileSync(join(dir, "notes.md"), "not a policy");
+  assert.deepEqual([...builtInPolicies(dir)], [["a.rego", DENY]]);
+  assert.equal(builtInPolicies(join(dir, "none")).size, 0);
+});
+
+test("deny: Deckhand's files under the operator's, the repo's over both, by name", async (t) => {
+  const opa = fakeOpa({
+    answer: (files) => evalResult(Object.keys(files).map((n) => `${n}: ${files[n]}`)),
+  });
+  const GH = 'package deckhand\ndeny_github contains "x" if true\n';
+  const { policies } = setup(t, {
+    opa,
+    builtIn: { "gh-a.rego": GH, "gh-b.rego": GH, "gh-c.rego": GH },
+    operator: { "gh-b.rego": "operator b" },
+    repoFiles: { "gh-c.rego": "repo c" },
+  });
+  const denied = await policies.deny("deny_github", "org/repo", "main", input);
+  assert.deepEqual(denied.sort(), [
+    'gh-a.rego: package deckhand deny_github contains "x" if true',
+    "gh-b.rego: operator b",
+    "gh-c.rego: repo c",
+  ]);
+  // Read once: they are the image's.
+  let reads = 0;
+  const counted = createPolicies({
+    config: {},
+    github: fakeGitHub().github,
+    run: opa.run,
+    readBuiltIn: () => (reads++, new Map([["gh-a.rego", GH]])),
+    tmp: tempDir(t),
+  });
+  await counted.deny("deny_github", "org/repo", "main", input);
+  await counted.deny("deny_github", "org/repo", "main", input);
+  assert.equal(reads, 1);
+});
+
+test("decide: Deckhand's files alone, none defining the rule: no policy asked", async (t) => {
+  const GH = 'package deckhand\n\ndeny_github contains "x" if true\n';
+  const { policies, opa } = setup(t, {
+    opa: fakeOpa({ answer: () => evalResult(["x"]) }),
+    builtIn: { "gh-a.rego": GH },
+  });
+  assert.deepEqual(await policies.decide("deny_merge", "org/repo", "main", input), {
+    applied: false,
+    messages: [],
+  });
+  assert.equal(opa.evals().length, 0);
+  // The rule they define is asked.
+  assert.deepEqual((await policies.decide("deny_github", "org/repo", "main", input)).messages, [
+    "x",
+  ]);
+  // A file of the operator's or the repo's, even with Deckhand's name: asked.
+  for (const more of [
+    { operator: { "gh-a.rego": DENY } },
+    { repoFiles: { "b.rego": "package deckhand\n" } },
+  ]) {
+    const other = setup(t, { builtIn: { "gh-a.rego": GH }, ...more });
+    assert.equal(
+      (await other.policies.decide("deny_merge", "org/repo", "main", input)).applied,
+      true,
+    );
+  }
+});
+
+test("describe and the checks: Deckhand's files first, which the others replace", async (t) => {
+  const GH = 'package deckhand\ndeny_github contains "x" if true\n';
+  const { policies, opa } = setup(t, {
+    builtIn: { "gh-a.rego": GH, "gh-b.rego": GH, "gh-c.rego": GH },
+    operator: { "gh-b.rego": "package deckhand\n", "gh-c.rego": "package deckhand\n" },
+    repoFiles: { "gh-a.rego": "package deckhand\n", "gh-c.rego": "package deckhand\n" },
+  });
+  const described = await policies.describe("org/repo", "main");
+  assert.deepEqual(
+    described.files.map((f) => [f.source, f.name, f.replaces, f.active]),
+    [
+      ["deckhand", "gh-a.rego", null, false],
+      ["deckhand", "gh-b.rego", null, false],
+      ["deckhand", "gh-c.rego", null, false],
+      ["operator", "gh-b.rego", "deckhand", true],
+      ["operator", "gh-c.rego", "deckhand", false],
+      ["repo", "gh-a.rego", "deckhand", true],
+      ["repo", "gh-c.rego", "operator", true],
+    ],
+  );
+  assert.deepEqual([...described.policies.keys()].sort(), ["gh-a.rego", "gh-b.rego", "gh-c.rego"]);
+  // The start's check and the onboarding's compile Deckhand's files too.
+  await policies.checkOperator();
+  assert.deepEqual(Object.keys(opa.calls.at(-1).files).sort(), [
+    "gh-a.rego",
+    "gh-b.rego",
+    "gh-c.rego",
+  ]);
+  assert.equal(opa.calls.at(-1).files["gh-a.rego"], GH);
+  await policies.checkRepo("org/repo", "main");
+  assert.equal(opa.calls.at(-1).files["gh-a.rego"], "package deckhand\n");
+  assert.equal(opa.calls.at(-1).files["gh-b.rego"], "package deckhand\n");
 });
 
 test("deny: no policy anywhere, no opa call and no input built", async (t) => {
@@ -476,20 +595,20 @@ test("describe: each file with its source and rules, the check of them all", asy
   });
   assert.deepEqual(described.files, [
     // The operator's a.rego, listed, but the repo's replaces it.
-    file("a.rego", "operator", false, false, ["deny_merge"], DENY),
+    file("a.rego", "operator", null, false, ["deny_merge"], DENY),
     file(
       "b.rego",
       "operator",
-      false,
+      null,
       true,
       ["deny_review"],
       'package deckhand\ndeny_review contains "x" if true\n',
     ),
-    file("a.rego", "repo", true, true, [], "# drops it\npackage deckhand\n"),
+    file("a.rego", "repo", "operator", true, [], "# drops it\npackage deckhand\n"),
     file(
       "bad.rego",
       "repo",
-      false,
+      null,
       true,
       ["deny_merge", "deny_merged"],
       `${DENY}deny_merged contains "y" if true\n`,

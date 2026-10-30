@@ -16,8 +16,8 @@ import {
 // (github-writes.mjs), and moving one from another parent is in no ceiling. A "blocked by"
 // link is a `link` on the blocked issue, its blocker one of those or any open issue of the
 // repo (github-writes.mjs resolveBlocker()). Brainstorms
-// comment elsewhere in theirs, which the default policy refuses
-// (docs/repo-config.md#the-github-input). Work runs, and the repo's modes that aren't light,
+// comment elsewhere in theirs, which Deckhand's default policy refuses (../policy/github.rego,
+// docs/repo-config.md#the-default-policies). Work runs, and the repo's modes that aren't light,
 // label their issue, its sub-issues and the issues they file, and create labels (issue #443); a
 // brainstorm only creates labels. A repo that doesn't want it refuses it with `deny_github`,
 // per mode if it likes.

@@ -1,7 +1,7 @@
 // A repository's Policies tab (docs/design/dashboard-redesign.md › Pages › Settings › A
 // repository's policies): the config check's errors first, as they refuse every decision a policy
 // is asked for; one line on how policies work; a card per decision with its rules; the policy
-// files, operator's and repo's, merged by name; each file's source, folded, its errors under their
+// files, Deckhand's, the operator's and the repo's, merged by name; each file's source, folded, its errors under their
 // lines; and how to try them on a pull request. Read with the config (api/repos/<repo>/config).
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
@@ -15,6 +15,9 @@ import { StatusBadge } from "./ui/Status";
 import styles from "./PolicyConfig.module.css";
 
 const COMMAND = "Deckhand /mode policy";
+// What deny_github reads, field by field.
+const GITHUB_INPUT =
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-github-input";
 
 // A file's errors: those opa placed in it. The rest (a timeout, a folder that can't be read)
 // are the whole check's.
@@ -33,8 +36,18 @@ export function policyTrouble({ files, errors }: Policies): string | null {
   return bad === 1 ? "1 policy doesn't compile" : `${bad} policies don't compile`;
 }
 
-const pathOf = (f: PolicyFile) =>
-  f.source === "operator" ? `grants/policy/${f.name}` : `.deckhand/policy/${f.name}`;
+// Where each source's files are: Deckhand's image, the grants folder, the repo.
+const FOLDERS = {
+  deckhand: "deckhand/policy",
+  operator: "grants/policy",
+  repo: ".deckhand/policy",
+};
+const pathOf = (f: PolicyFile) => `${FOLDERS[f.source]}/${f.name}`;
+// Whose file a source's is, as the effects and the sources' notes say it.
+const OWNERS = { deckhand: "Deckhand's", operator: "the operator's", repo: "the repo's" };
+// The source of the file that replaces `f` (the one evaluated in its place), when it is replaced.
+const replacedBy = (files: PolicyFile[], f: PolicyFile) =>
+  f.active ? null : (files.find((o) => o.active && o.name === f.name)?.source ?? null);
 const keyOf = (f: PolicyFile) => `${f.source}/${f.name}`;
 const foldId = (f: PolicyFile) => `policy-${f.source}-${f.name}`;
 const lineId = (f: PolicyFile) => (n: number) => `${foldId(f)}-line-${n}`;
@@ -82,14 +95,13 @@ function definitions(f: PolicyFile, rule: string): number {
   return Math.max(found, 1);
 }
 
-// The files in the table's order: the listener's, a replaced operator file right after the
-// repo file that replaces it.
+// The files in the table's order: the listener's, the files a file replaces right after it,
+// the nearest first.
 function ordered(files: PolicyFile[]): PolicyFile[] {
-  const replaced = (f: PolicyFile) => f.source === "operator" && !f.active;
   return files.flatMap((f) => {
-    if (replaced(f)) return [];
+    if (!f.active) return [];
     if (!f.replaces) return [f];
-    return [f, ...files.filter((o) => replaced(o) && o.name === f.name)];
+    return [f, ...files.filter((o) => !o.active && o.name === f.name).reverse()];
   });
 }
 
@@ -125,7 +137,12 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
     );
   }
   const rows = ordered(files);
-  const operator = files.filter((f) => f.source === "operator").length;
+  const from = (source: PolicyFile["source"]) => files.filter((f) => f.source === source).length;
+  const counts = [
+    ...(from("deckhand") ? [`${from("deckhand")} from Deckhand`] : []),
+    `${from("operator")} from the operator`,
+    `${from("repo")} from the repo`,
+  ].join(", ");
   return (
     <div class={styles.page}>
       {errors.length > 0 && <Banner files={files} errors={errors} goLine={goLine} />}
@@ -142,9 +159,19 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         </section>
       )}
       <p class={styles.model}>
-        Rules can only <b>deny</b>, and run after Deckhand's own gates. The operator's files are the
-        defaults; a repo file with the same name replaces one, any other name adds to them. They're
-        read from <code>{config.base}</code>.
+        Rules can only <b>deny</b>, and run after Deckhand's own gates. Deckhand's and the
+        operator's files are the defaults, the operator's over Deckhand's; a repo file with the same
+        name replaces one, any other name adds to them. The repo's are read from{" "}
+        <code>{config.base}</code>.
+      </p>
+      <p class={styles.model}>
+        <code>deny_github</code> reads the write (<code>action</code>, <code>target</code>,{" "}
+        <code>change</code>) and the run: its <code>mode</code>, <code>custom_mode</code> (one of
+        the repo's <code>modes:</code>), <code>light</code> and <code>reason</code> (
+        <code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or null).{" "}
+        <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
+          The GitHub input
+        </a>
       </p>
       <section class={styles.decisions} aria-label="Decisions">
         {DECISIONS.map((d) => (
@@ -155,8 +182,7 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         <div class={styles.cardHead}>
           <h2 id="policy-files">Policy files</h2>
           <span class={styles.note}>
-            {plural(files.length, "file")} · {operator} from the operator, {files.length - operator}{" "}
-            from the repo · merged by name
+            {plural(files.length, "file")} · {counts} · merged by name
           </span>
         </div>
         {files.length > 0 && (
@@ -173,6 +199,7 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
                 <FileRow
                   key={keyOf(f)}
                   file={f}
+                  by={replacedBy(files, f)}
                   errors={errorsOf(errors, f)}
                   unknown={unplaced(files, errors)}
                 />
@@ -185,6 +212,7 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
                 <Source
                   key={keyOf(f)}
                   file={f}
+                  by={replacedBy(files, f)}
                   errors={errorsOf(errors, f)}
                   open={isOpen(f)}
                   onToggle={toggle(f)}
@@ -305,7 +333,7 @@ function DecisionCard({
       <span class={styles.note}>
         {own.length
           ? `${plural(rules, "rule")} · ${own
-              .map((f) => (f.replaces ? `${f.name} (repo)` : f.name))
+              .map((f) => (f.replaces ? `${f.name} (${f.source})` : f.name))
               .join(", ")}`
           : "none in any file"}
       </span>
@@ -313,32 +341,27 @@ function DecisionCard({
   );
 }
 
-const EFFECTS = {
-  kept: "Default, kept",
-  replaced: "Replaced by the repo's",
-  replaces: "Replaces the operator's",
-  added: "Added",
-};
+// What a file does to the defaults: `by`, the source of the file that replaces it.
+function effectOf(f: PolicyFile, by: PolicyFile["source"] | null): string {
+  if (by) return `Replaced by ${OWNERS[by]}`;
+  if (f.replaces) return `Replaces ${OWNERS[f.replaces]}`;
+  return f.source === "repo" ? "Added" : "Default, kept";
+}
 
-// A file of the table: where it is, who brings it, what it does to the operator's defaults,
-// its rules, and whether it compiles. A replaced operator file is struck through.
+// A file of the table: where it is, who brings it, what it does to the defaults, its rules,
+// and whether it compiles. A replaced file is struck through.
 function FileRow({
   file: f,
+  by,
   errors: own,
   unknown,
 }: {
   file: PolicyFile;
+  by: PolicyFile["source"] | null;
   errors: PolicyError[];
   unknown: boolean;
 }) {
-  const effect =
-    f.source === "operator"
-      ? f.active
-        ? EFFECTS.kept
-        : EFFECTS.replaced
-      : f.replaces
-        ? EFFECTS.replaces
-        : EFFECTS.added;
+  const effect = effectOf(f, by);
   const [tone, compiles]: [Tone, string] = !f.active
     ? ["idle", "—"]
     : own.length
@@ -376,11 +399,13 @@ function FileRow({
 // GitHub for a repo file.
 function Source({
   file: f,
+  by,
   errors,
   open,
   onToggle,
 }: {
   file: PolicyFile;
+  by: PolicyFile["source"] | null;
   errors: PolicyError[];
   open: boolean;
   onToggle: (open: boolean) => void;
@@ -391,8 +416,8 @@ function Source({
     if (e.row !== null) marks.set(e.row, [...(marks.get(e.row) ?? []), e.message]);
   }
   const meta = [
-    ...(f.replaces ? [`replaces the operator's ${f.name}`] : []),
-    ...(!f.active ? ["replaced by the repo's: not evaluated"] : []),
+    ...(f.replaces ? [`replaces ${OWNERS[f.replaces]} ${f.name}`] : []),
+    ...(by ? [`replaced by ${OWNERS[by]}: not evaluated`] : []),
     plural(lines.length, "line"),
     ...(f.truncated ? ["its first 20 KB"] : []),
     ...(errors.length ? [plural(errors.length, "error")] : []),

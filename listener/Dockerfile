@@ -53,6 +53,8 @@ COPY --from=vendor /vendor/graphql.mjs listener/vendor/
 COPY listener/vendor/github.graphql listener/vendor/
 COPY listener/runner/ listener/runner/
 COPY listener/agents/ listener/agents/
+# Deckhand's default policies, under the operator's and the repos' (policies.mjs BUILT_IN_DIR).
+COPY policy/ policy/
 COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/
 # The onboarding prompt ends with the config's reference.
 COPY docs/repo-config.md docs/

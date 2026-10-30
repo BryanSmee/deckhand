@@ -27,7 +27,7 @@ const POLICIES: Policies = {
     makePolicyFile({ name: "size.rego", source: "operator", active: false, rules: ["deny_merge"] }),
     makePolicyFile({
       name: "size.rego",
-      replaces: true,
+      replaces: "operator",
       rules: ["deny_merge"],
       url: blob("size.rego"),
       text: 'package deckhand\n\ndeny_merge contains "too big" if input.pr.additions > 400\n',
@@ -168,6 +168,77 @@ test("a replaced operator file: struck through, next to the repo file that repla
   expect(within(replaced).getByText("—")).toBeTruthy();
   expect(payments.textContent).toContain("Added");
   expect(screen.getByText("5 files · 2 from the operator, 3 from the repo · merged by name"));
+});
+
+test("Deckhand's default files: under the operator's and the repo's, each replacing the one below", async () => {
+  const gh = 'package deckhand\n\ndeny_github contains "x" if input.custom_mode\n';
+  const drop = "package deckhand\n";
+  policies = {
+    files: [
+      makePolicyFile({ name: "github.rego", source: "deckhand", rules: ["deny_github"], text: gh }),
+      makePolicyFile({
+        name: "gh-a.rego",
+        source: "deckhand",
+        active: false,
+        rules: ["deny_github"],
+      }),
+      makePolicyFile({
+        name: "gh-b.rego",
+        source: "deckhand",
+        active: false,
+        rules: ["deny_github"],
+      }),
+      makePolicyFile({ name: "gh-a.rego", source: "operator", replaces: "deckhand", text: drop }),
+      makePolicyFile({
+        name: "gh-b.rego",
+        source: "operator",
+        replaces: "deckhand",
+        active: false,
+      }),
+      makePolicyFile({
+        name: "gh-b.rego",
+        replaces: "operator",
+        url: blob("gh-b.rego"),
+        text: drop,
+      }),
+    ],
+    errors: [],
+    warnings: [],
+  };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  expect(rows().map((r) => r.querySelector("[class*=path]")!.textContent)).toEqual([
+    "deckhand/policy/github.rego",
+    "grants/policy/gh-a.rego",
+    "deckhand/policy/gh-a.rego",
+    ".deckhand/policy/gh-b.rego",
+    "grants/policy/gh-b.rego",
+    "deckhand/policy/gh-b.rego",
+  ]);
+  expect(rows().map((r) => r.querySelector("[class*=effect]")!.textContent)).toEqual([
+    "Default, kept",
+    "Replaces Deckhand's",
+    "Replaced by the operator's",
+    "Replaces the operator's",
+    "Replaced by the repo's",
+    "Replaced by the repo's",
+  ]);
+  expect(
+    screen.getByText(
+      "6 files · 3 from Deckhand, 2 from the operator, 1 from the repo · merged by name",
+    ),
+  );
+  expect(within(card("GitHub writes")).getByText("Active")).toBeTruthy();
+  // What deny_github reads of the run, and where its input is documented.
+  const input = screen.getByRole("link", { name: "The GitHub input" });
+  expect(input.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-github-input$/);
+  expect(input.closest("p")!.textContent).toMatch(/custom_mode.*light.*reason/);
+  expect(source("deckhand/policy/gh-a.rego").textContent).toContain(
+    "replaced by the operator's: not evaluated",
+  );
+  expect(source(".deckhand/policy/gh-b.rego").textContent).toContain(
+    "replaces the operator's gh-b.rego",
+  );
 });
 
 test("policies that compile: no banner, each decision active or without rules, warnings apart", async () => {
