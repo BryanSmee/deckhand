@@ -341,6 +341,9 @@ export function createRuns(ctx) {
         message,
         { ...prepared, ...access, engine, ca, digest },
       );
+      // Before its engine starts: the broker keeps the run's addresses only once it knows the
+      // engine's too (broker-http.mjs hasAddress()).
+      live.engine = !!engine;
       const started = await ctx.runner.start(spec);
       if (started?.engine) note(engineNote(started.engine, engine));
       // Cancelled while Docker started it: cancel()'s kill came too early to find it.

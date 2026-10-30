@@ -156,6 +156,7 @@ export function createRestart(ctx) {
           ["id", "mode", "talk", "light", "secret", "asked", "replyTo", "replied", "hosts", "shots"]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
+            .concat(["engine"])
             .map((k) => [k, live[k]]),
         ),
         record,

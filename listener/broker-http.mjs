@@ -54,28 +54,42 @@ const ADDRESS_RETRY_MS = 5_000;
 // the address to another sandbox. Until then they are looked up at each question: a run with an
 // engine starts it before its sandbox, and the broker asks about every task whenever any
 // sandbox connects (taskAt(), runFrom()), so a list kept then would hold the engine's alone and
-// refuse the sandbox for good (#517). `again`: an address not among those kept looks them up
-// again, at most every ADDRESS_RETRY_MS, before the answer is no.
+// refuse the sandbox for good (#517). A run started with an engine (`live.engine`) keeps them
+// only once the engine's is known too, or its engine's connections would be nobody's. `again`:
+// an address not among those kept looks them up again, at most every ADDRESS_RETRY_MS, before
+// the answer is no. One lookup at a time per run: the calls that miss meanwhile share it.
 async function hasAddress(ctx, task, ip, { again = false } = {}) {
   const live = task.live;
   if (!live?.hosts) return false;
   if (live.ip?.includes(ip)) return true;
-  const now = (ctx.now ?? Date.now)();
-  if (live.ip && !(again && now - (live.ipAt ?? 0) >= ADDRESS_RETRY_MS)) return false;
+  if (!live.looking) {
+    const now = (ctx.now ?? Date.now)();
+    if (live.ip && !(again && now - (live.ipAt ?? 0) >= ADDRESS_RETRY_MS)) return false;
+    // From the lookup's start, whatever it finds: parallel calls, or a sandbox already gone,
+    // don't get around the limit.
+    if (live.ip) live.ipAt = now;
+    live.looking = lookUp(ctx, task, live, now).finally(() => (live.looking = null));
+  }
+  const found = await live.looking;
+  return task.live === live && !!live.hosts && found.includes(ip);
+}
+
+// The run's addresses now → its sandbox's and its engine's, kept in `live` once complete.
+async function lookUp(ctx, task, live, now) {
   // One inspection each, so they can't disagree. The engine's count as the run's: its pulls and
   // containers go out under the run's hosts.
   const own = (await ctx.runner.address(task.name)) ?? [];
   const engine = await ctx.runner.engineAddress(task.name);
-  if (task.live !== live || !live.hosts) return false;
+  if (task.live !== live || !live.hosts) return [];
   // Kept as soon as known, never lost to a lookup that failed: the engine's connections are
   // told apart by it (no decrypted HTTPS, no token).
   if (engine?.length) live.engineIp = engine;
   const found = [...own, ...(live.engineIp ?? [])];
-  if (own.length) {
+  if (own.length && (!live.engine || live.engineIp?.length)) {
     live.ip = found;
     live.ipAt = now;
   }
-  return found.includes(ip);
+  return found;
 }
 
 // The header in which the egress proxy names the sandbox a call it relays came from
