@@ -488,9 +488,11 @@ kept in `conflicts.json`, so the same pair never starts a second run, even after
 Before the item is queued, the repo's policies are asked (`deny_fix`, `reason: "conflict"`,
 the review and fix input of `reviews.mjs` `readPullInput()`, through `policies.mjs`
 `denyKept()`, which keeps the decision for the task's page). A refusal queues nothing and is
-kept as the pair's attempt, with its messages: a "No rebase run" comment quotes them, unless
-the pull request's last attempt was refused for the same ones (a base that keeps moving says it
-once).
+kept as the pair's attempt: a "No rebase run" comment quotes its messages, and once posted they
+are kept with it (`said`), so a later pair refused for the same ones isn't said again (a base
+that keeps moving says it once). A refusal because GitHub couldn't be read (`unread`: the
+policies or the input) keeps no pair: it is the repo's error for that pass, asked again at the
+next check, as any GitHub error there.
 
 The dashboard's Sync runs the same pass at once (`check()`), with every opted-in repo due
 whatever its interval, and resets their next check as a tick does. During a tick, it waits for

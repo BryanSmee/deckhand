@@ -210,23 +210,29 @@ export function createConflicts({
     if (!baseSha) return null;
     const pair = { pr: number, head: pr.head.sha, base: baseSha };
     const last = attempts.get(key);
-    // What the last attempt's policies said, when they refused it: the same refusal again
-    // isn't said again.
-    const before = last?.pr === number ? last.denied : undefined;
+    // The refusal last said on the pull request (`said`, kept once its comment was posted): the
+    // same refusal again isn't said again.
+    const said = last?.pr === number ? last.said : undefined;
     if (last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base) {
       return null;
     }
-    const denied = await deny(repo, key, pr, issue, base);
+    const { messages: denied, unread } = await deny(repo, key, pr, issue, base);
+    // Refused because GitHub couldn't be read (the policies, the pull request's files): nothing
+    // starts, and the pair isn't kept, so the next check asks again, as for any GitHub error.
+    if (unread) throw new Error(`#${number}: ${policyWhy("deny_fix", denied)}`);
     // Checked again: a comment may have come during the calls above.
     if (busy(key)) return null;
-    attempts.set(key, { ...pair, at: now(), ...(denied.length && { denied }) });
+    const repeated = denied.length > 0 && JSON.stringify(said) === JSON.stringify(denied);
+    attempts.set(key, { ...pair, at: now(), ...(repeated && { said }) });
     attempts.save();
     if (denied.length) {
       const why = policyWhy("deny_fix", denied);
       log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, no rebase run, ${why}`);
-      if (JSON.stringify(before) === JSON.stringify(denied)) return null;
+      if (repeated) return null;
       try {
         await reply(repo, number, noRebaseText(why, pr.base.ref));
+        attempts.set(key, { ...attempts.get(key), said: denied });
+        attempts.save();
       } catch (error) {
         log(`${key}: saying no rebase run: ${error.message ?? error}`);
       }
@@ -253,12 +259,12 @@ export function createConflicts({
     return "started";
   }
 
-  // Why the policies refuse a conflict run on `pr` (`deny_fix`, `reason: "conflict"`): their
-  // messages, or [] (always without policies). The decision is kept for the task's page.
+  // Why the policies refuse a conflict run on `pr` (`deny_fix`, `reason: "conflict"`):
+  // { messages, unread } (denyKept()), no messages without policies. The decision is kept for the task's page.
   // `issue`: the task's issue, or null for a pull request of its own; `ref`: the repo's
   // default branch, where its policies are.
   async function deny(repo, key, pr, issue, ref) {
-    if (!policies) return [];
+    if (!policies) return { messages: [], unread: false };
     const extra = { ...fixInput(fixes(repo, pr.number)), ci: false, reason: "conflict" };
     return denyKept(
       policies,

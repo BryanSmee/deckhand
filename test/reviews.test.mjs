@@ -1253,6 +1253,8 @@ test("dashboard Fix while a maintainer's review is settled, or a comment comes: 
   assert.match(late.why, /has a run going or queued/);
   assert.equal(c.accepted.length, queued);
   assert.equal(c.reviews.entry("org/repo", 5).fixes, 1);
+  // What a conflict run's deny_fix reads (conflicts.mjs): the fix runs so far, 0 without any.
+  assert.deepEqual([c.reviews.fixes("org/repo", 5), c.reviews.fixes("org/repo", 6)], [1, 0]);
 });
 
 test("dashboard Fix after the loop's review run failed: its step left over doesn't hold it", async (t) => {

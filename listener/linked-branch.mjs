@@ -104,7 +104,7 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
     if (!policies) return [];
     const { repo, number, base, live } = task;
     const rule = "deny_link_branch";
-    return denyKept(
+    const { messages } = await denyKept(
       policies,
       rule,
       repo,
@@ -126,6 +126,7 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
         log,
       },
     );
+    return messages;
   }
 
   return { link };

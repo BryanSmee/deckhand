@@ -1220,13 +1220,15 @@ export function createReviews({
   function asking(pr) {
     if (!policies) return null;
     return {
-      deny: (rule, repo, ref, input, { gates = [] } = {}) =>
-        denyKept(policies, rule, repo, ref, input, {
-          pr,
-          gates,
-          keep: (entry) => decided(repo, pr, entry),
-          log,
-        }),
+      deny: async (rule, repo, ref, input, { gates = [] } = {}) =>
+        (
+          await denyKept(policies, rule, repo, ref, input, {
+            pr,
+            gates,
+            keep: (entry) => decided(repo, pr, entry),
+            log,
+          })
+        ).messages,
     };
   }
 

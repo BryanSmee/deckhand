@@ -59,15 +59,14 @@ function setup({
   const decided = [];
   const logged = [];
   const routes = {
-    "/repos/org/repo/pulls/31/files?per_page=100&page=1": [
-      { filename: "migrations/1.sql", status: "modified", additions: 3, deletions: 1 },
-    ],
+    "/repos/org/repo/pulls/31/files?per_page=100&page=1": () => w.files,
     "/repos/org/repo": { default_branch: "main" },
     "/repos/org/repo/git/ref/heads/main": () => ({ object: { sha: w.baseSha } }),
     "/repos/org/repo/issues/30": () => w.issue,
     ...more,
   };
   const w = {
+    files: [{ filename: "migrations/1.sql", status: "modified", additions: 3, deletions: 1 }],
     prs,
     issue,
     baseSha,
@@ -683,10 +682,13 @@ test("deny_fix refuses and the comment fails: logged, no run, the pair still tri
     files: { "fix.rego": "package deckhand" },
     messages: (i, rule) => (rule === "deny_fix" ? ["no"] : []),
   });
+  let failing = true;
+  const replies = [];
   const w = setup({
     policies: policy.engine,
-    reply: async () => {
-      throw new Error("GitHub said 502");
+    reply: async (repo, number, text) => {
+      if (failing) throw new Error("GitHub said 502");
+      replies.push(text);
     },
   });
   await w.conflicts.tick();
@@ -695,7 +697,31 @@ test("deny_fix refuses and the comment fails: logged, no run, the pair still tri
   w.advance(10 * MIN);
   await w.conflicts.tick();
   assert.equal(policy.evals.length, 1);
+  // The base moved: the same refusal, never said yet, is said now.
+  failing = false;
+  w.baseSha = "base-2";
+  await w.conflicts.check();
+  assert.equal(policy.evals.length, 2);
+  assert.equal(replies.length, 1);
+  assert.match(replies[0], /^\*\*No rebase run\*\*.*`no`/);
   assert.deepEqual(w.accepted, []);
+});
+
+test("deny_fix: GitHub failing to give the input starts nothing, keeps no pair, asks again", async (t) => {
+  const policy = policyEngine(t, { files: { "fix.rego": "package deckhand" } });
+  const w = setup({ policies: policy.engine });
+  w.files = null;
+  const { started, errors } = await w.conflicts.tick();
+  assert.equal(started, 0);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /^org\/repo: #31: .*policy error: its input can't be built/);
+  assert.deepEqual([w.accepted, w.replies, policy.evals], [[], [], []]);
+  // GitHub answers again: the same pair is asked, allowed, and its run starts.
+  w.files = [];
+  w.advance(10 * MIN);
+  await w.conflicts.tick();
+  assert.equal(policy.evals.length, 1);
+  assert.equal(w.accepted.length, 1);
 });
 
 test("deny_fix: a policy error refuses the rebase run too", async (t) => {
