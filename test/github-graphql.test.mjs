@@ -121,6 +121,23 @@ const NODES = {
   // Projects (v2): outside any repository, named by their owner and number.
   PV_3: { __typename: "ProjectV2", number: 3, title: "Roadmap", owner: { login: "Acme" } },
   PV_9: { __typename: "ProjectV2", number: 9, title: "Other", owner: { login: "acme" } },
+  U_alice: { __typename: "User", login: "alice" },
+  U_mallory: { __typename: "User", login: "mallory" },
+  B_bot: { __typename: "Bot", login: "deckhand" },
+  B_copilot: { __typename: "Bot", login: "Copilot" },
+  O_org: { __typename: "Organization", login: "org" },
+  M_3: {
+    __typename: "Milestone",
+    number: 3,
+    title: "v1",
+    repository: { nameWithOwner: "Org/Repo" },
+  },
+  M_o: {
+    __typename: "Milestone",
+    number: 3,
+    title: "v1",
+    repository: { nameWithOwner: "org/other" },
+  },
 };
 function thread(number, comment, repo = "Org/Repo") {
   return {
@@ -133,7 +150,8 @@ function thread(number, comment, repo = "Org/Repo") {
 
 // GitHub's REST answers the write checks look up (github-writes.mjs resolve()): #1 the run's,
 // #2 a sub-issue of it, #3 someone else's, #4 someone else's closed, #5 the bot's (one a run
-// created, when its `created` says so), #6 a sub-issue waiting for answers, #7 a pull request.
+// created, when its `created` says so), #6 a sub-issue waiting for answers, #7 a pull request,
+// assigned to bob.
 const ISSUES = {
   1: { number: 1, user: { login: "alice" }, labels: [] },
   2: { number: 2, user: { login: "bob" }, labels: [{ name: "idea" }] },
@@ -146,7 +164,13 @@ const ISSUES = {
     created_at: "2026-01-01T00:00:00Z",
     labels: [],
   },
-  7: { number: 7, pull_request: {}, user: { login: "deckhand[bot]" }, labels: [] },
+  7: {
+    number: 7,
+    pull_request: {},
+    user: { login: "deckhand[bot]" },
+    labels: [],
+    assignees: [{ login: "bob" }],
+  },
 };
 // Comments by their path and id: two the bot's (one a run posts, the listener's), and for
 // reactions, the issue or pull request each is on.
@@ -213,7 +237,8 @@ const run = (mode, issue = 1, { push = mode === "work", reason = null } = {}) =>
   reason,
 });
 
-// The checks, with the writes they held and the IDs they looked up.
+// The checks, with the writes they held and the IDs they looked up. `policies`: their engine
+// (helpers.mjs policyEngine()), which sees each write's input.
 function checks({
   checkWrite,
   needsInputLabel = () => null,
@@ -228,6 +253,7 @@ function checks({
     needsInputLabel,
     lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
     bot: () => "deckhand[bot]",
+    users: () => ["alice", "bob", "copilot"],
     policies,
     projects,
   }).checkWrite;
@@ -449,6 +475,109 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
     call(GH_CREATE, { input: { repositoryId: "R_other", title: "T" } }),
   );
   assert.match(elsewhere.refused.message, /repositoryId isn't in the run's repository/);
+});
+
+// gh's own (GH_DEBUG=api, gh 2.103.3): `gh issue edit --add-assignee` and `gh issue create
+// --assignee` send every assignee by login.
+const GH_ASSIGN =
+  "mutation ReplaceActorsForAssignable($input:ReplaceActorsForAssignableInput!){replaceActorsForAssignable(input: $input){__typename}}";
+
+test("assignees and milestones over GraphQL: looked up from their nodes, held to the same limits as REST's", async (t) => {
+  const { engine: policies, evals } = policyEngine(t, {
+    operator: { "github.rego": "package deckhand\n" },
+  });
+  const { check, asked } = checks({ policies });
+  const work = run("work");
+  const change = () => evals.at(-1).change;
+  const ok = async (query, input, mode = work) => {
+    const out = await check(mode, call(query, { input }));
+    assert.equal(out.refused, undefined, JSON.stringify(input));
+    assert.equal(out.write, true);
+    return change();
+  };
+  // gh's call, by login, on the run's pull request (bob's): bob is removed.
+  assert.deepEqual(await ok(GH_ASSIGN, { assignableId: "PR_7", actorLogins: ["alice"] }), {
+    fields: ["assignees"],
+    labels_added: [],
+    labels_removed: [],
+    assignees: { added: ["alice"], removed: ["bob"] },
+  });
+  assert.deepEqual(evals.at(-1).actions, ["assign"]);
+  // By node ID: a user, the App's bot (its login as REST spells it).
+  assert.deepEqual(
+    (await ok(GH_ASSIGN, { assignableId: "I_1", actorIds: ["U_alice", "B_bot"] })).assignees,
+    { added: ["alice", "deckhand[bot]"], removed: [] },
+  );
+  assert.deepEqual(asked.at(-1), ["org/repo", ["I_1", "U_alice", "B_bot"]]);
+  const add =
+    "mutation($input: AddAssigneesToAssignableInput!) { addAssigneesToAssignable(input: $input) { __typename } }";
+  assert.deepEqual((await ok(add, { assignableId: "I_2", assigneeIds: ["U_alice"] })).assignees, {
+    added: ["alice"],
+    removed: [],
+  });
+  const remove =
+    "mutation($input: RemoveAssigneesFromAssignableInput!) { removeAssigneesFromAssignable(input: $input) { __typename } }";
+  assert.deepEqual(
+    (await ok(remove, { assignableId: "PR_7", assigneeIds: ["U_mallory"] })).assignees,
+    { added: [], removed: ["mallory"] },
+  );
+  // Set in place of the pull request's, with its milestone, looked up.
+  const edited = await ok(GH_PR_EDIT, {
+    pullRequestId: "PR_7",
+    assigneeIds: ["U_alice"],
+    milestoneId: "M_3",
+  });
+  assert.deepEqual(evals.at(-1).actions, ["assign", "milestone"]);
+  assert.deepEqual(edited.assignees, { added: ["alice"], removed: ["bob"] });
+  assert.deepEqual(edited.milestone, { number: 3, title: "v1" });
+  // Neither by ID nor by login: none, the pull request's removed.
+  assert.deepEqual((await ok(GH_ASSIGN, { assignableId: "PR_7" })).assignees, {
+    added: [],
+    removed: ["bob"],
+  });
+  // Cleared, and a brainstorm filing an issue in a milestone.
+  assert.equal((await ok(GH_EDIT, { id: "I_1", milestoneId: null })).milestone, null);
+  const create = { repositoryId: "R_repo", title: "T", milestoneId: "M_3" };
+  assert.deepEqual((await ok(GH_CREATE, create, run("brainstorm"))).milestone, {
+    number: 3,
+    title: "v1",
+  });
+  // Refused whatever the policies say: someone not allowed, Copilot, an organization, another
+  // repository's milestone or something that isn't one, Copilot's own fields.
+  const asks = evals.length;
+  for (const [query, input, message] of [
+    [GH_ASSIGN, { assignableId: "I_1", actorLogins: ["mallory"] }, /allowed users .* not @mallory/],
+    [GH_ASSIGN, { assignableId: "I_1", actorIds: ["U_mallory"] }, /not @mallory/],
+    [GH_ASSIGN, { assignableId: "I_1", actorIds: ["B_copilot"] }, /doesn't assign Copilot/],
+    [GH_ASSIGN, { assignableId: "I_1", actorLogins: ["copilot-swe-agent"] }, /Copilot/],
+    [add, { assignableId: "I_1", assigneeIds: ["O_org"] }, /names an assignee that isn't a user/],
+    [add, { assignableId: "I_1", assigneeIds: ["U_gone"] }, /isn't a user/],
+    [GH_EDIT, { id: "I_1", milestoneId: "M_o" }, /milestoneId isn't in the run's repository/],
+    [GH_EDIT, { id: "I_1", milestoneId: "I_2" }, /milestoneId isn't in the run's repository/],
+    [
+      GH_ASSIGN,
+      { assignableId: "I_1", agentAssignment: { targetRepositoryId: "R_repo" } },
+      /replaceActorsForAssignable's agentAssignment/,
+    ],
+    [add, { assignableId: "I_1", assignees: [] }, /addAssigneesToAssignable's assignees/],
+  ]) {
+    const out = await check(work, call(query, { input }));
+    assert.equal(out.refused?.status, 403, JSON.stringify(input));
+    assert.match(out.refused.message, message, JSON.stringify(input));
+  }
+  assert.equal(evals.length, asks);
+  // Above a brainstorm's ceiling: assigning, its own issue's milestone.
+  const brainstorm = run("brainstorm");
+  const assign = { assignableId: "I_1", actorLogins: ["alice"] };
+  const own = { id: "I_1", milestoneId: "M_3" };
+  assert.match(
+    (await check(brainstorm, call(GH_ASSIGN, { input: assign }))).refused.message,
+    /can't assign/,
+  );
+  assert.match(
+    (await check(brainstorm, call(GH_EDIT, { input: own }))).refused.message,
+    /can't milestone on own_issue/,
+  );
 });
 
 test("fragments spreading each other many times over: each field once, quickly", async () => {
@@ -1098,6 +1227,8 @@ test("restName: GraphQL's input names as REST's body names them", () => {
       "subIssueId",
       "stateReason",
       "blockingIssueId",
+      "actorIds",
+      "actorLogins",
     ].map(restName),
     [
       "labels",
@@ -1108,6 +1239,8 @@ test("restName: GraphQL's input names as REST's body names them", () => {
       "sub_issue_id",
       "state_reason",
       "issue_id",
+      "assignees",
+      "assignees",
     ],
   );
 });

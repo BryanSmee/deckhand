@@ -173,6 +173,15 @@ case "$1" in
       api=${GITHUB_API#*://}
       curl -fsS -H "Authorization: token $DECKHAND_RUN_SECRET" \
         "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo" > "$dir/broker-answer"
+      # The logins of assignees, one a line, when the test leaves them: each assigned to the
+      # run'"'"'s issue, its answer'"'"'s status in assign-<login>.
+      if [ -e "$dir/assignees" ]; then
+        while read -r login; do
+          curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: token $DECKHAND_RUN_SECRET" \
+            --data-binary "{\"assignees\":[\"$login\"]}" \
+            "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo/issues/12/assignees" > "$dir/assign-$login"
+        done < "$dir/assignees"
+      fi
       # The run'"'"'s files on the broker, as deckhand-files fetches and uploads them: its digest
       # when it has one, and a screenshot when the test leaves one in shot.
       if [ -n "${TASK_DIGEST:-}" ]; then

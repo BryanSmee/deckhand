@@ -33,10 +33,23 @@ import {
 // item to a project (v2) the operator grants the repo (`allow_projects`, github-writes.mjs;
 // issue #454): work runs their issue, pull request, sub-issues and the issues they file,
 // brainstorms the issues they file. Setting an item's fields is in no ceiling: the listener
-// moves them (projects.mjs). A repo that doesn't want any of it refuses it with `deny_github`,
+// moves them (projects.mjs). They also assign and set the milestone of their issue, pull
+// requests, sub-issues and the issues they file, the assignees being allowed users
+// (github-writes.mjs assignable()); a brainstorm only sets the milestone of the issues it files
+// (issue #453: policy/gh-assign-milestone.rego refuses assigning). A repo that doesn't want any of it refuses it with `deny_github`,
 // per mode if it likes.
 const WORK_CEILING = {
-  own_issue: ["edit", "comment", "label", "link", "react", "unreact", "project"],
+  own_issue: [
+    "edit",
+    "comment",
+    "label",
+    "link",
+    "react",
+    "unreact",
+    "project",
+    "assign",
+    "milestone",
+  ],
   own_pr: [
     "edit",
     "comment",
@@ -51,19 +64,41 @@ const WORK_CEILING = {
     "unresolve",
     "rerun",
     "project",
+    "assign",
+    "milestone",
   ],
-  sub_issue: ["edit", "comment", "label", "link", "react", "unreact", "project"],
-  created_issue: ["edit", "comment", "label", "link", "react", "unreact", "project"],
+  sub_issue: [
+    "edit",
+    "comment",
+    "label",
+    "link",
+    "react",
+    "unreact",
+    "project",
+    "assign",
+    "milestone",
+  ],
+  created_issue: [
+    "edit",
+    "comment",
+    "label",
+    "link",
+    "react",
+    "unreact",
+    "project",
+    "assign",
+    "milestone",
+  ],
   created_comment: ["edit", "delete"],
-  new_issue: ["create"],
-  new_pr: ["create"],
+  new_issue: ["create", "assign", "milestone"],
+  new_pr: ["create", "assign", "milestone"],
   label: ["create"],
 };
 const BRAINSTORM_CEILING = {
   own_issue: ["edit", "comment", "link", "react", "unreact"],
   sub_issue: ["edit", "comment", "link"],
-  created_issue: ["edit", "comment", "link", "project"],
-  new_issue: ["create"],
+  created_issue: ["edit", "comment", "link", "project", "milestone"],
+  new_issue: ["create", "milestone"],
   label: ["create"],
   own_pr: ["comment"],
   other_issue: ["comment"],

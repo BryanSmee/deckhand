@@ -390,7 +390,11 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     it added and hasn't removed since (saved with the run like the issues it created, its 100
     newest): the App's bot also adds the listener's reactions, which a run never removes, on
     any comment, even where the run's same reaction came first (GitHub keeps one per user and
-    content): the listener notes each one before it asks GitHub (`reactions.json`, issue #458). No ceiling holds closing, merging, reviews, deleting anything else,
+    content): the listener notes each one before it asks GitHub (`reactions.json`, issue #458). It
+    may assign and set the milestone of those it writes, a brainstorm only the milestone of
+    the issues it files; an assignee it adds must be one of the repository's allowed users or
+    the App's bot, never Copilot, whatever the policies say: an assignment notifies them
+    (Deckhand's default policy, `policy/gh-assign-milestone.rego`, refuses assigning). No ceiling holds closing, merging, reviews, deleting anything else,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - an item added to a project (v2) (`addProjectV2ItemById`, issue #454) is a `project` on

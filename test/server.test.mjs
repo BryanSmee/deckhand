@@ -1037,6 +1037,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // A screenshot the sandbox uploads (a PNG's first bytes are enough).
     const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("png")]);
     writeFileSync(join(dir, "shot"), png);
+    // Assignees it adds to its issue: one of ALLOWED_USERS, and someone else.
+    writeFileSync(join(dir, "assignees"), "alice\nmallory\n");
     const good = createHmac("sha256", SECRET).update(payload).digest("hex");
     assert.equal((await deliver(`sha256=${good}`)).status, 202);
 
@@ -1055,6 +1057,16 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     const relayed = github.requests.find((r) => r.method === "GET" && r.path === "/repos/org/repo");
     assert.equal(relayed.auth, "token repo-token");
+    // Its assignees: an allowed user goes on to GitHub, anyone else is refused at the gateway.
+    assert.equal(readFileSync(join(dir, "assign-alice"), "utf8"), "200");
+    assert.equal(readFileSync(join(dir, "assign-mallory"), "utf8"), "403");
+    const assigned = github.requests.filter(
+      (r) => r.path === "/repos/org/repo/issues/12/assignees",
+    );
+    assert.deepEqual(
+      assigned.map((r) => JSON.parse(r.body).assignees),
+      [["alice"]],
+    );
     const mint = github.requests.find((r) => r.body.includes("repositories"));
     assert.deepEqual(JSON.parse(mint.body).repositories, ["repo"]);
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");

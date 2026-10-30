@@ -413,6 +413,9 @@ const writeChecks = createWriteChecks({
   lookup,
   bot: () => config.bot,
   listenerReacted: (...args) => ctx.listenerReacted(...args),
+  // Whom a run may assign: the repo's `users` as last read (its run's start read them), else
+  // ALLOWED_USERS.
+  users: (repo) => ctx.usersOf(repo) ?? config.users,
   needsInputLabel: () => config.needsInputLabel,
   projects: grantedProjects,
   policies,

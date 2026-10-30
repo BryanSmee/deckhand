@@ -78,26 +78,59 @@ export function labelNames(list) {
 
 // PATCH of an issue or a pull request: what each field it sets is. A state changes first, then
 // labels, assignees and the milestone, then the rest (title, body, base…): the actions in that
-// order, the first being the write's `action`.
+// order, the first being the write's `action`. The assignees it sets replace the issue's.
 function patched(body) {
   const actions = [];
   const keys = Object.keys(body);
   if ("state" in body) actions.push(body.state === "closed" ? "close" : "reopen");
   if ("labels" in body) actions.push("label");
-  actions.push(...assigned(body));
+  const set = assigned(body, "set");
+  actions.push(...set.actions);
   const rest = ["state", "state_reason", "labels", "assignees", "assignee", "milestone"];
   if (!actions.length || keys.some((k) => !rest.includes(k))) actions.push("edit");
   // Labels set replace the issue's: what they remove is known once it is looked up.
   const change = { labels_added: labelNames(body.labels) };
-  return { actions, change: "labels" in body ? { ...change, labels_set: true } : change };
+  return {
+    actions,
+    assignees: set.assignees,
+    milestone: set.milestone,
+    change: "labels" in body ? { ...change, labels_set: true } : change,
+  };
 }
 
-// The assignees and milestone a body sets, which a create and an edit both take.
-function assigned(body) {
+// The assignees and milestone a body sets, which a create and an edit both take → { actions,
+// assignees: { logins, as } (`as`: they are `added`, or `set` in place of the issue's), milestone:
+// { number } (null: cleared) }, each undefined when the body leaves it out, null when it can't be
+// read (classify() refuses the write).
+function assigned(body, as) {
   const actions = [];
-  if ("assignees" in body || "assignee" in body) actions.push("assign");
-  if ("milestone" in body) actions.push("milestone");
-  return actions;
+  let assignees;
+  let milestone;
+  if ("assignees" in body || "assignee" in body) {
+    actions.push("assign");
+    // `assignee`: one login, or null; either, null, clears them.
+    const many = body.assignees ?? [];
+    const one = body.assignee ?? null;
+    const logins = Array.isArray(many) && loginsOf(one === null ? many : [one, ...many]);
+    assignees = logins ? { logins, as } : null;
+  }
+  if ("milestone" in body) {
+    actions.push("milestone");
+    milestone = body.milestone === null ? { number: null } : positive(body.milestone);
+  }
+  return { actions, assignees, milestone };
+}
+
+// A body's logins: strings, else null.
+function loginsOf(list) {
+  if (!Array.isArray(list) || list.some((l) => typeof l !== "string" || !l)) return null;
+  return list;
+}
+
+// A positive integer, as a number or a string: { number }, else null.
+function positive(value) {
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n > 0 && String(value).trim() !== "" ? { number: n } : null;
 }
 
 // A sub-issue link's child: the `sub_issue_id` of its body, and whether it may leave another
@@ -134,6 +167,12 @@ export function reactionSubject({ number, reacted }) {
   return reacted ? `${reacted.type}_comment:${reacted.id}` : `issue:${number}`;
 }
 
+// …/issues/<n>/assignees: its body's `assignees`, `as` they are added or removed.
+function assignees(m, body, as) {
+  const logins = loginsOf(body.assignees ?? []);
+  return { actions: ["assign"], target: { number: +m[1] }, assignees: logins && { logins, as } };
+}
+
 // [method, path under the repo (case-insensitive), (match, body, method) → { actions, target,
 // change, pull, thread, permissions }]: `pull`, a pull request's own write's head, base and
 // draft, or its branch update's expected head and method (github-pulls.mjs), `thread`, a review
@@ -144,11 +183,16 @@ const ROUTES = [
   [
     "POST",
     /^issues$/i,
-    (m, body) => ({
-      actions: ["create", ...assigned(body)],
-      target: { kind: "new_issue" },
-      change: { labels_added: labelNames(body.labels) },
-    }),
+    (m, body) => {
+      const { actions, assignees, milestone } = assigned(body, "added");
+      return {
+        actions: ["create", ...actions],
+        target: { kind: "new_issue" },
+        assignees,
+        milestone,
+        change: { labels_added: labelNames(body.labels) },
+      };
+    },
   ],
   ["PATCH", /^issues\/(\d+)$/i, (m, body) => ({ ...patched(body), target: { number: +m[1] } })],
   [
@@ -226,11 +270,9 @@ const ROUTES = [
       change: { fields: ["issue_id"] },
     }),
   ],
-  [
-    /^(?:POST|DELETE)$/,
-    /^issues\/(\d+)\/assignees$/i,
-    (m) => ({ actions: ["assign"], target: { number: +m[1] } }),
-  ],
+  // POST adds the body's assignees, DELETE removes them.
+  ["POST", /^issues\/(\d+)\/assignees$/i, (m, body) => assignees(m, body, "added")],
+  ["DELETE", /^issues\/(\d+)\/assignees$/i, (m, body) => assignees(m, body, "removed")],
   [
     /^(?:PUT|DELETE)$/,
     /^issues\/(\d+)\/lock$/i,
@@ -374,9 +416,10 @@ const ROUTES = [
 // A write → { repo, actions, target: { number } | { kind } | { comment: its id } | { reacted:
 // a reaction's comment, { id, type } }, child (a link's: { id, replace_parent }), blocker (a
 // "blocked by" link's: { id }), reaction (a reaction's: { subject, content } added, { subject,
-// id } removed: reactionSubject()), change: { fields, labels_added,
-// labels_removed, labels_set (the labels it sets replace the issue's) }, pull, thread,
-// permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
+// id } removed: reactionSubject()), assignees ({ logins, as }: assigned()), milestone
+// ({ number }), change: { fields, labels_added, labels_removed, labels_set (the labels it sets
+// replace the issue's) }, pull, thread, permissions (ROUTES') }, `{ read: true }` for a POST
+// that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
 export function classify(method, path, body) {
@@ -401,14 +444,17 @@ export function classify(method, path, body) {
     const m = route.exec(rest);
     if (!m) continue;
     const write = build(m, json, method);
-    // A link without its child or its blocker can't be checked.
-    if (write.child === null || write.blocker === null) return null;
+    // A link without its child or its blocker can't be checked, nor assignees or a milestone
+    // that can't be read.
+    if ([write.child, write.blocker, write.assignees, write.milestone].includes(null)) return null;
     return {
       repo: `${owner}/${name}`.toLowerCase(),
       actions: write.actions,
       target: write.target,
       ...(write.child && { child: write.child }),
       ...(write.blocker && { blocker: write.blocker }),
+      ...(write.assignees && { assignees: write.assignees }),
+      ...(write.milestone && { milestone: write.milestone }),
       ...(write.reaction && { reaction: write.reaction }),
       ...(write.pull && { pull: write.pull }),
       ...(write.thread && { thread: write.thread }),
@@ -460,10 +506,13 @@ const MAX_HOPS = 5;
 // `listenerReacted(repo, subject, content)`: whether the listener added that reaction
 // (comments.mjs), which a run never removes;
 // `projects(repo)`: the projects the operator's grants let its runs write, ["acme/3"] (grants.mjs
-// allowProjects), none by default; `log`: the listener's.
+// allowProjects), none by default; `users(repo)`: the logins a run may assign there
+// (ALLOWED_USERS, narrowed by the repo's `users`), in lower case: none by default; `log`: the
+// listener's.
 export function createWriteChecks({
   lookup,
   bot = () => null,
+  users = () => [],
   needsInputLabel,
   projects = () => [],
   policies = null,
@@ -693,6 +742,39 @@ export function createWriteChecks({
         job: job ? { id: job_id, name: job.name ?? null } : null,
       },
     };
+  }
+
+  // A write's assignees → { added, removed }: the logins it adds and removes, those it sets in
+  // place of the target's split against GitHub's (look-ups `get` has already made).
+  async function assigneesOf({ repo, assignees: { logins, as } }, target, get) {
+    if (as === "added") return { added: logins, removed: [] };
+    if (as === "removed") return { added: [], removed: logins };
+    const issue =
+      target.number === null ? null : await get(repo, `/repos/${repo}/issues/${target.number}`);
+    const now = (issue?.assignees ?? []).map((u) => u?.login).filter((l) => typeof l === "string");
+    const has = (list, login) => list.some((l) => l.toLowerCase() === login.toLowerCase());
+    return {
+      added: logins.filter((l) => !has(now, l)),
+      removed: now.filter((l) => !has(logins, l)),
+    };
+  }
+
+  // Whether a run may assign `login`: an assignment notifies them, so one of the repo's allowed
+  // users or the App's bot, never Copilot, which would start working on it.
+  function assignable(repo, login) {
+    const name = login.toLowerCase();
+    if (COPILOT.has(name)) return false;
+    if (name === bot()?.toLowerCase()) return true;
+    return users(repo).includes(name);
+  }
+
+  // A write's milestone → { number, title } (GraphQL's comes looked up), null when it clears
+  // it, undefined when the repo has no such milestone.
+  async function milestoneOf(repo, { number, title }, get) {
+    if (number === null) return null;
+    if (title !== undefined) return { number, title };
+    const found = await get(repo, `/repos/${repo}/milestones/${number}`);
+    return found ? { number, title: found.title ?? null } : undefined;
   }
 
   // GitHub's answer to a run's write that went on (github-gateway.mjs wroteWrite()): the pull
@@ -1002,6 +1084,32 @@ export function createWriteChecks({
       const { open: _, ...blocked_by } = found;
       change.blocked_by = blocked_by;
     }
+    if (write.assignees) {
+      const assignees = await assigneesOf(write, target, get);
+      const refused = assignees.added.find((login) => !assignable(run.repo, login));
+      if (refused !== undefined) {
+        return refusal(
+          403,
+          COPILOT.has(refused.toLowerCase())
+            ? "a run doesn't assign Copilot"
+            : `a run assigns only the repository's allowed users or its own bot, not @${refused}`,
+        );
+      }
+      change.assignees = assignees;
+    }
+    if (write.milestone) {
+      let milestone;
+      try {
+        milestone = await milestoneOf(write.repo, write.milestone, get);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo} milestone: ${error.message ?? error}`);
+        return refusal(502, "the milestone can't be looked up on GitHub");
+      }
+      if (milestone === undefined) {
+        return refusal(404, `milestone ${write.milestone.number} isn't there`);
+      }
+      change.milestone = milestone;
+    }
     const rerun = write.actions.includes("rerun");
     if (rerun && reruns(run, target.sha) >= MAX_RERUNS) return tooMany(run, target.sha);
     if (write.project) {
@@ -1173,5 +1281,7 @@ function inRepo(issue, repo) {
 }
 
 const refusal = (status, message) => ({ status, message });
+// Copilot's logins, over REST and GraphQL (a Bot's login with `[bot]`, github-graphql.mjs).
+const COPILOT = new Set(["copilot", "copilot[bot]", "copilot-swe-agent", "copilot-swe-agent[bot]"]);
 // The issues a run labels besides its own, which never get or lose the needs-input label from it.
 const OTHERS_LABELLED = new Set(["sub_issue", "created_issue"]);

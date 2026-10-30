@@ -56,6 +56,12 @@ function fakeLookup() {
 const NODES = {
   R_repo: { __typename: "Repository", nameWithOwner: "Org/Repo" },
   L_bug: { __typename: "Label", name: "bug", repository: { nameWithOwner: "Org/Repo" } },
+  M_1: {
+    __typename: "Milestone",
+    number: 1,
+    title: "v1",
+    repository: { nameWithOwner: "Org/Repo" },
+  },
   ...Object.fromEntries(
     Object.keys(PULLS).map((n) => [
       `PR_${n}`,
@@ -131,10 +137,10 @@ test("gh pr create, edit, ready and ready --undo: a work run's own pull request,
   const work = run();
   const cases = [
     [GH_CREATE, CREATE, { pull_requests: "write" }, [{ number: null, head: "issue-1-x" }]],
-    // --label and --milestone after a create: labels are in the ceiling, a milestone isn't.
+    // --label and --milestone after a create: both in the ceiling (issue #453).
     [
       GH_CREATE_METADATA,
-      { pullRequestId: "PR_7", labelIds: ["L_bug"] },
+      { pullRequestId: "PR_7", labelIds: ["L_bug"], milestoneId: "M_1" },
       { pull_requests: "write" },
     ],
     [
@@ -167,11 +173,12 @@ test("gh pr create, edit, ready and ready --undo: a work run's own pull request,
     ["org/repo", "issue-1-x", "main"],
     ["org/repo", "issue-1-x", "main"],
   ]);
+  // Not on a pull request that isn't the run's.
   const milestone = await graphql(
     work,
-    call(GH_CREATE_METADATA, { pullRequestId: "PR_7", milestoneId: "M_1" }),
+    call(GH_CREATE_METADATA, { pullRequestId: "PR_8", milestoneId: "M_1" }),
   );
-  assert.match(milestone.refused.message, /can't milestone/);
+  assert.match(milestone.refused.message, /can't milestone on pr #8/);
 });
 
 test("REST's creates and edits: the same checks, with a token that writes pull requests", async () => {
