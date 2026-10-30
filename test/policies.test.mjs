@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -18,7 +17,7 @@ import {
   TIMEOUT_MS,
 } from "../listener/policies.mjs";
 import { mergeInput } from "../listener/reviews.mjs";
-import { tempDir } from "./helpers.mjs";
+import { tempDir, hasOpa } from "./helpers.mjs";
 
 const CAPABILITIES = {
   builtins: [
@@ -519,6 +518,36 @@ test("deny: no policy anywhere, one listing until the default branch moves", asy
   assert.equal(opa.calls.length, 0);
 });
 
+test("check: a review.rego that replaces Deckhand's without a word on bots is warned of", async (t) => {
+  const own = builtInPolicies().get("review.rego");
+  const wip = 'package deckhand\ndeny_review contains "wip" if "wip" in input.pr.labels\n';
+  const warned = async (operator, repoFiles = null) => {
+    const { policies } = setup(t, { builtIn: { "review.rego": own }, operator, repoFiles });
+    const operatorSide = (await policies.checkOperator()).warnings;
+    const repoSide = repoFiles ? (await policies.checkRepo("org/repo", "main")).warnings : [];
+    const described = (await policies.describe("org/repo", "main")).warnings;
+    return [operatorSide.length, repoSide.length, described.length];
+  };
+  // Deckhand's alone, or replaced by a file that names author_type (a comment will do): nothing.
+  assert.deepEqual(await warned({}), [0, 0, 0]);
+  assert.deepEqual(
+    await warned({ "review.rego": `${wip}# input.pr.author_type: bots too\n` }),
+    [0, 0, 0],
+  );
+  // An operator's or a repo's written before the default: said at start, at the onboarding
+  // check and on the Policies tab.
+  assert.deepEqual(await warned({ "review.rego": wip }), [1, 0, 1]);
+  assert.deepEqual(await warned({}, { "review.rego": wip }), [0, 1, 1]);
+  const { policies } = setup(t, {
+    builtIn: { "review.rego": own },
+    operator: { "review.rego": wip },
+  });
+  assert.match(
+    (await policies.checkOperator()).warnings[0],
+    /^review\.rego replaces Deckhand's default without a rule on `input\.pr\.author_type`: other bots' ready pull requests/,
+  );
+});
+
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
   const opa = fakeOpa({
     checked: (files) =>
@@ -870,18 +899,11 @@ test("opaRunner: an empty environment, the input on stdin, killed at its timeout
   assert.match(missing.stderr, /ENOENT/);
 });
 
-// With the real binary on the PATH (the listener's image has it): the policy as written.
-let opa = null;
-try {
-  execFileSync("opa", ["version"], { stdio: "ignore" });
-  opa = "opa";
-} catch {
-  // Not here: the fakes above cover the listener's side.
-}
+// With the real binary on the PATH (hasOpa): the policy as written.
 
 test(
   "the real opa: a denial, no network, a compile error",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa && "no opa on the PATH" },
   async (t) => {
     const tmp = tempDir(t);
     const policies = createPolicies({
@@ -924,7 +946,7 @@ test(
 
 test(
   "the real opa: a repo file drops the operator's of its name, a slow policy times out",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa && "no opa on the PATH" },
   async (t) => {
     // The operator's size.rego denies; the repo's, only `package deckhand`, drops it.
     const merged = setup(t, {

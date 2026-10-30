@@ -42,6 +42,10 @@ export const RULES = [
   "deny_github",
 ];
 
+// Deckhand's default for the reviews that start by themselves, which skips other bots' pull
+// requests: replacing it without a word about them gets a warning (botsReviewed()).
+const BOT_REVIEWS = "review.rego";
+
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
 
@@ -148,6 +152,10 @@ export async function denyKept(
   }
   return { messages, unread: !!unread };
 }
+
+// A failure's message (failure() below: GitHub couldn't give the input, a policy that didn't
+// compile or timed out), not a rule's: asked again later rather than held.
+export const isPolicyError = (message) => /^policy error/i.test(message);
 
 // One decision's evaluation, compile included. Long enough for `opa` to start and load a few
 // files, short enough that a loop in a policy doesn't hold a merge decision for long.
@@ -565,6 +573,8 @@ export function createPolicies({
         }
       }
     }
+    const bots = botsReviewed(files);
+    if (bots) warnings.push(bots);
     const unplaced = (text, message = text) => ({ file: null, row: null, message, text });
     try {
       const res = await staged(files, (cwd) =>
@@ -581,6 +591,22 @@ export function createPolicies({
       errors.push(unplaced(failure(what)[0], line(what)));
     }
     return { errors, warnings };
+  }
+
+  // A review.rego that replaces Deckhand's and never names `author_type`: other bots' pull
+  // requests, which the default skips, are reviewed now, at the operator's cost. Said, as a
+  // file of that name written before the default (wip labels, docs only) drops it unseen. A
+  // file that names it, a comment saying so will do, decided. → the warning, or null.
+  function botsReviewed(files) {
+    const text = files.get(BOT_REVIEWS);
+    let own = null;
+    try {
+      own = ownDefaults().get(BOT_REVIEWS);
+    } catch {
+      // Deckhand's can't be read: describe() says so.
+    }
+    if (text === undefined || !own || text === own || /\bauthor_type\b/.test(text)) return null;
+    return `${BOT_REVIEWS} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves. Copy the default's rule in to keep them skipped, or name \`author_type\` in a comment to say they should be reviewed`;
   }
 
   // The operator's policies over Deckhand's, checked: errors to say at start. None: no `opa`

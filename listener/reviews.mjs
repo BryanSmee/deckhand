@@ -46,7 +46,7 @@ import {
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { denyKept, INPUT_VERSION, passed, pullInput, RULES } from "./policies.mjs";
+import { denyKept, INPUT_VERSION, isPolicyError, passed, pullInput, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
@@ -486,6 +486,10 @@ const MERGEABLE_WAIT_MS = 3000;
 // How often the pull requests waiting for their checks are decided again (tick()), for a lost
 // `workflow_run` delivery and `review.merge_wait`'s deadline.
 const WAIT_TICK_MS = 5 * 60_000;
+
+// How many times an automatic review the policies failed to decide is asked again, a tick
+// apart (decideReview()): a GitHub or opa hiccup, not a policy that never compiles.
+const POLICY_RETRIES = 3;
 
 // Why pull request `number` must not be merged now, or null with what the merge needs: { pr,
 // method }. Each gate is asked of GitHub now, not from the webhook or the config alone: the
@@ -1086,12 +1090,12 @@ export function notMergedText(why) {
   return `**Not merged automatically** (\`review.merge\`): ${why}. It waits for a maintainer's review and merge.`;
 }
 
-// A `pull_request` delivery that may start a review by itself → { repo, base, pr, author }, or
-// null. Only a pull request that turned ready (marked ready, or opened as ready), on a branch
-// of the repo (never a fork's), opened by the App (Deckhand's own), a bot or an allowed user:
-// outsiders never cost a review. The allowlist lists people: other bots are left to the
-// policies' `deny_review` (policy/review.rego skips them unless a repo's file lets them).
-// `author`: the user, checked again with the repo's `users`; null for the App's and a bot's.
+// A `pull_request` delivery that may start a review by itself → { repo, base, pr, author, own,
+// bot } (openedBy()), or null. Only a pull request that turned ready (marked ready, or opened as
+// ready), on a branch of the repo (never a fork's), opened by the App (Deckhand's own), a bot or
+// an allowed user: outsiders never cost a review. The allowlist lists people: other bots are
+// left to the policies' `deny_review` (policy/review.rego skips them unless a file of that name
+// lets them).
 export function reviewCandidate(config, event, p, skip = () => null) {
   if (event !== "pull_request") return null;
   const pr = p.pull_request;
@@ -1102,14 +1106,21 @@ export function reviewCandidate(config, event, p, skip = () => null) {
   if (!repoAllowed(config, repo)) return skip(`${repo} not in ALLOWED_REPOS`);
   if (pr.state && pr.state !== "open") return skip(`review: #${pr.number} isn't open`);
   if (!headInRepo(pr, repo)) return skip(`review: #${pr.number} is from a fork`);
+  const by = openedBy(config, pr);
+  if (!by) return skip(`review: #${pr.number} by ${pr.user?.login ?? "?"}, not an allowed user`);
+  const base = p.repository.default_branch || "main";
+  return { repo, base, pr, ...by };
+}
+
+// Who opened `pr`, for the automatic review → { author, own, bot }: the App (`own`), another
+// bot (`bot`), or a user of ALLOWED_USERS (`author`, their login, checked again with the repo's
+// `users`; null for the App's and a bot's). Null for anyone else.
+export function openedBy(config, pr) {
   const login = pr.user?.login?.toLowerCase() ?? "";
   const own = !!config.bot && login === config.bot.toLowerCase();
   const bot = !own && pr.user?.type === "Bot";
-  if (!own && !bot && !config.users.includes(login)) {
-    return skip(`review: #${pr.number} by ${pr.user?.login ?? "?"}, not an allowed user`);
-  }
-  const base = p.repository.default_branch || "main";
-  return { repo, base, pr, author: own || bot ? null : pr.user.login };
+  if (!own && !bot && !config.users.includes(login)) return null;
+  return { author: own || bot ? null : pr.user.login, own, bot };
 }
 
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `accept(item)`:
@@ -1198,7 +1209,12 @@ export function createReviews({
   async function consider(event, payload, skip = () => null) {
     const found = reviewCandidate(config, event, payload, skip);
     if (!found) return null;
-    const { repo, base, pr, author } = found;
+    return decideReview(found, skip);
+  }
+
+  // consider()'s decision about `found` (reviewCandidate()), and a retry's (policyRecheck()):
+  // `tries`, the policy errors so far at this head.
+  async function decideReview({ repo, base, pr, author, own }, skip, tries = 0) {
     const key = taskKey(repo, prId(pr.number));
     const head = pr.head?.sha ?? null;
     // A wait for CI dropped at this head (ciDecide()), or a CI step stopped there without a
@@ -1218,22 +1234,60 @@ export function createReviews({
       if (author && !settings.users.includes(author.toLowerCase())) {
         return skip(`review: ${author} not in ${repo}'s users`);
       }
+      const opener = author
+        ? "Opened by an allowed user"
+        : own
+          ? "Deckhand's own pull request"
+          : "Opened by a bot (left to deny_review)";
       const denied = await denyReview(repo, base, pr, [
         passed("Ready for review"),
-        passed(
-          author
-            ? "Opened by an allowed user"
-            : pr.user?.login?.toLowerCase() === config.bot?.toLowerCase()
-              ? "Deckhand's own pull request"
-              : "Opened by a bot (left to deny_review)",
-        ),
+        passed(opener),
         passed("Not reviewed at this commit"),
       ]);
-      if (denied.length) return skip(`review: #${pr.number}, ${policyWhy("deny_review", denied)}`);
-      remember(key, head);
+      if (denied.length) {
+        const why = `review: #${pr.number}, ${policyWhy("deny_review", denied)}`;
+        // A rule's refusal holds at this head. A failure (GitHub couldn't give the input, opa
+        // timed out) would leave a pull request nothing reviews: no delivery comes for its
+        // head again, so tick() asks again, POLICY_RETRIES times at most.
+        if (!denied.some(isPolicyError) || tries >= POLICY_RETRIES) {
+          if (reviewed.get(key)?.policyRetry) keep(key, { policyRetry: undefined });
+          return skip(why);
+        }
+        keep(key, { policyRetry: { sha: head, base, tries: tries + 1 } });
+        return skip(`${why}; asked again in ${WAIT_TICK_MS / 60_000} minutes`);
+      }
+      remember(key, head, { policyRetry: undefined });
       log(`${key}: pull request #${pr.number} is ready, starting a review`);
       return reviewAfterCi({ repo, base, pr, settings, author });
     });
+  }
+
+  // `fields` on pull request `key`'s entry, its reviewed head untouched (remember() sets it).
+  function keep(key, fields) {
+    const entry = reviewed.get(key);
+    reviewed.set(key, { ...entry, at: entry?.at ?? now(), ...fields });
+    reviewed.save();
+  }
+
+  // A review the policies failed to decide (decideReview()), asked again with the pull request
+  // as GitHub has it now: dropped once it is closed, a draft, pushed to (a push isn't
+  // reviewed by itself), or its author no longer allowed.
+  async function policyRecheck(key) {
+    const retry = reviewed.get(key)?.policyRetry;
+    const at = parseKey(key);
+    if (!retry || !at) return null;
+    // Taken off first: only another policy error sets it again, whatever else ends this try.
+    keep(key, { policyRetry: undefined });
+    const drop = (why) => log(`${key}: not asking the policies again, ${why}`);
+    const pr = await getJson(github, at.repo, `/repos/${at.repo}/pulls/${at.number}`, [404]);
+    if (!pr || pr.state !== "open") return drop("the pull request isn't open");
+    if (pr.draft) return drop("the pull request is a draft again");
+    if (pr.head?.sha !== retry.sha) return drop("it was pushed to since");
+    if (!headInRepo(pr, at.repo)) return drop("it is from a fork");
+    const by = openedBy(config, pr);
+    if (!by) return drop("its author isn't an allowed user");
+    const found = { repo: at.repo, base: retry.base, pr, ...by };
+    return decideReview(found, (why) => log(`${key}: ${why}`), retry.tries);
   }
 
   // The policies, asked about pull request `pr`: what they decide, when one applies, is kept
@@ -1871,6 +1925,10 @@ export function createReviews({
     const ci = [...reviewed].filter(([, v]) => v.ciWaiting).map(([k]) => k);
     for (const key of ci) {
       await ciRecheck(key).catch((error) => log(`${key}: CI step: ${error.stack ?? error}`));
+    }
+    const retries = [...reviewed].filter(([, v]) => v.policyRetry).map(([k]) => k);
+    for (const key of retries) {
+      await policyRecheck(key).catch((error) => log(`${key}: review: ${error.stack ?? error}`));
     }
   }
 

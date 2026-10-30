@@ -1,13 +1,13 @@
 // The branch the listener creates at the base's head and links to a work run's issue
 // (linked-branch.mjs), and Deckhand's default policy for it (policy/gh-linked-branch.rego).
 import assert from "node:assert/strict";
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { branchName, createLinkedBranches } from "../listener/linked-branch.mjs";
 import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
-import { policyEngine, tempDir } from "./helpers.mjs";
+import { policyEngine, tempDir, hasOpa } from "./helpers.mjs";
 
 // A work run on org/repo#12, from main: `live` over it.
 const taskOf = (live = {}, task = {}) => ({
@@ -247,15 +247,9 @@ test("deny_link_branch: its input, a denial links nothing, the decision kept for
 });
 
 // The real `opa`, when the PATH has it (the listener's image does).
-let opa = false;
-try {
-  execFileSync("opa", ["version"], { stdio: "ignore" });
-  opa = true;
-} catch {}
-
 test(
   "the real opa: gh-linked-branch.rego links work runs' branches only, and a repo broadens it",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa && "no opa on the PATH" },
   async (t) => {
     const builtIn = builtInPolicies();
     assert.ok(builtIn.has("gh-linked-branch.rego"));

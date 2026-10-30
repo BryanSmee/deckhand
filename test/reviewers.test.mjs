@@ -2,7 +2,6 @@
 // requested, once per head commit, and what the policies' `deny_request_review` sees and
 // refuses, Deckhand's default file with the real opa.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { test } from "node:test";
 import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
@@ -16,18 +15,9 @@ import {
   openerOf,
   runFields,
 } from "../listener/reviewers.mjs";
-import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
+import { policyEngine, tempDir, testConfig, hasOpa } from "./helpers.mjs";
 
 const config = { ...testConfig({ ALLOWED_USERS: "alice,bob" }), bot: "deckhand-app[bot]" };
-
-const opa = (() => {
-  try {
-    execFileSync("opa", ["version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
 
 // Deckhand's own pull request #5, closing #12, ready at sha-1.
 const PR = {
@@ -343,7 +333,7 @@ const asked = (policies, mode, { custom_mode = false, reason = null, when = "rea
 
 test(
   "the real opa: gh-reviewers.rego requests on work runs' pull requests only",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa && "no opa on the PATH" },
   async (t) => {
     const policies = defaults(t);
     for (const reason of [null, "review-fix", "ci-fix", "conflict"]) {

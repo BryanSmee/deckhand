@@ -11,7 +11,7 @@ import { repoAllowed } from "./config.mjs";
 import { headInRepo, linkedIssue, prId, taskKey } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { BUILT_IN } from "./modes.mjs";
-import { pullInput } from "./policies.mjs";
+import { isPolicyError, pullInput } from "./policies.mjs";
 import { sameTask } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -106,9 +106,6 @@ export function requestInput({
     ...run,
   };
 }
-
-// A failure's message (policies.mjs failure()), not a rule's.
-const isPolicyError = (message) => /^policy error/i.test(message);
 
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `github`: the App's
 // calls; `runOf(key, pr)`: the record of the run whose pull request `pr` is, on task `key`

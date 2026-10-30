@@ -1,7 +1,6 @@
 // Pull request reviews: the final message's format, the review posted from it, and which
 // pull requests get one by themselves (once per head commit).
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -26,18 +25,9 @@ import {
   reviewLoop,
   stepsGoing,
 } from "../listener/reviews.mjs";
-import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
+import { policyEngine, tempDir, testConfig, hasOpa } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
-
-const opa = (() => {
-  try {
-    execFileSync("opa", ["version"], { stdio: "ignore" });
-    return true;
-  } catch {
-    return false;
-  }
-})();
 
 const MESSAGE = `Adds the review mode. The token stays read-only, but one decision has no test.
 
@@ -297,6 +287,8 @@ test("reviewCandidate: ready pull requests of the repo, by the App, a bot or an 
     base: "trunk",
     pr: delivery().pull_request,
     author: "alice",
+    own: false,
+    bot: false,
   });
   // Opened as ready, or marked ready; not a draft, a push, an edit or a reopening.
   assert.ok(candidate(delivery("opened")));
@@ -306,9 +298,18 @@ test("reviewCandidate: ready pull requests of the repo, by the App, a bot or an 
   }
   assert.equal(reviewCandidate(config, "issue_comment", delivery()), null);
   // Deckhand's own: no user to check.
-  assert.equal(candidate(delivery("opened", {}, "deckhand-app[bot]")).author, null);
+  const own = candidate(delivery("opened", {}, "deckhand-app[bot]"));
+  assert.deepEqual([own.author, own.own, own.bot], [null, true, false]);
   // Another bot: the allowlist lists people, so policy/review.rego decides (deny_review).
-  assert.equal(candidate(delivery("opened", {}, "dependabot[bot]")).author, null);
+  const bot = candidate(delivery("opened", {}, "dependabot[bot]"));
+  assert.deepEqual([bot.author, bot.own, bot.bot], [null, false, true]);
+  // Without the App's login, its pull requests are another bot's.
+  const unknown = reviewCandidate(
+    { ...config, bot: null },
+    "pull_request",
+    delivery("opened", {}, "deckhand-app[bot]"),
+  );
+  assert.deepEqual([unknown.own, unknown.bot], [false, true]);
   // Never a fork's (a bot's neither), an outsider's, or in a repo the operator doesn't allow.
   const fork = { head: { sha: "x", repo: { full_name: "mallory/repo" } } };
   assert.equal(candidate(delivery("ready_for_review", fork)), null);
@@ -450,7 +451,7 @@ function reviewPolicies(t, repoFile = null) {
 
 test(
   "the real opa: review.rego skips other bots' pull requests, unless the repo's file drops it",
-  { skip: !opa && "no opa on the PATH" },
+  { skip: !hasOpa && "no opa on the PATH" },
   async (t) => {
     const dependabot = delivery("ready_for_review", {}, "dependabot[bot]");
     const skips = [];
@@ -472,8 +473,42 @@ test(
     await broad.reviews.consider("pull_request", dependabot);
     assert.equal(broad.accepted.length, 1);
     assert.equal(broad.accepted[0].author, undefined);
+    // The docs' examples (docs/repo-config.md#reviewrego): Dependabot's only, then every bot's,
+    // neither warned of by the config check.
+    const [, dependabotOnly, everyBot] = docsReviewBlocks();
+    const renovate = delivery("ready_for_review", {}, "renovate[bot]");
+    for (const [file, reviewed] of [
+      [dependabotOnly, [true, false]],
+      [everyBot, [true, true]],
+    ]) {
+      const got = [];
+      for (const pr of [dependabot, renovate]) {
+        const one = setup(t, undefined, reviewPolicies(t, file));
+        await one.reviews.consider("pull_request", pr);
+        got.push(one.accepted.length === 1);
+      }
+      assert.deepEqual(got, reviewed, file);
+      const { policies } = reviewPolicies(t, file);
+      assert.deepEqual(await policies.checkRepo("org/repo", "main"), { errors: [], warnings: [] });
+    }
   },
 );
+
+// docs/repo-config.md's ```rego blocks under its review.rego marker, their text.
+function docsReviewBlocks() {
+  const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+  const from = docs.indexOf("<!-- review.rego:");
+  const until = docs.indexOf("**Upgrading with a `review.rego`", from);
+  assert.ok(from > 0 && until > from);
+  return [...docs.slice(from, until).matchAll(/```rego\n([\s\S]*?)```/g)].map((m) => m[1]);
+}
+
+test("docs/repo-config.md's review.rego rule is policy/review.rego's", () => {
+  const [excerpt] = docsReviewBlocks();
+  const rule = excerpt.replace(/^# policy\/review\.rego.*\n/, "");
+  assert.ok(rule.startsWith("deny_review contains"));
+  assert.ok(builtInPolicies().get("review.rego").includes(rule));
+});
 
 test("createReviews: Deckhand's pull request is its issue's task, the review goes on it", async (t) => {
   const { reviews, accepted } = setup(t);
