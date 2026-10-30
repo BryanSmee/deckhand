@@ -18,8 +18,9 @@ import {
 // repo (github-writes.mjs resolveBlocker()). Brainstorms
 // comment elsewhere in theirs, which the default policy refuses
 // (docs/repo-config.md#the-github-input). Work runs, and the repo's modes that aren't light,
-// manage the issues they file as a brainstorm does: they label them and create the labels
-// (issue #443); a repo that doesn't want it refuses it with `deny_github`, per mode if it likes.
+// label their issue, its sub-issues and the issues they file, and create labels (issue #443); a
+// brainstorm only creates labels. A repo that doesn't want it refuses it with `deny_github`,
+// per mode if it likes.
 const WORK_CEILING = {
   own_issue: ["edit", "comment", "label", "link"],
   own_pr: ["edit", "comment", "label", "ready", "draft"],

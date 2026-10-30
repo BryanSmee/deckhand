@@ -160,7 +160,7 @@ test("the ceilings: what each mode can ever write", () => {
   assert.deepEqual(aboveCeiling(work, "own_issue", ["edit", "comment", "label"]), []);
   assert.deepEqual(aboveCeiling(work, "own_pr", ["edit", "label"]), []);
   assert.deepEqual(aboveCeiling(work, "sub_issue", ["link", "edit"]), []);
-  // It manages the issues it files as a brainstorm does: their labels, and new labels.
+  // It labels its sub-issues and the issues it files, and creates labels.
   assert.deepEqual(aboveCeiling(work, "sub_issue", ["label"]), []);
   assert.deepEqual(aboveCeiling(work, "created_issue", ["label"]), []);
   assert.deepEqual(aboveCeiling(work, "label", ["create"]), []);
@@ -760,7 +760,12 @@ test(
         issue: 1,
         action,
         actions: [action],
-        target: { kind, number: kind.startsWith("new") ? null : 7, labels: [], author: "a" },
+        target: {
+          kind,
+          number: kind.startsWith("new") || kind === "label" ? null : 7,
+          labels: [],
+          author: "a",
+        },
         change: { fields: ["body"], labels_added, labels_removed: [], ...more },
       }));
     assert.deepEqual(await ask("brainstorm", "edit", "own_issue"), []);

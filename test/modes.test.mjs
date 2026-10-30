@@ -55,7 +55,7 @@ test("every built-in mode's prompt is in prompts/, and copied into the listener'
   }
 });
 
-test("work runs and the repo's other modes manage their issues' labels as a brainstorm does", () => {
+test("work runs and the repo's other modes label their issues and create labels; a brainstorm only creates them", () => {
   const { work, brainstorm } = Object.fromEntries(
     ["work", "brainstorm"].map((m) => [m, MODES[m].ceiling]),
   );
@@ -63,6 +63,7 @@ test("work runs and the repo's other modes manage their issues' labels as a brai
   assert.deepEqual(work.label, ["create"]);
   for (const kind of ["own_issue", "sub_issue", "created_issue"]) {
     assert.ok(work[kind].includes("label"), kind);
+    assert.ok(!brainstorm[kind].includes("label"), kind);
   }
   // Not another's issue, and never a label's settings.
   assert.equal(work.other_issue, undefined);
