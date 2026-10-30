@@ -139,7 +139,22 @@ export function createBrokerHttp(ctx) {
       return sendJson(res, { allowed: false }, 403);
     }
     const task = await taskAt(ip);
+    // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
+    const other = task ? null : await ctx.images.egressFor?.(ip, host);
+    if (other) {
+      if (!other.allowed) log(`Egress: refused ${host} for ${ip} (a build or an install)`);
+      return sendJson(res, other);
+    }
     const live = task?.live;
+    // Its pod still installs its agent (an init container, runner/kubernetes.mjs): the
+    // install's hosts only, tunnelled, until the sandbox itself starts.
+    if (task && (await ctx.runner.installing?.(task.name))) {
+      const hosts = agentFor(live.record?.agent).install(config).hosts ?? [];
+      const answer = egressPolicy(host, hosts, [], [], [], { decrypt: false });
+      if (!answer.allowed)
+        log(`Egress: refused ${host} for ${taskKey(task.repo, task.id)}'s agent install`);
+      return sendJson(res, answer);
+    }
     // Its container engine's plain HTTP is cached too, but its HTTPS never decrypted: its
     // builds and containers don't trust Deckhand's CA. So GitHub's hosts aren't relayed for it
     // but tunnelled, anonymously (the gateway gives its address no token): an exception #411

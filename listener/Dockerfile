@@ -45,6 +45,22 @@ RUN case "$TARGETARCH" in \
     && chmod 755 /usr/local/bin/opa \
     && apk del .opa \
     && opa version
+# buildctl: the Kubernetes runner builds repo images with a BuildKit daemon in the cluster
+# (runner/kube-images.mjs). The client only, from BuildKit's release, pinned by version and
+# by the sha256 of each architecture's tarball (its release's digests).
+ARG BUILDKIT_VERSION=0.34.1
+RUN case "$TARGETARCH" in \
+      amd64) sum=a59539daf547fe0958efe2d07e41c0a6944e1112a66d7e519ec1cf5b673ef15b ;; \
+      arm64) sum=c8c97b84baf89dfe0ea85063ac24ad88eb909979ea476ce3ef9e8e11e60ebef8 ;; \
+      *) echo "no buildctl for $TARGETARCH" >&2; exit 1 ;; \
+    esac \
+    && apk add --no-cache --virtual .buildctl curl \
+    && curl -fsSLo /tmp/buildkit.tgz "https://github.com/moby/buildkit/releases/download/v${BUILDKIT_VERSION}/buildkit-v${BUILDKIT_VERSION}.linux-${TARGETARCH}.tar.gz" \
+    && echo "$sum  /tmp/buildkit.tgz" | sha256sum -c - \
+    && tar -xzf /tmp/buildkit.tgz -C /usr/local bin/buildctl \
+    && rm /tmp/buildkit.tgz \
+    && apk del .buildctl \
+    && buildctl --version
 WORKDIR /app
 COPY listener/*.mjs listener/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/

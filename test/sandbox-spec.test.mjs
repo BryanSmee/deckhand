@@ -69,7 +69,17 @@ test("sandboxSpec: as uid 1000, no capabilities, no shots volume, the agent read
   assert.deepEqual(spec.caps, []);
   // Its screenshots go to the broker (run-files.mjs), not into a volume of the listener's.
   assert.deepEqual(spec.volumes, [
-    { kind: "agent", name: "deckhand-claude-code", path: "/opt/claude-code", readOnly: true },
+    {
+      kind: "agent",
+      name: "deckhand-claude-code",
+      path: "/opt/claude-code",
+      readOnly: true,
+      // How to fill it, for a runner that installs it in the sandbox's own pod.
+      install: {
+        command: "deckhand-install-claude-code",
+        env: { CLAUDE_CODE_VERSION: "2.0.0" },
+      },
+    },
     { kind: "session", name: "deckhand-org-app-12-workspace", path: "/workspace" },
     { kind: "session", name: "deckhand-org-app-12-claude", path: "/home/node/.claude" },
     { kind: "cache", name: "cache-npm", path: "/home/node/.npm" },

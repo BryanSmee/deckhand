@@ -18,12 +18,17 @@
 //     fails its run, saying why (follow()), and a leftover one is removed rather than waited
 //     for (wait()).
 //
+//   - A repo's image, the agent's install and the caches are kube-images.mjs's: the agent is a
+//     claim mounted read-only, or, when there is none, installed by an init container into an
+//     emptyDir (podSpec()); caches are claims too, when the operator sets their class.
+//
 // Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine,
-// a repo's Dockerfile, preview hooks and host mounts. Nor caches, which runs go without.
+// preview hooks and host mounts.
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
+import { proxyEnv } from "../egress.mjs";
 import { createInbox } from "./inbox.mjs";
 import { splitLines } from "./lines.mjs";
 import { aliasOf } from "./networks.mjs";
@@ -45,12 +50,23 @@ const API_BACKOFF_MS = [1000, 2000, 5000, 10_000];
 const STUCK_MS = 2 * 60_000;
 const UNKNOWN_MS = 5 * 60_000;
 
+// How long installing() keeps its answer: the egress proxy asks at each connection.
+const INSTALLING_TTL_MS = 1000;
+
 // The proxy's addresses, as networks.mjs caches them.
 const PROXY_TTL_MS = 10000;
 const PROXY_RETRY_MS = 2000;
 
 // The sandbox's container, in its Pod and in its log's URL.
 const CONTAINER = "sandbox";
+
+// Who installs an agent on Kubernetes (kube-images.mjs, and the init container of podSpec()):
+// neither root, which Pod Security `restricted` refuses, nor the sandbox's user, who mustn't
+// own what the next sandbox runs.
+export const INSTALL_USER = { uid: 1001, gid: 1001 };
+
+// The annotation of a pod whose init container installs its agent (installing()).
+const AGENT_INIT = "deckhand.agent-init";
 
 // What sets a sandbox's pod and its Secret apart from the rest of the namespace.
 const ROLE = "deckhand.role";
@@ -163,16 +179,42 @@ export function isolationProblem(policies, labels) {
 // A sandbox spec (sandbox-spec.mjs) as a Pod, Pod Security `restricted` throughout: its user,
 // no privilege gain, no capability, the runtime's seccomp profile. `secret`: the Secret its
 // environment comes from; `env`: values that aren't secrets (where the run's files are);
-// `aliases`: hostAliases; `claims`: volume name → its claim's.
+// `aliases`: hostAliases; `claims`: volume name → its claim's; `pullSecret`: the registry's
+// (KUBERNETES_REGISTRY_SECRET); `agentInit`: { volume, image, command, env } when the agent
+// has no claim: an emptyDir, which an init container fills as INSTALL_USER before the
+// sandbox mounts it read-only.
 export function podSpec(
   { name, image, user, limits, caps = [], volumes = [] },
-  { pod, labels, annotations, secret, env = {}, aliases = [], claims = {} },
+  {
+    pod,
+    labels,
+    annotations,
+    secret,
+    env = {},
+    aliases = [],
+    claims = {},
+    pullSecret = null,
+    agentInit = null,
+  },
 ) {
   if (!user) throw new Error("the sandbox spec has no user");
   if (!limits) throw new Error("the sandbox spec has no limits");
   if (caps.length) throw new Error(`the kubernetes runner adds no capabilities (${caps})`);
   const resources = { cpu: String(limits.cpus), memory: quantity(limits.memory) };
   const claimed = [...new Set(volumes.map((v) => v.name))];
+  const hardened = {
+    allowPrivilegeEscalation: false,
+    capabilities: { drop: ["ALL"] },
+    runAsNonRoot: true,
+    seccompProfile: { type: "RuntimeDefault" },
+  };
+  const init = agentInit && claimed.includes(agentInit.volume) ? agentInit : null;
+  const mountOf = (v) => ({
+    name: `v${claimed.indexOf(v.name)}`,
+    mountPath: v.path,
+    ...(v.readOnly ? { readOnly: true } : {}),
+    ...(v.subpath ? { subPath: v.subpath } : {}),
+  });
   return {
     apiVersion: "v1",
     kind: "Pod",
@@ -187,6 +229,7 @@ export function podSpec(
       shareProcessNamespace: true,
       terminationGracePeriodSeconds: KILL_GRACE_S,
       hostAliases: aliases,
+      ...(pullSecret ? { imagePullSecrets: [{ name: pullSecret }] } : {}),
       // No cluster DNS: its only names are hostAliases'. A resolver that answers nothing fails
       // a lookup at once, where the cluster's, blocked by the NetworkPolicy, would time out on
       // every search domain.
@@ -203,6 +246,27 @@ export function podSpec(
         fsGroupChangePolicy: "OnRootMismatch",
         seccompProfile: { type: "RuntimeDefault" },
       },
+      ...(init
+        ? {
+            initContainers: [
+              {
+                name: "agent-install",
+                image: init.image,
+                command: [init.command],
+                env: Object.entries(init.env).map(([k, v]) => ({ name: k, value: String(v) })),
+                resources: { limits: resources, requests: resources },
+                securityContext: {
+                  ...hardened,
+                  runAsUser: INSTALL_USER.uid,
+                  runAsGroup: INSTALL_USER.gid,
+                },
+                volumeMounts: volumes
+                  .filter((v) => v.name === init.volume)
+                  .map((v) => ({ ...mountOf(v), readOnly: false })),
+              },
+            ],
+          }
+        : {}),
       containers: [
         {
           name: CONTAINER,
@@ -215,30 +279,24 @@ export function podSpec(
           // As much as it may use is held for it: a node without the room leaves it Pending
           // rather than starving it later.
           resources: { limits: resources, requests: resources },
-          securityContext: {
-            allowPrivilegeEscalation: false,
-            capabilities: { drop: ["ALL"] },
-            runAsNonRoot: true,
-            seccompProfile: { type: "RuntimeDefault" },
-          },
-          volumeMounts: volumes.map((v) => ({
-            name: `v${claimed.indexOf(v.name)}`,
-            mountPath: v.path,
-            ...(v.readOnly ? { readOnly: true } : {}),
-            ...(v.subpath ? { subPath: v.subpath } : {}),
-          })),
+          securityContext: hardened,
+          volumeMounts: volumes.map(mountOf),
         },
       ],
-      volumes: claimed.map((volume, i) => ({
-        name: `v${i}`,
-        persistentVolumeClaim: {
-          claimName: claims[volume] ?? kubeName(volume),
-          // Read-only for each of its mounts: the claim too, then.
-          ...(volumes.filter((v) => v.name === volume).every((v) => v.readOnly)
-            ? { readOnly: true }
-            : {}),
-        },
-      })),
+      volumes: claimed.map((volume, i) =>
+        volume === init?.volume
+          ? { name: `v${i}`, emptyDir: {} }
+          : {
+              name: `v${i}`,
+              persistentVolumeClaim: {
+                claimName: claims[volume] ?? kubeName(volume),
+                // Read-only for each of its mounts: the claim too, then.
+                ...(volumes.filter((v) => v.name === volume).every((v) => v.readOnly)
+                  ? { readOnly: true }
+                  : {}),
+              },
+            },
+      ),
     },
   };
 }
@@ -293,7 +351,8 @@ export function createKubernetesRunner({
   timers, // inbox.mjs poll()'s clock
   watchMs = WATCH_MS,
 }) {
-  const { pendingMs, storageClass, sessionSize } = config.kubernetes;
+  const { pendingMs, storageClass, sessionSize, cacheStorageClass, registrySecret } =
+    config.kubernetes;
   const inbox = createInbox({ inboxDir, timers });
   // Runs whose Secret exists before their pod does: relink() leaves them alone.
   const starting = new Set();
@@ -313,7 +372,8 @@ export function createKubernetesRunner({
     const { run, name, labels = {}, env: values = {}, engine, ca, digest, volumes = [] } = spec;
     if (engine) throw new Error("the kubernetes runner runs no container engine");
     for (const v of volumes) {
-      if (v.kind === "mount" || v.kind === "cache") {
+      // A cache's claim is images.mjs caches()'s, made only with a class to make it of.
+      if (v.kind === "mount" || (v.kind === "cache" && !cacheStorageClass)) {
         throw new Error(
           `the kubernetes runner mounts no ${v.kind === "mount" ? "host path" : "cache"} (${v.path})`,
         );
@@ -335,6 +395,7 @@ export function createKubernetesRunner({
       for (const v of volumes.filter((v) => v.kind === "session")) {
         if (await ensureClaim(v.name)) made.push(claimPath(v.name));
       }
+      const agentInit = await agentInstall(volumes.find((v) => v.kind === "agent"));
       const secret = secretName(run);
       await api.create("secrets", {
         apiVersion: "v1",
@@ -353,11 +414,17 @@ export function createKubernetesRunner({
         podSpec(spec, {
           pod: kubeName(name),
           labels: podLabels,
-          annotations: { ...labels, "deckhand.run": run },
+          annotations: {
+            ...labels,
+            "deckhand.run": run,
+            ...(agentInit ? { [AGENT_INIT]: agentInit.volume } : {}),
+          },
           secret,
           // Not secrets: where the run's files are.
           env: { ...inbox.env(config.brokerUrl, ca, digest), SANDBOX_TAG_STDERR: "1" },
           aliases,
+          pullSecret: registrySecret ? kubeName(registrySecret) : null,
+          agentInit,
         }),
       );
     } catch (error) {
@@ -369,6 +436,21 @@ export function createKubernetesRunner({
       starting.delete(run);
     }
     return { engine: null };
+  }
+
+  // The init container that installs the agent when it has no claim (kube-images.mjs
+  // installAgent() made none: no KUBERNETES_AGENT_STORAGE_CLASS), else null. From the base
+  // image, which has the installers whatever a repo's image did with them, through the egress
+  // proxy, which lets it reach its install's hosts only while the pod is Pending
+  // (installing()).
+  async function agentInstall(agent) {
+    if (!agent?.install || (await api.find(claimPath(agent.name)))) return null;
+    return {
+      volume: agent.name,
+      image: config.image,
+      command: agent.install.command,
+      env: { ...agent.install.env, ...proxyEnv(config) },
+    };
   }
 
   // Fail closed: without the namespace's NetworkPolicies, a sandbox would reach anything.
@@ -652,6 +734,20 @@ export function createKubernetesRunner({
     return Boolean(await api.find(claimPath(`${name}-${agent.session.volume}`)));
   }
 
+  // Whether the sandbox's init container is installing its agent: its pod has one, and is
+  // still Pending (its sandbox container hasn't started). Looked up again after a few seconds.
+  const pendingInstalls = new Map(); // name → { at, installing }
+  async function installing(name) {
+    const seen = pendingInstalls.get(name);
+    if (seen && now() - seen.at < INSTALLING_TTL_MS) return seen.installing;
+    const pod = await api.find(podPath(name));
+    const answer =
+      Boolean(pod?.metadata?.annotations?.[AGENT_INIT]) && pod.status?.phase === "Pending";
+    if (answer) pendingInstalls.set(name, { at: now(), installing: true });
+    else pendingInstalls.delete(name);
+    return answer;
+  }
+
   // Its pod's IPs, what the egress proxy and the broker see it call from.
   async function address(name) {
     const status = (await api.find(podPath(name)))?.status;
@@ -712,25 +808,9 @@ export function createKubernetesRunner({
     hasSession,
     address,
     engineAddress: async () => null,
+    installing,
     relink,
     proxyAddresses,
-  };
-}
-
-// What ../images.mjs asks of the backend, on Kubernetes: the base image only, which the nodes
-// pull (repo images: a builder and a registry, later), and the agents' claims, which have to
-// be there already: nothing installs into them yet (images.mjs installAgent()).
-export function createKubernetesImages({ config, api }) {
-  const refused = { code: 1, out: "", err: "the kubernetes runner builds no images" };
-  return {
-    id: async (ref) => (ref === config.image ? ref : null),
-    build: async () => refused,
-    tags: async () => null,
-    remove: async () => {},
-    volumeExists: async (name) =>
-      Boolean(await api.find(`persistentvolumeclaims/${kubeName(name)}`)),
-    createVolume: async () => ({ code: 1, out: "", err: "the kubernetes runner makes no volumes" }),
-    removeVolume: async () => {},
   };
 }
 

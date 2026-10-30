@@ -894,7 +894,13 @@ grants. The listener installs each version before the first run that needs it, a
 its files don't belong to the sandboxes' user, uid 1000, either. A Claude Code install that
 finds the volume owned by uid 1000 (from an older Deckhand) takes it over and reinstalls from
 npm rather than keep what a sandbox could have changed. A sandbox whose version isn't
-installed stops with a message instead of installing it.
+installed stops with a message instead of installing it. On Kubernetes, whose Pod Security
+`restricted` allows no root, the install runs as uid 1001 instead (a pod of its own into a
+shared claim, or each sandbox's init container into an `emptyDir`): still not the sandboxes'
+user, and the sandbox mounts it read-only all the same. Through the egress proxy, it reaches
+its agent's install hosts only, tunnelled; an init container gets them only while its pod is
+Pending, never the run's own hosts, and the sandbox never gets them
+([Agents on Kubernetes](setup.md#agents-on-kubernetes)).
 
 What is installed is pinned: Claude Code and Codex by their npm version, the Antigravity CLI
 by the sha256 of its release's tarball (`AGY_SHA256`, the operator's setting, not the
@@ -1096,7 +1102,9 @@ apply.
 **Preview hooks and Dockerfiles** are the most powerful things a `.deckhand.yaml` asks for:
 a preview hook holds the Docker socket, so it is root on the host (the App's key in
 `/data`, the Claude credential, every repository's volumes); a Dockerfile is built on the
-host's Docker with its network. A repository whose config has `preview` without
+host's Docker with its network (on Kubernetes, by the cluster's BuildKit daemon, through the
+egress proxy with the repo's hosts only, and pushed to the operator's registry:
+[Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `preview` without
 `allow_preview`, or `dockerfile` without `allow_dockerfile`, gets neither: its runs stop
 and the reply on the issue says which grant is missing, like refused mounts, and its preview
 hook doesn't run (the listener's logs say why:

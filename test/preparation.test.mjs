@@ -162,8 +162,8 @@ test("a research run without allow_research stops before anything is asked for",
 // what it asked of the images. `imageFor`: the images' own, `written`: what goes to its log,
 // `ca`: the egress proxy's CA certificate, or null.
 // `runner`: RUNNER; `grant`: the repo's file in the grants folder; `yaml`: its config;
-// `keepsCaches`: the images'; `linkedBranches`: linked-branch.mjs's; `cancel`: cancelled while
-// its image is looked up.
+// `keepsCaches`, `noCaches`: the images'; `linkedBranches`: linked-branch.mjs's; `cancel`:
+// cancelled while its image is looked up; `env`: more of the operator's settings.
 async function workRun(
   t,
   head,
@@ -177,6 +177,8 @@ async function workRun(
     keepsCaches,
     linkedBranches,
     cancel = false,
+    noCaches,
+    env = {},
   } = {},
 ) {
   const dir = realpathSync(tempDir(t));
@@ -184,7 +186,7 @@ async function workRun(
     mkdirSync(join(dir, "org"));
     writeFileSync(join(dir, "org/repo.yaml"), grant);
   }
-  const config = testConfig({ GRANTS_DIR: dir, RUNNER: runner });
+  const config = testConfig({ GRANTS_DIR: dir, RUNNER: runner, ...env });
   const calls = [];
   const ctx = {
     config,
@@ -192,6 +194,7 @@ async function workRun(
     shotsDir: tempDir(t),
     images: {
       keepsCaches,
+      noCaches,
       installAgent: async () => {},
       imageFor: async (args) => {
         if (cancel) task.live.cancelled = { by: "alice", at: 1 };
@@ -313,15 +316,40 @@ test("on the Kubernetes runner, a granted Dockerfile stops the run with a reply 
     }),
     (error) =>
       error instanceof RunError &&
-      /^Claude can't run here: the operator runs sandboxes on the kubernetes runner, which doesn't support its own image \(`dockerfile`\) yet/.test(
+      /^Claude can't run here: the operator runs sandboxes on the kubernetes runner, which doesn't support its own image \(`dockerfile`\) without a registry \(`KUBERNETES_REGISTRY`\) yet/.test(
         error.message,
       ),
   );
 });
 
+test("on the Kubernetes runner with a registry, a granted Dockerfile builds, with the run's hosts", async (t) => {
+  const asked = [];
+  const { parts } = await workRun(t, "org/repo", {
+    runner: "kubernetes",
+    env: { KUBERNETES_REGISTRY: "registry.example.com/dh" },
+    grant: "allow_dockerfile: true\nhosts: [pypi.org]\n",
+    yaml: "dockerfile: Dockerfile\n",
+    imageFor: async (request) => {
+      asked.push(request);
+      return "registry.example.com/dh/repo:abc";
+    },
+  });
+  assert.equal(parts.prepared.image, "registry.example.com/dh/repo:abc");
+  assert.equal(asked[0].dockerfile, "Dockerfile");
+  // What the build may reach through the egress proxy: the run's own hosts.
+  assert.ok(asked[0].access.hosts.includes("pypi.org"));
+  assert.ok(Array.isArray(asked[0].access.trusted));
+});
+
 test("on a runner that keeps no caches, a work run goes without and says so", async (t) => {
   const { notes } = await workRun(t, "org/repo", { runner: "kubernetes", keepsCaches: false });
-  assert.ok(notes.includes("No caches: the kubernetes runner keeps none yet"));
+  assert.ok(notes.includes("No caches: the kubernetes runner keeps none"));
+  const said = await workRun(t, "org/repo", {
+    runner: "kubernetes",
+    keepsCaches: false,
+    noCaches: "no KUBERNETES_CACHE_STORAGE_CLASS is set",
+  });
+  assert.ok(said.notes.includes("No caches: no KUBERNETES_CACHE_STORAGE_CLASS is set"));
 });
 
 test("a work run trusts the egress proxy's CA without cached hosts: its GitHub calls are relayed", async (t) => {

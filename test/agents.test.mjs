@@ -229,6 +229,7 @@ test("Claude Code's env: the run's secret in place of the credential, calls to t
     version: "9.9.9",
     versionVar: "CLAUDE_CODE_VERSION",
     command: "deckhand-install-claude-code",
+    hosts: ["registry.npmjs.org"],
   });
 });
 
@@ -355,6 +356,7 @@ test("Codex: installed like Claude Code, the run's secret as its key, no mid-run
     version: "0.162.1",
     versionVar: "CODEX_VERSION",
     command: "deckhand-install-codex",
+    hosts: ["registry.npmjs.org"],
   });
   assert.deepEqual(codex.env(config, "run-secret"), {
     OPENAI_API_KEY: "run-secret",

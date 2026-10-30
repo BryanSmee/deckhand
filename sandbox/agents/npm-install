@@ -1,6 +1,6 @@
 #!/bin/bash
 # Installs an npm package at one version into an agent's shared volume, for its installer
-# (agents/<name>/install, run as root): npm-install <volume> <package> <version> <bin> <name>.
+# (agents/<name>/install, run as root, or as uid 1001 on Kubernetes): npm-install <volume> <package> <version> <bin> <name>.
 # Nothing if that version's <bin> is already there.
 #
 # One folder per version, installed aside then renamed, so two installs at once can't leave
@@ -16,6 +16,8 @@ root=$1 package=$2 version=$3 bin=$4 name=$5
 umask 022
 home=$root/$version
 [ -x "$home/node_modules/.bin/$bin" ] && exit 0
+# npm's cache in a folder of its own: on Kubernetes, the install's user (uid 1001) has no home.
+export npm_config_cache=${npm_config_cache:-$(mktemp -d)}
 tmp=$(mktemp -d "$root/.install-XXXXXX")
 chmod 755 "$tmp"
 {

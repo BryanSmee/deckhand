@@ -169,3 +169,76 @@ test("the pre-#407 gh's pr ready prints the command that works now, not 'not fou
   );
   assert.doesNotMatch(res.stderr, /not found/);
 });
+
+// --- Kubernetes: the builder, install pods and init containers ----------------------------------
+
+test("egress: the runner's builder and installs answered by the images, an installing sandbox its install's hosts only", async (t) => {
+  const config = testConfig();
+  config.brokerPort = 0;
+  config.brokerUrl = "http://127.0.0.1:0";
+  const broker = createBroker({});
+  let installing = true;
+  const ctx = {
+    config,
+    broker,
+    log: () => {},
+    runner: {
+      // The test is the egress proxy.
+      proxyAddresses: async () => ["127.0.0.1"],
+      address: async () => ["10.1.0.2"],
+      engineAddress: async () => null,
+      installing: async (name) => name === "a" && installing,
+    },
+    images: {
+      egressFor: async (ip, host) =>
+        ip === "10.9.9.9"
+          ? {
+              allowed: host === "pypi.org",
+              private: false,
+              cache: false,
+              decrypt: false,
+              relay: false,
+            }
+          : null,
+    },
+    tasks: new Map([
+      [
+        "org/a#1",
+        {
+          name: "a",
+          repo: "org/a",
+          id: "1",
+          live: {
+            secret: broker.register("org/a"),
+            hosts: ["github.com", "pypi.org"],
+            trusted: [],
+            record: { agent: "claude" },
+          },
+        },
+      ],
+    ]),
+  };
+  const server = createBrokerHttp(ctx).listen();
+  await once(server, "listening");
+  t.after(() => server.close());
+  const ask = async (ip, host) =>
+    (await fetch(`http://127.0.0.1:${config.brokerPort}/egress?ip=${ip}&host=${host}`)).json();
+  // The builder: the images' answer.
+  assert.equal((await ask("10.9.9.9", "pypi.org")).allowed, true);
+  assert.equal((await ask("10.9.9.9", "evil.example")).allowed, false);
+  // A sandbox whose init container installs its agent: npm's registry, tunnelled, and
+  // nothing of the run's own hosts until the sandbox starts.
+  assert.deepEqual(await ask("10.1.0.2", "registry.npmjs.org"), {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: false,
+  });
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
+  installing = false;
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
+  assert.equal((await ask("10.1.0.2", "registry.npmjs.org")).allowed, false);
+  // Anyone else: refused.
+  assert.equal((await ask("10.7.7.7", "pypi.org")).allowed, false);
+});

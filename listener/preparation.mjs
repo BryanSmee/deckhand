@@ -55,7 +55,7 @@ export function createPreparation(ctx) {
     const engine = engineFor(config, task, settings, access, fork, note);
     const refused = runnerRefusal(config, settings, access, engine);
     if (refused) throw new RunError(`${cantRun(agent)}: ${refused}`);
-    const prepared = await prepareImage(task, items, settings, access.grant, note, pulls);
+    const prepared = await prepareImage(task, items, settings, access, note, pulls);
     live.shots = shotsFolder();
     live.record.shots = live.shots;
     live.hosts = access.hosts;
@@ -229,7 +229,8 @@ export function createPreparation(ctx) {
   // The run's image (built first if the repo's Dockerfile changed), its agent and the repo's
   // cache volumes. While an image builds, the dashboard shows the run as "building image"
   // (its `image` phase, board.mjs runState()).
-  async function prepareImage(task, items, settings, grant, note, pulls) {
+  async function prepareImage(task, items, settings, access, note, pulls) {
+    const { grant } = access;
     const { logFile } = task.live;
     const { base } = task;
     const output = (chunk) => logFile.write(chunk);
@@ -249,6 +250,7 @@ export function createPreparation(ctx) {
           );
         },
         output: build.write,
+        access: { hosts: access.hosts, trusted: access.trusted },
       });
       build.flush();
       // The sandbox's part of the setup comes after the image's build.
@@ -261,7 +263,7 @@ export function createPreparation(ctx) {
       if (task.live.fork && !task.live.light && settings.caches?.length)
         note("No caches: a pull request from a fork");
       else if (!task.live.light && settings.caches?.length && ctx.images.keepsCaches === false)
-        note(`No caches: the ${config.runner} runner keeps none yet`);
+        note(`No caches: ${ctx.images.noCaches ?? `the ${config.runner} runner keeps none`}`);
       const caches =
         task.live.light || task.live.fork
           ? []

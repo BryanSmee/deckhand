@@ -93,6 +93,8 @@ export const antigravity = {
       versionVar: "AGY_VERSION",
       // What the tarball must be (release-install): none, and it isn't installed.
       env: { AGY_SHA256: config.agySha256 ?? "" },
+      // GitHub's releases, which redirect to their storage.
+      hosts: ["github.com", "*.githubusercontent.com"],
     }),
   // With a Gemini API key, `agy` calls the listener's /google endpoint directly; with a plan's
   // login, the sandbox writes its token file with the run's secret instead (antigravity.sh).

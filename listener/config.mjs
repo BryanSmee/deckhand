@@ -172,6 +172,19 @@ export const SETTINGS = {
   },
   KUBERNETES_STORAGE_CLASS: { default: null },
   KUBERNETES_SESSION_SIZE: { default: "10Gi", parse: storageSize },
+  // Repo images on Kubernetes (runner/kube-images.mjs): the registry they are pushed to and
+  // nodes pull them from (empty: no repo images), the kubernetes.io/dockerconfigjson Secret
+  // with its credentials, and the BuildKit daemon that builds them (buildctl's --addr).
+  KUBERNETES_REGISTRY: { default: null, parse: registrySetting },
+  KUBERNETES_REGISTRY_SECRET: { default: null },
+  KUBERNETES_BUILDKIT: { default: "tcp://buildkitd:1234" },
+  // Claims every run of a repo mounts at once, of a ReadWriteMany storage class: its caches
+  // (empty: none) and the agents' installs (empty: the caches' class; neither, and no claim
+  // made beforehand: each run installs its agent in an init container).
+  KUBERNETES_CACHE_STORAGE_CLASS: { default: null },
+  KUBERNETES_CACHE_SIZE: { default: "10Gi", parse: storageSize },
+  KUBERNETES_AGENT_STORAGE_CLASS: { default: (s) => s.KUBERNETES_CACHE_STORAGE_CLASS },
+  KUBERNETES_AGENT_SIZE: { default: "5Gi", parse: storageSize },
   // The container engine sidecar of runs whose repo is granted allow_docker
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
@@ -429,6 +442,13 @@ function sandboxConfig(env, s) {
       pendingMs: s.KUBERNETES_PENDING_MINUTES * 60000,
       storageClass: s.KUBERNETES_STORAGE_CLASS,
       sessionSize: s.KUBERNETES_SESSION_SIZE,
+      registry: s.KUBERNETES_REGISTRY,
+      registrySecret: s.KUBERNETES_REGISTRY_SECRET,
+      buildkit: s.KUBERNETES_BUILDKIT,
+      cacheStorageClass: s.KUBERNETES_CACHE_STORAGE_CLASS,
+      cacheSize: s.KUBERNETES_CACHE_SIZE,
+      agentStorageClass: s.KUBERNETES_AGENT_STORAGE_CLASS,
+      agentSize: s.KUBERNETES_AGENT_SIZE,
     },
     maxParallel: s.MAX_PARALLEL,
     subnets: s.SANDBOX_SUBNETS,
@@ -510,6 +530,20 @@ function aboveZero(what) {
     if (!number) throw new ConfigError(`${label}: expected above 0, got 0`);
     return number;
   };
+}
+
+// "registry.example.com/deckhand" (a host, a port, a path; no scheme, no tag): what repo
+// images' names start with. A scheme or a tag would make every image reference wrong.
+function registrySetting(text, { label }) {
+  const value = text.trim().replace(/\/+$/, "");
+  if (!value) return null;
+  // Its host has a dot or a port (or is localhost), as a reference's first part must to be
+  // taken for a registry rather than a Docker Hub user.
+  const m = /^([a-z0-9.-]+)(:\d+)?(\/[a-z0-9._-]+)*$/.exec(value.toLowerCase());
+  if (m && (m[1].includes(".") || m[2] || m[1] === "localhost")) return value.toLowerCase();
+  throw new ConfigError(
+    `${label}: expected a registry host and an optional path (registry.example.com/deckhand), got ${text}`,
+  );
 }
 
 // A claim's size as Kubernetes takes it: "10Gi", "500Mi", "1T".
