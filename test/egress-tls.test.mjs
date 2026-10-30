@@ -7,6 +7,8 @@ import { execFileSync } from "node:child_process";
 import { X509Certificate } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
+import { connect as netConnect, createServer as createNetServer } from "node:net";
+import { Duplex } from "node:stream";
 import { createServer as createHttpsServer } from "node:https";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -28,7 +30,14 @@ const nameOf = (pem) => new X509Certificate(pem).subject.replace(/^CN=/, "");
 // relayed.test is relayed to `relayUrl` (the listener's /relay).
 async function setup(
   t,
-  { upstreamCa = publicCa.certificate(), cacheOn = true, decrypt = true, relayUrl = null } = {},
+  {
+    upstreamCa = publicCa.certificate(),
+    cacheOn = true,
+    decrypt = true,
+    relayUrl = null,
+    wait = {},
+    held = null, // a promise the policy's answers wait for (a listener slow to answer)
+  } = {},
 ) {
   const seen = [];
   // Each request's headers, as the host got them.
@@ -55,6 +64,7 @@ async function setup(
   const proxy = createProxy({
     policy: async (ip, host) => {
       asked.push(host);
+      await held;
       const cache = host === "cached.test";
       const relay = host === "relayed.test";
       return { allowed: true, private: true, cache, decrypt: (cache && decrypt) || relay, relay };
@@ -69,6 +79,7 @@ async function setup(
     authority,
     upstreamCa,
     relayUrl,
+    wait,
   });
   const proxyPort = await listening(proxy);
   t.after(() => {
@@ -107,7 +118,7 @@ async function setup(
         {
           createConnection: () => socket,
           path,
-          headers: { ...headers, host, connection: "close" },
+          headers: { host, connection: "close", ...headers },
         },
         (res) => {
           let body = "";
@@ -123,7 +134,7 @@ async function setup(
     });
   }
 
-  return { get, tunnel, seen, heard, asked, authority, proxyPort, plainPort, upstreamPort };
+  return { get, tunnel, seen, heard, asked, authority, proxy, proxyPort, plainPort, upstreamPort };
 }
 
 test("HTTPS to a cached host: decrypted with Deckhand's CA, and the second GET is a hit", async (t) => {
@@ -262,6 +273,248 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
   // No relay URL (or no CA): refused, never a tunnel that would reach the host.
   const nowhere = await setup(t);
   await assert.rejects(nowhere.tunnel("relayed.test", 443), /403/);
+});
+
+test("a relayed host to an https: listener: over verified TLS, one connection per request", async (t) => {
+  const relayed = [];
+  const listener = createHttpsServer({ ...(await publicCa.certFor("localhost")) }, (req, res) => {
+    relayed.push({ url: req.url, connection: req.headers.connection });
+    res.end("over TLS");
+  });
+  const port = await listening(listener);
+  t.after(() => listener.close());
+  const { get, authority } = await setup(t, { relayUrl: `https://localhost:${port}/relay` });
+  const answer = await get("relayed.test", "/v1/x", authority.certificate(), {
+    connection: "keep-alive",
+    "keep-alive": "timeout=60",
+  });
+  assert.equal(answer.status, 200);
+  assert.equal(answer.body, "over TLS");
+  // The listener's connection closes, not the client's.
+  assert.notEqual(answer.headers.connection, "close");
+  // The client's keep-alive isn't passed on: the connection, not pooled, closes once answered.
+  assert.deepEqual(relayed, [{ url: "/relay/relayed.test/v1/x", connection: "close" }]);
+});
+
+test("a relayed host while the listener restarts: waited for, sent once, never again", async (t) => {
+  // The listener's port, closed until the second wait (an injected clock).
+  const relayed = [];
+  const { server: listener, url } = await serve(t, (req, res) => {
+    let body = "";
+    req.on("data", (d) => (body += d));
+    req.on("end", () => {
+      relayed.push({ method: req.method, url: req.url, body });
+      // A listener that dies once it has the request: nothing comes back.
+      if (body === "die") return req.socket.destroy();
+      res.end("done");
+    });
+  });
+  const port = Number(new URL(url).port);
+  await new Promise((resolve) => listener.close(resolve));
+  const clock = { t: 0, sleeps: 0 };
+  const wait = {
+    now: () => clock.t,
+    sleep: async (ms) => {
+      clock.t += ms;
+      if (++clock.sleeps === 2)
+        await new Promise((resolve) => listener.listen(port, "127.0.0.1", resolve));
+    },
+  };
+  const { tunnel, authority } = await setup(t, { relayUrl: `${url}/relay`, wait });
+
+  // POST through a tunnel to relayed.test → { status, body }.
+  async function post(body) {
+    const raw = await tunnel("relayed.test", 443);
+    const socket = tlsConnect({
+      socket: raw,
+      servername: "relayed.test",
+      ca: authority.certificate(),
+    });
+    await new Promise((resolve) => socket.once("secureConnect", resolve));
+    return new Promise((resolve, reject) => {
+      const req = request(
+        {
+          createConnection: () => socket,
+          method: "POST",
+          path: "/v1/push",
+          headers: { host: "relayed.test", connection: "close" },
+        },
+        (res) => {
+          let text = "";
+          res.setEncoding("utf8");
+          res.on("data", (d) => (text += d));
+          res.on("end", () => resolve({ status: res.statusCode, body: text }));
+        },
+      );
+      req.on("error", reject);
+      req.end(body);
+    });
+  }
+
+  // Refused twice, then the listener is back: the POST reaches it once, body and all.
+  assert.deepEqual(await post("push"), { status: 200, body: "done" });
+  assert.deepEqual(relayed, [{ method: "POST", url: "/relay/relayed.test/v1/push", body: "push" }]);
+  assert.equal(clock.sleeps, 2);
+
+  // A request the listener got before it died isn't sent again: the sandbox hears it.
+  relayed.length = 0;
+  const cut = await post("die");
+  assert.equal(cut.status, 502);
+  assert.match(cut.body, /could not reach the listener/);
+  assert.equal(relayed.length, 1);
+  assert.equal(clock.sleeps, 2);
+
+  // Gone for good: the sandbox hears it after 5 minutes.
+  await new Promise((resolve) => listener.close(resolve));
+  const before = clock.t;
+  const late = await post("push");
+  assert.equal(late.status, 502);
+  assert.equal(clock.t - before, 300_000);
+});
+
+test("a draining proxy: no new tunnel, a relayed stream in flight finishes, then it ends", async (t) => {
+  let stream = null;
+  const { url } = await serve(t, (req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: 1\n\n");
+    stream = res;
+  });
+  const { tunnel, authority, proxy } = await setup(t, { relayUrl: `${url}/relay` });
+  // A kept-alive connection inside the tunnel, as gh's or an agent's.
+  const raw = await tunnel("relayed.test", 443);
+  const socket = tlsConnect({
+    socket: raw,
+    servername: "relayed.test",
+    ca: authority.certificate(),
+  });
+  await new Promise((resolve) => socket.once("secureConnect", resolve));
+  const answer = new Promise((resolve, reject) => {
+    const req = request(
+      {
+        createConnection: () => socket,
+        path: "/v1/stream",
+        headers: { host: "relayed.test", connection: "keep-alive" },
+      },
+      (res) => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", (d) => (text += d));
+        res.on("end", () => resolve({ headers: res.headers, text }));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+  while (!stream) await new Promise((resolve) => setTimeout(resolve, 5));
+  // Another, with no request going: closed by the drain.
+  const idle = await tunnel("relayed.test", 443);
+  const idleTls = tlsConnect({
+    socket: idle,
+    servername: "relayed.test",
+    ca: authority.certificate(),
+  });
+  await new Promise((resolve) => idleTls.once("secureConnect", resolve));
+  const idleClosed = new Promise((resolve) => idleTls.once("close", resolve));
+
+  let done = false;
+  const drained = proxy.drain().then((all) => ((done = true), all));
+  await assert.rejects(tunnel("relayed.test", 443), (error) => error.code === "ECONNREFUSED");
+  await idleClosed;
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(done, false);
+  stream.end("data: 2\n\n");
+  // Its answer began before the drain, keeping the connection alive: closed once sent, which
+  // ends the tunnel, the proxy's last connection.
+  assert.equal((await answer).text, "data: 1\n\ndata: 2\n\n");
+  assert.equal(await drained, true);
+  if (!raw.destroyed) await new Promise((resolve) => raw.once("close", resolve));
+});
+
+// A CONNECT's socket for a client that doesn't wait for the 200: the bytes it reads, past that
+// answer's head, as a stream TLS can start on at once.
+function eager(raw) {
+  let head = "";
+  let past = false;
+  const stream = new Duplex({
+    write: (chunk, encoding, done) => raw.write(chunk, done),
+    final: (done) => (raw.end(), done()),
+    read() {},
+  });
+  raw.on("data", (chunk) => {
+    if (past) return stream.push(chunk);
+    head += chunk.toString("latin1");
+    const end = head.indexOf("\r\n\r\n");
+    if (end === -1) return;
+    past = true;
+    assert.match(head, /^HTTP\/1\.1 200/);
+    const rest = Buffer.from(head.slice(end + 4), "latin1");
+    if (rest.length) stream.push(rest);
+  });
+  raw.on("end", () => stream.push(null));
+  return stream;
+}
+
+test("what a client sends while the policy is asked goes on first: raw and decrypted tunnels", async (t) => {
+  // A raw tunnel: the bytes reach the host before those sent after the 200.
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const received = [];
+  const host = createNetServer((socket) => socket.on("data", (d) => received.push(d.toString())));
+  const hostPort = await listening(host);
+  t.after(() => host.close());
+  const raw = await setup(t, { held });
+  const client = netConnect(raw.proxyPort, "127.0.0.1");
+  t.after(() => client.destroy());
+  await new Promise((resolve) => client.once("connect", resolve));
+  client.write(`CONNECT plain.test:${hostPort} HTTP/1.1\r\nhost: plain.test\r\n\r\nearly-1`);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  client.write("early-2");
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  release();
+  await new Promise((resolve) => client.once("data", resolve));
+  client.write("after");
+  while (received.join("") !== "early-1early-2after") {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+
+  // A decrypted one: a ClientHello sent before the 200 starts its TLS.
+  let again;
+  const later = new Promise((resolve) => (again = resolve));
+  const { url } = await serve(t, (req, res) => res.end(`relayed ${req.url}`));
+  const relayed = await setup(t, { held: later, relayUrl: `${url}/relay` });
+  const socket = netConnect(relayed.proxyPort, "127.0.0.1");
+  t.after(() => socket.destroy());
+  await new Promise((resolve) => socket.once("connect", resolve));
+  socket.write("CONNECT relayed.test:443 HTTP/1.1\r\nhost: relayed.test\r\n\r\n");
+  const tls = tlsConnect({
+    socket: eager(socket),
+    servername: "relayed.test",
+    ca: relayed.authority.certificate(),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  again();
+  await new Promise((resolve, reject) => {
+    tls.once("secureConnect", resolve);
+    tls.once("error", reject);
+  });
+  const body = await new Promise((resolve, reject) => {
+    const req = request(
+      {
+        createConnection: () => tls,
+        path: "/v1/x",
+        headers: { host: "relayed.test", connection: "close" },
+      },
+      (res) => {
+        let text = "";
+        res.setEncoding("utf8");
+        res.on("data", (d) => (text += d));
+        res.on("end", () => resolve(text));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+  assert.equal(body, "relayed /relay/relayed.test/v1/x");
 });
 
 test("the CA's certificate is served at /deckhand-ca.crt; none with the cache off", async (t) => {

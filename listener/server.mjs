@@ -31,6 +31,7 @@ import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
+import { drain } from "./drain.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -81,6 +82,9 @@ import { createOrder } from "./order.mjs";
 import { createTitles } from "./titles.mjs";
 import { createWaits } from "./waits.mjs";
 import { createWorkApi } from "./work.mjs";
+
+// How long the egress policy's answers in flight get once the broker drained: they are quick.
+const POLICY_DRAIN_MS = 5000;
 
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
@@ -738,8 +742,11 @@ dismissals.prune(ctx.runs);
 const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });
-http.listen();
-createBrokerHttp(ctx).listen();
+const web = http.listen();
+const brokerHttp = createBrokerHttp(ctx);
+const broker = brokerHttp.listen();
+// Not drained: the egress proxy asks it about every sandbox connection until the listener exits.
+const policy = brokerHttp.listenPolicy();
 
 // Deliveries GitHub couldn't hand over (the listener down, restarting, unreachable), asked for
 // again at start and every few minutes (redeliveries.mjs).
@@ -826,7 +833,10 @@ if (ctx.app) {
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
 // after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
-// saved with the 👀 ids, the runs' state is written, and the next listener carries on.
+// saved with the 👀 ids, the runs' state is written, and the next listener carries on. The
+// broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
+// listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
+// inbox polls) before it exits (drain.mjs). The egress policy's port answers until then.
 process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();
@@ -836,10 +846,22 @@ process.on("SIGTERM", () => {
   redeliveries.stop();
   clearInterval(relinking);
   log("Stopping: running sandboxes go on, the next listener picks them up");
+  // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).
+  web.close();
+  const drained = drain(broker).then((all) => {
+    if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
+  });
   // Replies being posted and comments being admitted first, then what they leave.
-  Promise.allSettled([...ctx.ending, ...http.admitting])
+  const saved = Promise.allSettled([...ctx.ending, ...http.admitting])
     .then(ctx.saveQueue)
     .then(() => Promise.all([...ctx.tasks.values()].map((t) => t.live && ctx.saveLive(t))))
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
+    // The dashboard's streams: its page reconnects to the next listener.
+    .finally(() => web.closeAllConnections());
+  // Last, the egress policy: closed, so that the proxy's next questions are refused and wait for
+  // the next listener, and its answers in flight are sent, rather than cut by the exit (which
+  // the proxy would take for a refusal).
+  Promise.all([saved, drained])
+    .then(() => drain(policy, { graceMs: POLICY_DRAIN_MS }))
     .finally(() => process.exit(0));
 });

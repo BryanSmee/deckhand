@@ -31,8 +31,11 @@ services:
       dockerfile: listener/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-listener:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping only saves the queue and the runs' state: sandboxes keep running.
-    stop_grace_period: 30s
+    # Stopping saves the queue and the runs' state (sandboxes keep running), and lets the
+    # sandboxes' calls in flight finish (agents' streams, pushes). New ones the egress proxy
+    # relays (GitHub's) wait for the next listener; those sent to it directly (agents' APIs,
+    # pushes) are refused until then, #511 (docs/architecture.md#restarts).
+    stop_grace_period: 5m
     # Pushes of repositories granted allow_workflows are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
     # (docs/security.md#github-actions-on-deckhands-branches).
@@ -204,8 +207,14 @@ services:
       dockerfile: proxy/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-egress:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
+    # Stopping gives the requests in flight 25 s to finish (docs/architecture.md#restarts): new
+    # connections are refused until the next proxy starts.
+    stop_grace_period: 30s
     environment:
-      POLICY_URL: http://listener:8081/egress
+      # The egress policy's own port, open while the broker's drains on a restart; the broker's,
+      # where relayed requests go (docs/architecture.md#restarts).
+      POLICY_URL: http://listener:8082/egress
+      RELAY_URL: http://listener:8081/relay
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume

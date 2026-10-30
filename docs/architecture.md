@@ -711,6 +711,56 @@ networks, container engines and engine volumes of runs that are gone are removed
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins, and so does the next listener for comments queued for a run still going.
 
+A restart delays the runs' calls rather than failing them, for those that go through the
+egress proxy (#507). Everything a sandbox calls during a run reaches the listener's broker port,
+two ways:
+
+- **through the egress proxy**, which relays them: GitHub's API and git's fetches (`gh`, `git
+clone`), and the hosts an agent has relayed (`relayed` in `agents/`, Antigravity's Google
+  endpoints);
+- **directly**, the broker's host being in the sandbox's `NO_PROXY`: the agents' APIs set to the
+  broker (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`), pushes (the git
+  gateway, `pushInsteadOf` in `entrypoint.sh`), the inbox and the run's files.
+
+On SIGTERM the listener closes its ports: the dashboard's and webhooks' at once (a delivery
+missed meanwhile comes back through `redeliveries.mjs`), and the broker's drains (`drain.mjs`):
+it takes no new connection, the calls in flight finish (agents' streams, pushes, `gh` calls,
+inbox long polls), each connection closing as soon as its answer is sent (a kept-alive one included, so that no
+request follows it), and the listener exits once
+they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)
+ends. The egress policy, which the proxy asks about every sandbox connection (to any host), has
+a port of its own (`POLICY_PORT`, 8082), which stays open until the broker has drained: the
+sandboxes' other traffic goes on during the drain. It closes last, its answers in flight sent (5 s
+at most), so that the proxy's next questions are refused and waited for rather than cut. Compose's `POLICY_URL` names it; the broker's
+port answers `/egress` too, as the proxy's default `POLICY_URL` (unchanged, so a deployment that
+relied on it keeps working), but a proxy asking there makes every new connection wait while the
+broker drains.
+
+The egress proxy waits for the next listener meanwhile (`proxy/wait.mjs`): a connection the
+listener refused, or that failed before it was made (reset while connecting, its name unknown
+while its container is gone), never reached it, so the proxy tries again, with a growing delay
+(0.25 s doubling up to 5 s), for up to 5 minutes before it answers `502` (or, for the policy,
+refuses the host). That is as long as the drain and the next listener's start: with one copy of
+each (compose), the next listener only starts once the previous one has exited. It holds for
+any method, a POST included: a request is only sent once a connection is made, and never sent
+again (a listener that dies with it gives the sandbox a `502`). The direct calls aren't waited for, and the drain makes them fail for longer: the broker's port
+refuses them from SIGTERM until the next listener has started, up to the drain (280 s) and a
+start, where they used to be refused only for the restart's few seconds. Those in flight finish,
+where they used to be cut. Routing them through the proxy too is #511; until then:
+
+- the run's files at start (`deckhand-files get`) try again for 6 minutes when the broker
+  doesn't answer (a minute for an error it answers), and the inbox (`deckhand-inbox`) and
+  screenshots (`deckhand-files shots`) for as long as the run lasts;
+- an agent's call is up to its CLI, which tries again on a connection error for a while, not
+  necessarily that long: a turn may fail;
+- a push isn't tried again: `git push` fails, and the agent sees it.
+
+The egress proxy drains on SIGTERM too, for 25 s (compose's `stop_grace_period` for it is 30 s):
+no new tunnel, the requests in flight finish, and the decrypted tunnels close once their
+requests are answered. Its grace is short on purpose: the next proxy only starts once it exited,
+and the sandboxes' new connections are refused meanwhile, with nothing to try them again. A raw
+tunnel is never known to be idle, so one still open at the end is cut.
+
 Running sandboxes outlive an update: they keep their image, and its scripts, until they end.
 So an endpoint that sandboxes call is never just removed: for a while it answers with what to
 do instead, which the old scripts print. The broker's old `/pr/` routes (gone in #407) answer

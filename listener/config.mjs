@@ -361,17 +361,37 @@ export function withCredentialFiles(env, exists = existsSync) {
   return Object.keys(found).length ? { ...env, ...found } : env;
 }
 
+// The listener's ports, each its own (0: one the OS picks, in the tests). POLICY_PORT came
+// after the others: a BROKER_PORT set to its default must say so, not fail to bind.
+function distinctPorts(ports) {
+  const seen = new Map();
+  for (const [name, port] of Object.entries(ports)) {
+    if (port && seen.has(port)) {
+      throw new ConfigError(
+        `${seen.get(port)} and ${name} are both ${port}: set one to another port`,
+      );
+    }
+    seen.set(port, name);
+  }
+}
+
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
 export function loadConfig(env, file = NO_FILE) {
   const from = settings(env, file);
   requiredSettings(env, from);
   const s = readSettings(env, from);
   registryCredentials(s);
+  const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
+  const policyPort = wholeNumber(env.POLICY_PORT, 8082, "POLICY_PORT", "a port");
+  distinctPorts({ PORT: port, BROKER_PORT: brokerPort, POLICY_PORT: policyPort });
   return {
-    port: wholeNumber(env.PORT, 8080, "PORT", "a port"),
+    port,
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
     brokerPort,
+    // The egress proxy's questions (/egress), on a port of their own: open until the listener
+    // exits, while the broker's drains (docs/architecture.md#restarts).
+    policyPort,
     // How sandboxes reach the broker on their network (compose service name by default).
     brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays

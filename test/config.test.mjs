@@ -17,6 +17,25 @@ test("refuses to start without allowed users", () => {
   }
 });
 
+test("the listener's ports are each its own: a BROKER_PORT on POLICY_PORT's default says so", () => {
+  const ALLOWED_USERS = "alice";
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS, BROKER_PORT: "8082" }),
+    (error) =>
+      error instanceof ConfigError &&
+      /BROKER_PORT and POLICY_PORT are both 8082/.test(error.message),
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS, PORT: "9000", POLICY_PORT: "9000" }),
+    /PORT and POLICY_PORT/,
+  );
+  // 0: ports the OS picks, as the tests do.
+  const zero = loadConfig({ ALLOWED_USERS, PORT: "0", BROKER_PORT: "0", POLICY_PORT: "0" });
+  assert.deepEqual([zero.port, zero.brokerPort, zero.policyPort], [0, 0, 0]);
+  const config = loadConfig({ ALLOWED_USERS });
+  assert.deepEqual([config.port, config.brokerPort, config.policyPort], [8080, 8081, 8082]);
+});
+
 test("allowed users and repos are lowercase lists", () => {
   const config = loadConfig({
     ALLOWED_USERS: " Alice,BOB ",
