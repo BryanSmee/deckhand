@@ -1473,14 +1473,12 @@ export function createReviews({
     const key = taskKey(run.repo, prId(run.number));
     if (!run.auto) {
       // A maintainer's review (`/mode review`, the dashboard's Review) of a pull request whose
-      // loop the dashboard shows: its latest round, read with the tolerance the dashboard's Fix
-      // reads it with, so that what the task page offers follows it. Not a loop round: it
-      // counts no fix run and starts no loop.
+      // loop the dashboard shows: its latest round, its blocking findings counted with the
+      // tolerance of the loop's own reviews (tolerance(), as the dashboard's Fix reads them),
+      // so that what the task page offers follows it. Not a loop round: it counts no fix run
+      // and starts no loop.
       if (reviewed.get(key)?.rounds?.length) {
-        const allowed = run.settings?.review?.fix
-          ? run.settings.review.maxAllowedSeverity
-          : undefined;
-        recordRound(run, posted, allowed);
+        recordRound(run, posted, await tolerance({ ...run, auto: true }));
       }
       return (await startFix(run, posted)).item;
     }

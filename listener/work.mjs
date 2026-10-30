@@ -782,6 +782,9 @@ export function createWorkApi({
     return `Rerun of #${number} queued.`;
   }
 
+  // Pull requests whose dashboard Review or Fix is being started (reviewAgain()).
+  const starting = new Set();
+
   // The dashboard's Review or Fix on pull request `number`, checked as a comment is (the
   // repo's users, the pull request open, nothing running or queued on it or its issue), then
   // the App's comment, the record of who asked and where the run's reactions go, and the run
@@ -796,10 +799,28 @@ export function createWorkApi({
     if (!pr) refuse(404, `#${number} isn't a pull request of ${repo}.`);
     if (pr.state !== "open") refuse(409, `#${number} is closed.`);
     const issue = linkedIssue(pr, repo, config.bot);
-    if (busy(taskKey(repo, prId(number))) || (issue && busy(taskKey(repo, String(issue))))) {
+    const key = taskKey(repo, prId(number)).toLowerCase();
+    if (
+      starting.has(key) ||
+      busy(taskKey(repo, prId(number))) ||
+      (issue && busy(taskKey(repo, String(issue))))
+    ) {
       refuse(409, `#${number} has a run going or queued.`);
     }
-    if (action === "fix") return fixAgain(repo, user, { number, pr, settings, base });
+    // Held until its run is queued: a second request meanwhile (another tab, another
+    // maintainer) would pass busy() too, and post and queue a second one.
+    starting.add(key);
+    try {
+      if (action === "fix") return await fixAgain(repo, user, { number, pr, settings, base });
+      return await queueReview(repo, user, { number, pr, issue, settings, base });
+    } finally {
+      starting.delete(key);
+    }
+  }
+
+  // The dashboard's Review: what `/mode review` on the pull request queues, with the App's
+  // comment for its reactions.
+  async function queueReview(repo, user, { number, pr, issue, settings, base }) {
     const posted = await comment(repo, number, `Review from the dashboard by @${user}.`);
     const item = {
       repo,

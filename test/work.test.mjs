@@ -137,6 +137,12 @@ function setup({
       : new Response("{}", { status: 404 });
   };
   const reply = async (repo, number, text) => {
+    // A test holds the App's comments with `w.replyHold`; `w.replying`: how many wait there.
+    if (w.replyHold) {
+      w.replying = (w.replying ?? 0) + 1;
+      await w.replyHold;
+      w.replying--;
+    }
     // A test fails a comment with `w.failComment()` returning true: it throws, as comments.mjs's.
     if (w.failComment?.())
       throw new ReplyError(`GitHub POST /repos/${repo}/issues/${number}/comments`, 502);
@@ -2237,4 +2243,30 @@ test("review refused: users, action, closed, busy, no review block, no review.fi
   assert.equal(res.status, 409);
   assert.equal(res.body.error, "No fix run on #8: it waits for the maintainer's input.");
   assert.deepEqual(w.comments, []);
+});
+
+test("review: a second request while the first is being started posts and queues nothing", async () => {
+  for (const action of ["review", "fix"]) {
+    const w = reviewSetup();
+    // The first request waits in its App comment (`w.replyHold`).
+    let go;
+    w.replyHold = new Promise((resolve) => (go = resolve));
+    const first = review(w, { number: 8, action });
+    while (!w.replying) await settled();
+    const asked = review(w, { number: 8, action: "review" }, { user: "bob" });
+    // Let it run as far as it would before the first is let go.
+    await settled();
+    go();
+    w.replyHold = null;
+    const [one, second] = await Promise.all([first, asked]);
+    assert.equal(one.status, 200, action);
+    assert.equal(second.status, 409, action);
+    assert.match(second.body.error, /run going or queued/);
+    assert.equal(w.comments.length, 1, action);
+    assert.equal(w.accepted.length, 1, action);
+    // Once it is queued, busy() refuses as before; refused, the pull request is free again.
+    w.noFix = "nothing";
+    assert.equal((await review(w, { number: 8, action: "fix" })).status, 409);
+    assert.equal((await review(w, { number: 8, action: "review" })).status, 200, action);
+  }
 });
