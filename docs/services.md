@@ -64,6 +64,24 @@ flowchart LR
 The broker also serves the endpoints a sandbox calls about its own run: progress, needs-input,
 its files.
 
+## Upgrades without downtime
+
+A run calls the proxy, the broker, the github, models and policy services while it runs, never
+the orchestrator or the runner: sandboxes run detached, and their events wait in the store's
+streams until the orchestrator acknowledges them.
+
+| Service                      | Copies            | On an update                                                                                                          |
+| ---------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| policy                       | 2, active         | no state: the new copy starts, the old one drains                                                                     |
+| github, models, broker, edge | 2, active         | shared state in the store; the new copy starts, the old one drains (models: up to 10 minutes, an agent call's length) |
+| orchestrator, runner         | 2, active/passive | the old copy releases its lease on SIGTERM, the new one takes it at once and restores from the store: about a second  |
+| proxy                        | per runs' network | drains on SIGTERM; until the split, it waits for a restarting listener instead of failing (#507)                      |
+
+Active/passive is safe because state is saved as it changes (#508), each lease holder gets a
+higher fencing epoch that the github service, the runner and the broker check, events are
+acknowledged once handled, and side effects carry idempotency keys (#506). The store is the
+file backend on one node, Redis on several (#509).
+
 ## What limits a leaked token
 
 - **Run tokens** (#493): **where**, the services are reachable from the runs' networks only
