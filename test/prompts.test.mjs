@@ -10,6 +10,7 @@ import {
 } from "../listener/github-app.mjs";
 import { isFresh, isLight, kindOf, permissionsFor, RESERVED_MODES } from "../listener/modes.mjs";
 import {
+  compactTables,
   firstMessage,
   handoffMessage,
   liveMessage,
@@ -241,6 +242,20 @@ test("prompts: work runs are told whether their pushes may change workflow files
   const fork = { settings, branches: [], grant: granted };
   assert.doesNotMatch(promptFor(pr, { ...fork, mode: "work" }), /workflows/);
   assert.doesNotMatch(promptFor(pr, { ...fork, ...mode, branches: [] }), /workflows/);
+});
+
+test("the onboarding prompt fits one environment string (TASK_PROMPT), its reference's tables compacted", () => {
+  const text = promptFor(issue, { mode: "onboarding", settings, config, grant });
+  // Linux's MAX_ARG_STRLEN, which counts the name and its `=`: past it, the sandbox doesn't
+  // start (E2BIG). Left room for a growing reference.
+  assert.ok(Buffer.byteLength(`TASK_PROMPT=${text}`) < 120 * 1024, String(text.length));
+  assert.match(text, /## Reference: `\.deckhand\.yaml`/);
+  assert.equal(
+    compactTables(
+      "| Key   | Default |\n| ----- | ------- |\n| `users` | none    |\nprose  |  kept",
+    ),
+    "| Key | Default |\n| --- | --- |\n| `users` | none |\nprose  |  kept",
+  );
 });
 
 test("prompts: a work run is told the projects the operator grants, none: nothing", () => {

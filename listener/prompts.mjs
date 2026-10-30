@@ -15,8 +15,29 @@ const modeInstructions = Object.fromEntries(
     .filter(([, mode]) => mode.prompt)
     .map(([name, mode]) => [name, instructions(mode.prompt)]),
 );
-// The config's reference, in the image next to the prompts so the two can't drift apart.
-const configReference = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+// The config's reference, in the image next to the prompts so the two can't drift apart. Its
+// tables without the padding prettier aligns their columns with: the prompt goes to the sandbox
+// in TASK_PROMPT, and one environment string holds 128 KiB at most (Linux's MAX_ARG_STRLEN:
+// over it, the sandbox doesn't start, E2BIG).
+const configReference = compactTables(
+  readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8"),
+);
+
+// Markdown's table rows with one space around each cell, and three dashes in each separator
+// cell: the same table, without its alignment.
+export function compactTables(text) {
+  return text
+    .split("\n")
+    .map((line) =>
+      line.startsWith("|")
+        ? line
+            .replace(/ {2,}\|/g, " |")
+            .replace(/\| -{3,}/g, "| ---")
+            .replace(/-{3,} \|/g, "--- |")
+        : line,
+    )
+    .join("\n");
+}
 
 // Inbox entries and discussions: the entries come with the prompt, as the session is new.
 function inboxPrompt(task, mode, text) {
