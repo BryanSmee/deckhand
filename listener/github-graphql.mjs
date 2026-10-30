@@ -18,6 +18,7 @@
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
+import { labelNames } from "./github-writes.mjs";
 import {
   buildSchema,
   getArgumentValues,
@@ -641,7 +642,7 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     else change.labels_added = names;
     if (spec.labels.as === "set") change.labels_set = true;
   }
-  if (spec.named) change.labels_added = [input[spec.named]];
+  if (spec.named) change.labels_added = labelNames([input[spec.named]]);
   const write = { repo, actions, target, change };
   if (spec.pull) Object.assign(write, { pull: spec.pull(set), permissions: spec.permissions });
   // The other issue a link names, its sub-issue or its blocker: in the run's repo (GitHub

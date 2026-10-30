@@ -272,7 +272,7 @@ const write = (method, path, body = {}) => ({ method, path, body: json(body) });
 
 test("a work run writes its issue, its pull requests and its sub-issues, nothing else", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check } = createWriteChecks({ lookup });
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
   const work = run("work");
   const allowed = [
     write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
@@ -329,7 +329,7 @@ test("a work run writes its issue, its pull requests and its sub-issues, nothing
 
 test("target kinds come from GitHub, never from the request", async () => {
   const { lookup, calls } = fakeLookup(GITHUB);
-  const { check } = createWriteChecks({ lookup });
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
   // Its pull request is by its branch, in its repo: a fork's of the same name isn't its own,
   // and a pull request's own path doesn't make it one.
   const work = run("work");
@@ -366,6 +366,7 @@ test("target kinds come from GitHub, never from the request", async () => {
   assert.equal(calls.length, before);
   // A look-up that fails refuses.
   const broken = createWriteChecks({
+    needsInputLabel: () => null,
     lookup: async () => {
       throw new Error("down");
     },
@@ -375,7 +376,10 @@ test("target kinds come from GitHub, never from the request", async () => {
 });
 
 test("light runs: brainstorms, inbox entries, discussions and the modes that read", async () => {
-  const { check } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup });
+  const { check } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+  });
   const ok = async (mode, w) => assert.equal(await check(run(mode), w), null, `${mode} ${w.path}`);
   const no = async (mode, w) => assert.ok(await check(run(mode), w), `${mode} ${w.path}`);
   await ok("brainstorm", write("PATCH", "repos/org/repo/issues/1", { body: "x" }));
@@ -443,7 +447,10 @@ const restIssue = (number, repo = "Org/Repo") =>
   });
 
 test("the issues a run created: GitHub's answers to its own creates, REST and GraphQL", () => {
-  const { answered } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup });
+  const { answered } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+  });
   const work = run("work");
   let saved = 0;
   work.createdChanged = () => saved++;
@@ -492,7 +499,7 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
 
 test("a sub-issue link: its child is one the run created or already under its issue, never moved", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ lookup, bot: BOT });
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
   const work = run("work");
   const link = (parent, body) => write("POST", `repos/org/repo/issues/${parent}/sub_issues`, body);
   // Any issue of the repo, by its id: refused, and moved from its parent all the more, however
@@ -561,7 +568,7 @@ test("a sub-issue link: its child is one the run created or already under its is
     /other_issue #50/,
   );
   // Without the App's login, nothing is the run's.
-  const unknown = createWriteChecks({ lookup });
+  const unknown = createWriteChecks({ needsInputLabel: () => null, lookup });
   assert.match((await unknown.check(work, link(1, { sub_issue_id: 900 }))).message, /links only/);
   // Another run's creations aren't this one's.
   assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
@@ -577,7 +584,7 @@ test("a sub-issue link: its child is one the run created or already under its is
 
 test("a blocked-by link: its blocker one the run created, one under its issue, or an open issue of its repo", async () => {
   const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ lookup, bot: BOT });
+  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
   const work = run("work");
   const block = (n, id) =>
     write("POST", `repos/org/repo/issues/${n}/dependencies/blocked_by`, { issue_id: id });
@@ -620,7 +627,7 @@ test("a blocked-by link's blocker by its id is looked for among the repo's newes
     Array.from({ length: 100 }, (_, i) => ({ number: 1000 + from + i, id: 5000 + from + i }));
   const open = [...filler(0), ...filler(100), { number: 3, id: 903 }];
   const { lookup, calls } = fakeLookup({ ...GITHUB, open });
-  const { check } = createWriteChecks({ lookup });
+  const { check } = createWriteChecks({ needsInputLabel: () => null, lookup });
   const block = { issue_id: 903 };
   const w = write("POST", "repos/org/repo/issues/2/dependencies/blocked_by", block);
   assert.equal(await check(run("work"), w), null);
@@ -628,7 +635,10 @@ test("a blocked-by link's blocker by its id is looked for among the repo's newes
   // Past the pages it reads: not found, refused.
   const many = Array.from({ length: 11 }, (_, p) => filler(p * 100)).flat();
   const far = fakeLookup({ ...GITHUB, open: [...many, { number: 3, id: 903 }] });
-  const { check: farCheck } = createWriteChecks({ lookup: far.lookup });
+  const { check: farCheck } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: far.lookup,
+  });
   assert.match((await farCheck(run("work"), w)).message, /an open issue of its repository/);
   assert.equal(far.calls.filter((c) => c.includes("state=open")).length, 10);
 });
@@ -641,7 +651,11 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
         ? ["brainstorms write only their own issue", "ask on #1 instead"]
         : [],
   });
-  const { check } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup, policies });
+  const { check } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: fakeLookup(GITHUB).lookup,
+    policies,
+  });
   const brainstorm = run("brainstorm");
   assert.equal(
     await check(brainstorm, write("PATCH", "repos/org/repo/issues/1", { body: "x" })),
@@ -709,7 +723,11 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
     app: () => ({ repoToken: async () => ({ token: "t-0123456789abcdef" }) }),
     api: github.url,
     web: "https://github.example",
-    checkWrite: createWriteChecks({ lookup: fakeLookup(GITHUB).lookup, policies }).check,
+    checkWrite: createWriteChecks({
+      needsInputLabel: () => null,
+      lookup: fakeLookup(GITHUB).lookup,
+      policies,
+    }).check,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   const secret = broker.register("org/repo", undefined, { mode: "work", push: true, issue: 1 });
@@ -823,7 +841,11 @@ deny_github contains "only plan runs create labels" if {
       readOperator: () => new Map([["github.rego", rego]]),
       tmp: tempDir(t),
     });
-    const { check } = createWriteChecks({ lookup: fakeLookup(GITHUB).lookup, policies });
+    const { check } = createWriteChecks({
+      needsInputLabel: () => null,
+      lookup: fakeLookup(GITHUB).lookup,
+      policies,
+    });
     const label = write("POST", "repos/org/repo/labels", { name: "a", color: "fff" });
     assert.equal(await check(run("plan", { push: true }), label), null);
     assert.deepEqual(await check(run("work"), label), {
@@ -888,4 +910,8 @@ test("the needs-input label: a run neither adds nor removes it on its sub-issues
     await check(work, write("POST", "repos/org/repo/issues/1/labels", { labels: ["needs-input"] })),
     null,
   );
+});
+
+test("createWriteChecks: the needs-input label is required, so a caller can't leave it unguarded", () => {
+  assert.throws(() => createWriteChecks({ lookup: fakeLookup(GITHUB).lookup }), /needsInputLabel/);
 });

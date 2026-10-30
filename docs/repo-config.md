@@ -944,9 +944,10 @@ own write gets what GitHub needs for it besides: `pull_requests: write` to open 
 | `onboarding`, `analyze`, `review`, `research`, a light `modes:` | nothing                                                                                                                                                                                                                                                          |
 | `work`, a `modes:` entry that isn't light                       | its issue: `edit`, `comment`, `label`, `link`; its pull requests: `edit`, `comment`, `label`, `ready`, `draft`; its sub-issues and the issues it created: `edit`, `comment`, `label`, `link`; new issues, labels and pull requests (from its branches): `create` |
 
-A run neither adds nor removes `NEEDS_INPUT_LABEL` on its sub-issues and the issues it created:
-taking it off would answer their questions and start what waited for them, which only an
-allowed user does.
+A run's label writes neither add nor remove `NEEDS_INPUT_LABEL` on its sub-issues and the issues
+it created: taking it off would answer their questions and start what waited for them. That
+covers the label only: a run that may edit those issues (a work run, a brainstorm) can still
+drop their questions section from the description, which the listener takes for an answer too.
 
 No ceiling holds closing or reopening (GitHub closes an issue when its pull request merges),
 merging, reviews and their comments, assignees and milestones (an issue created with them

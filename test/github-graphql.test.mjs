@@ -60,22 +60,30 @@ const NODES = {
     databaseId: 105,
     repository: { nameWithOwner: "Org/Repo" },
   },
+  I_6: {
+    __typename: "Issue",
+    number: 6,
+    databaseId: 106,
+    repository: { nameWithOwner: "Org/Repo" },
+  },
   PR_7: { __typename: "PullRequest", number: 7, repository: { nameWithOwner: "Org/Repo" } },
   IC_1: { __typename: "IssueComment", repository: { nameWithOwner: "Org/Repo" } },
   L_idea: { __typename: "Label", name: "idea", repository: { nameWithOwner: "Org/Repo" } },
   L_bug: { __typename: "Label", name: "bug", repository: { nameWithOwner: "Org/Repo" } },
+  L_needs: { __typename: "Label", name: "needs-input", repository: { nameWithOwner: "Org/Repo" } },
   L_o: { __typename: "Label", name: "idea", repository: { nameWithOwner: "org/other" } },
   U_1: { __typename: "User" },
 };
 
 // GitHub's REST answers the write checks look up (github-writes.mjs resolve()): #1 the run's,
 // #2 a sub-issue of it, #3 someone else's, #4 someone else's closed, #5 the bot's (one a run
-// created, when its `created` says so), #7 a pull request.
+// created, when its `created` says so), #6 a sub-issue waiting for answers, #7 a pull request.
 const ISSUES = {
   1: { number: 1, user: { login: "alice" }, labels: [] },
   2: { number: 2, user: { login: "bob" }, labels: [{ name: "idea" }] },
   3: { number: 3, state: "open", user: { login: "bob" }, labels: [] },
   4: { number: 4, state: "closed", user: { login: "bob" }, labels: [] },
+  6: { number: 6, user: { login: "bob" }, labels: [{ name: "needs-input" }] },
   5: {
     number: 5,
     user: { login: "deckhand[bot]" },
@@ -89,7 +97,9 @@ async function lookup(repo, path) {
   if (!m) throw new Error(`unexpected look-up ${path}`);
   const n = +m[2];
   if (m[3] === "/parent") {
-    return n === 2 ? { number: 1, repository_url: "https://api.github.com/repos/Org/Repo" } : null;
+    return n === 2 || n === 6
+      ? { number: 1, repository_url: "https://api.github.com/repos/Org/Repo" }
+      : null;
   }
   if (m[3]) return [];
   if (m[1] === "pulls") return { head: { ref: "issue-1-x", repo: { full_name: "Org/Repo" } } };
@@ -107,12 +117,13 @@ const run = (mode, issue = 1) => ({
 });
 
 // The checks, with the writes they held and the IDs they looked up.
-function checks({ checkWrite } = {}) {
+function checks({ checkWrite, needsInputLabel = () => null } = {}) {
   const writes = [];
   const asked = [];
   // The REST look-ups the write checks made.
   const looked = [];
   const real = createWriteChecks({
+    needsInputLabel,
     lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
     bot: () => "deckhand[bot]",
   }).checkWrite;
@@ -871,4 +882,27 @@ test("a work run labels its sub-issues and the issues it created over GraphQL as
   const set = await check(work, call(GH_EDIT, { input: { id: "I_2", labelIds: ["L_bug"] } }));
   assert.equal(set.refused, undefined);
   assert.deepEqual(writes.at(-1).actions, ["label"]);
+});
+
+test("the needs-input label of a sub-issue: neither removed nor added over GraphQL", async () => {
+  const { check } = checks({ needsInputLabel: () => "needs-input" });
+  const work = run("work");
+  const refused = [
+    'mutation { removeLabelsFromLabelable(input: { labelableId: "I_6", labelIds: ["L_needs"] }) { clientMutationId } }',
+    'mutation { updateIssue(input: { id: "I_6", labelIds: ["L_bug"] }) { clientMutationId } }',
+    'mutation { addLabelsToLabelable(input: { labelableId: "I_2", labelIds: ["L_needs"] }) { clientMutationId } }',
+  ];
+  for (const query of refused) {
+    const out = await check(work, call(query));
+    assert.equal(out.refused?.status, 403, query);
+    assert.match(out.refused.message, /doesn't add or remove needs-input on sub_issue #[26]/);
+  }
+  // Its other labels, the needs-input label kept.
+  const kept = await check(
+    work,
+    call(
+      'mutation { updateIssue(input: { id: "I_6", labelIds: ["L_bug", "L_needs"] }) { clientMutationId } }',
+    ),
+  );
+  assert.equal(kept.refused, undefined);
 });

@@ -34,7 +34,7 @@ const ID_TARGETS = new Set(["comment", "review"]);
 
 // The label names of a body's `labels` (strings, or objects with a name), or of the body itself
 // when it is the list (PUT …/labels takes either).
-function labelNames(list) {
+export function labelNames(list) {
   if (!Array.isArray(list)) return [];
   return list
     .map((l) => (typeof l === "string" ? l : l?.name))
@@ -313,15 +313,21 @@ const SKEW_MS = 2 * 60_000;
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
 // policies.mjs's, null without; `pulls`: github-pulls.mjs's checks (its workflow check and
-// record, none by default); `log`: the listener's.
+// record, none by default); `needsInputLabel()`: NEEDS_INPUT_LABEL, null when unset; `log`: the
+// listener's.
 export function createWriteChecks({
   lookup,
   bot = () => null,
-  needsInputLabel = () => null,
+  needsInputLabel,
   policies = null,
   pulls = createPullChecks({ lookup }),
   log = () => {},
 }) {
+  // Required, so a caller that forgets it fails here rather than leaving the label unguarded:
+  // () => null where nothing waits for answers.
+  if (typeof needsInputLabel !== "function") {
+    throw new TypeError("createWriteChecks: needsInputLabel is required");
+  }
   // Whether GitHub's issue is one `run` created: GitHub answered one of the run's own creates
   // with it (answered()), it is no older than that call, and the App's bot wrote it. The bot
   // files issues for every run and for the listener too: its authorship alone says nothing.
