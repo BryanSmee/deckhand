@@ -120,14 +120,6 @@ export function createBroker({
     if (run) run.createdChanged = changed;
   }
 
-  // `subjects()`: the comments whose 👀 is the listener's while the run is on (those it handled
-  // and those waiting for it: tasks.mjs), as github-writes.mjs reactionSubject() names them,
-  // which the run never takes off.
-  function watchListened(secret, subjects) {
-    const run = runOf(secret);
-    if (run) run.listened = subjects;
-  }
-
   // `pushed({ branch, at })`: called by the git gateway for each push of the run's GitHub took.
   function watchPushes(secret, pushed) {
     const run = runOf(secret);
@@ -164,7 +156,6 @@ export function createBroker({
     provide,
     watchPushes,
     watchCreated,
-    watchListened,
     revoke,
     runOf,
     sentBy,

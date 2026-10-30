@@ -6,7 +6,6 @@ import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
-import { reactionSubject } from "./github-writes.mjs";
 import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
@@ -176,9 +175,7 @@ export function createRestart(ctx) {
   // The pushes of the run's GitHub took (git-gateway.mjs), on its record: when it last pushed,
   // and which branch, for the dashboard. Saved with it, so a restart keeps them.
   // The issues it creates, the comments it posts and the reactions it adds too
-  // (github-writes.mjs answered()), in `live.created`. And the comments whose 👀 is the
-  // listener's (comments.mjs received()), which the run never takes off: those it handles and
-  // those waiting for it.
+  // (github-writes.mjs answered()), in `live.created`.
   function watchPushes(task) {
     const { live } = task;
     ctx.broker.watchPushes(live.secret, ({ branch, at }) => {
@@ -188,15 +185,6 @@ export function createRestart(ctx) {
     ctx.broker.watchCreated(live.secret, () => {
       if (task.live === live) saveLive(task);
     });
-    ctx.broker.watchListened(live.secret, () =>
-      [...live.handled, ...task.pending]
-        .filter((item) => item.comment && !item.comment.discussion)
-        .map(({ comment }) =>
-          reactionSubject({
-            reacted: { id: comment.id, type: comment.review ? "review" : "issue" },
-          }),
-        ),
-    );
   }
 
   // Runs a previous listener left behind, from their saved state: their tokens and egress work

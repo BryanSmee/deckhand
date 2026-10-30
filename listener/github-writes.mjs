@@ -373,14 +373,16 @@ const SKEW_MS = 2 * 60_000;
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
 // policies.mjs's, null without; `pulls`: github-pulls.mjs's checks (its workflow check and
-// record, none by default); `needsInputLabel()`: NEEDS_INPUT_LABEL, null when unset; `log`: the
-// listener's.
+// record, none by default); `needsInputLabel()`: NEEDS_INPUT_LABEL, null when unset;
+// `listenerReacted(repo, subject, content)`: whether the listener added that reaction
+// (comments.mjs), which a run never removes; `log`: the listener's.
 export function createWriteChecks({
   lookup,
   bot = () => null,
   needsInputLabel,
   policies = null,
   pulls = createPullChecks({ lookup }),
+  listenerReacted = () => false,
   log = () => {},
 }) {
   // Required, so a caller that forgets it fails here rather than leaving the label unguarded:
@@ -595,7 +597,9 @@ export function createWriteChecks({
       added = true;
     }
     for (const reaction of reactions) {
+      // The listener's same reaction, added meanwhile, isn't the run's.
       if (ownReaction(run, reaction)) continue;
+      if (listenerReacted(run.repo, reaction.subject, reaction.content)) continue;
       run.created.push({ reaction, at });
       added = true;
     }
@@ -718,11 +722,10 @@ export function createWriteChecks({
           "a run removes only the reactions it added, never the listener's or anyone else's",
         );
       }
-      // The listener's 👀 on a comment it handed the run (or that waits for it) is the same bot's
-      // as a 👀 the run added there first: GitHub keeps one, which the listener takes off.
-      const listened = own?.content === "eyes" && (run.listened?.() ?? []).includes(own.subject);
-      if (listened) {
-        return refusal(403, "a run doesn't take off the listener's 👀 on the comments it handles");
+      // The listener's own on any comment, on any task's (its 👀, an outcome's): the same bot's
+      // as one the run added there first, which GitHub keeps as one.
+      if (own && listenerReacted(run.repo, own.subject, own.content)) {
+        return refusal(403, "a run doesn't take off a reaction the listener added there");
       }
       change.content = own?.content ?? write.reaction.content ?? null;
     }

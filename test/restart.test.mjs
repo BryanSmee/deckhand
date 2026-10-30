@@ -412,36 +412,3 @@ test("queued comments keep when they were queued through a restart: the run orde
     ["8", "7"],
   );
 });
-
-test("a restored run knows the comments whose 👀 is the listener's: handled, and waiting for it", (t) => {
-  const dir = tempDir(t);
-  const broker = createBroker({});
-  const ctx = {
-    config: { dataDir: dir },
-    log: () => {},
-    tasks: new Map(),
-    logDir: dir,
-    runs: [],
-    runsById: new Map(),
-    runner: { closed: () => false },
-    broker,
-    running: 0,
-  };
-  const secret = saveRun(dir, "r1", 1, { agent: "claude" });
-  const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
-  const handled = [
-    { repo: "org/repo", comment: { id: 11 }, eyes: 5 },
-    { repo: "org/repo", comment: { id: 17, review: true }, eyes: 6 },
-    // A discussion's comment, and a review without one: no reaction of the run's to guard.
-    { repo: "org/repo", comment: { id: 12, discussion: true } },
-    { repo: "org/repo" },
-  ];
-  writeFileSync(join(dir, "r1.live.json"), JSON.stringify({ ...saved, handled }));
-  createRestart(ctx).restoreRuns();
-  const task = [...ctx.tasks.values()][0];
-  const run = broker.runOf(secret);
-  assert.deepEqual(run.listened(), ["issue_comment:11", "review_comment:17"]);
-  // One the listener took in since, waiting for the run.
-  task.pending.push({ repo: "org/repo", comment: { id: 13 } });
-  assert.deepEqual(run.listened(), ["issue_comment:11", "review_comment:17", "issue_comment:13"]);
-});

@@ -9,7 +9,7 @@ import {
   labelFailed,
   ReplyError,
 } from "../listener/comments.mjs";
-import { recordingFetch } from "./helpers.mjs";
+import { recordingFetch, tempDir } from "./helpers.mjs";
 
 test("hasLabel: names or { name }, whatever their case", () => {
   assert.equal(hasLabel([{ name: "needs-input" }], "needs-input"), true);
@@ -177,4 +177,44 @@ test("answer in a discussion: too long posts again shortened, a refusal throws",
     return true;
   });
   assert.equal(posted.length, 1);
+});
+
+test("the listener's reactions: claimed before GitHub is asked, on any comment, kept across a restart", async (t) => {
+  const dir = tempDir(t);
+  const calls = [];
+  // What GitHub answers: the POSTs and DELETEs as `status` says.
+  let status = 201;
+  const github = async (repo, method, path) => {
+    // Claimed before the call goes out.
+    calls.push([method, path, comments.listenerReacted("org/repo", "issue_comment:5", "eyes")]);
+    if (status >= 500) throw new Error("down");
+    if (method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ id: 40, content: "eyes" }, { status });
+  };
+  const make = () => createComments({ config: { dataDir: dir }, github, log: () => {} });
+  let comments = make();
+  const item = { repo: "Org/Repo", comment: { id: 5 } };
+  comments.received(item);
+  await item.eyes;
+  assert.deepEqual(calls[0], ["POST", "/repos/Org/Repo/issues/comments/5/reactions", true]);
+  // Its subject as github-writes.mjs names a run's: a review comment apart from an issue's.
+  assert.equal(comments.listenerReacted("org/repo", "review_comment:5", "eyes"), false);
+  comments.received({ repo: "org/repo", comment: { id: 5, review: true } });
+  assert.equal(comments.listenerReacted("org/repo", "review_comment:5", "eyes"), true);
+  // A restarted listener knows them.
+  comments = make();
+  assert.equal(comments.listenerReacted("org/repo", "issue_comment:5", "eyes"), true);
+  // Its 👀 off once the run is over, its outcome's on.
+  await comments.settle(item, "ok");
+  assert.equal(comments.listenerReacted("org/repo", "issue_comment:5", "eyes"), false);
+  assert.equal(comments.listenerReacted("org/repo", "issue_comment:5", "rocket"), true);
+  // A POST that fails keeps its claim: a run's same reaction stays (fail closed).
+  status = 503;
+  comments.received({ repo: "org/repo", comment: { id: 6 } });
+  assert.equal(comments.listenerReacted("org/repo", "issue_comment:6", "eyes"), true);
+  // A discussion's comment: no run reacts there.
+  const graphql = async () => ({});
+  const discussions = createComments({ config: {}, github, graphql, log: () => {} });
+  discussions.received({ repo: "org/repo", comment: { id: 7, discussion: true, node_id: "D" } });
+  assert.equal(discussions.listenerReacted("org/repo", "issue_comment:7", "eyes"), false);
 });

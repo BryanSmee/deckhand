@@ -1192,9 +1192,12 @@ The App's bot adds the listener's reactions too (👀 on a comment that starts a
 the run like the issues it created: a REST `201` (a `200` says the bot had it already), or an
 `addReaction` field the gateway parsed whose content the bot hadn't on that subject, which
 GitHub ran. A reaction the run removed is no longer its own (the listener may add the same one
-since), and it keeps its 100 newest. The listener's 👀 on a comment the run handles, or that
-waits for it, is never taken off, even where the run's 👀 came first: GitHub keeps one reaction
-per user and content. Any other removal is refused before any policy. One added over GraphQL is removed
+since), and it keeps its 100 newest. A reaction the listener added, on any comment of the
+repository (whichever task it went to, a waiting `/after`, a held comment's 😕, a finished run's
+outcome), is never the run's, even where the run's came first: GitHub keeps one reaction per
+user and content, so the listener's `POST` answers with the run's. The listener notes each one
+before it asks GitHub, in `reactions.json` (its 5,000 newest), and drops its 👀 once it takes it
+off. Any other removal is refused before any policy. One added over GraphQL is removed
 with `removeReaction` (REST's `DELETE` names a reaction by an id the gateway didn't keep for it).
 
 Deckhand's default file, `policy/gh-reactions.rego`, narrows the ceiling:

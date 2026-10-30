@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
+import { createComments } from "../listener/comments.mjs";
 import { createGithubGateway } from "../listener/github-gateway.mjs";
 import {
   aboveCeiling,
@@ -348,6 +349,12 @@ const GITHUB = {
   ],
   // On #1, alice's and the bot's; on #3, bob's; on another repository's #1.
   comments: {
+    // On #2, a sub-issue of the run's.
+    21: {
+      id: 21,
+      user: { login: "alice" },
+      issue_url: "https://api.github.com/repos/org/repo/issues/2",
+    },
     11: {
       id: 11,
       user: { login: "alice" },
@@ -1144,29 +1151,59 @@ test("reactions: a run removes only those it added, never the listener's", async
   assert.match((await check(work, link)).message, /links only issues it created/);
 });
 
-test("reactions: never the listener's 👀 on a comment it handed the run, though the run's came first", async () => {
+test("reactions: never one the listener added, on any task's comment, though the run's came first", async () => {
+  // The listener's reactions, as server.mjs wires them: its 👀 on a trigger comment of the run's
+  // sub-issue #2, which goes to that sub-issue's task, never to the run.
+  const posted = [];
+  const listener = createComments({
+    config: {},
+    github: async (repo, method, path) => (
+      posted.push(`${method} ${path}`),
+      Response.json({ id: 700, content: "eyes" }, { status: 200 })
+    ),
+    log: () => {},
+  });
   const { lookup } = fakeLookup(GITHUB);
-  const { check, answered } = createWriteChecks({ needsInputLabel: () => null, lookup, bot: BOT });
-  const listened = [];
-  const work = { ...run("work"), listened: () => listened };
+  const { check, answered } = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: BOT,
+    listenerReacted: listener.listenerReacted,
+  });
+  const work = run("work");
   const add = (content) => ({
     method: "POST",
-    path: "/repos/org/repo/issues/comments/11/reactions",
+    path: "/repos/org/repo/issues/comments/21/reactions",
     body: json({ content }),
     at: START,
   });
-  answered(work, add("eyes"), ...reacted(600, "eyes"));
-  answered(work, add("+1"), ...reacted(601, "+1"));
-  const remove = (id) => write("DELETE", `repos/org/repo/issues/comments/11/reactions/${id}`);
-  assert.equal(await check(work, remove(600)), null);
-  // The listener took the comment in for the run: its 👀 is the one GitHub keeps.
-  listened.push("issue_comment:11");
-  assert.deepEqual(await check(work, remove(600)), {
+  // The run's 👀 and 👍 land first (201), on #2's comment, which its ceiling holds.
+  assert.equal(
+    await check(work, write("POST", add("eyes").path.slice(1), { content: "eyes" })),
+    null,
+  );
+  answered(work, add("eyes"), ...reacted(700, "eyes"));
+  answered(work, add("+1"), ...reacted(701, "+1"));
+  const remove = (id) => write("DELETE", `repos/org/repo/issues/comments/21/reactions/${id}`);
+  assert.equal(await check(work, remove(700)), null);
+  // The listener takes the comment in for #2's task: GitHub answers its POST with the run's 👀.
+  listener.received({ repo: "Org/Repo", comment: { id: 21 } });
+  assert.deepEqual(posted, ["POST /repos/Org/Repo/issues/comments/21/reactions"]);
+  assert.deepEqual(await check(work, remove(700)), {
     status: 403,
-    message: "a run doesn't take off the listener's 👀 on the comments it handles",
+    message: "a run doesn't take off a reaction the listener added there",
   });
-  // Its other reactions there are still its own.
-  assert.equal(await check(work, remove(601)), null);
+  // Its other reaction there is still its own.
+  assert.equal(await check(work, remove(701)), null);
+  // And one the listener has: never kept as the run's, though GitHub answered the run 201.
+  const fresh = run("work");
+  listener.received({ repo: "org/repo", comment: { id: 13 } });
+  answered(
+    fresh,
+    { ...add("eyes"), path: "/repos/org/repo/issues/comments/13/reactions" },
+    ...reacted(702, "eyes"),
+  );
+  assert.deepEqual(fresh.created, []);
 });
 
 test("reactions: a run keeps its newest ones only", () => {

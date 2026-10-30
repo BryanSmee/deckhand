@@ -351,9 +351,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     comments there (a comment's issue or pull request, read from GitHub, is the target), a
     brainstorm on its own issue and its comments, and removes only the reactions GitHub said
     it added and hasn't removed since (saved with the run like the issues it created, its 100
-    newest): the App's bot also adds the listener's reactions on the comments that trigger
-    runs, which a run never removes, nor the listener's 👀 on the comments it handles where the
-    run's 👀 came first (issue #458). No ceiling holds closing, merging, reviews, deleting anything else,
+    newest): the App's bot also adds the listener's reactions, which a run never removes, on
+    any comment, even where the run's same reaction came first (GitHub keeps one per user and
+    content): the listener notes each one before it asks GitHub (`reactions.json`, issue #458). No ceiling holds closing, merging, reviews, deleting anything else,
     the repository's contents or settings; onboarding, analyses, reviews and a repository's
     light modes write nothing. Only a grant could widen a ceiling, and none does yet;
   - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
