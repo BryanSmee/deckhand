@@ -1103,7 +1103,10 @@ apply.
 a preview hook holds the Docker socket, so it is root on the host (the App's key in
 `/data`, the Claude credential, every repository's volumes); a Dockerfile is built on the
 host's Docker with its network (on Kubernetes, by the cluster's BuildKit daemon, through the
-egress proxy with the repo's hosts only, and pushed to the operator's registry:
+egress proxy with the repo's hosts only, and pushed to the operator's registry; the listener
+refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
+the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
+listener can't see:
 [Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `preview` without
 `allow_preview`, or `dockerfile` without `allow_dockerfile`, gets neither: its runs stop
 and the reply on the issue says which grant is missing, like refused mounts, and its preview

@@ -12,6 +12,7 @@ import {
   entryOf,
 } from "./agents/index.mjs";
 import { credentialName } from "./anthropic.mjs";
+import { hostProblem } from "./egress.mjs";
 import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
@@ -178,6 +179,9 @@ export const SETTINGS = {
   KUBERNETES_REGISTRY: { default: null, parse: registrySetting },
   KUBERNETES_REGISTRY_SECRET: { default: null },
   KUBERNETES_BUILDKIT: { default: "tcp://buildkitd:1234" },
+  // More hosts the BuildKit daemon reaches while it pulls and pushes (a registry's token
+  // service, the storage it sends layers from), beyond those runner/kube-images.mjs knows.
+  KUBERNETES_REGISTRY_HOSTS: { type: "list", default: [], parse: hostList },
   // Claims every run of a repo mounts at once, of a ReadWriteMany storage class: its caches
   // (empty: none) and the agents' installs (empty: the caches' class; neither, and no claim
   // made beforehand: each run installs its agent in an init container).
@@ -445,6 +449,7 @@ function sandboxConfig(env, s) {
       registry: s.KUBERNETES_REGISTRY,
       registrySecret: s.KUBERNETES_REGISTRY_SECRET,
       buildkit: s.KUBERNETES_BUILDKIT,
+      registryHosts: s.KUBERNETES_REGISTRY_HOSTS,
       cacheStorageClass: s.KUBERNETES_CACHE_STORAGE_CLASS,
       cacheSize: s.KUBERNETES_CACHE_SIZE,
       agentStorageClass: s.KUBERNETES_AGENT_STORAGE_CLASS,
@@ -544,6 +549,14 @@ function registrySetting(text, { label }) {
   throw new ConfigError(
     `${label}: expected a registry host and an optional path (registry.example.com/deckhand), got ${text}`,
   );
+}
+
+// "a.example.com, *.cdn.example" → the hosts, each checked as a grant's are (egress.mjs).
+function hostList(text, { label }) {
+  const hosts = list(text);
+  const bad = hosts.filter((host) => hostProblem(host));
+  if (bad.length) throw new ConfigError(`${label}: ${bad.join(", ")}: ${hostProblem(bad[0])}`);
+  return hosts;
 }
 
 // A claim's size as Kubernetes takes it: "10Gi", "500Mi", "1T".

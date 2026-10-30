@@ -50,7 +50,7 @@ const API_BACKOFF_MS = [1000, 2000, 5000, 10_000];
 const STUCK_MS = 2 * 60_000;
 const UNKNOWN_MS = 5 * 60_000;
 
-// How long installing() keeps its answer: the egress proxy asks at each connection.
+// How long installing() keeps a yes: the egress proxy asks at each connection.
 const INSTALLING_TTL_MS = 1000;
 
 // The proxy's addresses, as networks.mjs caches them.
@@ -65,8 +65,13 @@ const CONTAINER = "sandbox";
 // own what the next sandbox runs.
 export const INSTALL_USER = { uid: 1001, gid: 1001 };
 
-// The annotation of a pod whose init container installs its agent (installing()).
+// The annotation of a pod whose init container installs its agent (installing()), and that
+// container's name.
 const AGENT_INIT = "deckhand.agent-init";
+const INIT_CONTAINER = "agent-install";
+
+// What pendingReason() says while the init container installs the agent.
+export const INSTALLING = "its init container is installing the agent";
 
 // What sets a sandbox's pod and its Secret apart from the rest of the namespace.
 const ROLE = "deckhand.role";
@@ -250,7 +255,7 @@ export function podSpec(
         ? {
             initContainers: [
               {
-                name: "agent-install",
+                name: INIT_CONTAINER,
                 image: init.image,
                 command: [init.command],
                 env: Object.entries(init.env).map(([k, v]) => ({ name: k, value: String(v) })),
@@ -306,17 +311,35 @@ export function podSpec(
 // ContainerCreating: its events tell then (Multi-Attach of a claim another node holds, a
 // volume that won't mount), or nothing does.
 export function pendingReason(pod) {
-  for (const s of pod.status?.containerStatuses ?? []) {
-    const w = s.state?.waiting;
-    if (w?.reason && w.reason !== "ContainerCreating") {
-      return w.message ? `${w.reason}: ${w.message}` : w.reason;
+  const waiting = (statuses = []) => {
+    for (const s of statuses) {
+      const w = s.state?.waiting;
+      // Neither says more than "not yet": PodInitializing is the sandbox's while the init
+      // container runs.
+      if (w?.reason && !["ContainerCreating", "PodInitializing"].includes(w.reason)) {
+        return w.message ? `${w.reason}: ${w.message}` : w.reason;
+      }
     }
-  }
+    return null;
+  };
+  const init = pod.status?.initContainerStatuses ?? [];
+  const said =
+    waiting(init) ??
+    (init.some((s) => s.state?.running) ? INSTALLING : null) ??
+    waiting(pod.status?.containerStatuses);
+  if (said) return said;
   const unscheduled = (pod.status?.conditions ?? []).find(
     (c) => c.type === "PodScheduled" && c.status === "False",
   );
   if (unscheduled) return unscheduled.message || unscheduled.reason || "not scheduled";
   return null;
+}
+
+// The init container's exit code when it failed (the agent's install), else null.
+export function failedInit(pod) {
+  const code = (pod.status?.initContainerStatuses ?? []).find((s) => s.name === INIT_CONTAINER)
+    ?.state?.terminated?.exitCode;
+  return code === undefined || code === 0 ? null : code;
 }
 
 // The newest Warning event's "reason: message" among `events` (the pod's), or null.
@@ -578,7 +601,7 @@ export function createKubernetesRunner({
   // has been seen exited twice in a row, the stream is let go and its log read once more,
   // whole, for the lines it hadn't delivered.
   async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
-    if (!(await started(name))) return;
+    if (!(await started(name, onErr))) return;
     let seen = { out: 0, err: 0 };
     let past = skip;
     const each = (raw, at) => {
@@ -655,17 +678,37 @@ export function createKubernetesRunner({
   }
 
   // Until the pod leaves Pending: true once its container ran, false when it is gone.
-  async function started(name) {
+  // A failed install in its init container (the agent without a claim) fails the run, with
+  // the installer's output in the run's log (`onErr`), as a failed install does on Docker.
+  async function started(name, onErr = () => {}) {
     for (;;) {
       const pod = await look(name);
       if (!pod) return false;
+      const code = failedInit(pod);
+      if (code !== null) {
+        const agent = pod.metadata?.annotations?.[AGENT_INIT] ?? "its agent";
+        await readLog(
+          name,
+          { container: INIT_CONTAINER },
+          AbortSignal.timeout(WATCH_MS),
+          (line, at) => onErr(line, at),
+        ).catch((error) => log(`The install log of ${name}: ${error.message}`));
+        log(`${name}: installing ${agent} failed (exit ${code})`);
+        throw new RunError(
+          `The sandbox couldn't start on the Kubernetes runner: installing its agent (${agent}) in its init container failed (exit ${code}); the installer's output is in the run's log. The operator can check that the install reaches its hosts through the egress proxy, or set KUBERNETES_AGENT_STORAGE_CLASS to install it once per version. Comment again to retry.`,
+        );
+      }
       if (pod.status?.phase !== "Pending") return true;
       if (overdue(pod)) {
         const why = await whyPending(name, pod);
         log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
         await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
+        const fix =
+          why === INSTALLING
+            ? "The operator can check that the agent's install reaches its hosts through the egress proxy, or set KUBERNETES_AGENT_STORAGE_CLASS to install it once per version"
+            : "The operator can make room in the cluster, or check the image";
         throw new RunError(
-          `The sandbox couldn't start on the Kubernetes runner: its pod stayed Pending for ${minutes(pendingMs)} min (${why}). The operator can make room in the cluster, or check the image (KUBERNETES_PENDING_MINUTES sets the wait). Comment again to retry.`,
+          `The sandbox couldn't start on the Kubernetes runner: its pod stayed Pending for ${minutes(pendingMs)} min (${why}). ${fix} (KUBERNETES_PENDING_MINUTES sets the wait). Comment again to retry.`,
         );
       }
       await sleep(POLL_MS);
@@ -735,12 +778,20 @@ export function createKubernetesRunner({
   }
 
   // Whether the sandbox's init container is installing its agent: its pod has one, and is
-  // still Pending (its sandbox container hasn't started). Looked up again after a few seconds.
+  // still Pending (its sandbox container hasn't started). A yes is kept a moment. A no is
+  // final for the run, which the caller remembers (broker-http.mjs): a pod that left Pending
+  // never installs again. Null when the API can't tell.
   const pendingInstalls = new Map(); // name → { at, installing }
   async function installing(name) {
     const seen = pendingInstalls.get(name);
     if (seen && now() - seen.at < INSTALLING_TTL_MS) return seen.installing;
-    const pod = await api.find(podPath(name));
+    let pod;
+    try {
+      pod = await api.find(podPath(name));
+    } catch (error) {
+      log(`${name}: whether it installs its agent: ${error.message}`);
+      return null;
+    }
     const answer =
       Boolean(pod?.metadata?.annotations?.[AGENT_INIT]) && pod.status?.phase === "Pending";
     if (answer) pendingInstalls.set(name, { at: now(), installing: true });

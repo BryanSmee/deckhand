@@ -178,6 +178,7 @@ test("egress: the runner's builder and installs answered by the images, an insta
   config.brokerUrl = "http://127.0.0.1:0";
   const broker = createBroker({});
   let installing = true;
+  let asked = 0;
   const ctx = {
     config,
     broker,
@@ -187,7 +188,10 @@ test("egress: the runner's builder and installs answered by the images, an insta
       proxyAddresses: async () => ["127.0.0.1"],
       address: async () => ["10.1.0.2"],
       engineAddress: async () => null,
-      installing: async (name) => name === "a" && installing,
+      installing: async (name) => {
+        asked++;
+        return installing === null ? null : name === "a" && installing;
+      },
     },
     images: {
       egressFor: async (ip, host) =>
@@ -236,9 +240,19 @@ test("egress: the runner's builder and installs answered by the images, an insta
     relay: false,
   });
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
+  // The API can't tell: the run's own hosts for that connection, and it asks again.
+  installing = null;
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
+  installing = true;
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
   installing = false;
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
   assert.equal((await ask("10.1.0.2", "registry.npmjs.org")).allowed, false);
+  // Past its install, the run's connections no longer ask the runner (an API call each).
+  const before = asked;
+  installing = true;
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
+  assert.equal(asked, before);
   // Anyone else: refused.
   assert.equal((await ask("10.7.7.7", "pypi.org")).allowed, false);
 });

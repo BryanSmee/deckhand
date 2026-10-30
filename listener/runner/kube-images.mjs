@@ -18,15 +18,86 @@
 // The installs run as INSTALL_USER, neither root nor the sandbox's user: Pod Security
 // `restricted` allows no root, and a sandbox mustn't own what the next one runs.
 import { setTimeout as delay } from "node:timers/promises";
-import { checked } from "../docker.mjs";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
-import { INSTALL_USER, kubeName, labelValue, quantity } from "./kubernetes.mjs";
+import { INSTALL_USER, kubeName, labelValue, quantity, selects } from "./kubernetes.mjs";
 import { aliasOf } from "./networks.mjs";
+import { SANDBOX_USER } from "../sandbox-spec.mjs";
 import { authsOf, createRegistry, parseRef } from "./registry.mjs";
 
 const DISCOVERY = "/apis/discovery.k8s.io/v1/namespaces";
+const NETWORKING = "/apis/networking.k8s.io/v1/namespaces";
 const POLL_MS = 2000;
+// A build that hasn't ended by then (a RUN step that hangs) is stopped: builds of repos
+// granted other hosts wait for it (gate()).
+export const BUILD_MS = 60 * 60_000;
+// How long a check that a claim is writable may take, from creating its pod.
+const CHECK_MS = 5 * 60_000;
+// What a pod's shell exits with when its claim isn't writable (writable()).
+const NOT_WRITABLE = 97;
+
+// The hosts a registry sends a client to besides itself, known beforehand: the BuildKit daemon
+// pulls through the egress proxy before the listener has seen them (registry.mjs hostsOf()
+// learns the others as the listener reads the registry). Docker Hub's API, token service and
+// layer storage; GitHub's registry's layer storage.
+export const REGISTRY_HOSTS = {
+  "docker.io": [
+    "registry-1.docker.io",
+    "auth.docker.io",
+    "production.cloudflare.docker.com",
+    "production.cloudfront.docker.com",
+    "docker-images-prod.6aa30f8b08e16409b46e0173d6de2f56.r2.cloudflarestorage.com",
+  ],
+  "ghcr.io": ["pkg-containers.githubusercontent.com"],
+};
+
+// Why the namespace's NetworkPolicies (`policies`) don't isolate the BuildKit daemon's pods
+// (`labels`), or null when they do: one picks them for Egress and one for Ingress, and none of
+// those that pick them lets them out but to the namespace's pods (the egress proxy) and to DNS
+// (port 53), or in but from the namespace's pods (the listener). Without that, a Dockerfile's
+// RUN steps could skip the proxy, or anything could drive the daemon. Fail closed.
+export function builderIsolationProblem(policies, labels) {
+  const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
+  const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
+  for (const type of ["Egress", "Ingress"]) {
+    if (!picking.some((p) => types(p).includes(type))) {
+      return `no NetworkPolicy picks the BuildKit daemon's pods for ${type}`;
+    }
+  }
+  const dns = (rule) =>
+    rule.ports?.length && rule.ports.every((port) => String(port.port) === "53");
+  for (const p of picking) {
+    const name = `the NetworkPolicy ${p.metadata?.name}`;
+    for (const rule of p.spec.egress ?? []) {
+      if (!rule.to?.length) return `${name} lets the BuildKit daemon reach anything`;
+      const wide = rule.to.some(
+        (peer) => peer.ipBlock || peer.namespaceSelector || !peer.podSelector,
+      );
+      if (wide && !dns(rule)) {
+        return `${name} lets the BuildKit daemon reach beyond the namespace's pods (DNS aside)`;
+      }
+    }
+    for (const rule of p.spec.ingress ?? []) {
+      const wide =
+        !rule.from?.length ||
+        rule.from.some((peer) => peer.ipBlock || peer.namespaceSelector || !peer.podSelector);
+      if (wide)
+        return `${name} lets traffic in to the BuildKit daemon from beyond the namespace's pods`;
+    }
+  }
+  return null;
+}
+
+// A shell command for a pod: fails with NOT_WRITABLE unless its user may write to "$1" (a
+// claim's mount point), then runs the rest, if any. The kubelet applies a pod's fsGroup to
+// a claim only where its storage allows (a CSI driver's fsGroupPolicy, NFS's root_squash):
+// said plainly, rather than an EACCES halfway through an install.
+const WRITABLE = `p=$1; shift; t=$(mktemp -p "$p" .deckhand-check-XXXXXX 2>/dev/null) && rm -f "$t" || exit ${NOT_WRITABLE}; [ $# -eq 0 ] || exec "$@"`;
+export const writable = (path, ...command) => ["sh", "-c", WRITABLE, "sh", path, ...command];
+
+// What NOT_WRITABLE means, for an error: a claim the storage class doesn't hand to the pod.
+const notWritable = (claim, user, storageClass) =>
+  `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/setup.md, Kubernetes runner)`;
 // An install pod that hasn't ended by then (stuck Pending, npm hanging) fails, and goes.
 const INSTALL_MS = 15 * 60_000;
 // The pull Secret and the BuildKit pods' addresses, read again after this long.
@@ -41,6 +112,7 @@ export function createKubernetesImages({
   log = () => {},
   now = Date.now,
   sleep = delay,
+  buildMs = BUILD_MS,
 }) {
   const k = config.kubernetes;
   const owner = { "deckhand.owner": labelValue(config.prefix) };
@@ -74,31 +146,48 @@ export function createKubernetesImages({
   }
 
   // Builds in progress: the hosts each may reach, by what they are (gate()).
-  const running = { key: null, count: 0, hosts: [], trusted: [], waiting: [] };
+  const running = { key: null, count: 0, hosts: [], trusted: [] };
+  const queue = []; // { key, hosts, trusted, admit }, first come first served
 
   // Builds of one set of hosts run together; another set waits until they are done: the
   // daemon's address is the same for all of them, and one repo's Dockerfile mustn't reach
-  // what another's grant allows.
+  // what another's grant allows. In order of arrival: once a build of another set waits,
+  // builds of the running set wait behind it, rather than keep it waiting for ever.
   async function gate(hosts, trusted) {
     const key = JSON.stringify([[...hosts].sort(), [...trusted].sort()]);
-    while (running.count && running.key !== key) {
-      await new Promise((resolve) => running.waiting.push(resolve));
+    if (!queue.length && (!running.count || running.key === key)) {
+      Object.assign(running, { key, hosts, trusted, count: running.count + 1 });
+    } else {
+      await new Promise((admit) => queue.push({ key, hosts, trusted, admit }));
     }
-    Object.assign(running, { key, hosts, trusted, count: running.count + 1 });
     return () => {
       running.count--;
       if (running.count) return;
       running.key = null;
-      for (const wake of running.waiting.splice(0)) wake();
+      // The next set: the first in line, and those of the same set right behind it.
+      while (queue.length && (!running.count || queue[0].key === running.key)) {
+        const next = queue.shift();
+        Object.assign(running, {
+          key: next.key,
+          hosts: next.hosts,
+          trusted: next.trusted,
+          count: running.count + 1,
+        });
+        next.admit();
+      }
     };
   }
 
   // `hosts` and `trusted`: what the run may reach (access.mjs). Its RUN steps go through the
   // egress proxy; the daemon's own pulls and pushes do as its Deployment's environment says
-  // (docs/setup.md, Kubernetes runner).
+  // (docs/setup.md, Kubernetes runner), with the registries' hosts (builderHosts()). Not
+  // without the NetworkPolicies that make the proxy its only way out (builderIsolation()).
   async function build({ dir, dockerfile, tag, labels = {}, output, hosts = [], trusted = [] }) {
-    const registryHosts = [parseRef(tag).host, parseRef(config.image).host];
-    const done = await gate([...hosts, ...registryHosts], [...trusted, ...registryHosts]);
+    const problem = await builderIsolation();
+    if (problem) return { code: 1, out: "", err: problem };
+    const registries = builderHosts([tag, config.image]);
+    const done = await gate([...hosts, ...registries], [...trusted, ...registries]);
+    const signal = AbortSignal.timeout(buildMs);
     try {
       const args = buildArgs({
         addr: k.buildkit,
@@ -112,12 +201,59 @@ export function createKubernetesImages({
         },
         labels,
       });
-      return await withDockerConfig(await pullConfig(), (env) =>
-        buildctl(args, { env, onData: output }),
+      const built = await withDockerConfig(await pullConfig(), (env) =>
+        buildctl(args, { env, onData: output, signal }),
       );
+      if (signal.aborted) {
+        return { code: 1, out: "", err: `stopped after ${buildMs / 60_000} min` };
+      }
+      return built;
     } finally {
       done();
     }
+  }
+
+  // The registries of `refs` (the image built, its base), and the hosts each sends a puller
+  // to: those known (REGISTRY_HOSTS), those the listener saw it send it to, and the operator's
+  // (KUBERNETES_REGISTRY_HOSTS).
+  function builderHosts(refs) {
+    const found = [...(k.registryHosts ?? [])];
+    for (const host of new Set(refs.map((ref) => parseRef(ref).host))) {
+      found.push(host, ...(REGISTRY_HOSTS[host] ?? []), ...registry.hostsOf(host));
+    }
+    return [...new Set(found)];
+  }
+
+  // builderIsolationProblem() for the daemon's pods (the endpoints of its Service), checked
+  // again after a while; also a problem: no daemon behind its Service.
+  let isolation = { at: -Infinity, problem: null };
+  async function builderIsolation() {
+    if (now() - isolation.at < BUILDER_TTL_MS) return isolation.problem;
+    const service = aliasOf(k.buildkit);
+    const { items: slices = [] } = await api.get(`${DISCOVERY}/${api.namespace}/endpointslices`, {
+      labelSelector: `kubernetes.io/service-name=${service}`,
+    });
+    const pods = slices.flatMap((s) =>
+      (s.endpoints ?? []).map((e) => e.targetRef).filter((r) => r?.kind === "Pod"),
+    );
+    let problem = pods.length
+      ? null
+      : `no BuildKit daemon behind the Service ${service} in the namespace ${api.namespace} (KUBERNETES_BUILDKIT)`;
+    if (!problem) {
+      const { items: policies = [] } = await api.get(
+        `${NETWORKING}/${api.namespace}/networkpolicies`,
+      );
+      for (const ref of pods) {
+        const labels = (await api.find(`pods/${ref.name}`))?.metadata?.labels ?? {};
+        problem = builderIsolationProblem(policies, labels);
+        if (problem) break;
+      }
+    }
+    if (problem) {
+      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the listener reach it (see docs/setup.md, Repo images on Kubernetes)`;
+    }
+    isolation = { at: now(), problem };
+    return problem;
   }
 
   // The egress proxy, for the build's RUN steps: Docker's predefined proxy build args.
@@ -160,7 +296,10 @@ export function createKubernetesImages({
       if (!digest) return;
       for (const other of new Set([...kept, ...used.filter((i) => i.startsWith(`${name}:`))])) {
         if (other === ref || (await registry.digest(other)) !== digest) continue;
-        await registry.remove(name, ref.slice(name.length + 1)).catch(() => {});
+        // Logged, as a refused delete is: the tag is tried again at the next prune.
+        await registry
+          .remove(name, ref.slice(name.length + 1))
+          .catch((error) => log(`Pruning ${ref} (its tag only): ${error.message}`));
         return;
       }
       await registry.remove(name, digest);
@@ -173,7 +312,8 @@ export function createKubernetesImages({
     return Boolean(await api.find(claimPath(name)));
   }
 
-  // A cache's claim. No chown: the sandbox pod's fsGroup makes it the sandbox user's.
+  // A cache's claim. No chown: the sandbox pod's fsGroup makes it the sandbox user's, which a
+  // short pod as that user checks first (writable()); a claim it can't write goes again.
   async function createVolume(name, labels = {}) {
     if (!k.cacheStorageClass) {
       return { code: 1, out: "", err: "no KUBERNETES_CACHE_STORAGE_CLASS" };
@@ -183,10 +323,30 @@ export function createKubernetesImages({
         "persistentvolumeclaims",
         claim(name, labels, k.cacheStorageClass, k.cacheSize, "cache"),
       );
-      return { code: 0, out: "", err: "" };
     } catch (error) {
       if (error.status === 409) return { code: 0, out: "", err: "" };
       return { code: 1, out: "", err: error.message };
+    }
+    try {
+      const ended = await runPod({
+        pod: kubeName(`${config.prefix}-check-${kubeName(name)}`),
+        role: "check",
+        user: SANDBOX_USER,
+        command: writable("/cache"),
+        claim: kubeName(name),
+        mount: "/cache",
+        timeoutMs: CHECK_MS,
+      });
+      if (ended.code === 0) return { code: 0, out: "", err: "" };
+      await removeVolume(name).catch(() => {});
+      const err =
+        ended.code === NOT_WRITABLE
+          ? notWritable(kubeName(name), SANDBOX_USER, k.cacheStorageClass)
+          : `checking it: ${ended.why}`;
+      return { code: 1, out: "", err };
+    } catch (error) {
+      await removeVolume(name).catch(() => {});
+      return { code: 1, out: "", err: `checking it: ${error.message}` };
     }
   }
 
@@ -232,7 +392,7 @@ export function createKubernetesImages({
     return true;
   }
 
-  // Installs pods by IP while they run, for egressFor().
+  // Install pods while they run, by name, for egressFor().
   const installs = new Map(); // pod name → hosts
 
   // `spec`: agents' install() and the agent's name. The installer is idempotent (one folder
@@ -251,14 +411,52 @@ export function createKubernetesImages({
     output,
   }) {
     if (!(await agentClaim(volume))) return;
-    const pod = kubeName(`${config.prefix}-install-${name}-${version}`);
+    const ended = await runPod({
+      pod: kubeName(`${config.prefix}-install-${name}-${version}`),
+      role: "install",
+      user: INSTALL_USER,
+      command: writable(mount, command),
+      env: { [versionVar]: version, ...env, ...proxyEnv(config) },
+      claim: kubeName(volume),
+      mount,
+      hosts,
+      output,
+      timeoutMs: INSTALL_MS,
+    });
+    if (ended.code === NOT_WRITABLE) {
+      throw new Error(
+        `installing ${displayName} ${version} failed: ${notWritable(kubeName(volume), INSTALL_USER, k.agentStorageClass)}`,
+      );
+    }
+    if (ended.code !== 0) {
+      throw new Error(`installing ${displayName} ${version} failed: ${ended.why}`);
+    }
+  }
+
+  // A short pod of the base image with `claim` at `mount`, as `user` (its group the claim's),
+  // Pod Security `restricted`, removed once it ended; a leftover of the same name goes first.
+  // `hosts`: what it may reach through the egress proxy (egressFor()), none without.
+  // → { code, why }: its exit code (-1 when it didn't end within `timeoutMs`) and why it
+  // failed. Its log goes to `output`.
+  async function runPod({
+    pod,
+    role,
+    user,
+    command,
+    env = {},
+    claim,
+    mount,
+    hosts,
+    output,
+    timeoutMs,
+  }) {
     await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
     await waitGone(pod);
     const limits = { cpu: String(config.limits.cpus), memory: quantity(config.limits.memory) };
     await api.create("pods", {
       apiVersion: "v1",
       kind: "Pod",
-      metadata: { name: pod, labels: { ...owner, "deckhand.role": "install" } },
+      metadata: { name: pod, labels: { ...owner, "deckhand.role": role } },
       spec: {
         restartPolicy: "Never",
         automountServiceAccountToken: false,
@@ -266,21 +464,19 @@ export function createKubernetesImages({
         ...pullSecrets(),
         securityContext: {
           runAsNonRoot: true,
-          runAsUser: INSTALL_USER.uid,
-          runAsGroup: INSTALL_USER.gid,
-          // The claim becomes the installer's group's to write.
-          fsGroup: INSTALL_USER.gid,
+          runAsUser: user.uid,
+          runAsGroup: user.gid,
+          // The claim becomes the user's group's to write, where its storage applies it.
+          fsGroup: user.gid,
           fsGroupChangePolicy: "OnRootMismatch",
           seccompProfile: { type: "RuntimeDefault" },
         },
         containers: [
           {
-            name: "install",
+            name: role,
             image: config.image,
-            command: [command],
-            env: Object.entries({ [versionVar]: version, ...env, ...proxyEnv(config) }).map(
-              ([key, value]) => ({ name: key, value: String(value) }),
-            ),
+            command,
+            env: Object.entries(env).map(([key, value]) => ({ name: key, value: String(value) })),
             resources: { limits, requests: limits },
             securityContext: {
               allowPrivilegeEscalation: false,
@@ -288,23 +484,20 @@ export function createKubernetesImages({
               runAsNonRoot: true,
               seccompProfile: { type: "RuntimeDefault" },
             },
-            volumeMounts: [{ name: "agent", mountPath: mount }],
+            volumeMounts: [{ name: "claim", mountPath: mount }],
           },
         ],
-        volumes: [{ name: "agent", persistentVolumeClaim: { claimName: kubeName(volume) } }],
+        volumes: [{ name: "claim", persistentVolumeClaim: { claimName: claim } }],
       },
     });
-    installs.set(pod, hosts);
+    if (hosts) installs.set(pod, hosts);
     try {
-      const ended = await ending(pod);
+      const ended = await ending(pod, timeoutMs);
       await readLog(pod, output);
-      const code = ended?.status?.containerStatuses?.[0]?.state?.terminated?.exitCode;
-      if (ended?.status?.phase !== "Succeeded") {
-        const why = ended
-          ? `exit ${code ?? ended.status?.phase}`
-          : `no end in ${INSTALL_MS / 60000} min`;
-        throw new Error(`installing ${displayName} ${version} failed: ${why}`);
-      }
+      if (!ended) return { code: -1, why: `no end in ${timeoutMs / 60000} min` };
+      const code = ended.status?.containerStatuses?.[0]?.state?.terminated?.exitCode;
+      if (ended.status?.phase === "Succeeded") return { code: 0, why: null };
+      return { code: code ?? -1, why: `exit ${code ?? ended.status?.phase}` };
     } finally {
       installs.delete(pod);
       await api
@@ -317,12 +510,12 @@ export function createKubernetesImages({
     return k.registrySecret ? { imagePullSecrets: [{ name: kubeName(k.registrySecret) }] } : {};
   }
 
-  // The pod once it has ended, or null when it doesn't within INSTALL_MS.
-  async function ending(pod) {
+  // The pod once it has ended, or null when it doesn't within `timeoutMs`.
+  async function ending(pod, timeoutMs) {
     const since = now();
-    while (now() - since < INSTALL_MS) {
+    while (now() - since < timeoutMs) {
       const found = await api.find(`pods/${pod}`);
-      if (!found) throw new Error(`the install pod ${pod} is gone`);
+      if (!found) throw new Error(`the pod ${pod} is gone`);
       if (["Succeeded", "Failed"].includes(found.status?.phase)) return found;
       await sleep(POLL_MS);
     }
@@ -397,7 +590,7 @@ export function createKubernetesImages({
     keepsCaches: Boolean(k.cacheStorageClass),
     // What a missing piece costs a run, said in its log (preparation.mjs).
     noCaches: "no KUBERNETES_CACHE_STORAGE_CLASS is set",
-    // fsGroup hands a new claim to the sandbox's user: no chown job.
+    // fsGroup hands a new claim to the sandbox's user (createVolume() checks it): no chown job.
     ownsVolumes: true,
     installAgent,
     egressFor,

@@ -147,8 +147,12 @@ export function createBrokerHttp(ctx) {
     }
     const live = task?.live;
     // Its pod still installs its agent (an init container, runner/kubernetes.mjs): the
-    // install's hosts only, tunnelled, until the sandbox itself starts.
-    if (task && (await ctx.runner.installing?.(task.name))) {
+    // install's hosts only, tunnelled, until the sandbox itself starts. Once it has, the run
+    // never asks again: no API call per connection. The API failing to tell: the run's own
+    // hosts, for this connection only.
+    const installs = task && !live.pastInstall ? await ctx.runner.installing?.(task.name) : false;
+    if (installs === false && live) live.pastInstall = true;
+    if (installs) {
       const hosts = agentFor(live.record?.agent).install(config).hosts ?? [];
       const answer = egressPolicy(host, hosts, [], [], [], { decrypt: false });
       if (!answer.allowed)

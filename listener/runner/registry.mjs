@@ -78,6 +78,16 @@ export function challenge(header) {
 // `auths()`: host → { username, password }, read at each call (the Secret may change).
 export function createRegistry({ fetch = globalThis.fetch, auths = async () => ({}) } = {}) {
   const base = (host) => `https://${host === HUB ? HUB_API : host}/v2/`;
+  // Registry host → the other hosts it sent us to: its token service (a challenge's realm)
+  // and the storage a blob's download redirected to. What the BuildKit daemon reaches too
+  // when it pulls from it (kube-images.mjs).
+  const seen = new Map();
+  const saw = (host, url) => {
+    const other = new URL(url).host;
+    if (!other || other === host) return;
+    if (!seen.has(host)) seen.set(host, new Set());
+    seen.get(host).add(other);
+  };
 
   // A request to `host`'s API, authenticated as it asks: `scope` is what a bearer token is
   // asked for ("repository:<name>:pull").
@@ -94,6 +104,7 @@ export function createRegistry({ fetch = globalThis.fetch, auths = async () => (
       : null;
     let authorization;
     if (asked?.scheme === "bearer" && asked.params.realm) {
+      saw(host, asked.params.realm);
       authorization = `Bearer ${await token(asked.params, scope, basic)}`;
     } else if (asked?.scheme === "basic" && basic) {
       authorization = basic;
@@ -165,6 +176,7 @@ export function createRegistry({ fetch = globalThis.fetch, auths = async () => (
   async function json(host, path, scope, accept) {
     const res = await request(host, "GET", path, { accept, scope });
     if (!res.ok) throw await failed(`reading ${host}/${path}`, res);
+    if (res.url) saw(host, res.url);
     return { type: res.headers.get("content-type")?.split(";")[0], body: await res.json() };
   }
 
@@ -198,5 +210,12 @@ export function createRegistry({ fetch = globalThis.fetch, auths = async () => (
     await res.body?.cancel();
   }
 
-  return { digest, tags, created, remove };
+  return {
+    digest,
+    tags,
+    created,
+    remove,
+    // The hosts `host` sent this client to so far (seen above).
+    hostsOf: (host) => [...(seen.get(host) ?? [])],
+  };
 }

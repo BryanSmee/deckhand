@@ -11,6 +11,7 @@ import { apiBase, createKubeApi, KubeError } from "../listener/runner/kube-api.m
 import {
   createKubernetesRunner,
   INSTALL_USER,
+  INSTALLING,
   isolationProblem,
   kubeName,
   labelValue,
@@ -525,6 +526,62 @@ test("installing: while its pod with an init container is Pending, not once it r
   assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
 });
 
+test("installing: an API that can't tell is no answer, not a refused connection", async (t) => {
+  let failing = false;
+  const { runner } = setup(t, {
+    fail: ({ method, path }) =>
+      failing && method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc")
+        ? Response.json({ message: "etcd timeout" }, { status: 500 })
+        : null,
+  });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  failing = true;
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), null);
+});
+
+test("follow: a failed install in the init container fails the run, its output in the log", async (t) => {
+  const { runner, objects, calls, logged } = setup(t, {
+    logs: { "dh-org-repo-12-abc": ["npm error 403 registry.npmjs.org\n"] },
+  });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.status = {
+    phase: "Failed",
+    initContainerStatuses: [{ name: "agent-install", state: { terminated: { exitCode: 1 } } }],
+  };
+  const err = [];
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (line) => err.push(line) }),
+    (error) =>
+      error instanceof RunError &&
+      /installing its agent \(dh-claude-code\) in its init container failed \(exit 1\); the installer's output is in the run's log/.test(
+        error.message,
+      ),
+  );
+  assert.deepEqual(err, ["npm error 403 registry.npmjs.org"]);
+  assert.ok(calls.some((c) => c.includes("/log?container=agent-install")));
+  assert.ok(logged.some((line) => /installing dh-claude-code failed \(exit 1\)/.test(line)));
+});
+
+test("follow: an install still running past KUBERNETES_PENDING_MINUTES says so, not 'make room'", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:00:00Z";
+  pod.status = {
+    phase: "Pending",
+    initContainerStatuses: [{ name: "agent-install", state: { running: {} } }],
+    containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+  };
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+    (error) =>
+      /stayed Pending for 10 min \(its init container is installing the agent\)\. The operator can check that the agent's install reaches its hosts/.test(
+        error.message,
+      ),
+  );
+});
+
 test("list and state: this deployment's sandbox pods, Pending and Running as running", async (t) => {
   const { runner, objects } = setup(t);
   await runner.start(spec());
@@ -704,6 +761,23 @@ test("follow: a pod stuck mounting its volumes fails with its latest Warning eve
     },
   });
   await assert.rejects(follow(), /\(Kubernetes gave no reason: its volumes may not have mounted\)/);
+});
+
+test("pendingReason: an init container's image it can't pull, or its install running", () => {
+  assert.equal(
+    pendingReason({
+      status: {
+        initContainerStatuses: [
+          { state: { waiting: { reason: "ErrImagePull", message: "denied" } } },
+        ],
+      },
+    }),
+    "ErrImagePull: denied",
+  );
+  assert.equal(
+    pendingReason({ status: { initContainerStatuses: [{ state: { running: {} } }] } }),
+    INSTALLING,
+  );
 });
 
 test("pendingReason: an image it can't pull before scheduling, else Kubernetes' silence", () => {

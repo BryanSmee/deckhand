@@ -405,6 +405,7 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
     registry: null,
     registrySecret: null,
     buildkit: "tcp://buildkitd:1234",
+    registryHosts: [],
     cacheStorageClass: null,
     cacheSize: "10Gi",
     agentStorageClass: null,
@@ -425,6 +426,7 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
     registry: null,
     registrySecret: null,
     buildkit: "tcp://buildkitd:1234",
+    registryHosts: [],
     cacheStorageClass: null,
     cacheSize: "10Gi",
     agentStorageClass: null,
@@ -446,12 +448,14 @@ test("KUBERNETES_REGISTRY and the shared claims: a registry's name, the agents' 
     KUBERNETES_REGISTRY: "Registry.Example.com:5000/deckhand/",
     KUBERNETES_REGISTRY_SECRET: "pull",
     KUBERNETES_BUILDKIT: "tcp://builder:1234",
+    KUBERNETES_REGISTRY_HOSTS: "S3.example.com, *.cdn.example",
     KUBERNETES_CACHE_STORAGE_CLASS: "nfs",
     KUBERNETES_CACHE_SIZE: "50Gi",
   }).kubernetes;
   assert.equal(set.registry, "registry.example.com:5000/deckhand");
   assert.equal(set.registrySecret, "pull");
   assert.equal(set.buildkit, "tcp://builder:1234");
+  assert.deepEqual(set.registryHosts, ["s3.example.com", "*.cdn.example"]);
   assert.equal(set.cacheStorageClass, "nfs");
   assert.equal(set.cacheSize, "50Gi");
   assert.equal(set.agentStorageClass, "nfs");
@@ -472,6 +476,10 @@ test("KUBERNETES_REGISTRY and the shared claims: a registry's name, the agents' 
       /KUBERNETES_REGISTRY: expected a registry host and an optional path/,
     );
   }
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_REGISTRY_HOSTS: "a.example, https://b" }),
+    /KUBERNETES_REGISTRY_HOSTS: https:\/\/b: expected a host name/,
+  );
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_CACHE_SIZE: "lots" }),
     /KUBERNETES_CACHE_SIZE: expected a size/,
