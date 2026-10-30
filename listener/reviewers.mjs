@@ -11,7 +11,8 @@ import { repoAllowed } from "./config.mjs";
 import { headInRepo, linkedIssue, prId, taskKey } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
 import { BUILT_IN } from "./modes.mjs";
-import { pullInput } from "./reviews.mjs";
+import { pullInput } from "./policies.mjs";
+import { sameTask } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
 // A requested head commit is forgotten after this: the pull request is long merged or closed.
@@ -57,6 +58,24 @@ export function runFields(record) {
   };
 }
 
+// The run whose pull request `pr` is (GitHub's), among `runs` (runlog.mjs records, newest
+// first): the newest on task `key` that could push and had started when GitHub created it, so
+// the run that opened it, not a later follow-up in another mode. Null when none is known any
+// more (an older run dropped from the history).
+export function openerOf(runs, key, pr) {
+  const created = Date.parse(pr?.created_at ?? "");
+  return (
+    runs.find(
+      (r) =>
+        sameTask(r.key, key) &&
+        !r.light &&
+        Number.isFinite(created) &&
+        Number.isFinite(r.startedAt) &&
+        r.startedAt <= created,
+    ) ?? null
+  );
+}
+
 // The input of `deny_request_review` (docs/repo-config.md#the-reviewers-input): the pull
 // request's (pullInput(), no review), the `reviewers` to request, `when` ("ready": it turned
 // ready; "fix": a run pushed to it since), and the run's fields (runFields()).
@@ -69,9 +88,12 @@ export function requestInput({ info, pr, files, issue, reviewers, when, run, now
   };
 }
 
+// A failure's message (policies.mjs failure()), not a rule's.
+const isPolicyError = (message) => /^policy error/i.test(message);
+
 // `repoSettings(repo, base)`: the repo's settings from its default branch; `github`: the App's
-// calls; `runOf(key)`: the newest record of a run that could push on task `key` (the one whose
-// pull request it is), or null; `policies`: the policies' engine (policies.mjs), none without;
+// calls; `runOf(key, pr)`: the record of the run whose pull request `pr` is, on task `key`
+// (openerOf()), or null; `policies`: the policies' engine (policies.mjs), none without;
 // `decided(repo, pr, entry)`: a decision a policy was asked for, for the task's page.
 export function createReviewers({
   path,
@@ -130,11 +152,13 @@ export function createReviewers({
       // this is its turning ready, as far as its reviewers know.
       if (!requested.has(key)) when = "ready";
       const task = taskKey(repo, linkedIssue(pr, repo, config.bot) ?? prId(number));
-      const run = runFields(runOf(task));
+      const run = runFields(runOf(task, pr));
       const denied = await deny(repo, base, pr, { reviewers, when, run });
-      remember(key, head);
       if (denied.length) {
         log(`${key}: reviewers not requested: ${denied.join(" | ")}`);
+        // A rule's refusal holds at this head; a failure (GitHub couldn't give the input, a
+        // policy that didn't compile) is asked again at the next delivery or run's end.
+        if (!denied.some(isPolicyError)) remember(key, head);
         return null;
       }
       const res = await github(
@@ -145,10 +169,13 @@ export function createReviewers({
         [422],
       );
       if (!res.ok) {
-        // A login that isn't a collaborator: GitHub refuses the whole request.
         log(`${key}: requesting ${reviewers.join(", ")}: GitHub answered ${res.status}`);
+        // A login that isn't a collaborator: GitHub refuses the whole request, and would again.
+        // Anything else (5xx, a rate limit) is asked again at the next delivery or run's end.
+        if (res.status === 422) remember(key, head);
         return null;
       }
+      remember(key, head);
       log(`${key}: reviewers requested (${when}): ${reviewers.join(", ")}`);
       return reviewers;
     });

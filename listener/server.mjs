@@ -63,7 +63,7 @@ import { readRepoFile } from "./repo-config.mjs";
 import { createRepoSettings } from "./repo-settings.mjs";
 import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
-import { createReviewers } from "./reviewers.mjs";
+import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
@@ -72,7 +72,6 @@ import { createBackend } from "./runner/index.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
-import { sameTask } from "./spelling.mjs";
 import { createStatus, serverInfo, serverSetup } from "./status.mjs";
 import { createSync } from "./sync.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
@@ -544,6 +543,8 @@ ctx.reviews = createReviews({
   reply: ctx.reply,
   policies,
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
+  // `/mode policy`'s deny_request_review, about the run that opened the pull request.
+  runOf: (key, pr) => openerOf(ctx.runs, key, pr),
   grantOf: (repo) => {
     try {
       return grantFor(loadGrants(config), config, repo);
@@ -570,8 +571,8 @@ ctx.reviewers = createReviewers({
   config,
   repoSettings,
   github,
-  // The run whose pull request it is: the newest on its task that could push.
-  runOf: (key) => ctx.runs.find((r) => sameTask(r.key, key) && !r.light) ?? null,
+  // The run whose pull request it is: the one that opened it.
+  runOf: (key, pr) => openerOf(ctx.runs, key, pr),
   policies,
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   log,

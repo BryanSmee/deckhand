@@ -92,7 +92,16 @@ function fakeGitHub(over = {}) {
 // repo's `yaml`, and its grant (`allowAutoMerge`).
 function setup(
   t,
-  { yaml = MERGE, grant = true, granted = {}, path, busy = () => false, policies, ...over } = {},
+  {
+    yaml = MERGE,
+    grant = true,
+    granted = {},
+    path,
+    busy = () => false,
+    policies,
+    runOf,
+    ...over
+  } = {},
 ) {
   let time = 1_800_000_000_000;
   const advance = (ms) => (time += ms);
@@ -113,6 +122,7 @@ function setup(
     grantOf: () => ({ allowAutoMerge: grant, ...granted }),
     merged: (repo, pr) => merged.push(pr.number),
     policies,
+    runOf,
     decided: (repo, pr, entry) => decided.push({ repo, pr: pr.number, ...entry }),
     sleep: async () => {},
     now: () => (time += 1000),
@@ -636,6 +646,9 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     policies: policy.engine,
     pr: { additions: 12 },
     yaml: `${MERGE}  request: [alice]\n`,
+    // The run that opened it: a repository mode's.
+    runOf: (key, pr) =>
+      key === "org/repo#12" && pr.number === 5 ? { taskMode: "plan", light: false } : null,
   });
   const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
   // The brainstorm sample's denial is no decision: not counted.
@@ -699,11 +712,11 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
       ["deny_github", undefined, false],
     ],
   );
-  // The reviewers as when it turns ready, by the work run whose pull request it is.
+  // The reviewers as when it turns ready, by the run that opened it, as the listener would ask.
   const request = policy.evals[4];
   assert.deepEqual(
     [request.reviewers, request.when, request.mode, request.custom_mode, "fixes" in request],
-    [["alice"], "ready", "work", false, false],
+    [["alice"], "ready", "plan", true, false],
   );
   assert.deepEqual(
     policy.evals.slice(5).map((e) => [e.mode, e.action, e.target.kind, e.target.number]),

@@ -12,6 +12,7 @@ import {
   readyPull,
   requestInput,
   reviewersFor,
+  openerOf,
   runFields,
 } from "../listener/reviewers.mjs";
 import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
@@ -92,7 +93,7 @@ test("runFields: the run whose pull request it is, as deny_github's input has it
 });
 
 // A fake GitHub for the reviewers: the pull request (`pull()`, changed as pushes would), the
-// repo, its files and issue, and the reviewers' POST, answered `status`.
+// repo, its files and issue, and the reviewers' POST, answered `status` (or `status()`).
 function fakeGitHub({ pull = () => PR, status = 201 } = {}) {
   const calls = [];
   const github = async (repo, method, path, body) => {
@@ -106,7 +107,7 @@ function fakeGitHub({ pull = () => PR, status = 201 } = {}) {
       return Response.json({ title: "A thing", labels: [{ name: "ui" }] });
     }
     if (method === "POST" && path === "/repos/org/repo/pulls/5/requested_reviewers") {
-      return Response.json({}, { status });
+      return Response.json({}, { status: typeof status === "function" ? status() : status });
     }
     return new Response("{}", { status: 404 });
   };
@@ -125,7 +126,8 @@ function setup(t, { yaml = "review:\n  request: [alice, bob]\n", run, ...over } 
     config,
     repoSettings: async () => read,
     github: gh.github,
-    runOf: (key) => (key === "org/repo#12" ? (run ?? { taskMode: "work", light: false }) : null),
+    runOf: (key, pr) =>
+      key === "org/repo#12" && pr.number === 5 ? (run ?? { taskMode: "work", light: false }) : null,
     policies: over.policies ?? null,
     decided: (repo, pr, entry) => decided.push(entry),
     log: (line) => logs.push(line),
@@ -173,10 +175,61 @@ test("ready: nothing requested without review.request, on a draft, or someone el
   const closed = setup(t, { pull: () => ({ ...PR, state: "closed" }) });
   assert.equal(await closed.reviewers.pushed({ repo: "org/repo", base: "trunk", number: 5 }), null);
   assert.deepEqual([...draft.posts(), ...closed.posts()], []);
-  // GitHub refuses (a login that isn't a collaborator): said in the log.
+  // GitHub refuses (a login that isn't a collaborator): said in the log, and not asked again
+  // at that head, as it would refuse again.
   const refused = setup(t, { status: 422 });
   assert.equal(await refused.reviewers.ready("pull_request", delivery("ready_for_review")), null);
   assert.match(refused.logs.at(-1), /requesting alice, bob: GitHub answered 422/);
+  await refused.reviewers.ready("pull_request", delivery("ready_for_review"));
+  assert.equal(refused.posts().length, 1);
+});
+
+test("a failure isn't a decision: GitHub's 5xx or a policy error is asked again", async (t) => {
+  // GitHub fails, then the delivery comes again: requested then.
+  const answers = [500, 201];
+  const flaky = setup(t, { status: () => answers.shift() });
+  assert.equal(await flaky.reviewers.ready("pull_request", delivery("ready_for_review")), null);
+  assert.match(flaky.logs.at(-1), /GitHub answered 500/);
+  assert.deepEqual(await flaky.reviewers.ready("pull_request", delivery("ready_for_review")), [
+    "alice",
+    "bob",
+  ]);
+  assert.equal(await flaky.reviewers.ready("pull_request", delivery("ready_for_review")), null);
+  assert.equal(flaky.posts().length, 2);
+  // The policy input can't be built (opa fails here the same way): a `policy error`, asked
+  // again at the run's end, which a rule's refusal isn't.
+  let broken = true;
+  const policy = policyEngine(t, {
+    files: { "r.rego": "package deckhand" },
+    ref: "trunk",
+    messages: () => (broken ? 7 : []),
+  });
+  const s = setup(t, { policies: policy.engine });
+  assert.equal(await s.reviewers.ready("pull_request", delivery("ready_for_review")), null);
+  assert.deepEqual(
+    s.decided.map((d) => d.messages),
+    [["policy error: `deny_request_review` must be a set of strings"]],
+  );
+  broken = false;
+  await s.reviewers.pushed({ repo: "org/repo", base: "trunk", number: 5 });
+  assert.deepEqual(s.posts(), ["alice,bob"]);
+});
+
+test("openerOf: the run that opened the pull request, not a later follow-up", () => {
+  const at = (iso) => Date.parse(iso);
+  const pr = { number: 5, created_at: "2026-10-30T12:00:00Z" };
+  // Newest first, as ctx.runs has them.
+  const runs = [
+    { key: "org/repo#12", taskMode: "plan", light: false, startedAt: at("2026-10-30T13:00:00Z") },
+    { key: "org/repo#12", taskMode: "review", light: true, startedAt: at("2026-10-30T12:30:00Z") },
+    { key: "Org/Repo#12", taskMode: "work", light: false, startedAt: at("2026-10-30T11:50:00Z") },
+    { key: "org/repo#12", taskMode: "work", light: false, startedAt: at("2026-10-29T09:00:00Z") },
+    { key: "org/repo#13", taskMode: "work", light: false, startedAt: at("2026-10-30T11:55:00Z") },
+  ];
+  assert.equal(openerOf(runs, "org/repo#12", pr), runs[2]);
+  // None known any more, or no creation time to go by: null.
+  assert.equal(openerOf(runs.slice(0, 2), "org/repo#12", pr), null);
+  assert.equal(openerOf(runs, "org/repo#12", { number: 5 }), null);
 });
 
 test("pushed: a ready pull request never asked about counts as turning ready", async (t) => {

@@ -45,6 +45,58 @@ export const RULES = [
 // What the input looks like (docs/repo-config.md#the-merge-input): a policy can check it.
 export const INPUT_VERSION = 1;
 
+// What every decision's input has about a pull request (docs/repo-config.md#the-merge-input),
+// reviews.mjs's and reviewers.mjs's: the repo (`info`, GET /repos/{repo}), the pull request
+// and its `files`, its linked `issue`, and the `review` when there is one.
+export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
+  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+  return {
+    decision,
+    time: new Date(now()).toISOString(),
+    repo: {
+      name: info.full_name ?? null,
+      private: info.private === true,
+      default_branch: info.default_branch ?? null,
+    },
+    pr: {
+      number: pr.number,
+      author: pr.user?.login ?? null,
+      title: pr.title ?? "",
+      labels: names(pr.labels),
+      base: pr.base?.ref ?? null,
+      head: pr.head?.ref ?? null,
+      head_sha: pr.head?.sha ?? null,
+      draft: !!pr.draft,
+      additions: pr.additions ?? 0,
+      deletions: pr.deletions ?? 0,
+      changed_files: pr.changed_files ?? files.length,
+      files: files.map((f) => ({
+        path: f.filename,
+        previous_path: f.previous_filename ?? null,
+        status: f.status ?? null,
+        additions: f.additions ?? 0,
+        deletions: f.deletions ?? 0,
+      })),
+    },
+    issue: issue
+      ? { number: issue.number ?? null, title: issue.title ?? "", labels: names(issue.labels) }
+      : null,
+    review: review
+      ? {
+          verdict: review.verdict,
+          rating: review.rating,
+          allowed: review.allowed ?? "low",
+          findings: review.findings.map(({ severity, path, line, text }) => ({
+            severity,
+            path,
+            line,
+            text,
+          })),
+        }
+      : null,
+  };
+}
+
 // One decision's evaluation, compile included. Long enough for `opa` to start and load a few
 // files, short enough that a loop in a policy doesn't hold a merge decision for long.
 export const TIMEOUT_MS = 2000;

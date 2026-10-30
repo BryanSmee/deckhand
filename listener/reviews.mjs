@@ -43,8 +43,9 @@ import {
 } from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { INPUT_VERSION, RULES } from "./policies.mjs";
+import { INPUT_VERSION, pullInput, RULES } from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "./store.mjs";
 
@@ -622,58 +623,6 @@ const checksOf = (runs) =>
 // before the rounds read it.
 const fixInput = (fixes) => ({ fixed: fixes > 0, fixes });
 
-// What every decision's input has about a pull request (docs/repo-config.md#the-merge-input):
-// the repo (`info`, GET /repos/{repo}), the pull request and its `files`, its linked `issue`,
-// and the `review` when there is one.
-export function pullInput({ decision, info, pr, files, issue, review = null, now = Date.now }) {
-  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
-  return {
-    decision,
-    time: new Date(now()).toISOString(),
-    repo: {
-      name: info.full_name ?? null,
-      private: info.private === true,
-      default_branch: info.default_branch ?? null,
-    },
-    pr: {
-      number: pr.number,
-      author: pr.user?.login ?? null,
-      title: pr.title ?? "",
-      labels: names(pr.labels),
-      base: pr.base?.ref ?? null,
-      head: pr.head?.ref ?? null,
-      head_sha: pr.head?.sha ?? null,
-      draft: !!pr.draft,
-      additions: pr.additions ?? 0,
-      deletions: pr.deletions ?? 0,
-      changed_files: pr.changed_files ?? files.length,
-      files: files.map((f) => ({
-        path: f.filename,
-        previous_path: f.previous_filename ?? null,
-        status: f.status ?? null,
-        additions: f.additions ?? 0,
-        deletions: f.deletions ?? 0,
-      })),
-    },
-    issue: issue
-      ? { number: issue.number ?? null, title: issue.title ?? "", labels: names(issue.labels) }
-      : null,
-    review: review
-      ? {
-          verdict: review.verdict,
-          rating: review.rating,
-          allowed: review.allowed ?? "low",
-          findings: review.findings.map(({ severity, path, line, text }) => ({
-            severity,
-            path,
-            line,
-            text,
-          })),
-        }
-      : null,
-  };
-}
-
 // The input of `deny_review` and `deny_fix` (docs/repo-config.md#the-review-and-fix-input),
 // read from GitHub now: only called when a policy applies (policies.mjs deny()), so a repo
 // without any pays no extra call. `issue`: the number of the issue the pull request closes,
@@ -941,7 +890,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   }
   parts.push(
     details(
-      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`, request_review with its `reviewers`, `when` and the work run's `mode`; no review here)",
+      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`, request_review its own: `reviewers`, `when` and the mode of the run that opened it; no review here)",
       input,
     ),
   );
@@ -1026,9 +975,6 @@ export function linkSample(repo, pr, issue = null) {
   };
 }
 
-// The run a dry run's `deny_request_review` is about: the work run whose pull request it is.
-const WORK_RUN = { mode: "work", custom_mode: false, light: false, reason: null };
-
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
 const DRY_RUN_INPUT = 50_000;
 
@@ -1084,6 +1030,9 @@ export function createReviews({
   merged = () => {},
   policies = null,
   decided = () => {},
+  // The run that opened a pull request, for `/mode policy`'s deny_request_review (reviewers.mjs
+  // openerOf()): `runOf(taskKey, pr)`, or null.
+  runOf = () => null,
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -2204,20 +2153,27 @@ export function createReviews({
         continue;
       }
       const decision = rule.replace(/^deny_/, "");
+      // As the listener would ask when it turns ready, about the run that opened it.
+      if (decision === "request_review") {
+        const task = taskKey(repo, issue ?? prId(number));
+        const own = requestInput({
+          info,
+          pr,
+          files: prFiles,
+          issue: found,
+          reviewers: reviewersFor(config, settings, pr),
+          when: "ready",
+          run: runFields(runOf(task, pr)),
+          now,
+        });
+        const messages = await policies.denied(rule, repo, texts, () => own);
+        results.push({ rule, defined, messages });
+        continue;
+      }
       const own = { ...input, decision };
       if (decision !== "merge") delete own.checks;
       if (decision === "fix") {
         Object.assign(own, { ci: false, round: fixes + 1, rounds: roundsOf(settings) });
-      }
-      // As when it turns ready, the work run's (reviewers.mjs requestInput()).
-      if (decision === "request_review") {
-        delete own.fixed;
-        delete own.fixes;
-        const author = pr.user?.login?.toLowerCase();
-        const reviewers = (settings?.review?.request ?? []).filter(
-          (login) => config.users.includes(login) && login !== author,
-        );
-        Object.assign(own, { reviewers, when: "ready", ...WORK_RUN });
       }
       const messages = await policies.denied(rule, repo, texts, () => own);
       results.push({ rule, defined, messages });
