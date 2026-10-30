@@ -39,6 +39,7 @@ import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./githu
 import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
 import { classify } from "./github-writes.mjs";
+import { ceilingOf } from "./modes.mjs";
 import { redact } from "./redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
 import { sendJson } from "./web.mjs";
@@ -87,6 +88,14 @@ const REDIRECTS = new Set([301, 302, 303, 307, 308]);
 // Only its own repository's, by name: another's (a public repository's CI) GitHub may answer
 // without the permission, and the run's installation isn't the one to accept it.
 export const NEEDS = [{ permission: "actions", path: /^repos\/([^/]+\/[^/]+)\/actions(?:\/|$)/i }];
+// Whether a run's mode's ceiling holds `project` on any kind (modes.mjs ceilingOf()): its token
+// may then read projects, in a repo granted one.
+function addsItems(run) {
+  return Object.values(ceilingOf(run.mode, !run.push)).some((actions) =>
+    actions.includes("project"),
+  );
+}
+
 // What a call needs of the optional permissions: its path's (NEEDS) when the path is `repo`'s,
 // read, and what a checked write needs beyond its mode's (`permissions`), at their levels.
 export function needed(path, permissions = {}, repo = "") {
@@ -746,7 +755,10 @@ export function createGithubGateway({
     let token;
     let extra = run.extra;
     try {
-      if (await readsProjects(run.repo)) extra = { ...extra, ...PROJECT_READ };
+      // Only a run whose ceiling may add an item reads the organization's projects: a review,
+      // an inbox entry or a discussion reads outsiders' text, and nothing narrows the read to
+      // the granted projects.
+      if (addsItems(run) && (await readsProjects(run.repo))) extra = { ...extra, ...PROJECT_READ };
     } catch (error) {
       // Its token reads no project: what needs one fails at GitHub, the rest goes on.
       log(`GitHub gateway: ${run.repo}: its grants: ${error.message ?? error}`);

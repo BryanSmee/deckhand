@@ -399,8 +399,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     can't name one: its project, looked up from its node ID with the listener's token, must
     be one the operator's grants list for the repository (`allow_projects`), or it is refused
     before any policy, which can't reach another. Only that write's token gets
-    `organization_projects: write`; a granted repository's runs read the organization's
-    projects (the App can't narrow its token to one project: their titles, fields and the
+    `organization_projects: write`; a granted repository's runs whose ceiling holds `project`
+    read the organization's projects, never a review, an inbox entry, a discussion or an
+    analysis, which read outsiders' text (the App can't narrow its token to one project: their titles, fields and the
     items it can see, which GitHub redacts for repositories the token doesn't cover). Setting
     an item's fields, removing or archiving it, and the project's settings, fields and views
     are in no ceiling: the listener moves the repository's issues itself, from its

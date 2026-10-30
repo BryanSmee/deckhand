@@ -25,6 +25,7 @@ const delivery = (action, pr = {}) => ({
     draft: false,
     body: "Closes #12",
     head: { ref: "issue-12-x", repo: { full_name: "Org/Repo" } },
+    base: { ref: "trunk" },
     user: { login: "alice" },
     ...pr,
   },
@@ -46,6 +47,11 @@ test("projectStep: ready for review, opened ready, merged; from a branch of the 
     step(delivery("closed", { state: "closed", merged_at: "2026-10-30" })),
     at("merged"),
   );
+  // Into another branch than the default one: GitHub doesn't close the issue, nothing moves.
+  const feature = { base: { ref: "feature/x" } };
+  assert.equal(step(delivery("ready_for_review", feature)), null);
+  assert.equal(step(delivery("closed", { ...feature, state: "closed", merged_at: "x" })), null);
+  assert.equal(step(delivery("ready_for_review", { base: undefined })), null);
   // A draft opened, a close without a merge, a push, an edit: nothing moves.
   assert.equal(step(delivery("opened", { draft: true })), null);
   assert.equal(step(delivery("closed", { state: "closed", merged_at: null })), null);
@@ -246,6 +252,28 @@ test("started: a work run on an issue only; pulled: the issue a pull request clo
     log: () => {},
   });
   assert.deepEqual(await broken.started(task), []);
+});
+
+test("started: the settings the run started with, not read again", async () => {
+  const p = projects({ settings: [] });
+  const settings = {
+    projects: [entry("acme/3", { start: "In progress" })],
+    users: ["alice"],
+  };
+  const task = {
+    repo: "Org/Repo",
+    base: "main",
+    number: 12,
+    kind: "issue",
+    settings,
+    live: { light: false, key: "Org/Repo#12", replyTo: 12 },
+  };
+  assert.deepEqual(await p.started(task), ["acme/3: In progress"]);
+  assert.deepEqual(p.read, []);
+  // A repo without `projects:`: nothing asked of GitHub at all.
+  const none = projects();
+  assert.deepEqual(await none.started({ ...task, settings: { projects: [], users: [] } }), []);
+  assert.deepEqual([none.read, none.sent], [[], []]);
 });
 
 test("started: not from the issue's pull request, nor once it is ready or merged", async () => {

@@ -924,6 +924,24 @@ test("a repo granted a project: its runs' tokens read projects, and a project wr
     ],
   );
   assert.match(gw.logged.at(-1), /org\/repo: its grants: broken grants/);
+  // Only a run whose ceiling may add an item reads them: not a review, an inbox entry or a
+  // discussion, which read outsiders' text; a brainstorm does (the issues it files).
+  granted = true;
+  for (const [mode, reads] of [
+    ["review", false],
+    ["idea", false],
+    ["discussion", false],
+    ["analyze", false],
+    ["brainstorm", true],
+  ]) {
+    const light = gw.register({ pull_requests: "read" }, { mode, issue: 1 });
+    await gw.call("/api/graphql", {
+      secret: light.secret,
+      method: "POST",
+      body: '{"query": "{ viewer { login } }"}',
+    });
+    assert.equal(gw.minted.at(-1)[1].organization_projects, reads ? "read" : undefined, mode);
+  }
 });
 
 test("an Actions log's redirect is followed by the gateway, without credentials; others go back", async (t) => {

@@ -59,11 +59,15 @@ export function projectStep(config, event, p) {
     (["opened", "reopened"].includes(p.action) && pr.state === "open" && !pr.draft);
   const merged = p.action === "closed" && !!(pr.merged_at ?? pr.merged);
   if (!ready && !merged) return null;
+  // Into the default branch only: GitHub closes the issue a pull request names only then, and
+  // one merged into another branch hasn't done it.
+  const base = p.repository.default_branch || "main";
+  if (pr.base?.ref !== base) return null;
   const number = linkedIssue(pr, repo);
   if (!number) return null;
   return {
     repo,
-    base: p.repository.default_branch || "main",
+    base,
     number,
     pull: pr.number,
     author: pr.user?.login ?? null,
@@ -113,7 +117,14 @@ export function createProjects({
   // from outsiders' text); none for a run's start, whose author the run's admission checked.
   // `note`: a line in the run's log, when a run started it. Resolves to the moves made,
   // ["acme/3: In progress"]; never throws.
-  async function move(repo, base, number, step, { note = () => {}, pull = null, author } = {}) {
+  // `settings`: the repo's, as a run starting read them (runs.mjs begin()), else read here.
+  async function move(
+    repo,
+    base,
+    number,
+    step,
+    { note = () => {}, pull = null, author, settings: known = null } = {},
+  ) {
     const done = [];
     const failed = (what) => {
       log(`${repo}#${number}: projects: ${what}`);
@@ -123,9 +134,9 @@ export function createProjects({
         log(`${repo}#${number}: projects: its run's log: ${error.message ?? error}`);
       }
     };
-    let read;
+    let read = known && { settings: known, errors: [] };
     try {
-      read = await repoSettings(repo, base);
+      read ??= await repoSettings(repo, base);
     } catch (error) {
       failed(error.message ?? String(error));
       return done;
@@ -202,7 +213,8 @@ export function createProjects({
     const replyTo = task.live?.replyTo;
     if (replyTo != null && replyTo !== task.number) return Promise.resolve([]);
     if (PAST_START.has(pullOf(task.live?.key ?? task.key)?.state)) return Promise.resolve([]);
-    return move(task.repo, task.base, task.number, "start", { note });
+    // The settings the run started with (a config with errors starts none): no second read.
+    return move(task.repo, task.base, task.number, "start", { note, settings: task.settings });
   }
 
   // A `pull_request` delivery: the issue it closes and itself, at `ready` or `merged`

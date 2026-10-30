@@ -1857,6 +1857,7 @@ mounts:
           body: "Closes #12",
           html_url: "https://github.com/org/repo/pull/50",
           head: { ref: "issue-12-x", sha: "abc", repo: { full_name: "org/repo" } },
+          base: { ref: "trunk" },
           user: { login: "deckhand-x[bot]" },
         },
         sender: { login: "alice" },

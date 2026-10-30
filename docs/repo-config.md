@@ -899,7 +899,7 @@ The listener then moves the items, with the App's own token:
   there) and any once its pull request is ready or merged: the issue then stays where the
   pull request's steps put it.
 - **`ready`**: when a pull request that closes the issue (`Closes #12`, from a branch of the
-  repository, never a fork's, opened by one of the repository's `users` or by Deckhand's bot)
+  repository, never a fork's, into the default branch, opened by one of the repository's `users` or by Deckhand's bot)
   is opened ready or marked ready for review: the issue and the pull request, which is added
   too.
 - **`merged`**: when that pull request merges: both again.
@@ -1182,8 +1182,7 @@ item-add` and `gh issue create --project` send) is a `project` on its content, t
 to the ceiling as any write. Past the ceiling, before `deny_github`, its project (looked up
 from its node ID) must be one the operator's grants list for the repository
 (`allow_projects`): no policy can reach another. Its token gets `organization_projects:
-write` for that write alone, and a granted repository's runs read the organization's projects
-(`gh` looks a project up before it adds to it). Setting an item's fields
+write` for that write alone, and in a granted repository the runs whose ceiling holds `project` (work runs, brainstorms, its modes that aren't light) read the organization's projects (`gh` looks a project up before it adds to it); the others (reviews, inbox entries, discussions, analyses) don't. Setting an item's fields
 (`updateProjectV2ItemFieldValue`), removing or archiving one, and the project's own settings
 are refused: [the listener moves the items](#projects).
 
