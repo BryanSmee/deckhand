@@ -10,6 +10,7 @@ import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
   createGithubGateway,
   logStorage,
+  needed,
   readsThread,
   redactBody,
   secretOf,
@@ -35,6 +36,7 @@ async function gateway(
     checkGraphql = async (run, body) => ({ body, write: false, creates: [] }),
     wroteWrite,
     respond,
+    lacking,
   } = {},
 ) {
   const calls = [];
@@ -54,6 +56,7 @@ async function gateway(
   const minted = [];
   const fake = {
     repoToken: async (repo, extra) => (minted.push([repo, extra]), { token: TOKEN }),
+    ...(lacking && { lacking }),
   };
   const logged = [];
   let anonymous = null;
@@ -929,6 +932,44 @@ test("an Actions log's redirect is followed by the gateway, without credentials;
     assert.deepEqual([res.status, res.headers.get("location")], [302, location]);
   }
   assert.equal(stored.length, 3);
+});
+
+test("a call needing an optional permission the installation lacks is refused, naming it", async (t) => {
+  const asked = [];
+  const gw = await gateway(t, {
+    lacking: async (repo, wanted) => {
+      asked.push([repo, wanted]);
+      return wanted.actions
+        ? { missing: ["actions: read"], account: "org", url: "https://github.com/inst/7" }
+        : null;
+    },
+  });
+  const { secret, notes } = gw.register({ actions: "read" });
+  const res = await gw.call("/api/v3/repos/Org/Repo/actions/runs?branch=x", { secret });
+  assert.equal(res.status, 403);
+  const { message } = await res.json();
+  assert.match(message, /^Deckhand: this needs the GitHub App's actions: read permission/);
+  assert.match(
+    message,
+    /installation on org lacks: .* accepts it on https:\/\/github\.com\/inst\/7/,
+  );
+  assert.match(notes.at(-1), /refused the run's GitHub call .*actions: read/);
+  assert.equal(gw.calls.length, 0);
+  assert.deepEqual(asked, [["org/repo", { actions: "read" }]]);
+  // Anything else goes on, asking for none.
+  assert.equal((await gw.call("/api/v3/repos/org/repo/issues", { secret })).status, 200);
+  assert.deepEqual(asked.at(-1), ["org/repo", {}]);
+  assert.equal(gw.calls.length, 1);
+});
+
+test("needed: a path's optional permission, read, and a write's own", () => {
+  assert.deepEqual(needed("repos/org/repo/actions/runs/1/logs"), { actions: "read" });
+  assert.deepEqual(needed("repositories/12/ACTIONS"), { actions: "read" });
+  assert.deepEqual(needed("repos/org/repo/actions/runs/1/rerun", { actions: "write" }), {
+    actions: "write",
+  });
+  assert.deepEqual(needed("repos/org/repo/issues", { issues: "write" }), { issues: "write" });
+  assert.deepEqual(needed("repos/org/repo/actionsx"), {});
 });
 
 test("logStorage: GitHub's log storage and its own host, nothing else", () => {

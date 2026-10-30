@@ -19,6 +19,7 @@ import { createServer, request } from "node:http";
 import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
+import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
@@ -239,7 +240,11 @@ async function fakeGitHub(files = {}) {
       }
       // The listener lists the App's repos when it starts: none here, so a real error in its
       // startup log stands out.
-      if (req.url.startsWith("/app/installations?")) return res.end(JSON.stringify([{ id: 7 }]));
+      if (req.url.startsWith("/app/installations?")) {
+        return res.end(files.installations ?? JSON.stringify([{ id: 7 }]));
+      }
+      // The App's settings (github-app.mjs checkAppEvents()), when the test sets them.
+      if (req.url === "/app" && files.app) return res.end(files.app);
       if (req.url.startsWith("/installation/repositories?")) {
         return res.end(files.installed ?? JSON.stringify({ repositories: [] }));
       }
@@ -3518,6 +3523,50 @@ mounts:
       assert.equal(proxied.status, 401, header);
     }
     writeFileSync(join(dir, "go"), "");
+  });
+
+  test("the permissions the App and its installations lack: warned at start, and on api/repos", async (t) => {
+    const installation = {
+      id: 7,
+      account: { login: "org" },
+      html_url: "https://github.com/organizations/org/settings/installations/7",
+      permissions: { ...APP_PERMISSIONS, actions: undefined, discussions: undefined },
+    };
+    const { port, listener } = await listen(
+      t,
+      {
+        app: JSON.stringify({
+          slug: "deckhand",
+          owner: { login: "org", type: "Organization" },
+          events: APP_EVENTS,
+          permissions: { ...APP_PERMISSIONS, discussions: undefined },
+        }),
+        installations: JSON.stringify([installation]),
+      },
+      (dir, github) => ({ GITHUB_URL: github.url }),
+    );
+    await listener.until("lacks the permission discussions: write");
+    await listener.until(
+      `installation on org lacks actions: read: an owner of the account accepts the new permissions on ${installation.html_url}`,
+    );
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const { app } = await (await get("/api/repos", session)).json();
+    assert.deepEqual(app.missingEvents, []);
+    assert.deepEqual(app.missingPermissions, ["discussions: write"]);
+    // What the App lacks is said for the App alone.
+    assert.deepEqual(app.installations, [
+      { account: "org", url: installation.html_url, missing: ["actions: read"] },
+    ]);
   });
 
   test("api/repos: each configured repo's backlog count, read in the background, then cached", async (t) => {

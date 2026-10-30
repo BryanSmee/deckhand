@@ -81,6 +81,21 @@ export const ACTIONS_LOGS = new RegExp(
   "i",
 );
 const REDIRECTS = new Set([301, 302, 303, 307, 308]);
+// The REST paths (under the API's base) that need one of the App's optional permissions
+// (github-app.mjs OPTIONAL_PERMISSIONS), at least to read: a run's token goes without one its
+// installation lacks, and the call is refused here, naming it, rather than by GitHub, without.
+export const NEEDS = [
+  { permission: "actions", path: new RegExp(String.raw`^${REPO}\/actions(?:\/|$)`, "i") },
+];
+// What a call needs of the optional permissions: its path's (NEEDS), read, and what a checked
+// write needs beyond its mode's (`permissions`), at their levels.
+export function needed(path, permissions = {}) {
+  const wanted = { ...permissions };
+  for (const { permission, path: re } of NEEDS) {
+    if (re.test(path)) wanted[permission] ??= "read";
+  }
+  return wanted;
+}
 // Where an Actions log's redirect is followed to: GitHub's log storage (Azure blobs, its content
 // hosts), or GitHub's own host (an Enterprise Server's storage behind it). The listener isn't
 // behind the egress proxy: any other host goes back to the sandbox, which can't reach it.
@@ -500,6 +515,10 @@ export function createGithubGateway({
         writing = !refused && !classified?.read;
         permissions = classified?.permissions ?? {};
       }
+      if (!refused && where.api) {
+        const wanted = needed(graphqlCall ? "" : where.path, writing ? permissions : {});
+        refused = await unaccepted(github, run, wanted);
+      }
       if (refused) {
         note(
           run,
@@ -515,6 +534,26 @@ export function createGithubGateway({
     } finally {
       if (counted) inFlight.set(run, inFlight.get(run) - 1);
     }
+  }
+
+  // A refusal when the run's installation lacks an optional permission the call needs: its
+  // token goes without it (github-app.mjs OPTIONAL_PERMISSIONS), and GitHub's own refusal
+  // wouldn't say what to do.
+  async function unaccepted(github, run, wanted) {
+    let lacks;
+    try {
+      lacks = await github.lacking?.(run.repo, wanted);
+    } catch {
+      // The token's own mint tells the run when GitHub can't be asked.
+      return null;
+    }
+    if (!lacks) return null;
+    const them = lacks.missing.length > 1 ? "them" : "it";
+    const where = lacks.url ? ` on ${lacks.url}` : "";
+    return {
+      status: 403,
+      message: `this needs the GitHub App's ${lacks.missing.join(", ")} permission, which its installation${lacks.account ? ` on ${lacks.account}` : ""} lacks: the operator adds ${them} to the App's settings if ${lacks.missing.length > 1 ? "they aren't" : "it isn't"} there, and an owner of the account accepts ${them}${where} (Deckhand's docs/setup.md)`,
+    };
   }
 
   // The call's run, or null once it was answered with why not.

@@ -176,12 +176,15 @@ function useApp(credentials) {
   if (credentials) useApp(credentials);
 }
 
-// Events the App's settings miss (without `issues`, open questions get no label), and who
-// owns it, which the link to its settings needs.
+// Events and permissions the App's settings miss (without `issues`, open questions get no
+// label), and who owns it, which the link to its settings needs.
 function checkApp() {
   const app = ctx.app;
   checkAppEvents(app.asApp, log, { githubUrl: config.githubUrl, credentials: app.credentials })
-    .then(({ app: info }) => ctx.app === app && info && (ctx.appInfo = info))
+    .then(({ app: info, missing, permissions }) => {
+      if (ctx.app !== app || !info) return;
+      ctx.appInfo = { ...info, missingEvents: missing, missingPermissions: permissions };
+    })
     .catch((error) => log(`The GitHub App's events: ${error.message ?? error}`));
 }
 

@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { GrantsError, grantsFrom } from "../listener/grants.mjs";
-import { createGitHubApp } from "../listener/github-app.mjs";
+import { APP_PERMISSIONS, createGitHubApp } from "../listener/github-app.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
 import {
   CONFIG_MS,
@@ -83,6 +83,8 @@ function fakeGitHub({ first = [], second = [], configured = [], files = {} } = {
           id: 1,
           account: { login: "org" },
           html_url: "https://github.com/organizations/org/settings/installations/1",
+          // All but `actions`, which it hasn't accepted yet.
+          permissions: { ...APP_PERMISSIONS, actions: undefined },
         },
         {
           id: 2,
@@ -338,14 +340,21 @@ test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type say
   const stored = { slug: "my-app", owner: "acme", html_url: "https://github.com/apps/my-app" };
   const links = async (app) =>
     (await call(apiSetup({ app: () => app }).api, "GET", "/api/repos")).body.app;
+  // `other`'s permissions unknown: nothing said missing.
   const installations = [
-    { account: "org", url: "https://github.com/organizations/org/settings/installations/1" },
-    { account: "other", url: "https://github.com/settings/installations/2" },
+    {
+      account: "org",
+      url: "https://github.com/organizations/org/settings/installations/1",
+      missing: ["actions: read"],
+    },
+    { account: "other", url: "https://github.com/settings/installations/2", missing: [] },
   ];
   const expected = {
     name: "My App",
     installUrl: "https://github.com/apps/my-app/installations/new",
     settingsUrl: "https://github.com/organizations/acme/settings/apps/my-app",
+    missingEvents: [],
+    missingPermissions: [],
     installations,
   };
   assert.deepEqual(await links({ ...stored, name: "My App", ownerType: "Organization" }), expected);
@@ -358,6 +367,14 @@ test("GET /api/repos: the App's links, under GITHUB_URL, as its owner's type say
     ...expected,
     name: "my-app",
     settingsUrl: "https://github.com/settings/apps/my-app",
+  });
+  // What the App itself lacks is its settings' to fix, not the installation's to accept.
+  const missing = { missingEvents: ["push"], missingPermissions: ["actions: read"] };
+  assert.deepEqual(await links({ ...stored, name: "My App", ownerType: "User", ...missing }), {
+    ...expected,
+    ...missing,
+    settingsUrl: "https://github.com/settings/apps/my-app",
+    installations: installations.map((i) => ({ ...i, missing: [] })),
   });
   // Before /setup: none.
   assert.equal(await links(null), null);

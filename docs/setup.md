@@ -93,6 +93,31 @@ take the label off unless a run starts, and the dashboard only sees the label ch
 listener restarts. The listener logs a warning at each start naming the events the App
 misses, with the address of its settings.
 
+### When the App needs a new permission
+
+A Deckhand update can ask the App for a permission it didn't have when you created it
+(`APP_PERMISSIONS` in `listener/github-app.mjs`, the table above). GitHub never adds one by
+itself, and an installation only gets it once an owner of its account accepts it:
+
+1. Open the App's settings (the dashboard's **Settings › Server › GitHub App › App
+   settings**), _Permissions & events_, set the permission to the level the table says, and
+   save.
+2. On each installation's page (**configure ↗** beside its account, which reads **accept new
+   permissions ↗** while it lacks one), review and accept the new permissions.
+
+At each start, the listener logs the permissions the App lacks (with the address of its
+settings) and, for each installation, those it hasn't accepted yet (with the address of
+its page). The dashboard's GitHub App card shows the same: a _Missing in its settings_ row
+for the App's events and permissions, and what each installation lacks beside it.
+
+Until then, the permissions a feature added later are optional (`OPTIONAL_PERMISSIONS`,
+`actions` for now): a run's token goes without one its installation lacks, and the GitHub
+gateway refuses the calls that need it with a `Deckhand:` message naming the permission and
+the page that accepts it, instead of every token failing. The others are required: a token
+asking for `issues`, `contents` or `pull_requests` that the installation lacks fails, as
+before. An installation's permissions are read again within 5 minutes of a change, at once
+when GitHub tells the listener the new ones were accepted.
+
 ## 3. Use it
 
 On an issue of an installed repository, an allowed user comments `Deckhand` (the

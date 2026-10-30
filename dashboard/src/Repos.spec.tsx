@@ -37,9 +37,15 @@ const APP: AppLinks = {
   name: "Acme Deckhand",
   installUrl: "https://github.com/apps/acme-deckhand/installations/new",
   settingsUrl: "https://github.com/organizations/acme/settings/apps/acme-deckhand",
+  missingEvents: [],
+  missingPermissions: [],
   installations: [
-    { account: "org", url: "https://github.com/organizations/org/settings/installations/1" },
-    { account: "other", url: "https://github.com/settings/installations/2" },
+    {
+      account: "org",
+      url: "https://github.com/organizations/org/settings/installations/1",
+      missing: [],
+    },
+    { account: "other", url: "https://github.com/settings/installations/2", missing: [] },
   ],
 };
 

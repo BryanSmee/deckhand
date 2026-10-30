@@ -24,7 +24,7 @@ import {
   loadGrants,
   refusedByGrants,
 } from "./grants.mjs";
-import { appSettingsUrl } from "./github-app.mjs";
+import { appSettingsUrl, missingPermissions } from "./github-app.mjs";
 import {
   CONFIG_FILE,
   defaultSettings,
@@ -74,18 +74,26 @@ export function repoStatus(info, found, onboarded) {
 }
 
 // The dashboard's Manage App links, all on GitHub: { name, installUrl, settingsUrl,
-// installations: [{ account, url }] }. `app`: the stored credentials ({ slug, owner, html_url })
-// with what GET /app said at start ({ name, owner, ownerType }, github-app.mjs
-// checkAppEvents()), which may not have answered yet. `installUrl`: GitHub's install page,
-// which lists every account the App can be installed on, with Configure on those where it is;
-// an installation's `url` is that account's Configure page.
+// missingEvents, missingPermissions, installations: [{ account, url, missing }] }. `app`: the
+// stored credentials ({ slug, owner, html_url }) with what GET /app said at start ({ name,
+// owner, ownerType, missingEvents, missingPermissions }, github-app.mjs checkAppEvents()), which
+// may not have answered yet. `installUrl`: GitHub's install page, which lists every account the
+// App can be installed on, with Configure on those where it is; an installation's `url` is
+// that account's Configure page, where an owner accepts the App's new permissions, and its
+// `missing` what it has yet to accept: what the App itself lacks is the App's settings' to fix.
 export function appLinks(githubUrl, app, installations = []) {
   const page = app.html_url ?? `${githubUrl}/apps/${encodeURIComponent(app.slug)}`;
+  const missingPermissions = app.missingPermissions ?? [];
   return {
     name: app.name ?? app.slug,
     installUrl: `${page}/installations/new`,
     settingsUrl: appSettingsUrl(githubUrl, app),
-    installations,
+    missingEvents: app.missingEvents ?? [],
+    missingPermissions,
+    installations: installations.map(({ missing = [], ...i }) => ({
+      ...i,
+      missing: missing.filter((p) => !missingPermissions.includes(p)),
+    })),
   };
 }
 
@@ -103,7 +111,7 @@ export function createRepoList({
 }) {
   let listing = null; // Promise<repo infos>, while fresh
   let listedAt = 0;
-  // The installations as last listed, [{ account, url }]: the Manage App links.
+  // The installations as last listed, [{ account, url, missing }]: the Manage App links.
   let installed = [];
   // "owner/repo" → { at, base, has, errors, settings }: the parsed settings are kept (not the
   // text) so the grant checks run again at each list, without asking GitHub.
@@ -112,8 +120,14 @@ export function createRepoList({
   async function fetchRepos() {
     const installations = await paginate((path) => app.asApp("GET", path), "/app/installations");
     const infos = [];
-    installed = installations.map((i) => ({ account: i.account?.login ?? null, url: i.html_url }));
+    installed = installations.map((i) => ({
+      account: i.account?.login ?? null,
+      url: i.html_url,
+      // None when GitHub didn't say: the warnings are for what it says is missing.
+      missing: i.permissions ? missingPermissions(i.permissions) : [],
+    }));
     for (const installation of installations) {
+      app.rememberPermissions?.(installation);
       const repos = await paginate(
         (path) => app.asInstallation(installation.id, "GET", path),
         "/installation/repositories",

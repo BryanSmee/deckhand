@@ -22,9 +22,15 @@ const APP: AppLinks = {
   name: "acme-deckhand",
   installUrl: "https://github.com/apps/acme-deckhand/installations/new",
   settingsUrl: "https://github.com/organizations/acme/settings/apps/acme-deckhand",
+  missingEvents: [],
+  missingPermissions: [],
   installations: [
-    { account: "acme", url: "https://github.com/organizations/acme/settings/installations/1" },
-    { account: null, url: "https://github.com/settings/installations/2" },
+    {
+      account: "acme",
+      url: "https://github.com/organizations/acme/settings/installations/1",
+      missing: [],
+    },
+    { account: null, url: "https://github.com/settings/installations/2", missing: [] },
   ],
 };
 
@@ -287,4 +293,35 @@ test("the last sync line: none yet, up to date, failed", () => {
       now,
     ),
   ).toBe("Last sync 1 min ago failed: GitHub said 502");
+});
+
+test("what the App's settings and installations lack, with where to fix it", async () => {
+  const lacking: AppLinks = {
+    ...APP,
+    missingEvents: ["issues"],
+    missingPermissions: ["checks: read", "statuses: read"],
+    installations: [{ ...APP.installations[0], missing: ["actions: read"] }, APP.installations[1]],
+  };
+  render(<Dashboard state={makeState()} error={null} repos={list(lacking)} />);
+  await screen.findByText("Sysbox");
+  const missing = value("Missing in its settings");
+  expect(missing.textContent).toContain("2 permissions: checks: read, statuses: read");
+  expect(missing.textContent).toContain("1 event: issues");
+  expect(within(missing).getByRole("link", { name: "App settings ↗" }).getAttribute("href")).toBe(
+    APP.settingsUrl,
+  );
+  expect(value("Installed on").textContent).toBe(
+    "acme · lacks actions: read · accept new permissions ↗An account · configure ↗",
+  );
+  expect(
+    within(value("Installed on"))
+      .getByRole("link", { name: "accept new permissions ↗" })
+      .getAttribute("href"),
+  ).toBe(APP.installations[0].url);
+});
+
+test("nothing missing: no row for it", async () => {
+  render(<Dashboard state={makeState()} error={null} repos={list()} />);
+  await screen.findByText("Sysbox");
+  expect(card("GitHub App").queryByText("Missing in its settings")).toBeNull();
 });

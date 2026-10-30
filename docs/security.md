@@ -423,7 +423,10 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   (`listener/github-app.mjs` `readsOf()`), so a brainstorm's or an inbox entry's
   `issues: write` reaches only what its ceiling and the policies allowed (`token …` for the
   API, Basic with `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
-  cookies dropped. The answer streams back as it comes, with the agents' endpoints' limits
+  cookies dropped. An optional permission its installation hasn't accepted
+  (`OPTIONAL_PERMISSIONS`, [setup](setup.md#when-the-app-needs-a-new-permission)) is left
+  out of the token, and a call that needs it (`NEEDS`, `listener/github-gateway.mjs`) refused,
+  naming it: a required one it lacks fails the token, as GitHub refuses it. The answer streams back as it comes, with the agents' endpoints' limits
   (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
   calls in flight per run.
 - **A work run that isn't a fork's gets nothing that would bring a fork's code**: a fork's
