@@ -38,6 +38,9 @@ import { untilReached } from "./wait.mjs";
 // Where they were first: the tests import them from here.
 export { blockedAddress, v6Bytes } from "./addresses.mjs";
 
+// How long a stopping proxy lets its open connections finish.
+const DRAIN_MS = 25_000;
+
 // The header that names, on a relayed request, the sandbox it came from: the listener binds a
 // run's secret to its sandbox's address (../listener/broker-http.mjs, which believes it from
 // the proxy alone). Whatever the client sent in it is replaced.
@@ -100,14 +103,14 @@ export function relayTarget(relayUrl, host, path) {
 
 class Refused extends Error {}
 
-// A connection to `url`'s host, once made (over TLS for https:).
-function dial(url) {
+// A connection to `url`'s host, once made (over TLS for https:, verified against `ca`).
+function dial(url, ca) {
   return new Promise((resolve, reject) => {
     const port = Number(url.port) || (url.protocol === "https:" ? 443 : 80);
     const host = url.hostname.replace(/^\[|\]$/g, "");
     const socket =
       url.protocol === "https:"
-        ? tlsConnect({ host, port, servername: isIP(host) ? undefined : host })
+        ? tlsConnect({ host, port, servername: isIP(host) ? undefined : host, ca })
         : connect(port, host);
     socket.once(url.protocol === "https:" ? "secureConnect" : "connect", () => {
       socket.off("error", reject);
@@ -145,7 +148,7 @@ export function createProxy({
   cache = null, // createCache()'s, or none
   authority = null, // createAuthority()'s, ready: HTTPS to cached and relayed hosts is decrypted
   relayUrl = null, // where relayed requests go: <relayUrl>/<host><path>
-  upstreamCa, // what verifies the hosts' certificates; default: Node's trust store
+  upstreamCa, // what verifies the hosts' certificates, and an https: relayUrl's; default: Node's trust store
   // How relayed requests wait for a listener restarting (wait.mjs): { limitMs, now, sleep }.
   wait = {},
   now = Date.now,
@@ -377,6 +380,9 @@ export function createProxy({
       if (name.startsWith("proxy-")) delete headers[name];
     }
     headers[CLIENT_HEADER] = String(from ?? "").replace(/^::ffff:/, "");
+    // A connection per request, as it can't be pooled: closed once answered.
+    headers.connection = "close";
+    delete headers["keep-alive"];
     let upstream = null;
     let gone = false;
     res.on("close", () => {
@@ -385,16 +391,19 @@ export function createProxy({
     });
     let socket;
     try {
-      socket = await untilReached(() => dial(url), { ...wait, gone: () => gone });
+      socket = await untilReached(() => dial(url, upstreamCa), { ...wait, gone: () => gone });
     } catch {
       return unreachable(res, "the listener");
     }
     if (gone) return socket.destroy();
-    upstream = httpRequest(
+    const send = url.protocol === "https:" ? httpsRequest : httpRequest;
+    upstream = send(
       url,
       { method: req.method, headers, createConnection: () => socket },
       (answer) => {
-        res.writeHead(answer.statusCode, answer.headers);
+        // That connection's, not the client's, which stays open for its next request.
+        const { connection, "keep-alive": keepAlive, ...rest } = answer.headers;
+        res.writeHead(answer.statusCode, rest);
         answer.pipe(res);
       },
     );
@@ -506,10 +515,12 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? `on${https}` : "off"}`),
   );
   // `docker compose up` recreating it: new connections are refused until the next proxy
-  // starts, those open finish first.
+  // starts, which is only once this one exited, and nothing in a sandbox tries them again. So
+  // the requests in flight get a short grace, and long-lived tunnels (a raw one is never known
+  // to be idle) are cut at its end, before compose's stop_grace_period (30 s).
   process.on("SIGTERM", () => {
     log("Stopping: open connections finish first");
-    proxy.drain().then((all) => {
+    proxy.drain({ graceMs: DRAIN_MS }).then((all) => {
       if (!all) log("Stopping: connections still open at the end of the grace period, cut");
       process.exit(0);
     });

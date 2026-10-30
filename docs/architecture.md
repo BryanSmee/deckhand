@@ -711,29 +711,42 @@ networks, container engines and engine volumes of runs that are gone are removed
 dropped then; each run checks its comments' authors against the repository's `users` again
 when it begins, and so does the next listener for comments queued for a run still going.
 
-A restart delays the runs' calls rather than failing them (#507). Everything a sandbox calls
-during a run reaches the listener's broker port: GitHub and git, the agents' APIs (through the
-egress proxy, which relays them), the inbox and the run's files (directly). On SIGTERM the
-listener closes its ports: the dashboard's and webhooks' at once (a delivery missed meanwhile
-comes back through `redeliveries.mjs`), and the broker's drains (`drain.mjs`): it takes no new
-connection, the calls in flight finish (agents' streams, pushes, `gh` calls, inbox long polls),
-each connection closing once its answer is sent, and the listener exits once they are all done,
-or after 280 s, a little before compose's `stop_grace_period` (5 minutes) ends. The egress
-proxy waits for the next listener meanwhile (`proxy/wait.mjs`): a connection the listener
-refused, or that failed before it was made (reset while connecting, its name unknown while its
-container is gone), never reached it, so the proxy tries again, with a growing delay (0.25 s
-doubling up to 5 s), for up to 90 s before it answers `502` (or, for the policy it asks for each
-connection, refuses the host). That holds for any method, a push or a POST included: a request
-is only sent once a connection is made, and never sent again (a listener that dies with it gives
-the sandbox a `502`). The inbox and the run's files, which don't go through the proxy, try again
-on their own (`deckhand-inbox`, `deckhand-files`). The proxy drains on SIGTERM too, with the same
-grace: no new tunnel, the open ones finish, and the decrypted ones close once their requests are
-answered.
+A restart delays the runs' calls rather than failing them, for those that go through the
+egress proxy (#507). Everything a sandbox calls during a run reaches the listener's broker port,
+two ways:
+
+- **through the egress proxy**, which relays them: GitHub's API and git's fetches (`gh`, `git
+clone`), and the hosts an agent has relayed (`relayed` in `agents/`, Antigravity's Google
+  endpoints);
+- **directly**, the broker's host being in the sandbox's `NO_PROXY`: the agents' APIs set to the
+  broker (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`, `GOOGLE_GEMINI_BASE_URL`), pushes (the git
+  gateway, `pushInsteadOf` in `entrypoint.sh`), the inbox and the run's files.
+
+On SIGTERM the listener closes its ports: the dashboard's and webhooks' at once (a delivery
+missed meanwhile comes back through `redeliveries.mjs`), and the broker's drains (`drain.mjs`):
+it takes no new connection, the calls in flight finish (agents' streams, pushes, `gh` calls,
+inbox long polls), each connection closing once its answer is sent, and the listener exits once
+they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)
+ends. The egress proxy waits for the next listener meanwhile (`proxy/wait.mjs`): a connection
+the listener refused, or that failed before it was made (reset while connecting, its name
+unknown while its container is gone), never reached it, so the proxy tries again, with a growing
+delay (0.25 s doubling up to 5 s), for up to 90 s before it answers `502` (or, for the policy it
+asks for each connection, refuses the host). That holds for any method, a POST included: a
+request is only sent once a connection is made, and never sent again (a listener that dies with
+it gives the sandbox a `502`). The direct calls aren't waited for: they fail at once until the
+next listener answers. The inbox and the run's files try again on their own (`deckhand-inbox`,
+`deckhand-files`); an agent's call or a push is up to the agent's CLI or to git.
 
 With one copy of each (compose), the next listener only starts once the previous one has
 exited: the wait covers the drain and the next start when they take less than 90 s together. A
 call that comes while a long one (an agent's stream) holds the old listener longer fails as
 before once its 90 s are up; two copies handing over (#499) close that gap.
+
+The egress proxy drains on SIGTERM too, for 25 s (compose's `stop_grace_period` for it is 30 s):
+no new tunnel, the requests in flight finish, and the decrypted tunnels close once their
+requests are answered. Its grace is short on purpose: the next proxy only starts once it exited,
+and the sandboxes' new connections are refused meanwhile, with nothing to try them again. A raw
+tunnel is never known to be idle, so one still open at the end is cut.
 
 Running sandboxes outlive an update: they keep their image, and its scripts, until they end.
 So an endpoint that sandboxes call is never just removed: for a while it answers with what to

@@ -114,7 +114,7 @@ async function setup(
         {
           createConnection: () => socket,
           path,
-          headers: { ...headers, host, connection: "close" },
+          headers: { host, connection: "close", ...headers },
         },
         (res) => {
           let body = "";
@@ -271,6 +271,27 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
   await assert.rejects(nowhere.tunnel("relayed.test", 443), /403/);
 });
 
+test("a relayed host to an https: listener: over verified TLS, one connection per request", async (t) => {
+  const relayed = [];
+  const listener = createHttpsServer({ ...(await publicCa.certFor("localhost")) }, (req, res) => {
+    relayed.push({ url: req.url, connection: req.headers.connection });
+    res.end("over TLS");
+  });
+  const port = await listening(listener);
+  t.after(() => listener.close());
+  const { get, authority } = await setup(t, { relayUrl: `https://localhost:${port}/relay` });
+  const answer = await get("relayed.test", "/v1/x", authority.certificate(), {
+    connection: "keep-alive",
+    "keep-alive": "timeout=60",
+  });
+  assert.equal(answer.status, 200);
+  assert.equal(answer.body, "over TLS");
+  // The listener's connection closes, not the client's.
+  assert.notEqual(answer.headers.connection, "close");
+  // The client's keep-alive isn't passed on: the connection, not pooled, closes once answered.
+  assert.deepEqual(relayed, [{ url: "/relay/relayed.test/v1/x", connection: "close" }]);
+});
+
 test("a relayed host while the listener restarts: waited for, sent once, never again", async (t) => {
   // The listener's port, closed until the second wait (an injected clock).
   const relayed = [];
@@ -402,7 +423,7 @@ test("a draining proxy: no new tunnel, a relayed stream in flight finishes, then
   // ends the tunnel, the proxy's last connection.
   assert.equal((await answer).text, "data: 1\n\ndata: 2\n\n");
   assert.equal(await drained, true);
-  assert.equal(raw.destroyed || raw.readableEnded, true);
+  if (!raw.destroyed) await new Promise((resolve) => raw.once("close", resolve));
 });
 
 test("the CA's certificate is served at /deckhand-ca.crt; none with the cache off", async (t) => {

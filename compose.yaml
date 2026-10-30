@@ -206,8 +206,9 @@ services:
       dockerfile: proxy/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-egress:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping lets the open tunnels finish first (docs/architecture.md#restarts).
-    stop_grace_period: 5m
+    # Stopping gives the requests in flight 25 s to finish (docs/architecture.md#restarts): new
+    # connections are refused until the next proxy starts.
+    stop_grace_period: 30s
     environment:
       POLICY_URL: http://listener:8081/egress
     volumes:

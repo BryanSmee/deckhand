@@ -1963,6 +1963,42 @@ mounts:
     );
   });
 
+  test("on SIGTERM the broker takes no new call, one in flight finishes, then the listener exits", async (t) => {
+    const ctx = await holding(t);
+    const { dir, github, brokerPort, listener } = ctx;
+    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    // A sandbox's call the GitHub gateway relays, left unanswered (an agent's stream, a push).
+    const slow = (r) => r.method === "GET" && r.path === "/repos/org/repo/commits/held";
+    const release = github.hold(slow);
+    t.after(release);
+    const inFlight = fetch(
+      `http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo/commits/held`,
+      {
+        headers: { authorization: `token ${secret}` },
+      },
+    );
+    await github.waitFor(slow);
+
+    const exited = new Promise((resolve) => listener.child.on("exit", resolve));
+    listener.child.kill("SIGTERM");
+    await listener.until("Saved 0 task(s)");
+    // A new call is refused: the egress proxy waits for the next listener (proxy/wait.mjs).
+    await assert.rejects(
+      fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+        headers: { authorization: `token ${secret}` },
+      }),
+      (error) => error.cause?.code === "ECONNREFUSED",
+    );
+    // The queue and the runs are saved, but the listener waits for the call in flight.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(listener.child.exitCode, null);
+    release();
+    const answer = await inFlight;
+    assert.equal(answer.status, 200);
+    await answer.text();
+    assert.equal(await exited, 0);
+  });
+
   test("a restart during a run: it goes on, a new comment reaches it, one reply", async (t) => {
     const ctx = await holding(t);
     const { dir, github, send, brokerPort } = ctx;

@@ -1,11 +1,11 @@
 // Draining an HTTP server on SIGTERM (the listener's broker, the egress proxy): it takes no new
 // connection, the requests in flight finish, and each connection closes once its answer is
-// sent. A call that comes meanwhile is refused, and the egress proxy tries it again until the
-// next one answers (proxy/wait.mjs): an update delays the runs' calls rather than failing them.
+// sent. A call that comes meanwhile is refused, and the egress proxy tries those it relays again
+// until the next one answers (proxy/wait.mjs): an update delays them rather than failing them.
 // The proxy's image copies it.
 
-// compose.yaml's stop_grace_period is 5 minutes: what is still going after this is cut, a little
-// before Docker kills the process, so that it exits on its own.
+// The listener's: its stop_grace_period in compose.yaml is 5 minutes. What is still going after
+// this is cut, a little before Docker kills the process, so that it exits on its own.
 export const DRAIN_MS = 280_000;
 
 // Resolves true once every connection of `server` is closed, false when `graceMs` ends first.
