@@ -852,13 +852,17 @@ test("a pull request's own write goes on with the token it needs, its answer to 
   const create = '{"title": "T", "head": "issue-1-x", "base": "main"}';
   assert.equal((await post("/api/v3/repos/org/repo/pulls", create)).status, 200);
   assert.equal((await post("/api/v3/repos/org/repo/issues/1/comments", "{}")).status, 200);
+  // A reply in a review thread: the same token, and nothing for the dashboard.
+  const reply = "/api/v3/repos/org/repo/pulls/7/comments/40/replies";
+  assert.equal((await post(reply, '{"body": "Fixed."}')).status, 200);
   assert.deepEqual(
     gw.minted.map(([, perms]) => perms),
-    [{ contents: "write" }, readsOf(), { pull_requests: "write" }, {}],
+    [{ contents: "write" }, readsOf(), { pull_requests: "write" }, {}, { pull_requests: "write" }],
   );
   assert.deepEqual(wrote, [
     [true, [{ key: "m", number: 7, head: null, ready: true }], 200],
     [false, [{ key: null, number: null, head: "issue-1-x", ready: true }], 200],
+    [false, [], 200],
     [false, [], 200],
   ]);
 });

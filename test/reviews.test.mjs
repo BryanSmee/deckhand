@@ -460,6 +460,10 @@ test("fixMessage: what to do, then every finding by severity, the low ones too",
   const text = fixMessage(parseReview(MESSAGE), 5);
   assert.match(text, /^The automated review of pull request #5 requested changes\./);
   assert.match(text, /Stop and ask if a fix needs a decision only the maintainer can make\./);
+  assert.match(
+    text,
+    /review threads \(inline comments\) on what you fixed, reply in each with what changed and the commit; leave them open/,
+  );
   const high = text.indexOf("### 🟠 High (1)\n\n- `listener/reviews.mjs:42`: a redelivery");
   const medium = text.indexOf("### 🟡 Medium (1)\n\n- no location for this one");
   const low = text.indexOf("### ⚪ Low (1)\n\n- `docs/repo-config.md:10`: a typo");

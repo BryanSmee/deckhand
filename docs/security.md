@@ -244,8 +244,8 @@ can read.
   no sandbox can review one: `pull_requests: write` would let a run approve any pull request
   of its repository as the App, its own included, or replace a review mode's request for
   changes (GitHub counts a reviewer's latest review). The gateway adds it to a work run's
-  checked writes to its own pull requests alone, opening or editing one, whose document is
-  the one it checked ([The default branch](#the-default-branch)): reviews and merges are in
+  checked writes to its own pull requests alone, opening or editing one, or replying to or
+  resolving one of its review threads, whose document is the one it checked ([The default branch](#the-default-branch)): reviews and merges are in
   no ceiling. Comments on a pull request take `issues: write`.
 - Tokens are cached per repository and permission set, renewed 10 minutes before their
   end, and shared by that repository's runs with the same permissions. GitHub makes them
@@ -337,7 +337,15 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   link is a `link` on the blocked issue, and its blocker must be an issue the run created,
   one under its issue, or an open issue of its repository: never a pull request or another
   repository's issue. It orders work (`plans.mjs`), and leaves only a timeline event (and its
-  dependency counts) on the blocker, editing nothing else there. A
+  dependency counts) on the blocker, editing nothing else there. A reply in a review thread
+  (REST's `POST …/pulls/<n>/comments/<id>/replies`, GraphQL's
+  `addPullRequestReviewThreadReply`) is a `reply`, resolving one (`resolveReviewThread`) a
+  `resolve`, and opening it again (`unresolveReviewThread`) an `unresolve`, all on the thread's
+  pull request: the thread is looked up on GitHub by its first comment, must be on that pull
+  request, and its first comment's author (and whether it is the App's bot) goes to the
+  policies. Their default (`policy/gh-review-threads.rego`: work runs only, and never resolving a
+  person's thread) ships in the listener's image like Deckhand's other default policies. A new review,
+  or a review comment that answers no thread, stays in no ceiling. A
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
     ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
@@ -345,7 +353,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     (readying and drafting them too: [The default branch](#the-default-branch)), its issue's
     sub-issues and the issues it created (their labels too, but for `NEEDS_INPUT_LABEL`, which
     its label writes neither add nor remove there: taking it off answers their questions; an
-    edit dropping their questions section still does), and creates labels, issues, and
+    edit dropping their questions section still does), replies to, resolves and unresolves its pull
+    requests' review threads, and creates labels, issues, and
     pull requests from its own branches, and edits and deletes the comments it posted (the
     default policy, `policy/gh-own-comments.rego`, refuses deleting them), nothing else: not other issues and pull requests, though its token could. It reacts on its issues and pull requests and the
     comments there (a comment's issue or pull request, read from GitHub, is the target), a

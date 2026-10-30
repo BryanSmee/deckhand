@@ -32,6 +32,11 @@
 // `created_comment`'s), `comment_author` and `comment_deckhand`. The App's
 // bot adds the listener's reactions too (👀, then the outcome's, on the comments that trigger
 // runs): a run removes (`unreact`) only those GitHub said it added (answered()).
+// A review thread's reply, resolution or reopening (issue #449) is a `reply`, a `resolve` or an
+// `unresolve` on its pull request: the thread, by its first comment's id, is looked up on
+// GitHub, must be on that pull request, and its first comment's author goes to the policies
+// (resolveThread(); their default: ../policy/gh-review-threads.rego). A new review, or a review
+// comment that answers no thread, stays `review`.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
 import { createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
@@ -101,8 +106,9 @@ export function reactionSubject({ number, reacted }) {
 }
 
 // [method, path under the repo (case-insensitive), (match, body, method) → { actions, target,
-// change, pull, permissions }]: `pull`, a pull request's own write's head, base and draft
-// (github-pulls.mjs), `permissions`, its token's (PULL_WRITE).
+// change, pull, thread, permissions }]: `pull`, a pull request's own write's head, base and
+// draft (github-pulls.mjs), `thread`, a review thread's comment it answers, `permissions`, what
+// its token needs beyond its mode's (PULL_WRITE).
 // `number`: an issue's or pull request's; `body`: the write's JSON.
 const ROUTES = [
   [
@@ -287,7 +293,18 @@ const ROUTES = [
     /^pulls\/(\d+)\/update-branch$/i,
     (m) => ({ actions: ["update_branch"], target: { number: +m[1] } }),
   ],
-  // Reviews, their comments and their requests: in no ceiling.
+  // A reply in a review thread: GitHub takes it with `pull_requests: write`.
+  [
+    "POST",
+    /^pulls\/(\d+)\/comments\/(\d+)\/replies$/i,
+    (m) => ({
+      actions: ["reply"],
+      target: { number: +m[1] },
+      thread: { comment: +m[2] },
+      permissions: PULL_WRITE,
+    }),
+  ],
+  // Reviews, their comments (but replies, above) and their requests: in no ceiling.
   [
     /^(?:POST|PUT|PATCH|DELETE)$/,
     /^pulls\/\d+\/(?:reviews|comments|requested_reviewers)(?:\/.*)?$/i,
@@ -299,7 +316,8 @@ const ROUTES = [
 // a reaction's comment, { id, type } }, child (a link's: { id, replace_parent }), blocker (a
 // "blocked by" link's: { id }), reaction (a reaction's: { subject, content } added, { subject,
 // id } removed: reactionSubject()), change: { fields, labels_added,
-// labels_removed, labels_set (the labels it sets replace the issue's) }, pull, permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
+// labels_removed, labels_set (the labels it sets replace the issue's) }, pull, thread,
+// permissions (ROUTES') }, `{ read: true }` for a POST that writes nothing (rendering markdown), or
 // null when it can't be classified. `path`: under the API's base, decoded, without its query
 // (github-gateway.mjs route()); `body`: the bytes sent.
 export function classify(method, path, body) {
@@ -333,7 +351,9 @@ export function classify(method, path, body) {
       ...(write.child && { child: write.child }),
       ...(write.blocker && { blocker: write.blocker }),
       ...(write.reaction && { reaction: write.reaction }),
-      ...(write.pull && { pull: write.pull, permissions: write.permissions }),
+      ...(write.pull && { pull: write.pull }),
+      ...(write.thread && { thread: write.thread }),
+      ...(write.permissions && { permissions: write.permissions }),
       change: {
         fields: Array.isArray(json) ? [] : Object.keys(json),
         labels_added: [],
@@ -369,6 +389,9 @@ const PAGE = 100;
 // How much earlier than the call that created it GitHub may say an issue was created: the
 // listener's and GitHub's clocks differ, and `created_at` is in seconds.
 const SKEW_MS = 2 * 60_000;
+// The most replies a review comment is followed up through to its thread's first: GitHub's
+// point at it directly.
+const MAX_HOPS = 5;
 
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
@@ -507,6 +530,25 @@ export function createWriteChecks({
     const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
     const open = !issue?.pull_request && issue?.state === "open";
     return { id, number, kind, open };
+  }
+
+  // A review thread, by the id of one of its comments → { author, deckhand }: its first
+  // comment's author, and whether that is the App's bot (a thread Deckhand opened). Null when
+  // the comment isn't there, or isn't on pull request `number`.
+  async function resolveThread(repo, number, id, lookup) {
+    const on = (c) =>
+      String(c?.pull_request_url ?? "")
+        .toLowerCase()
+        .endsWith(`/repos/${repo}/pulls/${number}`);
+    let comment = await lookup(repo, `/repos/${repo}/pulls/comments/${id}`);
+    for (let hops = 0; comment?.in_reply_to_id && hops < MAX_HOPS; hops++) {
+      if (!on(comment)) return null;
+      comment = await lookup(repo, `/repos/${repo}/pulls/comments/${comment.in_reply_to_id}`);
+    }
+    if (!on(comment) || comment.in_reply_to_id) return null;
+    const author = comment.user?.login ?? null;
+    const login = bot();
+    return { author, deckhand: !!login && author?.toLowerCase() === login.toLowerCase() };
   }
 
   // The number of the repo's open issue whose id is `id`, among its newest (MAX_OPEN_PAGES),
@@ -704,6 +746,19 @@ export function createWriteChecks({
     if (above.length) {
       const on = target.number === null ? target.kind : `${target.kind} #${target.number}`;
       return refusal(403, `a ${mode} run can't ${above.join(", ")} on ${on} (its ceiling)`);
+    }
+    if (write.thread) {
+      let thread;
+      try {
+        thread = await resolveThread(write.repo, target.number, write.thread.comment, get);
+      } catch (error) {
+        log(
+          `GitHub gateway: ${run.repo} review comment ${write.thread.comment}: ${error.message ?? error}`,
+        );
+        return refusal(502, "the review thread can't be looked up on GitHub");
+      }
+      if (!thread) return refusal(404, `#${target.number} has no such review thread`);
+      target = { ...target, thread };
     }
     // An inbox run's issues carry its label (prompts/idea.md, bug.md): in its ceiling too.
     const label = issueLabelOf(run.mode);

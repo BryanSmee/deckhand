@@ -112,7 +112,21 @@ const NODES = {
   L_needs: { __typename: "Label", name: "needs-input", repository: { nameWithOwner: "Org/Repo" } },
   L_o: { __typename: "Label", name: "idea", repository: { nameWithOwner: "org/other" } },
   U_1: { __typename: "User" },
+  // Review threads on #7, by their first comment: Deckhand's review's, a person's, one GitHub
+  // answers without comments, and another repository's.
+  PRRT_d: thread(7, 40),
+  PRRT_h: thread(7, 41),
+  PRRT_e: { ...thread(7, 0), comments: { nodes: [] } },
+  PRRT_o: { ...thread(7, 40), repository: { nameWithOwner: "org/other" } },
 };
+function thread(number, comment, repo = "Org/Repo") {
+  return {
+    __typename: "PullRequestReviewThread",
+    repository: { nameWithOwner: repo },
+    pullRequest: { number },
+    comments: { nodes: [{ databaseId: comment }] },
+  };
+}
 
 // GitHub's REST answers the write checks look up (github-writes.mjs resolve()): #1 the run's,
 // #2 a sub-issue of it, #3 someone else's, #4 someone else's closed, #5 the bot's (one a run
@@ -156,6 +170,17 @@ const COMMENTS = {
     id: 17,
     user: { login: "bob" },
     pull_request_url: "https://api.github.com/repos/org/repo/pulls/7",
+  },
+  // Review threads' first comments on #7: Deckhand's review's, and a person's.
+  "pulls/comments/40": {
+    id: 40,
+    user: { login: "deckhand[bot]" },
+    pull_request_url: "https://api.github.com/repos/Org/Repo/pulls/7",
+  },
+  "pulls/comments/41": {
+    id: 41,
+    user: { login: "alice" },
+    pull_request_url: "https://api.github.com/repos/Org/Repo/pulls/7",
   },
 };
 async function lookup(repo, path) {
@@ -1205,4 +1230,92 @@ test("reactions over GraphQL: those GitHub ran are the run's, kept with its issu
   const removing = { method: "POST", path: "/graphql", graphql: true, unreacts, at: 7 };
   answered(work, removing, 200, json({ data: { c: { reaction: {} }, d: null } }));
   assert.deepEqual(work.created, [{ reaction: { subject: "issue:1", content: "heart" }, at: 6 }]);
+});
+
+const GH_REPLY =
+  "mutation Reply($input: AddPullRequestReviewThreadReplyInput!) { addPullRequestReviewThreadReply(input: $input) { comment { url } } }";
+const GH_RESOLVE =
+  "mutation Resolve($input: ResolveReviewThreadInput!) { resolveReviewThread(input: $input) { thread { isResolved } } }";
+const GH_UNRESOLVE =
+  "mutation Unresolve($input: UnresolveReviewThreadInput!) { unresolveReviewThread(input: $input) { thread { isResolved } } }";
+
+test("review threads: a work run replies to and resolves its pull request's, by their first comment, with the token pull requests' writes get", async () => {
+  const { check, writes, looked } = checks();
+  const reply = await check(
+    run("work"),
+    call(GH_REPLY, { input: { pullRequestReviewThreadId: "PRRT_h", body: "Fixed in abc123." } }),
+  );
+  assert.equal(reply.refused, undefined, reply.refused?.message);
+  assert.equal(reply.write, true);
+  assert.deepEqual(reply.permissions, { pull_requests: "write" });
+  // Nothing for the dashboard: the pull request itself didn't change.
+  assert.deepEqual(reply.pulls, []);
+  assert.deepEqual(writes[0], {
+    repo: "org/repo",
+    actions: ["reply"],
+    target: { number: 7 },
+    change: { fields: ["body"], labels_added: [], labels_removed: [] },
+    thread: { comment: 41 },
+    permissions: { pull_requests: "write" },
+  });
+  assert.ok(looked.includes("/repos/org/repo/pulls/comments/41"));
+  for (const [query, input, actions] of [
+    [GH_RESOLVE, { threadId: "PRRT_d" }, ["resolve"]],
+    [GH_RESOLVE, { threadId: "PRRT_d", resolutionReason: "ADDRESSED" }, ["resolve"]],
+    [GH_UNRESOLVE, { threadId: "PRRT_d" }, ["unresolve"]],
+  ]) {
+    const out = await check(run("work"), call(query, { input }));
+    assert.equal(out.refused, undefined, out.refused?.message);
+    assert.deepEqual(out.permissions, { pull_requests: "write" });
+    assert.deepEqual(writes.at(-1).actions, actions);
+    assert.deepEqual(writes.at(-1).thread, { comment: 40 });
+  }
+  const refused = [
+    // Into a pending review: reviews are in no ceiling.
+    [
+      run("work"),
+      call(GH_REPLY, {
+        input: { pullRequestReviewThreadId: "PRRT_d", body: "x", pullRequestReviewId: "PRR_1" },
+      }),
+      /doesn't let a run set addPullRequestReviewThreadReply's pullRequestReviewId/,
+    ],
+    [
+      run("brainstorm"),
+      call(GH_REPLY, { input: { pullRequestReviewThreadId: "PRRT_d", body: "x" } }),
+      /a brainstorm run can't reply here \(its ceiling\)/,
+    ],
+    [run("review"), call(GH_RESOLVE, { input: { threadId: "PRRT_d" } }), /can't resolve here/],
+    [
+      run("work"),
+      call(GH_RESOLVE, { input: { threadId: "PRRT_o" } }),
+      /threadId isn't in the run's repository/,
+    ],
+    [
+      run("work"),
+      call(GH_RESOLVE, { input: { threadId: "PRRT_e" } }),
+      /has no pull request or comment/,
+    ],
+    // A thread is not a pull request, nor a pull request a thread.
+    [run("work"), call(GH_RESOLVE, { input: { threadId: "PR_7" } }), /on a PullRequest isn't/],
+    // A new review, or a review comment outside a thread: unknown mutations.
+    [
+      run("work"),
+      call(
+        'mutation { addPullRequestReview(input: { pullRequestId: "PR_7", event: COMMENT, body: "x" }) { clientMutationId } }',
+      ),
+      /doesn't let a run send addPullRequestReview/,
+    ],
+    [
+      run("work"),
+      call(
+        'mutation { addPullRequestReviewThread(input: { pullRequestId: "PR_7", path: "a", line: 1, body: "x" }) { clientMutationId } }',
+      ),
+      /doesn't let a run send addPullRequestReviewThread$/,
+    ],
+  ];
+  for (const [r, body, why] of refused) {
+    const out = await check(r, body);
+    assert.ok(out.refused, body.toString());
+    assert.match(out.refused.message, why);
+  }
 });

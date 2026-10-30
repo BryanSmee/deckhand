@@ -61,6 +61,8 @@ export function githubSchema() {
 // The types a target or a subject may be, as GitHub's node lookup answers them.
 const ISSUE = ["Issue"];
 const ISSUE_OR_PR = ["Issue", "PullRequest"];
+// A review thread: its target is its pull request, the thread its first comment (writeOf()).
+const THREAD = ["PullRequestReviewThread"];
 // Comments: a reaction on an issue's or pull request's (REACTABLE_COMMENTS) is held to theirs,
 // on the others no ceiling holds, refused as REST refuses them (a run edits the ones it posted
 // with updateIssueComment, and deleteIssueComment, not through these). Those of a
@@ -109,11 +111,13 @@ function updated(input) {
 // - named: the input field of the label it creates' name, its `labels_added` as REST's;
 // - child: a link's sub-issue field; blocker: a "blocked by" link's blocking issue field;
 // - reaction: `add` or `remove`, a reaction's (its subject may be a comment: REACTABLE_COMMENTS);
+// - thread: its target is a review thread, written to as its pull request (writeOf());
 // - pull(input), permissions: a pull request's own write's head, base and draft, and what its
 //   token needs beyond its mode's (github-pulls.mjs, github-writes.mjs classify()'s).
 // The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
 // edited (`gh pr create` sets its labels and milestone with `updatePullRequest`), readied and
-// drafted. Reviews and merges are in none.
+// drafted, and its review threads replied to, resolved and unresolved. Reviews and merges are
+// in none.
 export const MUTATIONS = {
   createIssue: {
     target: "repositoryId",
@@ -302,6 +306,32 @@ export const MUTATIONS = {
     pull: () => ({}),
     permissions: CONTENTS_WRITE,
   },
+  // Not `pullRequestReviewId`: the reply would go into a pending review, and reviews are in no
+  // ceiling.
+  addPullRequestReviewThreadReply: {
+    target: "pullRequestReviewThreadId",
+    types: THREAD,
+    thread: true,
+    fields: ["body"],
+    actions: () => ["reply"],
+    permissions: PULL_WRITE,
+  },
+  resolveReviewThread: {
+    target: "threadId",
+    types: THREAD,
+    thread: true,
+    fields: ["resolutionReason"],
+    actions: () => ["resolve"],
+    permissions: PULL_WRITE,
+  },
+  unresolveReviewThread: {
+    target: "threadId",
+    types: THREAD,
+    thread: true,
+    fields: [],
+    actions: () => ["unresolve"],
+    permissions: PULL_WRITE,
+  },
 };
 
 // What GitHub's node lookup reads of each node: enough to say what it is and where.
@@ -317,6 +347,11 @@ const NODES = `query($ids: [ID!]!) {
     ... on PullRequestReviewComment { fullDatabaseId }
     ... on RepositoryNode { repository { nameWithOwner } }
     ... on Reactable { reactionGroups { content viewerHasReacted } }
+    ... on PullRequestReviewThread {
+      repository { nameWithOwner }
+      pullRequest { number }
+      comments(first: 1) { nodes { databaseId } }
+    }
   }
 }`;
 
@@ -672,6 +707,7 @@ export function answersComment(doc, fields) {
 // type is named, so a refusal says nothing of another repository's nodes.
 export function writeOf({ name, spec, input }, nodes, repo) {
   const node = nodes.get(input[spec.target]);
+  let thread = null;
   const elsewhere = (field) =>
     refusal(403, `${name}'s ${field} isn't in the run's repository, or isn't there`);
   if (!node || repoOf(node).toLowerCase() !== repo) return { refused: elsewhere(spec.target) };
@@ -681,6 +717,14 @@ export function writeOf({ name, spec, input }, nodes, repo) {
       return { refused: refusal(403, `${name}'s ${spec.target} isn't a repository`) };
     }
     target = { kind: spec.kind };
+  } else if (spec.thread && spec.types.includes(node.__typename)) {
+    // Its first comment names the thread as REST's replies do (github-writes.mjs).
+    const comment = node.comments?.nodes?.[0]?.databaseId;
+    if (!Number.isSafeInteger(node.pullRequest?.number) || !Number.isSafeInteger(comment)) {
+      return { refused: refusal(404, `${name}'s ${spec.target} has no pull request or comment`) };
+    }
+    target = { number: node.pullRequest.number };
+    thread = { comment };
   } else if (spec.types.includes(node.__typename)) {
     // A comment by its id, as REST's path names it: `databaseId`, an Int, no longer holds them.
     target = spec.comment ? { comment: commentId(node) } : { number: node.number };
@@ -727,7 +771,9 @@ export function writeOf({ name, spec, input }, nodes, repo) {
       write.reaction.fresh = !group?.viewerHasReacted;
     }
   }
-  if (spec.pull) Object.assign(write, { pull: spec.pull(set), permissions: spec.permissions });
+  if (spec.pull) write.pull = spec.pull(set);
+  if (thread) write.thread = thread;
+  if (spec.permissions) write.permissions = spec.permissions;
   // The other issue a link names, its sub-issue or its blocker: in the run's repo (GitHub
   // allows cross-repository ones, a run doesn't), an issue.
   const linked = (field) => {
