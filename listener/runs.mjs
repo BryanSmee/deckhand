@@ -199,16 +199,18 @@ export function createRuns(ctx) {
       await ctx.label(task.repo, task.number, false);
     }
     const note = writeHeader(task, run);
-    // Its issue on the repo's projects, at `start` (projects.mjs): never in the run's way.
-    ctx.projects
-      ?.started(task, note)
-      .catch((error) => log(`${task.live.key}: projects: ${error.stack ?? error}`));
     enterPhase(task.live, "setup");
     validateRun(agentOf(task), task, run, note);
     const parts = await prepareRun(task, items, run, note);
     if (ctx.stopping) return false;
     // Cancelled while it was prepared (its image building, say): no sandbox starts.
     if (task.live.cancelled) throw new Cancelled();
+    // Its issue on the repo's projects, at `start` (projects.mjs), once every check let the run
+    // start: a run refused (its config's errors, its grants, its agent) moves nothing. Never in
+    // the run's way.
+    ctx.projects
+      ?.started(task, note, run.errors)
+      .catch((error) => log(`${task.live.key}: projects: ${error.stack ?? error}`));
     await launch(task, items, run, parts, note);
     // Written before the agent starts (setup takes a while), a message waits in the inbox.
     task.live.open = true;

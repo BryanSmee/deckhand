@@ -1238,6 +1238,21 @@ caches:
     assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
   });
 
+  test("projects: a run refused as it starts (an agent the operator hasn't configured) moves nothing", async (t) => {
+    const { github, send } = await listen(
+      t,
+      { ".deckhand.yaml": "projects:\n  - project: acme/3\n    start: In progress\n" },
+      (dir) => (writeGrant(dir, "allow_projects: [acme/3]\n"), {}),
+    );
+    await send(comment("alice", "Deckhand\n/agent codex\nGo."));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.match(JSON.parse(reply.body).body, /can't run here|codex/i);
+    // Not even the project looked up (projects.mjs asks for it before moving anything).
+    assert.ok(!github.requests.some((r) => r.path === "/graphql" && /projectv2/i.test(r.body)));
+  });
+
   test("a config with errors stops the run and the reply says why; a broken grant, at start", async (t) => {
     // Another repo's broken grant (access.test.mjs: its runs stop): said at start, and the
     // listener starts anyway.

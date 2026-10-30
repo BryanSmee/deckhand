@@ -270,6 +270,11 @@ test("started: the settings the run started with, not read again", async () => {
   };
   assert.deepEqual(await p.started(task), ["acme/3: In progress"]);
   assert.deepEqual(p.read, []);
+  // Its config read with errors: nothing moves, whatever its `projects:` says.
+  const broken = projects();
+  const errors = ["fast_mod: unknown, ignored", "trigger: expected a line of text"];
+  assert.deepEqual(await broken.started(task, () => {}, errors), []);
+  assert.deepEqual([broken.read, broken.sent], [[], []]);
   // A repo without `projects:`: nothing asked of GitHub at all.
   const none = projects();
   assert.deepEqual(await none.started({ ...task, settings: { projects: [], users: [] } }), []);

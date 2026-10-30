@@ -893,7 +893,8 @@ projects:
 The listener then moves the items, with the App's own token:
 
 - **`start`**: when a work run starts on the issue (a work run, or one of the repository's
-  modes that isn't light; not a brainstorm or any light run), the issue is added to the
+  modes that isn't light; not a brainstorm or any light run), once its checks let it start (a run
+  refused, for its config's errors or its agent say, moves nothing), the issue is added to the
   project if it isn't there yet, and its field set to that option. A later work run on it
   sets it again, but for one asked from its pull request (a review's fix run, a comment
   there) and any once its pull request is ready or merged: the issue then stays where the

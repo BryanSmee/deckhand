@@ -207,13 +207,16 @@ export function createProjects({
   // A work run starting on an issue: its `start` option. Light runs only read and answer.
   // Not a run asked from the issue's pull request (a review's fix, a comment there: its
   // `replyTo`), nor one once that pull request is ready or merged: the issue stays where the
-  // pull request's steps put it.
-  function started(task, note) {
+  // pull request's steps put it. `errors`: those of the config the run read (runs.mjs begin()):
+  // with any, nothing moves, as for a delivery (the runs.mjs caller only gets here once the run
+  // passed its checks, which refuse it then).
+  function started(task, note, errors = []) {
     if (task.live?.light || task.kind !== "issue") return Promise.resolve([]);
+    if (errors?.length) return Promise.resolve([]);
     const replyTo = task.live?.replyTo;
     if (replyTo != null && replyTo !== task.number) return Promise.resolve([]);
     if (PAST_START.has(pullOf(task.live?.key ?? task.key)?.state)) return Promise.resolve([]);
-    // The settings the run started with (a config with errors starts none): no second read.
+    // The settings the run started with: no second read.
     return move(task.repo, task.base, task.number, "start", { note, settings: task.settings });
   }
 
