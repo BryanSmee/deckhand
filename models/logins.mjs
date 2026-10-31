@@ -9,10 +9,9 @@
 // written, so it may be mounted read-only. The store's login is the one used until the file
 // changes (a new sign-in, by its content's hash), which then replaces it.
 import { createHash, hkdfSync, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { linkSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
-import { writeFileAtomic } from "../lib/files.mjs";
 import { sealWith } from "../lib/seal.mjs";
 
 // How long a refresh may take before another copy takes over: `agy models` in a container the
@@ -30,16 +29,28 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 // (docs/setup.md, The models service).
 export function loginKey(dir) {
   const path = join(dir, "models.key");
-  try {
+  const read = () => {
     const key = Buffer.from(readFileSync(path, "utf8").trim(), "base64");
     if (key.length === 32) return key;
     throw new Error(`${path} isn't a key: remove it, and a new one is made`);
+  };
+  try {
+    return read();
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const key = randomBytes(32);
-  writeFileAtomic(path, `${key.toString("base64")}\n`, { mode: 0o600 });
-  return key;
+  // Written whole aside, then linked in place only if there is still none: two copies starting
+  // together on an empty volume keep the one that got there first, and read it.
+  const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, `${randomBytes(32).toString("base64")}\n`, { mode: 0o600 });
+  try {
+    linkSync(tmp, path);
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+  } finally {
+    rmSync(tmp, { force: true });
+  }
+  return read();
 }
 
 export const loginSeal = (key) => sealWith(key, "models logins");

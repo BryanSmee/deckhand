@@ -5,6 +5,8 @@
 // are two servers on the same memory store here, a real broker beside them.
 import assert from "node:assert/strict";
 import { Agent, request } from "node:http";
+import { randomBytes } from "node:crypto";
+import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
@@ -19,7 +21,7 @@ import { createBrokerService } from "../listener/broker-service.mjs";
 import { loadConfig, withModelCredentials } from "../listener/config.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
-import { fingerprintSalt, loginSeal } from "../models/logins.mjs";
+import { fingerprintSalt, loginKey, loginSeal } from "../models/logins.mjs";
 import { fingerprints } from "../models/http.mjs";
 import { createModels, credentialNames } from "../models/server.mjs";
 import { RECORD_MS } from "../models/runs.mjs";
@@ -535,4 +537,76 @@ test("redacting with fingerprints stays cheap: a few windows hashed per MB, not 
   assert.ok(out.endsWith(" [redacted]"));
   // What hashing every window took (#504's first fix): 500 ms and more per MB and set.
   assert.ok(ms < 250, `${Math.round(ms)} ms`);
+});
+
+// A fake models service's GET /fingerprints for createModelsService(): `answer(n)` for the n-th.
+const fingerprintsFetch = (answer) => {
+  let n = 0;
+  return async (url) => {
+    if (!String(url).endsWith("/fingerprints")) return new Response("{}", { status: 404 });
+    const value = await answer(++n);
+    return value instanceof Response ? value : new Response(JSON.stringify(value));
+  };
+};
+
+test("the listener's fingerprints: the operator's fixed key stays redacted once refreshed tokens fill the cap", async () => {
+  const salt = "s".repeat(32);
+  // A plan's access token refreshed at every read, beside a key that never changes.
+  const fetch = fingerprintsFetch((n) =>
+    fingerprints([KEY, `ya29.${randomBytes(96).toString("base64url")}`], salt),
+  );
+  const models = createModelsService({
+    urls: "http://models.test",
+    token: async () => null,
+    fetch,
+    setTimer: () => ({}),
+  });
+  const piece = KEY.slice(1, 33);
+  for (let i = 0; i < 400; i++) {
+    await models.start();
+    const out = redact(`key (${piece})`, models.prints());
+    assert.equal(out, "key ([redacted])", `read ${i}`);
+  }
+  assert.ok(models.prints()[0].chunks.length <= 2000);
+});
+
+test("the listener's first fingerprints: start() resolves once they are read, not after a failed try", async () => {
+  const fetch = fingerprintsFetch((n) =>
+    n === 1 ? new Response("down", { status: 500 }) : fingerprints([KEY], "s".repeat(32)),
+  );
+  const models = createModelsService({
+    urls: "http://models.test",
+    token: async () => null,
+    fetch,
+    setTimer: () => ({}),
+  });
+  await models.start();
+  assert.equal(models.prints().length, 1);
+  assert.equal(redact(KEY, models.prints()), "[redacted]");
+});
+
+test("the listener's relay: a copy it can't reach fails that call, the next ones go to the next copy", async (t) => {
+  const heard = [];
+  const { url: second } = await serve(t, (req, res) => (heard.push(req.url), res.end("ok")));
+  const models = createModelsService({
+    urls: `http://127.0.0.1:1,${second}`,
+    token: async () => "Bearer s",
+  });
+  const { url } = await serve(t, (req, res) =>
+    models.relay(req, res, { sandbox: "net-1", token: "agent", path: req.url }),
+  );
+  const call = () => fetch(`${url}/anthropic/v1/messages`, { method: "POST", body: "{}" });
+  assert.equal((await call()).status, 502);
+  const res = await call();
+  assert.equal(res.status, 200);
+  assert.deepEqual(heard, ["/anthropic/v1/messages"]);
+});
+
+test("loginKey(): made once, then read; the same key for every caller", () => {
+  const dir = tempDir(null, "deckhand-models-key-");
+  const key = loginKey(dir);
+  assert.equal(key.length, 32);
+  assert.deepEqual(loginKey(dir), key);
+  assert.deepEqual(readdirSync(dir), ["models.key"]);
+  assert.equal(statSync(join(dir, "models.key")).mode & 0o777, 0o600);
 });

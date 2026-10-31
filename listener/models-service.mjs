@@ -15,6 +15,14 @@ const PRINTS_EVERY_MS = 60_000;
 const PRINTS_KEPT_MS = 24 * 60 * 60_000;
 const RETRY_MS = 5_000;
 
+// `before` (a list, or none) with `fresh` last, those of `fresh` taken out of it first (by
+// `keyOf`), then the oldest dropped past `max`: `fresh` stays whole.
+function newestLast(before = [], fresh = [], keyOf, max) {
+  const now = new Set((fresh ?? []).map(keyOf));
+  const old = (before ?? []).filter((x) => !now.has(keyOf(x)));
+  return [...old.slice(Math.max(0, old.length - Math.max(0, max - now.size))), ...(fresh ?? [])];
+}
+
 // `urls`: MODELS_SERVICE_URL (its copies, comma-separated); `token()`: the Authorization
 // header for it (the listener's service token, as the orchestrator).
 export function createModelsService({
@@ -27,7 +35,14 @@ export function createModelsService({
   clearTimer = clearTimeout,
 }) {
   const client = serviceClient({ service: "models", urls, token, fetch, log });
-  const first = String(urls).split(",")[0].trim().replace(/\/$/, "");
+  // Its copies, for relay(), which can't send a call twice (its body streams on as it comes):
+  // one that can't be reached fails that call (502, which the agent's CLI retries), and the
+  // next ones go to the next copy.
+  const bases = String(urls)
+    .split(",")
+    .map((u) => u.trim().replace(/\/$/, ""))
+    .filter(Boolean);
+  let current = 0;
   let stopped = false;
   const timers = new Set();
   const later = (fn, ms) => {
@@ -56,6 +71,7 @@ export function createModelsService({
 
   // The fingerprints' sets, the newest last: { at, salt, values, chunk, chunks, rolls }.
   let sets = [];
+  // One read: whether it answered.
   async function readPrints() {
     try {
       const answer = await client.json("GET", "/fingerprints", { waitMs: 10_000 });
@@ -64,10 +80,11 @@ export function createModelsService({
       // too: a token refreshed away may still show in a run's output for a while.
       const before = sets.find((s) => s.salt === salt);
       const fresh = Array.isArray(answer.values) ? answer.values : [];
-      const hashes = new Set(fresh.map((v) => v.hash));
-      const values = [...(before?.values ?? []).filter((v) => !hashes.has(v.hash)), ...fresh];
-      const chunks = new Set([...(before?.chunks ?? []), ...(answer.chunks ?? [])]);
-      const rolls = new Set([...(before?.rolls ?? []), ...(answer.rolls ?? [])]);
+      // The current answer last, whole: a cap drops the oldest of what is no longer said, never
+      // a credential still held (the operator's keys, said at every read).
+      const values = newestLast(before?.values, fresh, (v) => v.hash, 200);
+      const chunks = newestLast(before?.chunks, answer.chunks, (c) => c, 2000);
+      const rolls = newestLast(before?.rolls, answer.rolls, (r) => r, 2000);
       const kept = sets.filter((s) => now() - s.at < PRINTS_KEPT_MS && s.salt !== salt);
       sets = [
         ...kept,
@@ -75,16 +92,28 @@ export function createModelsService({
           at: now(),
           salt,
           chunk: answer.chunk,
-          values: values.slice(-200),
-          chunks: [...chunks].slice(-2000),
-          rolls: [...rolls].slice(-2000),
+          values,
+          chunks,
+          rolls,
         },
       ];
-      later(readPrints, PRINTS_EVERY_MS);
+      return true;
     } catch (error) {
       log(`Models: its fingerprints (${error.message}), asking again`);
-      later(readPrints, RETRY_MS);
+      return false;
     }
+  }
+
+  // The first read, asked until it answers (the runs restored after it have their output
+  // redacted with them), then again every minute.
+  async function start() {
+    for (let delay = 1000; !(await readPrints()); delay = Math.min(delay * 2, 30_000)) {
+      if (stopped) return;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    // Again every PRINTS_EVERY_MS, RETRY_MS after a failure.
+    const again = async () => later(again, (await readPrints()) ? PRINTS_EVERY_MS : RETRY_MS);
+    later(again, PRINTS_EVERY_MS);
   }
 
   // What lib/redact.mjs takes among the secrets: the fingerprints of the agents' credentials.
@@ -134,7 +163,8 @@ export function createModelsService({
   // token, the run's agent token and the network (or pod) `sandbox` it came from, as the proxy
   // would. `path`: the call's, as sent.
   async function relay(req, res, { sandbox, token: agentToken, path }) {
-    const target = new URL(`${first}${path}`);
+    const at = current;
+    const target = new URL(`${bases[at]}${path}`);
     const headers = {
       ...forwarded(req.headers, AGENT_TOKEN_HEADERS),
       host: target.host,
@@ -145,12 +175,14 @@ export function createModelsService({
     await forward(req, res, {
       target,
       headers,
-      unreachable: () =>
+      unreachable: () => {
+        if (current === at) current = (at + 1) % bases.length;
         res
           .writeHead(502, { "content-type": "application/json" })
           .end(
             JSON.stringify({ error: { message: "Deckhand: the models service can't be reached" } }),
-          ),
+          );
+      },
       log,
       what: "Models",
     });
@@ -162,7 +194,7 @@ export function createModelsService({
     apiOf,
     consume,
     relay,
-    start: () => readPrints(),
+    start,
     stop() {
       stopped = true;
       for (const timer of timers) clearTimer(timer);

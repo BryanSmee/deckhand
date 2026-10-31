@@ -10,12 +10,12 @@
 //   redacts them from runs' output without them (GET /fingerprints), a run's API state (GET
 //   /runs/:id/api), and the `models` stream (GET /events, POST /events/ack);
 //   GET /health, /ready: liveness, and readiness (503 once draining).
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER } from "../lib/broker-client.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
-import { rollOf } from "../lib/redact.mjs";
+import { fingerprints } from "../lib/redact.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { STREAM } from "./runs.mjs";
 
@@ -40,45 +40,11 @@ export const ROUTES = {
 export const EVENTS_WAIT_MS = 20_000;
 const CONSUMER = "orchestrator";
 const BODY_MAX = 64 * 1024;
-// Shorter values are no credential (lib/redact.mjs MIN_LENGTH).
-const MIN_LENGTH = 16;
+
+// What the listener redacts the credentials with, without them (GET /fingerprints).
+export { fingerprints };
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
-
-// What redacts `values` from a text without them (lib/redact.mjs): a salt, each value's length
-// and salted SHA-256, and the salted SHA-256 of each of its CHUNK-long parts at fixed offsets
-// (past a JWT's header, which every token of its issuer shares), so that a part of one cut off
-// (#242) is found too, when it holds a whole chunk: any part of 2 × CHUNK - 1 characters. Not
-// every offset: from the hashes of every window, a value would be found back one character at a
-// time; from fixed chunks, only those whose characters are mostly known (a prefix, `sk-ant-…`),
-// a few characters, and the rest has too many unknown ones.
-export const CHUNK = 16;
-const JWT_HEADER = /^eyJ[A-Za-z0-9_-]*\.eyJ/;
-export function fingerprints(values, salt = randomBytes(16).toString("hex")) {
-  const hash = (text) =>
-    createHash("sha256")
-      .update(salt + text)
-      .digest("hex");
-  const unique = [
-    ...new Set(values.filter((v) => typeof v === "string" && v.length >= MIN_LENGTH)),
-  ];
-  const chunks = new Set();
-  const rolls = new Set();
-  for (const value of unique) {
-    const own = JWT_HEADER.exec(value)?.[0].length ?? 0;
-    for (let i = own; i + CHUNK <= value.length; i += CHUNK) {
-      chunks.add(hash(value.slice(i, i + CHUNK)));
-      rolls.add(rollOf(value.slice(i, i + CHUNK)));
-    }
-  }
-  return {
-    salt,
-    values: unique.map((value) => ({ length: value.length, hash: hash(value) })),
-    chunk: CHUNK,
-    chunks: [...chunks],
-    rolls: [...rolls],
-  };
-}
 
 // `endpoints`: { anthropic, openai, google }, each { handle(req, res) }; `runs`: runs.mjs's;
 // `credentials`: the names of those the operator set; `secrets()`: their values, and the plan
