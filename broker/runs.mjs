@@ -288,6 +288,10 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
         // Ended meanwhile (another copy): nothing.
         if (!run)
           return ((answer = { status: 401, message: "unknown or finished run" }), undefined);
+        // Started again on another sandbox meanwhile (another copy): the old one's isn't its.
+        if (run.sandbox && run.sandbox !== claims.sandbox) {
+          return ((answer = { status: 403, message: NOT_ITS_SANDBOX }), undefined);
+        }
         const newest = run.issued.at(-1)?.hash;
         const expired = claims.exp * 1000 <= now();
         if (expired && newest && presented !== newest && presented !== run.presented) {

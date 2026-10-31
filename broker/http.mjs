@@ -197,7 +197,7 @@ export function createBrokerHandler({
       return res.writeHead(204).end();
     }
     if (req.method === "POST" && path === "/keys") {
-      const { pem } = await readJsonBody(req, BODY_MAX);
+      const { pem } = (await readJsonBody(req, BODY_MAX)) ?? {};
       const imported = await runs.importKey(pem);
       if (!imported.kid) return sendJson(res, { message: imported.message }, imported.status);
       log(
@@ -207,7 +207,7 @@ export function createBrokerHandler({
     }
     if (req.method === "GET" && path === "/events") return events(res, url);
     if (req.method === "POST" && path === "/events/ack") {
-      const { ids } = await readJsonBody(req, BODY_MAX);
+      const { ids } = (await readJsonBody(req, BODY_MAX)) ?? {};
       const acked = await store.ack(STREAM, CONSUMER, Array.isArray(ids) ? ids.map(String) : []);
       return sendJson(res, { acked });
     }
@@ -233,7 +233,7 @@ export function createBrokerHandler({
       return sendJson(res, await runs.publicKeys());
     if (req.method === "POST" && url.pathname === "/service-tokens") {
       const caller = await callers.callerOf(req);
-      const { audiences } = await readJsonBody(req, BODY_MAX);
+      const { audiences } = (await readJsonBody(req, BODY_MAX)) ?? {};
       const tokens = issueServiceTokens(
         caller,
         Array.isArray(audiences) ? audiences : [],

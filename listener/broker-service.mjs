@@ -20,6 +20,9 @@ const KEYS_EVERY_MS = 5 * 60_000;
 const RETRY_MS = 5_000;
 const KEYS_AGAIN_MS = 30_000;
 
+// The most of a run's inbox one append sends: under the broker's limit (INBOX_MAX, 8 MiB).
+export const INBOX_CHUNK = 1024 * 1024;
+
 const enc = encodeURIComponent;
 
 // The key the listener signed run tokens with before the broker service (`run-token.key` in its
@@ -133,6 +136,10 @@ export function createBrokerService({
     try {
       await ok(await caller.call("POST", "/keys", { body: { pem: legacy } }), "the old key");
     } catch (error) {
+      // Refused for good (past the broker's first days, say): said once, not asked again.
+      if (error.status >= 400 && error.status < 500) {
+        return log(`Broker: the listener's old key refused (${error.message})`);
+      }
       log(`Broker: handing over the listener's old key (${error.message}), trying again`);
       later(importLegacy, RETRY_MS);
     }
@@ -195,22 +202,31 @@ export function createBrokerService({
   // failure is tried again a little later, and a later change catches up with it all.
   // → resolves once the broker has it, or rejects when it refused it.
   function sync(run, bytesFrom) {
-    const state = inboxes.get(run) ?? { synced: 0, chain: Promise.resolve() };
+    const state = inboxes.get(run) ?? { synced: 0, known: false, chain: Promise.resolve() };
     inboxes.set(run, state);
+    const post = (offset, body) =>
+      caller.call("POST", `/runs/${enc(run)}/inbox?offset=${offset}`, { body });
     const step = async () => {
       if (inboxes.get(run) !== state) return;
-      const data = bytesFrom(state.synced);
-      if (data === null) return;
-      const res = await caller.call("POST", `/runs/${enc(run)}/inbox?offset=${state.synced}`, {
-        body: data,
-      });
-      // The broker has less (a store lost, another broker): from what it has.
-      if (res.status === 409) {
+      const all = bytesFrom(0);
+      if (all === null) return;
+      // A restarted listener first asks what the broker has (nothing sent past its end: a
+      // 409 with its length), rather than send the whole file again.
+      if (!state.known) {
+        const res = await post(all.length, Buffer.alloc(0));
+        if (res.status !== 409) await ok(res, "the run's inbox");
         state.synced = res.json().length;
-        return step();
+        state.known = true;
       }
-      await ok(res, "the run's inbox");
-      state.synced = res.json().length;
+      // Then what it lacks, in parts under the broker's limit, each ending on a line.
+      while (state.synced < all.length) {
+        const data = all.subarray(state.synced, state.synced + INBOX_CHUNK);
+        const cut = state.synced + data.length < all.length ? data.lastIndexOf(10) + 1 : 0;
+        const res = await post(state.synced, cut > 0 ? data.subarray(0, cut) : data);
+        // The broker has less (a store lost, another broker): from what it has.
+        if (res.status !== 409) await ok(res, "the run's inbox");
+        state.synced = res.json().length;
+      }
     };
     const done = state.chain.then(step);
     state.chain = done.catch((error) => {

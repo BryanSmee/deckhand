@@ -256,3 +256,64 @@ test("an expired run's files go, unless its id started again before they did", a
   assert.deepEqual(await runs.list(), []);
   assert.deepEqual(removed, ["gone"]);
 });
+
+test("an inbox over the broker's limit: a restarted listener asks what the broker has, then sends the rest in parts", async (t) => {
+  const store = openStore("memory:");
+  const broker = await service(t, { store });
+  const file = join(tempDir(t), "inbox.jsonl");
+  // 9 MiB of lines, over the 8 MiB one append may carry.
+  const line = `${JSON.stringify({ text: "x".repeat(1000) })}\n`;
+  writeFileSync(file, line.repeat(Math.ceil((9 * 1024 * 1024) / line.length)));
+  const bytesFrom = (from) => readFileSync(file).subarray(from);
+  const first = remote(t, broker);
+  await first.mirror.sync("run-a", bytesFrom);
+  assert.deepEqual(await store.readBlob("inbox:run-a"), readFileSync(file));
+  // The next listener knows nothing of it: a line more, and only it goes.
+  writeFileSync(file, '{"text":"after"}\n', { flag: "a" });
+  const appended = [];
+  const appendBlobAt = store.appendBlobAt;
+  store.appendBlobAt = async (key, at, data) => (
+    appended.push(data.length),
+    appendBlobAt(key, at, data)
+  );
+  const next = remote(t, broker);
+  await next.mirror.sync("run-a", bytesFrom);
+  assert.deepEqual(await store.readBlob("inbox:run-a"), readFileSync(file));
+  assert.deepEqual(appended, [0, 17]);
+});
+
+test("the listener's old key refused for good is said once, not asked for again", async (t) => {
+  // A store whose first broker started long ago.
+  const store = openStore("memory:");
+  await store.set("first-start", 0);
+  const broker = await service(t, { store });
+  const logged = [];
+  const pem = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
+  const listener = remote(t, broker, { legacy: pem, logged });
+  await listener.start();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  assert.equal(logged.filter((line) => /old key refused/.test(line)).length, 1);
+  assert.ok(!logged.some((line) => /trying again/.test(line)));
+});
+
+test("a renewal from a run's old sandbox, the run started again elsewhere meanwhile, is refused", async () => {
+  const inner = openStore("memory:");
+  const runs = createRuns({ store: inner, key: testKey() });
+  const { token } = await runs.issue("r", { repo: "o/r", sandbox: "net-old" });
+  // Between the check and the update (another copy's issue()): the run bound to net-new.
+  const get = inner.get;
+  let reads = 0;
+  inner.get = async (name) => {
+    const value = await get(name);
+    if (name === "run:r" && ++reads === 1) {
+      await inner.set("run:r", { ...value, sandbox: "net-new", issued: [] });
+    }
+    return value;
+  };
+  const answer = await runs.renew(token, "net-old");
+  assert.equal(answer.status, 403);
+  inner.get = get;
+  const record = await inner.get("run:r");
+  assert.equal(record.sandbox, "net-new");
+  assert.deepEqual(record.issued, []);
+});
