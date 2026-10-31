@@ -115,10 +115,16 @@ export function createTasks(ctx) {
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
     if (!hasAnswer(item) && unanswered(item, issue)) return holdBack(item);
     // A trigger or "/mode" comment replaces the issue's wait, once it runs: refused by the
-    // policies, it changes nothing.
-    const mode = await accept(item);
-    if (mode && !item.after && (item.trigger === "work" || item.modeLine)) {
-      ctx.waits.cancel(taskKey(item.repo, item.id));
+    // policies, it changes nothing. The wait is held meanwhile (waits.mjs reserve()): a blocker
+    // done during the decision doesn't start it beside the new comment.
+    const key = taskKey(item.repo, item.id);
+    const replaces = !item.after && (item.trigger === "work" || !!item.modeLine);
+    if (replaces) ctx.waits.reserve(key);
+    let mode = null;
+    try {
+      mode = await accept(item);
+    } finally {
+      if (replaces) await ctx.waits.release(key, !!mode, "a new comment replaces it");
     }
   }
 

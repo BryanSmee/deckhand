@@ -835,6 +835,13 @@ test("refused by the policies: every dashboard action that starts a run answers 
   w.refusing = refusing;
   await refused(w, await post(w, { action: "start", number: 5 }));
   assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  // Its comment, which said it started, edited to say it didn't.
+  assert.deepEqual(w.edits, [
+    [
+      w.accepted[0].comment.id,
+      "Asked from the dashboard by @alice: not started, the policies refuse it. It still waits for #7.\n\n<!-- deckhand -->",
+    ],
+  ]);
   // Stop.
   const stopping = setup({
     issues: { 5: open("Five") },

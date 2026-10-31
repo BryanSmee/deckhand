@@ -436,3 +436,26 @@ test("the run decision with Deckhand's run.rego: no deny rule, but its allow rul
     "Deckhand's run.rego keeps brainstorms, /stop and onboarding on issues",
   );
 });
+
+test("the run decision with the operator's run.rego replacing Deckhand's: its rules aren't named", async () => {
+  policies = {
+    ...POLICIES,
+    errors: [],
+    files: [
+      ...POLICIES.files,
+      makePolicyFile({ name: "run.rego", source: "deckhand", active: false, rules: ["allow_run"] }),
+      makePolicyFile({
+        name: "run.rego",
+        source: "operator",
+        replaces: "deckhand",
+        rules: ["allow_run"],
+      }),
+    ],
+  };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  const run = card("Runs people start");
+  expect(within(run).getByText("No deny rule")).toBeTruthy();
+  expect(run.textContent).toContain("Its allow rules decide where each mode runs.");
+  expect(run.textContent).not.toContain("Deckhand's run.rego keeps");
+});

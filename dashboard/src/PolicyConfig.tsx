@@ -80,8 +80,9 @@ const DECISIONS: {
   denies: string;
   refused: (until: string) => string;
   builtIn?: boolean;
-  // Without a deny rule: what still refuses it, when its allow rules depend on the input.
-  allows?: string;
+  // Without a deny rule: what still refuses it, when its allow rules depend on the input
+  // (`files`: those that apply).
+  allows?: (files: PolicyFile[]) => string;
 }[] = [
   {
     decision: "run",
@@ -89,8 +90,16 @@ const DECISIONS: {
     denies:
       "A denial starts no run (a trigger comment, /mode, a comment that goes on in a mode, the dashboard, an inbox entry, a discussion): the reply quotes the messages.",
     refused: (until) => `No run a person asks for starts ${until}.`,
-    allows:
-      "Its allow rules decide where each mode runs: Deckhand's run.rego keeps brainstorms, /stop and onboarding on issues (a comment going on in a mode isn't refused).",
+    // Deckhand's run.rego named only while it is the operator's layer's one allow_run.
+    allows: (files) => {
+      const allowing = files.filter(
+        (f) => f.active && f.source !== "repo" && f.rules.includes("allow_run"),
+      );
+      const own = allowing.length === 1 && allowing[0].source === "deckhand";
+      return own
+        ? "Its allow rules decide where each mode runs: Deckhand's run.rego keeps brainstorms, /stop and onboarding on issues (a comment going on in a mode isn't refused)."
+        : "Its allow rules decide where each mode runs.";
+    },
   },
   {
     decision: "merge",
@@ -410,7 +419,7 @@ function DecisionCard({
       ? d.refused("while no allow rule of the operator's matches it")
       : denying.length
         ? d.denies
-        : (d.allows ?? "Nothing denies it: only Deckhand's own gates decide.");
+        : (d.allows?.(files) ?? "Nothing denies it: only Deckhand's own gates decide.");
   // A layer's rule as the note says it: its definitions, and their files.
   const said = (rule: string, list: PolicyFile[]) =>
     list.length

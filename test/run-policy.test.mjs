@@ -1,6 +1,7 @@
 // The decision before a run a person starts (run-policy.mjs): its input, the refusal's reply,
 // and Deckhand's policy/run.rego with the real opa.
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { test } from "node:test";
 import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
@@ -16,6 +17,7 @@ import {
 } from "../listener/run-policy.mjs";
 import { createTaskModes } from "../listener/task-modes.mjs";
 import { createTasks } from "../listener/tasks.mjs";
+import { createWaits } from "../listener/waits.mjs";
 import { hasOpa, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig();
@@ -517,7 +519,11 @@ function refusingTasks(messages) {
     answer: async () => {},
     runner: { hasSession: async () => false },
     repoSettings: async () => ({ settings, errors: [] }),
-    waits: { cancel: (key) => cancelled.push(key), request: async () => false },
+    waits: {
+      reserve: () => {},
+      release: async (key, replaced) => replaced && cancelled.push(key),
+      request: async () => false,
+    },
     policies: { decide: async (rule) => (asked.push(rule), { applied: false, messages }) },
     github: async () => Response.json({ labels: [], user: { login: "bob" } }),
   };
@@ -599,4 +605,34 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
   });
   assert.equal(await fresh(work(), "work", "Org/Repo#12"), false);
   assert.match(replies[0], /policy error: the policies can't be read .*Post the comment again/);
+});
+
+test("waits.mjs reserve(): a blocker done while a new comment is decided starts nothing until it is released", async (t) => {
+  const resumed = [];
+  const replies = [];
+  const waits = createWaits({
+    path: join(tempDir(t), "waits.json"),
+    github: async () => new Response("{}", { status: 404 }),
+    reply: async (repo, number, text) => replies.push(text),
+    received: () => {},
+    settle: async () => {},
+    resume: async (item) => (resumed.push(item.text), true),
+  });
+  const item = itemOf({ trigger: "work", text: "After #7.", comment: { id: 1 } });
+  await waits.hold(item, [7]);
+  // Replaced: #7 done meanwhile starts nothing, and the wait goes.
+  waits.reserve("Org/Repo#12");
+  await waits.closed("Org/Repo", 7, "done");
+  assert.deepEqual(resumed, []);
+  await waits.release("Org/Repo#12", true, "a new comment replaces it");
+  assert.equal(waits.get("Org/Repo#12"), undefined);
+  assert.deepEqual(resumed, []);
+  // Refused: what came meanwhile is replayed, the waiting comment starts.
+  await waits.hold(item, [7]);
+  waits.reserve("Org/Repo#12");
+  await waits.closed("Org/Repo", 7, "done");
+  assert.deepEqual(resumed, []);
+  await waits.release("Org/Repo#12", false);
+  assert.deepEqual(resumed, ["After #7."]);
+  assert.match(replies.at(-1), /^#7 is done: starting\./);
 });
