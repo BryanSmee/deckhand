@@ -244,7 +244,11 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     if (req.url.includes("broken")) return res.writeHead(500).end();
     const cache = req.url.includes("cached");
     const decrypt = req.url.includes("decrypt");
-    res.end(JSON.stringify({ allowed: req.url.includes("good"), private: true, cache, decrypt }));
+    // The broker's host: with the network of the sandbox the proxy vouches for.
+    const sandbox = req.url.includes("broker") ? "net-a" : undefined;
+    res.end(
+      JSON.stringify({ allowed: req.url.includes("good"), private: true, cache, decrypt, sandbox }),
+    );
   });
   const policy = listenerPolicy(`${url}/egress`);
   assert.deepEqual(await policy("10.0.0.5", "good.com"), {
@@ -253,7 +257,9 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     cache: false,
     decrypt: false,
     relay: false,
+    sandbox: null,
   });
+  assert.equal((await policy("10.0.0.5", "good.broker", { broker: true })).sandbox, "net-a");
   assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
   assert.equal((await policy("10.0.0.5", "good.cached.com")).decrypt, false);
   assert.equal((await policy("10.0.0.5", "good.cached.decrypt.com")).decrypt, true);

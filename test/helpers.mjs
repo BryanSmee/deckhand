@@ -2,14 +2,17 @@
 // their test, a config, a fake GitHub's fetch. `node --test` loads it as a file of its own too
 // (everything under test/ matches its patterns), where it finds no test.
 import { execFileSync } from "node:child_process";
+import { generateKeyPairSync } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
+import { createRuns, runFields } from "../broker/runs.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
-import { keyFolder } from "../lib/tokens.mjs";
+import { openStore } from "../lib/store.mjs";
+import { keyFolder, keyId } from "../lib/tokens.mjs";
 import { allowOnly, createEngine } from "../policy-service/engine.mjs";
 import { createPolicyService, ROUTES } from "../policy-service/service.mjs";
 
@@ -54,6 +57,30 @@ export function sandboxAt(address = "127.0.0.1") {
   const asked = [];
   const sentFrom = async (run, ip) => (asked.push({ run, ip }), ip === address);
   return Object.assign(sentFrom, { asked });
+}
+
+// A signing key of the test's own: { privateKey, publicKey, kid }.
+export function testKey() {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  return { privateKey, publicKey, kid: keyId(publicKey) };
+}
+
+// The broker service's runs (../broker/runs.mjs) in memory, as the listener's broker
+// (broker.mjs) calls them: spread into createBroker()'s options, its `issuer` and `keys`. Also
+// `runs`, `store` and `key`, for what the test checks there. `now`: the clock.
+export function localBroker({ now = Date.now, key = testKey() } = {}) {
+  const store = openStore("memory:", { now });
+  const runs = createRuns({ store, key, now });
+  const issuer = {
+    async issue(id, fields) {
+      const issued = await runs.issue(id, fields);
+      if (!issued.token) throw new Error(issued.message);
+      return issued;
+    },
+    put: (id, { issued, ...fields }) => runs.put(id, runFields(fields), issued),
+    end: (id) => runs.end(id),
+  };
+  return { issuer, keys: () => new Map([[key.kid, key.publicKey]]), runs, store, key };
 }
 
 // Retried: a process the test stopped may still be writing there.

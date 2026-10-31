@@ -778,7 +778,10 @@ export function createRuns(ctx) {
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
-    ctx.broker.revoke(live.id);
+    // The broker service hears it first, so its tokens renew nowhere once its network goes; a
+    // broker that doesn't answer soon is told again later (broker-service.mjs end()).
+    const revoked = ctx.broker.revoke(live.id);
+    await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
     live.record.finishedAt = Date.now();
     saveSummary(live.record, log);
     await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));

@@ -204,6 +204,21 @@ export function storeContract(name, open) {
     assert.equal(await store.readBlob("runs/1/log"), null);
   });
 
+  test(`${name}: a blob appended from its writer's offsets: again, or out of order, adds nothing twice`, async (t) => {
+    const { store } = await setup(t);
+    assert.deepEqual(await store.appendBlobAt("inbox", 0, "one\n"), { length: 4 });
+    // The same bytes again (an answer lost), and more over them: only what is new.
+    assert.deepEqual(await store.appendBlobAt("inbox", 0, "one\ntwo\n"), { length: 8 });
+    assert.deepEqual(await store.appendBlobAt("inbox", 4, "two\n"), { length: 8 });
+    // Past its end (a later write first): nothing, and where it is.
+    assert.deepEqual(await store.appendBlobAt("inbox", 12, "four\n"), { length: 8, gap: true });
+    assert.deepEqual(await store.appendBlobAt("inbox", 8, Buffer.from("three\n")), { length: 14 });
+    assert.equal((await store.readBlob("inbox")).toString(), "one\ntwo\nthree\n");
+    // Created empty.
+    assert.deepEqual(await store.appendBlobAt("other", 0, ""), { length: 0 });
+    assert.equal((await store.readBlob("other")).length, 0);
+  });
+
   test(`${name}: a stream, a consumer or a blob needs a name`, async (t) => {
     const { store } = await setup(t);
     await assert.rejects(store.append("", { n: 1 }), /not a name/);

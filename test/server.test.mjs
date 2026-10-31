@@ -19,8 +19,11 @@ import { createServer, request } from "node:http";
 import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
+import { createCallers } from "../broker/callers.mjs";
+import { createBroker as createBrokerService } from "../broker/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
-import { evalResult, fakeOpa, servePolicies, tempDir } from "./helpers.mjs";
+import { openStore } from "../lib/store.mjs";
+import { evalResult, fakeOpa, servePolicies, tempDir, testKey } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 // The App's key, one for every listener: making one takes a while.
@@ -377,8 +380,18 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       req.url === "/deckhand-ca.crt" ? res.end(TEST_CA) : res.writeHead(404).end(),
     );
     await new Promise((resolve) => egress.listen(0, "127.0.0.1", resolve));
+    // The broker service, which signs the runs' tokens and the listener's service tokens: the
+    // listener calls it from loopback, as the orchestrator. Its public key goes in keys/.
+    const brokerService = createBrokerService({
+      store: openStore("memory:"),
+      key: testKey(),
+      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+      keysDir: join(dir, "keys"),
+    }).server;
+    await new Promise((resolve) => brokerService.listen(0, "127.0.0.1", resolve));
+    brokerService.unref();
     // The policy service, with an opa that denies nothing, for Deckhand's default policies: the
-    // listener's own service tokens, its broker's key published in keys/, are checked there.
+    // listener's service tokens, from the broker service, are checked there with keys/.
     const policyService = await servePolicies(t, {
       grantsDir: join(dir, "grants"),
       keysDir: join(dir, "keys"),
@@ -398,6 +411,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     // Port 0: the OS picks free ports, which the listener logs. The broker's URL gets its port.
     const settings = {
+      BROKER_SERVICE_URL: `http://127.0.0.1:${brokerService.address().port}`,
       PATH: `${dir}:${process.env.PATH}`,
       DATA_DIR: dir,
       ALLOWED_USERS: "alice,bob",
@@ -413,7 +427,6 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       EGRESS_PROXY: `http://127.0.0.1:${egress.address().port}`,
       GRANTS_DIR: join(dir, "grants"),
       POLICY_SERVICE_URL: policyService,
-      SERVICE_KEYS_DIR: join(dir, "keys"),
       ...(typeof extra === "function" ? extra(dir, github) : extra),
     };
     let listener = start(settings);
@@ -421,6 +434,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       listener.child.kill("SIGKILL");
       github.server.close();
       egress.close();
+      brokerService.closeAllConnections();
+      brokerService.close();
       stopSandboxes(dir);
     });
     const [port, brokerPort, policyPort] = await ports(listener);
@@ -1123,7 +1138,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // Uploaded through the broker, served under SCREENSHOT_URL as before.
     assert.equal(readFileSync(join(dir, "shot-answer"), "utf8"), "204");
     const token = runEnv.match(/^SCREENSHOT_URL=.*\/shots\/(\w+)$/m)[1];
-    const served = await fetch(`http://127.0.0.1:${port}/shots/${token}/page.png`);
+    // The listener copies it from the broker's stream a moment after its upload.
+    let served;
+    for (let i = 0; i < 100; i++) {
+      served = await fetch(`http://127.0.0.1:${port}/shots/${token}/page.png`);
+      if (served.status === 200) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     assert.equal(served.status, 200);
     assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
     // Out through the egress proxy only, the broker directly.
@@ -2762,10 +2783,14 @@ mounts:
       assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
       await settled(ctx.github, [99, 100]);
       await until(() => prompts(ctx.dir).length === 2, "two runs");
-      const [first, second] = prompts(ctx.dir);
+      // Each its own run, side by side: which sandbox starts first is the broker's answers' order.
+      const all = prompts(ctx.dir);
+      const first = all.find((p) => p.includes("A dark mode"));
+      const second = all.find((p) => p.includes("Keyboard shortcuts"));
       assert.match(first, /A dark mode\n$/);
       assert.doesNotMatch(first, /Keyboard shortcuts/);
       assert.match(second, /Keyboard shortcuts\n$/);
+      assert.doesNotMatch(second, /A dark mode/);
     },
   );
 

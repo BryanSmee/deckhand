@@ -28,7 +28,7 @@ import {
 } from "../listener/git-gateway.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
 import { createForkChecks } from "../listener/github-forks.mjs";
-import { sandboxAt, serve, tempDir } from "./helpers.mjs";
+import { localBroker, sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const ZERO = "0".repeat(40);
 const A = "a".repeat(40);
@@ -267,7 +267,7 @@ function tokenRun(
 ) {
   b.register(repo, undefined, { id: "run-1", push });
   b.allow("run-1", branches, fork);
-  return b.issue("run-1", "net-1").token;
+  return b.issue("run-1", "net-1").then((issued) => issued.token);
 }
 
 async function setup(
@@ -330,8 +330,8 @@ async function setup(
       return Response.json({ default_branch: "main" });
     },
   };
-  const broker = createBroker({ sentFrom, sandboxOf });
-  const secret = register(broker);
+  const broker = createBroker({ ...localBroker(), sentFrom, sandboxOf });
+  const secret = await register(broker);
   const logs = [];
   const mirrorDir = join(dir, "mirrors");
   const spoolDir = join(dir, "pushes");
@@ -1352,7 +1352,7 @@ test("a token from another network, or one for the agents' endpoints, pushes not
   assert.equal(res.ok, false);
   assert.match(res.stderr, /this run's token only works from its own sandbox/);
   const agent = await setup(t, {
-    register: (b) => (tokenRun(b), b.issue("run-1", "net-1").agentToken),
+    register: async (b) => (await tokenRun(b), (await b.issue("run-1", "net-1")).agentToken),
   });
   const refused = await git(agent.work, "push", agent.remote(), "HEAD:refs/heads/issue-1-x");
   assert.equal(refused.ok, false);

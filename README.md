@@ -114,8 +114,9 @@ docker compose up -d
 docker compose logs listener
 ```
 
-This pulls the released images (the listener, the egress proxy and the base sandbox image,
-at `DECKHAND_VERSION`, by default `latest`) and starts the first two; `docker compose up -d
+This pulls the released images (the listener, the broker, which alone signs the runs' tokens,
+the egress proxy and the base sandbox image, at `DECKHAND_VERSION`, by default `latest`) and
+starts the first three; `docker compose up -d
 --build` builds them from your checkout instead. The logs print a one-time setup link,
 `…/setup?token=…`.
 

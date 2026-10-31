@@ -18,6 +18,8 @@ import { createGoogleRelay } from "./google.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
+import { createBrokerService, legacyKey } from "./broker-service.mjs";
+import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { clientAddress, createBrokerHttp, runAt, runFrom, sandboxAt } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createForkChecks } from "./github-forks.mjs";
@@ -71,8 +73,6 @@ import { createRestart } from "./restart.mjs";
 import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
-import { issueServiceTokens, serviceTokens } from "../lib/service-token.mjs";
-import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createBackend } from "./runner/index.mjs";
@@ -97,6 +97,9 @@ const EYES_WAIT_MS = 10_000;
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
+
+// How often the runs the broker service has are compared with the listener's.
+const RECONCILE_MS = 60 * 60_000;
 
 // With the plans' logins found in the credentials folder (/data/credentials) when their
 // variables are unset.
@@ -130,10 +133,27 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
+// The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
+// its stream of their events. The key the listener signed tokens with before it moves out of
+// the data volume, but for its public part (legacyKey()).
+// Its calls carry the listener's service tokens, as the orchestrator: for the broker, and for
+// the policy service.
+const brokerCaller = createBrokerCaller({
+  url: config.brokerServiceUrl,
+  audiences: ["broker", "policy"],
+  podTokenFile: config.serviceAccountTokenFile,
+  log,
+});
+const brokerService = createBrokerService({
+  caller: brokerCaller,
+  legacy: legacyKey(config.dataDir, { log }),
+  log,
+});
+
 // Where sandboxes, images and the listener's own short containers run (RUNNER).
 let backend;
 try {
-  backend = createBackend({ config, inboxDir: runsDir, log });
+  backend = createBackend({ config, inboxDir: runsDir, mirror: brokerService.mirror, log });
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
   console.error(error.message);
@@ -314,23 +334,6 @@ const repoList = createRepoList({
 // Each repo's settings as last read: its runs' and comments', its `users` for the dashboard.
 const { repoSettings, ...repoReads } = createRepoSettings({ github, config, repoList });
 
-// The broker's signing key, kept in the data volume, so that runs' tokens still check after a
-// restart. Its public key goes where the services that check tokens offline read it
-// (SERVICE_KEYS_DIR: the policy service's, #501).
-const tokenKey = signingKey(config.dataDir);
-if (config.serviceKeysDir) {
-  mkdirSync(config.serviceKeysDir, { recursive: true });
-  publishKey(config.serviceKeysDir, tokenKey);
-}
-// The listener's own service tokens, for the services it calls: the policy service, as the
-// orchestrator (lib/services.mjs). Its broker signs them until it moves out (#505).
-const serviceAuth = serviceTokens({
-  audiences: ["policy"],
-  request: async (audiences) => issueServiceTokens("orchestrator", audiences, tokenKey),
-  log,
-});
-serviceAuth.start().catch((error) => log(`Service tokens: ${error.message ?? error}`));
-
 // Deckhand's, the operator's and the repos' policies (rules as code), evaluated by the policy
 // service after the built-in gates (POLICY_SERVICE_URL, ../policy-service/). The operator's are
 // checked now, over Deckhand's, as the grants are: an error refuses each decision a policy is
@@ -340,7 +343,9 @@ const policies = createPolicies({
   github,
   service: policyClient({
     url: config.policyServiceUrl,
-    header: () => serviceAuth.header("policy"),
+    // Its service token for the policy service, from the broker service, which publishes the
+    // key the policy service checks it with (SERVICE_KEYS_DIR there).
+    header: () => brokerCaller.header("policy"),
   }),
   secrets: () => operatorSecrets(ctx),
   log,
@@ -408,11 +413,14 @@ Object.assign(ctx, {
     logDir: join(config.dataDir, "previews"),
     log,
   }),
-  // Runs' tokens, signed with a key kept in the data volume, so they still check after a
-  // restart; and the secrets of runs from before them. Both work from their own sandbox alone,
-  // whether it calls the broker directly or through the egress proxy.
+  // Runs' tokens, signed by the broker service and checked here with its public keys; and the
+  // secrets of runs from before them. Both work from their own sandbox alone, whether it calls
+  // the listener directly or through the egress proxy.
+  brokerService,
   broker: createBroker({
-    key: tokenKey,
+    issuer: brokerService.issuer,
+    keys: brokerService.keys,
+    unknownKey: brokerService.unknownKey,
     sandboxOf: (ip) => sandboxAt(ctx, ip),
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),
@@ -859,7 +867,23 @@ ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // The keys of comments dropped as the queue came back (their author no longer allowed) stay in
 // order.json otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
-ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
+// The broker service's keys first: the restored runs' tokens are checked with them.
+brokerService
+  .start()
+  .catch((error) => log(`Broker: ${error.stack ?? error}`))
+  .then(() => ctx.reattach(restored))
+  .catch((error) => log(`Re-attaching: ${error.stack ?? error}`))
+  // Runs the broker service still has that ended while the listener was down: asked until it
+  // answers, then every hour (the broker drops the files of runs whose record expired then).
+  .then(reconcileRuns);
+function reconcileRuns() {
+  const going = () => [...ctx.tasks.values()].flatMap((t) => t.live?.id ?? []);
+  return brokerService.persist("its runs", () => brokerService.reconcile(going));
+}
+const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
+reconciling.unref();
+// Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
+brokerService.consume({ shotsDir });
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
@@ -901,6 +925,9 @@ process.on("SIGTERM", () => {
   history.stop();
   redeliveries.stop();
   clearInterval(relinking);
+  clearInterval(reconciling);
+  // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
+  brokerService.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).
   web.close();
