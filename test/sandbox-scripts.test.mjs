@@ -1079,6 +1079,8 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
     "git ls-remote",
     "gh pr list",
     "gh issue view",
+    // Not the issue's branch (issue-5-a-title): whether that one has an open pull request.
+    "gh pr list",
     "gh pr create",
     "timeout 20 deckhand-files",
   ]);
@@ -1106,6 +1108,49 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   writeFileSync(join(fake, "deckhand-files"), "#!/bin/sh\nexit 1\n");
   const failing = spawnSync(`${bin}pre-push`, [], { env, input: "", encoding: "utf8" });
   assert.equal(failing.status, 0);
+});
+
+// A run that pushed to a branch of its own because it couldn't push the issue's (#552): no
+// second pull request for the issue while the issue's branch has an open one.
+test("draft-pr opens no second pull request while the issue's own branch has an open one", (t) => {
+  const fake = tempDir(t, "gh-");
+  const calls = join(fake, "calls");
+  writeFileSync(join(fake, "git"), `#!/bin/sh\n[ "$1" = branch ] && echo issue-5-other\nexit 0\n`);
+  writeFileSync(
+    join(fake, "gh"),
+    `#!/bin/sh\necho "$*" >> ${calls}\ncase "$*" in "pr list --head issue-5-own --state open"*) [ -n "$OPEN" ] && echo 7 ;; esac\nexit 0\n`,
+  );
+  for (const f of ["git", "gh"]) chmodSync(join(fake, f), 0o755);
+  mkdirSync(join(fake, ".git"));
+  writeFileSync(
+    join(fake, ".git", "deckhand-task.json"),
+    JSON.stringify({ title: "t", branch: "issue-5-own" }),
+  );
+  const script = readFileSync(`${bin}draft-pr.sh`, "utf8").replace(/\/workspace/g, fake);
+  writeFileSync(join(fake, "draft-pr.sh"), script);
+  const hook = (env) => {
+    rmSync(calls, { force: true });
+    const result = spawnSync("bash", [join(fake, "draft-pr.sh"), "hook", "Stop"], {
+      env: { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5", ...env },
+      encoding: "utf8",
+    });
+    return { stderr: result.stderr, calls: readFileSync(calls, "utf8").trim().split("\n") };
+  };
+  const open = hook({ OPEN: "1" });
+  assert.deepEqual(open.calls, [
+    "pr list --head issue-5-other --state all --json number --jq .[].number",
+    "pr list --head issue-5-own --state open --json number --jq .[].number",
+  ]);
+  assert.match(
+    open.stderr,
+    /issue-5-own has the issue's pull request, none opened for issue-5-other/,
+  );
+  // Once the issue's pull request is closed or merged, the other branch gets its draft.
+  const closed = hook({});
+  assert.ok(
+    closed.calls.some((c) => c.startsWith("pr create --draft --base main --head issue-5-other ")),
+    closed.calls.join("\n"),
+  );
 });
 
 // The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,

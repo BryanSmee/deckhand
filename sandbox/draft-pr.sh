@@ -9,8 +9,9 @@
 #   sandbox-draft-pr hook    the agent's hook (Claude Code's managed-settings.json, Codex's
 #                            and agy's hooks.json: after a `git push`, and when it stops; `hook
 #                            Stop` without its payload): opens the draft for the current branch
-#                            if it is pushed and has no pull request yet, whatever its name.
-#                            Never blocks the agent: after a push it only tells it the URL.
+#                            if it is pushed and has no pull request yet, whatever its name,
+#                            unless the issue's own branch has an open one (#552). Never
+#                            blocks the agent: after a push it only tells it the URL.
 #                            Both times, for every run, it then uploads the run's screenshots
 #                            (deckhand-files shots), last and within 20 s, so the final message
 #                            and the pushed work find them before the sandbox stops.
@@ -81,12 +82,20 @@ info() {
 # Opens the draft for the current branch when it is pushed and has no pull request (open,
 # closed or merged: never a duplicate). Prints its URL when it opened one.
 ensure() {
-  local branch task title body
+  local branch task own title body
   branch=$(git branch --show-current)
   [ -n "$branch" ] && [ "$branch" != "$base" ] || return 0
   git ls-remote --exit-code --heads origin "$branch" > /dev/null || return 0
   [ -z "$(gh pr list --head "$branch" --state all --json number --jq '.[].number')" ] || return 0
   task=$(info) || return 0
+  # Another branch, while the issue's own has its open pull request (one the run couldn't push
+  # to, say): a second pull request closing the same issue would only be a duplicate to close.
+  own=$(jq -r .branch <<< "$task")
+  if [ "$branch" != "$own" ] &&
+    [ -n "$(gh pr list --head "$own" --state open --json number --jq '.[].number')" ]; then
+    echo "draft-pr: $own has the issue's pull request, none opened for $branch" >&2
+    return 0
+  fi
   title=$(jq -r .title <<< "$task")
   # The agent rewrites the title and description when the work is ready for review.
   title=${title:-$branch}
