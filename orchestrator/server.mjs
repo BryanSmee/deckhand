@@ -1186,9 +1186,10 @@ Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).u
 // queue with its deadlines and 👀 ids, the runs' state): here, only the writes under way are
 // waited for, the delivery being handled, and the lines of output read in the last second.
 // Then the lease is released, and the waiting copy takes it at once (a second, about). The
-// broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
-// copy, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
-// inbox polls) before it exits (lib/drain.mjs). The egress policy's port answers until then.
+// broker port takes the sandboxes' calls until then, and drains from then on: it takes no new
+// connection (the egress proxy waits for the next copy, proxy/wait.mjs) and the calls in flight
+// finish (agents' streams, pushes, inbox polls) before it exits (lib/drain.mjs). The egress
+// policy's port answers until then.
 sigterm = () => {
   if (ctx.stopping) return;
   ctx.stopping = true;
@@ -1213,9 +1214,6 @@ sigterm = () => {
   githubService.stop();
   models.stop();
   log("Stopping: running sandboxes go on, the next copy picks them up");
-  const drained = drain(broker).then((all) => {
-    if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
-  });
   // Replies being posted and comments being admitted first, then what they leave.
   // The 👀 still on their way too, for a while (the drain's grace bounds it anyway).
   // The dashboard's posts edge passed on, still being answered (30 s at most): what they
@@ -1224,7 +1222,7 @@ sigterm = () => {
     Promise.allSettled(services.posting()),
     new Promise((resolve) => setTimeout(resolve, 30_000).unref()),
   ]);
-  const saved = Promise.allSettled([...ctx.ending, ...http.admitting, delivered, posted])
+  const released = Promise.allSettled([...ctx.ending, ...http.admitting, delivered, posted])
     .then(() => ctx.eyesSaved(EYES_WAIT_MS))
     .then(ctx.saveQueue)
     .then(() => {
@@ -1238,7 +1236,16 @@ sigterm = () => {
       leaseLost = () => {};
       return lease.control.stop();
     })
-    .catch((error) => log(`Releasing the lease: ${error.stack ?? error}`))
+    .catch((error) => log(`Releasing the lease: ${error.stack ?? error}`));
+  // The broker port relays the sandboxes' calls with this copy's epoch: until the lease goes,
+  // it takes new ones; then it drains (no new connection: the proxy waits for the next copy,
+  // which listens once it holds the lease), the calls in flight finishing.
+  const drained = released
+    .then(() => drain(broker))
+    .then((all) => {
+      if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
+    });
+  const saved = released
     .then(() => ctx.store.close())
     .catch((error) => log(`Closing the store: ${error.stack ?? error}`))
     // The dashboard's streams: its page reconnects, through edge, to the next copy.

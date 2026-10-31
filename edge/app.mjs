@@ -25,6 +25,15 @@ function withoutKey(credentials) {
   return kept;
 }
 
+// The same credentials, whatever their keys' order.
+const sorted = (o) =>
+  JSON.stringify(
+    Object.keys(o)
+      .sort()
+      .map((k) => [k, o[k]]),
+  );
+const same = (a, b) => sorted(a) === sorted(b);
+
 // What tells app.json's writes apart: saveCredentials() renames a new file in.
 function signature(path) {
   try {
@@ -69,8 +78,14 @@ export function createEdgeApp({ dir, log = () => {} }) {
     if (held && String(held.id) !== String(credentials.id)) {
       return { status: 409, message: `edge holds another App (id ${held.id})` };
     }
-    if (!held)
-      log(`GitHub App ${credentials.slug ?? credentials.id}: handed over by the orchestrator`);
+    // Held already: the same, asked again after a lost answer, and nothing replaced. The
+    // orchestrator never changes edge's secrets (its webhook secret, its OAuth client's).
+    if (held) {
+      return same(held, withoutKey(credentials))
+        ? null
+        : { status: 409, message: `edge holds App ${held.id} with other credentials` };
+    }
+    log(`GitHub App ${credentials.slug ?? credentials.id}: handed over by the orchestrator`);
     save(credentials);
     return null;
   }

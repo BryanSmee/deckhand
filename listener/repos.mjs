@@ -354,12 +354,12 @@ export function refreshFor(event, p, refresh) {
 // A grants error as the config panel shows it: { file, message, everyRepo }, the file to edit
 // (relative to GRANTS_DIR) when there is one. Only a GrantsError's details are shown: they
 // name files in the folder and their values; anything else may name the host's paths, and
-// the listener's logs have it.
+// the orchestrator's logs have it.
 function grantsErrorView(error, everyRepo) {
   if (!(error instanceof GrantsError)) {
     return {
       file: null,
-      message: "the grants folder can't be read (see the listener's logs)",
+      message: "the grants folder can't be read (see the orchestrator's logs)",
       everyRepo,
     };
   }
@@ -446,7 +446,7 @@ export function createRepoApi({
     if (!issue && after.status === "not-onboarded") {
       return send(res, 502, {
         repo: after,
-        error: "The issue couldn't be opened: see the listener's logs.",
+        error: "The issue couldn't be opened: see the orchestrator's logs.",
       });
     }
     send(res, 200, { repo: after, opened: !!issue });
@@ -545,7 +545,7 @@ export function createRepoApi({
       };
     } catch (error) {
       log(`Repositories: ${repo}'s policies: ${error.message ?? error}`);
-      const text = "the policies can't be read (see the listener's logs)";
+      const text = "the policies can't be read (see the orchestrator's logs)";
       return { files: [], errors: [{ file: null, row: null, message: text, text }], warnings: [] };
     }
   }
@@ -582,7 +582,7 @@ export function createRepoApi({
       return {
         catalogue,
         modes: [],
-        error: "the capabilities can't be decided (see the listener's logs)",
+        error: "the capabilities can't be decided (see the orchestrator's logs)",
       };
     }
   }

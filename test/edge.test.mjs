@@ -180,19 +180,33 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
   const { store, client } = await internal(t);
   for (const id of ["d1", "d2", "d3"]) await store.append(DELIVERIES, { id, event: "push" });
   const handled = [];
+  const started = [];
   let fail = true;
+  let release;
+  const slow = new Promise((resolve) => (release = resolve));
   client.consume(async (entry) => {
+    started.push(entry.id);
+    // d1 slow (an onboarding of many repositories, say): it holds up neither d2 nor d3.
+    if (entry.id === "d1") await slow;
     if (entry.id === "d2" && fail) {
       fail = false;
       throw new Error("not now");
     }
     handled.push(entry.id);
   });
+  for (let i = 0; i < 200 && !handled.includes("d3"); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  // Started in the stream's order, d3 handled while d1 still goes.
+  assert.deepEqual(started.slice(0, 3), ["d1", "d2", "d3"]);
+  assert.deepEqual(handled, ["d3"]);
+  release();
   for (let i = 0; i < 200 && handled.length < 3; i++) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  // d1 once; d2 read again after its failure, d3 behind it, in order.
-  assert.deepEqual(handled, ["d1", "d2", "d3"]);
+  // d1 once; d2 read again after its failure, and handled then.
+  assert.deepEqual(handled, ["d3", "d1", "d2"]);
+  assert.deepEqual(started, ["d1", "d2", "d3", "d2"]);
   await client.stop();
   assert.deepEqual(await store.read(DELIVERIES, "orchestrator"), []);
 });
@@ -248,6 +262,16 @@ test("a listener's App handed over: taken once with its sessions, another App re
   await assert.rejects(client.handOver({ credentials: { ...CREDENTIALS, id: 6 } }), {
     status: 409,
   });
+  // The same App with another webhook secret, or another OAuth client: never replaced by the
+  // orchestrator, which holds no secret of edge's.
+  for (const changed of [{ webhook_secret: "x".repeat(32) }, { client_secret: "other" }]) {
+    await assert.rejects(client.handOver({ credentials: { ...CREDENTIALS, ...changed } }), {
+      status: 409,
+    });
+  }
+  const kept = JSON.parse(readFileSync(join(dir, "app.json"), "utf8"));
+  assert.equal(kept.webhook_secret, SECRET);
+  assert.equal(kept.client_secret, "cs");
 });
 
 test("two copies: the redeliveries' poller runs on the one holding its lease, then on the other", async (t) => {

@@ -289,4 +289,12 @@ test("file: two processes' increments on one folder are never lost; a crashed on
   const old = new Date(Date.now() - 60_000);
   utimesSync(join(dir, "state.lock"), old, old);
   assert.equal(await fileStore({ dir }).increment("n"), 201);
+  // Left behind again, and four processes racing to take it over: one at a time, none lost
+  // (a takeover never removes the lock another process made anew).
+  for (let round = 0; round < 3; round++) {
+    writeFileSync(join(dir, "state.lock"), "12345");
+    utimesSync(join(dir, "state.lock"), old, old);
+    await Promise.all([run(), run(), run(), run()]);
+  }
+  assert.equal(await fileStore({ dir }).get("n"), 201 + 3 * 400);
 });

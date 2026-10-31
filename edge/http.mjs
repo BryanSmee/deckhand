@@ -218,6 +218,9 @@ export function createEdgeHttp({
 
   async function route(req, res) {
     const path = req.url.split("?")[0];
+    // A path with dot segments: fetch() would resolve them before the orchestrator saw it, which
+    // would then answer another path than the one edge routed. None of the dashboard's has any.
+    if (/(^|\/)(\.|%2e){1,2}(\/|$)/i.test(path)) return res.writeHead(400).end();
     if (req.method === "GET" && path === "/health") return res.end("ok");
     // Public, like any image in a GitHub comment; the folder token is the only protection.
     if (req.method === "GET" && path.startsWith("/shots/")) return forward(req, res);

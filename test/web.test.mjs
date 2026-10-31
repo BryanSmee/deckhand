@@ -156,7 +156,7 @@ test("apiRoute: methods, sign-in, ALLOWED_REPOS and Origin, in that order, then 
   assert.deepEqual(await ask("POST", "/api/r/org/app/refuse"), [409, { error: "Not now." }]);
   assert.deepEqual(await ask("GET", "/api/r/org/app/fail"), [
     502,
-    { error: "GitHub didn't answer: see the listener's logs." },
+    { error: "GitHub didn't answer: see the orchestrator's logs." },
   ]);
   assert.ok(logs.some((l) => l === "Test: refused for alice: Origin https://evil.example"));
   assert.ok(logs.some((l) => l === "Test: org/app: refused for alice: Not now."));

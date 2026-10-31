@@ -1330,7 +1330,7 @@ Edge and the orchestrator can each run two copies, so an update stops nothing.
   orchestrator's lease: another copy acts"), its services port open for its probes alone
   (`/health`; `/ready` is 503 until it acts, which keeps it out of a Kubernetes Service), 503 to
   every call. On SIGTERM the acting copy stops
-  its timers and edge's requests (edge asks again, for up to 15 s), acknowledges the delivery
+  its timers and edge's requests (edge asks again, for up to 15 s), acknowledges the deliveries
   it is handling, saves the queue and the runs' state, releases the lease, then drains the
   broker port and the egress policy. The waiting copy takes the lease at once, about a second
   later, rebuilds its tasks from the store and reads on from the last acknowledged delivery. On

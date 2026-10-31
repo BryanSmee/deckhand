@@ -893,7 +893,7 @@ their deadlines re-armed), then `reattach()`. They run once the copy holds the `
 lease (`lib/active.mjs`): a copy that starts while another acts waits for it, opening only its
 probes (`/ready` answers 503), and restores nothing until then. On SIGTERM the acting copy starts
 no more runs, stops its timers, refuses edge's and the runner's calls (503: they ask again),
-stops reading the streams (the delivery being handled is acknowledged first), waits for the
+stops reading the streams (the deliveries being handled are acknowledged first), waits for the
 writes under way, then **releases the lease**: the waiting copy takes it at once (about a
 second). After a crash the lease expires (15 s, `LEASE_SECONDS`) and the waiting copy takes it
 then; with one copy (Compose's default), the next one takes it as it starts. A copy that loses
@@ -963,9 +963,10 @@ proxy from before it still sends them to the broker port, where the orchestrator
 there as they stream (`models-service.mjs` `relay()`). The orchestrator asks the models service
 which credentials it holds before it reads its settings: it waits for it at start.
 
-On SIGTERM, once its lease is released, the orchestrator closes its services port (edge's
-calls and the dashboard's streams go to the next copy, through edge) and drains the broker's
-(`lib/drain.mjs`): it takes no new connection, the calls in flight finish (agents' streams,
+On SIGTERM the orchestrator answers edge's and the runner's calls on its services port with
+`503` (they ask the next copy), while the broker port still takes the sandboxes' calls. Once
+its lease is released, it ends the dashboard's open streams (their pages reconnect, through
+edge, to the next copy) and drains the broker port (`lib/drain.mjs`): it takes no new connection, the calls in flight finish (agents' streams,
 pushes, `gh` calls, inbox long polls), each connection closing as soon as its answer is sent (a
 kept-alive one included, so that no request follows it), and the copy exits once
 they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)

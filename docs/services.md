@@ -181,8 +181,8 @@ Its two copies are active/passive:
    other opens its services port for its probes (`/health`; `/ready` answers 503), answers 503
    to every call, and waits for the lease.
 2. **A handover on an update**: the new copy starts and waits; the old one, on SIGTERM, refuses
-   edge's and the runner's calls (503: they ask again), stops reading the streams (the delivery
-   being handled is acknowledged first), saves what it holds (already in the store, #508), and
+   edge's and the runner's calls (503: they ask again), stops reading the streams (the deliveries
+   being handled are acknowledged first), saves what it holds (already in the store, #508), and
    **releases the lease**; the new one takes it at once, rebuilds its tasks from the store,
    re-arms the deadlines and reads the streams from their last acknowledged event. About a
    second: no event is lost, no call fails, a reply or a run starts a second later at most. The

@@ -2433,6 +2433,8 @@ mounts:
     const exited = new Promise((resolve) => listener.child.on("exit", resolve));
     listener.child.kill("SIGTERM");
     await listener.until("0 task(s) with queued comments left to the next copy");
+    // Its lease released, the broker port drains: the next copy takes the new calls.
+    await listener.until("orchestrator: lease released");
     // A new call is refused: the egress proxy waits for the next listener (proxy/wait.mjs).
     await assert.rejects(
       fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {

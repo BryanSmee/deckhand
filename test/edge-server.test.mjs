@@ -247,3 +247,22 @@ test("unsigned or oversized deliveries are refused unread; one client gets only 
   // Stalled bodies are dropped after a while: readDelivery() in deliveries.test.mjs.
   for (const req of held) req.destroy();
 });
+
+test("a path with dot segments is refused at edge, never passed on as another", async (t) => {
+  const edge = await startEdge(t);
+  const base = `http://127.0.0.1:${edge.port}`;
+  const raw = (path) =>
+    new Promise((resolve, reject) => {
+      const req = request({ host, port: edge.port, path }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on("error", reject);
+      req.end();
+    });
+  for (const path of ["/shots/../api/state", "/shots/%2e%2e/api/state", "/api/./state"]) {
+    assert.equal(await raw(path), 400, path);
+  }
+  assert.equal(edge.asked.length, 0);
+  assert.equal((await fetch(`${base}/health`)).status, 200);
+});
