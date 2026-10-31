@@ -1206,6 +1206,58 @@ them, kept across its runs and mounted by concurrent ones; the sandbox pod's `fs
 new one its user's (see above for what the class has to do for that). Without it, runs go
 without caches, said once in the run's log.
 
+## The store
+
+The services the listener is being split into ([services.md](services.md)) keep their state
+in a store, which each one's `STORE_URL` names. The listener doesn't use it yet: it keeps its
+state in `/data` until the split.
+
+- **`file:///data/store`**, a folder in the service's volume: on Docker Compose, and on one
+  node, where each service runs one copy.
+- **`redis://[user:password@]host:6379[/db]`**, or **`rediss://`** over TLS: on several nodes
+  (a k3s cluster with more than one), where two copies of a service run on different nodes and
+  a ReadWriteOnce volume can't be on both. `?prefix=` changes what goes before every key
+  (`deckhand:`), for two deployments sharing one Redis. `REDIS_PASSWORD` gives the password
+  when it isn't in the URL (from a Kubernetes Secret, say). With `rediss://`, Redis's
+  certificate is checked against Node's CAs: a private one (a cluster's own, a self-signed
+  certificate) is trusted through `NODE_EXTRA_CA_CERTS`, the path of its PEM file.
+
+The Redis backend speaks to Redis 7 or later (or Valkey) by itself, without a package. Its
+leases and keys expire on Redis's clock, so copies on nodes whose clocks drift agree. Each
+call is one Lua script, so Redis Cluster isn't supported: run a single primary, with a replica
+if you want one. Configure it as follows (`redis.conf`, or the server's arguments):
+
+```conf
+# Kept on disk: the keys and the streams' events must outlive a restart of Redis. With
+# everysec, a crash loses at most the last second. A lease's epoch is at least Redis's time in
+# ms, so a lost write, or a failover to a replica behind (its clock in sync, NTP), never hands
+# one out twice.
+appendonly yes
+appendfsync everysec
+# Never evict: an evicted key or event would be lost.
+maxmemory-policy noeviction
+# No other network than the services' own, and a user allowed the store's commands and keys
+# only (those its scripts call included: Redis checks them too). REDIS_PASSWORD, with
+# redis://deckhand@redis:6379 as STORE_URL.
+user default off
+user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +getrange +set +append +select +ping +quit
+```
+
+The user's key pattern follows the prefix: with `?prefix=team-a:`, it is `~team-a:*`, else
+every call is refused with `NOPERM`. `requirepass <a long random password>` (the `default`
+user) works too, but leaves it every
+command, `FLUSHALL` and `CONFIG` included. A call Redis doesn't answer within 5 seconds fails,
+and the next one connects again: a copy that loses Redis learns in time that it can't renew
+its lease.
+
+Ready-made Kubernetes manifests, Redis's included, are on their way (issue #396).
+
+Secrets never go in the store: the App's key, the signing key and the agents' credentials
+stay in their service's own secret or volume. A write holding one the service knows, a
+private key or a GitHub token is refused in a value or an event (`lib/store.mjs`,
+`withoutSecrets()`): with Redis, every service using it could read it otherwise. In a blob (a
+run's log, its files), the secrets and GitHub tokens are redacted instead.
+
 ## Container engine
 
 A sandbox has no Docker: it never gets the host's socket, and its hardening (uid 1000, no

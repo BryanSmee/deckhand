@@ -56,7 +56,8 @@ started before you finish.
 
 ```
 lib/          what every service shares, copied into each image: yaml, settings, redact, http,
-              files, drain, tokens, service tokens, the store (store.mjs, store-file.mjs)
+              files, drain, tokens, service tokens, the store (store.mjs, store-file.mjs,
+              store-redis.mjs and its client resp.mjs)
 listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
               runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
               agents/ (each agent's specifics: install, env, hosts, session, normalize())

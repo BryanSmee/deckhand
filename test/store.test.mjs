@@ -1,7 +1,7 @@
 // The store (lib/store.mjs): the shared suite on each backend, then what the file backend
 // adds, everything kept across a restart.
 import assert from "node:assert/strict";
-import { appendFileSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openStore } from "../lib/store.mjs";
@@ -23,6 +23,7 @@ test("file: keys, leases, streams, consumers and blobs outlive a restart", async
   await before.release("orchestrator", "copy-a", lease.epoch);
   const ids = [];
   for (const n of [1, 2, 3]) ids.push(await before.append("runs", { n }));
+  await before.read("runs", "orchestrator");
   await before.ack("runs", "orchestrator", [ids[0], ids[2]]);
   await before.appendBlob("log", "a");
   await before.close();
@@ -42,6 +43,24 @@ test("file: keys, leases, streams, consumers and blobs outlive a restart", async
   assert.ok(Number(id) > Number(ids[2]), "ids go on increasing");
   await after.appendBlob("log", "b");
   assert.equal((await after.readBlob("log")).toString(), "ab");
+});
+
+test("file: a state file taken back to an older one still gives a new, higher epoch", async (t) => {
+  const dir = tempDir(t);
+  let at = 1_000_000;
+  const now = () => at;
+  const before = fileStore({ dir, now });
+  const first = await before.acquire("orchestrator", "copy-a", { ttlMs: 1000 });
+  await before.release("orchestrator", "copy-a", first.epoch);
+  const older = readFileSync(join(dir, "state.json"));
+  at += 10;
+  const second = await before.acquire("orchestrator", "copy-b", { ttlMs: 1000 });
+  // The disk lost copy b's lease: the next start reads the state from before it.
+  writeFileSync(join(dir, "state.json"), older);
+  at += 10;
+  const after = fileStore({ dir, now });
+  const third = await after.acquire("orchestrator", "copy-a", { ttlMs: 1000 });
+  assert.ok(third.epoch > second.epoch, `${third.epoch} after ${second.epoch}`);
 });
 
 test("file: an event cut short by a crash is dropped, and the stream goes on", async (t) => {
@@ -119,11 +138,53 @@ test("file: events trimmed by maxLength stay gone after a restart", async (t) =>
   assert.deepEqual(await read(fileStore({ dir }), "other"), [5, 6, 7, 8, 9]);
 });
 
-test("openStore: file: and memory:, nothing else", async (t) => {
+test("openStore: file:, memory: and redis:, nothing else", async (t) => {
   const dir = tempDir(t);
   const store = openStore(`file://${dir}`);
   await store.set("a", 1);
   assert.deepEqual(readdirSync(dir).includes("state.json"), true);
   assert.equal(await openStore("memory:").get("a"), null);
-  assert.throws(() => openStore("redis://store:6379"), /isn't a store/);
+  assert.throws(() => openStore("postgres://store:5432"), /isn't a store/);
+});
+
+test("openStore: a known secret, a private key or a GitHub token is never written", async (t) => {
+  const dir = tempDir(t);
+  const signingKey = "sk-signing-0123456789abcdef0123456789";
+  const store = openStore(`file://${dir}`, { secrets: () => [signingKey] });
+  const pem = "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----";
+  const token = `ghs_${"a".repeat(36)}`;
+  // In a value or an event: refused.
+  const writes = [
+    () => store.set("app", { key: pem }),
+    () => store.setIfAbsent("signing", signingKey),
+    () => store.compareAndSet("signing", null, `prefix ${signingKey.slice(0, 20)}`),
+    () => store.append("runs", { token }),
+  ];
+  for (const write of writes) await assert.rejects(write(), /a secret can't go in the store/);
+  assert.equal(await store.get("app"), null);
+  assert.equal(await store.get("signing"), null);
+  assert.deepEqual(await store.read("runs", "edge"), []);
+  // In a blob (a run's log): redacted, the rest kept, a test fixture's private key too.
+  await store.putBlob("log", Buffer.from(`key: ${signingKey}\n`));
+  await store.appendBlob("log", `${token}\n`);
+  await store.appendBlob("log", `$ cat test/fixture.pem\n${pem}\n`);
+  assert.equal(
+    (await store.readBlob("log")).toString(),
+    `key: [redacted]\n[redacted]\n$ cat test/fixture.pem\n${pem}\n`,
+  );
+  // Bytes around a secret come back as they were.
+  const bytes = Buffer.concat([
+    Buffer.from([0xff, 0x00]),
+    Buffer.from(signingKey),
+    Buffer.from([0x80]),
+  ]);
+  await store.putBlob("shot", bytes);
+  assert.deepEqual(
+    await store.readBlob("shot"),
+    Buffer.concat([Buffer.from([0xff, 0x00]), Buffer.from("[redacted]"), Buffer.from([0x80])]),
+  );
+  // The rest goes through.
+  await store.set("app", { id: 42 });
+  assert.deepEqual(await store.get("app"), { id: 42 });
+  assert.ok(!readFileSync(join(dir, "state.json"), "utf8").includes("signing-0123"));
 });

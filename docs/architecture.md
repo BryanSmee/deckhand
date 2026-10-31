@@ -1031,7 +1031,8 @@ Where they are headed once the listener is split into services: [services.md](se
 What the services share is in `lib/`, which every image copies beside its own code: the YAML
 reader and the settings parser, redaction, HTTP helpers, the JSON state files, draining, the
 tokens (run and service tokens, what each caller may do) and the store (`lib/store.mjs`, its
-file backend `lib/store-file.mjs`). Nothing in it imports from `listener/`.
+file backend `lib/store-file.mjs`, its Redis backend `lib/store-redis.mjs` and the Redis client
+`lib/resp.mjs`). Nothing in it imports from `listener/`.
 
 `server.mjs` only wires the listener together: its settings, the GitHub App, the shared `ctx`
 and the modules, then it starts the servers, restores runs and handles SIGTERM. The stateful
