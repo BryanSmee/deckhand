@@ -40,11 +40,20 @@ const FILES = { ca: "egress-ca.crt", digest: "digest.md" };
 // The most one poll() answers: whole lines only, so a longer one comes alone.
 export const MAX_READ = 1024 * 1024;
 
+// A run's folder: one name, directly in the runs folder, never `.`, `..` or a path.
+function folderName(run) {
+  if (typeof run !== "string" || !/^\w[\w.-]*$/.test(run)) {
+    throw new TypeError(`not a run's name: ${JSON.stringify(run)}`);
+  }
+  return run;
+}
+
 // `timers`: { setTimeout, clearTimeout }, a clock of the tests' own. `mirror`: the broker
 // service's copy ({ files(run, { ca, digest }), sync(run, bytesFrom), forget(run) }), none in
 // the tests that don't need it.
 export function createInbox({ inboxDir, timers = globalThis, mirror = null }) {
-  const inbox = (run) => join(inboxDir, run, INBOX);
+  const folder = (run) => join(inboxDir, folderName(run));
+  const inbox = (run) => join(folder(run), INBOX);
   // run → the poll()s waiting for its next line, woken by send() and close().
   const waiting = new Map();
 
@@ -52,10 +61,10 @@ export function createInbox({ inboxDir, timers = globalThis, mirror = null }) {
   // has them. The sandbox reads none of it directly: the broker service has them before it
   // starts, or the start fails.
   async function write(run, ca, digest) {
-    mkdirSync(join(inboxDir, run), { recursive: true });
+    mkdirSync(folder(run), { recursive: true });
     writeFileSync(inbox(run), "");
-    if (ca) writeFileSync(join(inboxDir, run, FILES.ca), ca);
-    if (digest) writeFileSync(join(inboxDir, run, FILES.digest), digest);
+    if (ca) writeFileSync(join(folder(run), FILES.ca), ca);
+    if (digest) writeFileSync(join(folder(run), FILES.digest), digest);
     if (!mirror) return;
     await mirror.files(run, { ca: ca || null, digest: digest || null });
     await mirror.sync(run, (from) => bytesFrom(run, from));
@@ -183,14 +192,14 @@ export function createInbox({ inboxDir, timers = globalThis, mirror = null }) {
   function file(run, name) {
     if (!Object.hasOwn(FILES, name)) return null;
     try {
-      return readFileSync(join(inboxDir, run, FILES[name]));
+      return readFileSync(join(folder(run), FILES[name]));
     } catch {
       return null;
     }
   }
 
   function remove(run) {
-    rmSync(join(inboxDir, run), { recursive: true, force: true });
+    rmSync(folder(run), { recursive: true, force: true });
     wake(run);
     mirror?.forget(run);
   }

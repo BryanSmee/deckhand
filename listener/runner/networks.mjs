@@ -1,6 +1,7 @@
 // Each run has a network of its own, internal (no route out), named after the run: sandboxes
 // can't reach each other. The listener (its broker) and the egress proxy join each one, under
-// the host names sandboxes know them by (BROKER_URL, EGRESS_PROXY).
+// the host names sandboxes know them by (BROKER_URL, EGRESS_PROXY): the runner service joins
+// them, the containers compose.yaml labels deckhand.role=broker and egress.
 import { hostname } from "node:os";
 import { checked, labelArgs } from "../docker.mjs";
 import { freeBlocks } from "../../lib/subnets.mjs";
@@ -14,15 +15,18 @@ const PROXY_RETRY_MS = 2000;
 // each overlaps (another project took it since the listener looked).
 const SUBNET_TRIES = 5;
 
-// What compose.yaml labels the egress proxy with, so the listener finds it.
+// What compose.yaml labels the listener and the egress proxy with, so the runner finds them.
 const ROLE = "deckhand.role";
 const PROJECT = "com.docker.compose.project";
 
 export function createNetworks({ config, docker, log, now }) {
   // The run's own network: internal, so the proxy is its only way out (checked rather than
   // assumed), with the listener and the proxy on it. Docker refuses a name already taken.
-  async function create(run) {
+  // `onCreated()`: once it exists, created here (a start that fails after removes it; one
+  // that didn't create it leaves it).
+  async function create(run, { onCreated = () => {} } = {}) {
     checked(await newNetwork(run), `the run's network ${run} wasn't created`);
+    onCreated();
     const { code, out } = await docker(["network", "inspect", "--format", "{{.Internal}}", run]);
     if (code !== 0 || out !== "true") {
       throw new Error(
@@ -76,7 +80,21 @@ export function createNetworks({ config, docker, log, now }) {
   }
 
   // Disconnects whatever is still on it first: Docker refuses to remove a network in use.
+  // Only a run's network of this deployment's (its labels, as create() sets them): never another
+  // network of the host's (`bridge`, another project's), whatever name a caller gives.
   async function remove(net) {
+    const labels = await docker([
+      "network",
+      "inspect",
+      "--format",
+      '{{index .Labels "deckhand.owner"}}|{{index .Labels "deckhand.run"}}',
+      net,
+    ]);
+    if (labels.code !== 0) return; // no such network
+    if (labels.out !== `${config.prefix}|${net}`) {
+      log(`Not removing the network ${net}: not a run's of this deployment`);
+      return;
+    }
     const { code, out } = await docker([
       "network",
       "inspect",
@@ -106,44 +124,54 @@ export function createNetworks({ config, docker, log, now }) {
     }
   }
 
-  // The listener's and the proxy's containers, with the names sandboxes call them by: the
-  // listener is the container it runs in (LISTENER_CONTAINER, or its host name, Docker's
-  // short id); the proxy is EGRESS_CONTAINER, or the container labelled deckhand.role=egress
-  // in the listener's compose project. Looked up each time: `docker compose up -d` recreates
+  // The broker's and the proxy's containers, with the names sandboxes call them by: the
+  // broker is LISTENER_CONTAINER, or the container labelled deckhand.role=broker (the listener,
+  // until the broker moves out, #505); the proxy is EGRESS_CONTAINER, or the one labelled
+  // deckhand.role=egress, each in the runner's own compose project (the container it runs in:
+  // its host name, Docker's short id). Looked up each time: `docker compose up -d` recreates
   // them under new ids.
   async function peers() {
-    const listener = config.listenerContainer || hostname();
+    const own = config.listenerContainer || hostname();
     const project = await docker([
       "inspect",
       "--format",
       `{{index .Config.Labels "${PROJECT}"}}`,
-      listener,
+      own,
     ]);
     if (project.code !== 0) {
       throw new Error(
-        `the listener's container ${listener} wasn't found: set LISTENER_CONTAINER (docs/setup.md)`,
+        config.listenerContainer
+          ? `the listener's container ${own} wasn't found: check LISTENER_CONTAINER (docs/setup.md)`
+          : `the runner's own container ${own} wasn't found: set LISTENER_CONTAINER and EGRESS_CONTAINER (docs/setup.md)`,
       );
     }
+    const broker =
+      config.listenerContainer || (await labelled("broker", project.out, "LISTENER_CONTAINER"));
     return [
-      { container: listener, alias: aliasOf(config.brokerUrl) },
+      { container: broker, alias: aliasOf(config.brokerUrl) },
       { container: await egressContainer(project.out), alias: aliasOf(config.egressProxy) },
     ];
   }
 
   async function egressContainer(project) {
-    if (config.egressContainer) return config.egressContainer;
+    return config.egressContainer || labelled("egress", project, "EGRESS_CONTAINER");
+  }
+
+  // The one container labelled deckhand.role=<role> in `project`.
+  async function labelled(role, project, setting) {
     const { code, out, err } = await docker([
       "ps",
       "--filter",
-      `label=${ROLE}=egress`,
+      `label=${ROLE}=${role}`,
       ...(project ? ["--filter", `label=${PROJECT}=${project}`] : []),
       "--format",
       "{{.ID}}",
     ]);
     const found = code === 0 ? out.split("\n").filter(Boolean) : [];
     if (found.length !== 1) {
+      const what = role === "egress" ? "the egress proxy's container" : "the listener's container";
       throw new Error(
-        `the egress proxy's container wasn't found (${code === 0 ? `${found.length} labelled ${ROLE}=egress` : err}): set EGRESS_CONTAINER (docs/setup.md)`,
+        `${what} wasn't found (${code === 0 ? `${found.length} labelled ${ROLE}=${role}` : err}): set ${setting} (docs/setup.md)`,
       );
     }
     return found[0];
@@ -296,7 +324,7 @@ export function createNetworks({ config, docker, log, now }) {
   }
 
   return {
-    create: async (run) => (forget(), await create(run)),
+    create: async (run, options) => (forget(), await create(run, options)),
     remove: async (net) => {
       try {
         return await remove(net);

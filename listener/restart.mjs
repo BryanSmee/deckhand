@@ -2,7 +2,8 @@
 // that one killed without SIGTERM (a crash, an OOM kill) leaves the same as one that stopped.
 // The comments waiting for a run are in the store (`queue`, with each task's deadline: the end
 // of its pause); each run's state is in logs/<run>.live.json. The next listener reads both,
-// re-arms the deadlines, finds the sandboxes by their labels, follows their output from where
+// re-arms the deadlines, finds the sandboxes by their labels (through the runner service,
+// which outlives it), follows their output from where
 // the previous one stopped, and posts each reply once.
 import { randomUUID } from "node:crypto";
 import { existsSync, readdirSync, rmSync } from "node:fs";
@@ -10,7 +11,7 @@ import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
-import { addRun, openLog, writeEvent } from "./runlog.mjs";
+import { addRun, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { storable } from "../lib/store.mjs";
@@ -70,6 +71,21 @@ export function revive(item) {
 
 function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
   return { repo, id, kind, number, name, base, discussionId, settings };
+}
+
+// How long a start waits for the runner to say whether the restored runs' inboxes are open.
+export const RESTORE_WAIT_MS = 10_000;
+
+// How long a run's state, or its end, waits for its log to be at the runner.
+export const LOG_SENT_MS = 5000;
+
+// Once what the run's log was written is at the runner, or LOG_SENT_MS on.
+export function logSent(live, ms = LOG_SENT_MS) {
+  // No log (a run that never started one): nothing to wait for.
+  if (!live.logFile?.flushed) return Promise.resolve();
+  let timer;
+  const late = new Promise((resolve) => (timer = setTimeout(resolve, ms)));
+  return Promise.race([live.logFile.flushed(), late]).finally(() => clearTimeout(timer));
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. `ctx.store`
@@ -350,8 +366,14 @@ export function createRestart(ctx) {
     // Whether it was written.
     const write = async () => {
       if (live.over) return false;
+      // Its log first: the lines counted here are at the runner (`lines`, which the next
+      // listener skips). A few seconds at most: with the runner away, the state goes anyway
+      // (what it says, `replied` say, matters more than a line the next listener misses).
+      await logSent(live);
+      if (live.over) return false;
       const handled = [...live.handled];
-      const { logPath, ...record } = live.record;
+      // State saved before #503 has where its log was in the listener's volume.
+      const { logPath: _, ...record } = live.record;
       const state = {
         task: pick(task),
         ...Object.fromEntries(
@@ -423,8 +445,11 @@ export function createRestart(ctx) {
 
   // Runs a previous listener left behind, from their saved state: their tokens and egress work
   // again at once, and comments find them. reattach() then follows their sandboxes.
-  // Without unifySpellings() first (the tests'), the queue's repos aren't read yet.
-  function restoreRuns() {
+  // Whether each one's inbox is still open is asked of the runner before a comment can reach
+  // it: no comment goes to one until it answers. `waitMs`: how long the start waits for that;
+  // a runner away longer doesn't keep the listener down, and a run whose answer comes later
+  // takes its comments then.
+  async function restoreRuns({ waitMs = RESTORE_WAIT_MS } = {}) {
     if (!spelled) respellRuns(spellings(recordsWith([])));
     const live = readLive();
     for (const saved of live) {
@@ -433,18 +458,44 @@ export function createRestart(ctx) {
       saved.record.key = respelled(saved.record.key, spelled);
       for (const item of saved.handled ?? []) item.repo = spelled(item.repo);
     }
-    return live.map(restoreRun);
+    const restored = live.map(restoreRun);
+    let started = true;
+    const asked = Promise.all(
+      restored.map(async (task) => {
+        const run = task.live;
+        if (!run.open) return;
+        run.open = false;
+        let closed;
+        try {
+          closed = await ctx.runner.closed(run.id);
+        } catch (error) {
+          // Not knowing: no comment goes to it, they wait for the next run.
+          log(`${run.key}: its inbox: ${error.message}`);
+          return;
+        }
+        if (closed || task.live !== run || run.finishing || run.cancelled) return;
+        run.open = true;
+        // Answered after the start went on: what waits meanwhile goes to it now.
+        if (!started) ctx.deliverLater?.(task);
+      }),
+    );
+    let timer;
+    const late = new Promise((resolve) => (timer = setTimeout(resolve, waitMs)));
+    await Promise.race([asked, late]).finally(() => clearTimeout(timer));
+    started = false;
+    return restored;
   }
 
   function restoreRun(saved) {
     const key = taskKey(saved.task.repo, saved.task.id);
-    const logPath = join(ctx.logDir, `${saved.id}.log`);
+    // State saved before #503 has where its log was in the listener's volume.
+    const { logPath: _, ...kept } = saved.record;
     // State saved before records kept their screenshots' folder has it beside them.
-    const shots = saved.record.shots ?? saved.shots ?? null;
+    const shots = kept.shots ?? saved.shots ?? null;
     // Its phase as its log has it: records saved before they kept it in step have none, or
     // "building image".
-    const phase = saved.logPhase ?? saved.record.phase ?? null;
-    const record = { ...saved.record, shots, phase, logPath, status: "running", finishedAt: null };
+    const phase = saved.logPhase ?? kept.phase ?? null;
+    const record = { ...kept, shots, phase, status: "running", finishedAt: null };
     addRun(ctx, record);
     let task = tasks.get(key);
     if (!task) {
@@ -457,9 +508,12 @@ export function createRestart(ctx) {
       key,
       record,
       result: savedResult(saved.result),
-      logFile: openLog(logPath),
-      // A cancelled or overflowed run takes no more comments: they wait for the next one.
-      open: !saved.cancelled && !saved.overflow && !ctx.runner.closed(saved.id),
+      // Its log at the runner, written on from its end (asked first), once the log this
+      // listener kept of it, if any, moved there (runlog.mjs moveLogs()).
+      logFile: ctx.runLogs.open(saved.id, { size: null, after: ctx.logsMoving?.get(saved.id) }),
+      // A cancelled or overflowed run takes no more comments: they wait for the next one; nor
+      // one whose inbox is closed (restoreRuns()).
+      open: !saved.cancelled && !saved.overflow,
       // A run started before the proxy decrypted HTTPS doesn't trust its CA: nothing cached.
       cached: saved.uncached ? saved.cached : [],
       handled,
@@ -524,6 +578,8 @@ export function createRestart(ctx) {
       const live = task.live;
       const sandbox = sandboxes.find((s) => s.run === live.id);
       if (live.replied || live.cancelled || live.overflow || sandbox) {
+        // Where its log goes on from: its size at the runner.
+        await live.logFile.ready;
         log(`${live.key}: picked up ${task.name} again`);
         if ((live.cancelled || live.overflow) && sandbox?.running) {
           ctx.runner
@@ -536,7 +592,11 @@ export function createRestart(ctx) {
       log(`${live.key}: its sandbox never started: its comments are queued again`);
       await requeue(task);
     }
+    // Those of the runs going now, restored or started since this listener did (the runner
+    // took a while to answer): its own.
+    const going = [...ctx.tasks.values()].filter((t) => t.live);
     for (const s of sandboxes) {
+      if (going.some((t) => t.live.id === s.run || t.name === s.name)) continue;
       if (restored.some((t) => t.live?.id === s.run || t.name === s.name)) continue;
       log(`${s.name}: no saved state for it: ${s.running ? "closing its input" : "removing it"}`);
       if (s.running) ctx.runner.close(s.run);

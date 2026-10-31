@@ -17,6 +17,8 @@ import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
+import { urlProblem } from "../lib/service-client.mjs";
+import { networkCallers } from "../lib/service-token.mjs";
 import { PRIVATE_RANGES, parseCidr, privateRange } from "../lib/subnets.mjs";
 import {
   ConfigError,
@@ -160,7 +162,7 @@ export const SETTINGS = {
   // Where sandboxes run (runner/index.mjs): the host's Docker, or pods of a Kubernetes cluster.
   RUNNER: { default: "docker", parse: runnerSetting },
   // The Kubernetes runner's (runner/kubernetes.mjs): its namespace, which holds the listener's
-  // and the egress proxy's pods too (empty: the listener's own, its ServiceAccount's), how long
+  // and the egress proxy's pods too (empty: the runner's own, its ServiceAccount's), how long
   // a pod may stay Pending before its run fails, and its session claims' storage class
   // (empty: the cluster's default) and size.
   KUBERNETES_NAMESPACE: { default: null },
@@ -307,18 +309,46 @@ function distinctPorts(ports) {
   }
 }
 
+// A service's URLs, comma-separated (its copies), each an http(s) URL: `runner:8080` would
+// otherwise be tried on every call until it times out.
+function serviceUrls(value, name) {
+  for (const url of value.split(",").map((u) => u.trim())) {
+    const problem = urlProblem(url);
+    if (problem) throw new ConfigError(`${name}: ${url} is ${problem} (http://host:port)`);
+  }
+  return value;
+}
+
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
-export function loadConfig(env, file = NO_FILE) {
-  const from = settingSource(env, file, SETTINGS);
-  requiredSettings(env, from);
-  const s = readSettings(env, from, SETTINGS);
+// `service`: "runner" for the runner service's (../runner/server.mjs), which starts no run of
+// its own: ALLOWED_USERS is the listener's to require.
+export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
+  const settings = service === "runner" ? RUNNER_SETTINGS : SETTINGS;
+  const from = settingSource(env, file, settings);
+  requiredSettings(env, from, { users: service !== "runner" });
+  const s = readSettings(env, from, settings);
   registryCredentials(s);
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   const policyPort = wholeNumber(env.POLICY_PORT, 8082, "POLICY_PORT", "a port");
-  distinctPorts({ PORT: port, BROKER_PORT: brokerPort, POLICY_PORT: policyPort });
+  const servicesPort = wholeNumber(env.SERVICES_PORT, 8083, "SERVICES_PORT", "a port");
+  distinctPorts({
+    PORT: port,
+    BROKER_PORT: brokerPort,
+    POLICY_PORT: policyPort,
+    SERVICES_PORT: servicesPort,
+  });
   return {
     port,
+    // The other services' calls to those the listener still is (the broker's, the github
+    // service's: services-http.mjs), on the networks it shares with them only.
+    servicesPort,
+    // The runner service (../runner/): the only one with the Docker socket, or the Kubernetes
+    // API. Several, comma-separated: its copies, tried in turn (lib/service-client.mjs).
+    runnerUrl: serviceUrls(env.RUNNER_URL || "http://runner:8080", "RUNNER_URL"),
+    // Which network each service calling the listener's services port is on
+    // (lib/service-token.mjs networkCallers()); none: no service may call it.
+    serviceNetworks: serviceNetworks(env.SERVICE_NETWORKS),
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
     brokerPort,
     // The egress proxy's questions (/egress), on a port of their own: open until the listener
@@ -449,10 +479,10 @@ function registryCredentials(s) {
 
 // What must be settled before anything starts: who may trigger runs, and no setting that
 // moved elsewhere.
-function requiredSettings(env, { setting }) {
+function requiredSettings(env, { setting }, { users = true } = {}) {
   // Fail closed: the sandbox runs without permission prompts and can push, so nobody may
   // trigger it until the operator names who can.
-  if (!list(setting("ALLOWED_USERS")).length) {
+  if (users && !list(setting("ALLOWED_USERS")).length) {
     throw new ConfigError(
       "ALLOWED_USERS is empty: name the GitHub users who may start runs (or allowed_users in config.yaml)",
     );
@@ -471,6 +501,25 @@ function requiredSettings(env, { setting }) {
       `${moved.join(", ")} ${moved.length > 1 ? "are" : "is"} gone (${where} instead, docs/security.md)`,
     );
   }
+}
+
+// SERVICE_NETWORKS, checked now: a typo would refuse every call of the runner's. `none` (the
+// runner's, where the network can't tell) means nothing here: the listener has to know which
+// address is the runner's. On Kubernetes, where every call arrives at the pod's one address,
+// `runner=0.0.0.0/0` says so, and a NetworkPolicy lets only the runner's pods reach the port.
+function serviceNetworks(text) {
+  const value = String(text ?? "").trim();
+  if (value === "none") {
+    throw new ConfigError(
+      "SERVICE_NETWORKS: none is the runner's; the listener needs the runner's network (runner=<subnet>; on Kubernetes runner=0.0.0.0/0, with a NetworkPolicy that lets only the runner's pods reach SERVICES_PORT: docs/setup.md, Kubernetes runner)",
+    );
+  }
+  try {
+    networkCallers(value);
+  } catch (error) {
+    throw new ConfigError(error.message);
+  }
+  return value;
 }
 
 // The parsers of SETTINGS: (text, { label, env, values, labelOf }) → the value.
@@ -647,19 +696,28 @@ function apiUrl(text, { label }) {
 // SANDBOX_AGENT and BRAINSTORM_AGENT. Claude Code may be the default without a credential, as
 // before agents could be picked: its endpoint then answers that the operator set none. Another
 // agent can't: it is picked on purpose.
-function agentSetting(text, { label, env }) {
+function agentSetting(text, { label, env, known = false }) {
   const agent = text.trim().toLowerCase();
   if (!Object.hasOwn(AGENTS, agent)) {
     throw new ConfigError(`${label}: expected ${Object.keys(AGENTS).join(", ")}, got ${text}`);
   }
   const secrets = AGENTS[agent].secrets;
-  if (agent !== DEFAULT_AGENT && !secrets.some((secret) => env[secret])) {
+  if (!known && agent !== DEFAULT_AGENT && !secrets.some((secret) => env[secret])) {
     throw new ConfigError(
       `${label} is ${agent}, which needs ${secrets.join(" or ")} in the environment`,
     );
   }
   return agent;
 }
+
+// The runner's: an agent's credential is the listener's to require, as the runner never holds
+// it (config.yaml, which both read, may pick one).
+const knownAgent = (text, { label }) => agentSetting(text, { label, env: {}, known: true });
+const RUNNER_SETTINGS = {
+  ...SETTINGS,
+  SANDBOX_AGENT: { ...SETTINGS.SANDBOX_AGENT, parse: knownAgent },
+  BRAINSTORM_AGENT: { ...SETTINGS.BRAINSTORM_AGENT, parse: knownAgent },
+};
 
 // The agents the operator configured: those it has a credential for (each agent's `secrets`),
 // and the defaults. A repo's `agent:` can only pick among these (repo-config.mjs).

@@ -1,11 +1,11 @@
 #!/bin/bash
-# server.test.mjs's docker, linked into each test's temp dir (on the listener's PATH): it plays
+# server.test.mjs's docker, linked into each test's temp dir (on the runner's PATH): it plays
 # Docker on files in that dir.
 # Sandboxes run detached: `run` starts the fake sandbox in the background (its output in
 # containers/<name>/out), `logs --follow` tails it, `ps`, `inspect`, `wait` and `rm` see it.
 # Each run's network is a file in nets/, listing the containers joined to it: the sandbox,
-# the listener (whatever its host name) and the egress proxy, `egress-1`, whose address is
-# 127.0.0.1 (the fake sandbox asks the egress policy from there).
+# the listener, `listener-1` (deckhand.role=broker), and the egress proxy, `egress-1`, whose
+# address is 127.0.0.1 (the fake sandbox asks the egress policy from there).
 # The fake sandbox asks the broker and the egress policy, prints a result (once $dir/go
 # exists, if $dir/hold does), then answers each comment of its inbox until the listener
 # closes it (then never exits if $dir/linger exists). What a test checks is logged in
@@ -23,7 +23,7 @@ nap() { [ -n "${never-}" ] || exec {never}<> <(:); read -r -t 0.05 -u "$never" _
 listed() { local line; while IFS= read -r line; do [ "$line" = "$1" ] && return; done < "$2"; false; }
 case "$1" in
   ps)
-    case "$*" in *deckhand.role=egress*) echo egress-1; exit ;; esac
+    case "$*" in *deckhand.role=egress*) echo egress-1; exit ;; *deckhand.role=broker*) echo listener-1; exit ;; esac
     for d in "$c"/*/; do
       [ -d "$d" ] || continue
       n=${d%/}
@@ -90,6 +90,8 @@ case "$1" in
         esac
         [ -f "$dir/nets/$n" ] || exit 1
         case "$*" in
+          # Its labels: those network create gave it, this deployment's.
+          *.Labels*) echo "deckhand|$n" ;;
           *Containers*) tr '\n' ' ' < "$dir/nets/$n" ;;
           *.Id*) echo "id-$n" ;;
           # Internal unless the test says otherwise.
@@ -112,9 +114,19 @@ case "$1" in
   inspect)
     n=${@: -1}
     case "$3" in
+      # Its exit code once it exited: 0, or what the test leaves in exit-code.
+      *ExitCode*)
+        [ -d "$c/$n" ] || exit 1
+        alive "$n" && exit 1
+        if [ -f "$dir/exit-code" ]; then read -r code < "$dir/exit-code"; echo "$code"; else echo 0; fi ;;
       *State*)
         [ -d "$c/$n" ] || exit 1
         alive "$n" && echo running || echo exited ;;
+      # A sandbox's labels: this deployment's, its run's.
+      *deckhand.owner*)
+        [ -d "$c/$n" ] || exit 1
+        read -r run < "$c/$n/run"
+        echo "deckhand|$run|" ;;
       *compose.project*) echo deckhand ;;
       *deckhand.run*)
         [ -d "$c/$n" ] || exit 1

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -10,6 +10,7 @@ import {
   lastResult,
   loadRuns,
   minutes,
+  moveLogs,
   openLog,
   outcome,
   phaseOf,
@@ -25,6 +26,30 @@ import { agentFor } from "../listener/agents/index.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const line = (event) => JSON.stringify(event);
+
+// The runner's logs (runner/client.mjs logs), as moveLogs() sends them: each upload's id, and
+// its text then, by id. `refuse`: ids it doesn't take.
+function fakeRunner(refuse = []) {
+  const logs = new Map();
+  return {
+    logs,
+    upload: async (id, path) => {
+      if (refuse.includes(id)) throw new Error("the runner service didn't answer");
+      logs.set(id, readFileSync(path, "utf8"));
+    },
+  };
+}
+
+// A start: the logs a listener kept itself go to the runner, then the runs are listed.
+async function started(dir, options) {
+  await moveLogs(dir, options?.runner ?? fakeRunner(), options).done;
+  return loadRuns(dir, options);
+}
+
+// What stream() reads a log by (the runner's, as edge): a file here, empty until written.
+const fromFile = (path) => async (offset) => ({
+  data: existsSync(path) ? readFileSync(path).subarray(offset) : Buffer.alloc(0),
+});
 
 test("outcome: ok, needs-input or error", () => {
   assert.equal(outcome(null), "error");
@@ -216,7 +241,7 @@ test("lastResult: the agent's last result in a log's lines", () => {
   );
 });
 
-test("runs: rebuilt from their log files, newest first, without their path for the dashboard", (t) => {
+test("runs: logs kept here are summarized, sent to the runner, then listed newest first", async (t) => {
   const dir = tempDir(t);
   const meta = {
     type: "listener",
@@ -251,8 +276,30 @@ test("runs: rebuilt from their log files, newest first, without their path for t
       line({ type: "result", result: asked }),
     ].join("\n"),
   );
-  const runs = loadRuns(dir).filter((r) => r.key !== "org/repo#3");
-  const stopped = loadRuns(dir).find((r) => r.key === "org/repo#3");
+  const runner = fakeRunner();
+  const all = await started(dir, { runner });
+  // Every log at the runner, as it was, and none left here.
+  assert.deepEqual([...runner.logs.keys()].sort(), [
+    "deckhand-org-repo-1-1000",
+    "deckhand-org-repo-2-2000",
+    "deckhand-org-repo-3-500",
+  ]);
+  assert.equal(runner.logs.get("deckhand-org-repo-2-2000"), "Cloning\n");
+  assert.equal(existsSync(join(dir, "deckhand-org-repo-2-2000.log")), false);
+  // The live run's is listed once restoreRuns() restores it, and summarized when it ends.
+  assert.deepEqual(
+    all.map((r) => r.id),
+    ["deckhand-org-repo-2-2000", "deckhand-org-repo-3-500"],
+  );
+  // Its state gone without a summary (a listener from before summaries): its log, read.
+  rmSync(join(dir, "deckhand-org-repo-1-1000.live.json"));
+  writeFileSync(
+    join(dir, "deckhand-org-repo-1-1000.log"),
+    runner.logs.get("deckhand-org-repo-1-1000"),
+  );
+  const listed = await started(dir);
+  const runs = listed.filter((r) => r.key !== "org/repo#3");
+  const stopped = listed.find((r) => r.key === "org/repo#3");
   assert.equal(stopped.status, "needs-input");
   assert.deepEqual(stopped.questions, {
     items: [{ title: "Name", text: "which one?", options: [] }],
@@ -267,7 +314,6 @@ test("runs: rebuilt from their log files, newest first, without their path for t
       ["deckhand-org-repo-1-1000", "org/repo#1", "ok", "Done.", "One"],
     ],
   );
-  assert.equal(runs[1].logPath, join(dir, "deckhand-org-repo-1-1000.log"));
   // Logs from before agents had names are Claude Code's; from before speeds, no speed.
   assert.equal(runs[1].agent, "claude");
   assert.deepEqual(
@@ -277,7 +323,8 @@ test("runs: rebuilt from their log files, newest first, without their path for t
   assert.deepEqual([runs[0].speed, runs[0].speedNote], [null, null]);
   // The credential it ran on survives the restart; none known from before it.
   assert.deepEqual([runs[1].auth, runs[0].auth], ["plan", null]);
-  assert.equal("logPath" in publicRun(runs[1]), false);
+  // Where a summary from before #503 said its log was: not for the dashboard.
+  assert.equal("logPath" in publicRun({ ...runs[1], logPath: "/data/logs/x.log" }), false);
 });
 
 // A sign-out, or a repo's users narrowed, while the stream is open: it ends within a second.
@@ -294,7 +341,12 @@ test(
     const written = [];
     const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
     let allowed = true;
-    stream(req, res, { status: "running", logPath, agent: "claude" }, () => allowed, 20);
+    stream(
+      req,
+      res,
+      { status: "running", agent: "claude" },
+      { read: fromFile(logPath), allowed: () => allowed, every: 20 },
+    );
     await new Promise((resolve) => setTimeout(resolve, 50));
     allowed = false;
     await done;
@@ -308,8 +360,8 @@ test("stream: a running run with no log file yet waits for it", { timeout: 5000 
   const req = new EventEmitter();
   const written = [];
   const res = { writeHead() {}, write: (s) => written.push(s), end() {} };
-  const run = { status: "running", logPath, agent: "claude" };
-  stream(req, res, run, () => true, 20);
+  const run = { status: "running", agent: "claude" };
+  stream(req, res, run, { read: fromFile(logPath), every: 20 });
   await new Promise((resolve) => setTimeout(resolve, 50));
   writeFileSync(logPath, line({ type: "listener", event: "note", message: "Hello", at: 0 }) + "\n");
   await new Promise((resolve) => setTimeout(resolve, 50));
@@ -323,32 +375,32 @@ test("stream: a finished run with no log file ends", { timeout: 5000 }, async (t
   let ended;
   const done = new Promise((resolve) => (ended = resolve));
   const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
-  stream(new EventEmitter(), res, { status: "failed", logPath, agent: "claude" }, () => true, 20);
+  stream(
+    new EventEmitter(),
+    res,
+    { status: "failed", agent: "claude" },
+    { read: fromFile(logPath), every: 20 },
+  );
   await done;
   assert.ok(written.some((w) => w.startsWith("event: end")));
 });
 
-test("stream: an error reading the log ends that stream only", { timeout: 5000 }, async (t) => {
-  // A directory where the log should be: reading it throws.
-  const logPath = tempDir(t, "deckhand-stream-");
+test("stream: an error reading the log ends that stream only", { timeout: 5000 }, async () => {
+  // The runner refusing it, say.
+  const read = async () => {
+    throw new Error("the log of x: 500");
+  };
   const errors = [];
   let ended;
   const done = new Promise((resolve) => (ended = resolve));
   const res = { writeHead() {}, write() {}, end: ended };
-  const run = { status: "running", logPath, agent: "claude" };
-  stream(
-    new EventEmitter(),
-    res,
-    run,
-    () => true,
-    20,
-    (e) => errors.push(e),
-  );
+  const run = { status: "running", agent: "claude" };
+  stream(new EventEmitter(), res, run, { read, every: 20, onError: (e) => errors.push(e) });
   await done;
   assert.equal(errors.length, 1);
 });
 
-test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", (t) => {
+test("runs: a cancelled run is cancelled after a restart, whatever its last result; its log says who", async (t) => {
   const dir = tempDir(t);
   const result = { type: "result", result: "Half done.", duration_ms: 1000 };
   const cancelled = {
@@ -365,7 +417,7 @@ test("runs: a cancelled run is cancelled after a restart, whatever its last resu
       line(cancelled),
     ].join("\n"),
   );
-  const [run] = loadRuns(dir);
+  const [run] = await started(dir);
   assert.equal(run.status, "cancelled");
   assert.equal(run.summary, "Stopped by @alice");
   assert.deepEqual(format(line(cancelled)), [
@@ -383,7 +435,7 @@ test("log: a run stopped for its silence after its answer says so", () => {
   ]);
 });
 
-test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", (t) => {
+test("runs: the comments a run ran on come back from its log, for a rerun, not for the dashboard", async (t) => {
   const dir = tempDir(t);
   const items = [
     { id: "4", kind: "issue", number: 4, trigger: "work", modeLine: null, text: "Fix it" },
@@ -396,44 +448,139 @@ test("runs: the comments a run ran on come back from its log, for a rerun, not f
     join(dir, "deckhand-org-repo-5-900.log"),
     line({ type: "listener", key: "org/repo#5", repo: "org/repo", startedAt: 900 }),
   );
-  const [run, old] = loadRuns(dir);
+  const [run, old] = await started(dir);
   assert.equal(run.status, "interrupted");
   assert.deepEqual(run.items, items);
   assert.equal(old.items, null);
   assert.equal("items" in publicRun(run), false);
 });
 
-test("runs: an older log without a summary is read once, then its summary is", (t) => {
+test("runs: an older log without a summary is read once, then its summary is", async (t) => {
   const dir = tempDir(t);
   const logPath = join(dir, "deckhand-org-repo-6-1000.log");
   const meta = { type: "listener", key: "org/repo#6", repo: "org/repo", startedAt: 1000 };
   writeFileSync(logPath, [line(meta), line({ type: "result", result: "Done." })].join("\n"));
-  const [first] = loadRuns(dir);
+  const [first] = await started(dir);
   assert.equal(first.summary, "Done.");
   const saved = JSON.parse(readFileSync(join(dir, "deckhand-org-repo-6-1000.json"), "utf8"));
   assert.equal(saved.status, "ok");
   assert.equal("logPath" in saved, false);
-  // The next start lists it from its summary: the log isn't read again.
+  // A log left here again (a start whose upload failed): its summary stands, it isn't read.
   writeFileSync(logPath, [line(meta), line({ type: "result", result: "Changed." })].join("\n"));
-  const [again] = loadRuns(dir);
+  const [again] = await started(dir);
   assert.deepEqual(again, first);
 });
 
-test("runs: a live run gets no summary from its log, the one written when it ends wins", (t) => {
+test("runs: a log the runner doesn't take stays here, summarized, and goes at the next start", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-11-1000";
+  const meta = { type: "listener", key: "org/repo#11", repo: "org/repo", startedAt: 1000 };
+  writeFileSync(
+    join(dir, `${id}.log`),
+    [line(meta), line({ type: "result", result: "Ok." })].join("\n"),
+  );
+  const logs = [];
+  const [run] = await started(dir, { runner: fakeRunner([id]), log: (l) => logs.push(l) });
+  assert.equal(run.summary, "Ok.");
+  assert.equal(existsSync(join(dir, `${id}.log`)), true);
+  assert.match(logs.join("\n"), /not sent to the runner \(the runner service didn't answer\)/);
+  const runner = fakeRunner();
+  await started(dir, { runner });
+  assert.deepEqual([...runner.logs.keys()], [id]);
+  assert.equal(existsSync(join(dir, `${id}.log`)), false);
+});
+
+test("runs: a log whose summary can't be written stays here, unsent: its run is never lost", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-12-1000";
+  const meta = { type: "listener", key: "org/repo#12", repo: "org/repo", startedAt: 1000 };
+  writeFileSync(join(dir, `${id}.log`), line(meta));
+  // Where its summary goes, a folder that isn't empty: no write replaces it.
+  mkdirSync(join(dir, `${id}.json`));
+  writeFileSync(join(dir, `${id}.json`, "x"), "");
+  const runner = fakeRunner();
+  const logs = [];
+  await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
+  assert.equal(runner.logs.size, 0);
+  assert.equal(existsSync(join(dir, `${id}.log`)), true);
+  assert.match(logs.join("\n"), new RegExp(`${id}\\.log not sent to the runner`));
+});
+
+test("runs: live runs' logs move first, on their own; a failed try is tried again, never left halfway", async (t) => {
+  const dir = tempDir(t);
+  const ids = ["deckhand-org-repo-1-1000", "deckhand-org-repo-2-1000", "deckhand-org-repo-3-1000"];
+  for (const id of ids) {
+    writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
+  }
+  // The last one is live.
+  const live = ids[2];
+  writeFileSync(join(dir, `${live}.live.json`), "{}");
+  const order = [];
+  let failures = 2;
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const runner = {
+    upload: async (id) => {
+      order.push(id);
+      if (id === live && failures-- > 0) throw new Error("the runner service didn't answer");
+      // The history's first log is slow: the live one doesn't wait for it.
+      if (id === ids[0]) await held;
+    },
+  };
+  const waits = [];
+  const moved = moveLogs(dir, runner, {
+    log: () => {},
+    sleep: async (ms) => waits.push(ms),
+    retryMs: 5000,
+  });
+  assert.equal(await moved.moving.get(live), true);
+  assert.deepEqual(waits, [5000, 10000]);
+  assert.equal(existsSync(join(dir, `${live}.log`)), false);
+  assert.ok(!order.includes(ids[1]), "the live log waited for no other");
+  release();
+  assert.equal(await moved.done, 3);
+});
+
+test("runs: a live run's log the runner holds more of is given up, not tried forever", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-9-1000";
+  writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
+  writeFileSync(join(dir, `${id}.live.json`), "{}");
+  let tries = 0;
+  const runner = {
+    upload: async () => {
+      tries++;
+      throw Object.assign(new Error("longer"), { code: "LOG_LONGER" });
+    },
+  };
+  const moved = moveLogs(dir, runner, { log: () => {}, sleep: async () => {} });
+  assert.equal(await moved.moving.get(id), false);
+  assert.equal(tries, 1);
+  assert.equal(await moved.done, 0);
+});
+
+test("runs: the run states and queues kept beside the summaries aren't listed, nor logged", (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "deckhand-org-repo-1-1000.live.json"), "{}");
+  writeFileSync(join(dir, "deckhand-org-repo-1-1000.queued.json"), "[]");
+  const logs = [];
+  assert.deepEqual(loadRuns(dir, { log: (l) => logs.push(l) }), []);
+  assert.deepEqual(logs, []);
+});
+
+test("runs: a live run gets no summary from its log, the one written when it ends wins", async (t) => {
   const dir = tempDir(t);
   const id = "deckhand-org-repo-7-1000";
   const logPath = join(dir, `${id}.log`);
   writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
   writeFileSync(join(dir, `${id}.live.json`), "{}");
-  assert.equal(loadRuns(dir)[0].status, "interrupted");
+  // restoreRuns() lists it.
+  assert.deepEqual(await started(dir), []);
   assert.equal(existsSync(join(dir, `${id}.json`)), false);
-  const record = { id, key: "org/repo#7", startedAt: 1000, finishedAt: 5000, logPath };
-  saveSummary({ ...record, status: "ok", summary: "Done.", shots: "a".repeat(24) });
+  const record = { id, key: "org/repo#7", startedAt: 1000, finishedAt: 5000 };
+  saveSummary(dir, { ...record, status: "ok", summary: "Done.", shots: "a".repeat(24) });
   const [run] = loadRuns(dir);
-  assert.deepEqual(
-    [run.status, run.summary, run.finishedAt, run.logPath],
-    ["ok", "Done.", 5000, logPath],
-  );
+  assert.deepEqual([run.status, run.summary, run.finishedAt], ["ok", "Done.", 5000]);
   assert.equal("shots" in publicRun(run), false);
 });
 
@@ -441,26 +588,22 @@ test("runs: a live run gets no summary from its log, the one written when it end
 test("runs: a few thousand runs with summaries load fast", (t) => {
   const dir = tempDir(t);
   const count = 3000;
-  const big = line({ type: "result", result: "x".repeat(20_000) });
   for (let i = 0; i < count; i++) {
     const id = `deckhand-org-repo-${i % 50}-${i}`;
-    const logPath = join(dir, `${id}.log`);
-    writeFileSync(logPath, big);
-    saveSummary({ id, key: `org/repo#${i % 50}`, startedAt: i, status: "ok", logPath });
+    saveSummary(dir, { id, key: `org/repo#${i % 50}`, startedAt: i, status: "ok" });
   }
   const started = performance.now();
   const runs = loadRuns(dir);
   const ms = performance.now() - started;
   assert.equal(runs.length, count);
   assert.equal(runs[0].startedAt, count - 1);
-  // Read from their logs, they would have a summary.
   assert.ok(runs.every((r) => r.summary === undefined));
   assert.ok(ms < 3000, `${count} runs took ${Math.round(ms)} ms`);
 });
 
 // #241: a log too big to read whole (a string can't hold over about 512 MB) doesn't stop the
 // start. Here with a small cap.
-test("runs: an oversized log is read by its first line and its end, and logged", (t) => {
+test("runs: an oversized log is read by its first line and its end, and logged", async (t) => {
   const dir = tempDir(t);
   const meta = { type: "listener", key: "org/repo#8", repo: "org/repo", startedAt: 1000 };
   writeFileSync(
@@ -468,13 +611,13 @@ test("runs: an oversized log is read by its first line and its end, and logged",
     [line(meta), "x".repeat(5000), line({ type: "result", result: "Done." })].join("\n"),
   );
   const logs = [];
-  const [run] = loadRuns(dir, { max: 1000, log: (l) => logs.push(l) });
+  const [run] = await started(dir, { max: 1000, log: (l) => logs.push(l) });
   assert.deepEqual(
     [run.key, run.repo, run.status, run.summary],
     ["org/repo#8", "org/repo", "ok", "Done."],
   );
   assert.match(
-    logs[0],
+    logs.join("\n"),
     /deckhand-org-repo-8-1000\.log: 0 MB, only its first line and its end read/,
   );
 });
@@ -488,7 +631,7 @@ test("openLog: its size, from what the file had when opened", (t) => {
   assert.equal(openLog(path).size, 7);
 });
 
-test("runs: a log that can't be read is left out, logged, and the others listed", (t) => {
+test("runs: a log that can't be read is left out, logged, and the others listed", async (t) => {
   const dir = tempDir(t);
   mkdirSync(join(dir, "deckhand-org-repo-9-1000.log"));
   writeFileSync(
@@ -496,12 +639,16 @@ test("runs: a log that can't be read is left out, logged, and the others listed"
     line({ type: "listener", key: "org/repo#10", startedAt: 1000 }),
   );
   const logs = [];
-  const runs = loadRuns(dir, { log: (l) => logs.push(l) });
+  const runs = await started(dir, { log: (l) => logs.push(l) });
   assert.deepEqual(
     runs.map((r) => r.key),
     ["org/repo#10"],
   );
-  assert.match(logs[0], /^Listing the run of deckhand-org-repo-9-1000\.log: /);
+  assert.match(logs.join("\n"), /deckhand-org-repo-9-1000\.log not sent to the runner/);
+  // A summary that isn't one: left out too, logged.
+  writeFileSync(join(dir, "deckhand-org-repo-12-1000.json"), "[]");
+  assert.equal(loadRuns(dir, { log: (l) => logs.push(l) }).length, 1);
+  assert.match(logs.at(-1), /^Listing the run of deckhand-org-repo-12-1000\.json: /);
 });
 
 test("format: a line that isn't JSON is clipped, an agent's event cut at MAX_LINE too", () => {
@@ -740,7 +887,7 @@ test("stream: a log's entries with their phases and build steps", { timeout: 500
   const done = new Promise((resolve) => (ended = resolve));
   const written = [];
   const res = { writeHead() {}, write: (s) => written.push(s), end: ended };
-  stream(req, res, { status: "ok", logPath, agent: "claude" }, () => true, 20);
+  stream(req, res, { status: "ok", agent: "claude" }, { read: fromFile(logPath), every: 20 });
   await done;
   const entries = written
     .filter((w) => w.startsWith("event: entries"))

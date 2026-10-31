@@ -154,7 +154,10 @@ export function excludesSandboxes(selector = {}, labels) {
 // that pick it lets anything in, nor lets it out to anything but other pods of the namespace
 // that aren't sandboxes (the egress proxy and the listener). Policies add up, so a single
 // wider one is enough to refuse: fail closed.
-export function isolationProblem(policies, labels) {
+// Each rule to them names its ports, among `ports` (the proxy's, the broker's): a sandbox that
+// could reach another port of theirs (the listener's services port) would get what only the
+// runner may.
+export function isolationProblem(policies, labels, { ports = [3128, 8081] } = {}) {
   const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
   const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
   if (!picking.some((p) => types(p).includes("Ingress") && types(p).includes("Egress"))) {
@@ -172,6 +175,16 @@ export function isolationProblem(policies, labels) {
         if (!excludesSandboxes(peer.podSelector, labels)) {
           return `${name} lets sandbox pods reach each other`;
         }
+      }
+      // A port entry without a number (a protocol alone) is every port of that protocol.
+      const wide = !rule.ports?.length
+        ? { port: undefined }
+        : rule.ports.find(
+            (p) => typeof p.port !== "number" || p.endPort !== undefined || !ports.includes(p.port),
+          );
+      if (wide) {
+        const what = wide.port === undefined ? "every port" : `port ${wide.port}`;
+        return `${name} lets sandbox pods reach ${what} of the namespace's pods (only ${ports.join(" and ")})`;
       }
     }
   }
@@ -482,10 +495,14 @@ export function createKubernetesRunner({
     };
   }
 
+  // The ports sandboxes reach the proxy and the broker on: none other (isolationProblem()).
+  const portOf = (url, fallback) => Number(new URL(url).port || fallback);
+  const sandboxPorts = () => [portOf(config.egressProxy, 3128), portOf(config.brokerUrl, 8081)];
+
   // Fail closed: without the namespace's NetworkPolicies, a sandbox would reach anything.
   async function checkIsolation(labels) {
     const { items = [] } = await api.get(`${NETWORKING}/${api.namespace}/networkpolicies`);
-    const problem = isolationProblem(items, labels);
+    const problem = isolationProblem(items, labels, { ports: sandboxPorts() });
     if (problem) {
       throw new Error(
         `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy and the listener only (see docs/setup.md, Kubernetes runner)`,
@@ -554,6 +571,15 @@ export function createKubernetesRunner({
     return pod ? (running(pod) ? "running" : "exited") : null;
   }
 
+  // The sandbox container's exit code once it ended, or null (running, gone): the runner's run
+  // events.
+  async function exitCode(name) {
+    const pod = await look(name);
+    const code = (pod?.status?.containerStatuses ?? []).find((s) => s.name === CONTAINER)?.state
+      ?.terminated?.exitCode;
+    return Number.isInteger(code) ? code : null;
+  }
+
   // The pod, or null when there is none. An error of the API's (not a 404) is asked again,
   // backing off, and thrown only past API_RETRY_MS. A pod its node lost (lost()) is
   // force-deleted, and null.
@@ -607,7 +633,11 @@ export function createKubernetesRunner({
   // has been seen exited twice in a row, the stream is let go and its log read once more,
   // whole, for the lines it hadn't delivered.
   // `onCaughtUp()`: once, when both streams are past the lines skipped (docker.mjs follow()).
-  async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {} }) {
+  // `signal`: the caller is gone (the runner service's), the stream ends.
+  async function follow(
+    name,
+    { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {}, signal },
+  ) {
     if (!(await started(name, onErr))) return;
     let seen = { out: 0, err: 0 };
     let past = skip;
@@ -635,9 +665,13 @@ export function createKubernetesRunner({
     };
     const stop = new AbortController();
     const watch = watchdog(name, stop);
+    // The caller gone (the runner service's): the stream ends, nothing more is read.
+    const gone = () => stop.abort();
+    signal?.addEventListener("abort", gone, { once: true });
     try {
       await readLog(name, { follow: "true" }, stop.signal, each);
     } catch (error) {
+      if (signal?.aborted) return;
       if (!stop.signal.aborted) {
         // The caller follows again while the pod runs (runs.mjs follow()).
         log(`The log of ${name}: ${error.message}`);
@@ -654,6 +688,7 @@ export function createKubernetesRunner({
       return;
     } finally {
       clearInterval(watch);
+      signal?.removeEventListener("abort", gone);
     }
     // The kubelet rotates a container's log (containerLogMaxSize): what was rotated away is
     // gone, and lines were read twice or will be skipped.
@@ -782,14 +817,28 @@ export function createKubernetesRunner({
 
   // Without `run` (a leftover sandbox), its Secret is the one its annotation names. A pod
   // still running (its run ended on an error) gets its grace, as with kill().
+  // Only a sandbox pod of this deployment's (its labels) and that run's, and only its run's
+  // Secret: never another pod or Secret of the namespace that has the name.
+  const ownedBy = (object) =>
+    object?.metadata?.labels?.["deckhand.owner"] === owner["deckhand.owner"];
   async function remove(name, run) {
-    const pod = await api.find(podPath(name));
+    const found = await api.find(podPath(name));
+    const runOfPod = found?.metadata?.annotations?.["deckhand.run"];
+    const pod = ownedBy(found) && (!run || runOfPod === run) ? found : null;
+    if (found && !pod) log(`Not removing the pod ${name}: not a sandbox of this deployment's`);
     const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
-    const grace = pod && running(pod) ? KILL_GRACE_S : 0;
-    await api.remove(podPath(name), { gracePeriodSeconds: grace });
-    // Its address no longer names it; the others' answers are kept as they were.
-    forgetUids({ removed: pod?.metadata?.uid ?? true });
-    if (which) await api.remove(`secrets/${secretName(which)}`);
+    if (pod) {
+      const grace = running(pod) ? KILL_GRACE_S : 0;
+      await api.remove(podPath(name), { gracePeriodSeconds: grace });
+      // Its address no longer names it; the others' answers are kept as they were.
+      forgetUids({ removed: pod.metadata?.uid ?? true });
+    }
+    if (which) {
+      const secret = await api.find(`secrets/${secretName(which)}`);
+      if (ownedBy(secret) && secret.metadata?.annotations?.["deckhand.run"] === which) {
+        await api.remove(`secrets/${secretName(which)}`);
+      }
+    }
     if (run) inbox.remove(run);
   }
 
@@ -938,6 +987,7 @@ export function createKubernetesRunner({
     start,
     list,
     state,
+    exitCode,
     follow,
     send: inbox.send,
     close: inbox.close,

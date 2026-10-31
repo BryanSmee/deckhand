@@ -62,17 +62,20 @@ operator, across as many repositories as the App is installed on.
 ## How it works
 
 ```
-GitHub ──webhook──▶ listener ──docker──▶ sandbox (one per issue, Claude Code inside)
-                     │  ▲                   │
-                     │  └─ GitHub gateway ◀─┤  the run's token, which the listener swaps
-                     │                      │  for a token for that repo only
-                     │                      └──▶ egress proxy ──▶ allowed hosts only
+GitHub ──webhook──▶ listener ──▶ runner ──docker──▶ sandbox (one per issue, Claude Code inside)
+                     │  ▲                              │
+                     │  └─ GitHub gateway ◀────────────┤  the run's token, which the listener swaps
+                     │                                 │  for a token for that repo only
+                     │                                 └──▶ egress proxy ──▶ allowed hosts only
                      └── dashboard
 ```
 
 - The **listener** (`listener/`) checks each webhook's signature, the allowlist and the
-  trigger line, queues the work and starts one sandbox container per run. It holds the
-  Docker socket and the App's private key; no sandbox gets either.
+  trigger line, queues the work and has the runner start one sandbox container per run. It
+  holds the App's private key; no sandbox gets it.
+- The **runner** (`runner/`) is the only service with the Docker socket: it starts, follows
+  and removes the sandboxes, builds repository images and keeps the runs' logs, for the
+  listener alone, checking each sandbox against your grants again.
 - A **sandbox** (`sandbox/`) is a container from the base image, or the repository's own
   image built `FROM` it. It runs Claude Code with permissions bypassed, in a clone of the
   repository kept between the issue's runs.
@@ -114,9 +117,9 @@ docker compose up -d
 docker compose logs listener
 ```
 
-This pulls the released images (the listener, the broker, which alone signs the runs' tokens,
-the egress proxy and the base sandbox image, at `DECKHAND_VERSION`, by default `latest`) and
-starts the first three; `docker compose up -d
+This pulls the released images (the listener, the runner, which alone holds the Docker socket,
+the broker, which alone signs the runs' tokens, the policy service, the egress proxy and the base
+sandbox image, at `DECKHAND_VERSION`, by default `latest`) and starts the first five; `docker compose up -d
 --build` builds them from your checkout instead. The logs print a one-time setup link,
 `…/setup?token=…`.
 

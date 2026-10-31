@@ -1,13 +1,21 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { claude } from "../listener/agents/claude.mjs";
-import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
+import {
+  KEEP_TAGS,
+  archivedBlobs,
+  createImages,
+  gitBlob,
+  imageRef,
+  imageTag,
+} from "../listener/images.mjs";
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
 import { createDockerImages } from "../listener/runner/images.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { buildContext, contextBlob, tempDir, testConfig, withBlobs } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
 const A = repoImage(config, "org/a");
@@ -59,16 +67,17 @@ const onDocker = (docker) => ({
 function setup(t, options, blob = "blob1") {
   const fake = fakeDocker(options);
   const checkouts = [];
-  const images = createImages({
-    config,
-    ...onDocker(fake.docker),
-    readFile: async (repo, path, ref) =>
-      path === "missing" ? null : { sha: `${blob}@${ref}`, text: "" },
-    checkout: async (repo, ref) => {
-      checkouts.push(ref);
-      return tempDir(t, "deckhand-ctx-");
-    },
-  });
+  const images = withBlobs(
+    createImages({
+      config,
+      ...onDocker(fake.docker),
+      checkout: async (repo, ref) => {
+        checkouts.push(ref);
+        return buildContext(t, `${blob}@${ref}`);
+      },
+    }),
+    async (repo, path, ref) => (path === "missing" ? null : { sha: contextBlob(`${blob}@${ref}`) }),
+  );
   return { ...fake, images, checkouts };
 }
 
@@ -111,6 +120,70 @@ test("a repo's Dockerfile is built once from its ref, then reused", async (t) =>
   assert.equal(calls.filter((c) => c.startsWith("build")).length, 1);
 });
 
+// The tag names the Dockerfile's blob as the github service said it; the files built come in a
+// tarball of their own (#503): built only when their Dockerfile is that blob, never stored under
+// a tag that names another Dockerfile.
+test("a build whose files hold another Dockerfile than its tag names is refused, nothing tagged", async (t) => {
+  const fake = fakeDocker();
+  const images = withBlobs(
+    createImages({
+      config,
+      ...onDocker(fake.docker),
+      checkout: async () => buildContext(t, "something else"),
+    }),
+    async () => ({ sha: contextBlob("the default branch's") }),
+  );
+  const ask = () => images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
+  await assert.rejects(ask(), /not the Dockerfile its tag names/);
+  assert.ok(!fake.calls.some((c) => c.startsWith("build")));
+  assert.equal(fake.tags.size, 0);
+  // No Dockerfile in its files at all: the same.
+  const none = withBlobs(
+    createImages({
+      config,
+      ...onDocker(fake.docker),
+      checkout: async () => tempDir(t, "deckhand-ctx-"),
+    }),
+    async () => ({ sha: contextBlob("x") }),
+  );
+  await assert.rejects(
+    none.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" }),
+    (error) => /\(none in its files/.test(error.message) && error.code === "DOCKERFILE_MOVED",
+  );
+});
+
+// GitHub's tarballs come from `git archive`, which applies .gitattributes: `eol=crlf` and `ident`
+// change the Dockerfile written, not the blob GitHub names. The same Dockerfile still builds.
+test("a Dockerfile git archive wrote with CRLF line ends or an expanded $Id$ still builds", async (t) => {
+  const stored = "FROM deckhand-sandbox\n# $Id$\nRUN true\n";
+  const archived = [
+    stored.replace(/\n/g, "\r\n"),
+    stored.replace("$Id$", `$Id: ${"a".repeat(40)} $`),
+    stored.replace("$Id$", `$Id: ${"b".repeat(40)} $`).replace(/\n/g, "\r\n"),
+  ];
+  for (const text of archived) {
+    assert.ok(archivedBlobs(Buffer.from(text)).has(gitBlob(Buffer.from(stored))), text);
+    const fake = fakeDocker();
+    const images = withBlobs(
+      createImages({
+        config,
+        ...onDocker(fake.docker),
+        checkout: async () => {
+          const dir = tempDir(t, "deckhand-ctx-");
+          writeFileSync(join(dir, "Dockerfile"), text);
+          return dir;
+        },
+      }),
+      async () => ({ sha: gitBlob(Buffer.from(stored)) }),
+    );
+    await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
+    assert.equal(fake.calls.filter((c) => c.startsWith("build")).length, 1);
+  }
+  // Another Dockerfile, CRLF or not, still doesn't.
+  const other = Buffer.from("FROM deckhand-sandbox\r\nRUN false\r\n");
+  assert.ok(!archivedBlobs(other).has(gitBlob(Buffer.from(stored))));
+});
+
 test("a new base image or a changed Dockerfile means a new tag", () => {
   const tag = imageTag(config, "org/a", "sha256:1", "Dockerfile", "blob1");
   assert.notEqual(tag, imageTag(config, "org/a", "sha256:2", "Dockerfile", "blob1"));
@@ -130,16 +203,18 @@ test("a new base image or a changed Dockerfile means a new tag", () => {
 test("a branch build never takes the default branch's tag", async (t) => {
   const fake = fakeDocker();
   const checkouts = [];
-  const images = createImages({
-    config,
-    ...onDocker(fake.docker),
+  const images = withBlobs(
+    createImages({
+      config,
+      ...onDocker(fake.docker),
+      checkout: async (repo, ref) => {
+        checkouts.push(ref);
+        return buildContext(t, "same");
+      },
+    }),
     // The same Dockerfile blob at both refs: only the build context may differ.
-    readFile: async () => ({ sha: "same", text: "" }),
-    checkout: async (repo, ref) => {
-      checkouts.push(ref);
-      return tempDir(t, "deckhand-ctx-");
-    },
-  });
+    async () => ({ sha: contextBlob("same") }),
+  );
   const ask = (ref, branch) =>
     images.imageFor({ repo: "org/a", ref, branch, dockerfile: "Dockerfile" });
   const branch = await ask("abc", true);

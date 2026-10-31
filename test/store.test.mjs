@@ -5,7 +5,7 @@ import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { openStore, storable } from "../lib/store.mjs";
+import { nextEpoch, openStore, storable } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
@@ -219,4 +219,16 @@ test("storable: what it returns, the store always takes, whatever the text held"
   // Nothing to hide: as it was.
   assert.deepEqual(storable(values.at(-1), [secret]), values.at(-1));
   assert.equal(storable({ text: `use ${token}` }, []).text, "use [redacted]");
+});
+
+test("nextEpoch: the clock's, above the last one, whatever the clock says", async () => {
+  const store = openStore("memory:");
+  let now = 1000;
+  assert.equal(await nextEpoch(store, { now: () => now }), 1000);
+  assert.equal(await nextEpoch(store, { now: () => now }), 1001);
+  now = 5;
+  assert.equal(await nextEpoch(store, { now: () => now }), 1002);
+  // A store made anew starts from the clock: above what was seen while it moved on.
+  now = 9000;
+  assert.equal(await nextEpoch(openStore("memory:"), { now: () => now }), 9000);
 });

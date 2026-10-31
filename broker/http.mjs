@@ -9,9 +9,9 @@
 //
 //   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), a key of the
 //   listener's from before this service (POST /keys), the `runs` stream (GET /events, POST
-//   /events/ack), and the screenshots it copies (GET and DELETE /shots/:folder/:name);
-//   the runner's: a run's first tokens (POST /runs/:id/tokens), its inbox and files (POST
-//   /runs/:id/inbox, PUT /runs/:id/files/:name);
+//   /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
+//   first tokens (POST /runs/:id/tokens), with the claims it decided;
+//   the runner's: a run's inbox and files (POST /runs/:id/inbox, PUT /runs/:id/files/:name);
 //   the sandboxes', through the egress proxy (#511), which vouches for the network or pod they
 //   came from (`x-deckhand-sandbox`, as the listener's egress policy told it) and passes their
 //   run token on in `x-deckhand-run-token`: renewal (POST /run/token), the inbox (GET
@@ -43,7 +43,9 @@ export const ROUTES = {
   "GET /runs": ["orchestrator"],
   "PUT /runs/:id": ["orchestrator"],
   "DELETE /runs/:id": ["orchestrator"],
-  "POST /runs/:id/tokens": RUNNER,
+  // A run's first tokens take every claim from the caller (repo, mode, branches): the
+  // orchestrator decides them, the runner asks it (#503), so it can't choose what they allow.
+  "POST /runs/:id/tokens": ["orchestrator"],
   "POST /runs/:id/inbox": RUNNER,
   "PUT /runs/:id/files/:name": RUNNER,
   "POST /keys": ["orchestrator"],
@@ -232,8 +234,8 @@ export function createBrokerHandler({
     if (req.method === "GET" && url.pathname === "/keys")
       return sendJson(res, await runs.publicKeys());
     if (req.method === "POST" && url.pathname === "/service-tokens") {
-      const caller = await callers.callerOf(req);
-      const { audiences } = (await readJsonBody(req, BODY_MAX)) ?? {};
+      const { audiences, service } = (await readJsonBody(req, BODY_MAX)) ?? {};
+      const caller = await callers.callerOf(req, typeof service === "string" ? service : null);
       const tokens = issueServiceTokens(
         caller,
         Array.isArray(audiences) ? audiences : [],

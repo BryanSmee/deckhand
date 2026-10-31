@@ -52,8 +52,8 @@ export function createRunFiles(ctx, { taskOf }) {
     res.writeHead(200, { "content-type": "application/x-ndjson" }).end(lines);
   }
 
-  function file(res, live, name) {
-    const data = ctx.runner.file(live.id, name);
+  async function file(res, live, name) {
+    const data = await ctx.runner.file(live.id, name);
     if (data === null) return sendJson(res, { message: `this run has no ${name}` }, 404);
     res.writeHead(200, { "content-type": "application/octet-stream" }).end(data);
   }

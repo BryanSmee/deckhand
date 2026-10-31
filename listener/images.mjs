@@ -12,7 +12,8 @@
 // default branch's runs and preview hooks never pick up what a branch built. Old tags are
 // pruned, keeping the default branch's newest and the most recent few.
 import { createHash } from "node:crypto";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { sameRepo } from "./events.mjs";
 import { checked } from "./docker.mjs";
 import { cacheVolume, legacyRepoImage, repoImage } from "./repo-config.mjs";
@@ -50,11 +51,28 @@ export function imageTag(config, repo, baseId, dockerfile, blob, branchRef = nul
   return `${repoImage(config, repo)}:${branchRef ? BRANCH : ""}${hash.slice(0, 16)}`;
 }
 
+// A file's git blob id, as GitHub names its contents (a Dockerfile's `sha`), which a repo image's
+// tag hashes.
+export const gitBlob = (data) =>
+  createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
+
+// The blobs a file of a checkout may have been archived from. GitHub's tarballs come from `git
+// archive`, which applies the repository's .gitattributes to what it writes: `eol=crlf` turns
+// its line ends to CRLF, `ident` expands `$Id$`. Undone here, as git stores the file; what can't
+// be undone (`export-subst`, a Git LFS pointer) doesn't match, and the build says so.
+export function archivedBlobs(data) {
+  const text = Buffer.from(data).toString("latin1");
+  const lf = text.replace(/\r\n/g, "\n");
+  const unident = (t) => t.replace(/\$Id: [0-9a-f]{40,64} \$/g, "$Id$");
+  return new Set(
+    [text, lf, unident(text), unident(lf)].map((t) => gitBlob(Buffer.from(t, "latin1"))),
+  );
+}
+
 export function createImages({
   config,
   backend, // the runner's images and volumes (runner/images.mjs)
   jobs, // its short containers (runner/jobs.mjs)
-  readFile, // (repo, path, ref) → { sha, text } or null (repo-config.mjs readRepoFile)
   checkout, // (repo, ref) → a folder with the repo's files (checkout.mjs)
   log = () => {},
 }) {
@@ -81,12 +99,14 @@ export function createImages({
   // `onBuild(tag)` is called when a build starts or is already under way; `output` gets its
   // log (the first caller's only). `branch`: `ref` is a pull request's head (imageRef()).
   // `access`: the run's { hosts, trusted } (access.mjs), which a build may reach on a runner
-  // whose builder goes through the egress proxy (Kubernetes).
+  // whose builder goes through the egress proxy (Kubernetes). `blob`: the Dockerfile's blob at
+  // `ref`, which the caller read (the runner reads nothing of GitHub's but a tarball).
   async function imageFor({
     repo,
     ref,
     branch = false,
     dockerfile,
+    blob,
     onBuild = () => {},
     output,
     access = {},
@@ -98,13 +118,14 @@ export function createImages({
       return config.image;
     }
     const id = await baseId();
-    const file = await readFile(repo, dockerfile, ref);
-    if (!file)
-      throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);
-    const tag = named(imageTag(config, repo, id, dockerfile, file.sha, branch ? ref : null));
+    if (!blob)
+      throw new Error(
+        `${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref ?? "its default branch"}`,
+      );
+    const tag = named(imageTag(config, repo, id, dockerfile, blob, branch ? ref : null));
     if ((await backend.id(tag)) !== null) return tag;
     if (!builds.has(tag)) {
-      const build = buildImage(repo, ref, dockerfile, tag, output, access).finally(() =>
+      const build = buildImage(repo, ref, dockerfile, blob, tag, output, access).finally(() =>
         builds.delete(tag),
       );
       builds.set(tag, build);
@@ -114,10 +135,29 @@ export function createImages({
     return tag;
   }
 
-  async function buildImage(repo, ref, dockerfile, tag, output, { hosts, trusted }) {
-    log(`${repo}: building ${tag} from ${dockerfile} at ${ref}`);
+  // The tag hashes the Dockerfile's blob, which the caller read apart from the files it builds
+  // (the github service, #502): built only when the Dockerfile in those files is that blob, so
+  // that a tag always names what it was built from, whoever served the files.
+  async function buildImage(repo, ref, dockerfile, blob, tag, output, { hosts, trusted }) {
+    const at = ref ?? "its default branch";
+    log(`${repo}: building ${tag} from ${dockerfile} at ${at}`);
     const dir = await checkout(repo, ref);
     try {
+      let found = null;
+      try {
+        found = archivedBlobs(readFileSync(join(dir, dockerfile)));
+      } catch {
+        // None: refused below.
+      }
+      if (!found?.has(blob)) {
+        // A push between the blob's lookup and this download, most often: the caller may plan
+        // again (DOCKERFILE_MOVED).
+        const error = new Error(
+          `${dockerfile} of ${repo} at ${at}: not the Dockerfile its tag names (${found ? [...found][0] : "none"} in its files, ${blob} asked)`,
+        );
+        error.code = "DOCKERFILE_MOVED";
+        throw error;
+      }
       const built = await backend.build({
         dir,
         dockerfile,

@@ -5,13 +5,13 @@
 // This file only wires the listener together: its settings, the GitHub App, the shared state
 // (`ctx`) and the modules that act on it, then starts the servers and picks up what a
 // previous listener left. How a comment becomes a run, and which module does what:
-// ../docs/architecture.md. No dependencies: node:http, node:crypto, docker CLI.
+// ../docs/architecture.md. No dependencies: node:http, node:crypto. Sandboxes, images and
+// preview hooks are the runner service's (../runner/), the only one with the Docker socket.
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
 import { createAnthropicProxy, NAMED } from "./anthropic.mjs";
-import { antigravity } from "./agents/antigravity.mjs";
 import { createAntigravityLogin } from "./antigravity-login.mjs";
 import { createChatgptLogin } from "./chatgpt.mjs";
 import { createGoogleRelay } from "./google.mjs";
@@ -29,13 +29,12 @@ import { createPullChecks } from "./github-pulls.mjs";
 import { createReadChecks, createWriteChecks } from "./github-writes.mjs";
 import { createProjects } from "./projects.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
-import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
-import { openStore } from "../lib/store.mjs";
+import { nextEpoch, openStore } from "../lib/store.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -54,13 +53,11 @@ import {
 import { autoMergeGrants, grantErrors, grantFor, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
-import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createLinkedBranches } from "./linked-branch.mjs";
 import { createPolicies } from "./policies.mjs";
 import { policyClient } from "./policy-client.mjs";
-import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
 import { createDecisions } from "./decisions.mjs";
 import { createRedeliveries } from "./redeliveries.mjs";
@@ -72,10 +69,13 @@ import { createRepoApi, createRepoList } from "./repos.mjs";
 import { createRestart } from "./restart.mjs";
 import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
-import { loadRuns } from "./runlog.mjs";
+import { loadRuns, moveLogs, saveSummary } from "./runlog.mjs";
+import { networkCallers } from "../lib/service-token.mjs";
+import { createRunnerClient } from "../runner/client.mjs";
+import { createServicesHttp } from "./services-http.mjs";
+import { createRunEvents } from "./run-events.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
-import { createBackend } from "./runner/index.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
@@ -100,6 +100,8 @@ const RELINK_MS = 60000;
 
 // How often the runs the broker service has are compared with the listener's.
 const RECONCILE_MS = 60 * 60_000;
+// How often the preview hooks the runner runs are asked again, for /status and the dashboard.
+const PREVIEWS_MS = 5000;
 
 // With the plans' logins found in the credentials folder (/data/credentials) when their
 // variables are unset.
@@ -126,8 +128,7 @@ try {
 }
 const logDir = join(config.dataDir, "logs");
 const shotsDir = join(config.dataDir, "shots");
-const runsDir = join(config.dataDir, "runs");
-for (const dir of [logDir, shotsDir, runsDir]) mkdirSync(dir, { recursive: true });
+for (const dir of [logDir, shotsDir]) mkdirSync(dir, { recursive: true });
 
 function log(...args) {
   console.log(new Date().toISOString(), ...args);
@@ -136,11 +137,12 @@ function log(...args) {
 // The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
 // its stream of their events. The key the listener signed tokens with before it moves out of
 // the data volume, but for its public part (legacyKey()).
-// Its calls carry the listener's service tokens, as the orchestrator: for the broker, and for
-// the policy service.
+// Its calls carry the listener's service tokens, as the orchestrator: for the broker, the policy
+// service and the runner.
 const brokerCaller = createBrokerCaller({
   url: config.brokerServiceUrl,
-  audiences: ["broker", "policy"],
+  service: "orchestrator",
+  audiences: ["broker", "policy", "runner"],
   podTokenFile: config.serviceAccountTokenFile,
   log,
 });
@@ -150,15 +152,54 @@ const brokerService = createBrokerService({
   log,
 });
 
-// Where sandboxes, images and the listener's own short containers run (RUNNER).
-let backend;
-try {
-  backend = createBackend({ config, inboxDir: runsDir, mirror: brokerService.mirror, log });
-} catch (error) {
-  if (!(error instanceof ConfigError)) throw error;
-  console.error(error.message);
-  process.exit(1);
-}
+// The orchestrator's fencing epoch (#506 makes it its lease's): higher at each start, sent with
+// every call to the runner, which refuses an older one. A listener still draining once the next
+// one started can't start or stop a run. From the clock, and above the last one: a data volume
+// made anew (the store with it) doesn't start again below what the runner has seen.
+// The listener's state through the store's interface (lib/store.mjs), in the data volume: the
+// queue for now (restart.mjs), the epoch, the rest as the services take it over (#499). The
+// operator's secrets are refused in it (lib/store.mjs), once `ctx` can say them.
+let storeSecrets = () => [];
+const store = openStore(env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href, {
+  secrets: () => storeSecrets(),
+});
+const epoch = await nextEpoch(store);
+
+// The services the listener still is, each with its own token for the runner, from the broker
+// service: the orchestrator drives runs (and the egress policy asks where a sandbox is), edge
+// reads their logs, models has the Antigravity login refreshed (runner/service.mjs ROUTES).
+const callers = {
+  orchestrator: brokerCaller,
+  ...Object.fromEntries(
+    ["edge", "models"].map((service) => [
+      service,
+      createBrokerCaller({
+        url: config.brokerServiceUrl,
+        service,
+        audiences: ["runner"],
+        podTokenFile: config.serviceAccountTokenFile,
+        log,
+      }),
+    ]),
+  ),
+};
+// Asked for until the broker answers; a call waits for its token (lib/broker-client.mjs).
+callers.edge.start();
+callers.models.start();
+
+// The runs being started: the first tokens the runner asks for once their network or pod
+// exists (services-http.mjs).
+const pendingTokens = new Map();
+
+// Where sandboxes, images, preview hooks and the runs' logs are: the runner service (RUNNER is
+// its setting).
+const runnerClient = createRunnerClient({
+  urls: config.runnerUrl,
+  token: (sub) => callers[sub].header("runner"),
+  epoch: () => epoch,
+  pendingTokens,
+  log,
+});
 
 // Logs why a delivery is ignored: deliveries that do nothing are the usual question.
 function skip(reason) {
@@ -186,24 +227,20 @@ const ctx = {
   // key ("org/repo#12") → task (tasks.mjs).
   tasks: new Map(),
   // The dashboard's runs, newest first (runlog.mjs), and by id; pruned daily (history.mjs).
-  runs: loadRuns(logDir, { log }),
+  // Listed once the logs kept here moved to the runner (below).
+  runs: [],
   runsById: new Map(),
   // Runs with a sandbox, for the parallel cap.
   running: 0,
   // Set on SIGTERM: no run starts any more, what waits is left to the next listener (saved
   // already, as it changed).
   stopping: false,
-  // The listener's state through the store's interface (lib/store.mjs), in the data volume: the
-  // queue for now (restart.mjs), the rest as the services take it over (#499).
-  // The operator's secrets are refused in it (lib/store.mjs), and left out of what the queue
-  // writes there (restart.mjs storable()).
-  store: openStore(pathToFileURL(join(config.dataDir, "store")).href, {
-    secrets: () => operatorSecrets(ctx),
-  }),
+  // The listener's store (above): the operator's secrets are left out of what the queue writes
+  // there (restart.mjs storable()).
+  store,
   storeSecrets: () => operatorSecrets(ctx),
 };
-
-for (const run of ctx.runs) ctx.runsById.set(run.id, run);
+storeSecrets = () => operatorSecrets(ctx);
 
 // --- GitHub ----------------------------------------------------------------------------
 
@@ -255,6 +292,29 @@ function publicUrl() {
 
 // The App's calls as the repo's installation, REST and GraphQL (github.mjs).
 const { github, graphql } = createGitHub(() => ctx.app);
+
+// The runner's calls, before anything waits on it: its tokens, a run's first ones, the repos'
+// tarballs (services-http.mjs).
+const services = createServicesHttp({
+  config,
+  // The broker service's own keys: never the listener's from before it.
+  keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
+  bound: networkCallers(config.serviceNetworks),
+  github,
+  pendingTokens,
+  log,
+});
+await new Promise((resolve) => services.listen(config.servicesPort, resolve));
+log(`Services on :${services.address().port}`);
+
+// The logs this listener kept before the runner kept them go to it, while it goes on; the runs
+// are listed from their summaries (runlog.mjs).
+const moved = moveLogs(logDir, runnerClient.logs, { log });
+ctx.logsMoving = moved.moving;
+// A log on its way there is read once it arrived (a digest, the dashboard's live view).
+ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
+ctx.runs = loadRuns(logDir, { log });
+for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 
 const setup = createSetup({
   config,
@@ -311,7 +371,6 @@ const order = createOrder({ path: join(config.dataDir, "order.json") });
 // --- Per-repo settings, images and preview hooks -------------------------------------------
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
-const fetchCheckout = (repo, ref) => checkout(github, repo, ref);
 
 // The repos onboarded so far (onboarding.json) and their onboarding issues (onboarding.mjs).
 const onboarded = createOnboardingStore(join(config.dataDir, "onboarding.json"));
@@ -398,21 +457,10 @@ Object.assign(ctx, {
     accept: (item) => ctx.accept(item),
     log,
   }),
-  images: createImages({
-    config,
-    backend: backend.images,
-    jobs: backend.jobs,
-    readFile: repoFile,
-    checkout: fetchCheckout,
-    log,
-  }),
-  previews: createPreviews({
-    config,
-    containers: backend.jobs.preview,
-    checkout: fetchCheckout,
-    logDir: join(config.dataDir, "previews"),
-    log,
-  }),
+  // Built and run by the runner service, from tarballs it gets through the listener.
+  images: runnerClient.images,
+  previews: runnerClient.previews,
+  runLogs: runnerClient.logs,
   // Runs' tokens, signed by the broker service and checked here with its public keys; and the
   // secrets of runs from before them. Both work from their own sandbox alone, whether it calls
   // the listener directly or through the egress proxy.
@@ -429,7 +477,7 @@ Object.assign(ctx, {
   // cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),
   // Sandboxes are started, followed and removed through it; they run detached.
-  runner: backend.runner,
+  runner: runnerClient.runner,
 });
 
 // The sandboxes' only way to GitHub, on the broker's port: their calls, relayed by the egress
@@ -568,14 +616,14 @@ ctx.openai = createOpenAiProxy({
   log,
 });
 // Their Antigravity CLI's: a Gemini API key, or a Google AI plan's login (relayed by the
-// egress proxy), which the listener holds and refreshes with `agy` itself.
+// egress proxy), which the listener holds and refreshes with `agy` itself, in a container the
+// runner starts (runner/service.mjs loginRefresh()).
 const agyLogin =
   config.agyCredential === "AGY_AUTH_FILE"
     ? createAntigravityLogin({
         file: env.AGY_AUTH_FILE,
         config,
-        jobs: backend.jobs,
-        install: () => ctx.images.installAgent(antigravity, () => {}),
+        refresh: runnerClient.refreshLogin,
         log,
       })
     : null;
@@ -728,6 +776,8 @@ ctx.repoApi = createRepoApi({
 ctx.analysis = createAnalysis({
   runs: () => ctx.runs,
   secrets: () => operatorSecrets(ctx),
+  // From the runner, which keeps the logs.
+  readLog: async (id) => (await ctx.logMoved(id), runnerClient.logs.text(id)),
 });
 
 // What signs the dashboard's posts as their users' (discussions.mjs fromLine()): a run posts
@@ -801,6 +851,17 @@ for (const state of keyed) state.respell(spelled);
 // A run since a dismissal shows its task again: its entry is stale.
 dismissals.prune(ctx.runs);
 
+// Before any request is served: runs still going since the previous listener (their inboxes
+// and logs asked of the runner), then what it left queued (comments for those runs are
+// delivered to them).
+const restored = await ctx.restoreRuns();
+await ctx.loadQueue();
+// A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
+ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
+// The keys of comments dropped as the queue came back (their author no longer allowed) stay in
+// order.json otherwise, and would rank a new comment there as placed.
+order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
+
 const http = createHttp(ctx, {
   dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
 });
@@ -858,15 +919,6 @@ agyLogin
   .catch((error) => log(`Antigravity CLI: ${error.message}`));
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
-// Before any request is served: runs still going since the previous listener, then what it
-// left queued (comments for those runs are delivered to them).
-const restored = ctx.restoreRuns();
-await ctx.loadQueue();
-// A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
-ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
-// The keys of comments dropped as the queue came back (their author no longer allowed) stay in
-// order.json otherwise, and would rank a new comment there as placed.
-order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 // The broker service's keys first: the restored runs' tokens are checked with them.
 brokerService
   .start()
@@ -890,7 +942,34 @@ ctx.waits.start();
 ctx.reviews.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
-history.start();
+// Once the logs kept here are at the runner: one removed before it arrives would arrive after
+// its summary went, and stay there for good.
+moved.done.then(() => ctx.stopping || history.start());
+// How the runner's sandboxes ended (runner/events.mjs), and the preview hooks it runs.
+const runEvents = createRunEvents({
+  events: runnerClient.events,
+  // Live, or over (its end said once its sandbox went): on its record and summary, and in
+  // its log, at the runner.
+  runOf: (id) => {
+    const live = [...ctx.tasks.values()].find((t) => t.live?.id === id)?.live;
+    const record = live?.record ?? ctx.runsById.get(id);
+    if (!record) return null;
+    let file = live?.logFile;
+    return {
+      record,
+      get logFile() {
+        return (file ??= runnerClient.logs.open(id, { size: null }));
+      },
+      // Once it has one: its end writes it, with this, or not yet.
+      save: () => record.finishedAt && saveSummary(logDir, record, log),
+    };
+  },
+  log,
+});
+runEvents.start();
+runnerClient.previews.refresh();
+const previewing = setInterval(() => runnerClient.previews.refresh(), PREVIEWS_MS);
+previewing.unref();
 redeliveries.start();
 if (ctx.app) checkApp();
 // Pull requests that changed while the listener was down, or whose delivery was lost. After
@@ -924,6 +1003,8 @@ process.on("SIGTERM", () => {
   ctx.reviews.stop();
   history.stop();
   redeliveries.stop();
+  runEvents.stop();
+  clearInterval(previewing);
   clearInterval(relinking);
   clearInterval(reconciling);
   // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
