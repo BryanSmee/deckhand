@@ -128,7 +128,9 @@ export function researchAccess(config, task, { agent, log }) {
 // GitHub gateway, and an agent whose calls the proxy relays to the listener (its `relayed`
 // hosts, agents/) can't do without it: the run stops. `egressCa()`: the proxy's, or null.
 export async function egressCache(grant, egressCa, note, agent, config = {}, github = false) {
-  const relays = !!agent?.relayed?.length && !Object.keys(agent.env(config, "s")).length;
+  // Its `relays(config)` says whether they go that way now (the Antigravity CLI's on a plan's
+  // login, not on an API key).
+  const relays = !!agent?.relayed?.length && agent.relays?.(config) === true;
   if (!grant.cachedHosts.length && !relays && !github) return { ca: null, cached: [] };
   const ca = await egressCa();
   if (!ca && (relays || github)) {

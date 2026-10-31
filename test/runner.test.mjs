@@ -269,7 +269,12 @@ test("start: detached, labelled, secrets by name only, its inbox at the broker",
 
 test("start: the run's tokens bound to its network's ID, by name only; locate() finds it", async () => {
   let now = 0;
-  const { r, calls } = runner({ now: () => now });
+  let failing = false;
+  const { r, calls } = runner({
+    now: () => now,
+    // A Docker CLI that fails, while the test says so.
+    answers: { "network ls": () => failing && { code: 1, out: "", err: "Cannot connect" } },
+  });
   const bound = [];
   await r.start({
     run: "dh-org-repo-12-1",
@@ -298,8 +303,22 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   const parallel = await Promise.all(["10.1.0.2", "10.9.9.9", "10.9.9.8"].map(sandboxOf));
   assert.deepEqual(parallel, ["id-dh-org-repo-12-1", null, null]);
   assert.equal(looks(), before + 1);
-  // Gone with its network: an address never names a network that was removed.
+  // A lookup that fails keeps what was known, even right after another network was created:
+  // one failed Docker call refuses no run.
+  now += 60_000;
+  failing = true;
+  await r.start({ run: "dh-b-1", name: "dh-b", image: "dh-sandbox" });
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  // Asked again 2 s on, once Docker answers.
+  failing = false;
+  now += 2_000;
+  assert.ok(await sandboxOf("10.1.0.2"));
+  assert.equal(looks(), before + 2);
+  // Gone with its network: an address never names a network that was removed (the fake gives
+  // both sandboxes the same one).
   await r.remove("dh-org-repo-12", "dh-org-repo-12-1");
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-b-1");
+  await r.remove("dh-b", "dh-b-1");
   assert.equal(await sandboxOf("10.1.0.2"), null);
 });
 

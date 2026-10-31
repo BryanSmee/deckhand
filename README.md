@@ -64,7 +64,7 @@ operator, across as many repositories as the App is installed on.
 ```
 GitHub ──webhook──▶ listener ──docker──▶ sandbox (one per issue, Claude Code inside)
                      │  ▲                   │
-                     │  └─ GitHub gateway ◀─┤  the run's secret, which the listener swaps
+                     │  └─ GitHub gateway ◀─┤  the run's token, which the listener swaps
                      │                      │  for a token for that repo only
                      │                      └──▶ egress proxy ──▶ allowed hosts only
                      └── dashboard

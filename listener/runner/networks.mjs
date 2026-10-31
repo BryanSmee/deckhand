@@ -216,7 +216,8 @@ export function createNetworks({ config, docker, log, now }) {
   }
 
   // Every run network's containers now, kept unless a network changed meanwhile: its answer
-  // would be older than that.
+  // would be older than that. A lookup that fails (a slow or failing Docker CLI) keeps what was
+  // known, asked again after PROXY_RETRY_MS: one failed call mustn't refuse every run's calls.
   async function lookUp(seen) {
     const at = now();
     const byAddress = new Map();
@@ -224,6 +225,10 @@ export function createNetworks({ config, docker, log, now }) {
       for (const [address, where] of await runAddresses()) byAddress.set(address, where);
     } catch (error) {
       log(`Looking up the runs' networks: ${error.message}`);
+      if (seen === generation) {
+        sandboxes = { at: at - PROXY_TTL_MS + PROXY_RETRY_MS, byAddress: sandboxes.byAddress };
+      }
+      return sandboxes.byAddress;
     }
     if (seen === generation) sandboxes = { at, byAddress };
     return byAddress;
@@ -277,9 +282,12 @@ export function createNetworks({ config, docker, log, now }) {
     ).out;
   }
 
-  function forget() {
+  // Looked up again at the next question. A network created or a container joining one leaves
+  // the others' answers as they were, to serve should that lookup fail; a network removed
+  // takes them all: one of them may name it.
+  function forget({ removed = false } = {}) {
     generation++;
-    sandboxes = { at: -Infinity, byAddress: new Map() };
+    sandboxes = { at: -Infinity, byAddress: removed ? new Map() : sandboxes.byAddress };
   }
 
   return {
@@ -288,7 +296,7 @@ export function createNetworks({ config, docker, log, now }) {
       try {
         return await remove(net);
       } finally {
-        forget();
+        forget({ removed: true });
       }
     },
     idOf,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { statSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   isToken,
@@ -100,4 +101,22 @@ test("the signing key is made once, owner-only, and the same after a restart", (
   const token = signToken(claims, { ...first, audience: RUN_AUDIENCE, ttlMs: 60_000, now: NOW });
   const known = new Map([[again.kid, again.publicKey]]);
   assert.equal(verifyToken(token, { keys: known, audience: RUN_AUDIENCE, now: NOW }).jti, "run-1");
+});
+
+test("a signing key file that isn't a key stops the listener saying what to do, never replaced", (t) => {
+  const dir = tempDir(t);
+  // Half a PEM, as a write cut short by an older listener would leave.
+  writeFileSync(join(dir, "run-token.key"), "-----BEGIN PRIVATE KEY-----\nMC4CAQAw");
+  assert.throws(
+    () => signingKey(dir),
+    /run-token\.key isn't a key .*: remove it, and a new one is made/,
+  );
+  assert.equal(
+    readFileSync(join(dir, "run-token.key"), "utf8"),
+    "-----BEGIN PRIVATE KEY-----\nMC4CAQAw",
+  );
+  // Made whole: nothing but the key in the folder.
+  const fresh = tempDir(t);
+  signingKey(fresh);
+  assert.deepEqual(readdirSync(fresh), ["run-token.key"]);
 });

@@ -21,8 +21,9 @@ import {
   sign,
   verify,
 } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { writeFileAtomic } from "./store.mjs";
 
 // The claims' format.
 export const TOKEN_VERSION = 1;
@@ -73,19 +74,26 @@ export function keyId(publicKey) {
   return createHash("sha256").update(der).digest("base64url").slice(0, 16);
 }
 
-// The broker's signing key, a PEM file in `dir`: created once, owner-only. → { privateKey,
-// publicKey, kid }.
+// The broker's signing key, a PEM file in `dir`: created once, when there is none, written
+// whole or not at all (a crash leaves none), owner-only. A file that can't be read, or isn't
+// an Ed25519 key, stops the listener, saying what to do: a new key would refuse the running
+// sandboxes' tokens, so it is never made in its place silently. → { privateKey, publicKey, kid }.
 export function signingKey(dir) {
   const path = join(dir, "run-token.key");
   let pem;
   try {
     pem = readFileSync(path, "utf8");
-  } catch {
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
     pem = generateKeyPairSync("ed25519").privateKey.export({ type: "pkcs8", format: "pem" });
-    writeFileSync(path, pem, { mode: 0o600 });
-    chmodSync(path, 0o600);
+    writeFileAtomic(path, pem, { mode: 0o600 });
   }
-  const privateKey = createPrivateKey(pem);
+  let privateKey;
+  try {
+    privateKey = createPrivateKey(pem);
+  } catch (error) {
+    throw new Error(`${path} isn't a key (${error.message}): remove it, and a new one is made`);
+  }
   if (privateKey.asymmetricKeyType !== "ed25519") {
     throw new Error(`${path} isn't an Ed25519 key: remove it, and a new one is made`);
   }

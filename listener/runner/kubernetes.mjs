@@ -843,8 +843,9 @@ export function createKubernetesRunner({
       const live = items.filter((p) => at(p) && !p.metadata?.deletionTimestamp && running(p));
       uid = live.length === 1 ? (live[0].metadata?.uid ?? null) : null;
     } catch (error) {
+      // What was known, if anything: an API error mustn't refuse a sandbox it knew. Not kept.
       log(`Looking up the sandbox at ${ip}: ${error.message}`);
-      return null;
+      return uids.get(ip)?.uid ?? null;
     }
     if (uids.size > 1000) uids = new Map();
     // Unless a sandbox started or went meanwhile: its answer would be older than that.

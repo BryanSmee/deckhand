@@ -371,7 +371,7 @@ can read.
 - Tokens are cached per repository and permission set, renewed 10 minutes before their
   end, and shared by that repository's runs with the same permissions. GitHub makes them
   valid for an hour, which the listener can't shorten, but none leaves the listener, so none
-  outlives its run in a sandbox: once the run ends, its secret gets nothing. Uninstalling the
+  outlives its run in a sandbox: once the run ends, its run token gets nothing. Uninstalling the
   App, or suspending its installation, revokes them at once.
 
 What a run prints doesn't publish one either way: the broker keeps the installation tokens
@@ -643,7 +643,7 @@ and end up in a public comment.
   your credential would be in, so it keeps its mode (an OAuth token or a gateway's
   `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer`, an API key as `x-api-key`; when you set
   several, `ANTHROPIC_AUTH_TOKEN` wins, then the API key, as in Claude Code).
-- The listener refuses a secret that isn't a live run's, replaces it with your credential in
+- The listener refuses an agent token that isn't a live run's, or comes from another sandbox, replaces it with your credential in
   the same header and forwards the call to Anthropic (or to the listener's own
   `ANTHROPIC_BASE_URL`, a gateway such as OpenRouter), streaming the answer back. Only the
   operator sets that address: a repository can't, since it would send its code and your
@@ -1041,7 +1041,7 @@ from its own sandbox only ([Run tokens](#run-tokens)), and only for its own run'
 
 Each agent's install volume (Claude Code's, Codex's, the Antigravity CLI's) is shared by
 every repository, so it is read-only in sandboxes: a run that could replace `claude` there
-would run its code in the next sandbox of any repository, with that run's broker secret and
+would run its code in the next sandbox of any repository, with that run's tokens and
 grants. The listener installs each version before the first run that needs it, as root, so
 its files don't belong to the sandboxes' user, uid 1000, either. A Claude Code install that
 finds the volume owned by uid 1000 (from an older Deckhand) takes it over and reinstalls from
@@ -1888,8 +1888,9 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   APIs, pushes, the run's files) once the policy, asked about the broker (`broker=1`), allows
   it: only for a running sandbox or its engine, never a build or an install's own pod, nor
   anyone else. It names the sandbox it came from (`x-deckhand-client`, replaced whatever the
-  sandbox sent), as for a relayed call: the broker binds a run's secret to that address, and
-  believes the header from the proxy's addresses alone. The path and query are set on the
+  sandbox sent), as for a relayed call: the broker turns that address into the ID of the network
+  (or pod) it is on, which the run's token is bound to, and believes the header from the
+  proxy's addresses alone. The path and query are set on the
   broker's own URL, never parsed as a URL again, so a path such as `//host/x` stays a path
   on the broker and never names another host. The proxy refuses the broker's `/egress` there,
   its URL parsed first (`..`, `%2e`): the listener answers it to the proxy only.
