@@ -133,6 +133,10 @@ conflicts:
 # Start work on an issue with open questions only once they are answered (see below).
 wait_for_answers: true
 
+# Start the open issues labelled auto-pickup by themselves, in the operator's reserved slots
+# (see Auto-pickup below).
+auto_pickup: true
+
 # Move this repo's issues on an organization's project (v2) as their work goes (see Projects
 # below). Only projects the operator grants it (allow_projects).
 projects:
@@ -145,41 +149,42 @@ projects:
 
 ## Keys
 
-| Key                                     | Default                                 | What                                                                                                                         |
-| --------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored                                             |
-| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode                                              |
-| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)                                        |
-| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)                                           |
-| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                                                      |
-| `fast_mode`                             | `SANDBOX_FAST_MODE`                     | `false`: `/speed fast` and a mode's `speed: fast` run at normal speed here; `true` can't turn it on when the operator hasn't |
-| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                                                          |
-| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                                                             |
-| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                              |
-| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `dockerfile` grant                                          |
-| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                        |
-| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                             |
-| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots                                        |
-| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                                                                 |
-| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                        |
-| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                               |
-| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                           |
-| `review.fix`                            | `false`                                 | a review that requests changes starts a work run that addresses it; `true` or a number of rounds (see Reviews)               |
-| `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `auto_merge` (see Auto-merge)                   |
-| `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                           |
-| `review.max_allowed_severity`           | `low`                                   | the most severe finding a review in the fix loop or deciding an auto-merge may have: `low` or `medium` (see Auto-merge)      |
-| `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)   |
-| `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)               |
-| `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                      |
-| `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)           |
-| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                  |
-| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                   |
-| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `preview` grant                                     |
-| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                             |
-| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                 |
-| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)               |
-| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                         |
-| `projects`                              | none                                    | organization projects (v2) the listener moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see Projects)   |
+| Key                                     | Default                                 | What                                                                                                                                                |
+| --------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored                                                                    |
+| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode                                                                     |
+| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)                                                               |
+| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)                                                                  |
+| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                                                                             |
+| `fast_mode`                             | `SANDBOX_FAST_MODE`                     | `false`: `/speed fast` and a mode's `speed: fast` run at normal speed here; `true` can't turn it on when the operator hasn't                        |
+| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                                                                                 |
+| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                                                                                    |
+| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                                                     |
+| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `dockerfile` grant                                                                 |
+| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                                               |
+| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                                                    |
+| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots                                                               |
+| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                                                                                        |
+| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                                               |
+| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                                                      |
+| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                                                  |
+| `review.fix`                            | `false`                                 | a review that requests changes starts a work run that addresses it; `true` or a number of rounds (see Reviews)                                      |
+| `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `auto_merge` (see Auto-merge)                                          |
+| `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                                                  |
+| `review.max_allowed_severity`           | `low`                                   | the most severe finding a review in the fix loop or deciding an auto-merge may have: `low` or `medium` (see Auto-merge)                             |
+| `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)                          |
+| `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)                                      |
+| `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                                             |
+| `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                                  |
+| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                         |
+| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                          |
+| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `preview` grant                                                            |
+| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                                                    |
+| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                                        |
+| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                      |
+| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                                                |
+| `auto_pickup`                           | `false`                                 | `true`: the listener starts this repo's open issues labelled `AUTO_PICKUP_LABEL` by itself, in the operator's `AUTO_PICKUP_SLOTS` (see Auto-pickup) |
+| `projects`                              | none                                    | organization projects (v2) the listener moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see Projects)                          |
 
 ## Network and mounts
 
@@ -1095,16 +1100,16 @@ allow_capabilities contains c if {
 
 `input` of `deny_run`, asked once per run a person asks for, before it is queued (not the
 listener's reviews and fix runs): `version`, `decision: "run"`, `time`, `repo` (`"owner/repo"`,
-lower case), `mode`, `custom_mode`, `fresh`, `trigger` (`comment`, `dashboard`,
+lower case), `mode`, `custom_mode`, `fresh`, `trigger` (`comment`, `dashboard`, `auto-pickup`,
 `inbox`, `discussion`), `continues` (`true` for a comment without a trigger or `/mode` line,
-going on in the issue's current mode), `sender` (a login), `target` (where the comment is: `kind`: `issue`,
-`pr` or `discussion`, `number`, `labels`, `author`), `issue` (the task's, or `null`) and `pr`
-(`draft`, `base`, `head`; else `null`). Deckhand's `run.rego` allows every mode on issues, all
-but `brainstorm`, `stop` and `onboarding` elsewhere unless the comment `continues` (the onboarding
-pull request's comments go on in onboarding). With Deckhand's files alone and no repository
-file, the listener decides as `run.rego` would, without `opa` or reading the comment's issue:
-it only lists the repository's policy folder (kept 10 minutes, and up to an hour when GitHub
-can't list it again).
+going on in the issue's current mode), `sender` (a login), `target` (where the comment is:
+`kind`: `issue`, `pr` or `discussion`, `number`, `labels`, `author`), `issue` (the task's, or
+`null`) and `pr` (`draft`, `base`, `head`; else `null`). Deckhand's `run.rego` allows every
+mode on issues, all but `brainstorm`, `stop` and `onboarding` elsewhere unless the comment
+`continues` (the onboarding pull request's comments go on in onboarding). With Deckhand's
+files alone and no repository file, the listener decides as `run.rego` would, without `opa` or
+reading the comment's issue: it only lists the repository's policy folder (kept 10 minutes,
+and up to an hour when GitHub can't list it again).
 
 ### The merge input
 
@@ -1855,3 +1860,26 @@ to ask, pull requests, inbox issues and discussions aren't affected. With
 `wait_for_answers: false`, trigger comments, waits and the dashboard start the issue as they
 would without questions (the dashboard's form is still there to answer from the task's
 panel).
+
+## Auto-pickup
+
+`auto_pickup: true` opts the repository in to the operator's auto-pickup
+([setup.md](setup.md#auto-pickup)): its open issues labelled `AUTO_PICKUP_LABEL`
+(`auto-pickup` by default) are started by the listener itself, oldest created first across
+every repository that opted in, in `work` mode, in the slots the operator reserves
+(`AUTO_PICKUP_SLOTS`). Without those slots (the default), or without this key, nothing is
+picked. Like the rest of this file, only the default branch's says it, and `max_parallel`
+still caps the repository's runs, auto-picked ones included.
+
+An issue is skipped, and the next one picked, while it has something live on the dashboard,
+the needs-input label (see Open questions), an open issue it is "blocked by", or an open pull
+request of Deckhand's. The run is for the person who last added the label: one who isn't in
+`users` (or `ALLOWED_USERS`), or a bot, starts nothing. Nor does an issue whose title or
+description anyone but an allowed user changed at any point after the label went on. Such an
+issue keeps the label, and the App comments once to say why; an allowed user adds the label
+again once the issue is checked.
+
+Once picked, the App comments who the run is for (and edits the comment when the run doesn't
+start), then the label comes off. A run that fails or is stopped isn't picked again until
+someone adds the label back. A `deny_run` rule sees these runs with `trigger: "auto-pickup"`
+and the labeller as `sender` ([The run input](#the-run-input)).

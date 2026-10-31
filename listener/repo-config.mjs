@@ -742,6 +742,27 @@ export const KEYS = {
     },
     display: asIs,
   },
+  // Whether the listener starts the repo's open issues labelled AUTO_PICKUP_LABEL by itself, in
+  // the operator's AUTO_PICKUP_SLOTS (auto-pickup.mjs): opting in only narrows, as without the
+  // operator's slots nothing is picked.
+  auto_pickup: {
+    field: "autoPickup",
+    default: false,
+    parse: (value, { key, settings, config, fail, warn }) => {
+      if (typeof value !== "boolean") return fail(key, "expected true or false");
+      if (value && !config.autoPickupSlots) {
+        warn(`${key}: the operator reserves no slots for it (AUTO_PICKUP_SLOTS), ignored`);
+      }
+      settings.autoPickup = value;
+    },
+    display: ({ value, row, config }) =>
+      row(
+        value ? `on, label \`${config.autoPickupLabel}\`` : "off",
+        value && !config.autoPickupSlots
+          ? "the operator reserves no slots for it (AUTO_PICKUP_SLOTS)"
+          : null,
+      ),
+  },
   review: {
     field: "review",
     default: null,
@@ -1045,17 +1066,49 @@ export async function loadRepoSettings(request, config, repo, ref) {
 }
 
 // Which of the ready tasks (in priority order) start now: the operator's MAX_PARALLEL
-// overall, each repo's own max_parallel within it.
-export function startable(ready, running, total, maxParallel) {
+// overall, each repo's own max_parallel within it. `reserved`: AUTO_PICKUP_SLOTS, the most
+// auto-picked tasks (`picked(task)`) running at once, `auto` of them running already and
+// `waiting` the queued ones (ready or still in their pause). The others borrow the reserved
+// slots while no auto-picked task waits; while one does, they keep to MAX_PARALLEL - reserved,
+// so it starts as soon as a slot frees. One its own repo's max_parallel holds doesn't wait for
+// a slot: it would keep the others from one it can't take.
+export function startable(
+  ready,
+  running,
+  total,
+  maxParallel,
+  { reserved = 0, auto = 0, waiting = [], picked: isPicked = () => false } = {},
+) {
+  // Without reserved slots (turned off while one was queued, a restart in between), an
+  // auto-picked task is one like the others: it would wait forever for a slot.
+  const picked = (task) => reserved > 0 && isPicked(task);
   const counts = new Map(running);
   const chosen = [];
-  for (const task of ready) {
-    if (total + chosen.length >= maxParallel) break;
-    const cap = task.settings?.maxParallel ?? maxParallel;
+  // Not `count < cap`: a cap not known (no MAX_PARALLEL in some tests' configs) leaves room.
+  const room = (task) =>
+    !((counts.get(task.repo) ?? 0) >= (task.settings?.maxParallel ?? maxParallel));
+  // Held back by a cap of its own repo's below MAX_PARALLEL (with no such cap, a full repo is
+  // every slot busy, which it waits for as the others do).
+  const capped = (task) => (task.settings?.maxParallel ?? maxParallel) < maxParallel && !room(task);
+  const fits = (task) => {
+    if (total + chosen.length >= maxParallel) return false;
+    if (!room(task)) return false;
     const now = counts.get(task.repo) ?? 0;
-    if (now >= cap) continue;
     counts.set(task.repo, now + 1);
     chosen.push(task);
+    return true;
+  };
+  // The reserved slots' tasks first: those slots are theirs.
+  let autoNow = auto;
+  for (const task of ready) {
+    if (picked(task) && autoNow < reserved && fits(task)) autoNow++;
+  }
+  const stillWaiting = waiting.some((t) => picked(t) && !chosen.includes(t) && !capped(t));
+  const cap = stillWaiting ? maxParallel - reserved : maxParallel;
+  let othersNow = total - auto;
+  for (const task of ready) {
+    if (picked(task) || othersNow >= cap) continue;
+    if (fits(task)) othersNow++;
   }
   return chosen;
 }

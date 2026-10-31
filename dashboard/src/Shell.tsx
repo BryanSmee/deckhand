@@ -7,7 +7,15 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useRef, useState } from "preact/hooks";
 import type { RepoList } from "./api";
-import { plural, type RepoCounts, repoCounts, sameRepo, shortRepo } from "./format";
+import {
+  plural,
+  type RepoCounts,
+  repoCounts,
+  reservedText,
+  runningText,
+  sameRepo,
+  shortRepo,
+} from "./format";
 import { withKey } from "./keys";
 import type { Permission } from "./notify";
 import { needingYou } from "./Repos";
@@ -200,8 +208,12 @@ function RunSlots({
   if (!state) return rail ? null : <div class={styles.slots}>Loading…</div>;
   const { running, maxParallel: max, queued } = state;
   const hooks = state.previews?.length ?? 0;
-  const summary = `${running} of ${max} running`;
-  const rest = [`${queued} queued`, hooks ? plural(hooks, "preview hook") : ""].filter(Boolean);
+  const summary = runningText(state);
+  const rest = [
+    `${queued} queued`,
+    reservedText(state) ?? "",
+    hooks ? plural(hooks, "preview hook") : "",
+  ].filter(Boolean);
   const meter = (
     <Meter running={running} max={max} rail={rail} title={[summary, ...rest].join(" · ")} />
   );

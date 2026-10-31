@@ -10,6 +10,7 @@ import type {
   Run,
   RunStatus,
   ServerInfo,
+  State,
   Task,
   TaskState,
 } from "./types";
@@ -287,6 +288,23 @@ export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 
 // "1 run", "3 runs"; `many` when adding an s won't do ("replies").
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+// The top bar's run count: "2 of 3 running", or, with slots reserved for auto-pickup, the runs
+// that hold them apart: "2 + 1 auto of 3 running".
+export function runningText({
+  running,
+  maxParallel,
+  autoPickup,
+}: Pick<State, "running" | "maxParallel" | "autoPickup">): string {
+  if (!autoPickup) return `${running} of ${maxParallel} running`;
+  return `${running - autoPickup.running} + ${autoPickup.running} auto of ${maxParallel} running`;
+}
+
+// What the run count leaves out of auto-pickup: its reserved slots, or nothing when it is off.
+export function reservedText(state: Pick<State, "autoPickup">): string | null {
+  const slots = state.autoPickup?.slots;
+  return slots ? `${plural(slots, "slot")} for auto-pickup` : null;
+}
 
 // The mode a task runs in, where its kind doesn't say it already: an issue's or a pull
 // request's ("work", "review"), else the repo's own mode only.
