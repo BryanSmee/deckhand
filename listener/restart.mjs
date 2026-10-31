@@ -5,7 +5,7 @@
 // re-arms the deadlines, finds the sandboxes by their labels, follows their output from where
 // the previous one stopped, and posts each reply once.
 import { randomUUID } from "node:crypto";
-import { readdirSync, rmSync } from "node:fs";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
@@ -164,13 +164,30 @@ export function createRestart(ctx) {
     waiting ??= saving.then(() => {
       waiting = null;
       const value = storable(queueState(), ctx.storeSecrets?.() ?? []);
+      // Those this write's state makes useless, as it is now: one added meanwhile waits for
+      // the next write, which has what made it so.
+      const removing = [...removeOnSave];
       return ctx.store.set(QUEUE_KEY, value).then(
-        () => true,
+        () => {
+          for (const path of removing) {
+            rmSync(path, { force: true });
+            removeOnSave.delete(path);
+          }
+          return true;
+        },
         (error) => (log(`Saving the queue: ${error.stack ?? error}`), false),
       );
     });
     saving = waiting;
     return waiting;
+  }
+
+  // Files whose comments are only safe once the queue is written with them (a queue.json from
+  // before the store, a run's state kept when the queue couldn't be written at its end,
+  // runs.mjs teardown()): removed after the next write that succeeds, whichever it is.
+  const removeOnSave = new Set();
+  function removeOnceSaved(path) {
+    removeOnSave.add(path);
   }
 
   // A comment's 👀 is a promise until GitHub answers: saved without it meanwhile (not waited
@@ -289,8 +306,9 @@ export function createRestart(ctx) {
       else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task, dueAt)));
     }
     // In the store as it is now (one spelling, without what was dropped); queue.json no more,
-    // once its comments are there.
-    if (await saveQueue()) rmSync(queuePath, { force: true });
+    // once its comments are there (this write, or the next that succeeds).
+    if (existsSync(queuePath)) removeOnceSaved(queuePath);
+    await saveQueue();
   }
 
   // What a listener needs to carry on with a run started by a previous one: written when it
@@ -533,6 +551,7 @@ export function createRestart(ctx) {
     loadQueue,
     take,
     eyesSaved,
+    removeOnceSaved,
     livePath,
     saveLive,
     saveLiveSoon,

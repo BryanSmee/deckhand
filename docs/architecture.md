@@ -727,14 +727,14 @@ one that stopped:
   (`restart.mjs` `saveQueue()`: a comment accepted, taken by a run or a running session,
   dropped, cancelled, put back by a run's end), with each task's `next` (`/model`, `/effort`
   for its next run) and the 👀 each comment got (saved once GitHub answers, the comment itself
-  at once; on SIGTERM, those on their way are waited for, 10 s at most). Each comment has a `queueId`. Its strings go there without the operator's secrets, GitHub tokens or private keys (`storable()`), which the store refuses: a comment holding one by mistake is saved without it, and the whole queue still is. A run's end keeps its state when the queue couldn't be written;
+  at once; on SIGTERM, those on their way are waited for, 10 s at most). Each comment has a `queueId`. Its strings go there without the operator's secrets, GitHub tokens or private keys (`storable()`), which the store refuses: a comment holding one by mistake is saved without it, and the whole queue still is. A run's end keeps its state when the queue couldn't be written, until the next write of it that succeeds;
 - **the runs**: each run's state in `logs/<run>.live.json` (`saveLive()`), at its start, a
   comment delivered, a phase, a result, a push, its reply; and, within a second
   (`saveLiveSoon()`), the lines of its output read so far. It holds the run's tokens, which go
   in the store only encrypted by their service (the broker's, #505): they stay in its file;
 - **the timers, as deadlines**: a task's pause before its run (or before the comments go to
   its running session) is `dueAt`, saved with the queue; a run's silent-end grace
-  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (re-armed once the follow has skipped the lines read before, its whole grace until then: the runner's `onCaughtUp()`; one that passed while no listener was there gets 10 s more for what the sandbox wrote meanwhile, which pushes it back); a brainstorm's idle time was
+  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (re-armed once the follow has skipped the lines read before, its whole grace until then: the runner's `onCaughtUp()`, unless a new line pushed it back first; one that passed while no listener was there gets 10 s more for what the sandbox wrote meanwhile, which pushes it back); a brainstorm's idle time was
   already `deadline` (`brainstorms.json`). The `setTimeout`s stay, and are re-armed from the
   deadline at start: what was left of it, or at once when it passed (a deadline saved by a
   listener from before them, none: the pause starts again). The waits' checks
@@ -758,7 +758,7 @@ a copy taking over from another (#506): `unifySpellings()`, `restoreRuns()` (the
 their tokens work again, comments find them), `loadQueue()` (the tasks rebuilt from the store,
 their deadlines re-armed), then `reattach()`. On SIGTERM the listener starts no more runs and
 only waits for the writes under way. A `queue.json`, which listeners from before #508 wrote on
-SIGTERM, is read once and moved to the store (removed once the store took it).
+SIGTERM, is read once and moved to the store (removed after the first write of it that succeeds).
 
 The next listener finds the sandboxes by their labels, follows their output from where the
 previous one stopped (a listener killed within a second of reading some lines reads them again,

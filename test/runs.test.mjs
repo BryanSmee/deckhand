@@ -554,15 +554,34 @@ test("a run's end whose queue couldn't be saved keeps its state for the next lis
   const path = ctx.livePath("run");
   writeFileSync(path, "{}");
   ctx.saveQueue = async () => false;
-  const live = task.live;
+  const later = [];
+  ctx.removeOnceSaved = (file) => later.push(file);
   await runs.teardown(task);
   assert.equal(readFileSync(path, "utf8"), "{}");
   assert.ok(logs.some((line) => /its state is kept/.test(line)));
-  // Saved: removed.
-  task.live = { ...live, over: false, saving: null };
-  task.running = true;
-  ctx.saveQueue = async () => true;
-  ctx.running = 1;
-  await runs.teardown(task);
-  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  // Removed after the next write of the queue that succeeds (restart.mjs).
+  assert.deepEqual(later, [path]);
+});
+
+test("a restored run's grace: a line read before the follow caught up keeps its whole grace", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  task.live.graceUntil = Date.now() - 60_000;
+  runner.holding = true;
+  const next = createRuns({ ...ctx, answerGraceMs: 400, catchUpMs: 20 });
+  const followed = next.follow(task);
+  // Docker's stdout past its skip first: a line written while no listener was there.
+  await sleep(30);
+  runner.out(JSON.stringify({ type: "assistant", message: { content: [] } }));
+  // Then stderr's: caught up. The line's whole grace holds, not the moment's.
+  await sleep(30);
+  runner.caughtUp();
+  await sleep(150);
+  assert.equal(runner.kills, 0);
+  await followed;
+  assert.equal(runner.kills, 1);
 });

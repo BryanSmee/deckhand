@@ -381,10 +381,14 @@ export function createRuns(ctx) {
     // of it.
     let saved = live.answered ? (live.graceUntil ?? null) : null;
     if (live.answered) linger(task);
+    const whole = live.graceUntil;
     const caughtUp = () => {
       if (saved === null || !live.answered || task.live !== live) return;
       const until = Math.max(saved, Date.now() + Math.min(graceMs, catchUpMs));
       saved = null;
+      // A new line pushed it back already (Docker's stdout past its skip before stderr): its
+      // whole grace from that line holds.
+      if (live.graceUntil !== whole) return;
       linger(task, until);
     };
     try {
@@ -783,9 +787,11 @@ export function createRuns(ctx) {
     await live.saving;
     // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
     // own state goes: a listener killed between the two finds them in both, and the run's win.
-    // Kept when the queue couldn't be written: the next listener finds them there.
+    // Kept when the queue couldn't be written, until a write of it succeeds: a listener killed
+    // meanwhile finds them there.
     if ((await ctx.saveQueue?.()) === false) {
-      log(`${live.key}: its state is kept, the queue couldn't be saved with what it put back`);
+      log(`${live.key}: its state is kept until the queue is saved with what it put back`);
+      ctx.removeOnceSaved?.(ctx.livePath(live.id));
     } else rmSync(ctx.livePath(live.id), { force: true });
     task.live = null;
     task.running = false;

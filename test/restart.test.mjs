@@ -983,3 +983,62 @@ test("a comment holding a token or a private key: the queue is saved without the
   // The listener's own copy keeps it, for its run.
   assert.match(ctx.tasks.get("org/repo#1").pending[0].text, /ghp_a{36}/);
 });
+
+test("a run's state kept as the queue couldn't be written: removed after the next write that succeeds", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const ctx = queueContext(t, dir, store, { real: true });
+  Object.assign(ctx, {
+    shotsDir: dir,
+    broker: { revoke: () => {} },
+    runner: { remove: async () => {} },
+  });
+  const { teardown } = createRuns(ctx);
+  const set = store.set;
+  let down = true;
+  store.set = (...args) => (down ? Promise.reject(new Error("disk full")) : set(...args));
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  const item = queued("1", { queueId: "q-1", eyes: Promise.resolve(3) });
+  task.live = {
+    id: "r1",
+    key: "org/repo#1",
+    record: { id: "r1", logPath: join(dir, "r1.log") },
+    lines: { out: 0, err: 0 },
+    handled: [item],
+    unanswered: [],
+  };
+  task.running = true;
+  ctx.running = 1;
+  ctx.tasks.set("org/repo#1", task);
+  // Put back by its end (its agent exited without answering it).
+  task.pending.push(item);
+  const path = join(dir, "r1.live.json");
+  writeFileSync(path, "{}");
+  await teardown(task);
+  assert.equal(readFileSync(path, "utf8"), "{}");
+  // The next write (any: a 👀, another comment) has what the run put back: its state goes.
+  down = false;
+  await ctx.saveQueue();
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  assert.deepEqual(
+    (await store.get(QUEUE_KEY))["org/repo#1"].pending.map((i) => i.queueId),
+    ["q-1"],
+  );
+});
+
+test("a queue.json the first write didn't take: removed after the next that succeeds", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const set = store.set;
+  let down = true;
+  store.set = (...args) => (down ? Promise.reject(new Error("disk full")) : set(...args));
+  const path = join(dir, "queue.json");
+  writeFileSync(path, JSON.stringify([{ ...queued("7"), pending: [queued("7")], next: {} }]));
+  const ctx = queueContext(t, dir, store);
+  await ctx.loadQueue();
+  assert.ok(readFileSync(path, "utf8").includes('"id":"7"'));
+  down = false;
+  await ctx.saveQueue();
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  assert.deepEqual(Object.keys(await store.get(QUEUE_KEY)), ["org/repo#7"]);
+});
