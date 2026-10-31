@@ -1633,10 +1633,17 @@ any of the repo's users, whoever dismissed it, as the dismissal is.
 The same file holds the runs whose questions were set aside (`questions: true`), and those
 come from GitHub, not the dashboard: anyone who can take the needs-input label off an issue or
 pull request (the repo's triage permission, not `ALLOWED_USERS`) sets aside the questions of
-its task's last run, and a close or merge does too. That only changes what the dashboard shows
-(the task no longer waits for input); it starts, posts and allows nothing, and
-`wait_for_answers` still goes by the label itself. The label put back asks again, and so does
-the dismiss API's `undo` for that run (the dashboard shows no Undo for these).
+its task's last run, and a close or merge does too. It starts and posts nothing, but it does
+change what the dashboard allows for that task, which goes by its `needs-input` state: with
+`wait_for_answers`, a Start, Queue or plan from the dashboard is no longer refused with "answer
+them first" (`work.mjs` `asking()`), and the run's questions can no longer be answered there,
+from its form or by ticking its reply's boxes (`answer()`, `ticked()`). So a label removal by
+someone outside `ALLOWED_USERS` can let one of the repo's users start that issue from the
+dashboard without answering its run's questions; what starts is still checked as any start is.
+Comment triggers aren't held back for a run's questions either way (`tasks.mjs`
+`unanswered()`); an issue's own open questions still go by the label. The label put back asks
+again, and so does the dismiss API's `undo` for that run (the dashboard shows no Undo for
+these).
 
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
 repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's
