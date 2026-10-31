@@ -193,4 +193,16 @@ export function storeContract(name, open) {
     await assert.rejects(store.putBlob("", "x"), /not a name/);
     await assert.rejects(store.readBlob(""), /not a name/);
   });
+
+  test(`${name}: a lease needs a lifetime`, async (t) => {
+    const { store } = await setup(t);
+    for (const ttlMs of [undefined, 0, -1, NaN, "1000"]) {
+      await assert.rejects(store.acquire("l", "a", { ttlMs }), TypeError);
+    }
+    await assert.rejects(store.acquire("l", "a"), TypeError);
+    const lease = await store.acquire("l", "a", { ttlMs: 1000 });
+    await assert.rejects(store.renew("l", "a", lease.epoch, {}), TypeError);
+    // Still a's.
+    assert.equal(await store.acquire("l", "b", { ttlMs: 1000 }), null);
+  });
 }

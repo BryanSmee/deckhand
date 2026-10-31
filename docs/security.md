@@ -421,7 +421,7 @@ endpoints, which callers may call it, in **one table per service**, checked in c
 
 No token, or one that isn't valid for the service (another key, another `aud`, expired):
 `401`. A token from another caller's network, a caller the table doesn't name on the endpoint,
-or an endpoint that isn't in the table at all: `403`. A compromised edge, already inside the
+or an endpoint that isn't in the table at all: `403`. Where routes overlap (`GET /runs/*` and `GET /runs/:id/secret`), each one that matches must name the caller, whatever their order. A path the URL parser would change (`//host/…`, `..` segments) is refused first (`400`), so a handler that routes on the raw path serves the endpoint the guard allowed. A compromised edge, already inside the
 internal network, gets what edge needs (a repository's config, the dashboard's data), never a
 minted token or a write.
 

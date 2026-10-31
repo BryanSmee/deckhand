@@ -132,6 +132,43 @@ test("a caller its table doesn't name on an endpoint: 403, and an endpoint not i
   );
 });
 
+test("overlapping routes: each one that matches must name the caller, whatever their order", () => {
+  for (const routes of [
+    { "GET /runs/*": ["edge", "orchestrator"], "GET /runs/:id/secret": ["orchestrator"] },
+    { "GET /runs/:id/secret": ["orchestrator"], "GET /runs/*": ["edge", "orchestrator"] },
+  ]) {
+    const overlapping = serviceGuard({ service: "github", keys, routes, bound, now: () => NOW });
+    refused(
+      () => overlapping(call({ url: "/runs/1/secret", token: tokenFor("edge") })),
+      403,
+      /edge may not GET \/runs\/1\/secret/,
+    );
+    assert.equal(overlapping(call({ url: "/runs/1/log", token: tokenFor("edge") })), "edge");
+    assert.equal(
+      overlapping(
+        call({ url: "/runs/1/secret", token: tokenFor("orchestrator"), local: ORCHESTRATOR_SIDE }),
+      ),
+      "orchestrator",
+    );
+  }
+});
+
+test("a path the URL parser would change is refused before any route: 400", () => {
+  const edge = tokenFor("edge");
+  for (const url of [
+    "//evil/repos/o/r/config",
+    "/admin/../repos/o/r/config",
+    "/repos/o/./r/config",
+    "/repos/o/r/%2e%2e/config",
+    "repos/o/r/config",
+    "http://evil/repos/o/r/config",
+  ]) {
+    refused(() => guard(call({ url, token: edge })), 400, /not a plain path/);
+  }
+  // A query is fine, and kept out of the match.
+  assert.equal(guard(call({ url: "/repos/o/r/config?ref=a/../b", token: edge })), "edge");
+});
+
 test("a token arriving on another caller's network: 403, wherever it was stolen from", () => {
   // The orchestrator's token, replayed from edge (which reaches the github service only on its
   // own network): refused, though the orchestrator may call the endpoint.

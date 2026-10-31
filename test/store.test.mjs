@@ -99,10 +99,24 @@ test("file: a trimmed stream's file is rewritten, not left to grow", async (t) =
     .split("\n")
     .filter(Boolean);
   assert.ok(lines.length < 6, `${lines.length} lines`);
-  // Reopened, it holds the last ones, at most twice maxLength until the next append trims it.
+  // Reopened, it holds the last ones only.
   const reopened = fileStore({ dir });
   const read = (await reopened.read("progress", "edge")).map((e) => e.event.n);
-  assert.deepEqual(read.slice(-3), [18, 19, 20]);
+  assert.deepEqual(read, [18, 19, 20]);
+});
+
+test("file: events trimmed by maxLength stay gone after a restart", async (t) => {
+  const dir = tempDir(t);
+  const before = fileStore({ dir });
+  for (let n = 1; n <= 8; n++) await before.append("progress", { n }, { maxLength: 5 });
+  const read = async (store, consumer) =>
+    (await store.read("progress", consumer)).map((e) => e.event.n);
+  assert.deepEqual(await read(before, "edge"), [4, 5, 6, 7, 8]);
+  const after = fileStore({ dir });
+  assert.deepEqual(await read(after, "dashboard"), [4, 5, 6, 7, 8]);
+  // And appends go on from there.
+  await after.append("progress", { n: 9 }, { maxLength: 5 });
+  assert.deepEqual(await read(fileStore({ dir }), "other"), [5, 6, 7, 8, 9]);
 });
 
 test("openStore: file: and memory:, nothing else", async (t) => {
