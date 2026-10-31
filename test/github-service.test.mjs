@@ -59,7 +59,7 @@ async function fakeGitHub(t, answer = () => null) {
 async function service(
   t,
   github,
-  { store, key, bound = null, gatewayOptions, app = true, env = {} } = {},
+  { store, key, bound = null, gatewayOptions, app = true, env = {}, lateKeys = false } = {},
 ) {
   const dir = tempDir(t);
   if (app) {
@@ -73,12 +73,14 @@ async function service(
     undefined,
     { service: "github" },
   );
-  const keys = new Map([[key.kid, key.publicKey]]);
+  // `lateKeys`: the broker's keys not read yet, as at a first start: read on a key unknown.
+  const keys = new Map(lateKeys ? [] : [[key.kid, key.publicKey]]);
+  const unknownKey = async () => void keys.set(key.kid, key.publicKey);
   const made = createGithubService({
     config,
     store,
     app: createAppHolder({ dir, api: `${github.url}/api/v3` }),
-    broker: { keys: () => keys, serviceKeys: () => keys, unknownKey: async () => {} },
+    broker: { keys: () => keys, serviceKeys: () => keys, unknownKey },
     bound,
     policies: allowingPolicies,
     mirrorDir: join(dir, "mirrors"),
@@ -211,6 +213,30 @@ test("each route takes its callers only: edge reads, the runner gets tarballs, t
     (await call(a, "orchestrator", "POST", "/graphql/org/repo", { body: mutation })).status,
     200,
   );
+  // As the App, the orchestrator redelivers a delivery, and nothing else: no token minted, no
+  // webhook changed, no installation removed.
+  const asApp = (method, path) =>
+    github.calls.filter((c) => c.method === method && c.url === `/api/v3${path}`);
+  for (const [method, path] of [
+    ["POST", "/app/installations/7/access_tokens"],
+    ["PATCH", "/app/hook/config"],
+    ["DELETE", "/app/installations/7"],
+    ["POST", "/app/hook/deliveries/1/attempts/x"],
+  ]) {
+    // The service mints its own installation tokens there: none more for this call.
+    const before = asApp(method, path).length;
+    const res = await call(a, "orchestrator", method, `/as-app${path}`, { body: {} });
+    assert.equal(res.status, 403, `${method} ${path}`);
+    assert.equal(asApp(method, path).length, before, `${method} ${path} reached GitHub`);
+  }
+  const redelivered = await call(
+    a,
+    "orchestrator",
+    "POST",
+    "/as-app/app/hook/deliveries/1/attempts",
+  );
+  assert.equal(redelivered.headers.get(GITHUB_STATUS), "200");
+  assert.equal(asApp("POST", "/app/hook/deliveries/1/attempts").length, 1);
 });
 
 test("with Docker, a caller's token counts only from its own network", async (t) => {
@@ -582,4 +608,44 @@ test("fingerprints: a whole secret found wherever it is; never one of its parts,
   // Another salt: another print, the same find.
   assert.equal(fingerprintRedactor(fingerprint([secret]))(secret), "[redacted]");
   assert.equal(fingerprintRedactor(null)("x"), "x");
+});
+
+test("a GraphQL write's key: its answer kept once GitHub ran it, not when its errors came with a 200", async (t) => {
+  let n = 0;
+  const { a, b, call, github } = await setup(t, {
+    answer: (req) =>
+      req.url.endsWith("/graphql")
+        ? ++n === 1
+          ? [200, { errors: [{ type: "RATE_LIMITED" }] }]
+          : [200, { data: { addDiscussionComment: { comment: { url: `u${n}` } } } }]
+        : null,
+  });
+  const mutation = { query: "mutation { addDiscussionComment(input: {}) { clientMutationId } }" };
+  const ask = (copy) =>
+    call(copy, "orchestrator", "POST", "/graphql/org/repo", {
+      body: mutation,
+      headers: { "idempotency-key": "run-1:reply" },
+    });
+  assert.deepEqual((await (await ask(a)).json()).errors, [{ type: "RATE_LIMITED" }]);
+  // Tried again: made, then given again as it was.
+  assert.equal((await (await ask(b)).json()).data.addDiscussionComment.comment.url, "u2");
+  assert.equal((await (await ask(a)).json()).data.addDiscussionComment.comment.url, "u2");
+  assert.equal(github.calls.filter((c) => c.url.endsWith("/graphql")).length, 2);
+});
+
+test("a caller's token signed with a key the service hasn't read yet: the broker's keys read again", async (t) => {
+  const github = await fakeGitHub(t);
+  const key = testKey();
+  const copy = await service(t, github, { store: openStore("memory:"), key, lateKeys: true });
+  const res = await fetch(`${copy.url}/app`, {
+    headers: { authorization: `Bearer ${signServiceToken({ sub: "edge", aud: "github" }, key)}` },
+  });
+  assert.equal(res.status, 200);
+  // Another key altogether: still refused.
+  const other = await fetch(`${copy.url}/app`, {
+    headers: {
+      authorization: `Bearer ${signServiceToken({ sub: "edge", aud: "github" }, testKey())}`,
+    },
+  });
+  assert.equal(other.status, 401);
 });

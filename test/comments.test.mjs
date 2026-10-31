@@ -269,3 +269,26 @@ test("the listener's reactions with the github service: noted there before GitHu
   assert.equal(await other.eyes, 40);
   assert.match(logs[0], /Noting the listener's reaction: the github service: 503/);
 });
+
+test("a run's reply carries its idempotency key, in an issue and in a discussion", async () => {
+  const keys = [];
+  const github = async (repo, method, path, body, expected, options) => {
+    keys.push(["rest", options?.key]);
+    return Response.json({ id: 1 }, { status: 201 });
+  };
+  const graphql = async (repo, query, variables, options) => {
+    keys.push(["graphql", options?.key]);
+    return { addDiscussionComment: { comment: { url: "u" } } };
+  };
+  const comments = createComments({ config: {}, github, graphql, log: () => {} });
+  await comments.answer({ kind: "issue", repo: "o/r", replyTo: 12 }, "hi", { key: "run-1:reply" });
+  const discussion = { kind: "discussion", repo: "o/r", discussionId: "D_1", comment: null };
+  await comments.answer(discussion, "hi", { key: "run-2:reply" });
+  // Without one, none.
+  await comments.answer(discussion, "hi");
+  assert.deepEqual(keys, [
+    ["rest", "run-1:reply"],
+    ["graphql", "run-2:reply"],
+    ["graphql", undefined],
+  ]);
+});

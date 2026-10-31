@@ -591,8 +591,9 @@ of the two.
 **The operator's credentials** (the agents' keys, the plans' logins) are no service's but the
 listener's (the models service's, #504): the github service redacts them from the runs' writes
 without holding them, by their **fingerprints** (`lib/fingerprints.mjs`): the listener sends a
-salted SHA-256 of each whole credential, with its length and a 31-bit rolling hash that finds
-the candidates quickly (`PUT /fingerprints`, again when a login is refreshed), and the gateway
+salted SHA-256 of each whole credential, with its length and 12 bits of a rolling hash that
+finds the candidates quickly (only 12: that hash is linear, and the whole of it would spare
+someone reading the store most of the work of guessing a short credential whose start is known) (`PUT /fingerprints`, again when a login is refreshed), and the gateway
 redacts each part of a write of that length whose hashes match.
 Never a hash of one of its parts: parts that overlap would give a credential away a character at
 a time, from what is known of its shape. So a credential cut short in a write isn't found, where

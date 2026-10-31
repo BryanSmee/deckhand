@@ -309,8 +309,10 @@ let handedOver = Promise.resolve();
             await githubService.setup.handOver(credentials);
             taken = true;
           } catch (error) {
-            // Refused for good (another App's key there, say): asking again changes nothing.
-            if (!(error.status >= 400 && error.status < 500)) throw error;
+            // Refused for good, another App's key there (409) or none in what it was sent (400):
+            // asking again changes nothing. Anything else (a service not up yet, its keys not
+            // read: 401, 503) is asked again.
+            if (error.status !== 409 && error.status !== 400) throw error;
             console.error(
               `The GitHub App's key: the github service refused it (${error.message}). It stays in /data/app.json until resolved by hand: remove the github service's app.json (its github-key volume) to take this App's, or this one's key from /data/app.json to keep the service's (docs/setup.md#the-github-service)`,
             );

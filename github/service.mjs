@@ -195,6 +195,18 @@ export function createGithubService({
     bound,
     now,
   });
+  // A caller's token signed with a key this copy doesn't know yet (its broker's keys not read
+  // since the broker started, or changed): read again once, then checked again, as a run token
+  // is (runs.mjs check()).
+  async function guarded(req) {
+    try {
+      return guard(req);
+    } catch (error) {
+      if (!(error instanceof Refused) || !/unknown key/.test(error.message)) throw error;
+      await broker.unknownKey();
+      return guard(req);
+    }
+  }
   const fence = createFence({ store, service: "github service", now });
   const runs = createRuns({
     store,
@@ -363,6 +375,17 @@ export function createGithubService({
   // A write's answer, read whole, made once per idempotency key: asked again with the same key,
   // its first answer (a success's: a failure may be tried again) without asking GitHub; while
   // the first is in flight (through the other copy), once it is over.
+  // A GraphQL answer whose errors came with a 200 (a rate limit, a refusal): not kept for its
+  // key, as a failed status isn't, so that the write asked again is tried again.
+  function graphqlFailed(answer) {
+    if (!answer.url?.startsWith("/graphql/")) return false;
+    try {
+      return Array.isArray(JSON.parse(answer.body.toString("utf8"))?.errors);
+    } catch {
+      return true;
+    }
+  }
+
   async function once(req, make) {
     const read = async () => {
       const answer = await make();
@@ -370,6 +393,7 @@ export function createGithubService({
         status: answer.status,
         headers: headersOf(answer),
         body: Buffer.from(await answer.arrayBuffer()),
+        url: req.url,
       };
     };
     const key = req.headers[IDEMPOTENCY_HEADER];
@@ -385,7 +409,7 @@ export function createGithubService({
           await store.delete(slot).catch(() => {});
           throw error;
         }
-        if (answer.status >= 200 && answer.status < 300) {
+        if (answer.status >= 200 && answer.status < 300 && !graphqlFailed(answer)) {
           const kept = answer.body.length <= MAX_KEPT ? answer.body.toString("base64") : null;
           const done = {
             state: "done",
@@ -497,7 +521,7 @@ export function createGithubService({
       const ready = path === "/health" || !draining;
       return sendJson(res, { ok: ready, app: !!app.get() }, ready ? 200 : 503);
     }
-    const caller = guard(req);
+    const caller = await guarded(req);
     if (path.startsWith("/relay/") || path.startsWith("/git/")) return sandboxCall(req, res, path);
     // What the orchestrator changes carries its epoch: a copy that lost its lease changes nothing.
     if (caller === "orchestrator" && req.method !== "GET") await fence(req);

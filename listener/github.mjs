@@ -16,7 +16,8 @@ export function createGitHub(app) {
     return app().request(repo, method, path, body, expected, ...(options ? [options] : []));
   }
   // Discussions are written to through GraphQL only. Its errors come with a 200: thrown there.
-  const query = (repo, text, variables) => graphql(github, repo, text, variables);
+  // `options.key`: a mutation's idempotency key, as a REST write's.
+  const query = (repo, text, variables, options) => graphql(github, repo, text, variables, options);
   return { github, graphql: query };
 }
 
@@ -58,8 +59,9 @@ export async function graphqlData(res, what = "GraphQL") {
 }
 
 // A GraphQL query or mutation as the repo's installation: its data, or it throws.
-export async function graphql(github, repo, query, variables) {
-  return graphqlData(await github(repo, "POST", "/graphql", { query, variables }));
+export async function graphql(github, repo, query, variables, options) {
+  const keyed = options ? [[], options] : [];
+  return graphqlData(await github(repo, "POST", "/graphql", { query, variables }, ...keyed));
 }
 
 // The first page of a list: the recent ones are enough there.

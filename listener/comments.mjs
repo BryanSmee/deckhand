@@ -75,11 +75,19 @@ export async function commentThread(graphql, repo, id) {
 
 // A comment in discussion `id` (a node id), in `thread`'s thread or at the top (null): the
 // comment's `fields`, as GraphQL names them.
-export async function addDiscussionComment(graphql, repo, { id, thread, body }, fields = "url") {
+// `key`: its idempotency key, when asking again must not post it twice (a run's reply).
+export async function addDiscussionComment(
+  graphql,
+  repo,
+  { id, thread, body },
+  fields = "url",
+  key = null,
+) {
   const data = await graphql(
     repo,
     `mutation($id: ID!, $thread: ID, $body: String!) { addDiscussionComment(input: {discussionId: $id, replyToId: $thread, body: $body}) { comment { ${fields} } } }`,
     { id, thread, body },
+    ...(key ? [{ key }] : []),
   );
   return data.addDiscussionComment.comment;
 }
@@ -303,7 +311,8 @@ export function createComments({
     const send = async (body) => {
       try {
         const id = target.discussionId;
-        return { value: await addDiscussionComment(graphql, target.repo, { id, thread, body }) };
+        const comment = { id, thread, body };
+        return { value: await addDiscussionComment(graphql, target.repo, comment, "url", key) };
       } catch (error) {
         const detail = error.message ?? String(error);
         const status = Number(/^GraphQL: (\d{3}) /.exec(detail)?.[1]) || null;
