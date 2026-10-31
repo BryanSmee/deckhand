@@ -21,7 +21,7 @@
 // asked again (after a handover, a lost answer) is keyed by its run: it finds the sandbox and
 // starts nothing.
 import { createServer } from "node:http";
-import { drain, drainable } from "../lib/drain.mjs";
+import { DRAIN_MS, drain, drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, send, sendJson } from "../lib/http.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
@@ -470,9 +470,23 @@ export function createRunnerService({
       const problem = buildProblem(config, asked, grants);
       if (problem) throw new Refused(403, `no build: ${problem}`);
       const plan = await buildPlan(config, asked, { grants, blobOf });
-      return streamed(res, (output, line) =>
-        images.imageFor({ ...plan, output, onBuild: (tag) => line({ type: "building", tag }) }),
-      );
+      return streamed(res, async (output, line) => {
+        const build = (planned) =>
+          images.imageFor({
+            ...planned,
+            output,
+            onBuild: (tag) => line({ type: "building", tag }),
+          });
+        try {
+          return await build(plan);
+        } catch (error) {
+          if (error.code !== "DOCKERFILE_MOVED") throw error;
+          // Its files hold another Dockerfile than the one its blob was looked up for: a push
+          // in between, most often (the default branch moves). Planned again, once.
+          log(`${asked.repo}: ${error.message}: looked up again`);
+          return build(await buildPlan(config, asked, { grants, blobOf }));
+        }
+      });
     },
     "POST /agents/:agent/install": ({ params, res }) =>
       streamed(res, async (output) => {
@@ -632,14 +646,26 @@ export function createRunnerService({
       watching = null;
     },
     // SIGTERM: output streams end now (their callers follow again, from the next copy), the
-    // other calls finish, then the lease goes to the other copy.
-    async stop({ graceMs } = {}) {
+    // other calls finish, and so do the preview hooks running (those waiting are dropped,
+    // logged: previews.mjs drain()), within `graceMs`; then the lease goes to the other copy.
+    async stop({ graceMs = DRAIN_MS } = {}) {
       stopping = true;
       clearInterval(watching);
       for (const res of streams) res.destroy();
-      const all = await drain(server, { graceMs });
+      let timer;
+      const late = new Promise((resolve) => {
+        timer = setTimeout(() => resolve(false), graceMs);
+        timer.unref?.();
+      });
+      const hooks = Promise.resolve(previews.drain?.()).then(() => true);
+      const [calls, ran] = await Promise.all([
+        drain(server, { graceMs }),
+        Promise.race([hooks, late]),
+      ]);
+      clearTimeout(timer);
+      if (!ran) log("Stopping: a preview hook still running at the end of the grace period, cut");
       await lease.stop();
-      return all;
+      return calls && ran;
     },
   };
 }

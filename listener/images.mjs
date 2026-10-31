@@ -56,6 +56,19 @@ export function imageTag(config, repo, baseId, dockerfile, blob, branchRef = nul
 export const gitBlob = (data) =>
   createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
 
+// The blobs a file of a checkout may have been archived from. GitHub's tarballs come from `git
+// archive`, which applies the repository's .gitattributes to what it writes: `eol=crlf` turns
+// its line ends to CRLF, `ident` expands `$Id$`. Undone here, as git stores the file; what can't
+// be undone (`export-subst`, a Git LFS pointer) doesn't match, and the build says so.
+export function archivedBlobs(data) {
+  const text = Buffer.from(data).toString("latin1");
+  const lf = text.replace(/\r\n/g, "\n");
+  const unident = (t) => t.replace(/\$Id: [0-9a-f]{40,64} \$/g, "$Id$");
+  return new Set(
+    [text, lf, unident(text), unident(lf)].map((t) => gitBlob(Buffer.from(t, "latin1"))),
+  );
+}
+
 export function createImages({
   config,
   backend, // the runner's images and volumes (runner/images.mjs)
@@ -132,14 +145,18 @@ export function createImages({
     try {
       let found = null;
       try {
-        found = gitBlob(readFileSync(join(dir, dockerfile)));
+        found = archivedBlobs(readFileSync(join(dir, dockerfile)));
       } catch {
         // None: refused below.
       }
-      if (found !== blob) {
-        throw new Error(
-          `${dockerfile} of ${repo} at ${at}: not the Dockerfile its tag names (${found ?? "none"} in its files, ${blob} asked)`,
+      if (!found?.has(blob)) {
+        // A push between the blob's lookup and this download, most often: the caller may plan
+        // again (DOCKERFILE_MOVED).
+        const error = new Error(
+          `${dockerfile} of ${repo} at ${at}: not the Dockerfile its tag names (${found ? [...found][0] : "none"} in its files, ${blob} asked)`,
         );
+        error.code = "DOCKERFILE_MOVED";
+        throw error;
       }
       const built = await backend.build({
         dir,

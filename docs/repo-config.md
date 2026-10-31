@@ -271,7 +271,11 @@ dashboard, and the build log is in the run's log. A failed build fails the run, 
 reply on GitHub.
 
 Only the Dockerfile's own content is hashed: a change in a file it copies builds a new
-image once the Dockerfile changes, or the base image does.
+image once the Dockerfile changes, or the base image does. The image builds only when the
+Dockerfile in the downloaded files is the one its tag names. GitHub writes those files with
+`git archive`, which applies the repository's `.gitattributes`: CRLF line ends (`eol=crlf`) and
+an expanded `$Id$` (`ident`) are undone for the check, but a Dockerfile with `export-subst` or
+stored in Git LFS can't build.
 
 **Branch images.** When the operator's grants set `allow_branch_docker_images: true`
 for the repository (it is not a key of `.deckhand.yaml`: one there is ignored, with a
@@ -836,7 +840,10 @@ requests. A newer delivery for a pull request (or a workflow run) whose hook sti
 replaces it, so the hook may not see every event: have it bring the preview to the state the
 event describes (open, updated, closed) rather than react to each action. A hook is **busy** for as
 long as its command runs: the listener's `/status` lists it and isn't idle meanwhile, so a
-restart that waits for it doesn't cut a deployment short. A hook that starts something
+restart that waits for it doesn't cut a deployment short. The runner, stopping for an update,
+lets a running hook finish within its grace period (`DRAIN_SECONDS`, 280 s by default) and
+drops the hooks still waiting, saying so in its log: the next event for that pull request or
+workflow run runs the hook again. A hook that starts something
 should wait until it is up before exiting. Its output is kept in the runner's volume
 (`runner-data`), under `previews/`.
 

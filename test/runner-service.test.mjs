@@ -102,7 +102,10 @@ const checkout = async () => {
   return dir;
 };
 
-async function copy(t, { store, backend, ttlMs = 400, bound, brokerTokens } = {}) {
+async function copy(
+  t,
+  { store, backend, ttlMs = 400, bound, brokerTokens, previews = {}, imageFor, blobOf } = {},
+) {
   let service;
   const lease = activePassive({
     store,
@@ -123,7 +126,7 @@ async function copy(t, { store, backend, ttlMs = 400, bound, brokerTokens } = {}
       keepsCaches: true,
       noCaches: null,
       egressFor: async () => null,
-      imageFor: async (plan) => (built.push(plan), "dh-sandbox"),
+      imageFor: imageFor ?? (async (plan) => (built.push(plan), "dh-sandbox")),
       installAgent: async () => {},
       caches: async () => [],
     },
@@ -131,6 +134,7 @@ async function copy(t, { store, backend, ttlMs = 400, bound, brokerTokens } = {}
       runs: async () => false,
       status: () => [],
       run: async (job) => (previewed.push(job), null),
+      ...previews,
     },
     logs: createLogs({ store }),
     store,
@@ -146,7 +150,8 @@ async function copy(t, { store, backend, ttlMs = 400, bound, brokerTokens } = {}
     watchMs: 50,
     grants,
     checkout,
-    blobOf: async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`,
+    blobOf:
+      blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
   });
   await new Promise((resolve) => service.server.listen(0, "127.0.0.1", resolve));
   await lease.start();
@@ -875,4 +880,61 @@ test("logs: the same append through two copies at once is written once", async (
   const data = Buffer.from("one line\n");
   assert.deepEqual(await Promise.all([a.append(id, 0, data), b.append(id, 0, data)]), [9, 9]);
   assert.equal((await store.readBlob(`logs/${id}`)).toString(), "one line\n");
+});
+
+// An update stops a copy: a preview hook running isn't cut, its lease goes once it ends.
+test("stop: the preview hooks running end before the lease goes to the other copy", async (t) => {
+  const store = fileStore();
+  const backend = host();
+  let release;
+  const running = new Promise((resolve) => (release = resolve));
+  let drained = 0;
+  const a = await copy(t, {
+    store,
+    backend,
+    previews: { drain: () => (drained++, running) },
+  });
+  const b = await copy(t, { store, backend });
+  let stopped = false;
+  const stopping = a.service.stop({ graceMs: 5000 }).then((all) => ((stopped = true), all));
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.equal(drained, 1);
+  assert.equal(stopped, false, "waits for the hook");
+  assert.equal(b.lease.active(), false);
+  release();
+  assert.equal(await stopping, true);
+  await until(() => b.lease.active(), "the other copy's lease");
+  // One still running at the end of the grace: cut, and said.
+  const c = await copy(t, { store, backend, previews: { drain: () => new Promise(() => {}) } });
+  await b.service.stop({ graceMs: 10 });
+  await until(() => c.lease.active(), "the third copy's lease");
+  assert.equal(await c.service.stop({ graceMs: 20 }), false);
+});
+
+// A push between the Dockerfile's lookup and the download of the files: planned again, once.
+test("a build whose Dockerfile moved in between is planned again once", async (t) => {
+  let looked = 0;
+  let tries = 0;
+  const { url } = await copy(t, {
+    store: fileStore(),
+    backend: host(),
+    blobOf: async () => `blob-${++looked}`,
+    imageFor: async (plan) => {
+      tries++;
+      if (plan.blob === "blob-1") {
+        throw Object.assign(new Error("not the Dockerfile its tag names"), {
+          code: "DOCKERFILE_MOVED",
+        });
+      }
+      return "dh-repo-org-repo:abc";
+    },
+  });
+  const build = { repo: "org/repo", ref: "main", dockerfile: "Dockerfile" };
+  const res = await call(url, "POST", "/images", { sub: "orchestrator", body: build });
+  const lines = (await res.text())
+    .trim()
+    .split("\n")
+    .map((l) => JSON.parse(l));
+  assert.deepEqual(lines.at(-1), { type: "done", value: "dh-repo-org-repo:abc" });
+  assert.deepEqual([looked, tries], [2, 2]);
 });

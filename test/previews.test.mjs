@@ -10,7 +10,7 @@ import { tempDir, testConfig } from "./helpers.mjs";
 const config = testConfig({ ALLOWED_USERS: "a", DOCKER_SOCKET: "/run/docker.sock" });
 const hook = { command: "./preview.sh", image: "docker:cli", timeoutMinutes: 1 };
 
-function setup() {
+function setup({ log } = {}) {
   const calls = [];
   const inputs = [];
   let release;
@@ -31,6 +31,7 @@ function setup() {
     containers: createDockerJobs({ config, docker }).preview,
     checkout: async () => tempDir(null, "deckhand-ctx-"),
     logDir,
+    log,
   });
   return { previews, calls, inputs, release, logDir };
 }
@@ -153,6 +154,37 @@ test("a repo's waiting hooks are capped, and a newer event replaces its pull req
     ["1 opened", "5 opened", "2 synchronize", "3 opened", "4 opened"],
   );
   assert.equal(calls.filter((c) => c[0] === "start").length, 5);
+  assert.deepEqual(previews.status(), []);
+});
+
+// The runner stopping (an update): its queue is this process's, so the hooks waiting are
+// dropped, said in the log; the one running ends before the runner lets its lease go.
+test("drain: the running hook finishes, those waiting and those queued after are dropped, logged", async () => {
+  const logs = [];
+  const { previews, calls, release } = setup({ log: (line) => logs.push(line) });
+  const run = (number) =>
+    previews.run({
+      repo: "org/a",
+      event: "pull_request",
+      payload: { action: "opened", pull_request: { number } },
+      ref: "trunk",
+      hook,
+      image: "x",
+    });
+  const first = run(1);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const waiting = [run(2), run(3)];
+  let drained = false;
+  const draining = previews.drain().then(() => (drained = true));
+  assert.deepEqual(await Promise.all(waiting), [null, null]);
+  assert.equal(await run(4), null);
+  assert.equal(logs.filter((l) => /dropped: the runner is stopping/.test(l)).length, 3);
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(drained, false, "the running hook is waited for");
+  release();
+  assert.equal(await first, 0);
+  await draining;
+  assert.equal(calls.filter((c) => c[0] === "start").length, 1);
   assert.deepEqual(previews.status(), []);
 });
 

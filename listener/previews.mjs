@@ -8,7 +8,8 @@
 // request (or workflow run) replaces the one still waiting, as it describes its latest state.
 //
 // A hook is busy while its container runs: the listener's /status reports it, so a restart
-// waits for it. A hook that starts something long-lived should run until it is done.
+// waits for it, and the runner, stopping, lets it finish (drain()). A hook that starts something
+// long-lived should run until it is done.
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { grantFor, loadGrants, ungranted } from "./grants.mjs";
@@ -35,6 +36,8 @@ export function createPreviews({
 }) {
   const hooks = new Map(); // container name → { repo, event, action, state, since }
   const queues = new Map(); // repo → { running, waiting: [{ name, entry, job, subject, resolve }] }
+  const running = new Set(); // the hooks running, until they end
+  let draining = false;
   let count = 0;
   mkdirSync(logDir, { recursive: true });
 
@@ -46,6 +49,13 @@ export function createPreviews({
   // hook's exit code once it ran, or null when it was dropped or replaced.
   function run(job) {
     const { repo, event, payload } = job;
+    if (draining) {
+      log(
+        `${repo}: preview hook for ${event} ${payload.action ?? ""} dropped: the runner is stopping`,
+      );
+      discard(job);
+      return Promise.resolve(null);
+    }
     const slug = repo.toLowerCase().replace(/[^a-z0-9]+/g, "-");
     const queue = queues.get(repo) ?? { running: false, waiting: [] };
     queues.set(repo, queue);
@@ -79,7 +89,7 @@ export function createPreviews({
     const hook = queue.waiting.shift();
     if (!hook) return queues.delete(repo);
     queue.running = true;
-    start(hook.name, hook.entry, hook.job)
+    const ran = start(hook.name, hook.entry, hook.job)
       .catch((error) => {
         log(`${repo}: preview hook: ${error.message ?? error}`);
         return null;
@@ -87,9 +97,30 @@ export function createPreviews({
       .then((code) => {
         hooks.delete(hook.name);
         queue.running = false;
+        running.delete(ran);
         hook.resolve(code);
         next(repo);
       });
+    running.add(ran);
+  }
+
+  // The runner stopping (an update, its other copy taking over): the hooks waiting are dropped,
+  // each said in the log (the queue is this process's: the next copy has none of it), as are
+  // those queued from now on; → once the hooks running have ended, which the runner waits for
+  // within its grace period.
+  function drain() {
+    draining = true;
+    for (const [repo, queue] of queues) {
+      for (const w of queue.waiting.splice(0)) {
+        log(
+          `${repo}: preview hook for ${w.entry.event} ${w.entry.action ?? ""} dropped: the runner is stopping`,
+        );
+        hooks.delete(w.name);
+        discard(w.job);
+        w.resolve(null);
+      }
+    }
+    return Promise.all([...running]).then(() => {});
   }
 
   async function start(name, entry, job) {
@@ -136,7 +167,7 @@ export function createPreviews({
 
   // Whether the runner can run hooks at all: previewHook() asks before it builds or queues one
   // (the runner service's client asks the runner, ../runner/client.mjs).
-  return { run, status, runs: async () => Boolean(containers) };
+  return { run, status, drain, runs: async () => Boolean(containers) };
 }
 
 // A delivery's preview hook (events.mjs previewEvent()), asked of the runner when the repo's

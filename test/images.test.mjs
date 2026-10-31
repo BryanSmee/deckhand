@@ -1,9 +1,17 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { claude } from "../listener/agents/claude.mjs";
-import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.mjs";
+import {
+  KEEP_TAGS,
+  archivedBlobs,
+  createImages,
+  gitBlob,
+  imageRef,
+  imageTag,
+} from "../listener/images.mjs";
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
 import { createDockerImages } from "../listener/runner/images.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
@@ -140,8 +148,40 @@ test("a build whose files hold another Dockerfile than its tag names is refused,
   );
   await assert.rejects(
     none.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" }),
-    /\(none in its files/,
+    (error) => /\(none in its files/.test(error.message) && error.code === "DOCKERFILE_MOVED",
   );
+});
+
+// GitHub's tarballs come from `git archive`, which applies .gitattributes: `eol=crlf` and `ident`
+// change the Dockerfile written, not the blob GitHub names. The same Dockerfile still builds.
+test("a Dockerfile git archive wrote with CRLF line ends or an expanded $Id$ still builds", async (t) => {
+  const stored = "FROM deckhand-sandbox\n# $Id$\nRUN true\n";
+  const archived = [
+    stored.replace(/\n/g, "\r\n"),
+    stored.replace("$Id$", `$Id: ${"a".repeat(40)} $`),
+    stored.replace("$Id$", `$Id: ${"b".repeat(40)} $`).replace(/\n/g, "\r\n"),
+  ];
+  for (const text of archived) {
+    assert.ok(archivedBlobs(Buffer.from(text)).has(gitBlob(Buffer.from(stored))), text);
+    const fake = fakeDocker();
+    const images = withBlobs(
+      createImages({
+        config,
+        ...onDocker(fake.docker),
+        checkout: async () => {
+          const dir = tempDir(t, "deckhand-ctx-");
+          writeFileSync(join(dir, "Dockerfile"), text);
+          return dir;
+        },
+      }),
+      async () => ({ sha: gitBlob(Buffer.from(stored)) }),
+    );
+    await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
+    assert.equal(fake.calls.filter((c) => c.startsWith("build")).length, 1);
+  }
+  // Another Dockerfile, CRLF or not, still doesn't.
+  const other = Buffer.from("FROM deckhand-sandbox\r\nRUN false\r\n");
+  assert.ok(!archivedBlobs(other).has(gitBlob(Buffer.from(stored))));
 });
 
 test("a new base image or a changed Dockerfile means a new tag", () => {
