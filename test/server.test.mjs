@@ -2177,6 +2177,9 @@ mounts:
       await ctx.send(comment("alice"));
       await ctx.listener.until("queued (work");
       await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
+      // Its 👀's id saved once GitHub answered (a listener killed before can't know it).
+      const state = join(ctx.dir, "store", "state.json");
+      await until(() => /"eyes": ?1\b/.test(exists(state) ?? ""), "the 👀 in the saved queue");
       // No SIGTERM: nothing is saved on the way out. The next one's own pause is a minute, and
       // the comment's deadline still holds.
       await ctx.restart({ signal: "SIGKILL", DEBOUNCE_MS: "60000" });
