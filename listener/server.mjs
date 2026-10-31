@@ -575,7 +575,7 @@ Object.assign(ctx, {
 const lookup = (repo, path) => getJson(github, repo, path, [404, 410]);
 ctx.githubService = githubService;
 // What a run did on GitHub (its reruns, for the CI step), read at its end.
-ctx.githubRunState = (id) => githubService.runs.state(id);
+ctx.githubRunState = (id, options) => githubService.runs.state(id, options);
 ctx.githubGateway = { handle: (req, res) => relayToGithub(ctx, req, res) };
 ctx.gitGateway = ctx.githubGateway;
 // Their Claude Code's API calls, with the operator's credential that they never see.

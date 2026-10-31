@@ -293,7 +293,7 @@ async function fakeGitHub(files = {}) {
               ? "app-token"
               : body.includes("workflows")
                 ? "workflows-token"
-                : "repo-token",
+                : (files.repoToken ?? "repo-token"),
             expires_at,
           }),
         );
@@ -2211,6 +2211,39 @@ mounts:
       added.map((r) => JSON.parse(r.body).variables.content),
       ["I_12", "I_12", "PR_50"],
     );
+  });
+
+  test("an installation token the github service used for a run: redacted from its log and reply by its fingerprint", async (t) => {
+    // Long enough to fingerprint, and of no GitHub token's shape: only its fingerprint finds it.
+    const used = "v1.installationtoken0123456789abcdef";
+    const ctx = await listen(t, { repoToken: used }, (dir) => {
+      writeFileSync(join(dir, "hold"), "");
+      return {};
+    });
+    await ctx.send(comment("alice"));
+    const egress = join(ctx.dir, "egress");
+    await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
+    // The run's call, relayed through the listener to the in-process github service, which mints
+    // the token and sends its fingerprint to the listener.
+    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const read = await fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+      headers: { authorization: `token ${secret}` },
+    });
+    assert.equal(read.status, 200);
+    assert.ok(ctx.github.requests.some((r) => r.auth === `token ${used}`));
+    // Its fingerprint reaches the listener as an event: given a moment.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    writeFileSync(join(ctx.dir, "result"), `The token is ${used}.`);
+    writeFileSync(join(ctx.dir, "go"), "");
+    await ctx.listener.until("done (ok)");
+    const log = await onlyLog(ctx.dir);
+    assert.ok(!log.includes(used), "the token in the log");
+    assert.match(log, /The token is \[redacted\]\./);
+    const replies = ctx.github.requests.filter(
+      (r) => r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.ok(replies.length);
+    for (const reply of replies) assert.ok(!reply.body.includes(used), "the token in the reply");
   });
 
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {

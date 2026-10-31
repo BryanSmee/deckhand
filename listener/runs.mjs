@@ -46,6 +46,8 @@ export const ANSWER_GRACE_MS = 2 * 60_000;
 // follow has skipped what was read before, for its sandbox's output from meanwhile before it is
 // stopped (follow()).
 const CATCH_UP_MS = 10_000;
+// The most a run's end waits for its state at the github service, every try included.
+const GITHUB_STATE_MS = 10_000;
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
@@ -807,22 +809,18 @@ export function createRuns(ctx) {
     }
   }
 
-  // The run's state at the github service: tried a few times, then logged, so that a CI step
-  // counting reruns from the run's own copy (cleanUp()) can be traced to it. Null: not read.
-  async function githubState(live, tries = 3) {
+  // The run's state at the github service, within GITHUB_STATE_MS in all (its client tries a
+  // service that is away again until then): the run holds its slot meanwhile. Not read: logged,
+  // so that a CI step counting reruns from the run's own copy (cleanUp()) can be traced to it.
+  async function githubState(live) {
     if (!ctx.githubRunState) return null;
-    for (let i = 1; ; i++) {
-      try {
-        return await ctx.githubRunState(live.id);
-      } catch (error) {
-        if (i >= tries) {
-          log(
-            `${live.key}: its state at the github service not read (${error.message}): its reruns are as the run started`,
-          );
-          return null;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000 * i).unref?.());
-      }
+    try {
+      return await ctx.githubRunState(live.id, { waitMs: GITHUB_STATE_MS });
+    } catch (error) {
+      log(
+        `${live.key}: its state at the github service not read (${error.message}): its reruns are as the run started`,
+      );
+      return null;
     }
   }
 

@@ -105,9 +105,12 @@ export function createGithubClient({
   const runs = {
     put: (id, fields) => client.json("PUT", `/runs/${enc(id)}`, { body: fields }),
     // → its { created, reruns }, or null when the service has no such run.
-    async state(id) {
+    // `waitMs`: the longest it waits for a service that is away, every try included.
+    async state(id, { waitMs: wait = 10_000 } = {}) {
       try {
-        return await client.json("GET", `/runs/${enc(id)}`, { waitMs: 10_000 });
+        // A service that took the call and doesn't answer is given no longer either.
+        const signal = AbortSignal.timeout(wait);
+        return await client.json("GET", `/runs/${enc(id)}`, { waitMs: wait, signal });
       } catch (error) {
         if (error.status === 404) return null;
         throw error;
