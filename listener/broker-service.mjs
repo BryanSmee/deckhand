@@ -19,6 +19,7 @@ export const RUN_TOKEN_HEADER = "x-deckhand-run-token";
 // How often the public keys are read again (a key rotated), and how soon after a failure.
 const KEYS_EVERY_MS = 5 * 60_000;
 const RETRY_MS = 5_000;
+const KEYS_AGAIN_MS = 30_000;
 
 const enc = encodeURIComponent;
 
@@ -100,6 +101,20 @@ export function createBrokerService({
     const res = await ok(await caller.request("GET", "/keys"), "its keys");
     const { run } = res.json();
     keys = new Map(run.map(({ kid, pem }) => [kid, createPublicKey(pem)]));
+  }
+
+  // The keys read again when a token names one this listener doesn't know (the broker's key
+  // changed): at most every KEYS_AGAIN_MS, so a forged kid can't make it ask in a loop.
+  let askedAt = -Infinity;
+  let asking = null;
+  function unknownKey() {
+    if (asking) return asking;
+    if (Date.now() - askedAt < KEYS_AGAIN_MS) return Promise.resolve();
+    askedAt = Date.now();
+    asking = readKeys()
+      .catch((error) => log(`Broker: its keys (${error.message})`))
+      .finally(() => (asking = null));
+    return asking;
   }
 
   async function refreshKeys() {
@@ -326,6 +341,7 @@ export function createBrokerService({
   return {
     issuer,
     keys: () => new Map([...legacyKeys, ...keys]),
+    unknownKey,
     async start() {
       caller.start();
       await refreshKeys();

@@ -92,6 +92,9 @@ const POLICY_DRAIN_MS = 5000;
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
 
+// How often the runs the broker service has are compared with the listener's.
+const RECONCILE_MS = 60 * 60_000;
+
 // With the plans' logins found in the credentials folder (/data/credentials) when their
 // variables are unset.
 const env = withCredentialFiles(process.env);
@@ -392,6 +395,7 @@ Object.assign(ctx, {
   broker: createBroker({
     issuer: brokerService.issuer,
     keys: brokerService.keys,
+    unknownKey: brokerService.unknownKey,
     sandboxOf: (ip) => sandboxAt(ctx, ip),
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),
@@ -844,11 +848,15 @@ brokerService
   .catch((error) => log(`Broker: ${error.stack ?? error}`))
   .then(() => ctx.reattach(restored))
   .catch((error) => log(`Re-attaching: ${error.stack ?? error}`))
-  // Runs the broker service still has that ended while the listener was down.
-  .then(() =>
-    brokerService.reconcile(() => [...ctx.tasks.values()].flatMap((t) => t.live?.id ?? [])),
-  )
-  .catch((error) => log(`Broker: its runs: ${error.message ?? error}`));
+  // Runs the broker service still has that ended while the listener was down: asked until it
+  // answers, then every hour (the broker drops the files of runs whose record expired then).
+  .then(reconcileRuns);
+function reconcileRuns() {
+  const going = () => [...ctx.tasks.values()].flatMap((t) => t.live?.id ?? []);
+  return brokerService.persist("its runs", () => brokerService.reconcile(going));
+}
+const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
+reconciling.unref();
 // Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
 brokerService.consume({ shotsDir });
 const relinking = setInterval(ctx.relink, RELINK_MS);
@@ -890,6 +898,7 @@ process.on("SIGTERM", () => {
   history.stop();
   redeliveries.stop();
   clearInterval(relinking);
+  clearInterval(reconciling);
   // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
   brokerService.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");

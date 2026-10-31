@@ -1111,8 +1111,10 @@ be allowed to reach them, and every run would be refused.
   the listener's and the proxy's pods each mount a token projected for it (a
   `serviceAccountToken` volume with `audience: deckhand-broker`) and name its path in
   `SERVICE_ACCOUNT_TOKEN_FILE`, and the broker's own ServiceAccount reviews them (a
-  ClusterRoleBinding to `system:auth-delegator`). Its store is the file backend, one replica,
-  until Redis (#509).
+  ClusterRoleBinding to `system:auth-delegator`). One replica on the file backend
+  (`STORE_URL=file:///data/store`, on a volume of its own); two on Redis (`STORE_URL=redis://…`,
+  `REDIS_PASSWORD`, see [The store](#the-store)), both mounting the same key Secret: a copy
+  with another key would sign tokens the other refuses.
 - **NetworkPolicies** that isolate the sandboxes. Their pods are labelled
   `deckhand.role: sandbox`. One policy has to pick them for both `Ingress` and `Egress`, and
   none that picks them may let anything in, or let them out to anything but the namespace's

@@ -9,6 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
 import { createBroker } from "../broker/server.mjs";
+import { createBroker as createListenerBroker } from "../listener/broker.mjs";
 import { createBrokerService, legacyKey } from "../listener/broker-service.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -109,6 +110,7 @@ test("an inbox: the runner's file copied from the offset the broker has, a broke
   // A broker that has less than the listener thinks (another store): from what it has.
   await store.deleteBlob("inbox:run-a");
   await store.putBlob("inbox:run-a", "one\n");
+  await store.set("inbox-taken:run-a", 4);
   writeFileSync(file, "three\n", { flag: "a" });
   await listener.mirror.sync("run-a", bytesFrom);
   assert.equal(await blob(), "one\ntwo\nthree\n");
@@ -158,4 +160,33 @@ test("the runs the broker still has that ended while the listener was down end t
   await listener.issuer.end("going");
   broker = await service(t, { store, key, port });
   await until(async () => (await broker.runs.list()).length === 0);
+});
+
+test("a token signed with a key the listener doesn't have yet: the keys read again, at most every 30 s", async (t) => {
+  const broker = await service(t);
+  const listener = remote(t, broker);
+  // Its keys never read (a broker whose key changed since, say): the token's check asks again.
+  const listenerBroker = createListenerBroker({
+    issuer: listener.issuer,
+    keys: listener.keys,
+    unknownKey: listener.unknownKey,
+    sandboxOf: async () => "net-a",
+  });
+  listenerBroker.register("org/a", undefined, { id: "run-a" });
+  const { token } = await listenerBroker.issue("run-a", "net-a");
+  assert.equal(listener.keys().has(broker.key.kid), false);
+  assert.equal((await listenerBroker.check(token, "10.0.0.2")).run.id, "run-a");
+  assert.equal(listener.keys().has(broker.key.kid), true);
+  // A forged kid right after: not read again.
+  const forged = signToken(
+    { ver: TOKEN_VERSION, jti: "run-a", sandbox: "net-a" },
+    { ...testKey(), audience: "deckhand:broker", ttlMs: 60_000 },
+  );
+  let asked = 0;
+  const counting = createListenerBroker({
+    keys: listener.keys,
+    unknownKey: () => (asked++, listener.unknownKey()),
+  });
+  assert.match((await counting.check(forged, "10.0.0.2")).message, /unknown key/);
+  assert.equal(asked, 1);
 });

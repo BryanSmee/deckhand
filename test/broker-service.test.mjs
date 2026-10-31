@@ -536,3 +536,57 @@ test("on Kubernetes, the pod's service account names the caller, once the API se
   // Neither proof set: the broker doesn't start.
   assert.throws(() => createCallers({}), /SERVICE_NETWORKS .* or SERVICE_ACCOUNTS/);
 });
+
+test("the inbox: a message holding a token-shaped string, redacted in the store, keeps the runner's offsets and the sandbox's lines whole", async (t) => {
+  const { copies, store } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const { token } = await started(orchestrator);
+  // The runner's file, as it grows: each append from the offset the broker says it has.
+  const ghp = `ghp_${"a".repeat(36)}`;
+  const lines = [`{"text":"${ghp} is revoked"}\n`, '{"text":"next"}\n', '{"text":"last"}\n'];
+  let file = Buffer.alloc(0);
+  let synced = 0;
+  for (const line of lines) {
+    file = Buffer.concat([file, Buffer.from(line)]);
+    const res = await orchestrator("POST", `/runs/run-a/inbox?offset=${synced}`, {
+      body: file.subarray(synced),
+    });
+    assert.equal(res.status, 200, res.text);
+    assert.equal(res.json.length, file.length);
+    synced = res.json.length;
+  }
+  // The same bytes again (an answer lost): nothing added.
+  const again = await orchestrator("POST", "/runs/run-a/inbox?offset=0", { body: file });
+  assert.equal(again.json.length, file.length);
+  // The sandbox reads whole, valid lines, the token redacted, each once.
+  let from = 0;
+  const read = [];
+  while (read.length < 3) {
+    const res = await sandboxCall(proxy, "GET", `/run/inbox?from=${from}`, token, "net-a");
+    assert.equal(res.status, 200);
+    for (const line of res.text.split("\n").filter(Boolean)) read.push(JSON.parse(line).text);
+    from += res.body.length;
+  }
+  assert.deepEqual(read, ["[redacted] is revoked", "next", "last"]);
+  assert.ok(!(await store.readBlob("inbox:run-a")).toString().includes(ghp));
+});
+
+test("an old key is taken in the broker's first days only; an expired run's files go with its record", async (t) => {
+  const { copies, clock, store } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  await started(orchestrator, "run-a");
+  await orchestrator("POST", "/runs/run-a/inbox?offset=0", { body: Buffer.from("x\n") });
+  await orchestrator("PUT", "/runs/run-a/files/ca", { body: Buffer.from("CA") });
+  // Its end never came: the record expires, and the next listing drops its files.
+  clock.now += 9 * 24 * 60 * 60_000;
+  assert.deepEqual((await orchestrator("GET", "/runs")).json.runs, []);
+  assert.equal(await store.readBlob("inbox:run-a"), null);
+  assert.equal(await store.readBlob("file:run-a:ca"), null);
+  // Past the migration's days, no key is imported any more.
+  const pem = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
+  const late = await orchestrator("POST", "/keys", { body: { pem } });
+  assert.equal(late.status, 409);
+});

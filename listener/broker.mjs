@@ -85,6 +85,8 @@ export function createBroker({
   // () → kid → public key: what run tokens are checked with, the broker service's (and a key
   // of the listener's from before it, while its tokens may still be presented).
   keys = () => new Map(),
+  // () → a promise, once the keys were read again: called when a token names an unknown key.
+  unknownKey = async () => {},
   now = Date.now,
   random = () => randomBytes(32).toString("hex"),
 }) {
@@ -286,9 +288,17 @@ export function createBroker({
       if (!(await sentBy(run, null, ip))) return { status: 403, message: NOT_ITS_SANDBOX };
       return { run, claims: null };
     }
+    const verify = () => verifyToken(credential, { keys: keys(), audience, now: now() });
     let claims;
     try {
-      claims = verifyToken(credential, { keys: keys(), audience, now: now() });
+      try {
+        claims = verify();
+      } catch (error) {
+        // Signed with a key the listener doesn't have yet (the broker's changed): read again.
+        if (!(error instanceof TokenError) || !/unknown key/.test(error.message)) throw error;
+        await unknownKey();
+        claims = verify();
+      }
     } catch (error) {
       if (!(error instanceof TokenError)) throw error;
       return { status: 401, message: `this run token is refused: ${error.message}` };

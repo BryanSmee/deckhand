@@ -53,6 +53,7 @@ const hash = (token) => createHash("sha256").update(token).digest("hex");
 const runKey = (id) => `run:${id}`;
 const INDEX = "runs";
 const LEGACY = "legacy-keys";
+const FIRST_START = "first-start";
 
 // The claims a run's tokens carry: what doesn't change during the run, nothing secret.
 function claimsOf(record) {
@@ -94,7 +95,8 @@ export function issuedFields(list) {
 }
 
 // `store`: lib/store.mjs's. `key`: { privateKey, publicKey, kid }.
-export function createRuns({ store, key, now = Date.now }) {
+// `expired(id)`: a run whose record expired (its end never reached the broker), for its files.
+export function createRuns({ store, key, now = Date.now, expired = async () => {} }) {
   const seal = createSeal(key.privateKey);
   const event = (type, run, extra = {}) =>
     store.append(STREAM, { type, run, at: now(), ...extra }, { maxLength: STREAM_MAX });
@@ -109,6 +111,9 @@ export function createRuns({ store, key, now = Date.now }) {
       if (await store.compareAndSet(name, before, after, options)) return after;
     }
   }
+
+  // When the first broker on this store started: kept, a later copy finds it.
+  const firstStart = store.setIfAbsent(FIRST_START, now()).then(() => store.get(FIRST_START));
 
   const index = (fn) => update(INDEX, (ids) => fn(ids ?? {}));
 
@@ -150,6 +155,12 @@ export function createRuns({ store, key, now = Date.now }) {
   // A legacy key's public part (POST /keys): taken for run tokens, for LEGACY_KEY_MS from its
   // first import. Its own key is never one.
   async function importKey(pem) {
+    // During the migration only: within LEGACY_KEY_MS of the broker's first start, when a
+    // listener that signed tokens itself can still have runs going.
+    const first = await firstStart;
+    if (now() - first > LEGACY_KEY_MS) {
+      return { status: 409, message: "an old key is only taken in the broker's first days" };
+    }
     let publicKey;
     try {
       publicKey = createPublicKey(pem);
@@ -322,7 +333,8 @@ export function createRuns({ store, key, now = Date.now }) {
     const live = [];
     const dead = new Set();
     for (const id of ids) (await get(id)) ? live.push(id) : dead.add(id);
-    // Only those found gone: another copy may have added one meanwhile.
+    // Only those found gone: another copy may have added one meanwhile. Their files go too.
+    for (const id of dead) await expired(id);
     if (dead.size) {
       await index((all) =>
         Object.fromEntries(

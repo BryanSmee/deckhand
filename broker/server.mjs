@@ -34,7 +34,7 @@ export function drainMs(text) {
 
 // The broker's parts on `store`, with `key`: what the tests start too. → { server, runs, files }.
 export function createBroker({ store, key, callers, now = Date.now, sleep, log = () => {} }) {
-  const runs = createRuns({ store, key, now });
+  const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
   const files = createFiles({ store, runs, now, sleep, ttlMs: RECORD_TTL_MS });
   let draining = false;
   const server = createBrokerServer({

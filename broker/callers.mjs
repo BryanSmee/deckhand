@@ -69,7 +69,12 @@ export function inClusterReview({ host, port, account = ACCOUNT, read = readFile
             if (res.statusCode !== 201 && res.statusCode !== 200) {
               return reject(new Error(`TokenReview: ${res.statusCode}`));
             }
-            const { status } = JSON.parse(text);
+            let status;
+            try {
+              ({ status } = JSON.parse(text));
+            } catch {
+              return reject(new Error("TokenReview: not JSON"));
+            }
             const audience = status?.audiences?.includes(POD_TOKEN_AUDIENCE);
             resolve(status?.authenticated && audience ? status.user?.username : null);
           });

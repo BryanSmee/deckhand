@@ -275,7 +275,9 @@ broker's store, so running sandboxes' tokens still check after a restart of eith
 it makes a new one: every running sandbox's token is refused from then on. A listener from
 before the broker service kept it in its data volume: the next one removes it there, keeping
 its public part only (`run-token.pub`), which it hands to the broker (`POST /keys`, the
-orchestrator alone) for the run tokens its sandboxes still hold, for 7 days at most. The
+orchestrator alone) for the run tokens its sandboxes still hold, for 7 days at most, and only
+in the 7 days after the first broker started on that store: after the migration, no key but
+the broker's own is ever added. The
 broker takes such a key for **run tokens only**, never a service token: a compromised
 orchestrator that handed it a key of its own could mint nothing it can't already ask for (a
 run's first tokens), and no service would take it for another service.
@@ -359,7 +361,8 @@ them back. The proxy waits for a broker restarting (5 minutes), as for the liste
 copies on one store (Kubernetes, Redis #509), an update leaves one answering. A run that ended
 is ended at the broker before its network goes (`DELETE /runs/:id`, told again until it is
 heard), so either copy refuses its tokens; a record whose end never came expires 8 days after
-its last renewal.
+its last renewal, and its inbox and files go when the listener next lists the runs (at its
+start, then every hour).
 
 **Runs from before tokens** keep the random secret they started with (`DECKHAND_RUN_SECRET`),
 and no renewal: the broker keeps it by hash, until the run ends, and it still only works from
