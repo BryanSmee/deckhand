@@ -18,7 +18,7 @@ permissions:
 jobs:
   tests:
     # As the runner's own user, not root: some tests need a directory root could write anyway.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
@@ -54,7 +54,7 @@ jobs:
           fi
 
   dashboard:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     defaults:
       run:
         working-directory: dashboard
@@ -68,7 +68,7 @@ jobs:
       - run: npm run build
 
   syntax:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -90,7 +90,7 @@ jobs:
           done
 
   format:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
