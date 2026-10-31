@@ -1072,6 +1072,9 @@ export function writeOf({ name, spec, input }, nodes, repo) {
 export function createGraphqlChecks({
   nodes,
   checkWrite,
+  // github-writes.mjs createWriteChecks()'s `budget`: the node look-up is one of the run's
+  // look-ups for refused writes (MAX_REFUSED_LOOKUPS), past which none is made. None: uncounted.
+  budget = null,
   files = async () => null,
   schema = githubSchema,
   validator = async (query) => {
@@ -1132,28 +1135,47 @@ export function createGraphqlChecks({
     if (ids.length > MAX_NODES) {
       return { refused: refusal(400, `a GraphQL call naming over ${MAX_NODES} nodes`) };
     }
-    let found = new Map();
+    const found = new Map();
+    // The node look-up's cost, kept when the call is refused for something the run did.
+    let cost = null;
     if (ids.length) {
+      if (budget) {
+        cost = budget.begin(run);
+        if (!cost) return { refused: budget.spentOut() };
+        cost.n++;
+      }
       try {
         const answer = await nodes(run.repo, ids);
-        found = new Map(ids.map((id, i) => [id, answer?.[i] ?? null]));
+        ids.forEach((id, i) => found.set(id, answer?.[i] ?? null));
       } catch (error) {
         log(`GitHub gateway: ${run.repo} nodes: ${error.message ?? error}`);
-        return { refused: refusal(502, "its GraphQL's nodes can't be looked up on GitHub") };
+        const refused = refusal(502, "its GraphQL's nodes can't be looked up on GitHub");
+        if (cost) budget.settle(run, cost, refused);
+        return { refused };
       }
     }
+    // A field refused for the budget the node look-up just reached keeps that look-up counted:
+    // the next call is refused before another.
+    const done = (refused) => {
+      if (cost && refused?.status !== 429) budget.settle(run, cost, refused);
+      return refused && { refused };
+    };
     // GitHub's answers about the targets, kept across the call's fields.
     const memo = new Map();
     const writes = [];
     for (const field of fields) {
       const write = writeOf(field, found, run.repo);
-      if (write.refused) return write;
+      if (write.refused) return done(write.refused);
       writes.push(write);
       const refused = await checkWrite(run, write, memo);
       if (refused) {
-        return { refused: { ...refused, message: `${field.key}: ${refused.message}` } };
+        // Its own message, the field's key first; whether it is the run's doing as it was.
+        const keyed = { ...refused, message: `${field.key}: ${refused.message}` };
+        if (refused.failed) Object.defineProperty(keyed, "failed", { value: true });
+        return done(keyed);
       }
     }
+    done(null);
     // Only those whose answer is GitHub's own `issue { url }`.
     const creates = fields
       .filter((f) => f.name === "createIssue" && answersCreated(doc, f.nodes))

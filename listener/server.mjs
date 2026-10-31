@@ -555,6 +555,7 @@ const graphqlChecks = createGraphqlChecks({
   files: forkChecks.checkGraphql,
   nodes: (repo, ids) => lookupNodes(github, repo, ids),
   checkWrite: writeChecks.checkWrite,
+  budget: writeChecks.budget,
   log,
 });
 ctx.githubGateway = createGithubGateway({

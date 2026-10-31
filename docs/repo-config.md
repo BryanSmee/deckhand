@@ -1217,6 +1217,7 @@ shares) before the policies are asked: once the writes a rule or a built-in chec
 cost a run 100 look-ups in the last hour, its next writes are refused (`429`) before any, until
 the hour has room again, so a run steered into writes no rule allows can't spend that limit.
 Writes that go on, and those GitHub or the policy service failed to check, cost nothing of it.
+A GraphQL call's look-up of the node IDs it names counts as one, as its fields' targets do.
 
 A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
 issues: the parent, its target, and the child, by its id: the child must be an issue the run

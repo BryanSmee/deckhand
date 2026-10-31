@@ -44,6 +44,7 @@ import {
   taskKey,
 } from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
+import { pushInput } from "./git-gateway.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
 import {
@@ -1116,22 +1117,17 @@ export function linkSample(repo, pr, issue = null) {
 // → { what, input }
 export function pushSample(repo, pr, issue = null, base = null) {
   const branch = pr.head?.ref ?? null;
+  // An update of a branch that is there (neither created nor deleted): any oid but zeros.
+  const at = pr.head?.sha || "1".repeat(40);
+  const run = { repo: repo.toLowerCase(), mode: "work", push: true, reason: null };
+  const input = pushInput(
+    { ...run, issue: issue?.number ?? pr.number },
+    { ref: branch === null ? "" : `refs/heads/${branch}`, old: at, new: at },
+    base,
+  );
   return {
     what: `a work run's push to ${branch ?? "its branch"}`,
-    input: {
-      repo: repo.toLowerCase(),
-      mode: "work",
-      custom_mode: false,
-      light: false,
-      reason: null,
-      issue: issue?.number ?? pr.number,
-      action: "push",
-      branch,
-      ref: branch === null ? null : `refs/heads/${branch}`,
-      created: false,
-      deleted: false,
-      default_branch: base,
-    },
+    input: { ...input, ref: branch === null ? null : input.ref },
   };
 }
 

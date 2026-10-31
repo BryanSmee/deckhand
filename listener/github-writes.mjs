@@ -53,6 +53,7 @@ import { branchAllowed } from "./broker.mjs";
 import { ISSUES_WRITE } from "./github-app.mjs";
 import { CONTENTS_WRITE, createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
 import { BUILT_IN } from "./modes.mjs";
+import { isPolicyError } from "./policies.mjs";
 
 // What a rerun's token needs: GitHub reruns a job with `actions: write`, an optional permission
 // of the App's (github-app.mjs OPTIONAL_PERMISSIONS), which the sandbox's own token never has.
@@ -940,24 +941,38 @@ export function createWriteChecks({
   // same as check(). `memo`: a Map that keeps GitHub's answers across the writes of one call (a
   // GraphQL call's several fields), so the same target is looked up once.
   async function checkWrite(run, write, memo = new Map()) {
-    const spentOut = () =>
+    const cost = budget.begin(run);
+    if (!cost) return budget.spentOut();
+    const refused = await checked(run, write, memo, cost);
+    if (cost.over) return budget.spentOut();
+    budget.settle(run, cost, refused);
+    return refused;
+  }
+
+  // MAX_REFUSED_LOOKUPS, for checkWrite() and the GraphQL checks' node look-ups
+  // (github-graphql.mjs): begin(run) → a cost entry whose `n` counts the look-ups as they are
+  // made, or null when the run's are spent (spentOut()'s refusal then); settle(run, cost,
+  // refused) keeps it only for a refusal the run caused.
+  const budget = {
+    begin(run) {
+      if (costOf(run) >= MAX_REFUSED_LOOKUPS) return null;
+      const cost = { at: now(), n: 0, over: false };
+      spent.get(run).push(cost);
+      return cost;
+    },
+    settle(run, cost, refused) {
+      if (refused && chargeable(refused)) return;
+      const list = spent.get(run) ?? [];
+      if (list.includes(cost)) list.splice(list.indexOf(cost), 1);
+    },
+    spentOut: () =>
       refusal(
         429,
         `this run's refused writes cost ${MAX_REFUSED_LOOKUPS} look-ups on GitHub in the last hour: Deckhand checks no more of its writes until then`,
-      );
-    if (costOf(run) >= MAX_REFUSED_LOOKUPS) return spentOut();
-    // This write's look-ups, counted as they are made.
-    const cost = { at: now(), n: 0, over: false };
-    spent.get(run).push(cost);
-    const { failed, ...refused } = (await checked(run, write, memo, cost)) ?? {};
-    if (cost.over) return spentOut();
-    const charged = refused.status && !failed && refused.status !== 502 && refused.status !== 503;
-    if (!charged) {
-      const list = spent.get(run) ?? [];
-      if (list.includes(cost)) list.splice(list.indexOf(cost), 1);
-    }
-    return refused.status ? refused : null;
-  }
+      ),
+    // Whether the run's look-ups still allow one more.
+    open: (run) => costOf(run) < MAX_REFUSED_LOOKUPS,
+  };
 
   // checkWrite()'s work, each look-up it makes counted in `cost.n`; past the budget, a look-up
   // fails and `cost.over` says why.
@@ -1242,14 +1257,12 @@ export function createWriteChecks({
     const messages = await policies.deny("deny_github", run.repo, run.base || "main", () => input);
     if (!messages.length) return null;
     // A policy that couldn't be evaluated (the service restarting, opa timing out) isn't the
-    // run's doing: checkWrite() doesn't charge its look-ups.
-    return {
-      ...refusal(403, `the policies refuse it: ${messages.join("; ")}`),
-      failed: messages.some((m) => m.startsWith("policy error")),
-    };
+    // run's doing: its look-ups aren't charged (chargeable()).
+    const refused = refusal(403, `the policies refuse it: ${messages.join("; ")}`);
+    return messages.some(isPolicyError) ? failedRefusal(refused) : refused;
   }
 
-  return { check, checkWrite, answered };
+  return { check, checkWrite, answered, budget };
 }
 
 // The reads the policies' `allow_github` and `deny_github` see (github-gateway.mjs
@@ -1292,7 +1305,7 @@ export function createReadChecks({ policies = null }) {
     if (!messages.length) return null;
     return {
       ...refusal(403, `the policies refuse it: ${messages.join("; ")}`),
-      failed: messages.some((m) => m.startsWith("policy error:")),
+      failed: messages.some(isPolicyError),
     };
   }
   return { checkRead };
@@ -1377,6 +1390,12 @@ function inRepo(issue, repo) {
 }
 
 const refusal = (status, message) => ({ status, message });
+// A refusal that isn't the run's doing (a policy that couldn't be evaluated), marked so without
+// changing what it says: a property of its own that isn't enumerable.
+const failedRefusal = (refused) => Object.defineProperty(refused, "failed", { value: true });
+// Whether a refusal's look-ups count against the run's MAX_REFUSED_LOOKUPS: a rule's or a built-in
+// check's, not GitHub's or the policy service's failing, nor the budget's own.
+export const chargeable = (refused) => !refused.failed && ![429, 502, 503].includes(refused.status);
 // Copilot's logins, over REST and GraphQL (a Bot's login with `[bot]`, github-graphql.mjs).
 const COPILOT = new Set(["copilot", "copilot[bot]", "copilot-swe-agent", "copilot-swe-agent[bot]"]);
 // The issues a run labels besides its own, which never get or lose the needs-input label from it.

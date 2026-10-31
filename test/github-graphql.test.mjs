@@ -19,7 +19,7 @@ import {
   restName,
 } from "../listener/github-graphql.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
-import { classify, createWriteChecks } from "../listener/github-writes.mjs";
+import { classify, createWriteChecks, MAX_REFUSED_LOOKUPS } from "../listener/github-writes.mjs";
 import { allowingPolicies, defaultPolicies, hasOpa, policyEngine } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
@@ -1877,4 +1877,65 @@ test("checkSelections: where the check and status fields are in the answer, alia
   const { check } = checks();
   const out = await check(run("work"), call(GH_CHECKS, { id: "PR_1" }));
   assert.deepEqual(out.readPaths, paths(GH_CHECKS));
+});
+
+test("MAX_REFUSED_LOOKUPS: a refused GraphQL call's node look-up counts, and past it none is made", async () => {
+  const looked = [];
+  // The policies refuse comments on #3, as Deckhand's refuse a work run's on another issue.
+  const writes = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
+    bot: () => "deckhand[bot]",
+    policies: {
+      deny: async (r, repo, ref, input) =>
+        input().target.number === 3 ? ["no rule allows it"] : [],
+    },
+  });
+  const asked = [];
+  const { check } = createGraphqlChecks({
+    nodes: async (repo, ids) => (asked.push(ids), ids.map((id) => NODES[id] ?? null)),
+    checkWrite: writes.checkWrite,
+    budget: writes.budget,
+  });
+  const work = run("work");
+  const comment = (id) => call(GH_COMMENT, { input: { subjectId: id, body: "x" } });
+  // Each refused call: its nodes, the issue and its parent.
+  let refused = 0;
+  while ((await check(work, comment("I_3"))).refused?.status === 403) refused++;
+  // 33 refused calls cost 99; the next one's nodes the 100th, its field refused for it.
+  assert.equal(refused, Math.floor(MAX_REFUSED_LOOKUPS / 3));
+  const [nodes, rest] = [asked.length, looked.length];
+  const spent = await check(work, comment("I_3"));
+  assert.equal(spent.refused.status, 429);
+  assert.match(spent.refused.message, /refused writes cost 100 look-ups/);
+  // Neither the nodes nor the targets looked up again, not even for its own issue.
+  assert.equal((await check(work, comment("I_1"))).refused.status, 429);
+  assert.deepEqual([asked.length, looked.length], [nodes, rest]);
+});
+
+test("MAX_REFUSED_LOOKUPS: a GraphQL call that goes on, or whose nodes GitHub fails, costs nothing", async () => {
+  const writes = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: () => "deckhand[bot]",
+    policies: allowingPolicies,
+  });
+  let down = false;
+  const { check } = createGraphqlChecks({
+    nodes: async (repo, ids) => {
+      if (down) throw new Error("GitHub is down");
+      return ids.map((id) => NODES[id] ?? null);
+    },
+    checkWrite: writes.checkWrite,
+    budget: writes.budget,
+  });
+  const work = run("work");
+  const comment = call(GH_COMMENT, { input: { subjectId: "I_1", body: "x" } });
+  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++)
+    assert.equal((await check(work, comment)).refused, undefined);
+  down = true;
+  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++)
+    assert.equal((await check(work, comment)).refused.status, 502);
+  down = false;
+  assert.equal((await check(work, comment)).refused, undefined);
 });
