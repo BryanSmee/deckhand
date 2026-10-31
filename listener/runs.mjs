@@ -81,8 +81,9 @@ export function createRuns(ctx) {
     ctx.order?.drop(taskKey(task.repo, task.id));
     task.live = newLive(task, items);
     addRun(ctx, task.live.record);
-    // In its saved state before they leave the saved queue (tasks.mjs taken()).
-    ctx.saveLive(task).then(() => ctx.saveQueue?.());
+    // In its saved state before they leave the saved queue (restart.mjs take()).
+    if (ctx.take) ctx.take(task, items);
+    else ctx.saveLive(task);
     try {
       if (!(await start(task, items))) return;
     } catch (error) {
@@ -242,6 +243,8 @@ export function createRuns(ctx) {
     // otherwise.
     const options = task.next;
     task.next = {};
+    // Used: a listener restarting mid-run doesn't give them to the next run too.
+    ctx.saveQueue?.();
     const text = commentsText(items, options);
     const marker = items.findLast((i) => i.fallback)?.fallback;
     // Inbox entries have no previous run to hand over, and start afresh: the sandbox doesn't

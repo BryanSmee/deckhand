@@ -746,10 +746,13 @@ one that stopped:
   (`lib/files.mjs` `persistentMap()`), until each service takes its own into the store (#499).
 
 A comment moves from the queue to a run's state in that order: the run's state is written, then
-the queue without it (`tasks.mjs` `taken()`); and back the other way at a run's end (the queue
-with the comments put back, then the run's state removed, `runs.mjs` `teardown()`). A listener
-killed between the two writes finds the comment in both, and leaves it to the run
-(`loadQueue()`, by `queueId`): never in neither.
+the queue without it (`restart.mjs` `take()`, for a run's start and a running session's
+comments: until the run's state has it, every write of the queue, another task's or a 👀's,
+still has it); and back the other way at a run's end, or a restored run whose sandbox never
+started (the queue with the comments put back, then the run's state removed, `runs.mjs`
+`teardown()`). A listener killed between the two writes finds the comment in both, and leaves
+it to the run (`loadQueue()`, by `queueId`): never in neither. A run's start takes its task's
+`next` and saves the queue without it, so a restart mid-run doesn't hand it to the next run too.
 
 Restoring is one path (`restart.mjs`), the same at a start after a stop, after a crash, and for
 a copy taking over from another (#506): `unifySpellings()`, `restoreRuns()` (the runs' states:

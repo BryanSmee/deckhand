@@ -2167,7 +2167,8 @@ mounts:
   });
 
   test("a listener killed during a comment's pause: the next one runs it once, at its deadline", async (t) => {
-    const PAUSE_MS = 3000;
+    // Long enough for a slow engine to kill the first listener within it.
+    const PAUSE_MS = 8000;
     const ctx = await listen(t, {}, { DEBOUNCE_MS: String(PAUSE_MS) });
     const sent = Date.now();
     await ctx.send(comment("alice"));
@@ -2716,7 +2717,7 @@ mounts:
       t,
       { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
       // Their pause outlasts the restart, and its deadline holds after it.
-      { BRAINSTORM_DEBOUNCE_MS: "3000" },
+      { BRAINSTORM_DEBOUNCE_MS: "8000" },
     );
     await ctx.send(entry(99, "A dark mode"));
     await ctx.send(entry(100, "Keyboard shortcuts"));

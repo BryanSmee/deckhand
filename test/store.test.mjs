@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { openStore } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -187,4 +188,10 @@ test("openStore: a known secret, a private key or a GitHub token is never writte
   await store.set("app", { id: 42 });
   assert.deepEqual(await store.get("app"), { id: 42 });
   assert.ok(!readFileSync(join(dir, "state.json"), "utf8").includes("signing-0123"));
+});
+
+test("openStore: a file: URL's escapes are its path's own characters", async (t) => {
+  const dir = join(tempDir(t), "a store");
+  await openStore(pathToFileURL(dir).href).set("a", 1);
+  assert.deepEqual(readdirSync(dir).includes("state.json"), true);
 });

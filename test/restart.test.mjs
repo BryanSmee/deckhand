@@ -10,7 +10,8 @@ import { createPulls } from "../listener/pulls.mjs";
 import { createRestart, QUEUE_KEY } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
-import { loadRuns } from "../listener/runlog.mjs";
+import { loadRuns, openLog } from "../listener/runlog.mjs";
+import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -695,4 +696,122 @@ test("a run's output read is saved with it once a second, and nothing once it is
   ctx.saveLive(task);
   await live.saving;
   assert.equal(JSON.parse(readFileSync(path, "utf8")).lines.out, 3);
+});
+
+// The store's writes of the queue as they happen, each with whether the run's state was on
+// disk then and which comments it held.
+function recordingWrites(store, livePath) {
+  const writes = [];
+  const set = store.set;
+  store.set = (key, value, options) => {
+    if (key === QUEUE_KEY) {
+      const ids = Object.values(value).flatMap((t) => t.pending.map((i) => i.queueId));
+      let live = null;
+      try {
+        live = JSON.parse(readFileSync(livePath, "utf8")).handled.map((i) => i.queueId);
+      } catch {
+        // Not written yet, or removed.
+      }
+      writes.push({ ids, live });
+    }
+    return set(key, value, options);
+  };
+  return writes;
+}
+
+test("a comment a running session takes stays in every write of the queue until the run's state has it", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const ctx = queueContext(t, dir, store, { real: true });
+  ctx.broker = {};
+  ctx.runner = { send: () => {} };
+  const writes = recordingWrites(store, join(dir, "r1.live.json"));
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.running = true;
+  task.live = {
+    id: "r1",
+    key: "org/repo#1",
+    mode: "work",
+    open: true,
+    record: { id: "r1", agent: "claude" },
+    logFile: openLog(join(dir, "r1.log")),
+    lines: { out: 0, err: 0 },
+    later: {},
+    handled: [],
+    unanswered: [],
+  };
+  ctx.tasks.set("org/repo#1", task);
+  // Its 👀 still on its way: the run's state waits for it.
+  let eyes;
+  const item = queued("1", { queueId: "q-1", text: "And the dates." });
+  item.eyes = new Promise((resolve) => (eyes = resolve));
+  task.pending.push(item);
+  assert.equal(ctx.deliver(task), true);
+  // Another task's comment meanwhile: its write still has the one being taken.
+  const other = newTask(queued("2"));
+  ctx.tasks.set("org/repo#2", other);
+  other.pending.push(queued("2", { queueId: "q-2" }));
+  await ctx.saveQueue();
+  assert.deepEqual(writes.at(-1), { ids: ["q-1", "q-2"], live: null });
+  eyes(7);
+  await task.live.saving;
+  await ctx.saveQueue();
+  // Never in neither: each write without it came once the run's state had it.
+  for (const write of writes) assert.ok(write.ids.includes("q-1") || write.live?.includes("q-1"));
+  assert.deepEqual(writes.at(-1), { ids: ["q-2"], live: ["q-1"] });
+});
+
+test("a restored run whose sandbox never started: its comments in the queue before its state goes", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const livePath = join(dir, "r1.live.json");
+  writeFileSync(
+    livePath,
+    JSON.stringify({
+      task: { repo: "org/repo", id: "1", kind: "issue", name: "deckhand-org-repo-1" },
+      id: "r1",
+      mode: "work",
+      light: false,
+      record: { id: "r1", key: "org/repo#1", agent: "claude" },
+      handled: [{ ...queued("1", { queueId: "q-1" }), eyes: 3 }],
+      unanswered: [],
+    }),
+  );
+  const ctx = queueContext(t, dir, store);
+  ctx.broker = createBroker({});
+  ctx.runner = {
+    closed: () => false,
+    relink: async () => {},
+    list: async () => [],
+    remove: async () => {},
+  };
+  ctx.shotsDir = dir;
+  Object.assign(ctx, { teardown: createRuns(ctx).teardown });
+  const writes = recordingWrites(store, livePath);
+  await ctx.reattach(ctx.restoreRuns());
+  assert.throws(() => readFileSync(livePath), { code: "ENOENT" });
+  // The last write while its state was there already had the comment back: never in neither.
+  const last = writes.findLast((w) => w.live);
+  assert.deepEqual(last, { ids: ["q-1"], live: ["q-1"] });
+  assert.deepEqual(ctx.armed, [["1", undefined]]);
+  // Its 👀 known from the start, not saved as none first.
+  assert.ok(writes.every((w) => w.ids.length === 0 || w.ids[0] === "q-1"));
+  assert.equal((await store.get(QUEUE_KEY))["org/repo#1"].pending[0].eyes, 3);
+});
+
+test("a restored comment's 👀 is in the queue's first write after a restart", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  await store.set(QUEUE_KEY, {
+    "org/repo#7": { ...queued("7"), pending: [{ ...queued("7"), eyes: 41 }], next: {} },
+  });
+  const ctx = queueContext(t, dir, store);
+  const writes = [];
+  const set = store.set;
+  store.set = (key, value, options) => {
+    writes.push(value["org/repo#7"]?.pending[0].eyes);
+    return set(key, value, options);
+  };
+  await ctx.loadQueue();
+  assert.deepEqual(writes, [41]);
 });

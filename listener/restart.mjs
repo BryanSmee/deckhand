@@ -56,8 +56,14 @@ export function queueId() {
   return randomUUID();
 }
 
+// Each comment's 👀 id once GitHub answered, for the queue's writes (eyesOf()).
+const eyesKnown = new WeakMap();
+
 export function revive(item) {
-  return { ...item, eyes: Promise.resolve(item.eyes) };
+  const revived = { ...item, eyes: Promise.resolve(item.eyes) };
+  // Known already: the queue's next write keeps it (eyesOf()).
+  eyesKnown.set(revived, item.eyes ?? null);
+  return revived;
 }
 
 function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
@@ -148,7 +154,6 @@ export function createRestart(ctx) {
 
   // A comment's 👀 is a promise until GitHub answers: saved without it meanwhile (not waited
   // for: the comment would be lost with a listener killed before), and saved again once known.
-  const eyesKnown = new WeakMap();
   function eyesOf(item) {
     if (eyesKnown.has(item)) return eyesKnown.get(item);
     eyesKnown.set(item, null);
@@ -162,11 +167,30 @@ export function createRestart(ctx) {
     return null;
   }
 
+  // Comments a run or a running session is taking (take()): out of `pending`, not yet in the
+  // run's saved state. task → [items], still written with the queue meanwhile.
+  const moving = new Map();
+
+  // Comments `items` of `task`, out of its `pending` now, taken by its run: written in the run's
+  // state first, then out of the queue. Until the run's state is written, every write of the
+  // queue (another task's, a 👀 known) still has them: a listener killed meanwhile finds them
+  // in the queue, or in both (loadQueue() leaves them to the run), never in neither.
+  function take(task, items) {
+    moving.set(task, [...(moving.get(task) ?? []), ...items]);
+    return saveLive(task).then(() => {
+      const left = (moving.get(task) ?? []).filter((item) => !items.includes(item));
+      if (left.length) moving.set(task, left);
+      else moving.delete(task);
+      return saveQueue();
+    });
+  }
+
   function queueState() {
     const saved = {};
     for (const [key, t] of tasks) {
-      if (!t.pending.length && !Object.keys(t.next).length) continue;
-      const pending = t.pending.map((item) => plainWith(item, eyesOf(item)));
+      const all = [...(moving.get(t) ?? []), ...t.pending];
+      if (!all.length && !Object.keys(t.next).length) continue;
+      const pending = all.map((item) => plainWith(item, eyesOf(item)));
       // The comments' text and authors: the store is the listener's own (its files the
       // owner's only, lib/store-file.mjs).
       saved[key] = { ...pick(t), pending, next: t.next, dueAt: t.dueAt ?? null };
@@ -442,11 +466,12 @@ export function createRestart(ctx) {
     }
   }
 
+  // Its comments back in the queue before its state goes (teardown() saves the queue first).
   async function requeue(task) {
     const { handled } = task.live;
     task.live.record.status = "interrupted";
-    await ctx.teardown(task);
     task.pending.unshift(...handled);
+    await ctx.teardown(task);
     ctx.startLater(task);
   }
 
@@ -454,6 +479,7 @@ export function createRestart(ctx) {
     unifySpellings,
     saveQueue,
     loadQueue,
+    take,
     livePath,
     saveLive,
     saveLiveSoon,

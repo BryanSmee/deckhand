@@ -313,21 +313,21 @@ export function createTasks(ctx) {
     live.record.delivered = (live.record.delivered ?? 0) + items.length;
     // Only "/model …" lines: nothing to tell the agent.
     if (!text) {
-      taken(task);
+      taken(task, items);
       return false;
     }
     ctx.runner.send(live.id, liveMessage(live.mode, text), agentFor(live.record.agent));
     writeEvent(live.logFile, "delivered", { message: text });
     live.unanswered.push(...items);
-    taken(task);
+    taken(task, items);
     return true;
   }
 
-  // Comments a run took: in its saved state first, then out of the saved queue. A listener
-  // killed between the two finds them in both, and leaves them to the run (restart.mjs
-  // loadQueue()); the other way round, it would lose them.
-  function taken(task) {
-    return ctx.saveLive(task).then(() => ctx.saveQueue?.());
+  // Comments a run took: in its saved state first, then out of the saved queue (restart.mjs
+  // take()). A listener killed between the two finds them in both, and leaves them to the run
+  // (loadQueue()); the other way round, it would lose them.
+  function taken(task, items) {
+    return ctx.take ? ctx.take(task, items) : ctx.saveLive(task);
   }
 
   // When a pause that starts now ends: its deadline, saved with the queue (restart.mjs), so

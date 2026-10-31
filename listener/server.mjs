@@ -32,7 +32,8 @@ import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import { drain } from "../lib/drain.mjs";
-import { fileStore } from "../lib/store-file.mjs";
+import { pathToFileURL } from "node:url";
+import { openStore } from "../lib/store.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -169,7 +170,7 @@ const ctx = {
   stopping: false,
   // The listener's state through the store's interface (lib/store.mjs), in the data volume: the
   // queue for now (restart.mjs), the rest as the services take it over (#499).
-  store: fileStore({ dir: join(config.dataDir, "store") }),
+  store: openStore(pathToFileURL(join(config.dataDir, "store")).href),
 };
 
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
