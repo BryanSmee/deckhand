@@ -6,7 +6,8 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { cacheVolume, repoImage, sandboxName } from "../listener/repo-config.mjs";
-import { SANDBOX_USER, sessionOf } from "../listener/sandbox-spec.mjs";
+import { SANDBOX_USER, sessionNames, sessionOf } from "../listener/sandbox-spec.mjs";
+import { AGENTS } from "../listener/agents/index.mjs";
 import { cliEnv, cliName } from "../listener/runner/docker.mjs";
 import { specProblems } from "../runner/spec-check.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -267,6 +268,27 @@ test("specProblems: every session volume the listener may name for a run is the 
       specProblems(config, spec(config, { name, run: `${name}-1`, volumes })),
       [],
       JSON.stringify(live),
+    );
+  }
+});
+
+test("specProblems: every volume of sessionNames(), with and without a fork's workspace, each agent's session", (t) => {
+  const { config } = setup(t);
+  const name = sandboxName(config, "org/repo", "12");
+  for (const base of [...sessionNames(name), `${name}-research`]) {
+    const volumes = [
+      { kind: "session", name: `${base}-workspace`, path: "/w1" },
+      { kind: "session", name: `${base}-fork-workspace`, path: "/w2" },
+      ...Object.values(AGENTS).map((agent, i) => ({
+        kind: "session",
+        name: `${base}-${agent.session.volume}`,
+        path: `/s${i}`,
+      })),
+    ];
+    assert.deepEqual(
+      specProblems(config, spec(config, { name, run: `${name}-1`, volumes })),
+      [],
+      base,
     );
   }
 });
