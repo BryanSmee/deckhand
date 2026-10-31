@@ -371,6 +371,8 @@ test("locate: the UID of the running sandbox pod at an address, else null", asyn
   // An API error keeps what was known, even right after another sandbox started: one failed
   // call refuses no sandbox. Nor is it asked again for every connection meanwhile.
   time += 60_000;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  time += 2_000;
   failing = true;
   await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1730000000" }));
   assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
@@ -381,6 +383,10 @@ test("locate: the UID of the running sandbox pod at an address, else null", asyn
     assert.equal(await runner.locate("10.244.5.5"), null);
   }
   assert.equal(failed, 2);
+  // Known means answered within 10 s: past that, an outage fails closed (the pod may be gone
+  // without remove(), its address another's).
+  time += 10_000;
+  assert.equal(await runner.locate("10.244.1.7"), null);
   failing = false;
   objects.pods.delete("dh-org-repo-13-abc");
   // Gone with its pod: an address never names a pod that was removed.

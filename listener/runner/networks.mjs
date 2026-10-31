@@ -254,7 +254,9 @@ export function createNetworks({ config, docker, log, now }) {
     );
     const ids = out.split("\n").filter(Boolean);
     if (!ids.length) return [];
-    // One removed meanwhile makes Docker exit 1 after printing the others.
+    // One removed meanwhile makes Docker exit 1 after printing the others: those still count.
+    // Exit 1 with none printed is a failure (the daemon not answering), not "no sandboxes":
+    // lookUp() keeps what it knew.
     const listed = await docker([
       "network",
       "inspect",
@@ -262,18 +264,19 @@ export function createNetworks({ config, docker, log, now }) {
       "{{.Id}}{{range .Containers}} {{.Name}}|{{.IPv4Address}}|{{.IPv6Address}}{{end}}",
       ...ids,
     ]);
-    return listed.out
-      .split("\n")
-      .filter(Boolean)
-      .flatMap((line) => {
-        const [id, ...containers] = line.split(" ").filter(Boolean);
-        return containers.flatMap((c) => {
-          const [name, ...addresses] = c.split("|");
-          return addresses
-            .filter(Boolean)
-            .map((a) => [a.replace(/\/\d+$/, ""), { sandbox: id, name }]);
-        });
+    const lines = listed.out.split("\n").filter(Boolean);
+    if (listed.code !== 0 && !lines.length) {
+      throw new Error(`docker network inspect: ${listed.err || `exit ${listed.code}`}`);
+    }
+    return lines.flatMap((line) => {
+      const [id, ...containers] = line.split(" ").filter(Boolean);
+      return containers.flatMap((c) => {
+        const [name, ...addresses] = c.split("|");
+        return addresses
+          .filter(Boolean)
+          .map((a) => [a.replace(/\/\d+$/, ""), { sandbox: id, name }]);
       });
+    });
   }
 
   // Its ID, once created.

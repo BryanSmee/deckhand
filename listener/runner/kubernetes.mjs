@@ -810,8 +810,12 @@ export function createKubernetesRunner({
   // at most), and looked up again as a sandbox starts (what was known kept, should that lookup
   // fail) or forgotten as one is removed. One lookup per address at a time: the connections that
   // ask meanwhile share it. An API error answers what was known, and is asked again after
-  // PROXY_RETRY_MS: an outage mustn't refuse every sandbox, nor cost an API call per connection.
-  let uids = new Map(); // ip → { uid, at, failed }
+  // PROXY_RETRY_MS: a blip mustn't refuse every sandbox, nor cost an API call per connection.
+  // Known means answered by the API within PROXY_TTL_MS (`goodAt`), never carried forward by
+  // failures: past that, an outage fails closed (nobody's), as a pod gone without remove()
+  // (evicted, its node lost) may have left its address to another run's.
+  let uids = new Map(); // ip → { uid, at, goodAt, failed }
+  const fresh = (k) => !!k?.uid && now() - (k.goodAt ?? -Infinity) < PROXY_TTL_MS;
   const looking = new Map(); // ip → Promise<uid>
   let uidsGen = 0; // counts forgetUids()
   // `removed`: the UID of the pod removed (true: unknown, all of them go).
@@ -819,11 +823,11 @@ export function createKubernetesRunner({
     uidsGen++;
     looking.clear();
     if (removed === true) return void (uids = new Map());
-    // Every answer looked up again; the sandboxes known kept for a failed lookup, not the
-    // addresses that had none (the new pod may have one of them now) nor the removed pod's.
+    // Every answer looked up again; the sandboxes known (fresh()) kept for a failed lookup, not
+    // the addresses that had none (the new pod may have one of them now) nor the removed pod's.
     uids = new Map(
       [...uids]
-        .filter(([, k]) => k.uid && k.uid !== removed)
+        .filter(([, k]) => fresh(k) && k.uid !== removed)
         .map(([ip, k]) => [ip, { ...k, at: -Infinity }]),
     );
   }
@@ -855,15 +859,18 @@ export function createKubernetesRunner({
       const live = items.filter((p) => at(p) && !p.metadata?.deletionTimestamp && running(p));
       uid = live.length === 1 ? (live[0].metadata?.uid ?? null) : null;
     } catch (error) {
-      // What was known, if anything, until PROXY_RETRY_MS on.
+      // What was known, if the API said so within PROXY_TTL_MS, until PROXY_RETRY_MS on.
       log(`Looking up the sandbox at ${ip}: ${error.message}`);
-      const kept = uids.get(ip)?.uid ?? null;
-      if (seen === uidsGen) uids.set(ip, { uid: kept, at: now(), failed: true });
+      const known = uids.get(ip);
+      const kept = fresh(known) ? known.uid : null;
+      if (seen === uidsGen) {
+        uids.set(ip, { uid: kept, at: now(), goodAt: known?.goodAt, failed: true });
+      }
       return kept;
     }
     if (uids.size > 1000) uids = new Map();
     // Unless a sandbox started or went meanwhile: its answer would be older than that.
-    if (seen === uidsGen) uids.set(ip, { uid, at: now() });
+    if (seen === uidsGen) uids.set(ip, { uid, at: now(), goodAt: now() });
     return uid;
   }
 

@@ -272,8 +272,13 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   let failing = false;
   const { r, calls } = runner({
     now: () => now,
-    // A Docker CLI that fails, while the test says so.
-    answers: { "network ls": () => failing && { code: 1, out: "", err: "Cannot connect" } },
+    // A Docker CLI that fails, while the test says so: its `ls`, or its `inspect` alone.
+    answers: {
+      "network ls": () => failing === "ls" && { code: 1, out: "", err: "Cannot connect" },
+      "network inspect": (args) =>
+        failing === "inspect" &&
+        args.join(" ").includes("IPv4Address") && { code: 1, out: "", err: "context deadline" },
+    },
   });
   const bound = [];
   await r.start({
@@ -306,7 +311,10 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   // A lookup that fails keeps what was known, even right after another network was created:
   // one failed Docker call refuses no run.
   now += 60_000;
-  failing = true;
+  failing = "inspect";
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  now += 60_000;
+  failing = "ls";
   await r.start({ run: "dh-b-1", name: "dh-b", image: "dh-sandbox" });
   assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
   // Nor does it make one more Docker call per connection while it fails: an unknown address (a
@@ -322,7 +330,7 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   failing = false;
   now += 2_000;
   assert.ok(await sandboxOf("10.1.0.2"));
-  assert.equal(looks(), before + 2);
+  assert.equal(looks(), before + 3);
   // Gone with its network: an address never names a network that was removed (the fake gives
   // both sandboxes the same one).
   await r.remove("dh-org-repo-12", "dh-org-repo-12-1");
