@@ -755,6 +755,14 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // they go to the listener, which relays them.
   // The models service (#504) likewise, for the agents' calls, with its token from the broker.
   const modelsUrl = process.env.MODELS_SERVICE_URL || null;
+  // One address: the proxy can't try a streamed call again elsewhere, so its copies are behind
+  // one name (a Service on Kubernetes), not listed as the listener may list them.
+  if (modelsUrl && !/^https?:\/\/[^,\s]+$/.test(modelsUrl)) {
+    console.error(
+      `MODELS_SERVICE_URL: ${modelsUrl} is not one http(s) URL: the egress proxy takes one address, which balances between the models service's copies`,
+    );
+    process.exit(1);
+  }
   const caller = process.env.BROKER_SERVICE_URL
     ? createBrokerCaller({
         url: process.env.BROKER_SERVICE_URL,
