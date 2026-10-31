@@ -21,7 +21,7 @@ import { capabilitiesInput, listed, outcomeOf } from "./capabilities.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { headInRepo } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { grantCheck } from "./grants.mjs";
+import { grantCheck, grantsBy } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
@@ -74,7 +74,12 @@ export function createPreparation(ctx) {
     ctx.broker.allow(live.id, live.branches, fork);
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
-    const access = grantedAccess(config, task, settings, { agent, note, log });
+    const access = await grantedAccess(config, task, settings, {
+      agent,
+      note,
+      log,
+      granted: grantsBy(ctx.policies),
+    });
     // The open internet: any public host, private addresses only for those every run needs
     // (access.mjs bareAccess() says why).
     if (caps.has("internet")) {
@@ -158,7 +163,9 @@ export function createPreparation(ctx) {
       );
     }
     // Grants that can't be read stop the run as they always did, before what they gate.
-    const check = grantCheck(config, task.repo, settings);
+    const check = await grantCheck(config, task.repo, settings, {
+      granted: grantsBy(ctx.policies),
+    });
     if (check.error) {
       log(`${task.repo}: ${check.error.message}`);
       throw new RunError(`${cantRun(agent)}: ${grantsRefusal(check)}.`);
@@ -229,7 +236,12 @@ export function createPreparation(ctx) {
     // The listener reads them: the sandbox has no clone to read them from.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     live.fork = false;
-    const access = bareAccess(config, task, { agent, log, internet: caps.has("internet") });
+    const access = await bareAccess(config, task, {
+      agent,
+      log,
+      internet: caps.has("internet"),
+      granted: grantsBy(ctx.policies),
+    });
     note(
       caps.has("internet")
         ? "Research: any public host, without the repository's code, image or a GitHub token"

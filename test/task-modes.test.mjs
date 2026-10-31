@@ -5,13 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { createTaskModes } from "../listener/task-modes.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { grantedOf, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig();
 
 // modeOf() for a comment on org/repo#12 with the repo's `yaml`: what it ran, and the replies.
 // `issueModes`: the issues' current modes, kept across calls. `sessions`: the volumes that hold an
-// agent session (the runner's hasSession()).
+// agent session (the runner's hasSession()). `grants`: what the operator's policies grant the repo
+// (grants.mjs GRANTS), with policies that are Deckhand's alone otherwise; none: no policies.
 async function modeOf(
   fields,
   yaml = "",
@@ -22,6 +23,7 @@ async function modeOf(
     decisions = null,
     posted,
     sessions = new Set(),
+    grants = null,
   } = {},
 ) {
   const replies = [];
@@ -40,6 +42,13 @@ async function modeOf(
     reviews,
     decisions,
     runner: { hasSession: async (name, agent) => sessions.has(`${name}-${agent.session.volume}`) },
+    ...(grants && {
+      policies: {
+        grants: async (repo) => grantedOf(grants.list)(repo),
+        policiesFor: async () => ({ operator: new Map(), repo: new Map() }),
+        deckhandOnly: () => true,
+      },
+    }),
   };
   const { settings } = parseRepoConfig(yaml, config);
   const item = { repo: "org/repo", id: "12", number: 12, replyTo: 12, settings, ...fields };
@@ -57,13 +66,13 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
       "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here), `policy`. Pick one with a `/mode <name>` line.",
     ],
   ]);
-  // The repo's own modes are listed too, a light one as comments only.
-  const modes = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n    light: true\n";
+  // The repo's own modes are listed too.
+  const modes = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n";
   const own = await modeOf({ trigger: "work", modeLine: "reveiw" }, modes);
   assert.equal(own.mode, null);
   assert.match(
     own.replies[0][2],
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `policy`, `audit` \(comments only\)\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `policy`, `audit`\./,
   );
   assert.equal((await modeOf({ trigger: "work", modeLine: "audit" }, modes)).mode, "audit");
 });
@@ -74,29 +83,40 @@ test("/mode research: refused without the operator's grant, naming it; no run, n
   assert.equal(mode, null);
   assert.match(
     replies[0][2],
-    /^Research can't run here: research runs need the operator's `allow_research: true` grant/,
+    /^Research can't run here: research runs need the `research` grant: the operator's policies don't grant `research` to this repository/,
   );
   assert.equal(issueModes.has("org/repo#12"), false);
 });
 
 test("/mode research with the grant: it starts alone, and comments go on in it", async (t) => {
   const dir = tempDir(t);
-  writeFileSync(join(dir, "default.yaml"), "allow_research: true\n");
+  writeFileSync(join(dir, "default.yaml"), "hosts: [pypi.org]\n");
   const cfg = testConfig({ GRANTS_DIR: dir });
   const issueModes = new Map();
-  const first = await modeOf({ modeLine: "research" }, "", { cfg, issueModes });
+  // The operator's policies grant it.
+  const grants = { list: ["research"] };
+  const first = await modeOf({ modeLine: "research" }, "", { cfg, issueModes, grants });
   assert.equal(first.mode, "research");
   assert.deepEqual(first.replies, []);
   assert.equal(issueModes.get("org/repo#12"), "research");
   // A comment without a trigger or /mode line: still research.
-  assert.equal((await modeOf({}, "", { cfg, issueModes })).mode, "research");
+  assert.equal((await modeOf({}, "", { cfg, issueModes, grants })).mode, "research");
   // The grant gone meanwhile: refused, and the issue leaves the mode.
-  mkdirSync(join(dir, "org"));
-  writeFileSync(join(dir, "org", "repo.yaml"), "allow_research: false\n");
-  const after = await modeOf({}, "", { cfg, issueModes });
+  grants.list = [];
+  const after = await modeOf({}, "", { cfg, issueModes, grants });
   assert.equal(after.mode, null);
-  assert.match(after.replies[0][2], /allow_research/);
+  assert.match(after.replies[0][2], /don't grant `research`/);
   assert.equal(issueModes.get("org/repo#12"), null);
+  // A broken grants file: refused too, naming it.
+  mkdirSync(join(dir, "org"));
+  writeFileSync(join(dir, "org", "repo.yaml"), "hosts: [bad host]\n");
+  grants.list = ["research"];
+  const broken = await modeOf({ modeLine: "research" }, "", { cfg, issueModes, grants });
+  assert.equal(broken.mode, null);
+  assert.match(
+    broken.replies[0][2],
+    /`org\/repo\.yaml` in the operator's grants folder has errors/,
+  );
 });
 
 test("/mode review: only with the repo's review block, and only on a pull request", async () => {

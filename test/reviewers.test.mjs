@@ -82,14 +82,14 @@ test("reviewersFor: the repo's list, still in ALLOWED_USERS, never the author", 
 
 test("runFields: the run whose pull request it is, as deny_github's input has it", () => {
   const record = (taskMode, more = {}) => ({ taskMode, light: false, reason: null, ...more });
+  // Its record's `light` (a mode apart from work's) isn't a policy input any more (#498).
   assert.deepEqual(runFields(record("work", { reason: "review-fix" })), {
     mode: "work",
     custom_mode: false,
-    light: false,
     reason: "review-fix",
   });
   assert.equal(runFields(record("plan")).custom_mode, true);
-  assert.deepEqual(runFields(null), { mode: null, custom_mode: false, light: false, reason: null });
+  assert.deepEqual(runFields(null), { mode: null, custom_mode: false, reason: null });
 });
 
 // A fake GitHub for the reviewers: the pull request (`pull()`, changed as pushes would), the
@@ -276,8 +276,8 @@ test("deny_request_review: its input, a denial requests nothing and is kept for 
     [1, "request_review", ["alice", "bob"], "ready"],
   );
   assert.deepEqual(
-    [input.mode, input.custom_mode, input.light, input.reason],
-    ["work", false, false, null],
+    [input.mode, input.custom_mode, input.reason, "light" in input],
+    ["work", false, null, false],
   );
   assert.deepEqual([input.pr.number, input.pr.files[0].path, input.issue.number], [5, "a.mjs", 12]);
   assert.equal(input.review, null);
@@ -352,7 +352,6 @@ const asked = (policies, mode, { custom_mode = false, reason = null, when = "rea
     when,
     mode,
     custom_mode,
-    light: false,
     reason,
   }));
 

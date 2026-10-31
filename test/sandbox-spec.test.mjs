@@ -367,16 +367,25 @@ test("sandboxSpec: a light run with `setup` or `docker` starts apart from the ot
 });
 
 test("sandboxSpec: a run the gateways check clones whole, `push` or not", () => {
-  // A work run whose `push` is denied, and a repo's mode that isn't light given only reads.
+  // A work run whose `push` is denied, and a repo's mode given only reads and `setup`: its
+  // capabilities decide, not its mode (#498).
   for (const mode of ["work", "audit"]) {
     const spec = sandboxSpec(
-      runOf({ mode, capabilities: ["pull", "read:issues"] }),
+      runOf({ mode, capabilities: ["pull", "setup", "read:issues"] }),
       "p",
       "m",
       parts,
     );
     assert.equal(spec.env.SANDBOX_FULL_CLONE, "1", mode);
     assert.equal(spec.env.SANDBOX_LIGHT, "1", mode);
+    // With reads alone, nothing the repo's later runs trust: not checked.
+    const reads = sandboxSpec(
+      runOf({ mode, capabilities: ["pull", "read:issues"] }),
+      "p",
+      "m",
+      parts,
+    );
+    assert.equal(reads.env.SANDBOX_FULL_CLONE, "", mode);
   }
   // A fork's: never checked, blobless.
   const fork = sandboxSpec(runOf({ fork: true }), "p", "m", parts);
@@ -395,15 +404,20 @@ test("sandboxSpec: a run without `push` never mounts the work runs' clone, nor t
       parts,
     );
     assert.equal(spec.env.SANDBOX_LIGHT, "1", mode);
-    // The gateways check it (its mode pushes).
+    // Nothing the gateways check it for: reads alone.
     assert.deepEqual(
       workspaceOf(spec),
-      [
-        "deckhand-org-app-12-readonly-trusted-workspace",
-        "deckhand-org-app-12-readonly-trusted-claude",
-      ],
+      ["deckhand-org-app-12-readonly-workspace", "deckhand-org-app-12-readonly-claude"],
       mode,
     );
+    // With `setup` (caches), checked: apart from those.
+    const setup = sandboxSpec(
+      runOf({ mode, capabilities: ["pull", "setup", "read:issues"] }),
+      "p",
+      "m",
+      parts,
+    );
+    assert.equal(workspaceOf(setup)[0], "deckhand-org-app-12-readonly-trusted-workspace", mode);
   }
   // A fork's: unchecked, a clone of its own.
   const fork = sandboxSpec(
@@ -438,6 +452,7 @@ test("sessionNames: every volume sessionOf() may give a work run or a light one,
       live("brainstorm", true, ["pull"]),
       live("brainstorm", true, ["pull"], true),
       live("audit", true, ["pull", "setup"]),
+      live("brainstorm", true, ["pull", "push"]),
       live("brainstorm", true, []),
       live("brainstorm", true, null),
     ],
@@ -452,17 +467,20 @@ test("sessionNames: every volume sessionOf() may give a work run or a light one,
 });
 test("sessionOf: a run that stashes and one that doesn't never share a clone", () => {
   // A work run with `push` stashes: the work clone. A work run without it doesn't: its own,
-  // apart from both the work runs' and the light runs' (which never have `push`: outcomeOf()).
+  // apart from both the work runs' and those of the modes apart from work (modes.mjs
+  // `volumes`), which get one of their own again when the policies give them `push` (#498).
   const pushes = { mode: "work", light: false, capabilities: ["pull", "push", "setup"] };
-  const reads = { mode: "work", light: false, capabilities: ["pull", "read:issues"] };
-  const lightReads = { mode: "audit", light: true, capabilities: ["pull", "setup"] };
+  const reads = { mode: "work", light: false, capabilities: ["pull", "setup", "read:issues"] };
+  const lightReads = { mode: "brainstorm", light: true, capabilities: ["pull", "setup"] };
+  const lightPushes = { mode: "brainstorm", light: true, capabilities: ["pull", "push"] };
   assert.equal(sessionOf("n", pushes), "n");
   assert.equal(sessionOf("n", reads), "n-readonly-trusted");
   assert.equal(sessionOf("n", lightReads), "n-light-trusted");
-  const workspaces = [pushes, reads, lightReads].map(
+  assert.equal(sessionOf("n", lightPushes), "n-light-push");
+  const workspaces = [pushes, reads, lightReads, lightPushes].map(
     (live) => workspaceOf(sandboxSpec(runOf(live), "p", "m", parts))[0],
   );
-  assert.equal(new Set(workspaces).size, 3);
+  assert.equal(new Set(workspaces).size, 4);
 });
 
 test("sessionOf: a run that reaches the open internet never shares volumes with one that doesn't", () => {

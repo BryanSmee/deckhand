@@ -125,6 +125,32 @@ test("the service: probes without a token, the rest by its table, an engine's an
   assert.deepEqual(await (await post("/check", { layer: "repo", files: [] })).json(), {
     errors: [],
   });
+  // The runner: a repository's grants only, of the operator's layer (#498).
+  const asRunner = (body) =>
+    fetch(`${url}/evaluate`, {
+      method: "POST",
+      headers: { authorization: bearer(key, "runner") },
+      body: JSON.stringify({ operatorDigest: engine.operatorDigest(), ...body }),
+    });
+  const grant = { decision: "grant", input: { grant: "docker", repo: { name: "org/repo" } } };
+  assert.equal((await asRunner(grant)).status, 200);
+  for (const body of [
+    { decision: "merge", input: { pr: { additions: 1 } } },
+    { ...grant, repo: [["a.rego", "package deckhand\n"]] },
+    { ...grant, repoAllow: true },
+  ]) {
+    const res = await asRunner(body);
+    assert.equal(res.status, 403, JSON.stringify(body));
+    assert.match((await res.json()).error, /the runner asks a repository's grants only/);
+  }
+  for (const path of ["/capabilities", "/check"]) {
+    const res = await fetch(`${url}${path}`, {
+      method: "POST",
+      headers: { authorization: bearer(key, "runner") },
+      body: "{}",
+    });
+    assert.equal(res.status, 403, path);
+  }
   // Draining: out of rotation for a readiness probe.
   server.draining();
   assert.equal((await get("/ready")).status, 503);
@@ -783,7 +809,13 @@ test("the capabilities: what the engine refuses, and a union's error said as the
       message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
     },
   ]);
-  assert.deepEqual(ROUTES["POST /capabilities"], ROUTES["POST /evaluate"]);
+  // The deciders', but the runner's: it asks the grants alone (#498).
+  assert.deepEqual(
+    ROUTES["POST /capabilities"],
+    ROUTES["POST /evaluate"].filter((caller) => caller !== "runner"),
+  );
+  assert.ok(ROUTES["GET /policies"].includes("runner"));
+  assert.ok(!ROUTES["POST /check"].includes("runner"));
 });
 
 test("the capabilities of many modes: in parts the service takes, one answer", async (t) => {

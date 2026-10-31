@@ -9,7 +9,8 @@ import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
-import { customMode, entryRun, isFresh, isLight, sessionName } from "./modes.mjs";
+import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
+import { answersOnly } from "./capabilities.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -30,7 +31,7 @@ import {
   writeEvent,
 } from "./runlog.mjs";
 import { logSent } from "./restart.mjs";
-import { sandboxSpec, sessionOf } from "./sandbox-spec.mjs";
+import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
@@ -118,7 +119,9 @@ export function createRuns(ctx) {
     const replyTo = items.at(-1).replyTo;
     // The last comment decides: a work trigger after a brainstorm comment means work.
     const mode = items.at(-1).mode;
-    const light = isLight(task, mode);
+    // Its mode's volumes are its own (modes.mjs `volumes`): what the run's record says as
+    // `light`, as runs before #498 did.
+    const light = isApart(mode);
     const key = taskKey(task.repo, task.id);
     const id = `${task.name}-${Date.now()}`;
     const { reason = null, round = null, rounds = null } = items.at(-1);
@@ -127,7 +130,7 @@ export function createRuns(ctx) {
       { id, key, mode, light, replyTo, reason, round, rounds, items },
       {
         title: ctx.titles.get(key),
-        agent: light ? config.brainstormAgent : config.agent,
+        agent: brainstormDefaults(mode) ? config.brainstormAgent : config.agent,
       },
     );
     // The issues it creates and the comments it posts, as GitHub answers its calls
@@ -139,9 +142,9 @@ export function createRuns(ctx) {
     // Its tokens, which its sandbox holds instead of a GitHub token (the GitHub gateway swaps
     // them for one limited to this repo) or the operator's credential, name it by its id while
     // it lasts. Signed once its sandbox's network is known (sandbox-spec.mjs).
+    // Whether it pushes is its capabilities' (broker.mjs grant()), once its start decided them.
     ctx.broker.register(task.repo, {
       id,
-      push: !light,
       mode,
       issue: task.number,
       base: task.base,
@@ -250,7 +253,16 @@ export function createRuns(ctx) {
     // Inbox entries have no previous run to hand over, and start afresh: the sandbox doesn't
     // resume their session (entrypoint.sh).
     const fresh = isFresh(task, mode);
-    const chosen = resolveEntry({ config, settings, own, light, previous, options, marker, fresh });
+    const chosen = resolveEntry({
+      config,
+      settings,
+      own,
+      light: brainstormDefaults(mode),
+      previous,
+      options,
+      marker,
+      fresh,
+    });
     const { entry } = chosen;
     Object.assign(record, {
       agent: entry.agent,
@@ -278,7 +290,7 @@ export function createRuns(ctx) {
     const started =
       !fresh &&
       !chosen.takeOver &&
-      (await ctx.runner.hasSession(sessionName(task.name, light, mode), agentOf(task)));
+      (await ctx.runner.hasSession(sessionName(task.name, mode), agentOf(task)));
     const restored = items.some((i) => i.restored);
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
@@ -793,8 +805,8 @@ export function createRuns(ctx) {
     } else await post(task, text);
     live.replied = true;
     ctx.saveLive(task);
-    // Light runs ask questions all along: no label for those.
-    if (status === "needs-input" && config.needsInputLabel && !live.light) {
+    // Runs that only answer (no `push`) ask questions all along: no label for those.
+    if (status === "needs-input" && config.needsInputLabel && !answersOnly(live)) {
       await ctx.label(task.repo, task.number, true);
     }
   }

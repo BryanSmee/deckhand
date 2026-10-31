@@ -5,8 +5,9 @@
 // strings, the reasons shown to the maintainer (or the run, for `deny_github`). Decisions: `run`
 // for a run a person starts (run-policy.mjs), `merge`, `review`, `fix`, `link_branch` for the branch the listener links to a work run's issue
 // (linked-branch.mjs), `request_review` for the reviewers it requests (reviewers.mjs), `github`
-// for a run's GitHub writes and some of its reads (github-writes.mjs), and `push` for each branch
-// a run pushes (git-gateway.mjs). A decision is allowed when an allow rule
+// for a run's GitHub writes and some of its reads (github-writes.mjs), `push` for each branch
+// a run pushes (git-gateway.mjs), and `grant` for each of a repository's yes-or-no grants
+// (grants.mjs GRANTS: grants() below, the operator's alone). A decision is allowed when an allow rule
 // matches and no deny rule does: a deny always wins. What a run gets as it starts has rules of
 // its own, sets of names (capabilityRules(), capabilities.mjs), which the service evaluates for
 // every mode at once and says the file that decided each of.
@@ -36,6 +37,7 @@ import {
   rulesOf,
 } from "../lib/policy-files.mjs";
 import { redact } from "../lib/redact.mjs";
+import { ANY_REPO, GRANTS, ownerProbe, REPO_ONLY } from "./grants.mjs";
 
 // Where a repo's policies are, on its default branch.
 export const POLICY_DIR = ".deckhand/policy";
@@ -50,6 +52,7 @@ export const DECISIONS = [
   "request_review",
   "github",
   "push",
+  "grant",
 ];
 
 // The rules the listener evaluates: another `allow_*` or `deny_*` rule is a mistake the config
@@ -70,6 +73,11 @@ export { CAPABILITY_RULES, rulesOf };
 // The decisions only about built-in modes' runs (a review, its fix run, the merge): a repo's
 // allow rule for them would count for no run, and is a config check error.
 export const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
+
+// The decisions only the operator's layer makes (#498): a repo's rules for them, allow or deny,
+// are a config check error, and not asked. What a repository gets beyond any run is the
+// operator's to say; it narrows what its runs do with its other rules.
+export const OPERATOR_ONLY = new Set(["grant"]);
 
 // `deny_merge`, `allow_merge` or `merge` → "merge".
 export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
@@ -213,6 +221,9 @@ export const DEFAULTS_MS = 30_000;
 const UNCONDITIONAL =
   /^allow_(github|push)\s*(?:(?::=|=)\s*true|if\s+true|if\s*\{\s*true\s*\})?\s*(?:#.*)?$/gm;
 
+// `input.light`, out of a comment: what a policy written before #498 reads of a run.
+const GONE_INPUT = /^[^#\n]*\binput\.light\b/m;
+
 // The line of `text` (1-based) where `rule` is first defined, null when none starts one.
 function lineOf(text, rule) {
   const at = text.split("\n").findIndex((l) => new RegExp(`^${rule}\\b`).test(l));
@@ -244,10 +255,17 @@ export function unallowed(decision, doc, layer) {
       return `no ${rules} allows requesting reviewers for ${run(doc.mode)}'s pull request`;
     case "fix":
       return `no ${rules} allows a fix run${doc.reason ? ` (\`${doc.reason}\`)` : ""}`;
+    case "grant":
+      return `no ${rules} grants \`${doc.grant}\` to ${doc.repo?.name ?? "the repository"}`;
     default:
       return `no ${rules} allows the ${decision}`;
   }
 }
+
+// How long a repository's grants (grants()) are kept for the same operator policies, and for how
+// many repositories at most.
+export const GRANTS_MS = 60_000;
+const MAX_GRANTS = 1000;
 
 // How much of a policy file's text the dashboard gets: its source view, not a download.
 export const MAX_TEXT = 20 * 1024;
@@ -628,6 +646,92 @@ export function createPolicies({
     }
   }
 
+  // grants()'s answers, by the operator's layer (its digest) and the repository: the same files
+  // give the same answer, so an edit is asked again at once. GRANTS_MS bounds a rule reading the
+  // time; a failure isn't kept.
+  const granted = new Map();
+
+  // The yes-or-no grants (grants.mjs GRANTS) the operator's policies give `repo` (#498): each
+  // asked of `allow_grant` and `deny_grant` with { grant, repo: { name } }, the operator's layer
+  // alone (OPERATOR_ONLY) → { granted: Set of names, files, denied } or { error }: `files`, those
+  // defining `allow_grant`; `denied`, why a grant an allow rule gives is refused anyway ({ grant,
+  // reasons }): a deny rule, or a REPO_ONLY grant its rules give every repository (ANY_REPO) or
+  // every repository of its owner (ownerProbe()). No
+  // file defining `allow_grant`: nothing granted, without a call. Asked for every run, push and
+  // row of the dashboard's repository list: kept (`granted`).
+  async function grants(repo) {
+    const name = String(repo).toLowerCase();
+    for (let attempt = 0; ; attempt++) {
+      let operator;
+      try {
+        operator = await defaults();
+      } catch (error) {
+        return { error: failure(`the policies can't be read (${error.message ?? error})`)[0] };
+      }
+      const files = [...operator]
+        .filter(([, text]) => rulesOf(text).includes("allow_grant"))
+        .map(([file]) => file);
+      if (!files.length) return { granted: new Set(), files, denied: [] };
+      const key = `${layerDigest(operator)} ${name}`;
+      const kept = granted.get(key);
+      if (kept && now() - kept.at < GRANTS_MS) return kept.said;
+      const ask = (grant, repoName) =>
+        evaluateLayers(
+          "grant",
+          { operator },
+          { version: INPUT_VERSION, decision: "grant", grant, repo: { name: repoName } },
+          { operator },
+        );
+      const names = Object.keys(GRANTS);
+      const said = await Promise.all(names.map((grant) => ask(grant, name)));
+      // Those every repository, or every one of its owner's, would get, for the grants given one
+      // at a time only.
+      const allowed = names.filter((_, i) => said[i].operator?.allow);
+      const wide = allowed.filter((grant) => REPO_ONLY.has(grant));
+      const probes = [ANY_REPO, ownerProbe(name)];
+      const anyRepo = await Promise.all(
+        wide.flatMap((grant) => probes.map((probe) => ask(grant, probe))),
+      );
+      const failed = [...said, ...anyRepo].find((r) => r.error);
+      if (failed?.mismatch && attempt === 0) {
+        knownOwn = null;
+        continue;
+      }
+      if (failed) {
+        const [message] = failure(failed.error);
+        log(`${repo}: its grants refused: ${message}`);
+        return { error: message };
+      }
+      const given = new Set();
+      const denied = [];
+      names.forEach((grant, i) => {
+        const { allow, denies } = said[i].operator;
+        if (!allow) return;
+        const at = wide.indexOf(grant) * probes.length;
+        const everyRepo = anyRepo
+          .slice(at, at + probes.length)
+          .some((r) => r.operator?.allow === true);
+        const reasons = [
+          ...messages(denies),
+          ...(at >= 0 && everyRepo
+            ? [
+                `\`${grant}\` is granted one repository at a time: a rule that gives it to every repository, or to all of an owner's, gives it to none (name each input.repo.name)`,
+              ]
+            : []),
+        ];
+        if (reasons.length) denied.push({ grant, reasons });
+        else given.add(grant);
+      });
+      for (const { grant, reasons } of denied) {
+        log(`${repo}: the grant ${grant} refused: ${reasons.join("; ")}`);
+      }
+      const answer = { granted: given, files, denied };
+      if (granted.size >= MAX_GRANTS) granted.delete(granted.keys().next().value);
+      granted.set(key, { at: now(), said: answer });
+      return answer;
+    }
+  }
+
   // Why `rule` (`deny_merge`, `merge`…: its decision) refuses on `repo` (its policies on `ref`,
   // its default branch): the messages, or [] when it is allowed. `input()` builds the input
   // (it may read GitHub): not for a decision only built-in modes make when Deckhand's files
@@ -805,11 +909,27 @@ export function createPolicies({
           );
         }
       }
+      // Gone from every input (#498): a rule reading it now sees it undefined, without an
+      // error: `deny_… if input.light` denies nothing, `not input.light` holds for every run.
+      if (GONE_INPUT.test(text)) {
+        warnings.push(
+          `${name}: reads \`input.light\`, which no input has any more (issue #498): a rule on it now matches as if every run had none. Read what the run gets instead: its \`mode\`, or its capabilities in \`allow_capabilities\` (\`push\`)`,
+        );
+      }
       for (const rule of rulesOf(text)) {
         if (!RULES.includes(rule)) {
           warnings.push(
             `${name}: \`${rule}\` isn't a rule Deckhand evaluates (${RULES.map((r) => `\`${r}\``).join(", ")})`,
           );
+        } else if (layer === "repo" && OPERATOR_ONLY.has(decisionOf(rule))) {
+          errors.push({
+            ...placed(
+              name,
+              lineOf(text, rule),
+              `\`${rule}\` is ignored: only the operator's policies decide a repository's grants (#498)`,
+            ),
+            ignored: true,
+          });
         } else if (layer === "repo" && rule.startsWith("allow_")) {
           const decision = decisionOf(rule);
           if (BUILT_IN_ONLY.has(decision)) {
@@ -986,6 +1106,7 @@ export function createPolicies({
     decide,
     capabilityRules,
     evaluateCapabilities,
+    grants,
     denied,
     evaluated,
     describe,

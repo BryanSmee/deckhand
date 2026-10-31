@@ -192,8 +192,9 @@ export interface Task {
   // The issues or pull requests its next run waits for ("/after #77", listener/waits.mjs).
   waitingFor?: number[];
   // Queued, waiting for a slot: its place in the run order across every repo, 1 next to start
-  // (listener/tasks.mjs queueOrder(), order.mjs). `startsFirst`: a brainstorm or a light mode,
-  // which goes before any work run whatever the order, and doesn't move.
+  // (listener/tasks.mjs queueOrder(), order.mjs). `startsFirst`: a brainstorm or another mode
+  // apart from work (listener/modes.mjs `volumes`), which goes before any work run whatever the
+  // order, and doesn't move.
   position?: number;
   startsFirst?: boolean;
   // Its issue or pull request closed: as completed (merged), not planned (closed without
@@ -380,7 +381,7 @@ export interface ServerInfo {
 // How this Deckhand is set up, for Settings › Server: GET api/server (listener/status.mjs
 // serverSetup()), read when the page opens. Any signed-in user gets it; nothing in it is secret.
 export interface ServerSetup {
-  // SANDBOX_ENGINE: the container engine of runs granted allow_docker. "auto": Sysbox where
+  // SANDBOX_ENGINE: the container engine of runs granted `docker`. "auto": Sysbox where
   // the host's Docker has it, else Podman. null: none.
   engine: "sysbox" | "podman" | "auto" | null;
   // The egress proxy, always on: the runs' only way out. `hosts`: how many the grants folder
@@ -561,9 +562,13 @@ export interface MountRow {
 }
 
 // What the operator grants the repo, and the files of its grants folder it comes from
-// (default.yaml, <owner>/<repo>.yaml); none: nothing beyond what every repository gets.
+// (default.yaml, <owner>/<repo>.yaml); none: nothing beyond what every repository gets. The
+// yes-or-no grants below are the operator's policies' (#498): `allow_grant` rules of its
+// policy files (`grantFiles`: those that have one; none: nothing granted), each named as the
+// rules name it (listener/grants.mjs GRANTS).
 export interface Grant {
   files: string[];
+  grantFiles: string[];
   allowPreview: boolean;
   allowDockerfile: boolean;
   allowBranchDockerImages: boolean;
@@ -572,7 +577,8 @@ export interface Grant {
   allowResearch: boolean;
   // Pushes that change .github/workflows/ (the git gateway's token gets `workflows: write`).
   allowWorkflows: boolean;
-  // `review.merge` may merge Deckhand's pull requests; "public": on a public repository too.
+  // `review.merge` may merge Deckhand's pull requests (`auto_merge`); "public": on a public
+  // repository too (`auto_merge_public`).
   allowAutoMerge: boolean | "public";
   // acknowledge_automerge_and_preview_is_highly_dangerous: auto-merge with a granted preview
   // hook, which runs the default branch as root on the host.
@@ -626,7 +632,7 @@ export interface RepoConfig {
 
 // A capability of the catalogue (listener/capabilities.mjs): what it gives, the capabilities it
 // needs, the .deckhand.yaml keys that ask for it (none: the policies alone decide), the grant
-// that gates it (`allow_docker`…) and what enforces it.
+// that gates it (`docker`…: the operator's `allow_grant` rules) and what enforces it.
 export interface CapabilityInfo {
   name: string;
   what: string;

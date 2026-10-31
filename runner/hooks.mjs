@@ -1,12 +1,13 @@
 // What the runner decides itself of the containers that aren't sandboxes and hold more than one
 // (#503): a repo image's build and a preview hook. The orchestrator only names the repository
-// (and, for a build, its Dockerfile and ref); the runner reads the grants (GRANTS_DIR) and,
+// (and, for a build, its Dockerfile and ref); the runner reads the grants (GRANTS_DIR, and the
+// policy service for what the operator's policies grant: `granted`, grants.mjs grantsBy()) and,
 // for a hook, the repository's config from its default branch's tarball, never from the
 // request: a preview hook runs as root on the host, with its Docker socket.
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Refused } from "../lib/http.mjs";
-import { grantFor, loadGrants, ungranted } from "../listener/grants.mjs";
+import { grantOf, loadGrants, notGranted, ungranted } from "../listener/grants.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { operatorHosts } from "../listener/egress.mjs";
 import { sameRepo } from "../listener/events.mjs";
@@ -24,29 +25,35 @@ export function validRepo(repo) {
   );
 }
 
-// The repository's grant, or a Refused: no grant read is no build and no hook.
-export function grantOrRefuse(config, repo, grants = () => loadGrants(config)) {
+// The repository's grant, with what the operator's policies grant it (`granted`), or a Refused:
+// no grant read is no build and no hook.
+export async function grantOrRefuse(
+  config,
+  repo,
+  grants = () => loadGrants(config),
+  granted = null,
+) {
   if (!validRepo(repo)) throw new Refused(400, "repo?");
   try {
-    return grantFor(grants(), config, repo);
+    return await grantOf(config, repo, { load: grants, granted });
   } catch (error) {
     throw new Refused(403, `${repo}: its grants: ${error.message}`);
   }
 }
 
-// A repo image's build, as asked: with `allow_dockerfile`, from a plain path of the repo, and
-// from a branch only with `allow_branch_docker_images`; any other ref is the default branch
+// A repo image's build, as asked: with the `dockerfile` grant, from a plain path of the repo,
+// and from a branch only with `branch_docker_images`; any other ref is the default branch
 // (buildPlan()). Without a Dockerfile, nothing builds.
-export function buildProblem(config, { repo, ref, branch, dockerfile }, grants) {
+export async function buildProblem(config, { repo, ref, branch, dockerfile }, grants, granted) {
   if (!dockerfile) return null;
-  const grant = grantOrRefuse(config, repo, grants);
-  if (!grant.allowDockerfile) return `the operator doesn't grant ${repo} \`allow_dockerfile\``;
+  const grant = await grantOrRefuse(config, repo, grants, granted);
+  if (!grant.allowDockerfile) return `${repo}: ${notGranted("dockerfile")}`;
   if (repoPath(dockerfile) !== dockerfile) return `its Dockerfile ${dockerfile}: not a plain path`;
   if (branch && (typeof ref !== "string" || !REF.test(ref) || ref.split("/").includes(".."))) {
     return "ref?";
   }
   if (branch && !grant.allowBranchDockerImages) {
-    return `the operator doesn't grant ${repo} \`allow_branch_docker_images\``;
+    return `${repo}: ${notGranted("branch_docker_images")}`;
   }
   return null;
 }
@@ -60,7 +67,7 @@ export async function buildPlan(config, asked, { grants, blobOf: lookup }) {
   const { repo, ref, branch, dockerfile, access = {} } = asked;
   const from = branch ? ref : null;
   if (!dockerfile) return { repo, ref: from, branch: Boolean(branch), dockerfile };
-  const grant = grantOrRefuse(config, repo, grants);
+  const grant = await grantOrRefuse(config, repo, grants);
   const granted = new Set(
     Object.values(AGENTS).flatMap((agent) => operatorHosts(config, grant, agent)),
   );
@@ -96,13 +103,15 @@ export function previewEventProblem(repo, event, payload) {
 // in the runner's own checkout (`checkout(repo, null)`: the default branch), which it then runs
 // in (`dir`): the command and the files of one commit. → the job for
 // previews.mjs run(), or a Refused saying why none runs. `imageFor`: images.mjs's.
-export async function previewJob(config, { repo, event, payload }, { checkout, imageFor, grants }) {
+export async function previewJob(
+  config,
+  { repo, event, payload },
+  { checkout, imageFor, grants, granted },
+) {
   const problem = previewEventProblem(repo, event, payload);
   if (problem) throw new Refused(400, problem);
-  const grant = grantOrRefuse(config, repo, grants);
-  if (!grant.allowPreview) {
-    throw new Refused(403, `the operator doesn't grant ${repo} \`allow_preview\``);
-  }
+  const grant = await grantOrRefuse(config, repo, grants, granted);
+  if (!grant.allowPreview) throw new Refused(403, `${repo}: ${notGranted("preview")}`);
   const dir = await checkout(repo, null);
   try {
     let text = "";

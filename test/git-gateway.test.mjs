@@ -227,6 +227,9 @@ function backendFetch(root, seen, received = [], down = new Set()) {
         GIT_PROTOCOL: headers["git-protocol"] ?? "",
       },
     });
+    // It may answer and exit before reading all it was sent (a refused push): its answer is
+    // what counts, not a write to a pipe it closed.
+    child.stdin.on("error", () => {});
     child.stdin.end(Buffer.concat(chunks));
     const out = [];
     for await (const chunk of child.stdout) out.push(chunk);
@@ -487,7 +490,7 @@ test("a push GitHub takes is the run's last: its branch and when; one it refuses
   assert.deepEqual(pushes.at(-1), { branch: "issue-1-y", at: 3000 });
 });
 
-test("allow_workflows: the push's token writes workflows, read again on each push", async (t) => {
+test("the `workflows` grant: the push's token writes workflows, read again on each push", async (t) => {
   let granted = true;
   const asked = [];
   const { work, remote, minted, upstream } = await setup(t, {
@@ -516,7 +519,7 @@ test("allow_workflows: the push's token writes workflows, read again on each pus
   );
 });
 
-test("allow_workflows: never for a refused push, nor when the grants can't be read", async (t) => {
+test("the `workflows` grant: never for a refused push, nor when the grants can't be read", async (t) => {
   const { work, remote, minted, logs } = await setup(t, {
     allowWorkflows: () => {
       throw new Error("org/repo.yaml: bad");
@@ -532,7 +535,7 @@ test("allow_workflows: never for a refused push, nor when the grants can't be re
   assert.ok(refused.minted.every((m) => !m.extra.workflows));
 });
 
-test("allow_workflows without the App's permission: refused, naming the grant and the setting", async (t) => {
+test("the `workflows` grant without the App's permission: refused, naming the grant and the setting", async (t) => {
   const missing = Object.assign(new Error("token for installation 1: 422 not granted"), {
     status: 422,
   });
@@ -542,7 +545,7 @@ test("allow_workflows without the App's permission: refused, naming the grant an
   });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
   assert.equal(res.ok, false);
-  assert.match(res.stderr, /\[remote rejected\] .*`allow_workflows` is granted but the App/);
+  assert.match(res.stderr, /\[remote rejected\] .*`workflows` is granted but the App/);
   assert.match(res.stderr, /Workflows: read and write/);
   assert.equal(upstream("refs/"), "");
   // Never pushed without it.
@@ -682,9 +685,13 @@ test("no secret, another run's repo or a finished run: no push", async (t) => {
   assert.deepEqual(seen, []);
 });
 
-// Light runs: brainstorms, inbox entries, onboarding and a repo's light modes, registered
-// without `push`: the kind of run decides, not its token.
-for (const what of ["a brainstorm", "a light repo mode", "a run registered without saying"]) {
+// Runs without the `push` capability: brainstorms, inbox entries, onboarding, a repo's mode its
+// policies give none, registered without it: what the broker has decides, not its token.
+for (const what of [
+  "a brainstorm",
+  "a repo mode without push",
+  "a run registered without saying",
+]) {
   test(`${what} can't push`, async (t) => {
     const { work, remote, seen } = await setup(t, {
       register: (b) => b.register("org/repo"),
@@ -747,7 +754,6 @@ test("a policy's refusal refuses the push, with its message; nothing reaches Git
         repo: "org/repo",
         mode: "work",
         custom_mode: false,
-        light: false,
         reason: null,
         issue: 1,
         action: "push",
@@ -776,7 +782,6 @@ test("a push's input: the run, its branch, whether it creates or deletes it", ()
     repo: "org/repo",
     mode: "plan",
     custom_mode: true,
-    light: false,
     reason: "ci",
     issue: 4,
     action: "push",
@@ -786,19 +791,19 @@ test("a push's input: the run, its branch, whether it creates or deletes it", ()
     deleted: false,
     default_branch: "trunk",
   });
-  // A new branch, a deleted one; a light run with no mode nor issue; a ref that isn't a branch.
+  // A new branch, a deleted one; a run with no mode nor issue; a ref that isn't a branch.
   assert.equal(pushInput(run, { ref: "refs/heads/x", old: ZERO, new: B }, "main").created, true);
   assert.equal(pushInput(run, { ref: "refs/heads/x", old: A, new: ZERO }, "main").deleted, true);
   const bare = pushInput({ repo: "org/repo" }, { ref: "refs/tags/v1", old: ZERO, new: A }, "main");
   assert.equal(bare.mode, null);
   assert.equal(bare.issue, null);
-  assert.equal(bare.light, true);
+  assert.ok(!("light" in bare));
   assert.equal(bare.custom_mode, false);
   assert.equal(bare.branch, null);
 });
 
 test(
-  "Deckhand's default policies: work runs push, a light run doesn't, a repo's own mode with its allow",
+  "Deckhand's default policies: work runs push, a brainstorm doesn't, a repo's own mode with its allow",
   {
     skip: !hasOpa() && "no opa on the PATH",
   },
@@ -824,7 +829,7 @@ test(
   },
 );
 
-test("a light run can't push even with a token that writes pull requests", async (t) => {
+test("a run without `push` can't push even with a token that writes pull requests", async (t) => {
   const { work, remote, seen } = await setup(t, {
     register: (b) => b.register("org/repo", { push: false }),
   });
@@ -934,7 +939,7 @@ test("a push bigger than git's post buffer is streamed through, after git's prob
   assert.equal(upstream("refs/heads/issue-1-big"), "refs/heads/issue-1-big");
 });
 
-// --- allow_workflows: the pushed workflow files are checked --------------------------------
+// --- the `workflows` grant: the pushed workflow files are checked --------------------------------
 
 const SAFE = `name: CI
 on: [push, pull_request]
@@ -948,7 +953,7 @@ jobs:
       - run: npm test
 `;
 
-// A grant of allow_workflows, its upstream's default branch holding `files`.
+// A grant of `workflows`, its upstream's default branch holding `files`.
 async function granted(t, files = {}) {
   const gateway = await setup(t, { allowWorkflows: () => true });
   if (Object.keys(files).length) {
@@ -958,7 +963,7 @@ async function granted(t, files = {}) {
   return gateway;
 }
 
-test("allow_workflows: a workflow that only reads goes through, the same pack GitHub gets", async (t) => {
+test("the `workflows` grant: a workflow that only reads goes through, the same pack GitHub gets", async (t) => {
   const { work, remote, commit, upstream, sent, received, mirrorDir, spoolDir } = await granted(t);
   commit({ ".github/workflows/ci.yml": SAFE });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-ci");
@@ -974,7 +979,7 @@ test("allow_workflows: a workflow that only reads goes through, the same pack Gi
   assert.deepEqual(pushes(), []);
 });
 
-test("allow_workflows: a workflow that writes, names a secret or hides from the parser is refused", async (t) => {
+test("the `workflows` grant: a workflow that writes, names a secret or hides from the parser is refused", async (t) => {
   const { work, remote, commit, upstream, received } = await granted(t);
   for (const [content, why] of [
     [SAFE.replace("permissions:\n  contents: read\n", ""), /ci\.yml: no top-level `permissions:`/],
@@ -1012,7 +1017,7 @@ test("allow_workflows: a workflow that writes, names a secret or hides from the 
   assert.deepEqual(received, []);
 });
 
-test("allow_workflows: a thin pack, its deltas against GitHub's objects, is read", async (t) => {
+test("the `workflows` grant: a thin pack, its deltas against GitHub's objects, is read", async (t) => {
   // A workflow already on GitHub, big enough for git to send a change to it as a delta.
   const steps = Array.from({ length: 200 }, (_, n) => `      - run: echo step ${n}\n`).join("");
   const { work, remote, commit, upstream, received, sent } = await granted(t, {
@@ -1032,7 +1037,7 @@ test("allow_workflows: a thin pack, its deltas against GitHub's objects, is read
   assert.equal(received.length, 1);
 });
 
-test("allow_workflows: what the default branch already has, other files and deletions pass", async (t) => {
+test("the `workflows` grant: what the default branch already has, other files and deletions pass", async (t) => {
   // The maintainers' own workflow, which the run couldn't push.
   const theirs = `on: push\njobs:\n  deploy:\n    steps:\n      - run: echo \${{ secrets.DEPLOY }}\n`;
   const { work, remote, commit, upstream } = await granted(t, {
@@ -1052,7 +1057,7 @@ test("allow_workflows: what the default branch already has, other files and dele
   assert.match(changed.stderr, /deploy\.yml: no top-level `permissions:`.*mentions `secrets`/);
 });
 
-test("allow_workflows: each branch of a push is checked; symlinks are refused", async (t) => {
+test("the `workflows` grant: each branch of a push is checked; symlinks are refused", async (t) => {
   const { work, remote, commit } = await granted(t);
   commit({ ".github/workflows/ci.yml": SAFE }, "safe");
   const safe = execFileSync("git", ["rev-parse", "HEAD"], { cwd: work }).toString().trim();
@@ -1070,7 +1075,7 @@ test("allow_workflows: each branch of a push is checked; symlinks are refused", 
   assert.match(res.stderr, /issue-1-link .*link\.yml: not a plain UTF-8 file/);
 });
 
-test("allow_workflows: with push options, the pack after them is read", async (t) => {
+test("the `workflows` grant: with push options, the pack after them is read", async (t) => {
   const { work, remote, commit, upstream } = await granted(t);
   commit({ ".github/workflows/ci.yml": SAFE.replace("read", "write") });
   const refused = await git(work, "push", "-o", "ci.skip", remote(), "HEAD:refs/heads/issue-1-o");
@@ -1082,7 +1087,7 @@ test("allow_workflows: with push options, the pack after them is read", async (t
   assert.equal(upstream("refs/heads/issue-1-o"), "refs/heads/issue-1-o");
 });
 
-test("allow_workflows: without a mirror to check against, nothing is forwarded", async (t) => {
+test("the `workflows` grant: without a mirror to check against, nothing is forwarded", async (t) => {
   const { work, remote, commit, down, received, logs } = await granted(t);
   down.add("git-upload-pack");
   commit({ ".github/workflows/ci.yml": SAFE });
@@ -1096,7 +1101,7 @@ test("allow_workflows: without a mirror to check against, nothing is forwarded",
   assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
 });
 
-test("without allow_workflows, pushes stream through: no mirror, nothing kept", async (t) => {
+test("without the `workflows` grant, pushes stream through: no mirror, nothing kept", async (t) => {
   const { work, remote, commit, mirrorDir, spoolDir, received, sent } = await setup(t);
   commit({ "a.txt": "a\n" });
   assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
@@ -1105,7 +1110,7 @@ test("without allow_workflows, pushes stream through: no mirror, nothing kept", 
   assert.ok(received[0].equals(sent()[0]));
 });
 
-test("allow_workflows: the merge GitHub runs a pull request from is checked too", async (t) => {
+test("the `workflows` grant: the merge GitHub runs a pull request from is checked too", async (t) => {
   const { work, remote, commit, seed, received } = await granted(t, {
     ".github/workflows/ci.yml": SAFE,
   });
@@ -1143,7 +1148,7 @@ test("allow_workflows: the merge GitHub runs a pull request from is checked too"
   assert.equal(received.length, 1);
 });
 
-test("allow_workflows: a .github/workflows that is a symlink is refused", async (t) => {
+test("the `workflows` grant: a .github/workflows that is a symlink is refused", async (t) => {
   const { work, remote, commit } = await granted(t);
   mkdirSync(join(work, ".github"), { recursive: true });
   mkdirSync(join(work, "ci"));
@@ -1155,7 +1160,7 @@ test("allow_workflows: a .github/workflows that is a symlink is refused", async 
   assert.match(res.stderr, /\.github\/workflows: not a plain UTF-8 file/);
 });
 
-test("allow_workflows: one push of a run's at a time; one too large is refused", async (t) => {
+test("the `workflows` grant: one push of a run's at a time; one too large is refused", async (t) => {
   const { work, remote, port, commit, received, spoolDir } = await granted(t);
   // A push whose pack never ends: saved, waiting for the rest.
   const secret = new URL(remote()).password;
@@ -1193,7 +1198,7 @@ test("allow_workflows: one push of a run's at a time; one too large is refused",
   assert.deepEqual([received, small.received], [[], []]);
 });
 
-test("allow_workflows: the workflows a changed one calls are checked too, changed or not", async (t) => {
+test("the `workflows` grant: the workflows a changed one calls are checked too, changed or not", async (t) => {
   // The maintainers' deploy workflow: its environment's secrets, for whoever calls it.
   const deploy = `on: workflow_call
 permissions: { contents: read }
@@ -1233,7 +1238,7 @@ jobs:
   assert.equal(upstream("refs/heads/issue-1-x"), "refs/heads/issue-1-x");
 });
 
-test("allow_workflows: merges with the bases of the branch's pull requests, and before one opens", async (t) => {
+test("the `workflows` grant: merges with the bases of the branch's pull requests, and before one opens", async (t) => {
   const { work, remote, commit, seed, pulls, gateway } = await granted(t, {
     ".github/workflows/ci.yml": SAFE,
   });
@@ -1262,7 +1267,7 @@ test("allow_workflows: merges with the bases of the branch's pull requests, and 
   assert.equal(await gateway.checkBranch("org/repo", "issue-1-x", "main"), null);
 });
 
-test("allow_workflows: a caller the branch adds meets the default branch's newer callee in the merge", async (t) => {
+test("the `workflows` grant: a caller the branch adds meets the default branch's newer callee in the merge", async (t) => {
   const helper = `on: workflow_call\npermissions: { contents: read }\njobs:\n  h:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n`;
   const { work, remote, commit, seed, gateway } = await granted(t, {
     ".github/workflows/helper.yml": helper,

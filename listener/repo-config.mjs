@@ -42,7 +42,7 @@ export function projectName(value) {
 export const PROJECT_STEPS = ["start", "ready", "merged"];
 const PROJECT_KEYS = ["project", "field", ...PROJECT_STEPS];
 
-const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort", "speed"];
+const MODE_KEYS = ["instructions", "session", "agent", "model", "effort", "speed"];
 
 const REVIEW_KEYS = [
   "on",
@@ -411,8 +411,8 @@ function projectsText(projects) {
 
 // Opt-in: the built-in review mode (modes.mjs, reviews.mjs), `true` for "/mode review" only.
 // Every key is checked, like a mode's: a mistyped one would change what it does unnoticed.
-// It widens nothing (a light run with a read-only token), so no grant; `merge` does, and only
-// the operator's `allow_auto_merge` makes it merge (grants.mjs autoMergeProblems()).
+// It widens nothing (a run with a read-only token), so no grant; `merge` does, and only the
+// operator's `auto_merge` grant makes it merge (grants.mjs autoMergeProblems()).
 function parseReview(value, { key, settings, config, fail, warn }) {
   if (value === false) return;
   const review = {
@@ -654,10 +654,13 @@ export const KEYS = {
     display: ({ value, row, refused, config }) =>
       refused(value) ?? row(value ?? `none: the base image ${config.image}`),
   },
-  // Moved to the operator's grants folder (grants.mjs): a repo can't allow itself this.
+  // The operator's to grant (grants.mjs GRANTS, `branch_docker_images`): a repo can't allow
+  // itself this.
   allow_branch_docker_images: {
     parse: (value, { key, warn }) => {
-      warn(`${key}: ignored here, the operator's grants folder sets it for this repository`);
+      warn(
+        `${key}: ignored here, the operator's policies grant \`branch_docker_images\` to this repository`,
+      );
     },
     display: ({ settings, grant, known, row, unknown }) =>
       !known && settings.dockerfile
@@ -666,7 +669,7 @@ export const KEYS = {
             String(grant.allowBranchDockerImages && !!settings.dockerfile),
             grant.allowBranchDockerImages && !settings.dockerfile
               ? "granted, but the repository has no dockerfile"
-              : "the operator's grants",
+              : "the operator's policies",
           ),
   },
   // { cache } when its runs get a container engine (runner/engine.mjs), with its grant.
@@ -748,7 +751,7 @@ export const KEYS = {
       // Not refused: the reviews run, only the merge waits for a human (grants.mjs).
       const merge =
         value?.merge && known && !grant.allowAutoMerge
-          ? "nothing is merged: the operator's grants don't set allow_auto_merge"
+          ? "nothing is merged: the operator's policies don't grant auto_merge"
           : null;
       const model = mode ? `${mode.model}/${mode.effort}` : null;
       return row(reviewText(value), [model, merge].filter(Boolean).join("; ") || null);
@@ -772,10 +775,10 @@ export const KEYS = {
   modes: {
     field: "modes",
     default: () => ({}),
-    parse: (value, { key, settings, config, fail }) => {
+    parse: (value, { key, settings, config, fail, warn }) => {
       if (!isMap(value)) return fail(key, "expected modes by name, each with its instructions");
       for (const [name, mode] of Object.entries(value)) {
-        parseMode(name, mode, settings, config, fail);
+        parseMode(name, mode, settings, config, fail, warn);
       }
     },
     display: ({ value, settings }) => Object.keys(value).map((name) => modeRow(settings, name)),
@@ -787,7 +790,6 @@ function modeRow(settings, name) {
   const traits = [
     mode.instructions,
     `${mode.model}/${mode.effort}${mode.speed === "fast" ? "/fast" : ""}`,
-    mode.light ? "light" : null,
     mode.fresh ? "fresh session" : null,
   ];
   return {
@@ -819,7 +821,7 @@ function previewText(preview) {
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
 // change what the mode does without anyone noticing. Nothing here touches the repo's grants.
-function parseMode(name, mode, settings, config, fail) {
+function parseMode(name, mode, settings, config, fail, warn = () => {}) {
   const where = `modes.${name}`;
   const id = name.toLowerCase();
   if (id === "work" || id === "brainstorm") {
@@ -856,7 +858,6 @@ function parseMode(name, mode, settings, config, fail) {
   const before = settings.modes[id];
   const own = {
     instructions: null,
-    light: false,
     session: "issue",
     agent: null,
     model: null,
@@ -869,14 +870,27 @@ function parseMode(name, mode, settings, config, fail) {
     fail(`${where}.${key}`, what, fix);
   };
   for (const [key, value] of Object.entries(mode)) {
-    if (!MODE_KEYS.includes(key)) {
+    if (key === "light" && value === false) {
+      // What every repo mode is now, a branch and its writes as its policies give them: nothing
+      // to stop a run for.
+      warn(
+        `${where}.light: gone, ignored: what a mode's runs get and write is decided by the policies now`,
+      );
+    } else if (key === "light") {
+      // Gone (#498): what a mode's runs get and write is its policies', which a repo written
+      // before kept as the trait. An error rather than ignored: its runs would get what
+      // Deckhand's defaults give the repo's modes (mode-work.rego: a branch and work's writes),
+      // as far as the repo's own allow rules reach.
+      bad(
+        key,
+        "gone: what a mode's runs get and write is decided by the policies now",
+        `Remove ${where}.light, and narrow the mode in .deckhand/policy/ so it only reads and answers: \`allow_capabilities\` without \`push\`, and \`allow_github\` and \`allow_push\` rules that leave it out (one on \`input.custom_mode\` alone gives it work's writes). Its runs then move no project item and set no needs-input label, but queue as work's and are held by \`wait_for_answers\` (docs/repo-config.md#modes).`,
+      );
+    } else if (!MODE_KEYS.includes(key)) {
       bad(key, `unknown key (expected ${MODE_KEYS.join(", ")})`);
     } else if (key === "instructions") {
       own.instructions = repoPath(value);
       if (!own.instructions) bad(key, "expected a path in the repository (relative, no ..)");
-    } else if (key === "light") {
-      if (typeof value === "boolean") own.light = value;
-      else bad(key, "expected true or false");
     } else if (key === "session") {
       if (["issue", "fresh"].includes(value)) own.session = value;
       else bad(key, "expected issue or fresh");

@@ -6,7 +6,7 @@
 // onboarding issue's run (nobody asked for it). Asked once, when the item is queued: a label
 // added before it starts changes nothing. Input: ../docs/repo-config.md#the-run-input.
 import { getJson } from "./github.mjs";
-import { BUILT_IN, isFresh, isLight } from "./modes.mjs";
+import { BUILT_IN, isFresh } from "./modes.mjs";
 import { denyKept, isPolicyError, unallowed } from "./policies.mjs";
 
 // Whether `item` is a run a person asked for: one with an author, not one of the listener's own
@@ -78,7 +78,6 @@ export function runInput(item, mode, read, now = Date.now) {
     repo: item.repo.toLowerCase(),
     mode,
     custom_mode: !BUILT_IN.has(mode),
-    light: isLight(item, mode),
     fresh: isFresh(item, mode),
     trigger: runTrigger(item),
     continues: continues(item),

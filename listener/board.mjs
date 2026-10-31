@@ -28,7 +28,7 @@
 // again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
-import { LIGHT } from "./modes.mjs";
+import { APART } from "./modes.mjs";
 import { LOOP_STEPS, reviewLoop } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
@@ -92,7 +92,7 @@ export function rerunnable(t) {
     t.state === last.status &&
     ["issue", "pr"].includes(t.kind) &&
     !!last.taskMode &&
-    !LIGHT.has(last.taskMode) &&
+    !APART.has(last.taskMode) &&
     Array.isArray(last.items)
   );
 }
@@ -260,7 +260,8 @@ function settle(t, q, b, w, input, aside = null) {
     t.deadline = b.deadline;
   }
   // Its place in the run order (tasks.mjs queueOrder()), 1 next to start, while it waits for
-  // a slot; `startsFirst`: a brainstorm or a light mode, which goes before any work run.
+  // a slot; `startsFirst`: a brainstorm or another mode apart from work (modes.mjs `volumes`),
+  // which goes before any work run.
   if (t.state === "queued" && q?.position) {
     t.position = q.position;
     if (q.startsFirst) t.startsFirst = true;

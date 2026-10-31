@@ -11,7 +11,7 @@
 // the repo's own modes that aren't light): a refusal refuses the whole push.
 //
 // That token writes contents only, so GitHub refuses a push that touches .github/workflows/,
-// unless the repo is granted `allow_workflows` (grants.mjs): then a push whose refs all pass
+// unless the repo is granted `workflows` (grants.mjs): then a push whose refs all pass
 // gets one with `workflows: write` too. The grant is read on each push, so revoking it
 // applies to the next one. Such a push is read whole first, and its workflow files checked
 // against the repo's mirror (git-mirror.mjs, workflow-check.mjs): GitHub runs a branch's own
@@ -272,12 +272,13 @@ export function createGitGateway({
   // policies.mjs's: `allow_push` and `deny_push` on each branch a push updates. None: every push
   // is refused.
   policies = null,
-  allowWorkflows = () => false, // (repo) => whether its grant sets `allow_workflows`
+  // (repo) → whether the operator's policies grant it `workflows` (grants.mjs), or a promise of it
+  allowWorkflows = () => false,
   // github-forks.mjs createForkChecks(): whose pushes are checked for a fork's objects
   // (restricted()). None: nobody's.
   forks = null,
   githubUrl = "https://github.com",
-  // Where the mirrors of the repos granted `allow_workflows` are kept (git-mirror.mjs).
+  // Where the mirrors of the repos granted `workflows` are kept (git-mirror.mjs).
   mirrorDir = join(tmpdir(), "deckhand-git-mirrors"),
   // Where their pushes are saved while checked; their size cap (git-mirror.mjs).
   spoolDir,
@@ -455,7 +456,7 @@ export function createGitGateway({
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
     // tree, needn't carry them, and its next fetch would bring them as the repository's own.
     const strict = forks?.restricted(may) === true;
-    const workflows = workflowsGranted(repo);
+    const workflows = await workflowsGranted(repo);
     if (!strict && !workflows) return { body: parsed.body, token: null, parsed };
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.
     if (!workflows) return checkSpooled(req, res, { repo, run, github }, parsed, base, null, true);
@@ -468,7 +469,7 @@ export function createGitGateway({
       // without it: the run would see GitHub's refusal and not know the grant is there.
       const why =
         error.status === 422
-          ? "`allow_workflows` is granted but the App doesn't have the Workflows permission: add Workflows: read and write in its settings and accept it on the installation (docs/setup.md)"
+          ? "`workflows` is granted but the App doesn't have the Workflows permission: add Workflows: read and write in its settings and accept it on the installation (docs/setup.md)"
           : "couldn't get a token for this push; try again";
       return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])));
     }
@@ -485,7 +486,7 @@ export function createGitGateway({
 
   // A push read whole, forwarded from disk once it passes: with `strict` (a work run that isn't
   // a fork's), its branches reach nothing it doesn't carry that the repository doesn't have
-  // (mirrors.connect()); with `token` (a repo granted `allow_workflows`, the token it pushes
+  // (mirrors.connect()); with `token` (a repo granted `workflows`, the token it pushes
   // with), the workflow files it changes pass (workflow-check.mjs). Never forwarded unchecked: a
   // mirror that can't be fetched, or a pack that can't be read, refuses it.
   async function checkSpooled(req, res, { repo, run, github }, parsed, base, token, strict) {
@@ -558,7 +559,7 @@ export function createGitGateway({
     return reasons;
   }
 
-  // Why each branch of a push of a repo granted `allow_workflows` can't go through, by its
+  // Why each branch of a push of a repo granted `workflows` can't go through, by its
   // workflow files, alone and merged with the bases of its pull requests: ref → why.
   async function workflowReasons(github, pushed, parsed, base) {
     const updates = [];
@@ -586,10 +587,10 @@ export function createGitGateway({
 
   // Why the run's branch `branch`, already on GitHub, can't have a pull request into `into`
   // opened, edited or marked ready (github-pulls.mjs): its workflows, merged with `into`, as a push of it
-  // would be refused. Null when they pass, or the repo isn't granted `allow_workflows`.
+  // would be refused. Null when they pass, or the repo isn't granted `workflows`.
   // Throws when they can't be checked.
   async function checkBranch(repo, branch, into) {
-    if (!workflowsGranted(repo)) return null;
+    if (!(await workflowsGranted(repo))) return null;
     const github = app();
     if (!github) throw new Error("the GitHub App is not set up");
     const base = await defaultBranch(github, repo);
@@ -598,10 +599,10 @@ export function createGitGateway({
     return workflowRefusals(found.map((f) => ({ ...f, ref: branch }))).get(branch) ?? null;
   }
 
-  // Whether the repo's grant sets `allow_workflows` now; not when it can't be read.
-  function workflowsGranted(repo) {
+  // Whether the repo is granted `workflows` now; not when that can't be decided.
+  async function workflowsGranted(repo) {
     try {
-      return allowWorkflows(repo) === true;
+      return (await allowWorkflows(repo)) === true;
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
       return false;

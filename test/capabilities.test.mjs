@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  answersOnly,
   CAPABILITIES,
   capabilitiesInput,
   KNOWN,
@@ -13,7 +14,15 @@ import {
   outcomeOf,
   RISKY,
 } from "../listener/capabilities.mjs";
-import { LIGHT, MODES, OPEN } from "../listener/modes.mjs";
+import {
+  autoMergeProblems,
+  GRANTS,
+  grantOf,
+  grantsBy,
+  grantsFrom,
+  previewProblem,
+} from "../listener/grants.mjs";
+import { APART, MODES, RESEARCH } from "../listener/modes.mjs";
 import { readsOf } from "../listener/github-app.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
@@ -24,6 +33,7 @@ import {
   hasOpa,
   localService,
   policyEngineOf,
+  testConfig,
   WORK_CAPABILITIES,
 } from "./helpers.mjs";
 
@@ -290,7 +300,7 @@ test("greedy: allowed and asked for by the config, granted when a grant gates it
   assert.equal(row(ungranted, "docker").status, "not-granted");
   assert.equal(row(ungranted, "image:branch").status, "not-granted");
   assert.deepEqual(ungranted.errors, [
-    "`docker`: the operator's grants don't set `allow_docker: true` for this repository",
+    "`docker`: the operator's policies don't grant `docker` to this repository (`allow_grant`)",
   ]);
   // Grants that can't be read give nothing they gate.
   assert.equal(row(outcome({ grant: null }), "internet").status, "not-granted");
@@ -453,15 +463,15 @@ test(
     for (const { mode } of modes) {
       const allowed = [...results[mode].operator.allow.keys()].sort();
       assert.deepEqual(allowed, [...defaultCapabilities(inputs[mode])].sort(), mode);
-      // And what its traits (modes.mjs) gave it, so the two can't drift apart: an open mode the
-      // internet alone; a light one no branch, setup or engine; a token with discussions, their
-      // reads; a work run the rest.
+      // And what its traits gave it before #498, so the policies still give it: research the
+      // internet alone; a mode apart from work (modes.mjs `volumes`) no branch, setup or engine;
+      // a token with discussions, their reads; a work run the rest.
       const has = (c) => allowed.includes(c);
-      if (OPEN.has(mode)) assert.deepEqual(allowed, ["internet"], mode);
+      if (RESEARCH.has(mode)) assert.deepEqual(allowed, ["internet"], mode);
       else {
         assert.ok(has("pull") && !has("internet"), mode);
         for (const c of ["push", "setup", "docker", "image:branch", "preview"]) {
-          assert.equal(has(c), !LIGHT.has(mode), `${mode}: ${c}`);
+          assert.equal(has(c), !APART.has(mode), `${mode}: ${c}`);
         }
         // Discussions for discussion runs only, as their token had.
         const discussions = mode === "discussion";
@@ -632,9 +642,8 @@ test(
   },
 );
 
-test("a light mode's run doesn't get `push`, whatever the policies allow, nor what needs it", () => {
-  const modes = { fixer: { light: true }, audit: {} };
-  const settings = { ...full, modes };
+test("a mode's runs get `push` when the policies give it, whatever the mode (#498)", () => {
+  const settings = { ...full, modes: { fixer: {}, audit: {} } };
   for (const [mode, custom] of [
     ["brainstorm", false],
     ["fixer", true],
@@ -647,27 +656,20 @@ test("a light mode's run doesn't get `push`, whatever the policies allow, nor wh
       repo: { private: true },
       mode,
     });
-    const push = said.capabilities.find((c) => c.name === "push");
-    assert.equal(push.status, "denied", mode);
-    assert.match(push.reason, /is a light mode: it has no branch to push/, mode);
-    assert.ok(!said.used.includes("push") && !said.used.includes("image:branch"), mode);
-    assert.ok(said.used.includes("pull") && said.used.includes("setup"), mode);
+    assert.ok(said.used.includes("push") && said.used.includes("image:branch"), mode);
     assert.deepEqual(said.errors, [], mode);
-    assert.ok(
-      said.warnings.some((w) => w.startsWith("`push` isn't used")),
-      mode,
-    );
   }
-  // A mode that isn't light keeps it.
+  // Without an allow rule for it, none: what a mode that only reads and answers asks of them.
+  const { push: _, ...rules } = everything();
   const audit = outcomeOf({
-    rules: { operator: layer(everything()), repo: layer(everything()) },
+    rules: { operator: layer(everything()), repo: layer(rules) },
     custom: true,
     settings,
     grant: granted,
     repo: { private: true },
     mode: "audit",
   });
-  assert.ok(audit.used.includes("push"));
+  assert.ok(!audit.used.includes("push") && audit.used.includes("pull"));
 });
 
 test("the config page: a config key its grant doesn't give stops every mode with a clone, said once", async () => {
@@ -682,7 +684,7 @@ test("the config page: a config key its grant doesn't give stops every mode with
   const of = (mode) => outcomes.modes.find((m) => m.mode === mode);
   // A brainstorm gets no `docker`, yet doesn't start: what its run would stop with.
   assert.deepEqual(of("brainstorm").errors, [
-    "docker: the operator's grants don't set `allow_docker: true` for this repository",
+    "docker: the operator's policies don't grant `docker` to this repository (`allow_grant`)",
   ]);
   // A work run, which asks for it: the capability's own refusal, once.
   assert.equal(of("work").errors.length, 1);
@@ -820,4 +822,88 @@ test("a review without read:pulls doesn't start: it reads its pull request with 
     "a `review` run needs `read:pulls`: it reads its pull request with its token, and its verdict decides fixes and merges",
   ]);
   assert.deepEqual(said(["pull", "read:pulls"]).errors, []);
+});
+
+test(
+  "the real opa: each yes-or-no grant is an allow rule of the operator's: what it gates is refused without it (#498)",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const names = Object.keys(GRANTS);
+    // What a repository lacks to show each grant missing: the grant, and for auto-merge on a
+    // private repository its public variant too, which covers it.
+    const lacks = (name) => (name === "auto_merge" ? [name, "auto_merge_public"] : [name]);
+    const rule = (repo, given) =>
+      `allow_grant if {\n  input.repo.name == "${repo}"\n  input.grant in {${given.map((n) => `"${n}"`).join(", ")}}\n}\n`;
+    // org/all gets every grant; org/no-<name> every one but <name>.
+    const text = [
+      "package deckhand\n",
+      rule("org/all", names),
+      ...names.map((n) =>
+        rule(
+          `org/no-${n}`,
+          names.filter((m) => !lacks(n).includes(m)),
+        ),
+      ),
+    ].join("\n");
+    const policies = realPolicies(t, { operator: { "grants.rego": text } });
+    const config = testConfig();
+    const grantFor = (repo) =>
+      grantOf(config, repo, { load: () => grantsFrom({}, config), granted: grantsBy(policies) });
+    // Deckhand's defaults' capabilities for a work run and a research run (the repository's name
+    // doesn't change them).
+    const inputs = {
+      work: capabilitiesInput({ repo: { name: "org/repo" }, mode: "work" }),
+      research: capabilitiesInput({ repo: { name: "org/repo" }, mode: "research" }),
+    };
+    const { results } = await policies.capabilityRules("org/repo", "main", inputs);
+    const merge = { review: { on: "ready", merge: true } };
+    const settings = { ...full, ...merge };
+    const used = (grant, mode, capability) =>
+      outcomeOf({
+        rules: results[mode],
+        custom: false,
+        settings,
+        grant,
+        repo: { private: true },
+        mode,
+      }).used.includes(capability);
+    // Each grant's gate: whether what it allows goes through.
+    const gates = {
+      dockerfile: (g) => used(g, "work", "image:repo"),
+      branch_docker_images: (g) => used(g, "work", "image:branch"),
+      docker: (g) => used(g, "work", "docker"),
+      preview: (g) => used(g, "work", "preview"),
+      research: (g) => used(g, "research", "internet"),
+      // The git gateway's: a push changing .github/workflows/ (git-gateway.test.mjs).
+      workflows: (g) => g.allowWorkflows === true,
+      auto_merge: (g) => !autoMergeProblems(g, merge, true).length,
+      auto_merge_public: (g) => !autoMergeProblems(g, merge, false).length,
+      // Auto-merge beside a preview hook that runs: without the hook, nothing to acknowledge.
+      acknowledge_automerge_and_preview_is_highly_dangerous: (g) =>
+        g.allowPreview && previewProblem(g, { ...merge, preview: full.preview }) === null,
+    };
+    assert.deepEqual(Object.keys(gates).sort(), [...names].sort());
+    const all = await grantFor("org/all");
+    for (const name of names) {
+      assert.equal(gates[name](all), true, `${name}: granted`);
+      assert.equal(gates[name](await grantFor(`org/no-${name}`)), false, `${name}: not granted`);
+    }
+    // Nothing granted without the operator's rules: Deckhand's defaults give none.
+    const none = await grantOf(config, "org/all", {
+      load: () => grantsFrom({}, config),
+      granted: grantsBy(realPolicies(t)),
+    });
+    for (const name of names) assert.equal(gates[name](none), false, `${name}: by default`);
+  },
+);
+
+test("answersOnly: a run without `push` once decided, else a mode apart; no label nor project for it", () => {
+  // Decided: the capabilities alone, whatever the mode.
+  assert.equal(answersOnly({ light: false, capabilities: ["pull", "read:issues"] }), true);
+  assert.equal(answersOnly({ light: false, capabilities: ["pull", "push"] }), false);
+  assert.equal(answersOnly({ light: true, capabilities: ["pull", "push"] }), false);
+  // Not yet: its mode's volumes.
+  assert.equal(answersOnly({ light: true, capabilities: null }), true);
+  assert.equal(answersOnly({ light: false, capabilities: null }), false);
+  assert.equal(answersOnly(null), false);
 });

@@ -75,7 +75,7 @@ test("each mode's capabilities, the file that decided them, and every capability
   // The catalogue: what asks for each, the grant that gates it.
   const catalogue = screen.getByRole("list", { name: "The catalogue" });
   const image = within(catalogue).getByText("image:repo").closest("li")!;
-  expect(image.textContent).toContain("dockerfile · grant allow_dockerfile");
+  expect(image.textContent).toContain("dockerfile · grant dockerfile");
   const pull = within(catalogue)
     .getByText("pull", { selector: "li > span:first-child" })
     .closest("li")!;
@@ -100,13 +100,13 @@ test("modes whose runs wouldn't start, and a repo's own mode with a warning", as
           "no allow_capabilities rule of the repository's policies (.deckhand/policy/) gives this mode anything: add one naming what its runs get (pull, push, setup…)",
         ],
       }),
-      // A light one its policies give push: it starts without it.
+      // One its policies give no push: it starts without what needs it.
       makeModeCapabilities(
         {
           mode: "notes",
           custom: true,
           warnings: [
-            "push isn't used: notes is a light mode: it has no branch to push or open a pull request from until #498",
+            "image:branch isn't used: it needs push: no allow rule of the repository's policies gives it",
           ],
         },
         ["pull", "read:issues"],
@@ -132,7 +132,7 @@ test("modes whose runs wouldn't start, and a repo's own mode with a warning", as
   const notes = mode("notes");
   expect(within(notes).getByText("Starts, with warnings")).toBeTruthy();
   expect(within(notes).getByRole("list", { name: "Warnings" }).textContent).toMatch(
-    /is a light mode/,
+    /isn't used: it needs push/,
   );
 });
 

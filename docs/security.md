@@ -33,23 +33,23 @@ that file asks for, so none can:
   - a work run on a pull request, or a comment on an issue's pull request: that pull
     request's head branch, read from GitHub when the run starts, a maintainer's included
     (they asked for the run); none when it is a fork's;
-  - light runs (brainstorms, onboarding, inbox entries, discussions, run analyses, reviews,
-    a repo's light modes):
+  - a run without the `push` [capability](#capabilities) (with Deckhand's default policies:
+    brainstorms, onboarding, inbox entries, discussions, run analyses, reviews, research):
     none. The broker registers every one as a run that can't push, so the gateway refuses
     it whatever its token, and the same holds for a run a restarted listener picks up again.
 
   Anything else is refused, whether an update, a force-push or a delete: another issue's
   branch (which that issue's next run checks out), another pull request's (which its author
   may merge without reading it again, or whose Dockerfile a repo with
-  `allow_branch_docker_images` would build on the host), long-lived branches such as
+  the `branch_docker_images` grant would build on the host), long-lived branches such as
   `gh-pages` or `release/*`, tags, signed and compressed pushes. The refusal shows in git's
   output as `[remote rejected] … (Deckhand: …)`.
 
   Past these checks, each branch a push updates is a `push` decision of the
   [policies](#policies) (`allow_push`, `deny_push`: [the push input](repo-config.md#the-push-input)):
   one refused refuses the whole push. Deckhand's default, `policy/mode-work.rego`, allows work
-  runs' pushes and those of a repository's own modes that aren't light (which need the
-  repository's `allow_push` too); without policies, every push is refused. A policy can only
+  runs' pushes and those of a repository's own modes (which need the repository's `allow_push`
+  too); without policies, every push is refused. A policy can only
   narrow the checks above: no rule reaches another task's branch or the default one.
 
 - **One branch is created outside the git gateway**: a work run's own, by the listener, as
@@ -57,7 +57,7 @@ that file asks for, so none can:
   GitHub's `createLinkedBranch`, which creates the branch it links: GitHub links no existing
   one). It carries no code the gateway didn't check: the listener creates it at the base
   branch's head, read from GitHub, with its own token, never the sandbox's, and only when
-  the run may push `issue-<n>-*` (not a light run, nor one where a fork's code runs), the issue
+  the run may push `issue-<n>-*` (a run with `push`, not one where a fork's code runs), the issue
   has no `issue-<n>-…` branch yet, and the name it gets back matches `issue-<n>-*`. The
   run asks for nothing: no sandbox can create or link a branch through the GitHub gateway
   (`createLinkedBranch` isn't among its known mutations). Its first commit goes through the git
@@ -131,11 +131,11 @@ By default the workflow files themselves can't change: neither the sandbox's tok
 gateway's has the `workflows` permission, so GitHub refuses a push that adds or edits one.
 What they run can.
 
-**`allow_workflows`** (a repository's own grants file only, never `default.yaml`) lifts that
+**The `workflows` grant** ([the grants](#the-grants), one repository at a time) lifts that
 for one repository: the gateway then pushes the run's branches with a token that also has
 `workflows: write`, so a run can add a CI job or bump the Node version of a workflow. That
-token is still the gateway's alone: the sandbox's own token never has `workflows`, light and
-research runs never push, and a fork's pull request has no branch to push. The grant is read
+token is still the gateway's alone: the sandbox's own token never has `workflows`, a run without
+`push` never pushes, and a fork's pull request has no branch to push. The grant is asked
 again on each push, so taking it back applies to the next one.
 
 It opens more than the workflows a repository already has: `on: push` and `on: pull_request`
@@ -239,8 +239,8 @@ changes: your workflows are yours to set up. On each repository the App is insta
 - keep deploy and publishing secrets out of `push` and `pull_request` workflows that run on
   any branch: put them in an
   [environment](https://docs.github.com/en/actions/deployment/targeting-different-environments/using-environments-for-deployment)
-  with required reviewers, or limit those workflows to the default branch (with
-  `allow_workflows`, the gateway refuses the workflows a run writes that name one, above);
+  with required reviewers, or limit those workflows to the default branch (with the
+  `workflows` grant, the gateway refuses the workflows a run writes that name one, above);
 - treat pull requests from the App's bot (`<app>[bot]`) like an outsider's in workflows
   and in the [preview hook](repo-config.md#preview-hook): they are same-repository and look
   trusted, but their code comes from a sandbox.
@@ -486,22 +486,23 @@ labels say it is that run's (a start removes only the one it made). None can nam
 image, mounts or capabilities beyond a sandbox spec
 (`listener/sandbox-spec.mjs`), which the runner turns into Docker's options as it did in the
 listener: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
-checks the spec again first, against the grants folder it reads itself (`runner/spec-check.mjs`):
+checks the spec again first, against the grants folder it reads itself and the operator's
+policies it asks the policy service itself ([the grants](#the-grants): `runner/spec-check.mjs`):
 the sandbox's user, no capability, the base image or the run's repository's own, the task's own
 sandbox name (from its `deckhand.task`) and exactly its session volumes, the agents' volumes
 read-only and the repository's own caches, plain volume names and paths (nothing Docker would
 read as another option), host paths resolved again (`..`, symlinks, in its own filesystem: mount
 each granted root on the runner too) inside a root granted to that repository, read-only unless
-granted read-write, an engine only with `allow_docker`, the operator's limits for the repository
+granted read-write, an engine only with the `docker` grant, the operator's limits for the repository
 (its engine's too), its task's label only, and no environment variable that would change what
 its own docker CLI does (`LD_*`, `DOCKER_*`, `SSL_CERT_*`, `PATH`…: one list, which the CLI keeps
 its own values for, `listener/runner/docker.mjs` `cliName()`). A cache volume is prepared (as
 root, to hand it to the sandbox's user) only in the base image or the repository's own, at plain
-paths. A repo image builds only with `allow_dockerfile` (a branch's with
-`allow_branch_docker_images`), from what the runner decides: the default branch's files unless a
+paths. A repo image builds only with the `dockerfile` grant (a branch's with
+`branch_docker_images`), from what the runner decides: the default branch's files unless a
 branch's is asked and granted, the Dockerfile's blob as the github service says it (`GET
 /blobs/…`), the hosts the grants give;
-and a preview hook, which runs as root with the socket, only with `allow_preview`: the runner
+and a preview hook, which runs as root with the socket, only with the `preview` grant: the runner
 reads its command and image itself, from the repository's default branch's config in its own
 checkout, and runs it in that checkout, never from the orchestrator's call (`runner/hooks.mjs`).
 The hook's event comes from the orchestrator: the runner can't check the delivery's signature
@@ -513,9 +514,9 @@ repository, with its pull request or workflow run. A compromised listener can st
 tarballs and blobs, which the runner can't tell from GitHub's. So a compromised listener can
 still reach root on the host through the two grants that run a repository's own files there:
 
-- `allow_preview`: it serves a `.deckhand.yaml` whose hook is its own, which then runs as root
+- `preview`: it serves a `.deckhand.yaml` whose hook is its own, which then runs as root
   with the socket;
-- `allow_dockerfile`: it serves a Dockerfile, or other files the build copies, of its own. The
+- `dockerfile`: it serves a Dockerfile, or other files the build copies, of its own. The
   runner builds only when the files hold the Dockerfile whose blob the tag names (`images.mjs`
   `buildImage()`), so such an image never takes the real Dockerfile's tag once the blobs come
   from GitHub itself; but the rest of the build context isn't in the tag, so after a compromise
@@ -608,10 +609,11 @@ get their own service tokens there and nothing else.
 
 The runner is on one network, `runner`, internal and shared with the listener alone, with a
 fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)).
-The policy service (#501), with Docker Compose, is on another, `policy`, internal (no way out)
-and shared with the listener alone too. A call can only
-come from the listener there, so it doesn't set `SERVICE_NETWORKS`: that comes with a second
-caller's network, when the github service moves out (#502). The listener's service tokens come
+The policy service (#501), with Docker Compose, is on two others, internal (no way out): `policy`,
+shared with the listener alone, and `policy-runner`, shared with the runner alone, which asks
+it [the grants](#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`
+or `/check`). Compose doesn't set its `SERVICE_NETWORKS`: its table still names what each
+caller may call. The listener's service tokens come
 from the broker service, as the orchestrator's, and the broker publishes the public key the
 policy service and the runner check them with (`SERVICE_KEYS_DIR`, the `service-keys` volume,
 which only the broker writes).
@@ -742,7 +744,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     before any policy, which can't reach another. Only that write's token gets
     `organization_projects: write`. In a granted repository, only the runs the policies allow
     `read_projects` (a read, once per run: Deckhand's defaults give it to work runs,
-    brainstorms and a repository's modes that aren't light) read the organization's projects,
+    brainstorms and a repository's modes) read the organization's projects,
     never a review, an inbox entry, a discussion or an
     analysis, which read outsiders' text (the App can't narrow its token to one project: their titles, fields and the
     items it can see, which GitHub redacts for repositories the token doesn't cover). Setting
@@ -766,7 +768,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     "blocked by" link, a project, a milestone), and never comments: the listener posts its
     reply. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label
     and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,
-    analyses, reviews, research and a repository's light modes write nothing. No default rule
+    analyses, reviews and research write nothing. No default rule
     allows closing, merging, locking or a label's settings.
 
   A **rerun** (`POST …/actions/runs/<id>/rerun-failed-jobs`, `…/actions/jobs/<id>/rerun`,
@@ -778,8 +780,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   that failed (`failure`, `timed_out`, `cancelled`), of a push or a pull request of a branch
   of the repository (not a fork's), whose head commit is still that of an open pull request
   of that branch. That pull request is held to the policies as any target (Deckhand's default
-  allows `rerun` on the run's own, `own_pr`, to work runs and a repository's modes that aren't
-  light), and its branch must be one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
+  allows `rerun` on the run's own, `own_pr`, to work runs and a repository's modes), and its branch must be one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
   head commit (`MAX_RERUNS`: a rerun takes a slot once its checks pass, with no await between
   the count and the slot, so calls made at once can't pass it; the slot is saved with the run
   before the call goes out, so a listener restarted meanwhile still counts it, and is freed when GitHub
@@ -1062,8 +1063,9 @@ A sandbox only gets Docker named volumes:
 | `<prefix>-<owner>-<repo>-<n>-<hash>-workspace`                  | the issue's clone, kept between its runs                                                        |
 | `<prefix>-<owner>-<repo>-<n>-<hash>-fork-workspace`             | the clone of its fork's runs (see [What a fork's code may reach](#what-a-forks-code-may-reach)) |
 | `<prefix>-<owner>-<repo>-<n>-<hash>-<agent>`                    | the issue's agent session (`~/.claude`, `~/.codex`, `~/.gemini`)                                |
-| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace`            | the clone of the issue's light runs                                                             |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-workspace`            | the clone of the issue's light runs (modes with volumes of their own)                           |
 | `<prefix>-<owner>-<repo>-<n>-<hash>-light-<agent>`              | the agent session of its light runs                                                             |
+| `<prefix>-<owner>-<repo>-<n>-<hash>-light-push-workspace`       | the clone of its light runs the policies give `push` (and their `-light-push-<agent>`)          |
 | `<prefix>-<owner>-<repo>-<n>-<hash>-research-…`                 | a research run's own (see [Research runs](#research-runs))                                      |
 | `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the listener                                                      |
 | `<prefix>-cache-<owner>-<repo>-<path>-<hash>`                   | the repo's `caches`, its own                                                                    |
@@ -1079,13 +1081,18 @@ not once retention removed them all):
 otherwise a new task could take over the session and workspace of another repository's task
 whose old name is the same.
 
-Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
-and comment (brainstorms, inbox entries and discussions also create issues); work runs push.
-The git gateway refuses light runs, and Deckhand's default policies allow them no pull request write. They never share a writable volume: what a light run could
-leave in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise
-run in the issue's next work run, with its token. So light runs get their own `-light-` clone and
-session, no cache volumes (they run no setup), and granted host paths read-only. A work run
-after a brainstorm starts a new session, from the issue and its comments.
+Light runs (the built-in modes with volumes of their own: brainstorms, onboarding, inbox
+entries, discussions, analyses, reviews, research) read and comment (brainstorms, inbox entries
+and discussions also create issues); work runs push. What each run gets and writes is its
+[capabilities](#capabilities) and the [policies](#policies)', whatever its mode: Deckhand's
+defaults give light runs neither `push` nor `setup` nor a pull request write, so the git gateway
+refuses them. They never share a writable volume with work runs: what a light run could leave in
+a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise run in the
+issue's next work run, with its token. So light runs get their own `-light-` clone and session
+(`-light-push-` when the policies give one `push`; research runs `-research-`), no cache volumes without `setup`, and
+granted host paths read-only without `push`. A work run after a brainstorm starts a new session,
+from the issue and its comments. A repository's own modes share the issue's volumes, as their
+capabilities pick them.
 
 ### What a fork's code may reach
 
@@ -1099,8 +1106,8 @@ the repository's later runs trust and execute:
 - **Caches**: none. A `postinstall` could otherwise leave a tampered package in the
   repository's `~/.npm` volume, which every later work run, on any issue, installs from with
   push access. The run's log says "No caches: a pull request from a fork".
-- **Host mounts**: read-only, as for a light run (the log's `Host mount` lines say so).
-- **Branch images**: never built from a fork's branch (`allow_branch_docker_images`).
+- **Host mounts**: read-only, as for a run without `push` (the log's `Host mount` lines say so).
+- **Branch images**: never built from a fork's branch (the `branch_docker_images` grant).
 
 These protections follow what triggered the run, not the code it fetches. A work run started
 from an issue, or from one of the repository's own pull requests, isn't a fork's run, yet it
@@ -1113,12 +1120,12 @@ description). The fork's code would then run with everything a fork's run is den
   reset at start, below, cleans the clone, not the caches);
 - **host mounts** granted read-write, and the **container engine** if granted;
 - the run's **token and push rights**: it can push the run's own branch, workflow changes
-  included with `allow_workflows`.
+  included with the `workflows` grant.
 
 So the [GitHub gateway](#the-github-gateway) refuses a work run that isn't a fork's what would
 bring a fork's code (`listener/github-forks.mjs`), reading it included: it can't tell reading
-from running. A fork's run, and a light run (no caches, read-only mounts, no engine, no push),
-fetch as before. The run's log notes each refusal, and the refusal says why, and that a
+from running. A fork's run, and a run whose capabilities are reads only (no caches, read-only
+mounts, no engine, no push), fetch as before. The run's log notes each refusal, and the refusal says why, and that a
 comment from an allowed user on the fork's pull request starts a fork's run, which fetches it.
 
 **What it covers, and what it doesn't.** A fork's code is its _tree_: its files, commits and
@@ -1242,7 +1249,7 @@ see the difference, and doesn't claim to.
   (`listener/git-mirror.mjs` `connect()`): every object its new tips reach must be in the
   push or in the gateway's mirror of the repository's branches and tags (never `refs/pull/*`),
   fetched just before. Else the push is refused, saying which object. That mirror is the one
-  `allow_workflows` keeps ([GitHub Actions on Deckhand's branches](#github-actions-on-deckhands-branches)), now for
+  the `workflows` grant keeps ([GitHub Actions on Deckhand's branches](#github-actions-on-deckhands-branches)), now for
   every repository whose work runs push: a copy of each in the data volume (`git-mirrors/`),
   whose first fetch is a whole clone. A fork's run may push its pull request's commits to its
   branch, as before: from then on they are the repository's, which the issue's later work runs
@@ -1280,7 +1287,7 @@ hooks, `.claude/settings.json`, before the model reads anything). Before either 
 - The clone goes back to the branch it was on when that tracks a branch of the repository
   (`gh pr checkout` sets a fork's to its URL or to `refs/pull/<n>/head`) and has no commit
   that isn't on the repository (a fork's merged in, not pushed), else the base branch
-  (always, for a light run); `draft-pr.sh` goes back to the issue's branch on the same
+  (always, for a run without `push`); `draft-pr.sh` goes back to the issue's branch on the same
   condition. Untracked and ignored files go (`git clean -ffdx`), after a work run's
   uncommitted changes are stashed (`git stash`). Stale worktrees are pruned first, so one
   can't keep a branch from being checked out. The agent is told where the clone was and
@@ -1409,14 +1416,17 @@ What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
 (`/etc/deckhand/grants` in the listener: `grants/` in the
 [server folder](setup.md#the-server-folder) `compose.yaml` mounts read-only, with
 [`server.example/grants/`](../server.example/grants) to start from): one file per
-repository, and `default.yaml` for every repository. It is optional and read again at each
-run, so an edit applies without a restart.
+repository for its hosts, projects, mounts and limits, `default.yaml` for every repository,
+and your policies in `policy/`, which hold [the grants](#the-grants) (a Dockerfile, a preview
+hook, an engine, research, workflows, auto-merge). It is optional and read again at each run,
+so an edit applies without a restart.
 
 ```
 grants/
   default.yaml       # every repository
   acme/api.yaml      # acme/api
   acme/web.yaml      # acme/web
+  policy/grants.rego # the grants, repository by repository (The grants, below)
   CODEOWNERS         # anything that isn't .yaml is skipped, and dot folders (.git, .github)
 ```
 
@@ -1430,33 +1440,6 @@ hosts: ["*.acme.dev", pypi.org]
 # Of the hosts it may reach, those whose answers the egress proxy keeps, HTTPS too (see The
 # egress cache below), besides default.yaml's.
 cached_hosts: [apt.acme.dev]
-# Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
-allow_preview: true
-# Its .deckhand.yaml's `dockerfile` is built on the host's Docker, with its network.
-allow_dockerfile: true
-# Runs on its pull requests build the Dockerfile of the pull request's branch (never a
-# fork's) rather than the default branch's. Needs allow_dockerfile too.
-allow_branch_docker_images: true
-# Its work runs get a container engine next to their sandbox (see Container engine below),
-# when its .deckhand.yaml asks with `docker` and SANDBOX_ENGINE is set. Per repository only.
-allow_docker: true
-# `/mode research` runs: any public host, without its code or a GitHub token (see Research
-# runs below).
-allow_research: true
-# Its runs' pushes may add or change files under .github/workflows/: the git gateway's token
-# gets `workflows: write`, and the gateway refuses a changed workflow that may write or names a
-# secret, checked against a mirror of the repository (see GitHub Actions on Deckhand's
-# branches above). Needs the App's Workflows permission, or every push of the repository is
-# refused. Per repository only.
-allow_workflows: true
-# UNSAFE: its .deckhand.yaml's `review.merge` lets the listener merge Deckhand's pull requests
-# after a clean review, with no human reading them (see Auto-merge below). `true`: while the
-# repository is private; `public`: a public one too. Per repository only.
-allow_auto_merge: true
-# EVEN MORE UNSAFE: auto-merge in a repository whose preview hook is granted. The hook runs the
-# default branch as root on the host, so what an unread merge changes may run as root. Per
-# repository only.
-acknowledge_automerge_and_preview_is_highly_dangerous: true
 # Organization projects (v2), <organization>/<number>, its runs add their issues and pull
 # requests to, and the listener moves its issues on (see Projects in repo-config.md). Needs the
 # App's Organization projects permission. Per repository only.
@@ -1470,14 +1453,10 @@ mounts:
   - /srv/datasets
 ```
 
-`default.yaml` takes the same keys but `mounts`, `allow_docker`, `allow_workflows`,
-`allow_auto_merge`, `acknowledge_automerge_and_preview_is_highly_dangerous` and
-`allow_projects`, for every repository:
+`default.yaml` takes the same keys but `mounts` and `allow_projects`, for every repository:
 
 ```yaml
 # default.yaml
-# The yes-or-no grants (all false by default); a repository's own file overrides each one.
-allow_dockerfile: false
 # Hosts every repository's sandboxes may reach, added to its own file's.
 hosts: [pypi.org]
 # Mirrors every repository's runs download from again and again, cached.
@@ -1487,10 +1466,14 @@ cached_hosts: [deb.debian.org]
 limits: { memory: 8g }
 ```
 
-`mounts`, `allow_docker`, `allow_workflows`, `allow_auto_merge`,
-`acknowledge_automerge_and_preview_is_highly_dangerous` and `allow_projects` in `default.yaml` are errors: a root, a container engine, workflow files run with the Actions secrets, merges
-nobody reviewed, or a project outside every repository, for every repository, are too broad to grant by accident, so they are
-granted one repository at a time.
+`mounts` and `allow_projects` in `default.yaml` are errors: a root, or a project outside every
+repository, for every repository, are too broad to grant by accident, so they are granted one
+repository at a time. The yes-or-no keys these files had before #498 (`allow_dockerfile`,
+`allow_preview`, `allow_branch_docker_images`, `allow_docker`, `allow_research`,
+`allow_workflows`, `allow_auto_merge`, `acknowledge_automerge_and_preview_is_highly_dangerous`)
+are errors too, each saying what to do instead: for `true`, the `allow_grant` rule to write;
+for `false`, which granted nothing, to remove it
+([Upgrading](setup.md#upgrading-the-grants-498)).
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,
@@ -1504,8 +1487,8 @@ and the listener starts anyway.
 **Symlinks** are followed while they stay in the folder: one leading outside it is an error,
 for that repository when it is its file, for every repository when it is a folder.
 
-**Who can edit the folder can grant root on the host** (`allow_preview`) and host paths
-(`mounts`): protect it like the deployment itself. A git checkout works well: reviewed pull
+**Who can edit the folder can grant root on the host** (the `preview` grant, in `policy/`)
+and host paths (`mounts`): protect it like the deployment itself. A git checkout works well: reviewed pull
 requests, and a `CODEOWNERS` giving each team its own repositories' files, while the
 folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
 
@@ -1532,13 +1515,81 @@ refuses to build unless NetworkPolicies make the proxy the daemon's only way out
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
 listener can't see. The registry has to require credentials to pull, push and delete (the listener doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
 [Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `preview` without
-`allow_preview`, or `dockerfile` without `allow_dockerfile`, gets neither: its runs stop
+the `preview` grant, or `dockerfile` without the `dockerfile` grant, gets neither: its runs stop
 and the reply on the issue says which grant is missing, like refused mounts, and its preview
 hook doesn't run (the listener's logs say why:
 `ignored: pull_request: preview hook of <repo> not run: …`). Grant them to repositories
-whose default branch you trust as much as the host itself. `allow_branch_docker_images`
+whose default branch you trust as much as the host itself. `branch_docker_images`
 is a grant too, not a `.deckhand.yaml` key: it lets anyone who can push a branch of the
 repository change what is built.
+
+### The grants
+
+What a repository may do beyond hosts, mounts, limits and projects is a `grant`
+[policy](#policies) decision of yours, asked for each repository and each grant, at each run
+(an edit applies without a restart):
+
+```json
+{ "version": 1, "decision": "grant", "grant": "dockerfile", "repo": { "name": "acme/api" } }
+```
+
+`input.repo.name` is lower case. The rules are `allow_grant` (a boolean) and `deny_grant` (a set
+of reasons): granted when an allow rule matches and no deny rule does. Write them in the grants
+folder's `policy/` (`policy/grants.rego`, as
+[`server.example/grants/policy/grants.rego`](../server.example/grants/policy/grants.rego)):
+
+```rego
+package deckhand
+
+allow_grant if {
+  input.repo.name == "acme/api"
+  input.grant in {"dockerfile", "preview", "research"}
+}
+```
+
+| Grant                                                   | What the repository gets                                                                              |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `dockerfile`                                            | its `dockerfile` built on the host's Docker (capability `image:repo`)                                 |
+| `branch_docker_images`                                  | its pull requests' runs build their branch's Dockerfile, never a fork's (`image:branch`)              |
+| `preview`                                               | its [preview hook](repo-config.md#preview-hook), with the Docker socket: root on the host (`preview`) |
+| `docker`                                                | a [container engine](#container-engine) next to its sandboxes (`docker`)                              |
+| `research`                                              | [research runs](#research-runs): any public host, without its code (`internet`)                       |
+| `workflows`                                             | its pushes may change `.github/workflows/` ([above](#github-actions-on-deckhands-branches))           |
+| `auto_merge`                                            | UNSAFE: `review.merge` merges on a private repository ([Auto-merge](#auto-merge))                     |
+| `auto_merge_public`                                     | the same on a public repository too                                                                   |
+| `acknowledge_automerge_and_preview_is_highly_dangerous` | EVEN MORE UNSAFE: auto-merge while its preview hook runs the default branch as root on the host       |
+
+- **Nothing by default**: Deckhand's default policies have no `allow_grant` rule. No rule, no
+  grant.
+- **One repository at a time**: `docker`, `workflows`, `auto_merge`, `auto_merge_public` and
+  `acknowledge_automerge_and_preview_is_highly_dangerous` (an engine, workflow files run with
+  the Actions secrets, merges nobody reviewed are too broad to grant every repository by
+  accident). The listener asks each of them again for two repositories nobody has: `*/*`, and
+  `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that also
+  grants it there (one without `input.repo.name`, a `startswith` on the owner, a `glob.match`
+  with `*`) gives it to none, and the listener logs why. This is a best-effort check, not a
+  guarantee: a rule that doesn't match those two names (`regex.match("^acme/[a-z-]+$", …)`,
+  `endswith(input.repo.name, "/api")`) still grants every repository it matches. List each
+  `input.repo.name`. The others may go to every repository (a rule without `input.repo.name`).
+- **Auto-merge is two grants**: `auto_merge_public` merges on a private repository too, so a
+  `deny_grant` keeping a repository out of auto-merge names both:
+  `input.grant in {"auto_merge", "auto_merge_public"}`.
+- **Yours only**: only the operator's layer (Deckhand's `policy/` under the grants folder's
+  `policy/`) is asked. A repository's own `.deckhand/policy/` `allow_grant` or `deny_grant` is
+  ignored, and a config check error.
+- **Fail closed**: when the policies can't be evaluated (the policy service down, a policy
+  error), the repository gets nothing, as with a grants file with errors: no run starts there,
+  and the reply says the grants folder has errors.
+- **The runner asks too**: it calls the policy service itself (the operator's layer only, no
+  repository's files) and checks every sandbox spec (an engine needs `docker`), image build
+  (`dockerfile`, `branch_docker_images`) and preview hook (`preview`) against these, whatever
+  the orchestrator says ([The runner service](#the-runner-service)).
+- **Where they show**: a refusal says, for example, "the operator's policies don't grant
+  `docker` to this repository (`allow_grant`)". The repository's config page names each grant,
+  with the policy files that have `allow_grant` rules, and its Capabilities tab each
+  capability's grant. The `/mode policy` dry run doesn't ask them. At start, the listener warns
+  for each policy file of the grants folder whose `allow_grant` rules name `auto_merge` or
+  `auto_merge_public`.
 
 ## Who reaches a session
 
@@ -1788,10 +1839,10 @@ Claude Code install runs as root with only `CHOWN` (to take over an older volume
 that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
 The Docker socket is the runner service's alone ([The runner service](#the-runner-service)),
-and preview hooks', which a repo's maintainers configure and only run with `allow_preview` in
-its grants file (see [Per-repo config](repo-config.md#preview-hook)). Neither the listener, nor
+and preview hooks', which a repo's maintainers configure and only run with the `preview`
+[grant](#the-grants) (see [Per-repo config](repo-config.md#preview-hook)). Neither the listener, nor
 any sandbox, nor a container engine gets it. Image builds only run for repositories granted
-`allow_dockerfile`.
+`dockerfile`.
 
 **Optional: a socket proxy.** The runner only uses the docker CLI, so it can talk to a
 socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST` instead of
@@ -1822,7 +1873,8 @@ The cap is per run: the logs together can take up to that much for each run kept
 
 ## Container engine
 
-A run whose repository is granted `allow_docker` (its own grants file only), whose
+A run whose repository the operator's policies grant `docker` ([the grants](#the-grants), one
+repository at a time), whose
 `.deckhand.yaml` asks for `docker`, and for which the operator set `SANDBOX_ENGINE`, gets a
 second container next to its sandbox: an engine serving Docker's API
 ([Setup](setup.md#container-engine)). The sandbox keeps everything above (uid 1000, no
@@ -1850,9 +1902,11 @@ in the engine only:
 - **Its API** (`tcp://engine:2375`) has no TLS and no authentication: only the run's own
   network reaches it, and whatever can reach it (the sandbox, the containers it started) is
   the run's own code anyway.
-- **Who gets one**: work runs only. Light runs (brainstorms, inbox entries, discussions,
-  light modes) never do, and neither does a run with a comment from a fork's pull request,
-  whatever its grant: a fork's code never runs in an engine.
+- **Who gets one**: a run the policies give the `docker` [capability](#capabilities):
+  Deckhand's defaults give it to work runs and a repository's own modes (with its own allow
+  rule), never to light runs (brainstorms, inbox entries, discussions…). A run with a comment
+  from a fork's pull request never does, whatever its grant: a fork's code never runs in an
+  engine.
 - **Clean-up**: the engine and its run's volume carry the `deckhand.engine` label (not
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
   listener's check every minute removes those whose run is gone, after a restart too.
@@ -1932,7 +1986,7 @@ secret sent somewhere. What limits it:
   which findings it left and why.
 - **What any work run is held to**: its token can't push or write pull requests, the git
   gateway pushes only its own branch (never the default one), `.github/workflows/` only
-  with `allow_workflows`, hosts only through the egress proxy, and its pull request still
+  with the `workflows` grant, hosts only through the egress proxy, and its pull request still
   waits for a maintainer to merge it.
 
 **What is left**: these are mitigations, not a guarantee. A model can still be talked into
@@ -1963,11 +2017,11 @@ waiting for CI, and a second failure counts as the next CI fix round, whose mess
 which of the runs it reran failed again, so aren't flaky, and offers no rerun for those. The listener copies no
 log text into a message, comment or review prompt. A workflow's or job's name comes from the
 branch's files: the comment the listener posts quotes each as code. What any work run is held
-to (above) holds too: a fix to `.github/workflows/` needs `allow_workflows`.
+to (above) holds too: a fix to `.github/workflows/` needs the `workflows` grant.
 
 ### Auto-merge
 
-With `allow_auto_merge` in a repository's grants file and `review.merge: true` in its
+With the `auto_merge` [grant](#the-grants) for a repository and `review.merge: true` in its
 `.deckhand.yaml`, the listener merges Deckhand's own pull requests after a review with nothing
 blocking (and, after a fix run, one more review of what it pushed), with its own token
 (`PUT /pulls/{n}/merge`, the App's `contents` and `pull_requests: write`). The flow and its
@@ -1985,14 +2039,14 @@ branch, the last check of everything above. With it on:
   follows a merge there.
 - **On a public repository, anyone can comment**: the review leaves outsiders' comments out,
   but an issue's text, an allowed user quoting one, or the code itself still reach the runs.
-  `allow_auto_merge: true` stops at a public repository; only `public` lets it merge there,
+  `auto_merge` stops at a public repository; only `auto_merge_public` lets it merge there,
   and the dashboard says so in red.
 
 **What still holds**:
 
-- **The grant is yours, per repository**: `default.yaml` can't set it, a repository's
-  `.deckhand.yaml` can only ask, and the listener logs a warning at start for each repository
-  granted it. The dashboard shows a red badge on the repository and a red box in its config
+- **The grant is yours, per repository**: a rule giving it to every repository gives it to
+  none, a repository's `.deckhand.yaml` can only ask (and its policies can't grant it), and the
+  listener logs a warning at start for each policy file of the grants folder that grants it. The dashboard shows a red badge on the repository and a red box in its config
   panel.
 - **No sandbox can merge**: their tokens only read code and pull requests ([Tokens](#tokens)),
   and the git gateway never pushes the default branch. Only the listener merges, after its
@@ -2004,10 +2058,10 @@ branch, the last check of everything above. With it on:
 - **Not with a preview hook, unless you say so at length**: the hook runs the default branch's
   files as root on the host, with the Docker socket, and no gate can follow what its command
   runs (a script it sources, a `Makefile`, `package.json`, a compose file, the files its image
-  `COPY`s). A repository with a granted hook doesn't auto-merge until its grants file also sets
-  `acknowledge_automerge_and_preview_is_highly_dangerous: true`. With it, a prompt injection
+  `COPY`s). A repository with a granted hook doesn't auto-merge until your policies also grant it
+  `acknowledge_automerge_and_preview_is_highly_dangerous`. With it, a prompt injection
   that gets a change merged can run as root on the host on the next pull request: the whole
-  deployment, every repository's secrets and the Claude credential. Don't set it.
+  deployment, every repository's secrets and the Claude credential. Don't grant it.
 - **What was reviewed is what is merged**: the merge names the reviewed commit, so a push
   after the review fails it; the repository's visibility, `mergeable_state` and its GitHub
   Actions runs are read from GitHub at the merge, not taken from a webhook. A merge waiting
@@ -2033,7 +2087,8 @@ the listener requests on Deckhand's ready pull request (`review.request`, allowe
 never a team, and never at a run's request); `github`, a run's write to GitHub (REST, or a
 GraphQL mutation's field), and its reads of CI's checks and of projects, after the gateway's
 built-in checks: [The GitHub gateway](#the-github-gateway); `push`, each branch a run's push
-updates, after the git gateway's: [The default branch](#the-default-branch). Each has two rules: `allow_<decision>` and
+updates, after the git gateway's: [The default branch](#the-default-branch); `grant`, each of a
+repository's [grants](#the-grants), your layer's alone. Each has two rules: `allow_<decision>` and
 `deny_<decision>`; what a run gets as it starts has two of its own ([Capabilities](#capabilities)). **A decision is allowed when an allow rule matches and no deny rule does**:
 a deny always wins, and with no allow rule matching it is refused, so an empty or replaced file
 refuses rather than opens, and a new decision starts closed.
@@ -2061,7 +2116,8 @@ namespace of its own:
   every run of the repository. Its allow rules count only for its own `modes:`, whose runs need
   your allow **and** its own: a repository mode does nothing until its repository allows it,
   within what you allow. Its allow rule for a built-in mode's run is ignored (for `merge`,
-  `review` and `fix`, a config check error). A file of its with the name of one of yours, or of
+  `review` and `fix`, a config check error). Its `allow_grant` and `deny_grant` are ignored, and a
+  config check error: only yours decide its grants. A file of its with the name of one of yours, or of
   Deckhand's, replaces nothing.
 
 - **A repository can only narrow what you allow, except for its own modes within it**: its
@@ -2073,10 +2129,10 @@ namespace of its own:
   of the same name is its own). Their `data.` references are moved along, so their own
   libraries resolve; one written otherwise only reads yours (never another repository's: an
   `opa` holds one repository's files at most). A compile error in either layer
-  refuses the decision, as any policy error. The grants (`allow_auto_merge` and the rest: settings of yours, not
-  rules) and the built-in gates stay what they are, so any repository may have policies, with
+  refuses the decision, as any policy error. The grants ([`allow_grant`](#the-grants): your layer's alone, a
+  repository's rules for them ignored) and the built-in gates stay what they are, so any repository may have policies, with
   no grant: they never drop one of your refusals or a gate's, nor widen what your allow rules
-  give (a light repository mode still writes nothing with Deckhand's defaults). If a rule must hold for every repository whatever it
+  give (a repository's own mode gets at most what Deckhand's defaults give work runs). If a rule must hold for every repository whatever it
   says, it belongs in your policies, a grant or a built-in gate. One default stands where a
   gate was: `review.rego` skips other bots' pull requests, which the review's allowlist
   (people only) used to stop. Replacing it in your grants folder is how you have those
@@ -2087,7 +2143,8 @@ namespace of its own:
   never merged by itself.
 - **They run in the policy service, isolated** (`policy-service/`, #501): a service of its own,
   which holds no secret, keeps no state and has no network but its callers' (with Docker
-  Compose, an internal network it shares with the listener alone: no way out), running as a
+  Compose, internal networks it shares with the listener alone and the runner alone: no way
+  out), running as a
   user, on a read-only filesystem, without capabilities. The listener starts no `opa`. The
   pinned `opa` binary of its image (version and sha256 in `policy-service/Dockerfile`) runs as
   **long-lived servers**, each with one **policy set** loaded at its start (your layer, with or
@@ -2166,24 +2223,24 @@ privilege gain, as any container), the agent's API through the listener, the lis
 endpoints for its own run (its token, progress, files, inbox) and its prompt with the text that
 triggered it. Nothing of the repository's: no clone, branch, image, setup, caches, mounts,
 engine, screenshots or GitHub token (a run without `pull` gets none, whatever its mode), volumes
-of its own (`<issue>-bare-…`, a light mode's `<issue>-light-bare-…`: no earlier run's clone or
+of its own (`<issue>-bare-…`, a light run's `<issue>-light-bare-…`: no earlier run's clone or
 transcript), and only the hosts every run
 needs.
 
-| Capability         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | Grant                        | Enforced by                                                                        |
-| ------------------ | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
-| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                              | the listener at start; GitHub (`contents: read`); the gateway (nothing without it) |
-| `push`             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                              | the git gateway                                                                    |
-| `setup`            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                              | the listener at start                                                              |
-| `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `allow_dockerfile`           | the listener at start                                                              |
-| `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `allow_branch_docker_images` | the listener at start (never a fork's)                                             |
-| `docker`           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `allow_docker`               | the listener at start (never for a fork's pull request)                            |
-| `preview`          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `allow_preview`              | not per run yet: the hook runs on pull request events                              |
-| `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `allow_research`             | the egress proxy                                                                   |
-| `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                              | GitHub (`issues: read`); the gateway (its own issue only without it)               |
-| `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                              | GitHub (`pull_requests: read`)                                                     |
-| `read:discussions` | its discussions                                                        | `pull`               |                             |                              | GitHub (`discussions: read`)                                                       |
-| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses       | `pull`               |                             |                              | GitHub (`actions`, `checks`, `statuses: read`)                                     |
+| Capability         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | [Grant](#the-grants)   | Enforced by                                                                        |
+| ------------------ | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
+| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                        | the listener at start; GitHub (`contents: read`); the gateway (nothing without it) |
+| `push`             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                        | the git gateway                                                                    |
+| `setup`            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                        | the listener at start                                                              |
+| `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `dockerfile`           | the listener at start                                                              |
+| `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `branch_docker_images` | the listener at start (never a fork's)                                             |
+| `docker`           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `docker`               | the listener at start (never for a fork's pull request)                            |
+| `preview`          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `preview`              | not per run yet: the hook runs on pull request events                              |
+| `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `research`             | the egress proxy                                                                   |
+| `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                        | GitHub (`issues: read`); the gateway (its own issue only without it)               |
+| `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                        | GitHub (`pull_requests: read`)                                                     |
+| `read:discussions` | its discussions                                                        | `pull`               |                             |                        | GitHub (`discussions: read`)                                                       |
+| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses       | `pull`               |                             |                        | GitHub (`actions`, `checks`, `statuses: read`)                                     |
 
 **Greedy**: a capability is used when the policies allow it, when a key of `.deckhand.yaml`
 asks for it if it has one, and when its grant gives it if one gates it. Allowed and asked for
@@ -2200,20 +2257,22 @@ a run that fails them doesn't start, and its reply says why:
   denied, not asked for or not granted isn't used either, with a warning (deny `push` to forks'
   runs, and they keep their code and reads, without `image:branch`). A capability whose need no
   allow rule gives refuses the run: the allow rules contradict themselves.
-- **Light modes don't push**: a light mode's run (Deckhand's or a repository's `light: true`)
-  doesn't get `push`, whatever the policies allow, nor what needs it, with a warning: it
-  has no branch to push or open a pull request from until #498.
+- **Every mode by the policies**: no mode trait drops a capability. The policies decide `push`
+  for every mode: a light run (a mode with volumes of its own: brainstorms, inbox entries…)
+  they give `push` gets it, its issue's branch included, in volumes of its own that stash
+  (`-light-push`), never a work run's.
 - **Modes that need the code**: a review (its verdict decides fixes and merges) and a discussion
   (read with its token) don't start without `pull`; a research run doesn't start with it: its
   input is the issue's thread, with nothing of the repository's.
 - **What later runs trust**: a run that isn't a fork's and gets `push`, `setup` (caches) or
   `docker` (an engine), whatever its mode, is refused a fork's code at the gateways
   (`github-forks.mjs restricted()`), as work runs always were, and clones whole (its blobs
-  can't be fetched one by one). A light run that is checked so has volumes apart from the
-  issue's other light runs (`-light-trusted`), which may fetch a fork's code. A run that doesn't
+  can't be fetched one by one). A light run without `push` that is checked so has volumes
+  apart from the issue's other light runs (`-light-trusted`), which may fetch a fork's code. A run that doesn't
   stash (no `push`: its reset throws away what is uncommitted) never shares a clone with one that
   does: a work run whose `push` is denied, or a repository's mode given only `pull` and the
-  reads, gets `-readonly` (`-readonly-trusted` when the gateways check it). A light mode's runs
+  reads, gets `-readonly` (`-readonly-trusted` when the gateways check it: with `setup` or
+  `docker`; reads only, it is not checked). Light runs
   and the work runs never share a volume (`-light-bare` and `-bare` without `pull`), so a comment
   without a trigger line, which goes on with work's session only, never goes on with a light
   run's: it looks in every volume a work run may have had. A run that finds, once its
@@ -2246,18 +2305,17 @@ have is a warning, never a capability (a misspelled deny denies nothing): on the
 tab and in a run's log, and for a repository's rules in its config check and Config tab too; so
 is a risky combination's name anywhere but your allow rules.
 
-Deckhand's defaults (`policy/mode-<mode>.rego`) give each built-in mode what its traits gave
-before capabilities, and the reads its token had: work runs (a maintainer's, fix and conflict
-runs) everything but `internet` and `read:discussions`; brainstorms, inbox entries, discussions (with
-`read:discussions`), onboarding, analyses and reviews `pull`, `image:repo` and the reads, and so
-neither `push`, `setup` nor an engine; research `internet` alone. A review or a brainstorm on a
-pull request no longer runs on its branch's image, which needs `push`. `mode-work.rego` also
-gives the repository's own modes work's, as your ceiling: they get what their repository's
+Deckhand's defaults (`policy/mode-<mode>.rego`) give each built-in mode its capabilities: the
+repository's config page, Capabilities tab, shows for each mode what a run gets, the file that
+decided each capability and what stops it. With them, only work runs (a maintainer's, fix and
+conflict runs) get `push`, `setup` or an engine, and research `internet` alone. `mode-work.rego`
+also gives the repository's own modes work's, as your ceiling: they get what their repository's
 policies allow within it. Until those allow it something, its runs are refused with a reply
 naming the rule to add: started, they would answer without the code their mode expects. What
 a run writes to GitHub and where it pushes are the same files' (`allow_github`, `allow_push`:
-[The GitHub gateway](#the-github-gateway)), and what its token reads follows its capabilities;
-the mode's traits still decide its volumes until #498 moves them.
+[The GitHub gateway](#the-github-gateway)), and what its token reads follows its capabilities.
+A mode keeps only where its runs' volumes are (its own, or the issue's) and whose agent and model
+they default to, never what they may do.
 
 ## Research runs
 
@@ -2278,10 +2336,10 @@ holds to any host, so it holds almost nothing:
 | Run analyses                   | never in one: what a page made it say would reach a run with the code and a token       |
 | Image, setup, caches, mounts   | the base image only; no `setup`, `caches`, host mounts or project `instructions`        |
 | Container engine, egress cache | none: no engine, no cached hosts; Deckhand's CA only for the Antigravity CLI on a plan  |
-| Volumes                        | `<name>-research-workspace` and its session volume: no work or light run mounts them    |
+| Volumes                        | `<name>-research-workspace` and its session volume: no other run mounts them            |
 
-- **The grant**: `allow_research: true`, in a repository's file or in `default.yaml` for
-  every repository; off by default. Without it, `/mode research` gets a reply naming it and
+- **The grant**: `research` ([the grants](#the-grants)), for one repository or every one; off by
+  default. Without it, `/mode research` gets a reply naming it and
   no sandbox starts; it is checked again when the run starts.
 - **Private addresses**: `*` never reaches one, nor an address on one of the egress proxy's
   networks, whatever its range (see [Network](#network)), so the listener's dashboard port,
@@ -2581,7 +2639,7 @@ it again when you change `AGY_VERSION`.
   and AppArmor are off, so every system call (`keyctl`, `bpf` where unprivileged use is
   allowed, `userfaultfd`…) and mount is open to code running in it, as are `/dev/fuse` and
   `/dev/net/tun`. A kernel bug reachable that way is a way out of the container. Prefer
-  Sysbox, and grant `allow_docker` only to repositories whose default branch you trust.
+  Sysbox, and grant `docker` only to repositories whose default branch you trust.
 - **An engine's containers** run what the run builds, with the run's hosts: a repository's
   Dockerfile pulling from a host the run may reach can bring anything in, as its setup
   command can.
@@ -2591,7 +2649,7 @@ it again when you change `AGY_VERSION`.
   `merge`), enough to make a branch of its own look like one of the repository's, stays in a
   fork's run's own clone (`-fork-workspace`), which only the issue's later fork's runs start
   from. It can also push the run's own branch, its pull request's commits included, which a
-  repository granted `allow_branch_docker_images` builds and the issue's later work runs
+  repository granted `branch_docker_images` builds and the issue's later work runs
   fetch as the repository's own. It ran with the same token
   and hosts as the run it would reach, one an allowed user asked for: read what a fork's pull
   request does before asking for work on it (see [What a fork's code may reach](#what-a-forks-code-may-reach)).
@@ -2613,15 +2671,15 @@ it again when you change `AGY_VERSION`.
   or written as text (a pull request's description, a comment, a workflow's check-run
   summary), is no fork's tree to any check. Ask for work on a fork's pull request from that
   pull request.
-- **Image builds** (a repo's `dockerfile`, with `allow_dockerfile`) and the **Claude Code
+- **Image builds** (a repo's `dockerfile`, with the `dockerfile` grant) and the **Claude Code
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
-  requests' branches with `allow_branch_docker_images`). A branch's image gets a tag of its
+  requests' branches with `branch_docker_images`). A branch's image gets a tag of its
   own (`branch-…`, hashing its commit), so the default branch's runs and preview hooks never
   use an image built from a branch. A repo's image name and tags hash the repository too
   (`<prefix>-repo-<owner>-<repo>-<hash>`): repositories whose names read alike (`acme/x.y`,
   `acme/x-y`) never run, or prune, each other's image, nor do their preview hooks.
-- **Preview hooks** (with `allow_preview`) run on Docker's default network with the Docker
+- **Preview hooks** (with the `preview` grant) run on Docker's default network with the Docker
   socket.
 - **Deckhand's own source** is in every sandbox, read-only (`/usr/local/share/deckhand/src`,
   for onboarding: see [Onboarding](architecture.md#onboarding)), repo images built from the
@@ -2642,7 +2700,7 @@ it again when you change `AGY_VERSION`.
 - **A research run allows every public host**: everything it holds can leave, so it holds
   little (see [Research runs](#research-runs)), but what it does hold can: the issue's
   thread, what it read on the web, and what the agent's provider sends back. Don't grant
-  `allow_research` to a repository whose issues hold what must not leave.
+  `research` to a repository whose issues hold what must not leave.
 - The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
   a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
   the webhook's signature. `/status` also answers calls from inside the listener's container

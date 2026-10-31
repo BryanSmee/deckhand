@@ -228,6 +228,12 @@ test("started: a work run on an issue only; pulled: the issue a pull request clo
   };
   assert.deepEqual(await p.started(task), ["acme/3: In progress"]);
   assert.deepEqual(await p.started({ ...task, live: { light: true } }), []);
+  // Once its capabilities are decided, they say: a repository mode (never `light` since #498)
+  // its policies give no `push` only answers, and moves nothing; one with `push` moves it.
+  const audit = { light: false, mode: "audit", capabilities: ["pull", "read:issues"] };
+  assert.deepEqual(await p.started({ ...task, live: audit }), []);
+  const plan = { ...audit, capabilities: ["pull", "push"] };
+  assert.deepEqual(await p.started({ ...task, live: plan }), ["acme/3: In progress"]);
   assert.deepEqual(await p.started({ ...task, kind: "pr" }), []);
   assert.deepEqual(await p.pulled("pull_request", delivery("ready_for_review")), [
     "acme/3: In review",

@@ -1339,13 +1339,13 @@ export function createReadChecks({ policies = null }) {
 }
 
 // What the policies read of a run besides its mode (issue #448): `custom_mode`, whether the mode
-// is one of the repo's `modes:` (a policy needn't list the built-in ones), `light`, whether it
-// runs without a branch (it can't push: broker.mjs), and `reason`, why the listener started it
-// itself ("review-fix", "ci-fix", "conflict"), null for a comment's.
+// is one of the repo's `modes:` (a policy needn't list the built-in ones), and `reason`, why the
+// listener started it itself ("review-fix", "ci-fix", "conflict"), null for a comment's. What it
+// may do beyond that is the policies' own: its mode, and its capabilities (`push`…), which no
+// longer come from a trait of its mode (#498).
 export function runTraits(run) {
   return {
     custom_mode: !!run.mode && !BUILT_IN.has(run.mode),
-    light: run.push !== true,
     reason: run.reason ?? null,
   };
 }
