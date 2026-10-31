@@ -5,7 +5,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { ConfigPanel } from "./ConfigPanel";
-import { makePolicyFile, mockApi } from "./testUtils";
+import { makeCapabilities, makePolicyFile, mockApi } from "./testUtils";
 import type { Policies, RepoConfig } from "./types";
 
 const PAYMENTS = `package deckhand
@@ -91,6 +91,7 @@ const CONFIG: RepoConfig = {
   grantsError: null,
   effective: { settings: [], hosts: [], mounts: [], grant: null },
   policies: POLICIES,
+  capabilities: makeCapabilities(),
   readAt: Date.now(),
 };
 

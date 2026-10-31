@@ -117,12 +117,16 @@ const NO_WRITES = {};
 // The listener's own modes, each with its traits:
 // - picked: "/mode" picks it; the others come from the inbox, discussions, "/stop" and the
 //   dashboard's Analyze (analysis.mjs).
-// - light: it reads the code and answers, without a branch or the repo's setup.
+// - light: it reads the code and answers, without a branch or the repo's setup. What its
+//   sandbox gets is its capabilities (capabilities.mjs), which Deckhand's default policies
+//   (../policy/mode-*.rego) give as these traits did: the traits still decide its token, its
+//   writes' ceiling and its volumes.
 // - fresh: a new session each time. An inbox issue collects unrelated entries, so each entry
 //   is a run of its own (entryRun()); an analysis reads its digest, nothing before.
-// - open: the open internet, with nothing of the repo's: no clone, no GitHub token, no
-//   image, setup, caches, mounts, engine or screenshots of the repo's, and volumes of its own
-//   (sessionName()). Only with the operator's `allow_research` (access.mjs researchAccess()).
+// - open: the open internet, with nothing of the repo's: no GitHub token, and volumes of its
+//   own (sessionName()); no clone, image, setup, caches, mounts, engine or screenshots of the
+//   repo's (its capabilities: ../policy/mode-research.rego). Only with the operator's
+//   `allow_research` (access.mjs researchRefusal()).
 // - inbox: inbox issues and discussion categories are their own trigger (workItem()).
 // - kind: what the dashboard shows its runs as (kindOf()).
 // - permissions: its token's (permissionsFor()). No light run writes pull requests. A

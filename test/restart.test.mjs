@@ -510,6 +510,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
       sandbox: "net-new",
       runTokens: first.broker.issuedOf("new"),
       branches: ["issue-1-*"],
+      capabilities: ["pull", "push", "setup"],
       record: { id: "new", key: "org/repo#1", agent: "claude" },
       handled: [],
       unanswered: [],
@@ -533,6 +534,9 @@ test("across a restart, a run's tokens still check, and a run from before them k
   assert.equal((await service.runs.renew(token, "net-old")).status, 403);
   assert.equal((await broker.check(renewed.token, "10.9.0.5")).run.id, "new");
   assert.equal((await broker.check(renewed.token, "10.9.1.5")).status, 403);
+  // Its renewed tokens carry the capabilities its start decided, as saved.
+  const claims = JSON.parse(Buffer.from(renewed.token.split(".")[1], "base64url"));
+  assert.deepEqual(claims.caps, ["pull", "push", "setup"]);
   assert.equal((await broker.check(agentToken, "10.9.0.5", "deckhand:agents")).run.id, "new");
   assert.deepEqual(broker.runOf("new").branches, ["issue-1-*"]);
   // Its agent token is redacted from its output still: the live state kept it.

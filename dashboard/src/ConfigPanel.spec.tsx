@@ -4,7 +4,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { ConfigPanel } from "./ConfigPanel";
-import { mockApi } from "./testUtils";
+import { makeCapabilities, mockApi } from "./testUtils";
 import type { Repo, RepoConfig, SettingRow } from "./types";
 
 const REPO: Repo = {
@@ -96,6 +96,7 @@ const BROKEN: RepoConfig = {
     },
   },
   policies: { files: [], errors: [], warnings: [] },
+  capabilities: makeCapabilities(),
   readAt: Date.now(),
 };
 

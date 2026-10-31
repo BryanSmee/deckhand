@@ -15,6 +15,7 @@
 // LIST_MS, and each repo's config is read once per CONFIG_MS, or again after a delivery says
 // it may have changed (refresh()), or the dashboard asks. The operator's grants and the
 // onboarding status are read at each list, so their changes show at once.
+import { capabilityNameWarnings, catalogueView, modeOutcomes } from "./capabilities.mjs";
 import { repoAllowed } from "./config.mjs";
 import {
   autoMergeProblems,
@@ -487,7 +488,8 @@ export function createRepoApi({
         settings: effective.settings.map((s) => ({ ...s, line: lineOf(s.key) })),
         mounts: effective.mounts.map((m) => ({ ...m, line: mountLine(m.path) })),
       },
-      policies: await policyView(info.full_name, base),
+      policies: await policyView(info, base, settings),
+      capabilities: await capabilityView(info, base, settings, grant),
       readAt: row.readAt,
     });
   }
@@ -495,10 +497,24 @@ export function createRepoApi({
   // The policies that apply on `repo`'s default branch `base`, read now, as the panel shows
   // them: { files, errors, warnings } (policies.mjs describe()), each file with its text. Only
   // this endpoint sends it, never api/state.
-  async function policyView(repo, base) {
+  async function policyView(info, base, settings) {
     if (!policies) return { files: [], errors: [], warnings: [] };
+    const repo = info.full_name;
     try {
-      const { files, errors, warnings } = await policies.describe(repo, base);
+      const { files, errors, warnings: said } = await policies.describe(repo, base);
+      // The capability names its rules give that nobody knows, as the config check says them.
+      const names =
+        errors.length || !policies.capabilityRules
+          ? []
+          : await capabilityNameWarnings({
+              repo: {
+                name: repo,
+                private: typeof info.private === "boolean" ? info.private : null,
+              },
+              settings,
+              decide: (inputs) => policies.capabilityRules(repo, base, inputs),
+            });
+      const warnings = [...said, ...names];
       // Written for GitHub replies; the panel shows text.
       const plain = (text) => text.replaceAll("`", "");
       return {
@@ -510,6 +526,43 @@ export function createRepoApi({
       log(`Repositories: ${repo}'s policies: ${error.message ?? error}`);
       const text = "the policies can't be read (see the listener's logs)";
       return { files: [], errors: [{ file: null, row: null, message: text, text }], warnings: [] };
+    }
+  }
+
+  // What each mode's runs get on `info`'s repo (capabilities.mjs modeOutcomes()), its policies on
+  // `base`, its `settings` and the operator's `grant` (null: can't be read), as a run would start
+  // with them: { catalogue, modes, error }, the policies' error when they can't be evaluated
+  // (then no run starts). Only this endpoint sends it, never api/state.
+  async function capabilityView(info, base, settings, grant) {
+    const catalogue = catalogueView();
+    const plain = (text) => text.replaceAll("`", "");
+    if (!policies) return { catalogue, modes: [], error: null };
+    const repo = {
+      name: info.full_name,
+      private: typeof info.private === "boolean" ? info.private : null,
+    };
+    try {
+      const said = await modeOutcomes({
+        repo,
+        settings,
+        grant,
+        decide: (inputs) => policies.capabilityRules(info.full_name, base, inputs),
+      });
+      if (said.error) return { catalogue, modes: [], error: plain(said.error) };
+      const modes = said.modes.map((m) => ({
+        ...m,
+        capabilities: m.capabilities.map((c) => ({ ...c, reason: c.reason && plain(c.reason) })),
+        errors: m.errors.map(plain),
+        warnings: m.warnings.map(plain),
+      }));
+      return { catalogue, modes, error: null };
+    } catch (error) {
+      log(`Repositories: ${info.full_name}'s capabilities: ${error.message ?? error}`);
+      return {
+        catalogue,
+        modes: [],
+        error: "the capabilities can't be decided (see the listener's logs)",
+      };
     }
   }
 

@@ -29,7 +29,7 @@ import {
   sandboxName,
 } from "../listener/repo-config.mjs";
 import { cliName } from "../listener/runner/docker.mjs";
-import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
+import { SANDBOX_USER, sessionNames } from "../listener/sandbox-spec.mjs";
 
 // A volume's name and where it goes, as Docker's options take them (`-v name:path`,
 // `--mount …,dst=path`): nothing that would end one and start another (`:`, `,`, `=`).
@@ -68,11 +68,13 @@ export const runOf = (name, run) =>
   run.startsWith(`${name}-`) &&
   /^\d+$/.test(run.slice(String(name).length + 1));
 
-// A task's session volumes (sandbox-spec.mjs, modes.mjs sessionName()): its workspace and each
-// agent's session, for its work, its light runs and its research, with the fork's workspace.
+// A task's session volumes: its workspace (with the fork's) and each agent's session, in every
+// volume a run of the task may get (sandbox-spec.mjs sessionNames(), sessionOf()'s names: its
+// work's, its light runs', by their capabilities) and its research's (modes.mjs sessionName()).
+// The same list as the listener's, so that no run the listener names is refused here.
 function sessionVolumes(name) {
   const out = new Set();
-  for (const base of [name, `${name}-light`, `${name}-research`]) {
+  for (const base of [...sessionNames(name), `${name}-research`]) {
     out.add(`${base}-workspace`).add(`${base}-fork-workspace`);
     for (const agent of Object.values(AGENTS)) out.add(`${base}-${agent.session.volume}`);
   }

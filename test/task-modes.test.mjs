@@ -10,11 +10,19 @@ import { tempDir, testConfig } from "./helpers.mjs";
 const config = testConfig();
 
 // modeOf() for a comment on org/repo#12 with the repo's `yaml`: what it ran, and the replies.
-// `issueModes`: the issues' current modes, kept across calls.
+// `issueModes`: the issues' current modes, kept across calls. `sessions`: the volumes that hold an
+// agent session (the runner's hasSession()).
 async function modeOf(
   fields,
   yaml = "",
-  { cfg = config, issueModes = new Map(), reviews = null, decisions = null, posted } = {},
+  {
+    cfg = config,
+    issueModes = new Map(),
+    reviews = null,
+    decisions = null,
+    posted,
+    sessions = new Set(),
+  } = {},
 ) {
   const replies = [];
   const ctx = {
@@ -31,6 +39,7 @@ async function modeOf(
     },
     reviews,
     decisions,
+    runner: { hasSession: async (name, agent) => sessions.has(`${name}-${agent.session.volume}`) },
   };
   const { settings } = parseRepoConfig(yaml, config);
   const item = { repo: "org/repo", id: "12", number: 12, replyTo: 12, settings, ...fields };
@@ -182,4 +191,20 @@ test("/mode policy: the dry run kept on the task, who asked, its denials and rep
     decisions,
   });
   assert.equal(kept.length, 2);
+});
+
+test("a comment without a trigger line goes on with a session in any volume a work run may have had", async () => {
+  // None: nothing to go on with.
+  assert.equal((await modeOf({})).mode, null);
+  // A work run without `pull` kept it in `-bare`, one without `push` in `-readonly`
+  // (sandbox-spec.mjs sessionOf()): the comment goes on as work.
+  for (const volume of ["claude", "bare-claude", "readonly-claude", "readonly-trusted-claude"]) {
+    const sessions = new Set([`deckhand-org-repo-12-${volume}`]);
+    assert.equal((await modeOf({}, "", { sessions })).mode, "work", volume);
+  }
+  // A light run's, whatever its capabilities gave it, isn't work's.
+  for (const volume of ["light-claude", "light-trusted-claude", "light-bare-claude"]) {
+    const sessions = new Set([`deckhand-org-repo-12-${volume}`]);
+    assert.equal((await modeOf({}, "", { sessions })).mode, null, volume);
+  }
 });

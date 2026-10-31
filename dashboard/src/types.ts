@@ -36,6 +36,9 @@ export interface Run {
   mode: string | null;
   // work, brainstorm, idea, bug, discussion or one of the repo's own modes
   taskMode: string | null;
+  // What its start decided it gets (pull, push, internet…); null before, or for a run from before
+  // capabilities.
+  capabilities?: string[] | null;
   // Why the listener started it itself ("conflict": a pull request to rebase, "review": one
   // that turned ready, "review-fix": one whose review requested changes, "ci-fix": one whose CI
   // failed before its review); null for comments.
@@ -616,7 +619,53 @@ export interface RepoConfig {
   // The policy files that apply, from the operator's grants folder and the repo's
   // .deckhand/policy/ on its default branch (listener/policies.mjs describe()).
   policies: Policies;
+  // What each mode's runs get (listener/capabilities.mjs, repos.mjs capabilityView()).
+  capabilities: Capabilities;
   readAt: number;
+}
+
+// A capability of the catalogue (listener/capabilities.mjs): what it gives, the capabilities it
+// needs, the .deckhand.yaml keys that ask for it (none: the policies alone decide), the grant
+// that gates it (`allow_docker`…) and what enforces it.
+export interface CapabilityInfo {
+  name: string;
+  what: string;
+  needs: string[];
+  config: string[];
+  grant: string | null;
+  enforcedBy: string;
+}
+
+// What a mode's runs get of a capability: used, or why not: a deny rule ("denied", `reason` its
+// messages), no allow rule of a layer that must give it ("not-allowed"), the config doesn't ask
+// for it ("not-asked"), the operator's grant doesn't give it ("not-granted"). `files`: the
+// policy files that decided, the allow rules that gave it or the deny rules that refused it.
+export interface CapabilityRow {
+  name: string;
+  status: "used" | "denied" | "not-allowed" | "not-asked" | "not-granted";
+  used: boolean;
+  // `file` null: a rule Deckhand couldn't place in a file (indented, say), which counts all the same.
+  files: { layer: "operator" | "repo"; file: string | null }[];
+  reason: string | null;
+}
+
+// A mode's runs, as one started by a comment on an issue, not a fork's: each capability, those
+// used, what stops them (`errors`: a broken dependency, a risky combination, a grant missing)
+// and the warnings. `custom`: one of the repo's own `modes:`.
+export interface ModeCapabilities {
+  mode: string;
+  custom: boolean;
+  capabilities: CapabilityRow[];
+  used: string[];
+  errors: string[];
+  warnings: string[];
+}
+
+// `error`: the policies couldn't be evaluated ("policy error: …"): no run starts, `modes` empty.
+export interface Capabilities {
+  catalogue: CapabilityInfo[];
+  modes: ModeCapabilities[];
+  error: string | null;
 }
 
 // A policy file: Deckhand's own defaults ("deckhand", in its image) and the operator's, one

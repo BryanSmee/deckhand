@@ -135,6 +135,24 @@ test("research runs are never offered nor selected, nor in a digest asked for by
   assert.doesNotMatch(digest.text, /part of r/);
 });
 
+test("a run its capabilities gave the open internet, whatever its mode, is never in a digest", async () => {
+  const runs = [
+    run("w2", { status: "ok", capabilities: ["pull", "internet"] }),
+    run("w1", { status: "ok", capabilities: ["pull", "push"] }),
+    // From before capabilities: as its mode says.
+    run("w0", { status: "ok" }),
+  ];
+  const sel = { count: 10, kinds: ["work"], outcomes: ["ok"] };
+  assert.deepEqual(
+    selectRuns(runs, "org/app", sel).map((r) => r.id),
+    ["w1", "w0"],
+  );
+  const analysis = createAnalysis({ runs: () => runs, partOf: (r) => `part of ${r.id}` });
+  const digest = await analysis.digest("org/app", ["w2", "w1"], sel);
+  assert.deepEqual(digest.included, ["w1"]);
+  assert.doesNotMatch(digest.text, /part of w2/);
+});
+
 test("selectRuns: one repo's finished runs, by kind and outcome, the newest `count`", () => {
   const runs = [
     run("a", { status: "running" }),

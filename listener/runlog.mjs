@@ -281,6 +281,8 @@ export function newRecord(
       text,
     })),
     mode: null,
+    // What its start decided it gets (preparation.mjs, capabilities.mjs), once it did.
+    capabilities: null,
     // The part of the run it is in (enterPhase()), while it runs: setup from the moment it
     // leaves the queue, so the dashboard shows it scheduled until its agent starts.
     phase: "setup",
@@ -304,6 +306,38 @@ export function addRun(ctx, record) {
   ctx.runsById.set(record.id, record);
 }
 
+// How writeEvent() starts a `session` event's line (runs.mjs reopen()), and the `sandbox` one it
+// writes just before the sandbox starts (runs.mjs launch()).
+const SESSION_EVENT = '{"type":"listener","event":"session"';
+const SANDBOX_EVENT = '{"type":"listener","event":"sandbox"';
+// The record modes a `session` event may say (runs.mjs reopenedMode()).
+const RECORD_MODES = new Set(["start", "continue", "restore", "wrap-up"]);
+
+// What a run's start decided (runs.mjs reopen()), from its log's `lines`: { mode, its record's as
+// its capabilities corrected it (null: none a record has), capabilities (null: not said) }, or
+// null. The first `session` event only: the listener writes one for every run before anything of
+// the run's own goes in the log raw (its image's build, its agent's install, its sandbox's
+// output), so a line of theirs that looks like one always comes after it. And only before the
+// `sandbox` marker: a log without one (its sandbox never started, or a listener from before) has
+// none.
+export function sessionEventOf(lines) {
+  let event;
+  for (const line of lines.slice(1)) {
+    if (line.startsWith(SANDBOX_EVENT)) return event ?? null;
+    if (event !== undefined || !line.startsWith(SESSION_EVENT)) continue;
+    const said = parse(line);
+    const caps = said?.capabilities;
+    event = {
+      mode: RECORD_MODES.has(said?.mode) ? said.mode : null,
+      capabilities: Array.isArray(caps) && caps.every((c) => typeof c === "string") ? caps : null,
+    };
+  }
+  return null;
+}
+
+// Its record mode alone (sessionEventOf()).
+export const sessionModeOf = (lines) => sessionEventOf(lines)?.mode ?? null;
+
 // The most of a log moveLogs() reads whole: a string can't hold much more than 512 MB, and
 // older logs had no cap (RUN_LOG_MAX_MB). Past it, its first and last ENDS bytes.
 const READ_MAX = 64 * 1024 * 1024;
@@ -322,11 +356,16 @@ function logLines(logPath, max, log) {
       const buffer = Buffer.alloc(length);
       return buffer.toString("utf8", 0, readSync(fd, buffer, 0, length, at));
     };
-    const first = read(0, ends).split("\n")[0];
+    const [first, ...head] = read(0, ends).split("\n");
+    // A correction of the first line's record, written before its sandbox started
+    // (sessionModeOf()): kept with the marker that bounds it.
+    const early = head
+      .slice(0, -1)
+      .filter((l) => l.startsWith(SESSION_EVENT) || l.startsWith(SANDBOX_EVENT));
     const tail = read(size - ends, ends)
       .split("\n")
       .slice(1);
-    return [first, ...tail];
+    return [first, ...early, ...tail];
   } finally {
     closeSync(fd);
   }
@@ -335,7 +374,9 @@ function logLines(logPath, max, log) {
 function runOf(logDir, file, max = READ_MAX, log = console.error) {
   const logPath = join(logDir, file);
   const lines = logLines(logPath, max, log);
-  const meta = parse(lines[0])?.type === "listener" ? parse(lines[0]) : {};
+  const header = parse(lines[0])?.type === "listener" ? parse(lines[0]) : {};
+  const session = sessionEventOf(lines);
+  const meta = session?.mode ? { ...header, mode: session.mode } : header;
   // Logs from before agents had names are Claude Code's.
   const agent = agentFor(meta.agent);
   const result = lastResult(lines, agent);
@@ -361,6 +402,9 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     repo: meta.repo ?? null,
     replyTo: meta.replyTo ?? null,
     mode: meta.mode ?? null,
+    // What its start decided it gets (capabilities.mjs): an analysis leaves out a run that had the
+    // open internet. None in logs from before capabilities.
+    capabilities: session?.capabilities ?? null,
     taskMode: meta.taskMode ?? null,
     reason: meta.reason ?? null,
     round: meta.round ?? null,
@@ -452,6 +496,9 @@ function listenerEntries(e, agent) {
   if (e.event === "at") return [];
   if (e.event === "phase") return [{ kind: "phase", phase: e.phase, at: e.at }];
   if (e.event === "note") return [{ kind: "meta", text: e.message }];
+  // The record's mode corrected (runs.mjs reopen()): the note beside it says why. The sandbox
+  // starting: its own lines come next.
+  if (e.event === "session" || e.event === "sandbox") return [];
   if (e.event === "cancelled") {
     const time = new Date(e.at).toISOString().slice(11, 19);
     return [{ kind: "meta", text: `Stopped by @${e.by} at ${time} UTC` }];

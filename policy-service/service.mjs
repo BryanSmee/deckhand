@@ -24,6 +24,7 @@ const DECIDERS = ["orchestrator", "github", "broker"];
 export const ROUTES = {
   "GET /policies": DECIDERS,
   "POST /evaluate": DECIDERS,
+  "POST /capabilities": DECIDERS,
   "POST /check": DECIDERS,
 };
 
@@ -80,6 +81,10 @@ export function createPolicyService({ engine, guard, log = () => {} }) {
         const body = await readJsonBody(req, MAX_BODY);
         if (!body || typeof body !== "object") throw new Refused(400, "expected an object");
         if (path === "/evaluate") return send(res, 200, await engine.evaluate(body));
+        // What a run gets as it starts (#495): every mode of a config page in one call.
+        if (path === "/capabilities") {
+          return send(res, 200, await engine.evaluateCapabilities(body));
+        }
         if (path === "/check") return send(res, 200, await engine.compile(body));
         throw new Refused(404, "no such endpoint");
       } catch (error) {

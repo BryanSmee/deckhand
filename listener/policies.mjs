@@ -6,7 +6,9 @@
 // for a run a person starts (run-policy.mjs), `merge`, `review`, `fix`, `link_branch` for the branch the listener links to a work run's issue
 // (linked-branch.mjs), `request_review` for the reviewers it requests (reviewers.mjs), and
 // `github` for a run's GitHub writes (github-writes.mjs). A decision is allowed when an allow rule
-// matches and no deny rule does: a deny always wins.
+// matches and no deny rule does: a deny always wins. What a run gets as it starts has rules of
+// its own, sets of names (capabilityRules(), capabilities.mjs), which the service evaluates for
+// every mode at once and says the file that decided each of.
 //
 // Two layers, each in a namespace of its own so that neither's files can define or break the
 // other's rules: the operator's, Deckhand's own defaults under GRANTS_DIR/policy/*.rego, which
@@ -24,7 +26,14 @@
 // Format: ../docs/repo-config.md#policies; trust: ../docs/security.md#policies.
 import { createHash } from "node:crypto";
 import { getJson } from "./github.mjs";
-import { FILE, layerDigest, operatorPolicies } from "../lib/policy-files.mjs";
+import {
+  CAPABILITY_RULES,
+  FILE,
+  layerDigest,
+  MAX_CAPABILITY_INPUTS,
+  operatorPolicies,
+  rulesOf,
+} from "../lib/policy-files.mjs";
 import { redact } from "../lib/redact.mjs";
 
 // Where a repo's policies are, on its default branch.
@@ -43,7 +52,18 @@ export const DECISIONS = [
 
 // The rules the listener evaluates: another `allow_*` or `deny_*` rule is a mistake the config
 // check says.
-export const RULES = DECISIONS.flatMap((d) => [`allow_${d}`, `deny_${d}`]);
+export const RULES = [
+  ...DECISIONS.flatMap((d) => [`allow_${d}`, `deny_${d}`]),
+  ...CAPABILITY_RULES,
+];
+
+// The inputs one call of the policy service's capabilities takes (lib/policy-files.mjs, its
+// engine's MAX_INPUTS too): more go in several (a repository's modes, for its config page).
+export const CAPABILITY_INPUTS_MAX = MAX_CAPABILITY_INPUTS;
+
+// Where they are now (lib/policy-files.mjs, which the policy service shares): the listener's
+// modules and tests import them from here.
+export { CAPABILITY_RULES, rulesOf };
 
 // The decisions only about built-in modes' runs (a review, its fix run, the merge): a repo's
 // allow rule for them would count for no run, and is a config check error.
@@ -183,14 +203,6 @@ export const MAX_MESSAGE_LENGTH = 200;
 // asking again: a decision only Deckhand's files allow is skipped on them (merge, fix), with no
 // call that would see a service of another version, so they are asked again after this.
 export const DEFAULTS_MS = 30_000;
-
-// The `allow_*` and `deny_*` rules a file defines at the start of a line, in package
-// `deckhand`: what the config check compares with RULES, and the files the dashboard says
-// decided. A rule written otherwise is only missed by them.
-export function rulesOf(text) {
-  if (!/^\s*package\s+deckhand\s*$/m.test(text)) return [];
-  return [...new Set([...text.matchAll(/^((?:allow|deny)_\w*)\b/gm)].map((m) => m[1]))];
-}
 
 // The line of `text` (1-based) where `rule` is first defined, null when none starts one.
 function lineOf(text, rule) {
@@ -471,6 +483,137 @@ export function createPolicies({
 
   // "policy error: …": the single refusal a failure gives.
   const failure = (what) => [line(`policy error: ${what}`)];
+
+  // One layer's (or file's) two capabilities' rules as the service gave them (`said`: { allow,
+  // deny }, each the rule's value in a list, empty when undefined) → { allow: names, deny: [{
+  // capability, reason }] }, or a failure: a rule of the wrong shape refuses.
+  function shapedRules(said, layer) {
+    const listed = (v) => Array.isArray(v) && v.length <= 1;
+    if (!listed(said?.allow) || !listed(said?.deny)) {
+      return { error: "the policy service's answer can't be read", errorLayer: null };
+    }
+    const [allow = []] = said.allow;
+    const [deny = []] = said.deny;
+    if (!Array.isArray(allow) || allow.some((n) => typeof n !== "string")) {
+      return { error: "`allow_capabilities` must be a set of strings", errorLayer: layer };
+    }
+    const shaped = (d) => d && typeof d.capability === "string" && typeof d.reason === "string";
+    if (!Array.isArray(deny) || !deny.every(shaped)) {
+      return {
+        error: '`deny_capabilities` must be a set of {"capability": …, "reason": …} objects',
+        errorLayer: layer,
+      };
+    }
+    return { allow, deny };
+  }
+
+  const denyKey = (d) => JSON.stringify([d.capability, d.reason]);
+
+  // The capabilities' rules (issue #495) of `layers` ({ operator, repo }: name → text, either
+  // absent or empty: not asked) on each of `inputs` (key → input document, the version added), by
+  // the policy service in one call → { results: key → { operator, repo }, each asked layer's {
+  // allow: name → [files], deny: [{ capability, reason, file }] }, decided by the whole rules, a
+  // file being one whose own rule gave it (byFile()), null when none did } or { error, errorLayer },
+  // as evaluateLayers() says them. The operator's files are the service's own: they go as their
+  // digest, as for a decision.
+  async function evaluateCapabilities(layers, inputs) {
+    const failed = (what, errorLayer = null) => ({ error: what, errorLayer });
+    const asked = Object.keys(layers).filter((layer) => layers[layer]?.size);
+    const docs = Object.fromEntries(
+      Object.entries(inputs).map(([k, doc]) => [k, { version: INPUT_VERSION, ...doc }]),
+    );
+    // In parts the service takes (its MAX_INPUTS): a repository may have many modes.
+    const keys = Object.keys(docs);
+    const said = { results: {} };
+    for (let at = 0; at === 0 || at < keys.length; at += CAPABILITY_INPUTS_MAX) {
+      const part = Object.fromEntries(
+        keys.slice(at, at + CAPABILITY_INPUTS_MAX).map((k) => [k, docs[k]]),
+      );
+      let got;
+      try {
+        got = await service.evaluateCapabilities({
+          inputs: part,
+          operator: asked.includes("operator"),
+          repo: asked.includes("repo") ? [...layers.repo] : null,
+          operatorDigest: layerDigest(layers.operator ?? new Map()),
+        });
+      } catch (error) {
+        return failed(error.message ?? String(error));
+      }
+      if (got?.error) {
+        const errorLayer = ["operator", "repo"].includes(got.errorLayer) ? got.errorLayer : null;
+        return {
+          ...failed(String(got.error), errorLayer),
+          ...(got.mismatch && { mismatch: true }),
+        };
+      }
+      if (asked.length && (!got?.results || typeof got.results !== "object")) {
+        return failed("the policy service's answer can't be read");
+      }
+      Object.assign(said.results, got?.results ?? {});
+    }
+    const results = {};
+    for (const key of Object.keys(inputs)) {
+      results[key] = {};
+      for (const layer of asked) {
+        const got = said.results[key]?.[layer];
+        const whole = shapedRules(got?.all, layer);
+        if (whole.error) return whole;
+        // Each name and deny of the whole rules with the files whose own rules gave it: none
+        // when only a rule byFile() couldn't rename did (indented, or in a file whose package
+        // line rulesOf() doesn't read), which counts all the same.
+        const allowFiles = new Map();
+        const denyFiles = new Map();
+        for (const [file, rules] of Object.entries(got.files ?? {})) {
+          const own = shapedRules(rules, layer);
+          if (own.error) return own;
+          for (const name of own.allow)
+            allowFiles.set(name, [...(allowFiles.get(name) ?? []), file]);
+          for (const d of own.deny)
+            denyFiles.set(denyKey(d), [...(denyFiles.get(denyKey(d)) ?? []), file]);
+        }
+        results[key][layer] = {
+          allow: new Map(whole.allow.map((name) => [name, allowFiles.get(name) ?? [null]])),
+          deny: whole.deny.flatMap((d) =>
+            (denyFiles.get(denyKey(d)) ?? [null]).map((file) => ({
+              capability: d.capability,
+              reason: line(d.reason),
+              file,
+            })),
+          ),
+        };
+      }
+      // An operator's layer without files allows nothing: said as one.
+      results[key].operator ??= { allow: new Map(), deny: [] };
+    }
+    return { results };
+  }
+
+  // The capabilities' rules of `repo`'s policies on `ref` (its default branch) on each of
+  // `inputs` (key → input: a run's, or each mode's for the config page) → evaluateCapabilities()'s
+  // answer, a failure being one "policy error: …" message (`error`).
+  async function capabilityRules(repo, ref, inputs) {
+    // As decide(): the service's operator layer not the one read here (its new version's
+    // defaults, say), Deckhand's are asked again and the capabilities once more.
+    for (let attempt = 0; ; attempt++) {
+      let layers;
+      try {
+        layers = await policiesFor(repo, ref);
+      } catch (error) {
+        log(`${repo}: reading its policies: ${error.message ?? error}`);
+        return { error: failure(`the policies can't be read (${error.message ?? error})`)[0] };
+      }
+      const said = await evaluateCapabilities(layers, inputs);
+      if (said.mismatch && attempt === 0) {
+        knownOwn = null;
+        continue;
+      }
+      if (!said.error) return said;
+      const [message] = failure(said.error);
+      log(`${repo}: capabilities refused: ${message}`);
+      return { error: message, errorLayer: said.errorLayer };
+    }
+  }
 
   // Why `rule` (`deny_merge`, `merge`…: its decision) refuses on `repo` (its policies on `ref`,
   // its default branch): the messages, or [] when it is allowed. `input()` builds the input
@@ -821,6 +964,8 @@ export function createPolicies({
   return {
     deny,
     decide,
+    capabilityRules,
+    evaluateCapabilities,
     denied,
     evaluated,
     describe,

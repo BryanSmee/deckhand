@@ -4,7 +4,13 @@ import { ConfigError } from "../listener/config.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { sandboxArgs } from "../listener/runner/docker.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
-import { SANDBOX_USER, sandboxEnv, sandboxSpec } from "../listener/sandbox-spec.mjs";
+import {
+  SANDBOX_USER,
+  sandboxEnv,
+  sandboxSpec,
+  sessionNames,
+  sessionOf,
+} from "../listener/sandbox-spec.mjs";
 
 const config = {
   claudeCodeVolume: "deckhand-claude-code",
@@ -24,12 +30,29 @@ function runOf({
   mode = "work",
   kind = "issue",
   agent = AGENTS.claude,
+  capabilities = null,
 } = {}) {
   const live = {
     id: "deckhand-org-app-12-1",
     key: "org/app#12",
     mode,
     light,
+    // What Deckhand's default policies give it (capabilities.mjs): a work run all, a light run
+    // the code.
+    capabilities:
+      capabilities ??
+      (light
+        ? ["pull", "image:repo", "read:issues", "read:pulls", "read:actions"]
+        : [
+            "pull",
+            "push",
+            "setup",
+            "image:repo",
+            "image:branch",
+            "docker",
+            "preview",
+            "read:issues",
+          ]),
     fork,
     shots: "f".repeat(24),
     handoff: false,
@@ -112,6 +135,15 @@ test("sandboxSpec: a light run's mounts are read-only, and its volumes its own",
     "deckhand-org-app-12-light-workspace",
     "deckhand-org-app-12-light-claude",
   ]);
+});
+
+// A fork's light run: a clone of its own too, apart from the issue's other light runs, which a
+// repo's policies may give caches or an engine (capabilities.mjs).
+test("sandboxSpec: a light run with a comment from a fork's pull request has a clone of its own", () => {
+  const spec = sandboxSpec(runOf({ light: true, fork: true, mode: "brainstorm" }), "p", "m", parts);
+  const names = spec.volumes.map((v) => `${v.name}:${v.path}`);
+  assert.ok(names.includes("deckhand-org-app-12-light-fork-workspace:/workspace"), String(names));
+  assert.ok(!names.includes("deckhand-org-app-12-light-workspace:/workspace"));
 });
 
 // Its code could leave a tampered file there for the repo's later work runs, which trust them.
@@ -290,5 +322,187 @@ test("sandboxArgs: a spec without a user or limits is refused", () => {
   assert.throws(
     () => sandboxArgs({ user: SANDBOX_USER, volumes: [] }),
     /the sandbox spec has no limits/,
+  );
+});
+
+// Where a run starts, and how it clones, by what it gets (capabilities.mjs) and what the gateways
+// check (github-forks.mjs restricted()).
+const workspaceOf = (spec) => spec.volumes.filter((v) => v.kind === "session").map((v) => v.name);
+
+test("sandboxSpec: a run without `pull` has volumes of its own, no earlier run's clone or session", () => {
+  const spec = sandboxSpec(
+    runOf({ light: true, mode: "brainstorm", capabilities: [] }),
+    "p",
+    "m",
+    parts,
+  );
+  assert.deepEqual(workspaceOf(spec), [
+    "deckhand-org-app-12-light-bare-workspace",
+    "deckhand-org-app-12-light-bare-claude",
+  ]);
+  assert.equal(spec.env.SANDBOX_NO_CLONE, "1");
+  // A work run's: apart from the light runs' too.
+  const work = sandboxSpec(runOf({ capabilities: [] }), "p", "m", parts);
+  assert.equal(workspaceOf(work)[0], "deckhand-org-app-12-bare-workspace");
+});
+
+test("sandboxSpec: a light run with `setup` or `docker` starts apart from the other light runs, and clones whole", () => {
+  for (const extra of ["setup", "docker"]) {
+    const spec = sandboxSpec(
+      runOf({ light: true, mode: "audit", capabilities: ["pull", extra] }),
+      "p",
+      "m",
+      parts,
+    );
+    assert.deepEqual(workspaceOf(spec), [
+      "deckhand-org-app-12-light-trusted-workspace",
+      "deckhand-org-app-12-light-trusted-claude",
+    ]);
+    assert.equal(spec.env.SANDBOX_FULL_CLONE, "1", extra);
+  }
+  // A plain light run, which may fetch a fork's code, as before: blobless, its own volumes.
+  const plain = sandboxSpec(runOf({ light: true, mode: "brainstorm" }), "p", "m", parts);
+  assert.equal(workspaceOf(plain)[0], "deckhand-org-app-12-light-workspace");
+  assert.equal(plain.env.SANDBOX_FULL_CLONE, "");
+});
+
+test("sandboxSpec: a run the gateways check clones whole, `push` or not", () => {
+  // A work run whose `push` is denied, and a repo's mode that isn't light given only reads.
+  for (const mode of ["work", "audit"]) {
+    const spec = sandboxSpec(
+      runOf({ mode, capabilities: ["pull", "read:issues"] }),
+      "p",
+      "m",
+      parts,
+    );
+    assert.equal(spec.env.SANDBOX_FULL_CLONE, "1", mode);
+    assert.equal(spec.env.SANDBOX_LIGHT, "1", mode);
+  }
+  // A fork's: never checked, blobless.
+  const fork = sandboxSpec(runOf({ fork: true }), "p", "m", parts);
+  assert.equal(fork.env.SANDBOX_FULL_CLONE, "");
+});
+
+test("sandboxSpec: a run without `push` never mounts the work runs' clone, nor the light runs'", () => {
+  // It starts as a light run (SANDBOX_LIGHT: its reset doesn't stash), so it never starts where
+  // a work run left uncommitted changes for its next run; and its session is work's, so it never
+  // shares the light runs' either.
+  for (const mode of ["work", "audit"]) {
+    const spec = sandboxSpec(
+      runOf({ mode, capabilities: ["pull", "read:issues"] }),
+      "p",
+      "m",
+      parts,
+    );
+    assert.equal(spec.env.SANDBOX_LIGHT, "1", mode);
+    // The gateways check it (its mode pushes).
+    assert.deepEqual(
+      workspaceOf(spec),
+      [
+        "deckhand-org-app-12-readonly-trusted-workspace",
+        "deckhand-org-app-12-readonly-trusted-claude",
+      ],
+      mode,
+    );
+  }
+  // A fork's: unchecked, a clone of its own.
+  const fork = sandboxSpec(
+    runOf({ fork: true, capabilities: ["pull", "read:issues"] }),
+    "p",
+    "m",
+    parts,
+  );
+  assert.deepEqual(workspaceOf(fork), [
+    "deckhand-org-app-12-readonly-fork-workspace",
+    "deckhand-org-app-12-readonly-claude",
+  ]);
+  // With `push`, and before its capabilities are decided: the work clone, as before.
+  assert.equal(
+    workspaceOf(sandboxSpec(runOf(), "p", "m", parts))[0],
+    "deckhand-org-app-12-workspace",
+  );
+  assert.equal(sessionOf("n", { mode: "work", light: false, capabilities: null }), "n");
+});
+test("sessionNames: every volume sessionOf() may give a work run or a light one, never both", () => {
+  const n = "deckhand-org-app-12";
+  const live = (mode, light, capabilities, fork = false) => ({ mode, light, capabilities, fork });
+  const given = {
+    work: [
+      live("work", false, ["pull", "push"]),
+      live("work", false, ["pull"]),
+      live("work", false, ["pull"], true),
+      live("work", false, []),
+      live("work", false, null),
+    ],
+    light: [
+      live("brainstorm", true, ["pull"]),
+      live("brainstorm", true, ["pull"], true),
+      live("audit", true, ["pull", "setup"]),
+      live("brainstorm", true, []),
+      live("brainstorm", true, null),
+    ],
+  };
+  for (const [kind, runs] of Object.entries(given)) {
+    const names = sessionNames(n, kind === "light");
+    for (const run of runs) assert.ok(names.includes(sessionOf(n, run)), JSON.stringify(run));
+  }
+  const work = new Set(sessionNames(n, false));
+  assert.ok(sessionNames(n, true).every((name) => !work.has(name)));
+  assert.deepEqual(sessionNames(n), [...sessionNames(n, false), ...sessionNames(n, true)]);
+});
+test("sessionOf: a run that stashes and one that doesn't never share a clone", () => {
+  // A work run with `push` stashes: the work clone. A work run without it doesn't: its own,
+  // apart from both the work runs' and the light runs' (which never have `push`: outcomeOf()).
+  const pushes = { mode: "work", light: false, capabilities: ["pull", "push", "setup"] };
+  const reads = { mode: "work", light: false, capabilities: ["pull", "read:issues"] };
+  const lightReads = { mode: "audit", light: true, capabilities: ["pull", "setup"] };
+  assert.equal(sessionOf("n", pushes), "n");
+  assert.equal(sessionOf("n", reads), "n-readonly-trusted");
+  assert.equal(sessionOf("n", lightReads), "n-light-trusted");
+  const workspaces = [pushes, reads, lightReads].map(
+    (live) => workspaceOf(sandboxSpec(runOf(live), "p", "m", parts))[0],
+  );
+  assert.equal(new Set(workspaces).size, 3);
+});
+
+test("sessionOf: a run that reaches the open internet never shares volumes with one that doesn't", () => {
+  // A work run with `internet` beside the issue's next ordinary one; two light runs with
+  // `setup`, one with `internet` (both checked by the gateways); a light run without `pull`.
+  const pairs = [
+    [
+      { mode: "work", light: false, capabilities: ["pull", "push", "internet"] },
+      { mode: "work", light: false, capabilities: ["pull", "push"] },
+    ],
+    [
+      { mode: "audit", light: true, capabilities: ["pull", "setup", "internet"] },
+      { mode: "audit", light: true, capabilities: ["pull", "setup"] },
+    ],
+    [
+      { mode: "brainstorm", light: true, capabilities: ["internet"] },
+      { mode: "brainstorm", light: true, capabilities: [] },
+    ],
+  ];
+  for (const [open, closed] of pairs) {
+    const [a, b] = [open, closed].map((live) =>
+      workspaceOf(sandboxSpec(runOf(live), "p", "m", parts)),
+    );
+    assert.ok(
+      a.every((v) => !b.includes(v)),
+      `${open.mode}: ${a} / ${b}`,
+    );
+    assert.ok(
+      a.every((v) => v.includes("-open-")),
+      String(a),
+    );
+  }
+  assert.equal(sessionOf("n", pairs[0][0]), "n-open");
+  assert.equal(sessionOf("n", pairs[1][0]), "n-light-trusted-open");
+  // Each among the names a comment without a trigger line looks in, and the runner takes.
+  assert.ok(sessionNames("n", false).includes("n-open"));
+  assert.ok(sessionNames("n", true).includes("n-light-trusted-open"));
+  // Research keeps its own.
+  assert.equal(
+    sessionOf("n", { mode: "research", light: true, capabilities: ["internet"] }),
+    "n-research",
   );
 });

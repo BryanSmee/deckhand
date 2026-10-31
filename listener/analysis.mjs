@@ -32,9 +32,11 @@ function runKind(run) {
 
 const ofRepo = (run, repo) => sameRepo(run.repo, repo);
 const finished = (run) => run.status !== "running";
-// A research run (modes.mjs OPEN) read the open web: what a page made it say would reach a run
-// that has the code and a token, and a report posted as is. Never in a digest.
-const research = (run) => OPEN.has(run.taskMode) || run.kind === "research";
+// A research run (modes.mjs OPEN), or any run its capabilities gave the open internet, read the
+// open web: what a page made it say would reach a run that has the code and a token, and a report
+// posted as is. Never in a digest.
+const research = (run) =>
+  OPEN.has(run.taskMode) || run.kind === "research" || !!run.capabilities?.includes("internet");
 // The runs of `repo` an analysis may read.
 const readable = (run, repo) => ofRepo(run, repo) && finished(run) && !research(run);
 

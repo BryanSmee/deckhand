@@ -394,6 +394,7 @@ export function createRestart(ctx) {
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
             .concat(["graceUntil"])
+            .concat(["capabilities"])
             .map((k) => [k, live[k]]),
         ),
         // Its run tokens still valid, for its output's redaction after a restart (broker.mjs).
@@ -543,6 +544,9 @@ export function createRestart(ctx) {
       agentToken: saved.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
       issued: saved.runTokens ?? [],
+      // Its tokens' `caps` (and no token without `pull`); none decided for a run saved before
+      // capabilities.
+      caps: saved.capabilities ?? null,
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).

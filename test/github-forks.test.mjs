@@ -380,6 +380,22 @@ test("a work run that isn't a fork's is checked; a fork's run and other runs are
   assert.equal(forks.restricted(broker.runOf(work)), false);
   const light = broker.register("Org/Repo", {}, { push: false });
   assert.equal(forks.restricted(broker.runOf(light)), false);
+  // A light run (a repo's light mode, say) its capabilities give what later runs trust: caches
+  // (`setup`) or an engine (`docker`). Checked, unless a fork's.
+  for (const caps of [
+    ["pull", "setup"],
+    ["pull", "docker"],
+    ["pull", "push"],
+  ]) {
+    const run = broker.register("Org/Repo", {}, { push: false });
+    broker.grant(run, caps);
+    assert.equal(forks.restricted(broker.runOf(run)), true, caps.join());
+    broker.allow(run, [], true);
+    assert.equal(forks.restricted(broker.runOf(run)), false, caps.join());
+  }
+  const reads = broker.register("Org/Repo", {}, { push: false });
+  broker.grant(reads, ["pull", "image:repo", "read:issues"]);
+  assert.equal(forks.restricted(broker.runOf(reads)), false);
 });
 
 test("a fork's pull request, its repository and its commits are refused; the repository's own aren't", async () => {

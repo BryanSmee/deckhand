@@ -4,7 +4,16 @@
 import { fireEvent, screen, within } from "@testing-library/preact";
 import { vi } from "vitest";
 import fixture from "./fixture.json";
-import type { Backlog, PolicyFile, Run, State, Task } from "./types";
+import type {
+  Backlog,
+  Capabilities,
+  CapabilityInfo,
+  ModeCapabilities,
+  PolicyFile,
+  Run,
+  State,
+  Task,
+} from "./types";
 
 // A request the dashboard made: its JSON body parsed (undefined for a GET or an empty POST).
 // `any`: each handler knows the body it gets.
@@ -146,6 +155,75 @@ export function makePolicyFile(over: Partial<PolicyFile> & Pick<PolicyFile, "nam
     url: null,
     text: "package deckhand\n",
     truncated: false,
+    ...over,
+  };
+}
+
+// The catalogue, as listener/capabilities.mjs catalogueView() sends it.
+export const CATALOGUE: CapabilityInfo[] = [
+  ["pull", "a clone of the repository: its code and history", [], [], null],
+  ["push", "its branches pushed, its issue's branch and draft pull request", ["pull"], [], null],
+  ["setup", "the repository's setup command, and its caches", ["pull"], ["setup", "caches"], null],
+  [
+    "image:repo",
+    "the image built from the repository's Dockerfile",
+    ["pull"],
+    ["dockerfile"],
+    "allow_dockerfile",
+  ],
+  ["docker", "a container engine next to the sandbox", ["pull"], ["docker"], "allow_docker"],
+  ["internet", "any public host, beyond the hosts the operator grants", [], [], "allow_research"],
+  ["read:issues", "the repository's issues", [], [], null],
+].map(([name, what, needs, config, grant]) => ({
+  name: name as string,
+  what: what as string,
+  needs: needs as string[],
+  config: config as string[],
+  grant: grant as string | null,
+  enforcedBy: "the listener at start",
+}));
+
+// A mode's runs on the config page: each capability of CATALOGUE used when `used` names it,
+// else not allowed, unless `over` says.
+export function makeModeCapabilities(
+  over: Partial<ModeCapabilities> & Pick<ModeCapabilities, "mode">,
+  used: string[] = [],
+): ModeCapabilities {
+  return {
+    custom: false,
+    capabilities: CATALOGUE.map(({ name }) =>
+      used.includes(name)
+        ? {
+            name,
+            status: "used",
+            used: true,
+            files: [{ layer: "operator", file: `mode-${over.mode}.rego` }],
+            reason: null,
+          }
+        : {
+            name,
+            status: "not-allowed",
+            used: false,
+            files: [],
+            reason: "no allow rule of the operator's policies gives it",
+          },
+    ),
+    used,
+    errors: [],
+    warnings: [],
+    ...over,
+  };
+}
+
+// A repo's capabilities on its config page: work's and a brainstorm's, unless `over` says.
+export function makeCapabilities(over: Partial<Capabilities> = {}): Capabilities {
+  return {
+    catalogue: CATALOGUE,
+    modes: [
+      makeModeCapabilities({ mode: "work" }, ["pull", "push", "setup", "read:issues"]),
+      makeModeCapabilities({ mode: "brainstorm" }, ["pull", "read:issues"]),
+    ],
+    error: null,
     ...over,
   };
 }

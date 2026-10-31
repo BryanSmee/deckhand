@@ -21,6 +21,7 @@
 // its sandbox by address (sentBy()), until they end: that path goes in a later release
 // (docs/architecture.md, Restarts).
 import { createHash, randomBytes } from "node:crypto";
+import { NO_TOKEN } from "./github-app.mjs";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 
 // What a run's token or secret sent from elsewhere than its sandbox gets.
@@ -142,6 +143,7 @@ export function createBroker({
       agentToken = null,
       sandbox = null,
       issued = [],
+      caps = null,
     } = {},
   ) {
     const run = {
@@ -158,6 +160,9 @@ export function createBroker({
       // No branch until allow() names them: a run that can push still pushes nothing else.
       branches: [],
       fork: false,
+      // Its capabilities (capabilities.mjs), once its start decided them (grant()); a restarted
+      // run's as saved, none for one saved before capabilities (its token as its mode gave it).
+      caps: [],
       sandbox: typeof sandbox === "string" && sandbox ? sandbox : null,
       issued: (Array.isArray(issued) ? issued : [])
         .filter(isToken)
@@ -170,6 +175,7 @@ export function createBroker({
       apiError: null,
       tokens: new Set(),
     };
+    if (Array.isArray(caps)) withCaps(run, caps);
     runs.set(run.id, run);
     if (secret) {
       run.secret = hash(secret);
@@ -208,12 +214,30 @@ export function createBroker({
   }
 
   // The branches a run may push and whose pull requests it may mark ready: names, or
-  // prefixes ending in "*" (branchAllowed()). `fork`: whether a fork's pull request started it,
-  // so its code may run there anyway (github-forks.mjs): a work run is checked until it says so.
-  // Before issue(): the tokens carry them.
+  // prefixes ending in "*" (branchAllowed()), none for a run that neither may push (`push`, a
+  // work run) nor has the `push` capability (grant(), before this): preparation.mjs passes none
+  // without it. `fork`: whether a fork's pull request started it, so its code may run there anyway
+  // (github-forks.mjs): a work run is checked until it says so. Before issue(): the tokens carry
+  // them.
   function allow(handle, branches, fork = false) {
     const run = runOf(handle);
-    if (run) Object.assign(run, { branches: run.push ? [...branches] : [], fork: fork === true });
+    if (!run) return;
+    const push = run.push || run.caps.includes("push");
+    Object.assign(run, { branches: push ? [...branches] : [], fork: fork === true });
+  }
+
+  // The capabilities the run's start decided (capabilities.mjs outcomeOf()'s `used`), which its
+  // tokens carry (`caps`). Before issue().
+  function grant(handle, caps) {
+    const run = runOf(handle);
+    if (run) withCaps(run, caps);
+  }
+
+  // A run without `pull` gets no GitHub token at all (NO_TOKEN), whatever its mode's permissions:
+  // its token's reads would reach the code (#497 maps the rest to the token).
+  function withCaps(run, caps) {
+    run.caps = caps.filter((c) => typeof c === "string");
+    if (!run.caps.includes("pull")) run.extra = NO_TOKEN;
   }
 
   // What the broker service is told of the run: what its tokens claim, the network or pod they
@@ -227,6 +251,7 @@ export function createBroker({
       branches: run.branches,
       sandbox: run.sandbox,
       shots: run.shots ?? null,
+      caps: run.caps,
     };
   }
 
@@ -346,6 +371,7 @@ export function createBroker({
   return {
     register,
     allow,
+    grant,
     provide,
     watchPushes,
     watchChanges,
