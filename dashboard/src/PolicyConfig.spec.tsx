@@ -295,6 +295,16 @@ test("Deckhand's default files: under the operator's, which replace them by name
   );
   const github = card("GitHub writes and checks");
   expect(within(github).getByText("Active")).toBeTruthy();
+  // No allow_run here (Deckhand's run.rego isn't in this list): never allowed.
+  const run = card("Runs people start");
+  expect(within(run).getByText("Never allowed")).toBeTruthy();
+  expect(run.textContent).toContain("No run a person asks for starts");
+  const runInput = screen.getByRole("link", { name: "The run input" });
+  expect(runInput.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-run-input$/);
+  expect(runInput.closest("p")!.textContent).toMatch(/trigger.*sender.*target/);
+  // Both rules read it; what run.rego does is the card's to say, when it applies.
+  expect(runInput.closest("p")!.textContent).toMatch(/^allow_run and deny_run read/);
+  expect(runInput.closest("p")!.textContent).not.toMatch(/run\.rego/);
   // The same rule refuses reads of CI's checks too.
   expect(github.textContent).toContain("its reads of CI's checks (read_checks");
   // What deny_github reads of the run, and where its input is documented.
@@ -318,6 +328,7 @@ test("policies that compile: no banner, each decision active or without rules, w
   expect(within(card("Auto-merge")).getByText("Active")).toBeTruthy();
   expect(within(card("Fix run")).getByText("No deny rule")).toBeTruthy();
   expect(within(card("Reviewers")).getByText("No deny rule")).toBeTruthy();
+  expect(within(card("Runs people start")).getByText("Never allowed")).toBeTruthy();
   expect(rows().every((r) => /Yes|—/.test(r.textContent!))).toBe(true);
   expect(screen.getByLabelText("Policy warnings").textContent).toContain("deny_wip");
   // Every source folded.
@@ -409,4 +420,45 @@ test("try them: the command copied", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Copy the command" }));
   await screen.findByRole("button", { name: "Copied" });
   expect(writeText).toHaveBeenCalledWith("Deckhand /mode policy");
+});
+
+test("the run decision with Deckhand's run.rego: no deny rule, but its allow rules still refuse some modes", async () => {
+  policies = {
+    ...POLICIES,
+    errors: [],
+    files: [
+      ...POLICIES.files,
+      makePolicyFile({ name: "run.rego", source: "deckhand", rules: ["allow_run"] }),
+    ],
+  };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  const run = card("Runs people start");
+  expect(within(run).getByText("No deny rule")).toBeTruthy();
+  expect(run.textContent).toContain(
+    "Deckhand's run.rego keeps brainstorms, /stop and onboarding on issues",
+  );
+});
+
+test("the run decision with the operator's run.rego replacing Deckhand's: its rules aren't named", async () => {
+  policies = {
+    ...POLICIES,
+    errors: [],
+    files: [
+      ...POLICIES.files,
+      makePolicyFile({ name: "run.rego", source: "deckhand", active: false, rules: ["allow_run"] }),
+      makePolicyFile({
+        name: "run.rego",
+        source: "operator",
+        replaces: "deckhand",
+        rules: ["allow_run"],
+      }),
+    ],
+  };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  const run = card("Runs people start");
+  expect(within(run).getByText("No deny rule")).toBeTruthy();
+  expect(run.textContent).toContain("Its allow rules decide where each mode runs.");
+  expect(run.textContent).not.toContain("Deckhand's run.rego keeps");
 });

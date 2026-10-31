@@ -3,29 +3,42 @@ import { mkdirSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from
 import { join } from "node:path";
 import { test } from "node:test";
 import {
-  ALLOW,
-  allowOnly,
-  BUILT_IN_DIR,
-  builtInPolicies,
   createPolicies,
   DECISIONS,
-  namespaced,
-  namespaceRefusal,
-  REPO_NS,
   RULES,
   rulesOf,
   unallowed,
   denyKept,
   MAX_MESSAGE_LENGTH,
   MAX_TEXT,
-  opaRunner,
-  operatorPolicies,
   pullInput,
+} from "../listener/policies.mjs";
+import {
+  ALLOW,
+  allowOnly,
+  BUILT_IN_DIR,
+  builtInPolicies,
+  namespaced,
+  namespaceRefusal,
+  operatorPolicies,
+  REPO_NS,
   restrictedCapabilities,
   TIMEOUT_MS,
-} from "../listener/policies.mjs";
+} from "../policy-service/engine.mjs";
+import { opaBinary, opaRunner } from "../policy-service/opa.mjs";
+import { issueServiceTokens, serviceTokens } from "../lib/service-token.mjs";
+import { publishKey, signingKey } from "../lib/tokens.mjs";
+import { policyClient } from "../listener/policy-client.mjs";
 import { mergeInput } from "../listener/reviews.mjs";
-import { tempDir, hasOpa } from "./helpers.mjs";
+import {
+  evalResult,
+  fakeOpa as sharedFakeOpa,
+  hasOpa,
+  localService,
+  policyEngineOf,
+  servePolicies,
+  tempDir,
+} from "./helpers.mjs";
 
 const CAPABILITIES = {
   builtins: [
@@ -79,79 +92,21 @@ function fakeGitHub(files = null, { status = null } = {}) {
   return { github, calls };
 }
 
-// A fake `opa`: `eval` answers `answer(files, input)` → { code, stdout, … } (files: the staged
-// policies, name → text), `check` likewise with `checked(files)`.
-function fakeOpa({
-  answer = () => evalResult([]),
-  checked = () => ({ code: 0, stdout: "" }),
-} = {}) {
-  const calls = [];
-  // Each staged layer's files (policy/operator/, policy/repo/), name → text as written (the
-  // repo's namespaced(): `raw`, as the repo wrote them).
-  const staged = (cwd, raw) =>
-    Object.fromEntries(
-      readdirSync(join(cwd, "policy")).map((layer) => [
-        layer,
-        Object.fromEntries(
-          readdirSync(join(cwd, "policy", layer)).map((n) => {
-            const text = readFileSync(join(cwd, "policy", layer, n), "utf8");
-            return [n, raw ? text.replaceAll("deckhand_repository.", "") : text];
-          }),
-        ),
-      ]),
-    );
-  const run = async (args, { input, cwd } = {}) => {
-    calls.push({ args, input, cwd });
-    if (args[0] === "capabilities") return { code: 0, stdout: JSON.stringify(CAPABILITIES) };
-    const caps = JSON.parse(readFileSync(join(cwd, "capabilities.json"), "utf8"));
-    const layers = staged(cwd, true);
-    const files = Object.assign({}, ...Object.values(layers));
-    Object.assign(calls.at(-1), { capabilities: caps, files, layers, written: staged(cwd) });
-    if (args[0] !== "eval") return checked(files);
-    // One process for the layers: each answers as its own, a failure for them all.
-    const value = {};
-    for (const [layer, own] of Object.entries(layers)) {
-      const res = answer(own, JSON.parse(input), layer);
-      if (res.code !== 0 || res.timedOut) return res;
-      try {
-        value[layer] = JSON.parse(res.stdout).result?.[0]?.expressions?.[0]?.value;
-      } catch {
-        return res;
-      }
-    }
-    return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
-  };
-  return { run, calls, evals: () => calls.filter((c) => c.args[0] === "eval") };
-}
-
-// opa's answer to the query of a layer's rules: `deny`, the deny rule's value (undefined: no
-// file defines it); `allow`, the allow rule's (null: none defines it).
-const evalResult = (deny, allow = true) => ({
-  code: 0,
-  stdout: JSON.stringify({
-    result: [
-      {
-        expressions: [
-          {
-            value: {
-              allow: allow === null ? [] : [allow],
-              deny: deny === undefined ? [] : [deny],
-            },
-          },
-        ],
-      },
-    ],
-  }),
-});
+// A fake `opa` (helpers.mjs fakeOpa()) whose capabilities are CAPABILITIES.
+const fakeOpa = (options = {}) => sharedFakeOpa({ capabilities: CAPABILITIES, ...options });
 
 // Deckhand's allow.rego, as the image ships it.
 const ALLOWING = Object.fromEntries(allowOnly());
 
+// The policies over a policy service's engine (helpers.mjs policyEngineOf()) with `opa`, Deckhand's
+// `builtIn` and the operator's `operator` (name → text, or `readOperator()`), and a fake GitHub
+// with the repo's `repoFiles`.
 function setup(
   t,
   {
     repoFiles = null,
     operator = {},
+    readOperator = undefined,
     builtIn = ALLOWING,
     opa = fakeOpa(),
     secrets = [],
@@ -161,18 +116,21 @@ function setup(
 ) {
   const gh = fakeGitHub(repoFiles, { status });
   const logs = [];
+  const engine = policyEngineOf(t, {
+    opa,
+    operator,
+    builtIn,
+    ...(readOperator && { readOperator }),
+  });
   const policies = createPolicies({
     config: {},
     github: gh.github,
-    run: opa.run,
+    service: localService(engine),
     secrets: () => secrets,
-    readOperator: () => new Map(Object.entries(operator)),
-    readBuiltIn: () => new Map(Object.entries(builtIn)),
-    tmp: tempDir(t),
     log: (line) => logs.push(line),
     ...(now ? { now } : {}),
   });
-  return { policies, gh, opa, logs };
+  return { policies, gh, opa, logs, engine };
 }
 
 const input = () => ({ decision: "merge", pr: { additions: 500 } });
@@ -268,20 +226,28 @@ test("unallowed: what no allow rule matched, said from the input", () => {
     unallowed("request_review", { mode: null }, "operator"),
     "no rule allows requesting reviewers for a run Deckhand no longer knows's pull request",
   );
-  assert.deepEqual(RULES.slice(0, 2), ["allow_merge", "deny_merge"]);
+  assert.equal(
+    unallowed("run", { mode: "brainstorm", target: { kind: "pr" } }, "operator"),
+    "no rule allows a `brainstorm` run on a pull request",
+  );
+  assert.equal(
+    unallowed("run", { mode: "plan", target: { kind: "issue" } }, "repo"),
+    "no rule of .deckhand/policy/ allows a `plan` run on an issue",
+  );
+  assert.deepEqual(RULES.slice(0, 4), ["allow_run", "deny_run", "allow_merge", "deny_merge"]);
   assert.equal(RULES.length, 2 * DECISIONS.length);
 });
 
 test("operatorPolicies: the grants folder's policy/*.rego, symlinks only inside it", (t) => {
   const grants = tempDir(t);
-  assert.equal(operatorPolicies({ grantsDir: grants }).size, 0);
+  assert.equal(operatorPolicies(grants).size, 0);
   mkdirSync(join(grants, "policy"));
   writeFileSync(join(grants, "policy", "size.rego"), DENY);
   writeFileSync(join(grants, "policy", "notes.md"), "not a policy");
   writeFileSync(join(grants, "shared.rego"), "package deckhand\n");
   symlinkSync(join(grants, "shared.rego"), join(grants, "policy", "shared.rego"));
   assert.deepEqual(
-    [...operatorPolicies({ grantsDir: grants })],
+    [...operatorPolicies(grants)],
     [
       ["shared.rego", "package deckhand\n"],
       ["size.rego", DENY],
@@ -290,25 +256,27 @@ test("operatorPolicies: the grants folder's policy/*.rego, symlinks only inside 
   const outside = join(tempDir(t), "x.rego");
   writeFileSync(outside, "package deckhand\n");
   symlinkSync(outside, join(grants, "policy", "out.rego"));
-  assert.throws(() => operatorPolicies({ grantsDir: grants }), /out\.rego leads outside/);
+  assert.throws(() => operatorPolicies(grants), /out\.rego leads outside/);
 });
 
 test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no folder, none", (t) => {
   const own = builtInPolicies();
   assert.ok(own.has("github.rego"));
   for (const [name, text] of own) {
-    assert.match(name, /^(allow|github|review|gh-[a-z0-9-]+)\.rego$/, name);
+    assert.match(name, /^(allow|github|review|run|gh-[a-z0-9-]+)\.rego$/, name);
     // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
     // alone: comments and the package, nothing else.
     const bare = text.replace(/^\s*#.*$/gm, "").trim() === "package deckhand";
     assert.ok(rulesOf(text).length || bare, `${name} defines a rule of package deckhand`);
   }
   // allow.rego allows each decision, whatever the input: the listener knows it without opa.
+  // All but `run`, which run.rego allows where each mode makes sense.
   const allow = own.get(ALLOW);
   assert.deepEqual(
     rulesOf(allow),
-    DECISIONS.map((d) => `allow_${d}`),
+    DECISIONS.filter((d) => d !== "run").map((d) => `allow_${d}`),
   );
+  assert.deepEqual(rulesOf(own.get("run.rego")), ["allow_run"]);
   assert.deepEqual([...allowOnly()], [[ALLOW, allow]]);
   assert.equal(BUILT_IN_DIR, join(import.meta.dirname, "..", "policy/"));
   const dir = tempDir(t);
@@ -342,8 +310,8 @@ test("deny: Deckhand's files under the operator's by name, the repo's a layer of
     "gh-c.rego: package deckhand # repo c",
     'gh-c.rego: package deckhand deny_github contains "x" if true',
   ]);
-  // One opa process, each layer in a folder of its own, the repo's package moved under its
-  // namespace: neither layer's files can define the other's rules.
+  // One query of one opa server, each layer in a folder of its own, the repo's package moved
+  // under its namespace: neither layer's files can define the other's rules.
   const [call, ...more] = opa.evals();
   assert.equal(more.length, 0);
   assert.deepEqual(
@@ -352,17 +320,20 @@ test("deny: Deckhand's files under the operator's by name, the repo's a layer of
   );
   assert.equal(call.written.repo["gh-c.rego"], "package deckhand_repository.deckhand # repo c");
   assert.equal(
-    call.args.at(-1),
-    '{"operator": {"allow": [x | x := data.deckhand.allow_github], "deny": [x | x := data.deckhand.deny_github]}, "repo": {"deny": [x | x := data.deckhand_repository.deckhand.deny_github]}}',
+    call.query,
+    'result := {"operator": {"allow": [x | x := data.deckhand.allow_github], "deny": [x | x := data.deckhand.deny_github]}, "repo": {"deny": [x | x := data.deckhand_repository.deckhand.deny_github]}}',
   );
-  // Read once: they are the image's.
+  // Deckhand's are read once by the service: they are its image's.
   let reads = 0;
   const counted = createPolicies({
     config: {},
     github: fakeGitHub().github,
-    run: opa.run,
-    readBuiltIn: () => (reads++, new Map([["gh-a.rego", GH]])),
-    tmp: tempDir(t),
+    service: localService(
+      policyEngineOf(t, {
+        opa,
+        readBuiltIn: () => (reads++, new Map([["gh-a.rego", GH]])),
+      }),
+    ),
   });
   await counted.deny("deny_github", "org/repo", "main", input);
   await counted.deny("deny_github", "org/repo", "main", input);
@@ -562,32 +533,44 @@ test("deny: the operator's and the repo's layers, each on its own, a deny of eit
   ]);
 });
 
-test("deny: the rule's messages, its input on stdin, a restricted opa", async (t) => {
+test("deny: the rule's messages, its input, a set checked with restricted capabilities then served", async (t) => {
   const opa = fakeOpa({
     answer: (files, doc) => evalResult(doc.pr.additions > 400 ? ["too big"] : []),
   });
-  const { policies, logs } = setup(t, { opa, repoFiles: { "size.rego": DENY } });
+  const { policies, logs, engine } = setup(t, { opa, repoFiles: { "size.rego": DENY } });
   assert.deepEqual(await policies.deny("deny_merge", "org/repo", "main", input), ["too big"]);
   const [call] = opa.evals();
   assert.deepEqual(JSON.parse(call.input), { version: 1, ...input() });
-  assert.ok(call.args.includes("--stdin-input"));
-  assert.ok(call.args.includes("--capabilities=capabilities.json"));
-  assert.ok(call.args.some((a) => a.startsWith("--timeout=")));
   // The repo's layer: its deny rule, not its allow, a merge being no mode of its own. Deckhand's
-  // allow.rego alone needs no opa.
+  // allow.rego alone needs no asking, but is loaded beside it.
   assert.equal(
-    call.args.at(-1),
-    '{"repo": {"deny": [x | x := data.deckhand_repository.deckhand.deny_merge]}}',
+    call.query,
+    'result := {"repo": {"deny": [x | x := data.deckhand_repository.deckhand.deny_merge]}}',
   );
   assert.equal(opa.evals().length, 1);
-  assert.ok(!call.capabilities.builtins.some((b) => b.name === "http.send"));
-  // The staged files are gone after.
-  assert.throws(() => readdirSync(call.cwd));
+  // The set was checked with the restricted capabilities before its server started, the same
+  // files staged for both.
+  const [check, serve] = opa.calls.filter((c) => c.args[0] === "check" || c.args[0] === "serve");
+  assert.deepEqual(check.args, [
+    "check",
+    "--format=json",
+    "--capabilities=capabilities.json",
+    "policy",
+  ]);
+  assert.equal(serve.args[0], "serve");
+  assert.ok(!check.capabilities.builtins.some((b) => b.name === "http.send"));
+  assert.deepEqual(serve.written, check.written);
+  assert.deepEqual(Object.keys(serve.layers).sort(), ["operator", "repo"]);
   assert.match(logs.join("\n"), /merge refused: too big/);
   const small = () => ({ pr: { additions: 1 } });
   assert.deepEqual(await policies.deny("deny_merge", "org/repo", "main", small), []);
-  // Once per binary: its capabilities.
+  // The same set: the same server, checked once; once per binary: its capabilities.
+  assert.equal(opa.calls.filter((c) => c.args[0] === "check").length, 1);
+  assert.equal(opa.calls.filter((c) => c.args[0] === "serve").length, 1);
   assert.equal(opa.calls.filter((c) => c.args[0] === "capabilities").length, 1);
+  // Its staged files go with its server.
+  await engine.stop();
+  assert.throws(() => readdirSync(serve.cwd));
 });
 
 test("deny: messages capped, on one line and redacted", async (t) => {
@@ -647,17 +630,23 @@ test("deny: fail closed, each failure one policy error", async (t) => {
       },
       /^policy error: var timeout is unsafe$/,
     ],
-    // Too much output: opaRunner() says so on stderr, not as a timeout.
+    // An evaluation's error, which opa's server says in one message.
     [
-      { code: -1, stdout: "", stderr: "stdout maxBuffer length exceeded", timedOut: false },
-      /^policy error: stdout maxBuffer length exceeded$/,
+      {
+        code: 1,
+        stdout: JSON.stringify({
+          code: "internal_error",
+          message:
+            "a.rego:3: eval_conflict_error: complete rules must not produce multiple outputs",
+        }),
+      },
+      /^policy error: a\.rego:3: eval_conflict_error: complete rules must not produce multiple outputs$/,
     ],
     [evalResult([1, "x"]), /^policy error: `deny_merge` must be a set of strings$/],
     [evalResult("x"), /must be a set of strings/],
     [{ code: 0, stdout: "not json" }, /^policy error: opa's answer can't be read$/],
     // Undefined: the query always has a value, its rules' lists.
     [{ code: 0, stdout: "{}" }, /^policy error: opa's answer can't be read$/],
-    [{ code: -1, stdout: "", stderr: "spawn opa ENOENT" }, /^policy error: spawn opa ENOENT$/],
   ];
   for (const [answer, expected] of cases) {
     const { policies } = setup(t, {
@@ -700,14 +689,10 @@ test("deny: fail closed, each failure one policy error", async (t) => {
     "policy error: opa's answer can't be read",
   ]);
   // The operator's folder can't be read: refused, whatever the repo has.
-  const operator = createPolicies({
-    config: {},
-    github: fakeGitHub().github,
-    run: fakeOpa().run,
+  const { policies: operator } = setup(t, {
     readOperator: () => {
       throw new Error("policy/x.rego can't be read (EACCES)");
     },
-    tmp: tempDir(t),
   });
   assert.match((await operator.deny("deny_merge", "org/repo", "main", input))[0], /EACCES/);
   // GitHub's part is told apart (`unread`): a caller may ask again rather than keep the refusal.
@@ -880,7 +865,7 @@ test("check: compile errors and rules nobody evaluates; nothing to check, no opa
     ["bad.rego", "package deckhand\ndeny_merge contains x if { x := http.send({}) }\n"],
   ]);
   const rules =
-    "`allow_merge`, `deny_merge`, `allow_review`, `deny_review`, `allow_fix`, `deny_fix`, `allow_link_branch`, `deny_link_branch`, `allow_request_review`, `deny_request_review`, `allow_github`, `deny_github`";
+    "`allow_run`, `deny_run`, `allow_merge`, `deny_merge`, `allow_review`, `deny_review`, `allow_fix`, `deny_fix`, `allow_link_branch`, `deny_link_branch`, `allow_request_review`, `deny_request_review`, `allow_github`, `deny_github`";
   assert.deepEqual(await policies.check(files), {
     errors: ["policy error: bad.rego:2: undefined function http.send"],
     warnings: [
@@ -1026,7 +1011,7 @@ test("describe: each file with its source and rules, the check of them all", asy
       "deckhand",
       null,
       true,
-      DECISIONS.map((d) => `allow_${d}`),
+      DECISIONS.filter((d) => d !== "run").map((d) => `allow_${d}`),
       ALLOWING[ALLOW],
     ),
     // The operator's a.rego, evaluated beside the repo's of the same name.
@@ -1075,13 +1060,10 @@ test("describe: each file with its source and rules, the check of them all", asy
 
 test("describe: each error of opa check at its file and row (a recorded output)", async (t) => {
   const recorded = readFileSync(new URL("fixtures/opa-check-errors.json", import.meta.url), "utf8");
-  const policies = createPolicies({
-    config: {},
-    github: fakeGitHub({ "net.rego": NET, "size.rego": SIZE }).github,
-    run: opaRunner(FAKE),
-    readOperator: () => new Map(),
-    readBuiltIn: () => new Map(),
-    tmp: tempDir(t),
+  const { policies } = setup(t, {
+    opa: { run: opaRunner(FAKE) },
+    builtIn: {},
+    repoFiles: { "net.rego": NET, "size.rego": SIZE },
   });
   const described = await policies.describe("org/repo", "main");
   assert.deepEqual(described.errors, [
@@ -1151,21 +1133,42 @@ test("describe: no policy anywhere, no opa call; an operator folder that can't b
   assert.deepEqual(described.files, []);
   assert.deepEqual(described.errors, []);
   assert.equal(opa.calls.length, 0);
-  const broken = createPolicies({
-    config: {},
-    github: fakeGitHub().github,
-    run: fakeOpa().run,
+  const { policies: broken } = setup(t, {
+    builtIn: {},
     readOperator: () => {
       throw new Error("policy/x.rego leads outside the grants folder");
     },
-    readBuiltIn: () => new Map(),
-    tmp: tempDir(t),
   });
   const text =
     "the operator's policies can't be read: policy/x.rego leads outside the grants folder";
   assert.deepEqual((await broken.describe("org/repo", "main")).errors, [
     { layer: null, file: null, row: null, message: text, text },
   ]);
+  // A policy service that can't be reached: said, the repo's files listed alone.
+  const away = createPolicies({
+    config: {},
+    github: fakeGitHub({ "a.rego": DENY }).github,
+    service: {
+      policies: async () => {
+        throw new Error("the policy service can't be reached (ECONNREFUSED, for 30 s)");
+      },
+      compile: async () => {
+        throw new Error("the policy service can't be reached (ECONNREFUSED, for 30 s)");
+      },
+    },
+  });
+  const unreachable = await away.describe("org/repo", "main");
+  assert.deepEqual(
+    unreachable.files.map((f) => [f.source, f.name]),
+    [["repo", "a.rego"]],
+  );
+  assert.deepEqual(
+    unreachable.errors.map((e) => e.text),
+    [
+      "the policy service can't be reached (ECONNREFUSED, for 30 s)",
+      "policy error: the policy service can't be reached (ECONNREFUSED, for 30 s)",
+    ],
+  );
 });
 
 test("mergeInput: what deny_merge reads", () => {
@@ -1281,45 +1284,66 @@ test("opaRunner: an empty environment, the input on stdin, killed at its timeout
 
 // With the real binary on the PATH (hasOpa): the policy as written.
 
+// The policies through the policy service itself, over HTTP, as the listener calls it: its
+// engine with the real opa and the operator's `operator` files (name → text) over Deckhand's
+// allow.rego, each call with a service token the broker's key signed, checked offline with its
+// public key. `repo`: the repo's files.
+async function overHttp(t, { operator = {}, repo = null } = {}) {
+  const key = signingKey(tempDir(t));
+  const keysDir = tempDir(t);
+  publishKey(keysDir, key);
+  const url = await servePolicies(t, {
+    keysDir,
+    engine: policyEngineOf(t, { opa: opaBinary(), operator }),
+  });
+  const tokens = serviceTokens({
+    audiences: ["policy"],
+    request: async (audiences) => issueServiceTokens("orchestrator", audiences, key),
+  });
+  return createPolicies({
+    config: {},
+    github: fakeGitHub(repo).github,
+    service: policyClient({ url, header: () => tokens.header("policy") }),
+  });
+}
+
 test(
-  "the real opa: a denial, no network, a compile error",
+  "the real opa, through the policy service: a denial, no environment, network or files, a compile error",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
-    const tmp = tempDir(t);
-    const policies = createPolicies({
-      config: {},
-      github: null,
-      readOperator: () => new Map(),
-      tmp,
-    });
-    const files = new Map([["size.rego", DENY]]);
-    assert.deepEqual(await policies.evaluate("deny_merge", files, input()), ["too big"]);
-    assert.deepEqual(await policies.evaluate("deny_merge", files, { pr: { additions: 1 } }), []);
-    const net = new Map([
-      ["n.rego", "package deckhand\ndeny_merge contains x if { x := opa.runtime().env.HOME }\n"],
-    ]);
+    const sized = await overHttp(t, { operator: { "size.rego": DENY } });
+    assert.deepEqual(await sized.deny("deny_merge", "org/repo", "main", input), ["too big"]);
+    const tiny = () => ({ pr: { additions: 1 } });
+    assert.deepEqual(await sized.deny("deny_merge", "org/repo", "main", tiny), []);
+    const net = "package deckhand\ndeny_merge contains x if { x := opa.runtime().env.HOME }\n";
+    const runtime = await overHttp(t, { operator: { "n.rego": net } });
     assert.match(
-      (await policies.evaluate("deny_merge", net, {}))[0],
-      /n\.rego:2: undefined function opa\.runtime/,
+      (await runtime.deny("deny_merge", "org/repo", "main", input))[0],
+      /^policy error: n\.rego:2: undefined function opa\.runtime/,
     );
-    assert.match((await policies.check(net)).errors[0], /undefined function opa\.runtime/);
-    // Nothing that reads the environment, the network or the listener's files compiles.
+    assert.match(
+      (await runtime.check(new Map([["n.rego", net]]))).errors[0],
+      /undefined function opa\.runtime/,
+    );
+    // Nothing that reads the environment, the network or the service's files compiles: refused
+    // when the set is loaded, the operator's or a repo's, before any opa serves it.
     for (const call of [
       "opa.runtime().env.HOME",
       'http.send({"method": "get", "url": "https://example.com"}).body',
       'net.lookup_ip_addr("example.com")',
       'json.match_schema({}, {"$ref": "file:///etc/hostname"})',
       'json.verify_schema({"$ref": "file:///etc/hostname"})',
+      'trace("x")',
     ]) {
       const name = call.slice(0, call.indexOf("("));
-      const file = new Map([
-        [
-          "x.rego",
-          `package deckhand\ndeny_merge contains sprintf("%v", [x]) if { x := ${call} }\n`,
-        ],
-      ]);
-      const [denied] = await policies.evaluate("deny_merge", file, {});
-      assert.match(denied, new RegExp(`undefined function ${name.replace(/\./g, "\\.")}`), name);
+      const file = `package deckhand\ndeny_merge contains sprintf("%v", [x]) if { x := ${call} }\n`;
+      const expected = new RegExp(`undefined function ${name.replace(/\./g, "\\.")}`);
+      for (const layers of [{ operator: { "x.rego": file } }, { repo: { "x.rego": file } }]) {
+        const policies = await overHttp(t, layers);
+        const [denied] = await policies.deny("deny_merge", "org/repo", "main", input);
+        assert.match(denied, /^policy error: /, name);
+        assert.match(denied, expected, name);
+      }
     }
   },
 );
@@ -1327,7 +1351,7 @@ test(
 // The two layers with the real opa: `operator` and `repo`, name → text, over Deckhand's files
 // (`builtIn`: its allow.rego by default).
 function layered(t, { operator = {}, repo = null, builtIn = ALLOWING } = {}) {
-  return setup(t, { opa: { run: opaRunner() }, operator, repoFiles: repo, builtIn });
+  return setup(t, { opa: opaBinary(), operator, repoFiles: repo, builtIn });
 }
 
 // A write by a run in `mode` (one of the repo's own when `custom`), as deny_github reads it.
@@ -1566,17 +1590,23 @@ test(
     assert.deepEqual(await kept.policies.deny("deny_merge", "org/repo", "main", input), [
       "too big",
     ]);
-    // opa stops itself at --timeout: the decision is refused, saying so.
-    const slow = new Map([
-      [
-        "slow.rego",
-        'package deckhand\ndeny_merge contains "x" if { count([n | some n in numbers.range(1, 100000000); n % 7 == 0]) > 0 }\n',
-      ],
-    ]);
+    // A query past TIMEOUT_MS is cut, which cancels it in opa: the decision is refused, saying
+    // so, and the same server answers the next one.
+    const slow = layered(t, {
+      repo: {
+        "slow.rego":
+          'package deckhand\ndeny_merge contains "x" if {\n  input.slow\n  count([n | some n in numbers.range(1, 100000000); n % 7 == 0]) > 0\n}\n',
+      },
+    });
+    // Its set started first, so that what is timed is the decision alone.
+    assert.deepEqual(await slow.policies.deny("deny_merge", "org/repo", "main", input), []);
     const start = Date.now();
-    assert.deepEqual(await kept.policies.evaluate("deny_merge", slow, {}), [
-      "policy error: the `merge` rules took more than 2 s",
-    ]);
-    assert.ok(Date.now() - start < TIMEOUT_MS + 3000);
+    assert.deepEqual(
+      await slow.policies.deny("deny_merge", "org/repo", "main", () => ({ slow: true })),
+      ["policy error: the `merge` rules took more than 2 s"],
+    );
+    assert.ok(Date.now() - start < TIMEOUT_MS + 1000);
+    assert.deepEqual(await slow.policies.deny("deny_merge", "org/repo", "main", input), []);
+    assert.equal(slow.engine.servers(), 1);
   },
 );

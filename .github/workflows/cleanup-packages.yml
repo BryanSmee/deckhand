@@ -22,6 +22,7 @@ jobs:
           - deckhand-listener
           - deckhand-broker
           - deckhand-egress
+          - deckhand-policy
           - deckhand-sandbox
           - deckhand-engine
           - deckhand-engine-podman

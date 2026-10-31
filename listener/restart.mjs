@@ -1,8 +1,11 @@
-// Restarts: the queue and the runs a listener leaves to the next one. On SIGTERM the comments
-// still waiting for a run go to queue.json; each run's state is in logs/<run>.live.json all
-// along. The next listener reads both, finds the sandboxes by their labels, follows their
-// output from where the previous one stopped, and posts each reply once.
-import { readdirSync, rmSync } from "node:fs";
+// Restarts: the queue and the runs a listener leaves to the next one, saved as they change, so
+// that one killed without SIGTERM (a crash, an OOM kill) leaves the same as one that stopped.
+// The comments waiting for a run are in the store (`queue`, with each task's deadline: the end
+// of its pause); each run's state is in logs/<run>.live.json. The next listener reads both,
+// re-arms the deadlines, finds the sandboxes by their labels, follows their output from where
+// the previous one stopped, and posts each reply once.
+import { randomUUID } from "node:crypto";
+import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
@@ -10,6 +13,7 @@ import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { storable } from "../lib/store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
@@ -20,7 +24,11 @@ function savedResult(result) {
 }
 
 // A comment as saved to disk: the id of its 👀 rather than the promise of it.
-export async function plain({ eyes, comment, ...item }) {
+export async function plain(item) {
+  return plainWith(item, (await item.eyes?.catch(() => null)) ?? null);
+}
+
+function plainWith({ eyes: _, comment, ...item }, eyes) {
   return {
     ...item,
     comment: comment && {
@@ -31,21 +39,45 @@ export async function plain({ eyes, comment, ...item }) {
       parent_id: comment.parent_id,
       discussion: comment.discussion,
     },
-    eyes: (await eyes?.catch(() => null)) ?? null,
+    eyes,
   };
 }
 
+// How long the lines a run's output adds wait to be saved with its state (saveLiveSoon()).
+const LIVE_SAVE_MS = 1000;
+
+// The store's key of the queue: every task's comments waiting for a run, as one value. The
+// store lists no keys, and the next listener needs them all.
+export const QUEUE_KEY = "queue";
+
+// What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
+// both in the queue and in a run's saved state (a listener killed between the two writes) is the
+// run's alone.
+export function queueId() {
+  return randomUUID();
+}
+
+// Each comment's 👀 id once GitHub answered, for the queue's writes (eyesOf()).
+const eyesKnown = new WeakMap();
+
 export function revive(item) {
-  return { ...item, eyes: Promise.resolve(item.eyes) };
+  // Saved by a listener from before queueIds: one now, so that the next restart tells it apart.
+  const revived = { ...item, queueId: item.queueId ?? queueId(), eyes: Promise.resolve(item.eyes) };
+  // Known already: the queue's next write keeps it (eyesOf()).
+  eyesKnown.set(revived, item.eyes ?? null);
+  return revived;
 }
 
 function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
   return { repo, id, kind, number, name, base, discussionId, settings };
 }
 
-// `ctx` (server.mjs): the listener's state and services, read at call time.
+// `ctx` (server.mjs): the listener's state and services, read at call time. `ctx.store`
+// (lib/store.mjs) keeps the queue.
 export function createRestart(ctx) {
   const { config, log, tasks } = ctx;
+  // Where a listener from before the store saved its queue, on SIGTERM only: read once, then
+  // in the store.
   const queuePath = join(config.dataDir, "queue.json");
   // spelled(repo) (spelling.mjs): set by unifySpellings(), or by restoreRuns() without GitHub's names.
   let spelled = null;
@@ -56,10 +88,50 @@ export function createRestart(ctx) {
       .map((file) => readJson(join(ctx.logDir, file)))
       .filter(Boolean);
 
+  // The queue a previous listener left: the store's, and queue.json's from before it. Read once,
+  // by unifySpellings() or loadQueue(), whichever comes first.
+  let leftQueue = null;
+  // And the files keepQueued() left, a run's end the queue couldn't be written for.
+  const keptFiles = () =>
+    readdirSync(ctx.logDir)
+      .filter((f) => f.endsWith(".queued.json"))
+      .map((f) => join(ctx.logDir, f));
+  function readQueue() {
+    leftQueue ??= ctx.store.get(QUEUE_KEY).then((stored) => {
+      const files = [queuePath, ...keptFiles()];
+      const legacy = files.flatMap((path) => {
+        const saved = readJson(path);
+        return Array.isArray(saved) ? saved : [];
+      });
+      return [...Object.values(stored ?? {}), ...legacy];
+    });
+    return leftQueue;
+  }
+
+  // A run's end whose queue write failed (runs.mjs teardown()): its task's queue in
+  // logs/<run>.queued.json, read with the queue at the next start, and removed after the next
+  // write of the queue that succeeds. False when it can't be written either.
+  function keepQueued(task, live) {
+    if (!task.pending.length) return true;
+    const path = join(ctx.logDir, `${live.id}.queued.json`);
+    const pending = task.pending.map((item) => plainWith(item, eyesOf(item)));
+    try {
+      const saved = storable([{ ...pick(task), pending, next: task.next }], ctx.storeSecrets?.());
+      // The comments' text and authors: the owner's only.
+      writeJsonAtomic(path, saved, { mode: 0o600 });
+    } catch (error) {
+      log(`${live.key}: keeping its queue: ${error.stack ?? error}`);
+      return false;
+    }
+    log(`${live.key}: its task's queue kept in ${path} until the queue is saved`);
+    removeOnceSaved(path);
+    return true;
+  }
+
   // Every repo the runs, the runs going, the queue and `keys` (other state's task keys) have,
   // for spellings().
-  function records(keys = []) {
-    const queued = readJson(queuePath);
+  const records = async (keys = []) => recordsWith(await readQueue(), keys);
+  function recordsWith(queued, keys = []) {
     return [
       ...ctx.runs,
       ...readLive().map((saved) => ({
@@ -67,7 +139,7 @@ export function createRestart(ctx) {
         startedAt: saved.record?.startedAt,
         live: true,
       })),
-      ...(Array.isArray(queued) ? queued : []).map((t) => ({ repo: t.repo })),
+      ...queued.map((t) => ({ repo: t.repo })),
       ...keys.map((key) => ({ repo: parseKey(key)?.repo })),
     ];
   }
@@ -78,7 +150,7 @@ export function createRestart(ctx) {
   // repo once, and its tasks are one. In memory only: the next start does it again. Returns
   // spelled(), for the other state keyed by task (server.mjs).
   async function unifySpellings({ nameOf = null, keys = [], waitMs } = {}) {
-    const all = records(keys);
+    const all = await records(keys);
     const known = nameOf ? await githubNames(ambiguous(all), nameOf, waitMs) : new Map();
     for (const full of known.values()) log(`${full}: other spellings of it are now this one`);
     return respellRuns(spellings(all, known));
@@ -93,28 +165,144 @@ export function createRestart(ctx) {
     return spelled;
   }
 
-  // Comments that wait for a run, with the 👀 they got, so the next listener runs them.
-  async function saveQueue() {
-    const saved = [];
-    for (const t of tasks.values()) {
-      if (!t.pending.length && !Object.keys(t.next).length) continue;
-      const pending = await Promise.all(t.pending.map(plain));
-      saved.push({ ...pick(t), pending, next: t.next });
-    }
-    // The comments' text and authors: the owner's only, like the runs' state.
-    if (saved.length) writeJsonAtomic(queuePath, saved, { mode: 0o600 });
-    log(`Saved ${saved.length} task(s) with queued comments`);
+  // The comments that wait for a run, with the 👀 they got and each task's deadline, written to
+  // the store whenever they change (tasks.mjs, runs.mjs): a listener killed at any moment
+  // leaves them to the next one. Whole each time, the latest state when the write begins: a
+  // call while one waits to begin joins it, one while it is under way comes after it.
+  // Resolves once its state is written, to whether it was: a failed write is logged, the next
+  // one tries again.
+  let saving = Promise.resolve();
+  let waiting = null;
+  function saveQueue() {
+    waiting ??= saving.then(() => {
+      waiting = null;
+      let value;
+      try {
+        value = storable(queueState(), ctx.storeSecrets?.() ?? []);
+      } catch (error) {
+        log(`Saving the queue: ${error.stack ?? error}`);
+        return false;
+      }
+      // Those this write's state makes useless, as it is now: one added meanwhile waits for
+      // the next write, which has what made it so.
+      const removing = [...removeOnSave];
+      return ctx.store.set(QUEUE_KEY, value).then(
+        () => {
+          for (const path of removing) {
+            rmSync(path, { force: true });
+            removeOnSave.delete(path);
+          }
+          return true;
+        },
+        (error) => (log(`Saving the queue: ${error.stack ?? error}`), false),
+      );
+    });
+    saving = waiting;
+    return waiting;
   }
 
-  function loadQueue() {
-    const saved = readJson(queuePath);
-    if (!Array.isArray(saved)) return; // Nothing was waiting.
-    rmSync(queuePath, { force: true });
-    const spell = spelled ?? respellRuns(spellings(records()));
+  // Files whose comments are only safe once the queue is written with them (a queue.json from
+  // before the store, a run's state kept when the queue couldn't be written at its end,
+  // runs.mjs teardown()): removed after the next write that succeeds, whichever it is.
+  const removeOnSave = new Set();
+  function removeOnceSaved(path) {
+    removeOnSave.add(path);
+  }
+
+  // A comment's 👀 is a promise until GitHub answers: saved without it meanwhile (not waited
+  // for: the comment would be lost with a listener killed before), and saved again once known.
+  // The 👀 still on their way, each until the queue is saved with it (eyesSaved()).
+  const eyesComing = new Set();
+  function eyesOf(item) {
+    if (eyesKnown.has(item)) return eyesKnown.get(item);
+    eyesKnown.set(item, null);
+    if (!item.eyes) return null;
+    const coming = item.eyes
+      .catch(() => null)
+      .then((eyes) => {
+        if (!eyes) return;
+        eyesKnown.set(item, eyes);
+        return saveQueue();
+      })
+      .finally(() => eyesComing.delete(coming));
+    eyesComing.add(coming);
+    return null;
+  }
+
+  // Once the 👀 on their way are in the queue's saved state, or after `ms`: a listener that stops
+  // leaves the next one their ids, which it takes off with the comments' outcome.
+  function eyesSaved(ms) {
+    let timer;
+    const timeout = new Promise((resolve) => (timer = setTimeout(resolve, ms)));
+    return Promise.race([Promise.allSettled([...eyesComing]), timeout]).finally(() =>
+      clearTimeout(timer),
+    );
+  }
+
+  // Comments a run or a running session is taking (take()): out of `pending`, not yet in the
+  // run's saved state. live → [items], still written with the queue meanwhile, until a write
+  // of the run's state that has them succeeds (saveLive() moved()), or the run is over (they
+  // are back in `pending` then, or answered).
+  const moving = new Map();
+
+  // Comments `items` of `task`, out of its `pending` now, taken by its run: written in the run's
+  // state first, then out of the queue. Until the run's state is written, every write of the
+  // queue (another task's, a 👀 known) still has them: a listener killed meanwhile finds them
+  // in the queue, or in both (loadQueue() leaves them to the run), never in neither.
+  function take(task, items) {
+    const { live } = task;
+    moving.set(live, [...(moving.get(live) ?? []), ...items]);
+    return saveLive(task).then(() => saveQueue());
+  }
+
+  // The run's state was written with `handled`: those of its comments are in it.
+  function moved(live, handled) {
+    const left = (moving.get(live) ?? []).filter((item) => !handled.includes(item));
+    if (left.length) moving.set(live, left);
+    else moving.delete(live);
+  }
+
+  function takenBy(live) {
+    if (!live) return [];
+    if (live.over) moving.delete(live);
+    return moving.get(live) ?? [];
+  }
+
+  function queueState() {
+    const saved = {};
+    for (const [key, t] of tasks) {
+      // Once each: one a run put back in `pending` may still be moving.
+      const all = [...new Set([...takenBy(t.live), ...t.pending])];
+      if (!all.length && !Object.keys(t.next).length) continue;
+      const pending = all.map((item) => plainWith(item, eyesOf(item)));
+      // The comments' text and authors: the store is the listener's own (its files the
+      // owner's only, lib/store-file.mjs).
+      saved[key] = { ...pick(t), pending, next: t.next, dueAt: t.dueAt ?? null };
+    }
+    return saved;
+  }
+
+  // Back from the store, after restoreRuns(): each task's comments queued again, its pause
+  // re-armed for what was left of it (its deadline, `dueAt`), or over at once when it passed.
+  async function loadQueue() {
+    const saved = await readQueue();
+    const spell = spelled ?? respellRuns(spellings(await records()));
+    // A comment a run took as the listener stopped is that run's (restoreRuns()).
+    const taken = new Set();
+    for (const task of tasks.values()) {
+      for (const item of task.live?.handled ?? []) if (item.queueId) taken.add(item.queueId);
+    }
     for (const t of saved) {
       t.repo = spell(t.repo);
       for (const item of t.pending) item.repo = spell(item.repo);
       const key = taskKey(t.repo, t.id);
+      // Once each: a comment in a kept file and in the store too, say.
+      t.pending = t.pending.filter((item) => {
+        if (!item.queueId) return true;
+        if (taken.has(item.queueId)) return false;
+        taken.add(item.queueId);
+        return true;
+      });
       // ALLOWED_REPOS or ALLOWED_USERS may have changed with the restart. The repo's own
       // users are checked when the run begins (runs.mjs), or below for a run still going.
       t.pending = t.pending.filter((item) => {
@@ -134,21 +322,35 @@ export function createRestart(ctx) {
       task.next = { ...t.next, ...task.next };
       task.pending.push(...t.pending.map(revive));
       if (!t.pending.length) continue;
-      log(`${key}: ${t.pending.length} comment(s) queued before the restart`);
-      if (!task.running) ctx.startLater(task);
+      // Saved before deadlines were: its pause starts again.
+      const dueAt = t.dueAt ?? undefined;
+      const left = dueAt === undefined ? "" : `, due in ${Math.max(0, dueAt - Date.now())} ms`;
+      log(`${key}: ${t.pending.length} comment(s) queued before the restart${left}`);
+      if (!task.running) ctx.startLater(task, dueAt);
       // Its run began before: these comments weren't checked against the repo's users then.
-      else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task)));
+      else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task, dueAt)));
     }
+    // In the store as it is now (one spelling, without what was dropped); queue.json and the
+    // kept files no more, once their comments are there (this write, or the next that succeeds).
+    for (const path of [queuePath, ...keptFiles()]) if (existsSync(path)) removeOnceSaved(path);
+    await saveQueue();
   }
 
   // What a listener needs to carry on with a run started by a previous one: written when it
-  // starts and whenever a comment reaches it, Claude answers or the reply is posted; removed
-  // once it is over. In order, each after the comments' 👀 are known.
+  // starts and whenever a comment reaches it, Claude answers or the reply is posted, and within
+  // a second of the output it reads (saveLiveSoon()); removed once it is over (runs.mjs
+  // teardown(), which sets `over`: a write still due then writes nothing). In order, each after
+  // the comments' 👀 are known.
   const livePath = (id) => join(ctx.logDir, `${id}.live.json`);
 
   function saveLive(task) {
     const live = task.live;
+    clearTimeout(live.soon);
+    live.soon = null;
+    // Whether it was written.
     const write = async () => {
+      if (live.over) return false;
+      const handled = [...live.handled];
       const { logPath, ...record } = live.record;
       const state = {
         task: pick(task),
@@ -169,6 +371,7 @@ export function createRestart(ctx) {
           ]
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
+            .concat(["graceUntil"])
             .map((k) => [k, live[k]]),
         ),
         // Its run tokens still valid, for its output's redaction after a restart (broker.mjs).
@@ -180,11 +383,26 @@ export function createRestart(ctx) {
       };
       // The run's tokens (or its secret, from before tokens) are in it: the owner's only.
       writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
+      moved(live, handled);
+      return true;
     };
     live.saving = (live.saving ?? Promise.resolve())
       .then(write)
-      .catch((error) => log(`${live.key}: saving its state: ${error.stack ?? error}`));
+      .catch((error) => (log(`${live.key}: saving its state: ${error.stack ?? error}`), false));
     return live.saving;
+  }
+
+  // The lines of output read (`lines`) and the silent-end grace they push back (`graceUntil`)
+  // change with each line: saved a second later at most, once for all those that came
+  // meanwhile. A listener killed in that second reads them again, and its log has them twice.
+  function saveLiveSoon(task, delayMs = LIVE_SAVE_MS) {
+    const live = task.live;
+    if (live.soon || live.over) return;
+    live.soon = setTimeout(() => {
+      live.soon = null;
+      if (task.live === live) saveLive(task);
+    }, delayMs);
+    live.soon.unref?.();
   }
 
   // The pushes of the run's GitHub took (git-gateway.mjs), on its record: when it last pushed,
@@ -205,8 +423,9 @@ export function createRestart(ctx) {
 
   // Runs a previous listener left behind, from their saved state: their tokens and egress work
   // again at once, and comments find them. reattach() then follows their sandboxes.
+  // Without unifySpellings() first (the tests'), the queue's repos aren't read yet.
   function restoreRuns() {
-    if (!spelled) respellRuns(spellings(records()));
+    if (!spelled) respellRuns(spellings(recordsWith([])));
     const live = readLive();
     for (const saved of live) {
       saved.task.repo = spelled(saved.task.repo);
@@ -347,11 +566,12 @@ export function createRestart(ctx) {
     }
   }
 
+  // Its comments back in the queue before its state goes (teardown() saves the queue first).
   async function requeue(task) {
     const { handled } = task.live;
     task.live.record.status = "interrupted";
-    await ctx.teardown(task);
     task.pending.unshift(...handled);
+    await ctx.teardown(task);
     ctx.startLater(task);
   }
 
@@ -359,8 +579,13 @@ export function createRestart(ctx) {
     unifySpellings,
     saveQueue,
     loadQueue,
+    take,
+    eyesSaved,
+    removeOnceSaved,
+    keepQueued,
     livePath,
     saveLive,
+    saveLiveSoon,
     watchPushes,
     restoreRuns,
     reattach,

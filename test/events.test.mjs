@@ -163,8 +163,6 @@ test("pull request comments go to the linked issue's session", () => {
   const alone = workItem(config, "issue_comment", comment("fix it", { pr: "No issue" }));
   assert.equal(alone.id, "pr-12");
   assert.equal(alone.title, "Fix the queue");
-  const brainstorm = comment("Deckhand\n/mode brainstorm", { pr: "" });
-  assert.equal(workItem(config, "issue_comment", brainstorm), null);
   // Anyone else's, a maintainer's included: the payload has no head, which tasks.mjs looks up
   // (`claims`) before linking it.
   const own = comment("fix it", { pr: "Closes #3", by: "COLLABORATOR" });
@@ -466,7 +464,7 @@ test("a /mode line picks the mode, and is never taken for /model", () => {
   assert.equal(splitTrigger(config, "use /mode review here").mode, null);
 });
 
-test("a /mode line reaches the item; brainstorms stay off pull requests", () => {
+test("a /mode line reaches the item, a brainstorm's on a pull request too (policy/run.rego decides)", () => {
   const item = workItem(config, "issue_comment", comment("/mode review\nCheck the tests."));
   assert.equal(item.modeLine, "review");
   assert.equal(item.trigger, null);
@@ -474,11 +472,11 @@ test("a /mode line reaches the item; brainstorms stay off pull requests", () => 
   const onPr = workItem(config, "issue_comment", comment("/mode review", { pr: "Closes #3" }));
   assert.equal(onPr.modeLine, "review");
   assert.equal(onPr.id, "3");
-  const reasons = [];
-  const skip = (reason) => (reasons.push(reason), null);
+  // Refused later by the policies' allow_run, not here: the operator may allow it.
   const brainstorm = comment("/mode brainstorm", { pr: "Closes #3" });
-  assert.equal(workItem(config, "issue_comment", brainstorm, skip), null);
-  assert.match(reasons[0], /brainstorms are on issues/);
+  assert.equal(workItem(config, "issue_comment", brainstorm).modeLine, "brainstorm");
+  const stop = workItem(config, "issue_comment", comment("/stop", { pr: "Closes #3" }));
+  assert.equal(stop.trigger, "stop");
 });
 
 test("/after: on the trigger line or its own, with /mode, /model, /effort and the text kept", () => {

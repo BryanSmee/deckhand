@@ -159,7 +159,12 @@ function setup({ env = {}, settings = {}, errors = [], categories, discussions }
     config,
     graphql,
     checkedRepo,
-    accept: async (item) => w.accepted.push(item),
+    // `w.refusing`: what the policies' refusal replied (run-policy.mjs marks the item).
+    accept: async (item) => {
+      w.accepted.push(item);
+      if (w.refusing) item.refused = w.refusing;
+      return w.refusing ? null : "discussion";
+    },
     publicUrl: () => ORIGIN,
     key: () => KEY,
     now: () => w.clock,
@@ -465,7 +470,12 @@ test("GitHub failing: a 502, nothing queued", async () => {
       settings: { users: ["alice"], inbox: { discussions: "ask claude" } },
       base: "main",
     }),
-    accept: async (item) => w.accepted.push(item),
+    // `w.refusing`: what the policies' refusal replied (run-policy.mjs marks the item).
+    accept: async (item) => {
+      w.accepted.push(item);
+      if (w.refusing) item.refused = w.refusing;
+      return w.refusing ? null : "discussion";
+    },
     publicUrl: () => ORIGIN,
   });
   assert.equal((await start(w, { title: "x", body: "y" })).status, 502);
@@ -489,4 +499,19 @@ test("the App's marks in a dashboard user's text are taken out before it is post
   // Shown as alice's, not as Deckhand's answer.
   const shown = postOf({ id: "x", body: w.added[0].body, author: app }, BOT, KEY);
   assert.deepEqual([shown.author, shown.deckhand, shown.body], ["alice", false, "More"]);
+});
+
+test("refused by the policies: a 403 with their reply, for a new discussion and a comment", async () => {
+  const w = setup();
+  w.refusing = "No `discussion` run: the policies refuse it: `not today`.";
+  const sent = await start(w, { title: "Restarts", body: "Is the queue kept?" });
+  assert.deepEqual([sent.status, sent.body.error ?? sent.body.message], [403, w.refusing]);
+  // The discussion made for it is closed, as a refused Analyze's issue.
+  assert.ok(
+    w.queries.some((q) => q.includes("closeDiscussion")),
+    w.queries.join("\n"),
+  );
+  const said = await comment(w, { text: "And the waits?" });
+  assert.deepEqual([said.status, said.body.error ?? said.body.message], [403, w.refusing]);
+  assert.equal(w.accepted.length, 2);
 });

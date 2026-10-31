@@ -50,10 +50,16 @@ class Cancelled extends Error {}
 // background work behind can go on, or never exit (#204).
 export const ANSWER_GRACE_MS = 2 * 60_000;
 
+// How long a restored run whose grace passed while no listener was there waits, once the
+// follow has skipped what was read before, for its sandbox's output from meanwhile before it is
+// stopped (follow()).
+const CATCH_UP_MS = 10_000;
+
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
   const { config, log } = ctx;
   const graceMs = ctx.answerGraceMs ?? ANSWER_GRACE_MS;
+  const catchUpMs = ctx.catchUpMs ?? CATCH_UP_MS;
 
   // The run's agent (agents/), by the name its record keeps across a restart.
   const agentOf = (task) => agentFor(task.live.record.agent);
@@ -81,7 +87,9 @@ export function createRuns(ctx) {
     ctx.order?.drop(taskKey(task.repo, task.id));
     task.live = newLive(task, items);
     addRun(ctx, task.live.record);
-    ctx.saveLive(task);
+    // In its saved state before they leave the saved queue (restart.mjs take()).
+    if (ctx.take) ctx.take(task, items);
+    else ctx.saveLive(task);
     try {
       if (!(await start(task, items))) return;
     } catch (error) {
@@ -101,6 +109,7 @@ export function createRuns(ctx) {
     } catch {
       // begin() reads them again, and fails the run with the error.
     }
+    const before = task.pending.length;
     task.pending = task.pending.filter((item) => {
       const refused = noLongerAllowed(config, item, settings);
       if (!refused) return true;
@@ -108,6 +117,7 @@ export function createRuns(ctx) {
       ctx.track(ctx.settle(item, "refused"));
       return false;
     });
+    if (task.pending.length < before) ctx.saveQueue?.();
   }
 
   // Where comments that arrive during the run go (deliver()), and what a listener that
@@ -239,6 +249,8 @@ export function createRuns(ctx) {
     // otherwise.
     const options = task.next;
     task.next = {};
+    // Used: a listener restarting mid-run doesn't give them to the next run too.
+    ctx.saveQueue?.();
     const text = commentsText(items, options);
     const marker = items.findLast((i) => i.fallback)?.fallback;
     // Inbox entries have no previous run to hand over, and start afresh: the sandbox doesn't
@@ -362,18 +374,35 @@ export function createRuns(ctx) {
   // Also how a restarted listener picks a run up: what it already read is skipped.
   async function follow(task) {
     const live = task.live;
-    // A run that answered before the listener restarted: its grace starts again.
+    // A run that answered before the listener restarted: all of its grace while the follow
+    // skips what was read before (a log of up to RUN_LOG_MAX_MB), then what was left of it
+    // (`graceUntil`), and at least a moment for the follow to read what its sandbox wrote
+    // while no listener was there, which pushes it back. Saved before its deadline was: all
+    // of it.
+    let saved = live.answered ? (live.graceUntil ?? null) : null;
     if (live.answered) linger(task);
+    const whole = live.graceUntil;
+    const caughtUp = () => {
+      if (saved === null || !live.answered || task.live !== live) return;
+      const until = Math.max(saved, Date.now() + Math.min(graceMs, catchUpMs));
+      saved = null;
+      // A new line pushed it back already (Docker's stdout past its skip before stderr): its
+      // whole grace from that line holds.
+      if (live.graceUntil !== whole) return;
+      linger(task, until);
+    };
     try {
       for (;;) {
         await ctx.runner.follow(task.name, {
           skip: { ...live.lines },
+          onCaughtUp: caughtUp,
           onOut: (line, at) => output(task, line, at),
           // Setup output (clone, install) before the agent starts.
           onErr: (line) => {
             if (ctx.stopping) return; // left for the next listener
             const kept = keep(task, hidden(live, line));
             live.lines.err++;
+            ctx.saveLiveSoon?.(task);
             if (!kept) return;
             if (live.answered) linger(task);
           },
@@ -418,6 +447,7 @@ export function createRuns(ctx) {
       writeEvent(live.logFile, "at", { at });
     const kept = keep(task, line);
     live.lines.out++;
+    ctx.saveLiveSoon?.(task);
     if (!kept) return;
     // Still at work after its answer (a background task's turn): its stop waits.
     if (live.answered) linger(task);
@@ -480,11 +510,14 @@ export function createRuns(ctx) {
     `its output passed RUN_LOG_MAX_MB (${Math.round(live.overflow.max / 1024 / 1024)} MB), the rest of it not kept`;
 
   // (Re)starts the timer of a run that answered with its inbox closed: if its sandbox writes
-  // nothing more for graceMs, it is stopped, and finish() posts its last result as usual.
-  function linger(task) {
+  // nothing more for graceMs, it is stopped, and finish() posts its last result as usual. Its
+  // deadline, `graceUntil`, is saved with the run (saveLiveSoon()): a listener that follows it
+  // again keeps to it (`until`).
+  function linger(task, until = Date.now() + graceMs) {
     const live = task.live;
     clearTimeout(live.lingering);
-    const timer = setTimeout(() => endSilent(task, live, timer), graceMs);
+    live.graceUntil = until;
+    const timer = setTimeout(() => endSilent(task, live, timer), Math.max(0, until - Date.now()));
     // A listener that stops leaves it to the next one (follow()).
     timer.unref?.();
     live.lingering = timer;
@@ -550,6 +583,7 @@ export function createRuns(ctx) {
     clearTimeout(task.timer);
     task.ready = false;
     for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
+    ctx.saveQueue?.();
     ctx.order?.drop(key);
     log(`${key}: queued comments dropped by ${by}`);
     return "queued";
@@ -751,8 +785,19 @@ export function createRuns(ctx) {
     live.record.finishedAt = Date.now();
     saveSummary(live.record, log);
     await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));
+    live.over = true;
+    clearTimeout(live.soon);
     await live.saving;
-    rmSync(ctx.livePath(live.id), { force: true });
+    // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
+    // own state goes: a listener killed between the two finds them in both, and the run's win.
+    // When the queue couldn't be written, what the task has queued goes in a file of its own
+    // until a write of the queue succeeds (restart.mjs keepQueued()): the run is over, and the
+    // next listener must not take it for one going. Its state is kept only when even that file
+    // can't be written.
+    if ((await ctx.saveQueue?.()) === false && ctx.keepQueued?.(task, live) === false) {
+      log(`${live.key}: its state is kept until the queue is saved with what it put back`);
+      ctx.removeOnceSaved?.(ctx.livePath(live.id));
+    } else rmSync(ctx.livePath(live.id), { force: true });
     task.live = null;
     task.running = false;
     ctx.running--;

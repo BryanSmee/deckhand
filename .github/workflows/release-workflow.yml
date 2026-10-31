@@ -26,6 +26,8 @@ jobs:
             dockerfile: broker/Dockerfile
           - image: deckhand-egress
             dockerfile: proxy/Dockerfile
+          - image: deckhand-policy
+            dockerfile: policy-service/Dockerfile
           - image: deckhand-sandbox
             dockerfile: sandbox/Dockerfile
           - image: deckhand-engine

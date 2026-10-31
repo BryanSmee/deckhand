@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   isToken,
+  keyFolder,
   keyId,
   MAX_TOKEN,
+  publishKey,
   RUN_AUDIENCE,
   signingKey,
   signToken,
@@ -119,4 +121,37 @@ test("a signing key file that isn't a key stops the listener saying what to do, 
   const fresh = tempDir(t);
   signingKey(fresh);
   assert.deepEqual(readdirSync(fresh), ["run-token.key"]);
+});
+
+test("publishKey and keyFolder: the broker's public keys for the services that check tokens offline", (t) => {
+  const dir = tempDir(t);
+  let clock = 0;
+  const folder = keyFolder(dir, { now: () => clock, everyMs: 1000 });
+  // None yet: the folder is read again only once a second, whatever the kids asked.
+  assert.equal(folder.get(key.kid), undefined);
+  publishKey(dir, key);
+  assert.equal(folder.get(key.kid), undefined);
+  clock += 1000;
+  assert.equal(
+    folder.get(key.kid).export({ type: "spki", format: "pem" }),
+    key.publicKey.export({ type: "spki", format: "pem" }),
+  );
+  // Public only, readable by the services' own users.
+  const [name] = readdirSync(dir);
+  assert.equal(name, `${key.kid}.pem`);
+  assert.match(readFileSync(join(dir, name), "utf8"), /^-----BEGIN PUBLIC KEY-----/);
+  assert.equal(statSync(join(dir, name)).mode & 0o777, 0o644);
+  // A token checks with it.
+  assert.equal(
+    verifyToken(signed(), { keys: folder, audience: RUN_AUDIENCE, now: NOW }).jti,
+    "run-1",
+  );
+  // A key by its own id, never its file's name; a file that isn't one is skipped.
+  const other = pair();
+  writeFileSync(join(dir, "renamed.pem"), other.publicKey.export({ type: "spki", format: "pem" }));
+  writeFileSync(join(dir, "junk.pem"), "not a key");
+  clock += 1000;
+  assert.ok(folder.get(other.kid));
+  assert.equal(folder.get("renamed"), undefined);
+  assert.equal(keyFolder(join(dir, "none")).get(key.kid), undefined);
 });

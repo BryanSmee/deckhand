@@ -125,12 +125,13 @@ test("/mode policy: a dry run replied on the pull request, no run; on an issue, 
   };
   // Deckhand's own pull request #30, linked to issue #12, in a repo without a review block.
   const linked = await modeOf(
-    { kind: "issue", replyTo: 30, base: "trunk", modeLine: "policy" },
+    { kind: "issue", replyTo: 30, base: "trunk", modeLine: "policy", author: "alice" },
     "",
     { reviews },
   );
   assert.equal(linked.mode, null);
-  assert.deepEqual(asked, [{ repo: "org/repo", base: "trunk", number: 30 }]);
+  // Who asked: the run samples' sender.
+  assert.deepEqual(asked, [{ repo: "org/repo", base: "trunk", number: 30, by: "alice" }]);
   assert.deepEqual(linked.replies, [["org/repo", 30, "**Policy dry run** on #30"]]);
   const pr = await modeOf({ kind: "pr", id: "pr-12", modeLine: "policy" }, "", { reviews });
   assert.deepEqual([pr.mode, pr.replies[0][2]], [null, "**Policy dry run** on #30"]);

@@ -34,6 +34,8 @@ import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import { drain } from "../lib/drain.mjs";
+import { pathToFileURL } from "node:url";
+import { openStore } from "../lib/store.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -56,7 +58,8 @@ import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createLinkedBranches } from "./linked-branch.mjs";
-import { builtInPolicies, createPolicies } from "./policies.mjs";
+import { createPolicies } from "./policies.mjs";
+import { policyClient } from "./policy-client.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
 import { createDecisions } from "./decisions.mjs";
@@ -87,6 +90,9 @@ import { createWorkApi } from "./work.mjs";
 
 // How long the egress policy's answers in flight get once the broker drained: they are quick.
 const POLICY_DRAIN_MS = 5000;
+
+// How long a listener that stops waits for the 👀 still on their way, for the queue it leaves.
+const EYES_WAIT_MS = 10_000;
 
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
@@ -130,12 +136,16 @@ function log(...args) {
 // The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
 // its stream of their events. The key the listener signed tokens with before it moves out of
 // the data volume, but for its public part (legacyKey()).
+// Its calls carry the listener's service tokens, as the orchestrator: for the broker, and for
+// the policy service.
+const brokerCaller = createBrokerCaller({
+  url: config.brokerServiceUrl,
+  audiences: ["broker", "policy"],
+  podTokenFile: config.serviceAccountTokenFile,
+  log,
+});
 const brokerService = createBrokerService({
-  caller: createBrokerCaller({
-    url: config.brokerServiceUrl,
-    podTokenFile: config.serviceAccountTokenFile,
-    log,
-  }),
+  caller: brokerCaller,
   legacy: legacyKey(config.dataDir, { log }),
   log,
 });
@@ -180,8 +190,17 @@ const ctx = {
   runsById: new Map(),
   // Runs with a sandbox, for the parallel cap.
   running: 0,
-  // Set on SIGTERM: no run starts any more, what waits is saved for the next listener.
+  // Set on SIGTERM: no run starts any more, what waits is left to the next listener (saved
+  // already, as it changed).
   stopping: false,
+  // The listener's state through the store's interface (lib/store.mjs), in the data volume: the
+  // queue for now (restart.mjs), the rest as the services take it over (#499).
+  // The operator's secrets are refused in it (lib/store.mjs), and left out of what the queue
+  // writes there (restart.mjs storable()).
+  store: openStore(pathToFileURL(join(config.dataDir, "store")).href, {
+    secrets: () => operatorSecrets(ctx),
+  }),
+  storeSecrets: () => operatorSecrets(ctx),
 };
 
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
@@ -315,14 +334,20 @@ const repoList = createRepoList({
 // Each repo's settings as last read: its runs' and comments', its `users` for the dashboard.
 const { repoSettings, ...repoReads } = createRepoSettings({ github, config, repoList });
 
-// Deckhand's, the operator's and the repos' policies (rules as code), evaluated by `opa` after
-// the built-in gates. The operator's are checked now, over Deckhand's, as the grants are: an
-// error refuses each decision a policy is asked for (fail closed), so it is said at once.
+// Deckhand's, the operator's and the repos' policies (rules as code), evaluated by the policy
+// service after the built-in gates (POLICY_SERVICE_URL, ../policy-service/). The operator's are
+// checked now, over Deckhand's, as the grants are: an error refuses each decision a policy is
+// asked for (fail closed), so it is said at once.
 const policies = createPolicies({
   config,
   github,
+  service: policyClient({
+    url: config.policyServiceUrl,
+    // Its service token for the policy service, from the broker service, which publishes the
+    // key the policy service checks it with (SERVICE_KEYS_DIR there).
+    header: () => brokerCaller.header("policy"),
+  }),
   secrets: () => operatorSecrets(ctx),
-  readBuiltIn: () => builtInPolicies(),
   log,
 });
 policies.checkOperator().then(({ errors, warnings }) => {
@@ -836,11 +861,11 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 // Before any request is served: runs still going since the previous listener, then what it
 // left queued (comments for those runs are delivered to them).
 const restored = ctx.restoreRuns();
-ctx.loadQueue();
+await ctx.loadQueue();
 // A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
 ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
-// queue.json is only written when the listener stops: after a crash, the keys of comments it
-// lost stay in order.json, and would rank a new comment there as placed.
+// The keys of comments dropped as the queue came back (their author no longer allowed) stay in
+// order.json otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 // The broker service's keys first: the restored runs' tokens are checked with them.
 brokerService
@@ -885,8 +910,10 @@ if (ctx.app) {
 }
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
-// after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
-// saved with the 👀 ids, the runs' state is written, and the next listener carries on. The
+// after the stop grace period. Sandboxes go on: no run starts any more, and the next listener
+// carries on from what is saved as it changes (the queue with its deadlines and 👀 ids, the
+// runs' state): here, only the writes under way are waited for, and the lines of output read
+// in the last second. The
 // broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
 // listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
 // inbox polls) before it exits (lib/drain.mjs). The egress policy's port answers until then.
@@ -908,9 +935,16 @@ process.on("SIGTERM", () => {
     if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
   });
   // Replies being posted and comments being admitted first, then what they leave.
+  // The 👀 still on their way too, for a while (the drain's grace bounds it anyway).
   const saved = Promise.allSettled([...ctx.ending, ...http.admitting])
+    .then(() => ctx.eyesSaved(EYES_WAIT_MS))
     .then(ctx.saveQueue)
+    .then(() => {
+      const queued = [...ctx.tasks.values()].filter((t) => t.pending.length).length;
+      log(`Stopping: ${queued} task(s) with queued comments left to the next listener`);
+    })
     .then(() => Promise.all([...ctx.tasks.values()].map((t) => t.live && ctx.saveLive(t))))
+    .then(() => ctx.store.close())
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
     // The dashboard's streams: its page reconnects to the next listener.
     .finally(() => web.closeAllConnections());

@@ -606,14 +606,27 @@ export function createKubernetesRunner({
   // upgrade) would never end: while it lasts, the pod is looked at every watchMs, and once it
   // has been seen exited twice in a row, the stream is let go and its log read once more,
   // whole, for the lines it hadn't delivered.
-  async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
+  // `onCaughtUp()`: once, when both streams are past the lines skipped (docker.mjs follow()).
+  async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {} }) {
     if (!(await started(name, onErr))) return;
     let seen = { out: 0, err: 0 };
     let past = skip;
+    let caught = false;
+    const catchUp = () => {
+      if (caught || seen.out < skip.out || seen.err < skip.err) return;
+      caught = true;
+      try {
+        onCaughtUp();
+      } catch (error) {
+        log(`The log of ${name}: ${error.stack ?? error}`);
+      }
+    };
+    catchUp();
     const each = (raw, at) => {
       const kind = raw.startsWith(STDERR_TAG) ? "err" : "out";
       const line = kind === "err" ? raw.slice(STDERR_TAG.length) : raw;
-      if (seen[kind]++ < past[kind]) return;
+      if (seen[kind]++ < past[kind]) return catchUp();
+      catchUp();
       try {
         (kind === "out" ? onOut : onErr)(line, at);
       } catch (error) {

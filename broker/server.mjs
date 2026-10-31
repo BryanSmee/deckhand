@@ -14,10 +14,13 @@
 //   SERVICE_ACCOUNTS  on Kubernetes: each caller's service account, service=namespace:name
 //   DRAIN_SECONDS     how long a stopping copy lets its calls finish: 30, over an inbox's long
 //                     poll (25 s), under compose's stop_grace_period
+//   SERVICE_KEYS_DIR  where it publishes its public key (<kid>.pem) for the services that check
+//                     service tokens offline (the policy service's, #501): none by default
+import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { drainOnSigterm } from "../lib/drain.mjs";
 import { openStore } from "../lib/store.mjs";
-import { signingKey } from "../lib/tokens.mjs";
+import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createCallers, inClusterReview } from "./callers.mjs";
 import { createFiles } from "./files.mjs";
 import { createBrokerServer } from "./http.mjs";
@@ -43,7 +46,20 @@ export function storeSecrets(key) {
 }
 
 // The broker's parts on `store`, with `key`: what the tests start too. → { server, runs, files }.
-export function createBroker({ store, key, callers, now = Date.now, sleep, log = () => {} }) {
+// `keysDir`: where its public key is published, for the services that check its tokens offline.
+export function createBroker({
+  store,
+  key,
+  callers,
+  keysDir = null,
+  now = Date.now,
+  sleep,
+  log = () => {},
+}) {
+  if (keysDir) {
+    mkdirSync(keysDir, { recursive: true });
+    publishKey(keysDir, key);
+  }
   const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
   const files = createFiles({ store, runs, now, sleep, ttlMs: RECORD_TTL_MS });
   let draining = false;
@@ -86,7 +102,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       secrets: () => secrets,
     });
     const graceMs = drainMs(env.DRAIN_SECONDS);
-    started = { ...createBroker({ store, key, callers, log }), graceMs, key };
+    const keysDir = env.SERVICE_KEYS_DIR || null;
+    started = { ...createBroker({ store, key, callers, keysDir, log }), graceMs, key };
   } catch (error) {
     console.error(`Broker: ${error.message}`);
     process.exit(1);

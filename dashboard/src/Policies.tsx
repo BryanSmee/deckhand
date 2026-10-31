@@ -11,6 +11,7 @@ import { Card } from "./ui/Surface";
 import styles from "./Policies.module.css";
 
 const DECISIONS: Record<PolicyDecision["decision"], string> = {
+  run: "Run refused",
   merge: "Auto-merge",
   review: "Automatic review",
   fix: "Fix run",
@@ -53,8 +54,9 @@ export function PolicyTab({ task: t, now }: { task: Task; now: number }) {
                 key={`${d.at}-${d.rule}`}
                 decision={d}
                 open={d === first}
-                // A linked branch is the task's own issue's, never another's.
-                own={d.decision === "link_branch" || d.pr === t.pr?.number}
+                // A linked branch is the task's own issue's, never another's; a run, the
+                // task's own, wherever its comment was.
+                own={d.decision === "link_branch" || d.decision === "run" || d.pr === t.pr?.number}
                 now={now}
               />
             ))}

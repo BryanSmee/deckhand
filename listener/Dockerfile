@@ -28,26 +28,10 @@ FROM node:26-alpine
 # git: the git gateway reads the workflow files a push of a repo granted `allow_workflows`
 # changes, against a mirror of it (git-mirror.mjs).
 RUN apk add --no-cache docker-cli docker-cli-buildx git tar
-# opa: evaluates the operator's and the repos' policies (policies.mjs). The static release,
-# pinned by version and by the sha256 of each architecture's binary (its release's .sha256).
-# A new version may bring builtins that read files or the network: check them against
-# policies.mjs's REMOVED before raising it.
-ARG TARGETARCH
-ARG OPA_VERSION=1.21.4
-RUN case "$TARGETARCH" in \
-      amd64) sum=2ab571f367f293bb19523b76f92f1945bbf245003392c7f392903f95c2b9b630 ;; \
-      arm64) sum=810aa96e44f1f852d044888cf830324e44eafd0f510345339011347ab4deaab1 ;; \
-      *) echo "no opa for $TARGETARCH" >&2; exit 1 ;; \
-    esac \
-    && apk add --no-cache --virtual .opa curl \
-    && curl -fsSLo /usr/local/bin/opa "https://github.com/open-policy-agent/opa/releases/download/v${OPA_VERSION}/opa_linux_${TARGETARCH}_static" \
-    && echo "$sum  /usr/local/bin/opa" | sha256sum -c - \
-    && chmod 755 /usr/local/bin/opa \
-    && apk del .opa \
-    && opa version
 # buildctl: the Kubernetes runner builds repo images with a BuildKit daemon in the cluster
 # (runner/kube-images.mjs). The client only, from BuildKit's release, pinned by version and
 # by the sha256 of each architecture's tarball (its release's digests).
+ARG TARGETARCH
 ARG BUILDKIT_VERSION=0.34.1
 RUN case "$TARGETARCH" in \
       amd64) sum=a59539daf547fe0958efe2d07e41c0a6944e1112a66d7e519ec1cf5b673ef15b ;; \
@@ -71,8 +55,6 @@ COPY --from=vendor /vendor/graphql.mjs listener/vendor/
 COPY listener/vendor/github.graphql listener/vendor/
 COPY listener/runner/ listener/runner/
 COPY listener/agents/ listener/agents/
-# Deckhand's default policies, under the operator's and the repos' (policies.mjs BUILT_IN_DIR).
-COPY policy/ policy/
 COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/
 # The onboarding prompt ends with the config's reference.
 COPY docs/repo-config.md docs/

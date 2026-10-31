@@ -758,10 +758,12 @@ test("follow: whole lines of each stream, skipping what was already read", async
   const { r } = runner({ spawn });
   const out = [];
   const err = [];
+  const order = [];
   const done = r.follow("x", {
     skip: { out: 2, err: 1 },
-    onOut: (line) => out.push(line),
-    onErr: (line) => err.push(line),
+    onOut: (line) => (out.push(line), order.push(`out ${line}`)),
+    onErr: (line) => (err.push(line), order.push(`err ${line}`)),
+    onCaughtUp: () => order.push("caught up"),
   });
   child.stdout.write('{"a":1}\n{"a":2}\n{"a"');
   child.stdout.write(':3}\n{"a":4}');
@@ -773,6 +775,23 @@ test("follow: whole lines of each stream, skipping what was already read", async
   // A line cut short isn't read: the next follow() reads it whole.
   assert.deepEqual(out, ['{"a":3}']);
   assert.deepEqual(err, ["new"]);
+  // Once both streams are past what was read: stderr's skipped line came after stdout's new one.
+  assert.deepEqual(order, ['out {"a":3}', "caught up", "err new"]);
+});
+
+test("follow: with nothing to skip, caught up at once", async () => {
+  const child = new EventEmitter();
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  const { r } = runner({ spawn: () => child });
+  let caught = 0;
+  const done = r.follow("x", { onOut: () => {}, onErr: () => {}, onCaughtUp: () => caught++ });
+  assert.equal(caught, 1);
+  child.stdout.write("a\n");
+  await new Promise((resolve) => setImmediate(resolve));
+  child.emit("close", 0);
+  await done;
+  assert.equal(caught, 1);
 });
 
 // #414: Docker's time for each line, without its stamp, for lines read again after a restart

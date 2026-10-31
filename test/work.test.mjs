@@ -188,7 +188,13 @@ function setup({
     }),
     reply,
     waits: w.waits,
-    accept: async (item) => w.accepted.push(item),
+    // `w.refusing`: what the policies' refusal replied (run-policy.mjs marks the item).
+    accept: async (item) => {
+      w.accepted.push(item);
+      if (w.refusing) item.refused = w.refusing;
+      // Its mode, as tasks.mjs accept() says it: none when refused.
+      return w.refusing ? null : (item.modeLine ?? "work");
+    },
     boardKeys: () => new Set(board),
     liveKeys: () => new Set(live),
     busy: (key) => busy.includes(key),
@@ -805,6 +811,70 @@ test("start: the App comments, then the work is queued as a trigger comment woul
   assert.equal(item.comment.id, 501);
 });
 
+test("start refused by the policies (allow_run, deny_run): their reply is the answer, 403", async () => {
+  const w = setup({ issues: { 5: open("Five") } });
+  // Items from the dashboard say so, for the policies' input.trigger.
+  await post(w, { action: "start", number: 5 });
+  assert.equal(w.accepted[0].dashboard, true);
+  w.refusing = "No `work` run: the policies refuse it: `not today`.";
+  const res = await post(w, { action: "start", number: 5 });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error ?? res.body.message, w.refusing);
+});
+
+test("refused by the policies: every dashboard action that starts a run answers 403, waits kept", async () => {
+  const refusing = "No `work` run: the policies refuse it: `not today`.";
+  const refused = async (w, res) => {
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.equal(res.body.error ?? res.body.message, refusing);
+    assert.equal(w.accepted.length, 1);
+  };
+  // Start: the issue's wait stays, the run didn't replace it.
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") } });
+  await post(w, { action: "queue", number: 5, after: 7 });
+  w.refusing = refusing;
+  await refused(w, await post(w, { action: "start", number: 5 }));
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  // Its comment, which said it started, edited to say it didn't.
+  assert.deepEqual(w.edits, [
+    [
+      w.accepted[0].comment.id,
+      "Asked from the dashboard by @alice: not started, the policies refuse it. It still waits for #7.\n\n<!-- deckhand -->",
+    ],
+  ]);
+  // Stop.
+  const stopping = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": { state: "brainstorm" } },
+  });
+  stopping.refusing = refusing;
+  await refused(stopping, await post(stopping, { action: "stop", number: 5 }));
+  // Rerun.
+  const again = setup({ issues: { 5: open("Five") }, ...failed("org/app#5", { status: "error" }) });
+  again.refusing = refusing;
+  await refused(again, await rerun(again, { runId: "run-5" }));
+  // Inbox.
+  const entry = setup({ settings: INBOX, issues: { 12: open("Ideas"), 13: open("Bugs") } });
+  entry.refusing = refusing;
+  await refused(entry, await sendInbox(entry, { kind: "idea", text: "Dark mode" }));
+  // A run's questions answered.
+  const asked = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "run") } });
+  asked.refusing = refusing;
+  await refused(asked, await answer(asked, { number: 5, answers: [{ options: [0] }, {}] }));
+  // Review.
+  const reviewing = reviewSetup();
+  reviewing.refusing = refusing;
+  await refused(reviewing, await review(reviewing, { number: 8, action: "review" }));
+  // Analyze: the issue made for it is closed, no analysis to keep.
+  const analysis = setup({ history: HISTORY });
+  analysis.refusing = refusing;
+  await refused(
+    analysis,
+    await analyze(analysis, { count: 1, kinds: ["work"], outcomes: ["error"] }),
+  );
+  assert.ok(analysis.calls.includes("PATCH /repos/org/app/issues/901"), analysis.calls.join("\n"));
+});
+
 test("start in another mode: a /mode line's", async () => {
   const w = setup({ issues: { 5: open("Five") } });
   await post(w, { action: "start", number: 5, mode: "brainstorm" });
@@ -920,6 +990,24 @@ test("plan: the tree starts in order, from its sub-issues and their blockers", a
   assert.deepEqual(blockersOf(w, 10), [11, 13]);
   // Their lane is named after the parent.
   for (const n of [10, 11, 12, 13]) assert.equal(w.lanes.get(`org/app#${n}`).plan, 10);
+});
+
+test("plan: the issues the policies refuse to start are named in its answer, their comments edited", async () => {
+  const w = setup({ issues: epic() });
+  w.refusing = "No `work` run: the policies refuse it: `not today`.";
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 200);
+  assert.equal(
+    res.body.message,
+    "#10 laid out: #12 and #13 start; #10 waits for #11, #12 and #13; #11 waits for #12. Refused by the policies, not started: #12 and #13.",
+  );
+  assert.deepEqual(
+    w.edits.map(([, body]) => body),
+    [
+      "Asked from the dashboard by @alice: not started, the policies refuse it.\n\n<!-- deckhand -->",
+      "Asked from the dashboard by @alice: not started, the policies refuse it.\n\n<!-- deckhand -->",
+    ],
+  );
 });
 
 test("plan: nested sub-issues, blockers outside the tree or in another repo, done ones", async () => {
@@ -1453,6 +1541,8 @@ test("answer a run's questions: the comment is the reply that continues its sess
   assert.equal(item.author, "alice");
   assert.equal(item.comment.id, 501);
   assert.equal(item.base, "main");
+  // From the dashboard: the policies' input.trigger.
+  assert.equal(item.dashboard, true);
   // The run takes the label off as it starts (runs.mjs start()).
   assert.deepEqual(w.labels, []);
   // A pull request's own task.
@@ -1541,6 +1631,27 @@ test("start or queue an issue with open questions: refused until they are answer
   );
   assert.equal((await answer(w, { number: 5, text: "x", then: { action: "fly" } })).status, 400);
   assert.deepEqual([w.comments, w.accepted, w.labels], [[], [], []]);
+});
+
+test("answers sent with a start the policies refuse: kept in the App's edited comment", async () => {
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "issue") } });
+  w.refusing = "No `work` run: the policies refuse it: `not today`.";
+  const res = await answer(w, {
+    number: 5,
+    answers: [{ options: [0] }, { text: "Home" }],
+    then: { action: "start" },
+  });
+  assert.equal(res.status, 403);
+  const [[, posted]] = w.comments;
+  const [[, edited]] = w.edits;
+  assert.match(
+    edited,
+    /^Asked from the dashboard by @alice: not started, the policies refuse it\./,
+  );
+  // What the form said is still there: the answers, as posted.
+  const answers = posted.slice(posted.indexOf("\n\n") + 2);
+  assert.ok(answers.length > 0);
+  assert.ok(edited.includes(answers), `${edited}\n---\n${answers}`);
 });
 
 test("wait_for_answers off: an issue with open questions starts and queues without them", async () => {
@@ -2087,8 +2198,8 @@ test("ticked in a run's reply: the answers continue its session, once, for its l
   );
   const [item] = w.accepted;
   assert.deepEqual(
-    [item.id, item.trigger, item.author, item.text],
-    ["5", null, "alice", w.comments[0][1]],
+    [item.id, item.trigger, item.author, item.text, item.dashboard],
+    ["5", null, "alice", w.comments[0][1], false],
   );
   // On the pull request the issue's run replied on.
   await w.api.ticked("org/app", "alice", { number: 9, pr: true, items: edited });

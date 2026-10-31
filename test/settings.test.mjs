@@ -1,6 +1,5 @@
-// Every environment variable the listener, the egress proxy and the broker read is in
-// docs/setup.md: a
-// setting nobody can find is one nobody can change. Every setting config.yaml takes is in
+// Every environment variable the listener, the policy service, the egress proxy and the broker
+// read is in docs/setup.md: a setting nobody can find is one nobody can change. Every setting config.yaml takes is in
 // compose.yaml too, which passes .env's value.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -16,25 +15,36 @@ function sources(dir) {
     .map((file) => readFileSync(join(root, dir, file), "utf8"));
 }
 
-// SETTINGS, `env.X`, `process.env.X` and `setting("X")`: how config.mjs, server.mjs, runs.mjs
-// and proxy.mjs read them.
+// SETTINGS, `env.X`, `process.env.X` and `setting("X")`: how config.mjs, server.mjs, runs.mjs,
+// proxy.mjs, the policy service's service.mjs and the broker's server.mjs read them.
 function settingsRead() {
   const names = new Set(Object.keys(SETTINGS));
-  for (const source of [...sources("listener"), ...sources("proxy"), ...sources("broker")]) {
+  for (const source of [
+    ...sources("listener"),
+    ...sources("proxy"),
+    ...sources("policy-service"),
+    ...sources("broker"),
+  ]) {
     for (const [, name] of source.matchAll(/\b(?:env\.|setting\(")([A-Z][A-Z0-9_]*)/g))
       names.add(name);
   }
   return [...names].sort();
 }
 
-test("the listener and the proxy read settings that the scan finds", () => {
+test("the listener, the policy service and the proxy read settings that the scan finds", () => {
   // Guards the scan itself: an empty list would pass the next test.
-  for (const name of ["ALLOWED_USERS", "DEBOUNCE_MS", "POLICY_URL", "BROKER_URL"]) {
+  for (const name of [
+    "ALLOWED_USERS",
+    "DEBOUNCE_MS",
+    "POLICY_URL",
+    "BROKER_URL",
+    "SERVICE_NETWORKS",
+  ]) {
     assert.ok(settingsRead().includes(name), name);
   }
 });
 
-test("docs/setup.md documents every setting the listener and the proxy read", () => {
+test("docs/setup.md documents every setting the listener, the policy service and the proxy read", () => {
   const doc = readFileSync(join(root, "docs/setup.md"), "utf8");
   const missing = settingsRead().filter((name) => !doc.includes(`\`${name}\``));
   assert.deepEqual(missing, [], `not in docs/setup.md: ${missing.join(", ")}`);

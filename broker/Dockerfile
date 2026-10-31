@@ -6,9 +6,10 @@ WORKDIR /app
 COPY broker/*.mjs broker/
 # The modules every service shares (lib/), beside the broker's as in the repository.
 COPY lib/ lib/
-# Its signing key (/keys, a volume or Secret of its own) and its store (/data): the node user's,
-# which a new volume mounted there takes.
-RUN mkdir /keys /data && chown node:node /keys /data && chmod 700 /keys
+# Its signing key (/keys, a volume or Secret of its own), its store (/data) and where it
+# publishes its public key (/service-keys, SERVICE_KEYS_DIR): the node user's, which a new volume
+# mounted there takes.
+RUN mkdir /keys /data /service-keys && chown node:node /keys /data /service-keys && chmod 700 /keys
 USER node
 EXPOSE 8081
 # Node's fetch, which no HTTP_PROXY of the environment takes elsewhere.

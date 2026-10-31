@@ -1,7 +1,7 @@
 // runs.mjs's end of a run that answered with its inbox closed but whose sandbox goes on (#204):
 // a fake runner whose sandbox never exits by itself, and a grace period of a few ms.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createComments } from "../listener/comments.mjs";
@@ -23,10 +23,14 @@ function fakeRunner(fails = null) {
     onOut: null,
     exited: null,
     state: async () => (runner.running ? "running" : "exited"),
-    follow: (name, { onOut, onErr }) => {
+    // Past what was read before at once, unless `holding`: then when the test says (caughtUp()).
+    holding: false,
+    follow: (name, { onOut, onErr, onCaughtUp }) => {
       if (fails) return Promise.reject(fails);
       runner.onOut = onOut;
       runner.onErr = onErr;
+      runner.caughtUp = onCaughtUp;
+      if (!runner.holding) onCaughtUp?.();
       return new Promise((resolve) => (runner.exited = resolve));
     },
     kill: async () => {
@@ -233,17 +237,90 @@ test("a Stop before any answer: the short reply", async (t) => {
   assert.match(answers[0], /^Stopped by @bryansmee\.\n\n<sub>/);
 });
 
-test("a run that answered before a restart: its grace starts again when it is followed", async (t) => {
-  const { ctx, runner, task, following } = setup(t, { graceMs: 5000 });
+test("a run that answered before a restart: what was left of its grace, when it is followed", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 300 });
   runner.out(result("Answered before the restart."));
-  // The next listener's: the same saved state, a runner without the old timer.
+  const { graceUntil } = task.live;
+  assert.ok(graceUntil > Date.now());
+  // The next listener's: the same saved state, a runner without the old timer, and a grace of
+  // its own far longer. The deadline saved holds.
   ctx.stopping = true;
   runner.exited();
   await following;
   ctx.stopping = false;
+  const next = createRuns({ ...ctx, answerGraceMs: 60_000, catchUpMs: 20 });
+  await next.follow(task);
+  assert.equal(runner.kills, 1);
+  assert.ok(Date.now() >= graceUntil);
+  assert.ok(Date.now() < graceUntil + 5000);
+});
+
+test("a restored run's grace waits for the follow to skip what was read before", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  // Its deadline long gone, and a log long to skip.
+  task.live.graceUntil = Date.now() - 60_000;
+  runner.holding = true;
+  const next = createRuns({ ...ctx, answerGraceMs: 1000, catchUpMs: 20 });
+  const followed = next.follow(task);
+  await sleep(150);
+  // Still skipping: its whole grace meanwhile.
+  assert.equal(runner.kills, 0);
+  // Past them, nothing new: the moment to read what came meanwhile, then stopped, well before
+  // its whole grace.
+  const at = Date.now();
+  runner.caughtUp();
+  await followed;
+  assert.equal(runner.kills, 1);
+  assert.ok(Date.now() - at < 500);
+});
+
+test("a run whose grace passed while no listener was there: what its sandbox wrote meanwhile is read before any stop", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  // Its deadline long gone; its sandbox went on (a background task's turn).
+  task.live.graceUntil = Date.now() - 60_000;
+  const next = createRuns({ ...ctx, answerGraceMs: 200, catchUpMs: 100 });
+  const followed = next.follow(task);
+  // The follow's backlog: a line written while no listener was there.
+  await sleep(30);
+  runner.out(JSON.stringify({ type: "assistant", message: { content: [] } }));
+  await sleep(150);
+  assert.equal(runner.kills, 0);
+  // Silent for its grace from that line on: stopped then.
+  await followed;
+  assert.equal(runner.kills, 1);
+});
+
+test("a run that answered before a restart, saved before its grace's deadline was: all of it again", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 5000 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  delete task.live.graceUntil;
   const next = createRuns({ ...ctx, answerGraceMs: 30 });
   await next.follow(task);
   assert.equal(runner.kills, 1);
+});
+
+test("the lines a run's output adds are saved with it a second later at most", async (t) => {
+  const saves = [];
+  const { ctx, runner, task } = setup(t);
+  ctx.saveLiveSoon = (saved) => saves.push(saved.live.lines.out);
+  runner.out(JSON.stringify({ type: "assistant" }));
+  runner.out(JSON.stringify({ type: "assistant" }));
+  assert.deepEqual(saves, [1, 2]);
+  assert.equal(task.live.lines.out, 2);
 });
 
 test("the GitHub tokens the broker gave the run are redacted from its log and its reply", async (t) => {
@@ -470,4 +547,52 @@ test("an agent's line past RUN_LOG_MAX_MB starts no phase: the line isn't kept",
   runner.out(JSON.stringify({ type: "system", subtype: "init", model: "x".repeat(400) }));
   await following;
   assert.doesNotMatch(readFileSync(logPath, "utf8"), /"event":"phase"/);
+});
+
+test("a run's end whose queue couldn't be saved: its state goes, unless its task's queue can't be kept either", async (t) => {
+  const { ctx, runs, task, logs } = setup(t);
+  const path = ctx.livePath("run");
+  writeFileSync(path, "{}");
+  ctx.saveQueue = async () => false;
+  const later = [];
+  ctx.removeOnceSaved = (file) => later.push(file);
+  // Its task's queue in a file of its own (restart.mjs keepQueued()): the run is over.
+  ctx.keepQueued = () => true;
+  const live = task.live;
+  await runs.teardown(task);
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  assert.deepEqual(later, []);
+  // That file can't be written either: its state is kept, removed after the next write of the
+  // queue that succeeds.
+  writeFileSync(path, "{}");
+  Object.assign(task, { live: { ...live, over: false, saving: null }, running: true });
+  ctx.running = 1;
+  ctx.keepQueued = () => false;
+  await runs.teardown(task);
+  assert.equal(readFileSync(path, "utf8"), "{}");
+  assert.ok(logs.some((line) => /its state is kept/.test(line)));
+  assert.deepEqual(later, [path]);
+});
+
+test("a restored run's grace: a line read before the follow caught up keeps its whole grace", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  task.live.graceUntil = Date.now() - 60_000;
+  runner.holding = true;
+  const next = createRuns({ ...ctx, answerGraceMs: 400, catchUpMs: 20 });
+  const followed = next.follow(task);
+  // Docker's stdout past its skip first: a line written while no listener was there.
+  await sleep(30);
+  runner.out(JSON.stringify({ type: "assistant", message: { content: [] } }));
+  // Then stderr's: caught up. The line's whole grace holds, not the moment's.
+  await sleep(30);
+  runner.caughtUp();
+  await sleep(150);
+  assert.equal(runner.kills, 0);
+  await followed;
+  assert.equal(runner.kills, 1);
 });

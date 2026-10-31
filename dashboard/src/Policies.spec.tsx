@@ -227,3 +227,36 @@ test("a linked branch's decision is the task's issue's, not another pull request
   expect(link.textContent).not.toContain("of #22");
   expect(link.textContent).toContain("deny_link_branch · 1 reason");
 });
+
+test("a run the policies refused: the task's own, wherever its comment was", () => {
+  const run = decision({
+    decision: "run",
+    rule: "deny_run",
+    denied: true,
+    messages: ["no rule allows a `brainstorm` run on a pull request"],
+    // The comment was on another pull request than the task's.
+    pr: 31,
+    layers: [
+      {
+        layer: "operator",
+        allow: false,
+        denies: [],
+        allowFiles: ["run.rego"],
+        denyFiles: [],
+        error: null,
+      },
+    ],
+    input: { version: 1, decision: "run", mode: "brainstorm", target: { kind: "pr", number: 31 } },
+  });
+  render(<Dashboard state={withTask({ decisions: [run] })} error={null} />);
+  openTab();
+  const [refused] = decisions();
+  expect(refused.textContent).toContain("Run refused");
+  expect(refused.textContent).not.toContain("of #31");
+  expect(refused.textContent).toContain("Denied");
+  expect(refused.textContent).toContain("allow_run · deny_run · 1 reason");
+  expect(refused.hasAttribute("open")).toBe(true);
+  expect(
+    within(refused).getByText("no rule allows a `brainstorm` run on a pull request"),
+  ).toBeTruthy();
+});

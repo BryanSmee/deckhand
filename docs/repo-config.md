@@ -403,7 +403,7 @@ Focus on the error handling.
   from the issue and its comments, where the audit posted what it found.
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
   or `/mode work`, goes back to work; `/mode brainstorm` to a brainstorm, which `/stop` wraps
-  up. Brainstorms stay on issues: `/mode brainstorm` on a pull request is ignored.
+  up. Brainstorms stay on issues ([`run.rego`](#the-run-input)).
 - **An unknown name** gets a reply listing the modes, and nothing runs. So does a comment
   for a mode that was removed from the config since.
 - Work is the default: there is no `default_mode`.
@@ -441,6 +441,8 @@ error, listed in the reply:
 - **A mode narrows, never widens**: the hosts, mounts and limits of every run of the repo
   are the same whatever the mode (the operator's grants and what they let the repo's
   `mounts` add). A mode has no key for them.
+- **It runs once the repository allows it**: `allow_run if input.mode == "audit"` in
+  `.deckhand/policy/` ([Policies](#policies)).
 
 The dashboard names the repo's modes next to the issue, and in each run.
 
@@ -969,12 +971,13 @@ deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
 
 **The files**: every `*.rego` file of `.deckhand/policy/` on the default branch (not its
 subfolders), in package `deckhand`; a file in another package is a library its layer's files
-can import. **Two layers**, evaluated by one `opa`, the repository's packages moved under
+can import. **Two layers**, evaluated together by Deckhand's policy service (one `opa` with both
+layers loaded, never another repository's), the repository's packages moved under
 `deckhand_repository` (its `data.` references too): neither can define the other's rules. A
 repository's file must start with `package …`, after comments only, and use `sprintf()`, not
 template strings (`$"…"`):
 
-- **The operator's**: [Deckhand's defaults](#the-default-policies), in the listener's image,
+- **The operator's**: [Deckhand's defaults](#the-default-policies), in the policy service's image,
   under the operator's grants folder `policy/` ([security model](security.md#policies)), where
   a file **with the same name** replaces Deckhand's (one with only `package deckhand` drops it).
   Its allow rules are the ceiling: Deckhand's `allow.rego` allows every decision.
@@ -983,8 +986,9 @@ template strings (`$"…"`):
   rule for a built-in mode's run is ignored (for `merge`, `review` and `fix`, a config check
   error). Its file named as one of Deckhand's or the operator's replaces nothing (a warning).
 
-When only Deckhand's files apply, allowing the decision and none defining its deny rule, no
-`opa` runs (and the task's page keeps nothing). The repository's folder is listed once, then
+When only Deckhand's files apply, allowing the decision and none defining its deny rule, the
+policy service isn't asked (and the task's page keeps nothing); for `run`, the listener decides as
+`run.rego` would. The repository's folder is listed once, then
 again after a push to its default branch (or 10 minutes).
 
 <!-- modes.rego: test/linked-branch.test.mjs evaluates this block with the real opa -->
@@ -993,7 +997,9 @@ again after a push to its default branch (or 10 minutes).
 # .deckhand/policy/modes.rego
 package deckhand
 
-# The repository's modes `plan` and `docs` write, within their ceiling; `plan` links a branch.
+# The repository's modes `plan` and `docs` run and write; `plan` links a branch.
+allow_run if input.mode in {"plan", "docs"}
+
 allow_github if input.mode in {"plan", "docs"}
 
 allow_link_branch if input.mode == "plan"
@@ -1005,10 +1011,11 @@ deny_github contains "review threads stay open here" if input.action == "resolve
 and `deny_<decision>`, a set of strings, the reasons shown to the maintainer. A decision no
 allow rule matches is refused with a reason from its input (`no rule allows \`comment\` on
 \`other_issue\` for a \`brainstorm\` run`; `no rule of .deckhand/policy/ allows …` for the
-repository's). Six decisions:
+repository's). Seven decisions:
 
 | Rule                  | When                                                                                                                                                                                                | A message does                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deny_run`            | A [run a person asks for](#the-run-input), before it is queued.                                                                                                                                     | Starts nothing: a reply quotes the messages.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `deny_merge`          | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                                        | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                                                                                                                                 |
 | `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for.                            | Skips the review: the listener's log says why, nothing is posted; a policy error (not a rule's message) is asked again 10 seconds later first, then, on a pull request that turned ready, 5 minutes apart, 3 times. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                      |
 | `deny_fix`            | A [`review.fix`](#reviews) run, a [CI fix run](#ci-before-the-review), or a [conflict](#conflicts)'s rebase run, after its own checks, right before it is queued (`input.reason` tells them apart). | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. A conflict run refused: a "No rebase run" comment quotes them, and that head and base aren't tried again. |
@@ -1022,13 +1029,31 @@ settings, not rules.
 
 **Fail closed**: a policy that doesn't compile, takes more than 2 seconds, or makes an allow
 rule anything but a boolean or a deny rule anything but a set of strings refuses the decision,
-with a single `policy error: …` reason, whatever the other layer says. So does a policy folder
-that GitHub can't list. The onboarding pull request's config check compiles its branch's
+with a single `policy error: …` reason, whatever the other layer says. So do a policy folder
+that GitHub can't list and a policy service that can't be reached. The onboarding pull request's config check compiles its branch's
 policies and reports their errors.
 
 **What a policy can call**: Rego's builtins, without those that read the environment, the
-network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
-`json.verify_schema`) and `trace`: a policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
+network or the service's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
+`json.verify_schema`) and `trace`: a file that calls one doesn't compile, and refuses every
+decision of its layer. A policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
+
+<!-- onboarding: skip (listener/prompts.mjs leaves the inputs out of the onboarding prompt) -->
+
+### The run input
+
+`input` of `deny_run`, asked once per run a person asks for, before it is queued (not the
+listener's reviews and fix runs): `version`, `decision: "run"`, `time`, `repo` (`"owner/repo"`,
+lower case), `mode`, `custom_mode`, `light`, `fresh`, `trigger` (`comment`, `dashboard`,
+`inbox`, `discussion`), `continues` (`true` for a comment without a trigger or `/mode` line,
+going on in the issue's current mode), `sender` (a login), `target` (where the comment is: `kind`: `issue`,
+`pr` or `discussion`, `number`, `labels`, `author`), `issue` (the task's, or `null`) and `pr`
+(`draft`, `base`, `head`; else `null`). Deckhand's `run.rego` allows every mode on issues, all
+but `brainstorm`, `stop` and `onboarding` elsewhere unless the comment `continues` (the onboarding
+pull request's comments go on in onboarding). With Deckhand's files alone and no repository
+file, the listener decides as `run.rego` would, without `opa` or reading the comment's issue:
+it only lists the repository's policy folder (kept 10 minutes, and up to an hour when GitHub
+can't list it again).
 
 ### The merge input
 
@@ -1413,13 +1438,15 @@ its branch checked out and its draft pull request opened by the sandbox, as a wo
 but only on the run that links it: the policies aren't asked about a branch that exists
 already, so its later runs get none.
 
+<!-- onboarding: end -->
+
 ### The default policies
 
 The ceilings leave room for what a prompt may need one day; Deckhand's default policies narrow
-them to what its prompts ask for. They ship in the listener's image (`policy/` in Deckhand's
+them to what its prompts ask for. They ship in the policy service's image (`policy/` in Deckhand's
 repository) and hold without any setup, in the operator's layer, under the operator's files:
 
-- **`allow.rego`** allows every decision: the ceilings and the deny rules decide. The
+- **`allow.rego`** allows every decision (`run`: `run.rego`): the ceilings and the deny rules decide. The
   operator's `policy/allow.rego` replaces it (one without `allow_merge` refuses every
   auto-merge).
 - **One file per feature**: `github.rego` for the writes runs have always made (below), and a
@@ -1601,7 +1628,7 @@ modes that aren't light. Deckhand's default file, `gh-own-comments.rego`, narrow
 | `edit` a comment it posted   | ✅ allowed                          | ❌ (its replies are the listener's: its ceiling) | ❌ no token | ✅ once the repository allows them  |
 | `delete` a comment it posted | ❌ denied, the operator may broaden | ❌                                               | ❌ no token | ❌ denied, the operator may broaden |
 
-The file ships in the listener's image ([The default policies](#the-default-policies)), so
+The file ships in the policy service's image ([The default policies](#the-default-policies)), so
 this holds without any setup. The operator's `policy/gh-own-comments.rego` replaces it for every
 repository (a file without the rule on `delete`, say): never past the ceiling. A repository's
 own modes edit theirs once its `allow_github` lets them.
@@ -1636,7 +1663,7 @@ Deckhand's default file, `policy/gh-reactions.rego`, narrows the ceiling:
 | `react` on its issue or pull request, and their comments | ✅ allowed          | ✅ on its own issue and its comments (its ceiling) | ❌ no token | ✅ once the repository allows them |
 | `unreact`                                                | ✅ its own only     | ✅ its own only                                    | ❌ no token | ✅ its own only, likewise          |
 
-The file ships in the listener's image ([The default policies](#the-default-policies)), so
+The file ships in the policy service's image ([The default policies](#the-default-policies)), so
 this holds without any setup: it refuses nothing, the ceiling decides. A repository's
 `allow_github` lets its own modes react, up to their ceiling, and its deny rule refuses
 reactions altogether there:
@@ -1665,7 +1692,7 @@ the reply.
 | `resolve` a person's thread     | ❌ denied, the operator may broaden | ❌ (no ceiling) | ❌ no token | ❌ denied, the operator may broaden |
 | `unresolve` a thread            | ✅ allowed                          | ❌ (no ceiling) | ❌ no token | ✅ once the repository allows them  |
 
-The file ships in the listener's image ([The default policies](#the-default-policies)). The
+The file ships in the policy service's image ([The default policies](#the-default-policies)). The
 operator's `policy/gh-review-threads.rego` replaces it for every repository (a copy without the
 rule on `resolve` lets work runs resolve anyone's threads): never past the ceiling. A
 repository's deny rule narrows it for its runs.
@@ -1722,7 +1749,8 @@ deny_github contains "only work runs assign people" if {
 ### A dry run and the dashboard
 
 **`/mode policy`**, commented on a pull request by an allowed user, evaluates the `merge`,
-`review`, `fix` and `request_review` decisions on the pull request as it is now, and `github` on
+`review`, `fix` and `request_review` decisions on the pull request as it is now, `run` on
+sample comments (work, a brainstorm), and `github` on
 sample writes (a comment on it by the work run whose pull request it is, one by a brainstorm
 of another issue, `issue: null`, and, when the repository has `modes:`, one by a run in the
 first of them that isn't light, else the first, `custom_mode: true`), then on a `read_checks` sample, `link_branch` on a

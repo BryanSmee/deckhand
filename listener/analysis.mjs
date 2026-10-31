@@ -370,20 +370,30 @@ export async function startAnalysis(
   if (!res.ok) throw new Error(`GitHub POST an issue: ${res.status}`);
   const issue = await res.json();
   const { count, kinds, outcomes } = selection;
-  await accept(
-    issueItem(repo, issue, {
-      trigger: "analyze",
-      modeLine: null,
-      text,
-      author: user,
-      base,
-      settings,
-      comment: null,
-      // Whether the digest may quote what only the dashboard showed (runDigest()): only on a
-      // repo GitHub said was private.
-      analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes, private: isPrivate },
-    }),
-  );
+  const item = issueItem(repo, issue, {
+    trigger: "analyze",
+    modeLine: null,
+    text,
+    author: user,
+    base,
+    settings,
+    comment: null,
+    // For the policies' `input.trigger` (run-policy.mjs).
+    dashboard: true,
+    // Whether the digest may quote what only the dashboard showed (runDigest()): only on a
+    // repo GitHub said was private.
+    analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes, private: isPrivate },
+  });
+  await accept(item);
+  // The policies refused it (run-policy.mjs), saying so on the issue: the form's answer too, and
+  // the issue made for it closed, no analysis to keep.
+  if (item.refused) {
+    await github(repo, "PATCH", `/repos/${repo}/issues/${issue.number}`, {
+      state: "closed",
+      state_reason: "not_planned",
+    }).catch((error) => log(`${repo}#${issue.number}: closing it: ${error.message ?? error}`));
+    refuse(403, item.refused);
+  }
   return {
     message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
     url: issue.html_url,

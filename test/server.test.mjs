@@ -23,7 +23,7 @@ import { createCallers } from "../broker/callers.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { openStore } from "../lib/store.mjs";
-import { tempDir, testKey } from "./helpers.mjs";
+import { evalResult, fakeOpa, servePolicies, tempDir, testKey } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 // The App's key, one for every listener: making one takes a while.
@@ -40,8 +40,6 @@ const RW_MOUNT = "/usr";
 // (fixtures/fake-docker.sh says how).
 function fakeDocker(dir) {
   symlinkSync(new URL("fixtures/fake-docker.sh", import.meta.url).pathname, join(dir, "docker"));
-  // And an `opa` that denies nothing (fixtures/allow-opa.sh), for Deckhand's default policies.
-  symlinkSync(new URL("fixtures/allow-opa.sh", import.meta.url).pathname, join(dir, "opa"));
 }
 
 // Stops the fake sandboxes a test leaves running.
@@ -82,6 +80,22 @@ async function fakeGitHub(files = {}) {
       for (const w of [...waiters]) if (w.match(entry)) w.resolve(entry);
       for (const h of holds) if (h.match(entry)) await h.released;
       res.setHeader("content-type", "application/json");
+      // The repo's policies (.deckhand/policy/ on its default branch), keyed "policy:<name>":
+      // listed, then read by blob. None: a 404, as GitHub answers for a missing folder.
+      const policies = Object.keys(files).filter((k) => k.startsWith("policy:"));
+      if (req.url === "/repos/org/repo/contents/.deckhand/policy?ref=trunk" && policies.length) {
+        const list = policies.map((k) => ({
+          type: "file",
+          name: k.slice(7),
+          sha: `policy-${k.slice(7)}`,
+        }));
+        return res.end(JSON.stringify(list));
+      }
+      const policyBlob = /^\/repos\/org\/repo\/git\/blobs\/policy-(.+)$/.exec(req.url);
+      if (policyBlob && files[`policy:${policyBlob[1]}`] !== undefined) {
+        const content = Buffer.from(files[`policy:${policyBlob[1]}`]).toString("base64");
+        return res.end(JSON.stringify({ content, encoding: "base64" }));
+      }
       // Other branches' files are keyed "<branch>:<path>".
       const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=(.+)$/.exec(req.url);
       if (file) {
@@ -355,7 +369,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     writeFileSync(join(dir, "grants", "org", "repo.yaml"), text);
   }
 
-  async function listen(t, files, extra = {}) {
+  // `opa`: the policy service's (fakeOpa()'s, allowing everything by default).
+  async function listen(t, files, extra = {}, { opa } = {}) {
     // Removed once the file is done: its listener and sandboxes are stopped by then.
     const dir = tempDir(null);
     fakeDocker(dir);
@@ -365,6 +380,23 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       req.url === "/deckhand-ca.crt" ? res.end(TEST_CA) : res.writeHead(404).end(),
     );
     await new Promise((resolve) => egress.listen(0, "127.0.0.1", resolve));
+    // The broker service, which signs the runs' tokens and the listener's service tokens: the
+    // listener calls it from loopback, as the orchestrator. Its public key goes in keys/.
+    const brokerService = createBrokerService({
+      store: openStore("memory:"),
+      key: testKey(),
+      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+      keysDir: join(dir, "keys"),
+    }).server;
+    await new Promise((resolve) => brokerService.listen(0, "127.0.0.1", resolve));
+    brokerService.unref();
+    // The policy service, with an opa that denies nothing, for Deckhand's default policies: the
+    // listener's service tokens, from the broker service, are checked there with keys/.
+    const policyService = await servePolicies(t, {
+      grantsDir: join(dir, "grants"),
+      keysDir: join(dir, "keys"),
+      ...(opa && { opa }),
+    });
     writeFileSync(
       join(dir, "app.json"),
       JSON.stringify({
@@ -377,15 +409,6 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         pem: PEM,
       }),
     );
-    // The broker service, which signs the runs' tokens: the listener calls it from loopback,
-    // as the orchestrator.
-    const brokerService = createBrokerService({
-      store: openStore("memory:"),
-      key: testKey(),
-      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
-    }).server;
-    await new Promise((resolve) => brokerService.listen(0, "127.0.0.1", resolve));
-    brokerService.unref();
     // Port 0: the OS picks free ports, which the listener logs. The broker's URL gets its port.
     const settings = {
       BROKER_SERVICE_URL: `http://127.0.0.1:${brokerService.address().port}`,
@@ -403,6 +426,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       // The egress proxy asks from here: in the tests, the fake sandbox itself.
       EGRESS_PROXY: `http://127.0.0.1:${egress.address().port}`,
       GRANTS_DIR: join(dir, "grants"),
+      POLICY_SERVICE_URL: policyService,
       ...(typeof extra === "function" ? extra(dir, github) : extra),
     };
     let listener = start(settings);
@@ -2044,7 +2068,7 @@ mounts:
 
     const exited = new Promise((resolve) => listener.child.on("exit", resolve));
     listener.child.kill("SIGTERM");
-    await listener.until("Saved 0 task(s)");
+    await listener.until("0 task(s) with queued comments left to the next listener");
     // A new call is refused: the egress proxy waits for the next listener (proxy/wait.mjs).
     await assert.rejects(
       fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
@@ -2156,7 +2180,7 @@ mounts:
     // Meanwhile, the repo's users leave bob out.
     files[".deckhand.yaml"] = "users: [alice]\n";
     const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
-    assert.match(output, /Saved 1 task\(s\) with queued comments/);
+    assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
     await ctx.listener.until("a queued comment dropped: bob is no longer an allowed user");
     await new Promise((resolve) => setTimeout(resolve, 200));
     const [run] = readdirSync(join(dir, "runs"));
@@ -2187,22 +2211,40 @@ mounts:
     assert.equal(results.length, 1);
   });
 
-  test("comments queued when the listener stops run after it starts", async (t) => {
-    const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
-    await ctx.send(comment("alice"));
-    await ctx.listener.until("queued (work");
-    await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
-    const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
-    assert.match(output, /Saved 1 task\(s\) with queued comments/);
-    await ctx.listener.until("1 comment(s) queued before the restart");
-    await ctx.listener.until("done (ok)");
-    assert.equal(replies(ctx.github).length, 1);
-    // Its 👀 from before the restart is replaced by the outcome.
-    await ctx.github.waitFor(
-      (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
-    );
-    assert.deepEqual(leftovers(ctx.dir), []);
-  });
+  test(
+    "a listener killed during a comment's pause: the next one runs it once, at its deadline",
+    { timeout: 120_000 },
+    async (t) => {
+      // Long enough for a slow engine to kill the first listener within it.
+      const PAUSE_MS = 8000;
+      const ctx = await listen(t, {}, { DEBOUNCE_MS: String(PAUSE_MS) });
+      const sent = Date.now();
+      await ctx.send(comment("alice"));
+      await ctx.listener.until("queued (work");
+      await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
+      // Its 👀's id saved once GitHub answered (a listener killed before can't know it).
+      const state = join(ctx.dir, "store", "state.json");
+      await until(() => /"eyes": ?1\b/.test(exists(state) ?? ""), "the 👀 in the saved queue");
+      // No SIGTERM: nothing is saved on the way out. The next one's own pause is a minute, and
+      // the comment's deadline still holds.
+      await ctx.restart({ signal: "SIGKILL", DEBOUNCE_MS: "60000" });
+      const line = await ctx.listener.until(
+        /1 comment\(s\) queued before the restart, due in \d+ ms/,
+      );
+      assert.ok(Number(line.match(/due in (\d+) ms/)[1]) <= PAUSE_MS);
+      await ctx.listener.until("done (ok)");
+      assert.ok(Date.now() - sent >= PAUSE_MS);
+      // Not after a pause of the next listener's own (a minute).
+      assert.ok(Date.now() - sent < 30_000);
+      assert.equal(prompts(ctx.dir).length, 1);
+      assert.equal(replies(ctx.github).length, 1);
+      // Its 👀 from before the restart is replaced by the outcome.
+      await ctx.github.waitFor(
+        (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
+      );
+      assert.deepEqual(leftovers(ctx.dir), []);
+    },
+  );
 
   test("a comment queued before a restart doesn't run once its author left ALLOWED_USERS", async (t) => {
     const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
@@ -2214,7 +2256,7 @@ mounts:
     const exited = new Promise((resolve) => child.on("exit", resolve));
     child.kill("SIGTERM");
     await exited;
-    assert.equal(statSync(join(ctx.dir, "queue.json")).mode & 0o777, 0o600);
+    assert.equal(statSync(join(ctx.dir, "store", "state.json")).mode & 0o777, 0o600);
     await ctx.restart({ DEBOUNCE_MS: "0", ALLOWED_USERS: "bob" });
     await ctx.listener.until("dropped: alice is no longer an allowed user");
     // Its 👀 goes, and nothing runs.
@@ -2724,28 +2766,33 @@ mounts:
     assert.ok(replies(github).every((r) => /^All done\./.test(JSON.parse(r.body).body)));
   });
 
-  test("inbox entries queued when the listener stops: a run each after it starts", async (t) => {
-    const ctx = await listen(
-      t,
-      { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
-      { BRAINSTORM_DEBOUNCE_MS: "60000" },
-    );
-    await ctx.send(entry(99, "A dark mode"));
-    await ctx.send(entry(100, "Keyboard shortcuts"));
-    await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
-    const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
-    assert.match(output, /Saved 1 task\(s\) with queued comments/);
-    await settled(ctx.github, [99, 100]);
-    await until(() => prompts(ctx.dir).length === 2, "two runs");
-    // Each its own run, side by side: which sandbox starts first is the broker's answers' order.
-    const all = prompts(ctx.dir);
-    const first = all.find((p) => p.includes("A dark mode"));
-    const second = all.find((p) => p.includes("Keyboard shortcuts"));
-    assert.match(first, /A dark mode\n$/);
-    assert.doesNotMatch(first, /Keyboard shortcuts/);
-    assert.match(second, /Keyboard shortcuts\n$/);
-    assert.doesNotMatch(second, /A dark mode/);
-  });
+  test(
+    "inbox entries queued when the listener stops: a run each after it starts",
+    { timeout: 120_000 },
+    async (t) => {
+      const ctx = await listen(
+        t,
+        { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
+        // Their pause outlasts the restart, and its deadline holds after it.
+        { BRAINSTORM_DEBOUNCE_MS: "8000" },
+      );
+      await ctx.send(entry(99, "A dark mode"));
+      await ctx.send(entry(100, "Keyboard shortcuts"));
+      await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
+      const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
+      assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
+      await settled(ctx.github, [99, 100]);
+      await until(() => prompts(ctx.dir).length === 2, "two runs");
+      // Each its own run, side by side: which sandbox starts first is the broker's answers' order.
+      const all = prompts(ctx.dir);
+      const first = all.find((p) => p.includes("A dark mode"));
+      const second = all.find((p) => p.includes("Keyboard shortcuts"));
+      assert.match(first, /A dark mode\n$/);
+      assert.doesNotMatch(first, /Keyboard shortcuts/);
+      assert.match(second, /Keyboard shortcuts\n$/);
+      assert.doesNotMatch(second, /A dark mode/);
+    },
+  );
 
   test("a burst of comments on an ordinary issue is still one run", async (t) => {
     const { dir, github, listener, send } = await listen(t, {}, { DEBOUNCE_MS: "300" });
@@ -2778,6 +2825,10 @@ mounts:
   test("a discussion in the repo's category is answered in it, with a discussions token", async (t) => {
     const { dir, github, listener, send } = await listen(t, {
       ".deckhand.yaml": "inbox:\n  discussions: Ask Claude\n",
+      // Its author and labels, for the policies' allow_run (run-policy.mjs).
+      "graphql:discussion(number: $number) { author": JSON.stringify({
+        data: { repository: { discussion: { author: { login: "alice" }, labels: { nodes: [] } } } },
+      }),
     });
     await send(discussion("General"), "discussion");
     await listener.until(`category "General" doesn't call Deckhand`);
@@ -2807,6 +2858,9 @@ mounts:
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
     assert.ok(args.includes("deckhand.task=org/repo#discussion-8"));
   });
+
+  // The repo's allow rule for its mode audit: without it, the mode doesn't run.
+  const AUDIT_RUNS = 'package deckhand\n\nallow_run if input.mode == "audit"\n';
 
   const MODES = `setup: npm ci
 model: opus
@@ -3212,7 +3266,12 @@ modes:
   test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
     const { dir, github, listener, send } = await listen(
       t,
-      { ".deckhand.yaml": MODES, ".deckhand/audit.md": "Read the diff and list the risks." },
+      {
+        ".deckhand.yaml": MODES,
+        ".deckhand/audit.md": "Read the diff and list the risks.",
+        // Its own mode runs once it allows it (allow_run, run-policy.mjs).
+        "policy:modes.rego": AUDIT_RUNS,
+      },
       (dir) => {
         writeGrant(dir, "hosts: [registry.npmjs.org, pypi.org]\n");
         return {};
@@ -3409,6 +3468,38 @@ modes:
     assert.equal(lastRun(dir), "work full");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_SESSION=$/m);
     assert.equal(brainstormOf(dir), undefined);
+  });
+
+  test("a run the policies refuse (deny_run): a reply quoting them, nothing runs, the decision kept", async (t) => {
+    const { dir, github, send } = await listen(
+      t,
+      {},
+      (dir) => {
+        // A file of the operator's: opa is asked (Deckhand's alone, the listener decides itself).
+        mkdirSync(join(dir, "grants", "policy"), { recursive: true });
+        writeFileSync(join(dir, "grants", "policy", "fridays.rego"), "package deckhand\n");
+        return {};
+      },
+      // The policy service's opa: every deny rule says "not today", for this listener only.
+      { opa: fakeOpa({ answer: () => evalResult(["not today"]) }) },
+    );
+    await send(comment("alice", "Deckhand\nShip it."));
+    await until(() => replies(github).length === 1, "the refusal");
+    assert.equal(
+      JSON.parse(replies(github)[0].body).body,
+      "No `work` run: the policies refuse it: `not today`.\n\n<!-- deckhand -->",
+    );
+    // Its input was read: the issue the comment is on.
+    assert.ok(
+      github.requests.some((r) => r.method === "GET" && r.path === "/repos/org/repo/issues/12"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(exists(join(dir, "run-args")), null);
+    const [kept] = JSON.parse(readFileSync(join(dir, "decisions.json"), "utf8"))["org/repo#12"];
+    assert.deepEqual(
+      [kept.decision, kept.rule, kept.denied, kept.messages, kept.input.mode, kept.input.sender],
+      ["run", "deny_run", true, ["not today"], "work", "alice"],
+    );
   });
 
   test("/after #77: waits, through a restart, and runs the comment once #77 is done", async (t) => {
@@ -3660,7 +3751,10 @@ mounts:
   });
 
   test("a mode whose instructions file is missing: the reply says so", async (t) => {
-    const { dir, github, send } = await listen(t, { ".deckhand.yaml": MODES });
+    const { dir, github, send } = await listen(t, {
+      ".deckhand.yaml": MODES,
+      "policy:modes.rego": AUDIT_RUNS,
+    });
     await send(comment("alice", "Deckhand\n/mode audit"));
     const reply = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
@@ -4281,7 +4375,7 @@ mounts:
 
   test("Run order: a queued task moved first has position 1, in order.json", async (t) => {
     const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
-      // A key whose comments a crash lost (queue.json is only written at a stop): dropped at start.
+      // A key with no comment queued (dropped as the queue came back, say): dropped at start.
       writeFileSync(
         join(dir, "order.json"),
         JSON.stringify({ "org/repo#99": { key: "org/repo#99" } }),
