@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   createPolicies,
   DECISIONS,
+  GRANTS_MS,
   RULES,
   rulesOf,
   unallowed,
@@ -26,6 +27,7 @@ import {
   TIMEOUT_MS,
 } from "../policy-service/engine.mjs";
 import { opaBinary, opaRunner } from "../policy-service/opa.mjs";
+import { GRANTS } from "../listener/grants.mjs";
 import { issueServiceTokens, serviceTokens } from "../lib/service-token.mjs";
 import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
@@ -1705,4 +1707,36 @@ test("check: a repository's grant rules are ignored, an error; the operator's ar
     "grants.rego:4: `deny_grant` is ignored: only the operator's policies decide a repository's grants (#498)",
   ]);
   assert.deepEqual((await policies.check(files)).warnings, []);
+});
+
+test("grants: kept for the same operator policies and repository, asked again once they change", async (t) => {
+  const files = { "grants.rego": grantsPolicy(["dockerfile"]) };
+  const clock = { now: 1_000 };
+  const opa = sharedFakeOpa();
+  const { policies } = setup(t, {
+    opa,
+    readOperator: () => new Map(Object.entries(files)),
+    now: () => clock.now,
+  });
+  const asked = () => opa.evals().length;
+  assert.deepEqual([...(await policies.grants("org/repo")).granted], ["dockerfile"]);
+  const first = asked();
+  assert.ok(first >= Object.keys(GRANTS).length);
+  // The same answer, without asking: its name in another case too.
+  assert.deepEqual([...(await policies.grants("Org/Repo")).granted], ["dockerfile"]);
+  assert.equal(asked(), first);
+  // Another repository: asked.
+  assert.deepEqual([...(await policies.grants("org/other")).granted], []);
+  assert.ok(asked() > first);
+  // An edit of the operator's policies applies at once.
+  files["grants.rego"] = grantsPolicy(["dockerfile", "preview"]);
+  assert.deepEqual([...(await policies.grants("org/repo")).granted].sort(), [
+    "dockerfile",
+    "preview",
+  ]);
+  // And past GRANTS_MS, asked again whatever.
+  const before = asked();
+  clock.now += GRANTS_MS;
+  await policies.grants("org/repo");
+  assert.ok(asked() > before);
 });

@@ -259,6 +259,11 @@ export function unallowed(decision, doc, layer) {
   }
 }
 
+// How long a repository's grants (grants()) are kept for the same operator policies, and for how
+// many repositories at most.
+export const GRANTS_MS = 60_000;
+const MAX_GRANTS = 1000;
+
 // How much of a policy file's text the dashboard gets: its source view, not a download.
 export const MAX_TEXT = 20 * 1024;
 
@@ -638,12 +643,18 @@ export function createPolicies({
     }
   }
 
+  // grants()'s answers, by the operator's layer (its digest) and the repository: the same files
+  // give the same answer, so an edit is asked again at once. GRANTS_MS bounds a rule reading the
+  // time; a failure isn't kept.
+  const granted = new Map();
+
   // The yes-or-no grants (grants.mjs GRANTS) the operator's policies give `repo` (#498): each
   // asked of `allow_grant` and `deny_grant` with { grant, repo: { name } }, the operator's layer
   // alone (OPERATOR_ONLY) → { granted: Set of names, files, denied } or { error }: `files`, those
   // defining `allow_grant`; `denied`, why a grant an allow rule gives is refused anyway ({ grant,
   // reasons }): a deny rule, or a REPO_ONLY grant its rules give every repository (ANY_REPO). No
-  // file defining `allow_grant`: nothing granted, without a call.
+  // file defining `allow_grant`: nothing granted, without a call. Asked for every run, push and
+  // row of the dashboard's repository list: kept (`granted`).
   async function grants(repo) {
     const name = String(repo).toLowerCase();
     for (let attempt = 0; ; attempt++) {
@@ -657,6 +668,9 @@ export function createPolicies({
         .filter(([, text]) => rulesOf(text).includes("allow_grant"))
         .map(([file]) => file);
       if (!files.length) return { granted: new Set(), files, denied: [] };
+      const key = `${layerDigest(operator)} ${name}`;
+      const kept = granted.get(key);
+      if (kept && now() - kept.at < GRANTS_MS) return kept.said;
       const ask = (grant, repoName) =>
         evaluateLayers(
           "grant",
@@ -667,8 +681,8 @@ export function createPolicies({
       const names = Object.keys(GRANTS);
       const said = await Promise.all(names.map((grant) => ask(grant, name)));
       // Those every repository would get, for the grants given one at a time only.
-      const given = names.filter((_, i) => said[i].operator?.allow);
-      const wide = given.filter((grant) => REPO_ONLY.has(grant));
+      const allowed = names.filter((_, i) => said[i].operator?.allow);
+      const wide = allowed.filter((grant) => REPO_ONLY.has(grant));
       const anyRepo = await Promise.all(wide.map((grant) => ask(grant, ANY_REPO)));
       const failed = [...said, ...anyRepo].find((r) => r.error);
       if (failed?.mismatch && attempt === 0) {
@@ -680,7 +694,7 @@ export function createPolicies({
         log(`${repo}: its grants refused: ${message}`);
         return { error: message };
       }
-      const granted = new Set();
+      const given = new Set();
       const denied = [];
       names.forEach((grant, i) => {
         const { allow, denies } = said[i].operator;
@@ -695,12 +709,15 @@ export function createPolicies({
             : []),
         ];
         if (reasons.length) denied.push({ grant, reasons });
-        else granted.add(grant);
+        else given.add(grant);
       });
       for (const { grant, reasons } of denied) {
         log(`${repo}: the grant ${grant} refused: ${reasons.join("; ")}`);
       }
-      return { granted, files, denied };
+      const answer = { granted: given, files, denied };
+      if (granted.size >= MAX_GRANTS) granted.delete(granted.keys().next().value);
+      granted.set(key, { at: now(), said: answer });
+      return answer;
     }
   }
 
