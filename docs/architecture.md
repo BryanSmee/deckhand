@@ -394,13 +394,16 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
 
 - **GitHub**: the operator's private App, created at `/setup` and stored in the data volume.
   The listener calls GitHub with installation tokens; sandboxes get none. A sandbox holds a
-  secret that dies with the run (`broker.mjs`), which its `gh` and git hand out as their
-  token; the egress proxy decrypts its calls to GitHub's hosts (with Deckhand's CA, which
+  run token (`run-token.mjs`, `broker.mjs`): a JWT the broker signs with Ed25519, which every
+  service checks offline with the public key, bound to the ID of the run's network (or pod),
+  15 minutes long and renewed by the sandbox every 5 (`POST /run/token`, `deckhand-token
+--renew`, a file on a tmpfs rather than a variable); its `gh` and git hand it out as their
+  token (security.md, Run tokens); the egress proxy decrypts its calls to GitHub's hosts (with Deckhand's CA, which
   every run but research trusts) and relays them to the GitHub gateway (`github-gateway.mjs`,
   on `BROKER_PORT`, only on the runs' networks), with the address of the sandbox they came
   from, which the listener believes from the proxy alone. The gateway finds the run by its
-  secret (bound to that address) or, without one, by its sandbox's address (never its
-  engine's); refuses finished, foreign,
+  token (bound to that address's network) or, without one, by the network that address is
+  on (`runner.locate()`, never its engine's); refuses finished, foreign,
   research and push calls and a review's reads of its thread; refuses a work run that isn't a
   fork's what would bring a fork's code (`github-forks.mjs`: a fork's repository, a fork's
   pull request's head, a commit that isn't the repository's, by git, the API, an archive, a
@@ -410,7 +413,7 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   it pushes reaching a fork's objects (the git gateway); its clone is whole, as a blob fetched
   by its id is refused to it);
   redacts every write's body
-  (`redact()`, the run's and operator's secrets) and notes it in the run's log; holds each
+  (`redact()`, the run's tokens and the operator's secrets) and notes it in the run's log; holds each
   REST write to its mode's ceiling and the policies' `deny_github` (`github-writes.mjs`, its
   target's kind looked up with the listener's token); parses and validates its GraphQL
   against GitHub's pinned schema and holds each mutation field to the same checks, its node
@@ -738,8 +741,9 @@ calls during a run reaches the listener's broker port through the egress proxy, 
   inbox and the run's files. The proxy recognises the broker's origin (its own `BROKER_URL`,
   by default `RELAY_URL`'s), asks the policy whether that client may reach the broker (a
   running sandbox or its engine: `broker=1`), and sends the request on as it is, naming
-  the sandbox in `x-deckhand-client` as for a relayed one; the broker's secrets are bound to
-  that address (`broker.mjs` `sentBy()`, through `broker-http.mjs` `clientAddress()`). It
+  the sandbox in `x-deckhand-client` as for a relayed one; the runs' tokens (and the secrets of
+  runs from before them) are bound to that address's network (`broker.mjs` `check()`, through
+  `broker-http.mjs` `clientAddress()`). It
   refuses `/egress` there (`403`): the broker answers it to the proxy alone, which would
   otherwise ask on the sandbox's behalf.
 
@@ -788,13 +792,24 @@ do instead, which the old scripts print. The broker's old `/pr/` routes (gone in
 410 with the `gh` command that works now (`broker-http.mjs`, until no sandbox from before
 #407 can still run).
 
+A run's tokens outlive a restart: they are signed with `run-token.key`, in the data volume, and
+name the run by its id, which `logs/<run>.live.json` keeps (with its tokens, for redaction),
+so the next listener checks and renews them as the last one did. A renewal (`POST /run/token`)
+goes through the egress proxy like the sandbox's other broker calls, which waits for the next
+listener meanwhile; `deckhand-token` gives up on one after 30 s (`curl --max-time 30`) and asks
+again every 30 s; a token that expired meanwhile still renews, from its
+own sandbox, for 7 days (`RENEW_GRACE_MS`), and the renewed one is bound where it was. Runs started before run
+tokens (#493) keep the random secret they started with and no renewal loop: the listener
+keeps accepting it (by hash, from its own sandbox's network, `broker.mjs` `sentBy()`) until
+those runs end. That path goes in a later release, once no such run can still be going.
+
 ### Run files
 
 A run's inbox, the egress proxy's CA and the run's digest stay in the listener's runs folder
 (`runner/inbox.mjs`, `<dataDir>/runs/<run>/`), and its screenshots in `shots/<token>/`; no
 sandbox mounts either (#393): a volume shared with sandboxes on other machines would need
 ReadWriteMany storage. They travel through the broker's port instead (`run-files.mjs`), with
-the run's secret, from its own sandbox only, like its GitHub calls:
+the run token, from its own sandbox only, like its GitHub calls:
 
 | Call                         | From the sandbox                                                                                                                             | Answer                                                                                                                                                 |
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -906,7 +921,7 @@ credential for, and its defaults), checked when its config is read (`repo-config
   shared volume.
 - **In the listener**, `listener/agents/<name>.mjs`, listed in `listener/agents/index.mjs`:
   - `install(config)`: its volume, mount, version and installer (`images.installAgent()`);
-  - `env(config, secret, provider)` and `secrets`: its environment, with the run's secret
+  - `env(config, secret, provider)` and `secrets`: its environment, with the run's agent token
     where its credential would be, and the variables redacted from logs and replies;
   - `providers` and `defaultProvider`: where its API calls can go, and the credentials each
     takes (see [Providers and fallbacks](#providers-and-fallbacks));
@@ -963,7 +978,7 @@ has `plan` (`CLAUDE_CODE_OAUTH_TOKEN`) and `key` (`ANTHROPIC_API_KEY`), written
 `claude@anthropic:key`. Without a name, a run takes the default credential (`credentialName()`):
 a gateway's token, then the plan, already paid for, then the key. The endpoint holds every
 credential set (`named`) and picks the run's, in its header (`Bearer` for the plan, `x-api-key`
-for the key); the sandbox gets the run's secret in that credential's variable, so Claude Code's
+for the key); the sandbox gets the run's agent token in that credential's variable, so Claude Code's
 auth mode matches. `config.credentials` lists the ones set and which is the default, for
 `/agent` and for `resolved()`, which names an entry's credential (`claude@anthropic` →
 `claude@anthropic:plan`), so the default isn't tried twice. A run's record keeps the entry's
@@ -1056,9 +1071,9 @@ tests fake it.
 | `repo-check.mjs`                                                  | The checks a dashboard action makes on a repo and user before acting as a comment would.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `grants.mjs`, `egress.mjs`, `subnets.mjs`                         | The operator's grants (hosts, mounts, limits), the egress policy and the proxy's CA; the runs' subnets.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `github-app.mjs`, `github.mjs`                                    | The App's tokens and calls; `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `broker.mjs`, `git-gateway.mjs`                                   | The runs' secrets, each for its own sandbox only; their pushes, to the run's own branches only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `broker.mjs`, `run-token.mjs`, `git-gateway.mjs`                  | The runs' tokens (Ed25519 JWTs, checked offline, renewed, each bound to its sandbox's network or pod) and the secrets of runs from before them; their pushes, to the run's own branches only.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `github-forks.mjs`                                                | What a work run that isn't a fork's may fetch through the GitHub gateway: no fork's repository, pull request head or commit, by git, the API, an archive, a page, a raw file, a workflow's artifacts or logs, or GraphQL (`Blob`, a fork's repository, an unnamed one's files), nor, through the git gateway, a branch pushed to reach a fork's objects (`git-mirror.mjs` `connect()`); a fork's run gets a clone of its own.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `github-gateway.mjs`                                              | The sandboxes' GitHub calls, relayed by the egress proxy: the run's token in place of its secret, writes redacted, a review's thread reads refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `github-gateway.mjs`                                              | The sandboxes' GitHub calls, relayed by the egress proxy: the GitHub token in place of the run token, writes redacted, a review's thread reads refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `github-writes.mjs`                                               | The REST writes the GitHub gateway relays: classified, their target's kind read from GitHub, held to the mode's ceiling (`modes.mjs` `ceilingOf()`) and the policies' `deny_github`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `ci.mjs`                                                          | What CI says of a commit (`ciState()`): failed, running or passed, over Actions runs, check runs and commit statuses.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `github-graphql.mjs`, `github-graphql-worker.mjs`, `vendor/`      | The GraphQL the GitHub gateway relays: parsed with graphql-js (bundled at image build), validated against GitHub's pinned schema in a worker (`github-graphql-worker.mjs`), each mutation field a write for `github-writes.mjs`, printed again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |

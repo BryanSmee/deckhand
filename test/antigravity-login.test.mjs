@@ -10,7 +10,7 @@ import { createAntigravityLogin } from "../listener/antigravity-login.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { createGoogleRelay } from "../listener/google.mjs";
-import { serve, tempDir } from "./helpers.mjs";
+import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-17T12:00:00Z");
 const config = {
@@ -276,7 +276,7 @@ async function fakeGoogle(t, status = 200) {
 
 async function relay(t, options = {}) {
   const google = await fakeGoogle(t, options.status);
-  const broker = createBroker({});
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const refusedTokens = [];
   // `login: null`: the operator set none.
   const plan =
@@ -420,7 +420,7 @@ test("a login that can't be refreshed: its error stays in the listener's log, re
   const leak = new Error('can\'t be refreshed ({"token":{"access_token":"ya29.plan-access-tok');
   const logs = [];
   const google = await fakeGoogle(t);
-  const broker = createBroker({});
+  const broker = createBroker({ sentFrom: sandboxAt() });
   const endpoint = createGoogleRelay({
     broker,
     login: {

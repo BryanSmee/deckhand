@@ -22,11 +22,15 @@
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
-//   address(name)        its addresses on its network (its engine's: engineAddress())
-//   engineAddress(name)  its engine's alone
 //   relink()             joins the listener and the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
+//   locate(ip)           { sandbox, name }: the ID of the run's network that address is on (its
+//                        pod's UID, on Kubernetes) and the container that has it there
+//                        (Kubernetes names none: the pod is the sandbox), or null: what the
+//                        run's tokens are bound to, once the broker knows that container is
+//                        the run's sandbox or engine (../broker-http.mjs sandboxAt())
+//   sandboxIdOf(name, run)  the ID of a run's network (its pod's UID), or null
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
 // run's other files, which the sandbox fetches from the broker rather than mounts),
@@ -45,7 +49,7 @@ import {
   volumeArgs,
   volumeExists,
 } from "../docker.mjs";
-import { engineEnv, engineName } from "./engine.mjs";
+import { engineEnv } from "./engine.mjs";
 import { createRelink } from "./gc.mjs";
 import { createInbox } from "./inbox.mjs";
 import { splitLines } from "./lines.mjs";
@@ -101,7 +105,7 @@ export function createDockerRunner({
   const starting = new Set();
 
   // `spec`: sandboxSpec()'s. `env` values reach the container by name only (`-e NAME`), so
-  // they never show in `ps`; its user, limits, caps and volumes become Docker's own options
+  // they never show in `ps`, with those of `tokens(sandbox)`, once its network's ID is known; its user, limits, caps and volumes become Docker's own options
   // (sandboxArgs()); `engine`: { limits, cache } for a run granted a
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
@@ -109,10 +113,8 @@ export function createDockerRunner({
   // past runs (analysis.mjs), there too (TASK_DIGEST). → { engine: { backend, volume, cached } }
   // when it has one.
   async function start(spec) {
-    const { run, name, image, labels = {}, env: values = {}, engine, ca, digest } = spec;
+    const { run, name, image, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
     const args = sandboxArgs(spec);
-    // Unset values stay unset in the sandbox, as with `-e NAME` and no NAME.
-    const env = Object.fromEntries(Object.entries(values).filter(([, v]) => v !== undefined));
     inbox.write(run, ca, digest);
     const all = {
       "deckhand.owner": config.prefix,
@@ -123,7 +125,15 @@ export function createDockerRunner({
     let started = null;
     try {
       await networks.create(run);
+      // The run's tokens, bound to its network's ID (../sandbox-spec.mjs tokenEnv()). Unset
+      // values stay unset in the sandbox, as with `-e NAME` and no NAME.
+      const bound = tokens ? await tokens(await networks.idOf(run)) : {};
+      const env = Object.fromEntries(
+        Object.entries({ ...bound, ...values }).filter(([, v]) => v !== undefined),
+      );
       if (engine) started = await engines.start(run, name, labels, engine);
+      // The engine's address is new on the network.
+      if (started) networks.forget();
       // Not secrets: where the engine and the run's files are, as values.
       const engineVars = {
         ...(started ? engineEnv(started.backend) : {}),
@@ -135,6 +145,8 @@ export function createDockerRunner({
         }),
         "the sandbox didn't start",
       );
+      // Its address is new: a lookup made since its network was created didn't see it.
+      networks.forget();
     } catch (error) {
       if (engine) await engines.remove(name, run);
       await networks.remove(run);
@@ -257,21 +269,6 @@ export function createDockerRunner({
     return volumeExists(docker, `${name}-${agent.session.volume}`);
   }
 
-  // On every network it is on: its own, or the shared one of a sandbox an older listener
-  // started. The sandbox's alone, from one inspection, as engineAddress() is the engine's: the
-  // broker counts both as the run's (broker-http.mjs hasAddress()), and can tell whether the
-  // sandbox's is known yet (#517).
-  async function address(name) {
-    const found = (await networks.addressesOf(name)) ?? [];
-    return found.length ? found : null;
-  }
-
-  // Its engine's alone: the egress proxy never decrypts their HTTPS, as the engine's builds
-  // and containers don't trust Deckhand's CA.
-  async function engineAddress(name) {
-    return networks.addressesOf(engineName(name));
-  }
-
   return {
     start,
     list,
@@ -286,9 +283,10 @@ export function createDockerRunner({
     kill,
     remove,
     hasSession,
-    address,
-    engineAddress,
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
+    locate: networks.locate,
+    // Its network is named after the run.
+    sandboxIdOf: (name, run) => networks.idOf(run).catch(() => null),
   };
 }

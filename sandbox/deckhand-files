@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The run's files on the broker (../listener/run-files.mjs), with the run's secret:
+// The run's files on the broker (../listener/run-files.mjs), with the run token (deckhand-token):
 //
 //   deckhand-files get <url> <path>   fetches the egress proxy's CA or the run's digest into
 //                                     <path> (entrypoint.sh, at start), retrying for a minute
@@ -15,11 +15,15 @@
 //                                     only the run's log (the watcher's, the Stop hook's), so a
 //                                     later call still tells the agent.
 "use strict";
+const { execFileSync } = require("node:child_process");
 const { readdirSync, readFileSync, renameSync, statSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
 const broker = process.env.DECKHAND_BROKER_URL ?? "";
-const headers = { authorization: `Bearer ${process.env.DECKHAND_RUN_SECRET ?? ""}` };
+// The run token for each request, from deckhand-token, which renews it every few minutes.
+const headers = () => ({
+  authorization: execFileSync("deckhand-token", ["--header"], { encoding: "utf8" }).trim(),
+});
 const SHOT = /^[\w.-]+\.(png|jpe?g|webp)$/;
 // What the file itself makes the broker refuse (its name, its size, its type): final until it
 // changes. Others (401, 403 while a restarted listener takes the run back, 409 while another
@@ -46,7 +50,7 @@ async function get(url, path) {
     if (attempt) await sleep(5000);
     let res;
     try {
-      res = await fetch(url, { headers, signal: AbortSignal.timeout(30_000) });
+      res = await fetch(url, { headers: headers(), signal: AbortSignal.timeout(30_000) });
     } catch (error) {
       why = error.cause?.code ?? error.message;
       if (Date.now() - start >= UNREACHED_MS) break;
@@ -106,7 +110,7 @@ async function shots(watching = false) {
     try {
       const res = await fetch(`${broker}/run/shots/${encodeURIComponent(name)}`, {
         method: "PUT",
-        headers,
+        headers: headers(),
         body: readFileSync(join(dir, name)),
         signal: AbortSignal.timeout(60_000),
       });

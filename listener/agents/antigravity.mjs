@@ -3,10 +3,10 @@
 // `agy -p … --output-format stream-json` and joins an answer's text deltas into one line of its
 // own (`deckhand.text`, antigravity/text.jq): the dashboard shows a message, not its pieces.
 //
-// With a GEMINI_API_KEY, the sandbox gets the run's secret as GEMINI_API_KEY and
+// With a GEMINI_API_KEY, the sandbox gets the run's agent token as GEMINI_API_KEY and
 // GOOGLE_GEMINI_BASE_URL=<broker>/google (google.mjs). With a Google AI plan's login instead
 // (antigravity-login.mjs), `agy` has no base URL: the sandbox's token file holds the run's
-// secret, and the proxy hands the hosts that carry it (`relayed`) to the listener (google.mjs),
+// agent token, and the proxy hands the hosts that carry it (`relayed`) to the listener (google.mjs),
 // which puts the plan's access token in its place. Security model: ../../docs/security.md.
 import { GOOGLE_CREDENTIALS } from "../google.mjs";
 import { installSpec, normalizer } from "./common.mjs";
@@ -97,17 +97,21 @@ export const antigravity = {
       hosts: ["github.com", "*.githubusercontent.com"],
     }),
   // With a Gemini API key, `agy` calls the listener's /google endpoint directly; with a plan's
-  // login, the sandbox writes its token file with the run's secret instead (antigravity.sh).
+  // login, the sandbox writes its token file with the run's agent token instead
+  // (antigravity.sh, DECKHAND_AGENT_TOKEN).
   env: (config, secret) =>
     config?.agyCredential === "GEMINI_API_KEY"
       ? { GEMINI_API_KEY: secret, GOOGLE_GEMINI_BASE_URL: `${config.brokerUrl}/google` }
-      : {},
+      : { DECKHAND_AGENT_TOKEN: secret },
   secrets: GOOGLE_CREDENTIALS,
   providers: { google: { secrets: GOOGLE_CREDENTIALS } },
   defaultProvider: "google",
   hosts: [...RELAYED, "antigravity-unleash.goog", "lh3.googleusercontent.com"],
   // Decrypted by the egress proxy and handed to the listener (egress.mjs), for its runs only.
   relayed: RELAYED,
+  // Whether its calls go that way: on a plan's login, not on a Gemini API key (env()), so its
+  // sandbox must trust the proxy's CA (access.mjs egressCache()).
+  relays: (config) => config?.agyCredential !== "GEMINI_API_KEY",
   blocked: BLOCKED,
   // ~/.gemini: its conversations, settings and token file, a volume per issue.
   session: { volume: "antigravity", path: "/home/node/.gemini" },

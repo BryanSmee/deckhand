@@ -1,7 +1,7 @@
 // The sandbox's scripts: git's credential helper and the gh wrapper hand out the run's secret
 // (the listener's GitHub gateway swaps it for a token), the entrypoint, the agents' scripts.
 import assert from "node:assert/strict";
-import { execFile, spawnSync } from "node:child_process";
+import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
@@ -58,6 +58,126 @@ test("git gets the run's secret for the repo's host, which the GitHub gateway ta
     assert.equal(res.stdout, "");
   }
   assert.ok(DECKHAND_RUN_SECRET);
+});
+
+// The run token as the broker signs them: three base64url parts.
+const jwt = (n) => `eyJhbGciOiJFZERTQSJ9.eyJuIjo${n}fQ.c2lnbmF0dXJl${n}`;
+
+test("deckhand-token: the run token from its file, written once, renewed in place", async (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "deckhand", "run-token");
+  const asked = [];
+  let n = 0;
+  const broker = await serve(t, (req, res) => {
+    asked.push(`${req.method} ${req.url} ${req.headers.authorization}`);
+    // The first renewal refused (a listener restarting): asked again sooner.
+    if (n++ === 0) return res.writeHead(503).end();
+    res.end(`${jwt(n)}\n`);
+  });
+  const env = {
+    PATH: `${bin}:${process.env.PATH}`,
+    DECKHAND_TOKEN_FILE: file,
+    DECKHAND_BROKER_URL: broker.url,
+    DECKHAND_TOKEN_RENEW: "0.3",
+    DECKHAND_TOKEN_RETRY: "0.1",
+  };
+  const token = (extra = {}) =>
+    spawnSync(`${bin}deckhand-token`, [], { env: { ...env, ...extra }, encoding: "utf8" });
+  // Written once by the entrypoint, owner-only; not a token: refused.
+  const init = (value) =>
+    spawnSync(`${bin}deckhand-token`, ["--init"], {
+      env: { ...env, DECKHAND_RUN_TOKEN: value },
+      encoding: "utf8",
+    });
+  assert.equal(init("not a token").status, 1);
+  assert.equal(init(jwt(0)).status, 0);
+  assert.equal(statSync(file).mode & 0o777, 0o600);
+  assert.equal(statSync(join(dir, "deckhand")).mode & 0o777, 0o700);
+  assert.equal(token().stdout, `${jwt(0)}\n`);
+  // The file wins over a secret from before tokens, which is only for runs without one.
+  assert.equal(token({ DECKHAND_RUN_SECRET: "old" }).stdout, `${jwt(0)}\n`);
+  // Renewed in the background, presenting the current one, the file replaced whole.
+  const renew = execFile(`${bin}deckhand-token`, ["--renew"], { env });
+  let err = "";
+  renew.stderr.on("data", (d) => (err += d));
+  t.after(() => renew.kill());
+  for (let i = 0; i < 100 && n < 3; i++) await new Promise((r) => setTimeout(r, 50));
+  renew.kill();
+  assert.ok(n >= 3, "renewed twice");
+  assert.equal(asked[0], `POST /run/token Bearer ${jwt(0)}`);
+  assert.equal(asked[1], `POST /run/token Bearer ${jwt(0)}`);
+  assert.equal(asked[2], `POST /run/token Bearer ${jwt(2)}`);
+  assert.match(token().stdout, /^eyJ.*\n$/);
+  assert.match(err, /couldn't be renewed, asking again in 0\.1 s/);
+  assert.deepEqual(readdirSync(join(dir, "deckhand")), ["run-token"]);
+  // Once, at once, before the run's first call (entrypoint.sh): a first token signed long
+  // before the sandbox started (a pod Pending) is replaced before anything presents it.
+  assert.equal(init(jwt(0)).status, 0);
+  // Async: the broker answers from this process.
+  const renewNow = (extra = {}) =>
+    new Promise((resolve) =>
+      execFile(
+        `${bin}deckhand-token`,
+        ["--now"],
+        { env: { ...env, ...extra } },
+        (error, _, stderr) => resolve({ status: error ? (error.code ?? 1) : 0, stderr }),
+      ),
+    );
+  assert.equal((await renewNow()).status, 0);
+  assert.equal(asked.at(-1), `POST /run/token Bearer ${jwt(0)}`);
+  assert.notEqual(token().stdout, `${jwt(0)}\n`);
+  // A broker that refuses it: a failure the caller may ignore, the file as it was.
+  const refused = await renewNow({ DECKHAND_BROKER_URL: "http://127.0.0.1:1" });
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /couldn't be renewed/);
+  // The broker's header, for deckhand-files and deckhand-inbox; outside a run, an empty one.
+  const header = (e) =>
+    spawnSync(`${bin}deckhand-token`, ["--header"], { env: e, encoding: "utf8" });
+  assert.match(header(env).stdout, /^Bearer eyJ.*\n$/);
+  const outside = header({ PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") });
+  assert.deepEqual([outside.status, outside.stdout], [0, "Bearer \n"]);
+  // A sandbox from before tokens: its secret.
+  const old = spawnSync(`${bin}deckhand-token`, [], {
+    env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none"), DECKHAND_RUN_SECRET: "s" },
+    encoding: "utf8",
+  });
+  assert.equal(old.stdout, "s\n");
+});
+
+test("deckhand-token --renew: after a failed --now, its first renewal comes after the retry delay", async (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "run-token");
+  writeFileSync(file, `${jwt(0)}\n`);
+  const asked = [];
+  const broker = await serve(t, (req, res) => (asked.push(req.url), res.end(`${jwt(1)}\n`)));
+  // Its own process group, stopped whole: its `sleep 300` would outlive it otherwise.
+  const renew = spawn(`${bin}deckhand-token`, ["--renew"], {
+    detached: true,
+    stdio: "ignore",
+    env: {
+      PATH: `${bin}:${process.env.PATH}`,
+      DECKHAND_TOKEN_FILE: file,
+      DECKHAND_BROKER_URL: broker.url,
+      // A whole interval would be too late: the first token may have expired already.
+      DECKHAND_TOKEN_RENEW: "300",
+      DECKHAND_TOKEN_FIRST: "0.1",
+    },
+  });
+  const stop = () => {
+    try {
+      process.kill(-renew.pid, "SIGKILL");
+    } catch {
+      // Gone already.
+    }
+  };
+  t.after(stop);
+  for (let i = 0; i < 100 && !asked.length; i++) await new Promise((r) => setTimeout(r, 50));
+  for (let i = 0; i < 20 && readFileSync(file, "utf8") !== `${jwt(1)}\n`; i++) {
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  stop();
+  assert.deepEqual(asked, ["/run/token"]);
+  assert.equal(readFileSync(file, "utf8"), `${jwt(1)}\n`);
 });
 
 // The Claude Code volume is read-only in a sandbox: a missing version is the listener's to

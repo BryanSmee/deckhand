@@ -1,10 +1,10 @@
 // Git gateway: the only way a sandbox pushes. Sandbox tokens only read contents, so git
 // sends pushes here instead (entrypoint.sh: `url.<broker>/git/.pushInsteadOf`), with the
-// run's secret as its password (git-credential-deckhand). The gateway reads the push's ref
-// updates, refuses any outside `refs/heads/`, to the repo's default branch (the branch
-// Deckhand trusts: its `.deckhand.yaml`, preview hook and Dockerfile come from there) or to a
-// branch that isn't the run's own (broker.mjs allow(): its issue's, its pull request's), and
-// forwards the rest to GitHub with a token of its own that the sandbox never sees. Updates,
+// run token as its password (git-credential-deckhand), checked offline (broker.mjs check()).
+// The gateway reads the push's ref updates, refuses any outside `refs/heads/`, to the repo's
+// default branch (the branch Deckhand trusts: its `.deckhand.yaml`, preview hook and Dockerfile
+// come from there) or to a branch that isn't the run's own (broker.mjs allow(): its issue's,
+// its pull request's), and forwards the rest to GitHub with a token of its own that the sandbox never sees. Updates,
 // force-pushes and deletes alike: another task's branch, a maintainer's pull request or
 // gh-pages stay out of reach.
 //
@@ -27,7 +27,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { branchAllowed, NOT_ITS_SANDBOX } from "./broker.mjs";
+import { branchAllowed } from "./broker.mjs";
 import { createMirrors } from "./git-mirror.mjs";
 import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
 import { FORK_RUN } from "./github-forks.mjs";
@@ -244,7 +244,7 @@ export function refusal(ref, base, branches) {
 }
 
 export function createGitGateway({
-  broker, // broker.mjs: the run a secret belongs to
+  broker, // broker.mjs: the run a token belongs to
   app, // () => the GitHub App (github-app.mjs), or null before /setup
   allowWorkflows = () => false, // (repo) => whether its grant sets `allow_workflows`
   // github-forks.mjs createForkChecks(): whose pushes are checked for a fork's objects
@@ -337,16 +337,25 @@ export function createGitGateway({
     const repo = `${path[1]}/${path[2]}`.toLowerCase();
     const service = path[3];
 
-    const run = broker.runOf(secretOf(req));
+    // Git only sends credentials once asked: a 401 asks for them (again).
+    const { run, claims, status, message } = await broker.check(secretOf(req), req);
     if (!run) {
-      // Git only sends credentials once asked.
-      return fail(res, 401, "Deckhand: unknown or finished run", {
-        "www-authenticate": 'Basic realm="Deckhand"',
-      });
+      const challenge = status === 401 ? { "www-authenticate": 'Basic realm="Deckhand"' } : {};
+      return fail(res, status, `Deckhand: ${message}`, challenge);
     }
-    if (!(await broker.sentBy(run, req))) return fail(res, 403, `Deckhand: ${NOT_ITS_SANDBOX}`);
-    if (run.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${run.repo}`);
-    if (!run.push) return fail(res, 403, "Deckhand: this run can't push");
+    // What it may push, from its token's claims, which the broker signed (a run from before
+    // tokens: its record): its repo and branches. A run that can't push has none (broker.mjs
+    // allow()).
+    const may = claims
+      ? {
+          repo: claims.repo,
+          branches: Array.isArray(claims.branches) ? claims.branches : [],
+          push: Array.isArray(claims.branches) && claims.branches.length > 0,
+          fork: claims.fork === true,
+        }
+      : { repo: run.repo, branches: run.branches, push: run.push, fork: run.fork };
+    if (may.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${may.repo}`);
+    if (!may.push) return fail(res, 403, "Deckhand: this run can't push");
 
     if (service === "info/refs") {
       if (req.method !== "GET" || url.searchParams.get("service") !== "git-receive-pack") {
@@ -363,7 +372,7 @@ export function createGitGateway({
 
     const github = app();
     if (!github) return fail(res, 503, "Deckhand: the GitHub App is not set up");
-    return { repo, service, run, github };
+    return { repo, service, run, may, github };
   }
 
   // The push's refs refused with `reasons` (ref → why): what's left of the pack is read and
@@ -386,7 +395,7 @@ export function createGitGateway({
   // A push whose every ref update the run may make: { body, token, done, parsed }, `token` the
   // gateway's own for it, `done` what to call once it is forwarded and `parsed` its ref updates
   // (commands()), or nothing once the push is refused.
-  async function checkPush(req, res, { repo, run, github }) {
+  async function checkPush(req, res, { repo, run, may, github }) {
     let parsed;
     try {
       parsed = await commands(req);
@@ -404,7 +413,7 @@ export function createGitGateway({
     }
     const reasons = new Map();
     for (const ref of parsed.refs) {
-      const why = refusal(ref, base, run.branches);
+      const why = refusal(ref, base, may.branches);
       if (why) reasons.set(ref, why);
     }
     if (reasons.size) return refuse(req, res, repo, parsed, reasons);
@@ -412,7 +421,7 @@ export function createGitGateway({
     // what it carries or the repository has (mirrors.connect()): GitHub keeps a fork network's
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
     // tree, needn't carry them, and its next fetch would bring them as the repository's own.
-    const strict = forks?.restricted(run) === true;
+    const strict = forks?.restricted(may) === true;
     const workflows = workflowsGranted(repo);
     if (!strict && !workflows) return { body: parsed.body, token: null, parsed };
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.

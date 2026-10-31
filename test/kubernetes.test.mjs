@@ -194,12 +194,21 @@ const spec = (over = {}) => ({
   ...over,
 });
 
-test("start: a Secret with the run's env, a claim per session volume, then the Pod", async (t) => {
+test("start: a claim per session volume, the Pod, then a Secret with the run's env and tokens", async (t) => {
   const { runner, calls, objects } = setup(t);
-  assert.deepEqual(await runner.start(spec()), { engine: null });
+  const bound = [];
+  const tokens = (uid) => (bound.push(uid), { DECKHAND_RUN_TOKEN: `token-for-${uid}` });
+  assert.deepEqual(await runner.start(spec({ tokens })), { engine: null });
   const secret = objects.secrets.get("dh-org-repo-12-abc-1730000000-env");
-  // Unset values stay unset; the secrets are in the Secret, never in the Pod.
-  assert.deepEqual(secret.stringData, { DECKHAND_RUN_SECRET: "s3cret", TASK_PROMPT: "do it" });
+  // Unset values stay unset; the secrets are in the Secret, never in the Pod. The run's tokens
+  // are bound to the pod's UID, known once it is made.
+  const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
+  assert.deepEqual(bound, [uid]);
+  assert.deepEqual(secret.stringData, {
+    DECKHAND_RUN_TOKEN: `token-for-${uid}`,
+    DECKHAND_RUN_SECRET: "s3cret",
+    TASK_PROMPT: "do it",
+  });
   assert.equal(secret.metadata.annotations["deckhand.run"], "dh-org-repo-12-abc-1730000000");
   const pod = objects.pods.get("dh-org-repo-12-abc");
   assert.ok(!JSON.stringify(pod).includes("s3cret"));
@@ -244,9 +253,10 @@ test("start: a Secret with the run's env, a claim per session volume, then the P
     storageClassName: "fast",
   });
   assert.ok(!objects.persistentvolumeclaims.has("dh-claude-code"));
-  // The policy checked first, the Pod last.
+  // The policy checked first, the Pod, then its Secret, last.
   assert.match(calls[0], /networkpolicies$/);
-  assert.match(calls.at(-1), /^POST \/api\/v1\/namespaces\/runs\/pods$/);
+  assert.match(calls.at(-2), /^POST \/api\/v1\/namespaces\/runs\/pods$/);
+  assert.match(calls.at(-1), /^POST \/api\/v1\/namespaces\/runs\/secrets$/);
   // The inbox is the listener's: the next run's claims are already there.
   runner.send("dh-org-repo-12-abc-1730000000", "more", claude);
   assert.equal(runner.closed("dh-org-repo-12-abc-1730000000"), false);
@@ -254,7 +264,7 @@ test("start: a Secret with the run's env, a claim per session volume, then the P
   objects.pods.clear();
   calls.length = 0;
   await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
-  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2); // Secret, Pod
+  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2); // Pod, Secret
 });
 
 test("podSpec: Pod Security restricted, no token, no restart, the grant's limits", () => {
@@ -307,7 +317,7 @@ test("podSpec: Pod Security restricted, no token, no restart, the grant's limits
   assert.throws(() => podSpec(spec({ caps: ["CHOWN"] }), {}), /no capabilities/);
 });
 
-test("start: a failure removes the Secret and the claims it made, keeps the older ones", async (t) => {
+test("start: a failure removes the Pod, Secret and claims it made, keeps the older ones", async (t) => {
   const { runner, objects } = setup(t, {
     fail: ({ method, path }) =>
       method === "POST" && path.endsWith("/pods")
@@ -320,6 +330,68 @@ test("start: a failure removes the Secret and the claims it made, keeps the olde
   await assert.rejects(runner.start(spec()), /POST pods: pods is forbidden/);
   assert.equal(objects.secrets.size, 0);
   assert.deepEqual([...objects.persistentvolumeclaims.keys()], ["dh-org-repo-12-abc-claude"]);
+});
+
+test("start: a Secret refused removes the Pod made before it", async (t) => {
+  const { runner, objects } = setup(t, {
+    fail: ({ method, path }) =>
+      method === "POST" && path.endsWith("/secrets")
+        ? Response.json({ message: "secrets is forbidden" }, { status: 403 })
+        : null,
+  });
+  await assert.rejects(runner.start(spec()), /POST secrets: secrets is forbidden/);
+  assert.equal(objects.pods.size, 0);
+});
+
+test("locate: the UID of the running sandbox pod at an address, else null", async (t) => {
+  let time = 0;
+  let failing = false;
+  let failed = 0;
+  const { runner, objects, calls } = setup(
+    t,
+    {
+      fail: ({ method, path }) =>
+        failing && method === "GET" && path.endsWith("/pods")
+          ? (failed++, Response.json({ message: "etcd leader changed" }, { status: 500 }))
+          : null,
+    },
+    { now: () => time },
+  );
+  await runner.start(spec());
+  const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(await runner.locate("10.244.9.9"), null);
+  // The connections that ask at once about an address share one lookup.
+  const lists = () => calls.filter((c) => c.startsWith("GET") && c.includes("podIP")).length;
+  time += 60_000;
+  const before = lists();
+  const found = await Promise.all([1, 2, 3].map(() => runner.locate("10.244.8.8")));
+  assert.deepEqual(found, [null, null, null]);
+  assert.equal(lists(), before + 1);
+  // An API error keeps what was known, even right after another sandbox started: one failed
+  // call refuses no sandbox. Nor is it asked again for every connection meanwhile.
+  time += 60_000;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  time += 2_000;
+  failing = true;
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1730000000" }));
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(failed, 1);
+  for (let i = 0; i < 5; i++) {
+    time += 10;
+    assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+    assert.equal(await runner.locate("10.244.5.5"), null);
+  }
+  assert.equal(failed, 2);
+  // Known means answered within 10 s: past that, an outage fails closed (the pod may be gone
+  // without remove(), its address another's).
+  time += 10_000;
+  assert.equal(await runner.locate("10.244.1.7"), null);
+  failing = false;
+  objects.pods.delete("dh-org-repo-13-abc");
+  // Gone with its pod: an address never names a pod that was removed.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.equal(await runner.locate("10.244.1.7"), null);
 });
 
 test("start: without the namespace's NetworkPolicy, no run, and the reply says why", async (t) => {
@@ -894,11 +966,10 @@ test("hasSession, address and proxyAddresses", async (t) => {
   assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), false);
   await runner.start(spec());
   assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
-  assert.deepEqual(await runner.address("dh-org-repo-12-abc"), ["10.244.1.7"]);
-  objects.pods.get("dh-org-repo-12-abc").status = { phase: "Pending" };
-  assert.equal(await runner.address("dh-org-repo-12-abc"), null);
-  assert.equal(await runner.address("dh-gone"), null);
-  assert.equal(await runner.engineAddress("dh-org-repo-12-abc"), null);
+  const { uid } = objects.pods.get("dh-org-repo-12-abc").metadata;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(await runner.sandboxIdOf("dh-org-repo-12-abc"), uid);
+  assert.equal(await runner.sandboxIdOf("dh-gone"), null);
   assert.deepEqual(await runner.proxyAddresses(), ["10.244.2.3", "10.244.3.4"]);
   assert.ok(
     calls.at(-1).endsWith("endpointslices?labelSelector=kubernetes.io%2Fservice-name%3Degress"),

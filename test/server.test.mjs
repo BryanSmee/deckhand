@@ -599,7 +599,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(credential));
-    assert.match(runEnv, new RegExp(`^CLAUDE_CODE_OAUTH_TOKEN=${secret}$`, "m"));
+    const agentToken = agentTokenIn(runEnv, "CLAUDE_CODE_OAUTH_TOKEN", secret);
     assert.doesNotMatch(runEnv, /^ANTHROPIC_API_KEY=/m);
     assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/anthropic$/m);
 
@@ -613,6 +613,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const body = JSON.parse(reply.body).body;
     assert.match(body, /^Leaked \[redacted\] and \[redacted\]\./);
     assert.ok(!body.includes(secret) && !body.includes(credential));
+    assert.ok(!body.includes(agentToken));
     await until(
       () => !readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json")),
       "the run's state to go",
@@ -620,6 +621,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     for (const file of readdirSync(join(dir, "logs"))) {
       const log = readFileSync(join(dir, "logs", file), "utf8");
       assert.ok(!log.includes(secret) && !log.includes(credential));
+      assert.ok(!log.includes(agentToken));
     }
     // Its log's first line says it ran on the plan, for the dashboard after a restart.
     const logFile = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".log"));
@@ -645,7 +647,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(credential));
-    assert.match(runEnv, new RegExp(`^ANTHROPIC_AUTH_TOKEN=${secret}$`, "m"));
+    agentTokenIn(runEnv, "ANTHROPIC_AUTH_TOKEN", secret);
     // Only the variables named with -e reach the container: not the unused API key.
     const passed = readFileSync(join(dir, "run-args"), "utf8").split("\n");
     assert.ok(passed.includes("ANTHROPIC_AUTH_TOKEN"));
@@ -680,7 +682,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.ok(!runEnv.includes(key));
     assert.match(runEnv, /^SANDBOX_AGENT=codex$/m);
     assert.match(runEnv, /^CODEX_VERSION=0\.162\.1$/m);
-    assert.match(runEnv, new RegExp(`^OPENAI_API_KEY=${secret}$`, "m"));
+    agentTokenIn(runEnv, "OPENAI_API_KEY", secret);
     assert.match(runEnv, /^OPENAI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/openai$/m);
     assert.match(runEnv, /^SANDBOX_MODEL=gpt-6-astra$/m);
     assert.doesNotMatch(runEnv, /^(ANTHROPIC_|CLAUDE_CODE_VERSION=)/m);
@@ -852,7 +854,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(key));
-    assert.match(runEnv, new RegExp(`^GEMINI_API_KEY=${secret}$`, "m"));
+    agentTokenIn(runEnv, "GEMINI_API_KEY", secret);
     assert.match(runEnv, /^GOOGLE_GEMINI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/google$/m);
     // The proxy's CA, which its GitHub calls need, if not its own.
     assert.match(readFileSync(join(dir, "run-args"), "utf8"), /^DECKHAND_CA=/m);
@@ -1135,6 +1137,18 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.equal(push.status, 401);
     assert.match(push.headers.get("www-authenticate"), /^Basic/);
   });
+
+  // The agent's token in `name` of the sandbox's environment (sandbox-spec.mjs tokenEnv()),
+  // checked: for the agents' endpoints, of the same run as the run token.
+  function agentTokenIn(runEnv, name, runToken) {
+    const value = new RegExp(`^${name}=(.*)$`, "m").exec(runEnv)?.[1];
+    assert.ok(value, `${name} in the sandbox's environment`);
+    const claims = (token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
+    assert.equal(claims(value).aud, "deckhand:agents");
+    assert.equal(claims(runToken).aud, "deckhand:broker");
+    assert.equal(claims(value).jti, claims(runToken).jti);
+    return value;
+  }
 
   // "host {json}" lines the fake sandbox wrote → { host: answer }.
   function egressAnswers(dir) {
@@ -4909,18 +4923,19 @@ mounts:
       return { SANDBOX_ENGINE: "podman" };
     });
     const { dir, github } = ctx;
-    // Whether the running run started an engine, from its saved state: the broker keeps its
-    // addresses only once it knows the engine's too (broker-http.mjs hasAddress()).
-    const savedEngine = async () => {
+    // The network its tokens are bound to, from its saved state: what the egress policy finds
+    // its sandbox and its engine by (broker-http.mjs taskWhere()).
+    const savedSandbox = async () => {
       const state = await until(() => {
         const live = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json"));
         const saved = live && JSON.parse(readFileSync(join(dir, "logs", live), "utf8"));
-        return saved && "engine" in saved ? saved : null;
+        return saved?.sandbox ? saved : null;
       }, "the run's saved state, after its start");
-      return state.engine;
+      return state;
     };
     await ctx.send(comment("alice"));
-    assert.equal(await savedEngine(), true);
+    const saved = await savedSandbox();
+    assert.equal(saved.sandbox, `id-${saved.id}`);
     writeFileSync(join(dir, "go"), "");
     await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
@@ -4957,7 +4972,8 @@ mounts:
     const payload = comment("alice");
     payload.issue = { number: 41, pull_request: {} };
     await ctx.send(payload);
-    assert.equal(await savedEngine(), false);
+    // Started: its saved state has its network.
+    await savedSandbox();
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("org/repo#pr-41: done (ok)");
     assert.throws(() => readFileSync(join(dir, "engine-args")));

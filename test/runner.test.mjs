@@ -83,7 +83,21 @@ function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"], taken
               .join("\n"),
           );
         }
+        if (args.join(" ").includes("IPv4Address")) {
+          // Each run network's ID and its containers' addresses (networks.mjs locate()).
+          return ok(
+            args
+              .slice(4)
+              .filter((n) => nets.has(n))
+              .map((n) => {
+                const ips = [...nets.get(n)].map((c) => ` ${c}|${containers.get(c).ip}/24|`);
+                return `id-${n}${ips.join("")}`;
+              })
+              .join("\n"),
+          );
+        }
         if (!nets.has(last)) return missing;
+        if (args[3] === "{{.Id}}") return ok(`id-${last}`);
         return args.join(" ").includes("Containers")
           ? ok([...nets.get(last)].map((c) => `${c} `).join(""))
           : ok(String(internal.has(last)));
@@ -251,6 +265,78 @@ test("start: detached, labelled, secrets by name only, its inbox at the broker",
   assert.doesNotMatch(joined, /--mount|-v /);
   assert.match(joined, /--network dh-org-repo-12-1 /);
   assert.equal(readFileSync(join(inboxDir, "dh-org-repo-12-1", "inbox.jsonl"), "utf8"), "");
+});
+
+test("start: the run's tokens bound to its network's ID, by name only; locate() finds it", async () => {
+  let now = 0;
+  let failing = false;
+  const { r, calls } = runner({
+    now: () => now,
+    // A Docker CLI that fails, while the test says so: its `ls`, or its `inspect` alone.
+    answers: {
+      "network ls": () => failing === "ls" && { code: 1, out: "", err: "Cannot connect" },
+      "network inspect": (args) =>
+        failing === "inspect" &&
+        args.join(" ").includes("IPv4Address") && { code: 1, out: "", err: "context deadline" },
+    },
+  });
+  const bound = [];
+  await r.start({
+    run: "dh-org-repo-12-1",
+    name: "dh-org-repo-12",
+    image: "dh-sandbox",
+    env: { TASK_PROMPT: "p" },
+    tokens: async (sandbox) => (bound.push(sandbox), { DECKHAND_RUN_TOKEN: `t@${sandbox}` }),
+  });
+  assert.deepEqual(bound, ["id-dh-org-repo-12-1"]);
+  const { args, env } = calls.find((c) => c.args[0] === "run");
+  assert.ok(args.includes("DECKHAND_RUN_TOKEN"));
+  assert.doesNotMatch(args.join(" "), /t@/);
+  assert.equal(env.DECKHAND_RUN_TOKEN, "t@id-dh-org-repo-12-1");
+  // The sandbox's address on it: that network's ID, and the container's name.
+  const sandboxOf = async (ip) => (await r.locate(ip))?.sandbox ?? null;
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  assert.equal((await r.locate("10.1.0.2")).name, "dh-org-repo-12");
+  assert.equal(await sandboxOf("10.9.9.9"), null);
+  // Looked up once, until a miss lets it look again, at most every 2 seconds.
+  const looks = () => calls.filter((c) => c.args.join(" ").includes("IPv4Address")).length;
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  assert.equal(looks(), 1);
+  // Misses at once share one lookup: every connection of an `npm install` asks.
+  now += 60_000;
+  const before = looks();
+  const parallel = await Promise.all(["10.1.0.2", "10.9.9.9", "10.9.9.8"].map(sandboxOf));
+  assert.deepEqual(parallel, ["id-dh-org-repo-12-1", null, null]);
+  assert.equal(looks(), before + 1);
+  // A lookup that fails keeps what was known, even right after another network was created:
+  // one failed Docker call refuses no run.
+  now += 60_000;
+  failing = "inspect";
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  now += 60_000;
+  failing = "ls";
+  await r.start({ run: "dh-b-1", name: "dh-b", image: "dh-sandbox" });
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  // Nor does it make one more Docker call per connection while it fails: an unknown address (a
+  // build's) waits 2 s too.
+  const lists = () => calls.filter((c) => c.args[0] === "network" && c.args[1] === "ls").length;
+  const failed = lists();
+  for (let i = 0; i < 5; i++) {
+    now += 10;
+    assert.equal(await sandboxOf("10.9.9.7"), null);
+  }
+  assert.equal(lists(), failed);
+  // Asked again 2 s on, once Docker answers.
+  failing = false;
+  now += 2_000;
+  assert.ok(await sandboxOf("10.1.0.2"));
+  assert.equal(looks(), before + 3);
+  // Gone with its network: an address never names a network that was removed (the fake gives
+  // both sandboxes the same one).
+  await r.remove("dh-org-repo-12", "dh-org-repo-12-1");
+  assert.equal(await sandboxOf("10.1.0.2"), "id-dh-b-1");
+  await r.remove("dh-b", "dh-b-1");
+  assert.equal(await sandboxOf("10.1.0.2"), null);
 });
 
 test("start: the run's own internal network, with the listener and the proxy on it", async () => {
@@ -520,29 +606,20 @@ test("list: this deployment's sandboxes, by label", async () => {
   );
 });
 
-test("state and address: null when there is no such sandbox", async () => {
+test("state and locate: null when there is no such sandbox", async () => {
   const { r } = runner();
   assert.equal(await r.state("x"), null);
-  assert.equal(await r.address("x"), null);
-  const found = runner({
-    answers: {
-      // A sandbox an older listener started is on the shared network: found there too.
-      inspect: (args) =>
-        args.at(-1) === "x" && {
-          code: 0,
-          out: '{"deckhand-sandboxes":{"IPAddress":"10.0.0.2","GlobalIPv6Address":"fd00::2"}}',
-          err: "",
-        },
-    },
-  });
-  assert.deepEqual(await found.r.address("x"), ["10.0.0.2", "fd00::2"]);
+  assert.equal(await r.locate("10.0.0.2"), null);
+  assert.equal(await r.sandboxIdOf("x", "dh-x-1"), null);
 });
 
-test("address: the sandbox's own, on its run's network", async () => {
+test("locate: the sandbox's own, on its run's network; its network's ID by its name", async () => {
   const { r } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
-  assert.deepEqual(await r.address("dh-a"), ["10.1.0.2"]);
-  assert.equal(await r.engineAddress("dh-a"), null);
+  assert.deepEqual(await r.locate("10.1.0.2"), { sandbox: "id-dh-a-1", name: "dh-a" });
+  // The listener's and the proxy's there are on it too, under their own names.
+  assert.deepEqual(await r.locate("10.0.0.3"), { sandbox: "id-dh-a-1", name: "egress-id" });
+  assert.equal(await r.sandboxIdOf("dh-a", "dh-a-1"), "id-dh-a-1");
 });
 
 test("start with the egress proxy's CA: in the inbox folder, at the broker as DECKHAND_CA", async () => {
@@ -895,10 +972,10 @@ test("start: the engine first, on the run's network as `engine`, then the sandbo
     "deckhand.engine": "dh-a-1",
   });
   assert.equal(containers.get("dh-a-engine").volume, "dh-a-1-engine");
-  // The sandbox's and the engine's, each from its own inspection: the broker counts both as the
-  // run's, and tells the engine apart (broker-http.mjs hasAddress()).
-  assert.deepEqual(await r.address("dh-a"), ["10.1.0.2"]);
-  assert.deepEqual(await r.engineAddress("dh-a"), ["10.1.0.3"]);
+  // The sandbox and its engine, on the run's network, each under its name: the broker counts
+  // both as the run's, and tells the engine apart (broker-http.mjs taskWhere()).
+  assert.deepEqual(await r.locate("10.1.0.2"), { sandbox: "id-dh-a-1", name: "dh-a" });
+  assert.deepEqual(await r.locate("10.1.0.3"), { sandbox: "id-dh-a-1", name: "dh-a-engine" });
 });
 
 test("start: auto without Sysbox is Podman, with what it relaxes and no BuildKit", async () => {

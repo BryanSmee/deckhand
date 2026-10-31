@@ -3,10 +3,11 @@
 // the agent's input (deckhand_messages in entrypoint.sh; Claude Code's stream-json). Fed
 // through the inbox rather than stdin so that it survives a restart of the listener
 // (runner/docker.mjs). TASK_INBOX is the broker's URL for it (../listener/run-files.mjs),
-// asked with the run's secret for what follows the bytes already read: a listener that
+// asked with the run token (deckhand-token) for what follows the bytes already read: a listener that
 // restarts meanwhile is asked again, from the same offset, so no line is lost or printed
 // twice. A file path (a sandbox started by hand) is followed instead.
 "use strict";
+const { execFileSync } = require("node:child_process");
 const { closeSync, openSync, readSync } = require("node:fs");
 
 const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
@@ -37,13 +38,17 @@ function followFile() {
   poll();
 }
 
+// The run token for each request, from deckhand-token, which renews it every few minutes.
+const headers = () => ({
+  authorization: execFileSync("deckhand-token", ["--header"], { encoding: "utf8" }).trim(),
+});
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // The broker answers whole lines only, so `offset` stays on a line's start. Over its 25 s
 // wait, or while the listener restarts: asked again, waiting a little longer each time. A
 // refusal is said once on stderr (the run's log), then again only when the answer changes.
 async function followBroker() {
-  const headers = { authorization: `Bearer ${process.env.DECKHAND_RUN_SECRET ?? ""}` };
   let offset = 0;
   let pause = 500;
   let said = "";
@@ -54,7 +59,7 @@ async function followBroker() {
   for (;;) {
     try {
       const res = await fetch(`${source}?from=${offset}`, {
-        headers,
+        headers: headers(),
         signal: AbortSignal.timeout(60_000),
       });
       if (res.status === 200) {

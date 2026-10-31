@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
+import { signingKey } from "../listener/run-token.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { createRestart } from "../listener/restart.mjs";
@@ -150,7 +151,7 @@ test("a restored run keeps the issues it created, the comments it posted and the
   ]);
 });
 
-test("a restored run knows whether it started an engine, and saves it again", async (t) => {
+test("a restored run keeps the network its tokens are bound to, and saves it again", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});
   const ctx = {
@@ -166,18 +167,18 @@ test("a restored run knows whether it started an engine, and saves it again", as
   };
   const secret = saveRun(dir, "r1", 1, { agent: "claude" });
   const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
-  writeFileSync(join(dir, "r1.live.json"), JSON.stringify({ ...saved, engine: true }));
-  // Saved before runs said: unknown (broker-http.mjs hasAddress() waits for its engine's address).
+  writeFileSync(join(dir, "r1.live.json"), JSON.stringify({ ...saved, sandbox: "net-1" }));
+  // Saved before runs kept it: looked up when asked (broker-http.mjs sandboxOfTask()).
   const old = saveRun(dir, "r2", 2, { agent: "claude" });
   createRestart(ctx).restoreRuns();
   const of = (s) => [...ctx.tasks.values()].find((task) => task.live.secret === s).live;
-  assert.equal(of(secret).engine, true);
-  assert.equal(of(old).engine, undefined);
-  // Its addresses are looked up again, the flag kept.
-  assert.equal(of(secret).ip, null);
+  assert.equal(of(secret).sandbox, "net-1");
+  assert.equal(broker.runOf("r1").sandbox, "net-1");
+  assert.equal(of(old).sandbox, undefined);
+  assert.equal(broker.runOf("r2").sandbox, null);
   broker.runOf(secret).changed();
   await of(secret).saving;
-  assert.equal(JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8")).engine, true);
+  assert.equal(JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8")).sandbox, "net-1");
 });
 
 // A data dir whose runs, run going and queue have one repo under two spellings: `live` the
@@ -453,4 +454,76 @@ test("queued comments keep when they were queued through a restart: the run orde
     after.queueOrder().map((task) => task.id),
     ["8", "7"],
   );
+});
+
+test("across a restart, a run's tokens still check, and a run from before them keeps its secret", async (t) => {
+  const dir = tempDir(t);
+  const key = signingKey(dir);
+  const networks = { "10.9.0.5": "net-new", "10.9.1.5": "net-old" };
+  const make = () => {
+    // The old run's sandbox at 10.9.1.5, as broker-http.mjs runAt() tells.
+    const broker = createBroker({
+      key,
+      sandboxOf: async (ip) => networks[ip] ?? null,
+      sentFrom: async (run, ip) => run.id === "old" && ip === "10.9.1.5",
+    });
+    const ctx = {
+      config: { dataDir: dir },
+      log: () => {},
+      tasks: new Map(),
+      logDir: dir,
+      runs: [],
+      runsById: new Map(),
+      runner: { closed: () => false },
+      broker,
+      running: 0,
+    };
+    return { broker, ctx, restart: createRestart(ctx) };
+  };
+  // The first listener: a run with tokens, saved as saveLive() writes it.
+  const first = make();
+  first.broker.register("org/repo", undefined, { id: "new", push: true, mode: "work" });
+  first.broker.allow("new", ["issue-1-*"]);
+  const { token, agentToken } = first.broker.issue("new", "net-new");
+  writeFileSync(
+    join(dir, "new.live.json"),
+    JSON.stringify({
+      task: { repo: "org/repo", id: 1, kind: "issue" },
+      id: "new",
+      mode: "work",
+      light: false,
+      agentToken,
+      runTokens: first.broker.issuedOf("new"),
+      branches: ["issue-1-*"],
+      record: { id: "new", key: "org/repo#1", agent: "claude" },
+      handled: [],
+      unanswered: [],
+    }),
+  );
+  // And one a listener from before tokens started: its secret, and no renewal.
+  const secret = saveRun(dir, "old", 2, { agent: "claude" });
+
+  const { broker, restart } = make();
+  restart.restoreRuns();
+  // The token the sandbox holds is redacted at once, before it is renewed.
+  assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
+  // Renewed by the next listener, bound where it was (the saved state of a listener that didn't
+  // keep `sandbox` says nothing: the token presented does), and it works, as do the next ones.
+  const renewed = await broker.renew(token, "10.9.0.5");
+  assert.ok(renewed.token);
+  assert.equal((await broker.check(renewed.token, "10.9.0.5")).run.id, "new");
+  assert.equal((await broker.check(renewed.token, "10.9.1.5")).status, 403);
+  const again = await broker.renew(renewed.token, "10.9.0.5");
+  assert.equal((await broker.check(again.token, "10.9.0.5")).run.id, "new");
+  // The token the sandbox held across the restart is redacted too, not only those renewed since.
+  assert.ok(broker.secretsOf("new").includes(token));
+  assert.equal((await broker.check(agentToken, "10.9.0.5", "deckhand:agents")).run.id, "new");
+  assert.equal((await broker.check(agentToken, "10.9.0.5", "deckhand:agents")).run.id, "new");
+  assert.deepEqual(broker.runOf("new").branches, ["issue-1-*"]);
+  // Its agent token is redacted from its output still: the live state kept it.
+  assert.ok(broker.secretsOf("new").includes(agentToken));
+  // The old run's secret works from its own sandbox alone, and has nothing to renew.
+  assert.equal((await broker.check(secret, "10.9.1.5")).run.id, "old");
+  assert.equal((await broker.check(secret, "10.9.0.5")).status, 403);
+  assert.equal((await broker.renew(secret, "10.9.1.5")).status, 401);
 });

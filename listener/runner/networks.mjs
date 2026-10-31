@@ -190,7 +190,130 @@ export function createNetworks({ config, docker, log, now }) {
     return addresses;
   }
 
-  return { create, remove, connect, peers, networksOf, addressesOf, proxyAddresses };
+  // Where an address is on the runs' networks: { sandbox, name }, the ID of the network and the
+  // name of the container that has it there (a sandbox, its engine, the listener, the proxy), or
+  // null: what a run's tokens are bound to (../broker.mjs check()), and what the egress policy
+  // finds a connection's run by (../broker-http.mjs taskWhere()). IDs, not names or addresses:
+  // both are reused, an ID never. Cached, as each call to the broker asks; forgotten whenever a
+  // network is created or removed or a container joins one, so an address never names a
+  // network that is gone. One not found makes the runner look again, at most every
+  // PROXY_RETRY_MS. One lookup at a time: the calls that miss meanwhile (every connection of an
+  // `npm install` asks) share it, unless a network changed since it started.
+  let sandboxes = { at: -Infinity, byAddress: new Map() };
+  let generation = 0; // counts forget()s
+  let looking = null; // { generation, done: Promise<Map> }
+  let failedAt = -Infinity; // the last lookup that failed
+  async function locate(ip) {
+    const age = now() - sandboxes.at;
+    const known = sandboxes.byAddress.get(ip);
+    if (known && age < PROXY_TTL_MS) return known;
+    // Within PROXY_RETRY_MS of a lookup, or of one that failed: what was known, whatever the
+    // address, rather than one more Docker call per connection.
+    if (age < PROXY_RETRY_MS || now() - failedAt < PROXY_RETRY_MS) return known ?? null;
+    if (looking?.generation !== generation) {
+      const flight = { generation, done: lookUp(generation) };
+      looking = flight;
+      flight.done.finally(() => looking === flight && (looking = null));
+    }
+    return (await looking.done).get(ip) ?? null;
+  }
+
+  // Every run network's containers now, kept unless a network changed meanwhile: its answer
+  // would be older than that. A lookup that fails (a slow or failing Docker CLI) keeps what was
+  // known, asked again after PROXY_RETRY_MS: one failed call mustn't refuse every run's calls.
+  async function lookUp(seen) {
+    const at = now();
+    const byAddress = new Map();
+    try {
+      for (const [address, where] of await runAddresses()) byAddress.set(address, where);
+    } catch (error) {
+      log(`Looking up the runs' networks: ${error.message}`);
+      failedAt = at;
+      return sandboxes.byAddress;
+    }
+    failedAt = -Infinity;
+    if (seen === generation) sandboxes = { at, byAddress };
+    return byAddress;
+  }
+
+  // [address, { sandbox: network ID, name }] of every container on this deployment's runs'
+  // networks. Neither a container's name nor an address has a space or a "|".
+  async function runAddresses() {
+    const { out } = checked(
+      await docker([
+        "network",
+        "ls",
+        "--quiet",
+        "--no-trunc",
+        "--filter",
+        `label=deckhand.owner=${config.prefix}`,
+        "--filter",
+        "label=deckhand.run",
+      ]),
+      "docker network ls",
+    );
+    const ids = out.split("\n").filter(Boolean);
+    if (!ids.length) return [];
+    // One removed meanwhile makes Docker exit 1 after printing the others: those still count.
+    // Exit 1 with none printed is a failure (the daemon not answering), not "no sandboxes":
+    // lookUp() keeps what it knew.
+    const listed = await docker([
+      "network",
+      "inspect",
+      "--format",
+      "{{.Id}}{{range .Containers}} {{.Name}}|{{.IPv4Address}}|{{.IPv6Address}}{{end}}",
+      ...ids,
+    ]);
+    const lines = listed.out.split("\n").filter(Boolean);
+    if (listed.code !== 0 && !lines.length) {
+      throw new Error(`docker network inspect: ${listed.err || `exit ${listed.code}`}`);
+    }
+    return lines.flatMap((line) => {
+      const [id, ...containers] = line.split(" ").filter(Boolean);
+      return containers.flatMap((c) => {
+        const [name, ...addresses] = c.split("|");
+        return addresses
+          .filter(Boolean)
+          .map((a) => [a.replace(/\/\d+$/, ""), { sandbox: id, name }]);
+      });
+    });
+  }
+
+  // Its ID, once created.
+  async function idOf(net) {
+    return checked(
+      await docker(["network", "inspect", "--format", "{{.Id}}", net]),
+      `the run's network ${net}`,
+    ).out;
+  }
+
+  // Looked up again at the next question. A network created or a container joining one leaves
+  // the others' answers as they were, to serve should that lookup fail; a network removed
+  // takes them all: one of them may name it.
+  function forget({ removed = false } = {}) {
+    generation++;
+    sandboxes = { at: -Infinity, byAddress: removed ? new Map() : sandboxes.byAddress };
+  }
+
+  return {
+    create: async (run) => (forget(), await create(run)),
+    remove: async (net) => {
+      try {
+        return await remove(net);
+      } finally {
+        forget({ removed: true });
+      }
+    },
+    idOf,
+    locate,
+    // For a container that joined a network: its address must be looked up again.
+    forget,
+    connect,
+    peers,
+    networksOf,
+    addressesOf,
+    proxyAddresses,
+  };
 }
 
 // "http://listener:8081" → "listener": the name a sandbox calls it by on its network. None

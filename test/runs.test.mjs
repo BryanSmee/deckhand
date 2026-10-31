@@ -61,7 +61,7 @@ function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {}, answe
     stopping: false,
     runs: [],
     tasks: new Map(),
-    broker: { runOf: () => ({ tokens: new Set(tokens) }), revoke: () => {} },
+    broker: { runOf: () => ({ tokens: new Set(tokens) }), secretsOf: () => [], revoke: () => {} },
     onboarded: { isIssue: () => false },
     brainstorms: { replied: () => {} },
     livePath: (id) => join(dir, `${id}.live.json`),

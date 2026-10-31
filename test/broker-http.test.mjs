@@ -1,49 +1,61 @@
-// What binds a run's secret to its sandbox (broker-http.mjs runAt()): the run's own task's
-// addresses, never another running sandbox's.
+// What finds a connection's run (broker-http.mjs taskWhere()): the ID of the network (or pod)
+// its address is on, as the runner tells now, never a list of addresses kept per run. What binds
+// a run's secret from before tokens to its sandbox (runAt()) is the same.
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { chmodSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { clientAddress, createBrokerHttp, runAt, runFrom } from "../listener/broker-http.mjs";
+import {
+  clientAddress,
+  createBrokerHttp,
+  runAt,
+  runFrom,
+  sandboxAt,
+  taskWhere,
+} from "../listener/broker-http.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
-// Two running tasks, A and B, each with its sandbox's and its engine's addresses.
+// Two running tasks, A and B, on networks net-a and net-b: A's sandbox and its engine, B's
+// sandbox, and the listener on A's. `at`: address → { sandbox, name }, as runner.locate()
+// answers; `asked`: its questions.
 function twoRuns() {
   const broker = createBroker({});
-  const looked = [];
-  const addresses = { a: ["10.1.0.2"], b: ["10.2.0.2"] };
-  const engines = { a: ["10.1.0.3"], b: null };
+  const at = {
+    "10.1.0.2": { sandbox: "net-a", name: "a" },
+    "10.1.0.3": { sandbox: "net-a", name: "a-engine" },
+    "10.1.0.9": { sandbox: "net-a", name: "listener" },
+    "10.2.0.2": { sandbox: "net-b", name: "b" },
+  };
+  const asked = [];
   const runner = {
     proxyAddresses: async () => ["10.0.0.9"],
-    address: async (name) => (looked.push(name), addresses[name].length ? addresses[name] : null),
-    engineAddress: async (name) => engines[name],
+    locate: async (ip) => (asked.push(ip), at[ip] ?? null),
+    sandboxIdOf: async (name, run) => `net-${run}`,
   };
   const task = (name, repo) => ({
     name,
     repo,
-    // Whether it started an engine (runs.mjs launch()).
     live: {
-      secret: broker.register(repo),
+      id: name,
+      secret: broker.register(repo, undefined, { id: name, secret: `${name}-secret` }),
       hosts: ["github.com"],
-      ip: null,
-      engine: !!engines[name],
+      sandbox: `net-${name}`,
     },
   });
   const tasks = new Map([
     ["org/a#1", task("a", "org/a")],
     ["org/b#2", task("b", "org/b")],
   ]);
-  const clock = { t: 1_000_000 };
-  const ctx = { broker, runner, tasks, now: () => clock.t };
+  const ctx = { broker, runner, tasks };
   const runOf = (key) => broker.runOf(tasks.get(key).live.secret);
-  return { ctx, tasks, runOf, looked, addresses, engines, clock };
+  return { ctx, tasks, runOf, at, asked };
 }
 
 test("runAt: a run's record from its own sandbox or engine, not from another sandbox", async () => {
-  const { ctx, runOf, looked } = twoRuns();
+  const { ctx, runOf } = twoRuns();
   const a = runOf("org/a#1");
   assert.equal(await runAt(ctx, a, "10.1.0.2"), true);
   assert.equal(await runAt(ctx, a, "10.1.0.3"), true);
@@ -51,175 +63,102 @@ test("runAt: a run's record from its own sandbox or engine, not from another san
   assert.equal(await runAt(ctx, a, "10.2.0.2"), false);
   assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
   assert.equal(await runAt(ctx, runOf("org/b#2"), "10.1.0.2"), false);
-  // Looked up once per run.
-  assert.deepEqual(looked, ["a", "b"]);
+  // Another container on A's network (the listener, the proxy) isn't A's.
+  assert.equal(await runAt(ctx, a, "10.1.0.9"), false);
   // A record no running task holds (revoked, unknown): nobody's.
   assert.equal(await runAt(ctx, { repo: "org/a" }, "10.1.0.2"), false);
   assert.equal(await runAt(ctx, undefined, "10.1.0.2"), false);
 });
 
-test("runAt: a finished run (finish() cleared its hosts and addresses) is nobody's", async () => {
+test("runAt: a finished run (finish() cleared its hosts) is nobody's", async () => {
   const { ctx, tasks, runOf } = twoRuns();
   const a = runOf("org/a#1");
   assert.equal(await runAt(ctx, a, "10.1.0.2"), true);
-  const live = tasks.get("org/a#1").live;
-  live.hosts = null;
-  live.ip = null;
+  tasks.get("org/a#1").live.hosts = null;
   assert.equal(await runAt(ctx, a, "10.1.0.2"), false);
-  assert.equal(live.ip, null, "not looked up again");
+  assert.equal(await taskWhere(ctx, "10.1.0.2"), null);
 });
 
-test("runAt: an engine started before its sandbox isn't kept as the run's addresses (#517)", async () => {
-  const { ctx, tasks, runOf, addresses, engines, looked } = twoRuns();
-  const live = tasks.get("org/b#2").live;
-  // B's engine runs, its sandbox doesn't exist yet: only the engine has an address.
-  live.engine = true;
-  engines.b = ["10.2.0.3"];
-  addresses.b = [];
-  // Another sandbox connects meanwhile: the broker asks about every task (taskAt(), runFrom()).
-  assert.equal(await runFrom(ctx, "10.9.0.2"), null);
-  assert.equal(live.ip, null, "the engine's address alone isn't kept");
-  assert.deepEqual(live.engineIp, ["10.2.0.3"]);
-  // The engine's own calls are B's.
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.3"), true);
-  // The sandbox starts: its first call is B's, and its addresses are kept from then on.
-  addresses.b = ["10.2.0.2"];
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
-  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
-  looked.length = 0;
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
-  assert.deepEqual(looked, []);
+test("taskWhere: nothing kept per run, so another run's engine starting changes nothing (#517)", async () => {
+  const { ctx, tasks, at, asked } = twoRuns();
+  const b = tasks.get("org/b#2");
+  // B's engine runs before its sandbox does; A's sandbox connects meanwhile.
+  delete at["10.2.0.2"];
+  at["10.2.0.3"] = { sandbox: "net-b", name: "b-engine" };
+  assert.equal((await taskWhere(ctx, "10.1.0.2")).task, tasks.get("org/a#1"));
+  assert.deepEqual(await taskWhere(ctx, "10.2.0.3"), { task: b, engine: true });
+  // B's sandbox starts: its own at once, nothing to look up again.
+  at["10.2.0.2"] = { sandbox: "net-b", name: "b" };
+  assert.deepEqual(await taskWhere(ctx, "10.2.0.2"), { task: b, engine: false });
+  assert.equal((await taskWhere(ctx, "10.1.0.2")).engine, false);
+  // Each question asks the runner, whose cache is its own (runner/networks.mjs locate()); the
+  // runs' live states hold no address.
+  assert.deepEqual(asked, ["10.1.0.2", "10.2.0.3", "10.2.0.2", "10.1.0.2"]);
+  for (const task of tasks.values()) {
+    assert.deepEqual(
+      Object.keys(task.live).filter((k) => /ip/i.test(k)),
+      [],
+    );
+  }
 });
 
-test("runAt: an engine's lookup that fails loses nothing, and keeps nothing (#518)", async () => {
-  const { ctx, tasks, runOf, addresses, engines } = twoRuns();
-  const b = runOf("org/b#2");
-  const live = tasks.get("org/b#2").live;
-  live.engine = true;
-  engines.b = ["10.2.0.3"];
-  addresses.b = [];
-  assert.equal(await runAt(ctx, b, "10.2.0.3"), true);
-  assert.deepEqual(live.engineIp, ["10.2.0.3"]);
-  // The engine's inspection fails once (Docker busy): what was known of it stays.
-  engines.b = null;
-  assert.equal(await runAt(ctx, b, "10.2.0.3"), true);
-  assert.deepEqual(live.engineIp, ["10.2.0.3"]);
-  assert.equal(live.ip, null, "the engine's address alone is never kept");
-  // The sandbox starts while the engine's inspection still fails: both are the run's.
-  addresses.b = ["10.2.0.2"];
-  assert.equal(await runAt(ctx, b, "10.2.0.2"), true);
-  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
-  // Its engine is still told apart: no record for its anonymous calls.
-  assert.equal(await runFrom(ctx, "10.2.0.3"), null);
+test("taskWhere: a run from before tokens has its network's ID looked up once, by its name", async () => {
+  const { ctx, tasks, asked } = twoRuns();
+  const a = tasks.get("org/a#1");
+  a.live.sandbox = null;
+  let looked = 0;
+  const sandboxIdOf = ctx.runner.sandboxIdOf;
+  ctx.runner.sandboxIdOf = async (...args) => (looked++, sandboxIdOf(...args));
+  assert.equal((await taskWhere(ctx, "10.1.0.2")).task, a);
+  assert.equal((await taskWhere(ctx, "10.1.0.3")).task, a);
+  assert.equal(looked, 1);
+  assert.equal(a.live.sandbox, "net-a");
+  assert.equal(asked.length, 2);
 });
 
-test("a run with an engine missed by every lookup so far: its sandbox's address alone isn't kept", async () => {
-  const { ctx, tasks, runOf, engines } = twoRuns();
-  const live = tasks.get("org/b#2").live;
-  live.engine = true;
-  // Its sandbox is up, but its engine's inspection fails (Docker busy).
-  engines.b = null;
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
-  assert.equal(live.ip, null, "kept without the engine, its connections would be nobody's");
-  // The next egress question finds the engine: kept, with both.
-  engines.b = ["10.2.0.3"];
-  assert.equal(await runFrom(ctx, "10.9.0.2"), null);
-  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
-  assert.equal(await runFrom(ctx, "10.2.0.3"), null, "the engine, told apart");
-  assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
-  // A run that started none keeps its sandbox's alone, at once.
-  engines.a = null;
-  const a = tasks.get("org/a#1").live;
-  Object.assign(a, { engine: false, ip: null, engineIp: null });
-  assert.equal(await runAt(ctx, runOf("org/a#1"), "10.1.0.2"), true);
-  assert.deepEqual(a.ip, ["10.1.0.2"]);
-});
-
-test("an engine gone mid-run: its sandbox's kept after 5 s, the engine looked for every 5 s", async () => {
-  const { ctx, tasks, runOf, engines, looked, clock } = twoRuns();
-  const live = tasks.get("org/b#2").live;
-  live.engine = true;
-  engines.b = null;
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
-  assert.equal(live.ip, null);
-  // 5 s on, its engine still missing: its sandbox's are kept, so a question costs no lookup.
+test("taskWhere: a run with tokens still starting is looked up nowhere; an older run's lookup is shared, a miss not asked again at once", async () => {
+  const { ctx, tasks } = twoRuns();
+  let looked = 0;
+  let id = null;
+  ctx.runner.sandboxIdOf = async () => (looked++, id);
+  const clock = { t: 1_000_000 };
+  ctx.now = () => clock.t;
+  // A has tokens, not signed yet (its sandbox starting): no `sandbox`, no secret.
+  const a = tasks.get("org/a#1");
+  a.live.sandbox = null;
+  delete a.live.secret;
+  const questions = Array.from({ length: 50 }, () => taskWhere(ctx, "10.2.0.2"));
+  assert.ok((await Promise.all(questions)).every((w) => w.task === tasks.get("org/b#2")));
+  assert.equal(looked, 0);
+  // B is from before tokens, its network gone: one lookup for many questions, then none for 5 s.
+  const b = tasks.get("org/b#2");
+  b.live.sandbox = null;
+  await Promise.all(Array.from({ length: 20 }, () => taskWhere(ctx, "10.2.0.2")));
+  assert.equal(looked, 1);
+  assert.equal(await taskWhere(ctx, "10.2.0.2"), null);
+  assert.equal(looked, 1);
   clock.t += 5_000;
-  assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
-  assert.deepEqual(live.ip, ["10.2.0.2"]);
-  // Other sandboxes' questions look its engine up again, at most every 5 s.
-  looked.length = 0;
-  clock.t += 1_000;
-  await runFrom(ctx, "10.9.0.2");
-  assert.deepEqual(looked, []);
-  clock.t += 4_000;
-  await runFrom(ctx, "10.9.0.2");
-  assert.deepEqual(looked, ["b"]);
-  // It's back: in the list, and told apart.
-  engines.b = ["10.2.0.3"];
-  clock.t += 5_000;
-  await runFrom(ctx, "10.9.0.2");
-  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
-  assert.equal(await runFrom(ctx, "10.2.0.3"), null);
-  // Then nobody looks it up again.
-  looked.length = 0;
-  clock.t += 60_000;
-  await runFrom(ctx, "10.9.0.2");
-  assert.deepEqual(looked, []);
+  id = "net-b";
+  assert.equal((await taskWhere(ctx, "10.2.0.2")).task, b);
+  assert.equal(looked, 2);
 });
 
-test("a run saved before `engine` was: it may have one, so its sandbox's wait for it", async () => {
-  const { ctx, tasks, runOf, engines } = twoRuns();
-  const live = tasks.get("org/b#2").live;
-  delete live.engine;
-  engines.b = null;
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
-  assert.equal(live.ip, null);
-  engines.b = ["10.2.0.3"];
-  assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
-  assert.deepEqual(live.ip, ["10.2.0.2", "10.2.0.3"]);
-});
-
-test("runAt: calls that miss at once share one lookup, and the limit holds when it finds nothing", async () => {
-  const { ctx, tasks, runOf, addresses, looked, clock } = twoRuns();
-  const a = runOf("org/a#1");
-  assert.equal(await runAt(ctx, a, "10.1.0.2"), true);
-  // A secret replayed from another sandbox, 50 calls at once: one lookup.
-  clock.t += 5_000;
-  looked.length = 0;
-  const answers = await Promise.all(Array.from({ length: 50 }, () => runAt(ctx, a, "10.2.0.2")));
-  assert.ok(answers.every((answer) => answer === false));
-  assert.deepEqual(looked, ["a"]);
-  // Its sandbox gone (before finish()): the lookup finds nothing, and the next waits 5 s anyway.
-  addresses.a = [];
-  clock.t += 5_000;
-  assert.equal(await runAt(ctx, a, "10.2.0.2"), false);
-  assert.equal(await runAt(ctx, a, "10.2.0.2"), false);
-  assert.deepEqual(looked, ["a", "a"]);
-  assert.deepEqual(tasks.get("org/a#1").live.ip, ["10.1.0.2", "10.1.0.3"], "what was kept stays");
-});
-
-test("runAt: an address not among those kept looks them up again, at most every 5 s", async () => {
-  const { ctx, runOf, addresses, looked, clock } = twoRuns();
-  const a = runOf("org/a#1");
-  assert.equal(await runAt(ctx, a, "10.1.0.2"), true);
-  // Another address (a replayed secret, or one the list missed): no again within 5 s.
-  addresses.a = ["10.1.0.2", "10.1.0.4"];
-  looked.length = 0;
-  assert.equal(await runAt(ctx, a, "10.1.0.4"), false);
-  clock.t += 4_999;
-  assert.equal(await runAt(ctx, a, "10.1.0.4"), false);
-  assert.deepEqual(looked, []);
-  // Then looked up again: there now.
-  clock.t += 1;
-  assert.equal(await runAt(ctx, a, "10.1.0.4"), true);
-  assert.deepEqual(looked, ["a"]);
-  // Still another sandbox's address: no, and no lookup before the next 5 s.
-  assert.equal(await runAt(ctx, a, "10.2.0.2"), false);
-  assert.deepEqual(looked, ["a"]);
-  // Asking about every task (an egress question) never looks a kept list up again.
-  clock.t += 60_000;
-  assert.equal(await runFrom(ctx, "10.9.0.2"), null);
-  assert.deepEqual(looked, ["a", "b"]);
+test("sandboxAt: a token binds to its run's sandbox or engine, never the listener or the proxy on its network", async () => {
+  const { ctx, at } = twoRuns();
+  at["10.1.0.8"] = { sandbox: "net-a", name: "egress-1" };
+  assert.equal(await sandboxAt(ctx, "10.1.0.2"), "net-a");
+  assert.equal(await sandboxAt(ctx, "10.1.0.3"), "net-a");
+  assert.equal(await sandboxAt(ctx, "10.1.0.9"), null);
+  assert.equal(await sandboxAt(ctx, "10.1.0.8"), null);
+  // A's token, as the listener's broker checks it (server.mjs): from the proxy's own address on
+  // A's network (a call it made itself, naming no client), refused.
+  const broker = createBroker({ sandboxOf: (ip) => sandboxAt(ctx, ip) });
+  broker.register("org/a", undefined, { id: "a" });
+  ctx.broker = broker;
+  const { token } = broker.issue("a", "net-a");
+  assert.equal((await broker.check(token, "10.1.0.2")).run.id, "a");
+  assert.equal((await broker.check(token, "10.1.0.8")).status, 403);
+  assert.equal((await broker.check(token, "10.1.0.9")).status, 403);
 });
 
 test("runFrom: the record of the running task whose sandbox has the address, never its engine", async () => {
@@ -229,6 +168,7 @@ test("runFrom: the record of the running task whose sandbox has the address, nev
   assert.equal(await runFrom(ctx, "10.1.0.3"), null);
   assert.equal(await runFrom(ctx, "10.2.0.2"), runOf("org/b#2"));
   assert.equal(await runFrom(ctx, "10.3.0.2"), null);
+  assert.equal(await runFrom(ctx, "10.1.0.9"), null);
   // Finished: nobody's.
   tasks.get("org/a#1").live.hosts = null;
   assert.equal(await runFrom(ctx, "10.1.0.2"), null);
@@ -346,8 +286,7 @@ test("egress: the runner's builder and installs answered by the images, an insta
     runner: {
       // The test is the egress proxy.
       proxyAddresses: async () => ["127.0.0.1"],
-      address: async () => ["10.1.0.2"],
-      engineAddress: async () => null,
+      locate: async (ip) => (ip === "10.1.0.2" ? { sandbox: "net-a", name: "a" } : null),
       installing: async (name) => {
         asked++;
         return installing === null ? null : name === "a" && installing;
@@ -374,6 +313,7 @@ test("egress: the runner's builder and installs answered by the images, an insta
           id: "1",
           live: {
             secret: broker.register("org/a"),
+            sandbox: "net-a",
             hosts: ["github.com", "pypi.org"],
             trusted: [],
             record: { agent: "claude" },
@@ -442,8 +382,7 @@ test("egress: the broker's host only for a run's sandbox the proxy forwards, nev
     runner: {
       // The test is the egress proxy.
       proxyAddresses: async () => ["127.0.0.1"],
-      address: async () => ["10.1.0.2"],
-      engineAddress: async () => null,
+      locate: async (ip) => (ip === "10.1.0.2" ? { sandbox: "net-a", name: "a" } : null),
       installing: async () => false,
     },
     // The builder may reach anything: never the broker through the proxy all the same.
@@ -455,7 +394,12 @@ test("egress: the broker's host only for a run's sandbox the proxy forwards, nev
           name: "a",
           repo: "org/a",
           id: "1",
-          live: { secret: broker.register("org/a"), hosts: ["github.com"], trusted: [] },
+          live: {
+            secret: broker.register("org/a"),
+            sandbox: "net-a",
+            hosts: ["github.com"],
+            trusted: [],
+          },
         },
       ],
     ]),
@@ -491,18 +435,22 @@ test("egress: a question between a run's engine start and its sandbox's refuses 
   config.brokerPort = 0;
   config.brokerUrl = "http://127.0.0.1:0";
   const broker = createBroker({});
-  const addresses = { a: ["10.1.0.2"], b: [] };
-  const engines = { a: null, b: ["10.2.0.3"] };
-  const live = (repo) => ({
+  // What runner.locate() answers: B's engine runs, its sandbox doesn't yet.
+  const at = {
+    "10.1.0.2": { sandbox: "net-a", name: "a" },
+    "10.2.0.3": { sandbox: "net-b", name: "b-engine" },
+  };
+  const live = (repo, sandbox) => ({
     secret: broker.register(repo),
+    sandbox,
     hosts: ["github.com", "pypi.org"],
     trusted: [],
     record: { agent: "claude" },
   });
   // B first: a question from A's sandbox looks B up on its way.
   const tasks = new Map([
-    ["org/b#2", { name: "b", repo: "org/b", id: "2", live: { ...live("org/b"), engine: true } }],
-    ["org/a#1", { name: "a", repo: "org/a", id: "1", live: live("org/a") }],
+    ["org/b#2", { name: "b", repo: "org/b", id: "2", live: live("org/b", "net-b") }],
+    ["org/a#1", { name: "a", repo: "org/a", id: "1", live: live("org/a", "net-a") }],
   ]);
   const ctx = {
     config,
@@ -511,8 +459,7 @@ test("egress: a question between a run's engine start and its sandbox's refuses 
     runner: {
       // The test is the egress proxy.
       proxyAddresses: async () => ["127.0.0.1"],
-      address: async (name) => (addresses[name].length ? addresses[name] : null),
-      engineAddress: async (name) => engines[name],
+      locate: async (ip) => at[ip] ?? null,
     },
     images: { egressFor: async () => null },
     tasks,
@@ -524,12 +471,14 @@ test("egress: a question between a run's engine start and its sandbox's refuses 
     (await fetch(`http://127.0.0.1:${config.brokerPort}/egress?ip=${ip}&host=${host}`)).json();
   // B's engine runs, its sandbox doesn't yet, and A's sandbox connects.
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
-  assert.equal(tasks.get("org/b#2").live.ip ?? null, null, "the engine's address alone isn't kept");
-  // B's engine pulls under B's hosts.
-  assert.equal((await ask("10.2.0.3", "pypi.org")).allowed, true);
+  // B's engine pulls under B's hosts, its HTTPS never decrypted.
+  const engine = await ask("10.2.0.3", "pypi.org");
+  assert.equal(engine.allowed, true);
+  assert.equal(engine.decrypt, false);
   // B's sandbox starts: its hosts are its own, and only those.
-  addresses.b = ["10.2.0.2"];
+  at["10.2.0.2"] = { sandbox: "net-b", name: "b" };
   assert.equal((await ask("10.2.0.2", "pypi.org")).allowed, true);
   assert.equal((await ask("10.2.0.2", "evil.example")).allowed, false);
-  assert.deepEqual(tasks.get("org/b#2").live.ip, ["10.2.0.2", "10.2.0.3"]);
+  // And A's are still A's.
+  assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
 });

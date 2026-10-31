@@ -36,7 +36,7 @@ agent_check() {
 # Its config and hooks, written again on every start (the header says why).
 codex_home() {
   mkdir -p "$CODEX_HOME"
-  # Its calls go to the listener (OPENAI_BASE_URL), with the run's secret as its key; without
+  # Its calls go to the listener (OPENAI_BASE_URL), with the run's agent token as its key; without
   # one (by hand), to OpenAI. Nothing else leaves: no analytics, update check or plugins.
   {
     echo "check_for_update_on_startup = false"

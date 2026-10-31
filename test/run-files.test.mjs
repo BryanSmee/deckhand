@@ -11,35 +11,41 @@ import { createBroker } from "../listener/broker.mjs";
 import { clientAddress, createBrokerHttp } from "../listener/broker-http.mjs";
 import { MAX_SHOT, MAX_SHOTS, SHOT_NAME } from "../listener/run-files.mjs";
 import { CLOSE, createInbox } from "../listener/runner/inbox.mjs";
+import { signingKey } from "../listener/run-token.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { listening, serve, tempDir, testConfig } from "./helpers.mjs";
+
+// The sandbox's scripts, deckhand-token among them, on the PATH of those the tests run.
+const sandboxBin = new URL("../sandbox", import.meta.url).pathname;
 
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 const image = (head, size = 64) => Buffer.concat([head, Buffer.alloc(size - head.length)]);
 
-// A listener with two running tasks, A (its sandbox at 127.0.0.1, where the test's requests
-// come from) and B (elsewhere), over `runsDir` and `shotsDir`: what a restart keeps.
-// `secrets`: theirs again, as restart.mjs registers them once more.
-// `ips`: their sandboxes' addresses.
-function listener({ runsDir, shotsDir, secrets = {}, ips = { a: "127.0.0.1", b: "10.2.0.2" } }) {
-  const at = new Map();
+// A listener with two running tasks, A (its sandbox's network at 127.0.0.1, where the test's
+// requests come from) and B (elsewhere), over `runsDir` and `shotsDir`: what a restart keeps.
+// `key`: the broker's signing key, the same after a restart (run-token.mjs signingKey()), as
+// restart.mjs registers the runs once more by their ids. `ips`: their sandboxes' addresses.
+function listener({ runsDir, shotsDir, key, ips = { a: "127.0.0.1", b: "10.2.0.2" } }) {
+  const networks = { [ips.a]: "net-a", [ips.b]: "net-b" };
   const broker = createBroker({
-    sentFrom: async (run, ip) => at.get(run) === ip,
+    key,
+    sandboxOf: async (ip) => networks[ip] ?? null,
     clientOf: (req) => clientAddress(ctx, req),
   });
   const inbox = createInbox({ inboxDir: runsDir });
-  const task = (key, id, ip, shots) => {
-    const secret = broker.register("org/repo", null, { secret: secrets[key] });
-    at.set(broker.runOf(secret), ip);
-    return [key, { name: id, repo: "org/repo", live: { id, secret, shots } }];
+  const tokens = {};
+  const task = (name, id, net, shots) => {
+    broker.register("org/repo", null, { id });
+    tokens[name] = broker.issue(id, net).token;
+    return [name, { name: id, repo: "org/repo", live: { id, shots } }];
   };
   const tasks = new Map([
-    task("a", "run-a", ips.a, "a".repeat(24)),
-    task("b", "run-b", ips.b, "b".repeat(24)),
+    task("a", "run-a", "net-a", "a".repeat(24)),
+    task("b", "run-b", "net-b", "b".repeat(24)),
   ]);
   const config = testConfig();
   const ctx = { config, broker, tasks, runner: inbox, shotsDir, log: () => {} };
-  return { ctx, inbox, secret: (key) => tasks.get(key).live.secret };
+  return { ctx, inbox, secret: (name) => tokens[name] };
 }
 
 // The broker's server, on `port` (0: one the OS picks).
@@ -56,15 +62,16 @@ async function start(t, ctx, port = 0) {
 function fixture(t, ips) {
   const runsDir = tempDir(t, "deckhand-runs-");
   const shotsDir = tempDir(t, "deckhand-shots-");
-  const made = listener({ runsDir, shotsDir, ips });
+  const key = signingKey(tempDir(t, "deckhand-key-"));
+  const made = listener({ runsDir, shotsDir, key, ips });
   made.inbox.write("run-a", "PEM-A", "# Digest A\n");
   made.inbox.write("run-b", "PEM-B", "# Digest B\n");
-  return { runsDir, shotsDir, ...made };
+  return { runsDir, shotsDir, key, ...made };
 }
 
 const auth = (secret) => ({ authorization: `Bearer ${secret}` });
 
-test("a sandbox gets its own run's CA and digest; another run's secret or none is refused", async (t) => {
+test("a sandbox gets its own run's CA and digest; another run's token or none is refused", async (t) => {
   const { ctx, runsDir, secret } = fixture(t);
   const { url } = await start(t, ctx);
   const get = async (path, headers) => {
@@ -73,7 +80,7 @@ test("a sandbox gets its own run's CA and digest; another run's secret or none i
   };
   assert.deepEqual(await get("/run/ca", auth(secret("a"))), [200, "PEM-A"]);
   assert.deepEqual(await get("/run/digest", auth(secret("a"))), [200, "# Digest A\n"]);
-  // B's secret, sent from A's address: B's files stay B's.
+  // B's token, sent from A's network: B's files stay B's.
   for (const path of ["/run/ca", "/run/digest", "/run/inbox?from=0"]) {
     assert.equal((await get(path, auth(secret("b"))))[0], 403, path);
     assert.equal((await get(path, auth("not-a-secret")))[0], 401, path);
@@ -107,25 +114,36 @@ test("the inbox: whole lines after an offset, a long poll woken by a message, a 
 // What a sandbox runs (../sandbox/deckhand-inbox), against a listener that restarts between
 // two messages: each message printed once, then it stops at the close line.
 test("deckhand-inbox over the broker: a listener restart loses and repeats nothing", async (t) => {
-  const { runsDir, shotsDir, ctx, inbox, secret } = fixture(t);
+  const { runsDir, shotsDir, ctx, inbox, secret, key } = fixture(t);
   const first = await start(t, ctx);
   const script = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
+  // The token in its file, as entrypoint.sh writes it.
+  const tokenFile = join(tempDir(t, "deckhand-sandbox-"), "run-token");
+  writeFileSync(tokenFile, `${secret("a")}\n`);
   let printed;
   const firstLine = new Promise((resolve) => (printed = resolve));
   const done = new Promise((resolve, reject) => {
     const child = execFile(
       script,
       [`${first.url}/run/inbox`],
-      { timeout: 20000, env: { ...process.env, DECKHAND_RUN_SECRET: secret("a") } },
+      {
+        timeout: 20000,
+        env: {
+          ...process.env,
+          PATH: `${sandboxBin}:${process.env.PATH}`,
+          DECKHAND_TOKEN_FILE: tokenFile,
+        },
+      },
       (error, out) => (error ? reject(error) : resolve(out)),
     );
     child.stdout.once("data", printed);
   });
   inbox.send("run-a", "one");
   await firstLine;
-  // The listener stops; a new one, on the same port and folders, knows the run's secret again.
+  // The listener stops; a new one, on the same port and folders and with the same key, checks
+  // the run's token again.
   first.stop();
-  const again = listener({ runsDir, shotsDir, secrets: { a: secret("a"), b: secret("b") } });
+  const again = listener({ runsDir, shotsDir, key });
   again.inbox.send("run-a", "two");
   await start(t, again.ctx, first.port);
   again.inbox.send("run-a", "three");
@@ -215,10 +233,14 @@ test("deckhand-files: get fetches a run file, shots uploads new and changed imag
   const shots = join(tmp, "screenshots");
   mkdirSync(shots);
   const script = new URL("../sandbox/deckhand-files", import.meta.url).pathname;
+  // The token in its file, as entrypoint.sh writes it, read again at each request.
+  const tokenFile = join(tmp, "run-token");
+  writeFileSync(tokenFile, secret("a"));
   const env = {
     ...process.env,
+    PATH: `${sandboxBin}:${process.env.PATH}`,
     DECKHAND_BROKER_URL: url,
-    DECKHAND_RUN_SECRET: secret("a"),
+    DECKHAND_TOKEN_FILE: tokenFile,
     SCREENSHOT_DIR: shots,
     TMPDIR: tmp,
   };
@@ -259,13 +281,13 @@ test("deckhand-files: get fetches a run file, shots uploads new and changed imag
   writeFileSync(join(shots, "page.png"), image(PNG, 99));
   await run("shots");
   assert.equal(readFileSync(join(folder, "page.png")).length, 99);
-  // Refused for the sandbox, not the file (another run's secret here, as a listener that
-  // doesn't know the sandbox's address yet answers): tried again next time.
+  // Refused for the sandbox, not the file (another run's token here, as a listener that
+  // doesn't know the sandbox's network yet answers): tried again next time.
   writeFileSync(join(shots, "later.png"), image(PNG));
-  env.DECKHAND_RUN_SECRET = secret("b");
+  writeFileSync(tokenFile, secret("b"));
   await run("shots");
   assert.equal(existsSync(join(folder, "later.png")), false);
-  env.DECKHAND_RUN_SECRET = secret("a");
+  writeFileSync(tokenFile, secret("a"));
   await run("shots");
   assert.equal(existsSync(join(folder, "later.png")), true);
   // A refusal the watcher (or a hook: --log) met first is still told once by the next call
@@ -297,7 +319,12 @@ test("deckhand-inbox: a refusal it keeps getting is said once on stderr", async 
   const { ctx } = fixture(t);
   const { url } = await start(t, ctx);
   const script = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
-  const env = { ...process.env, DECKHAND_RUN_SECRET: "unknown" };
+  const env = {
+    ...process.env,
+    PATH: `${sandboxBin}:${process.env.PATH}`,
+    DECKHAND_TOKEN_FILE: "/nonexistent/run-token",
+    DECKHAND_RUN_SECRET: "unknown",
+  };
   const child = execFile(script, [`${url}/run/inbox`], { env, timeout: 20000 });
   let err = "";
   child.stderr.on("data", (d) => (err += d));

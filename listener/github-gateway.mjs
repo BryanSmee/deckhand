@@ -3,11 +3,11 @@
 // and hands each one here as /relay/<host>/<path> (../proxy/proxy.mjs), REST, GraphQL, clones
 // and fetches alike. Here:
 //
-// - the call's run is found by the secret it sent in place of a token (`GH_TOKEN`, git's
-//   credential helper: ../sandbox/), or by its sandbox's address when it sent none (git's first
-//   request, a download with curl); the secret only works from its own sandbox (broker.mjs
-//   sentBy()), and a finished run's, another sandbox's or a research run's (NO_TOKEN) get
-//   nothing;
+// - the call's run is found by the run token it sent in place of a GitHub token (`GH_TOKEN`,
+//   git's credential helper: ../sandbox/), checked offline (broker.mjs check()), or by its
+//   sandbox's address when it sent none (git's first request, a download with curl); the token
+//   only works from its own sandbox, and a finished run's, another sandbox's or a research
+//   run's (NO_TOKEN) get nothing;
 // - pushes are refused: they go to the git gateway (git-gateway.mjs, pushInsteadOf);
 // - a review's reads of its thread (comments, reviews, review comments) are refused: it reads
 //   only what allowed users wrote, from TASK_DIGEST (reviews.mjs);
@@ -23,7 +23,7 @@
 //   raw.githubusercontent.com, media.githubusercontent.com, patch-diff.githubusercontent.com),
 //   relayed here for such a run only (broker-http.mjs), and sent on anonymously: they never get
 //   a token, nor count towards its calls in flight, as when they were plain hosts;
-// - every write's body is redacted (the run's secret, the operator's credentials, the tokens
+// - every write's body is redacted (the run's tokens, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
 // - the call goes on with a token minted for the run's repo: a write that passed its checks gets
@@ -34,7 +34,7 @@
 //   (ACTIONS_LOGS).
 //
 // Served on the broker's port, which only the runs' networks reach.
-import { addressOf, NOT_ITS_SANDBOX } from "./broker.mjs";
+import { addressOf } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
 import { NO_TOKEN, PROJECT_READ, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
@@ -175,8 +175,8 @@ export const ROUTING_HEADERS = [
   "x-method-override",
 ];
 
-// The secret a call sent in place of a token: `token <secret>` (gh), `Bearer <secret>` or Basic
-// with it as the password (git). Undefined without an Authorization header; "" for one that
+// The run token (or a run's secret from before tokens) a call sent in place of a GitHub token:
+// `token <token>` (gh), `Bearer <token>` or Basic with it as the password (git). Undefined without an Authorization header; "" for one that
 // holds none.
 export function secretOf(header) {
   if (!header) return undefined;
@@ -286,7 +286,7 @@ function readBody(req, max, idleMs, clock) {
 }
 
 export function createGithubGateway({
-  broker, // broker.mjs: the run a secret belongs to
+  broker, // broker.mjs: the run a token belongs to
   app, // () => the GitHub App (github-app.mjs), or null before /setup
   api, // the listener's GITHUB_API
   web, // its GITHUB_URL
@@ -304,7 +304,7 @@ export function createGithubGateway({
   // address → the live run whose sandbox has it (never its engine), or null: a call without a
   // secret (broker-http.mjs runFrom()).
   runFrom = async () => null,
-  // run → the secrets its writes must not carry, besides its tokens: its own secret and the
+  // run → the secrets its writes must not carry, besides its GitHub tokens: its own tokens (or secret) and the
   // operator's credentials (secrets.mjs operatorSecrets()).
   secrets = () => [],
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
@@ -683,9 +683,9 @@ export function createGithubGateway({
       run = ip ? await runFrom(ip) : null;
       if (!run) return (fail(res, 401, "unknown or finished run"), null);
     } else {
-      run = broker.runOf(secret);
-      if (!run) return (fail(res, 401, "unknown or finished run"), null);
-      if (!(await broker.sentBy(run, req, ip))) return (fail(res, 403, NOT_ITS_SANDBOX), null);
+      const checked = await broker.check(secret, ip);
+      if (!checked.run) return (fail(res, checked.status, checked.message), null);
+      run = checked.run;
     }
     if (run.extra === NO_TOKEN) {
       return (fail(res, 403, "this run gets nothing from GitHub"), null);

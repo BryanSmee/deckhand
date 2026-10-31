@@ -389,7 +389,8 @@ export function createKubernetesRunner({
 
   // `spec`: sandboxSpec()'s. → { engine: null }: no engine here.
   async function start(spec) {
-    const { run, name, labels = {}, env: values = {}, engine, ca, digest, volumes = [] } = spec;
+    const { run, name, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
+    const { volumes = [] } = spec;
     if (engine) throw new Error("the kubernetes runner runs no container engine");
     for (const v of volumes) {
       // A cache's claim is images.mjs caches()'s, made only with a class to make it of.
@@ -399,12 +400,6 @@ export function createKubernetesRunner({
         );
       }
     }
-    // Unset values stay unset in the sandbox, as under Docker.
-    const env = Object.fromEntries(
-      Object.entries(values)
-        .filter(([, v]) => v !== undefined)
-        .map(([k, v]) => [k, String(v)]),
-    );
     inbox.write(run, ca, digest);
     const podLabels = { ...owner, "deckhand.run": labelValue(run), [ROLE]: SANDBOX };
     const made = []; // what start() created, removed again if it fails
@@ -417,19 +412,10 @@ export function createKubernetesRunner({
       }
       const agentInit = await agentInstall(volumes.find((v) => v.kind === "agent"));
       const secret = secretName(run);
-      await api.create("secrets", {
-        apiVersion: "v1",
-        kind: "Secret",
-        metadata: {
-          name: secret,
-          labels: { ...owner, "deckhand.run": labelValue(run), [ROLE]: ENV },
-          annotations: { "deckhand.run": run },
-        },
-        type: "Opaque",
-        stringData: env,
-      });
-      made.push(`secrets/${secret}`);
-      await api.create(
+      // The pod first: the run's tokens are bound to its UID (../sandbox-spec.mjs tokenEnv()).
+      // Its container waits for the Secret it reads (CreateContainerConfigError, which the
+      // kubelet retries), made right after.
+      const pod = await api.create(
         "pods",
         podSpec(spec, {
           pod: kubeName(name),
@@ -447,6 +433,28 @@ export function createKubernetesRunner({
           agentInit,
         }),
       );
+      made.push(podPath(name));
+      // Its address, once it has one, may have been asked about meanwhile: nobody's then.
+      forgetUids();
+      const bound = tokens ? await tokens(pod?.metadata?.uid) : {};
+      // Unset values stay unset in the sandbox, as under Docker.
+      const env = Object.fromEntries(
+        Object.entries({ ...bound, ...values })
+          .filter(([, v]) => v !== undefined)
+          .map(([k, v]) => [k, String(v)]),
+      );
+      await api.create("secrets", {
+        apiVersion: "v1",
+        kind: "Secret",
+        metadata: {
+          name: secret,
+          labels: { ...owner, "deckhand.run": labelValue(run), [ROLE]: ENV },
+          annotations: { "deckhand.run": run },
+        },
+        type: "Opaque",
+        stringData: env,
+      });
+      made.push(`secrets/${secret}`);
     } catch (error) {
       for (const path of made.reverse()) {
         await api.remove(path).catch((e) => log(`Removing ${path}: ${e.message}`));
@@ -765,6 +773,8 @@ export function createKubernetesRunner({
     const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
     const grace = pod && running(pod) ? KILL_GRACE_S : 0;
     await api.remove(podPath(name), { gracePeriodSeconds: grace });
+    // Its address no longer names it; the others' answers are kept as they were.
+    forgetUids({ removed: pod?.metadata?.uid ?? true });
     if (which) await api.remove(`secrets/${secretName(which)}`);
     if (run) inbox.remove(run);
   }
@@ -793,12 +803,85 @@ export function createKubernetesRunner({
     return !init?.state?.terminated;
   }
 
-  // Its pod's IPs, what the egress proxy and the broker see it call from.
-  async function address(name) {
-    const status = (await api.find(podPath(name)))?.status;
-    const found = (status?.podIPs ?? []).map((p) => p.ip).filter(Boolean);
-    if (!found.length && status?.podIP) found.push(status.podIP);
-    return found.length ? found : null;
+  // The UID of the sandbox's pod that has an IP, or null: what the run's tokens are bound to
+  // (../broker.mjs check()). A UID, not the pod's name (each of the issue's runs has the same)
+  // nor its IP (reused). Cached for PROXY_TTL_MS, as each call to the broker asks, an address
+  // with no sandbox for PROXY_RETRY_MS (a token replayed from elsewhere asks the API that often
+  // at most), and looked up again as a sandbox starts (what was known kept, should that lookup
+  // fail) or forgotten as one is removed. One lookup per address at a time: the connections that
+  // ask meanwhile share it. An API error answers what was known, and is asked again after
+  // PROXY_RETRY_MS: a blip mustn't refuse every sandbox, nor cost an API call per connection.
+  // Known means answered by the API within PROXY_TTL_MS (`goodAt`), never carried forward by
+  // failures: past that, an outage fails closed (nobody's), as a pod gone without remove()
+  // (evicted, its node lost) may have left its address to another run's.
+  let uids = new Map(); // ip → { uid, at, goodAt, failed }
+  const fresh = (k) => !!k?.uid && now() - (k.goodAt ?? -Infinity) < PROXY_TTL_MS;
+  const looking = new Map(); // ip → Promise<uid>
+  let uidsGen = 0; // counts forgetUids()
+  // `removed`: the UID of the pod removed (true: unknown, all of them go).
+  function forgetUids({ removed = null } = {}) {
+    uidsGen++;
+    looking.clear();
+    if (removed === true) return void (uids = new Map());
+    // Every answer looked up again; the sandboxes known (fresh()) kept for a failed lookup, not
+    // the addresses that had none (the new pod may have one of them now) nor the removed pod's.
+    uids = new Map(
+      [...uids]
+        .filter(([, k]) => fresh(k) && k.uid !== removed)
+        .map(([ip, k]) => [ip, { ...k, at: -Infinity }]),
+    );
+  }
+  async function sandboxOf(ip) {
+    const known = uids.get(ip);
+    const age = known ? now() - known.at : Infinity;
+    const ttl = known?.uid && !known.failed ? PROXY_TTL_MS : PROXY_RETRY_MS;
+    if (known && age < ttl) return known.uid;
+    if (!looking.has(ip)) {
+      looking.set(
+        ip,
+        podUid(ip).finally(() => looking.delete(ip)),
+      );
+    }
+    return looking.get(ip);
+  }
+
+  // The API's answer for sandboxOf(), cached.
+  async function podUid(ip) {
+    const seen = uidsGen;
+    let uid = null;
+    try {
+      const { items = [] } = await api.get("pods", {
+        labelSelector: selector(SANDBOX),
+        fieldSelector: `status.podIP=${ip}`,
+      });
+      // Checked here too: the API's answer for that address, and no other.
+      const at = (p) => p.status?.podIP === ip || (p.status?.podIPs ?? []).some((a) => a.ip === ip);
+      const live = items.filter((p) => at(p) && !p.metadata?.deletionTimestamp && running(p));
+      uid = live.length === 1 ? (live[0].metadata?.uid ?? null) : null;
+    } catch (error) {
+      // What was known, if the API said so within PROXY_TTL_MS, until PROXY_RETRY_MS on.
+      log(`Looking up the sandbox at ${ip}: ${error.message}`);
+      const known = uids.get(ip);
+      const kept = fresh(known) ? known.uid : null;
+      if (seen === uidsGen) {
+        uids.set(ip, { uid: kept, at: now(), goodAt: known?.goodAt, failed: true });
+      }
+      return kept;
+    }
+    if (uids.size > 1000) uids = new Map();
+    // Unless a sandbox started or went meanwhile: its answer would be older than that.
+    if (seen === uidsGen) uids.set(ip, { uid, at: now(), goodAt: now() });
+    return uid;
+  }
+
+  // The UID of the task's pod, or null: a run's from before tokens (../broker-http.mjs).
+  async function sandboxIdOf(name) {
+    try {
+      return (await api.find(podPath(name)))?.metadata?.uid ?? null;
+    } catch (error) {
+      log(`${name}: its pod's UID: ${error.message}`);
+      return null;
+    }
   }
 
   // The IPs of the pods behind the egress Service, ready or not (one starting still relays).
@@ -851,11 +934,15 @@ export function createKubernetesRunner({
     kill,
     remove,
     hasSession,
-    address,
-    engineAddress: async () => null,
     installing,
     relink,
     proxyAddresses,
+    // The pod at that address is the sandbox: no other container of a run has one of its own.
+    locate: async (ip) => {
+      const sandbox = await sandboxOf(ip);
+      return sandbox ? { sandbox, name: null } : null;
+    },
+    sandboxIdOf,
   };
 }
 

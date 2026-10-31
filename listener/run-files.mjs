@@ -1,6 +1,6 @@
 // A run's files, on the broker's port (broker-http.mjs) rather than in volumes shared with its
 // sandbox, which a cluster would need ReadWriteMany storage for (#393). The sandbox sends its
-// run's secret (`Authorization: Bearer`), from its own address only (broker.mjs sentBy()), and
+// run token (`Authorization: Bearer`), from its own sandbox only (broker.mjs check()), and
 // gets its own run's files only:
 //
 //   GET /run/inbox?from=<offset>  the inbox's whole lines after byte `offset`, waiting for one
@@ -15,7 +15,6 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { NOT_ITS_SANDBOX } from "./broker.mjs";
 import { sendJson } from "./web.mjs";
 
 // A screenshot's size, and all of a run's: they are public once linked, and on the
@@ -48,13 +47,11 @@ export function createRunFiles(ctx, { taskOf }) {
 
   // The live run a request comes from, or null once refused.
   async function admit(req, res) {
-    const [scheme, secret] = (req.headers.authorization ?? "").split(" ");
-    const run = scheme === "Bearer" ? ctx.broker.runOf(secret) : undefined;
-    const live = run && liveOf(run);
+    const [scheme, token] = (req.headers.authorization ?? "").split(" ");
+    const { run, status, message } = await ctx.broker.check(scheme === "Bearer" ? token : "", req);
+    if (!run) return (sendJson(res, { message }, status), null);
+    const live = liveOf(run);
     if (!live) return (sendJson(res, { message: "unknown or finished run" }, 401), null);
-    if (!(await ctx.broker.sentBy(run, req))) {
-      return (sendJson(res, { message: NOT_ITS_SANDBOX }, 403), null);
-    }
     return live;
   }
 

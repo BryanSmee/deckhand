@@ -48,7 +48,7 @@ export function createPreparation(ctx) {
     // A fork's code may run in it: nothing it can leave for the repo's later runs, which
     // trust what they find (prepareImage(), sandbox-spec.mjs).
     live.fork = fork;
-    ctx.broker.allow(live.secret, live.branches, fork);
+    ctx.broker.allow(live.id, live.branches, fork);
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });
@@ -98,7 +98,7 @@ export function createPreparation(ctx) {
       );
     }
     note(`Thread: #${number}, allowed users' and Deckhand's comments only`);
-    return redact(text, [task.live.secret, ...operatorSecrets(ctx)]);
+    return redact(text, operatorSecrets(ctx));
   }
 
   // A research run (modes.mjs OPEN): any public host, and nothing of the repo's (access.mjs
@@ -164,7 +164,7 @@ export function createPreparation(ctx) {
     ];
     if (!kept.length) parts.push("None.");
     note(`Thread: #${number}, ${kept.length} of ${comments.length} comment(s)`);
-    return redact(parts.join("\n\n") + "\n", [task.live.secret, ...operatorSecrets(ctx)]);
+    return redact(parts.join("\n\n") + "\n", operatorSecrets(ctx));
   }
 
   // An analysis's digest (analysis.mjs), built now from the runs picked when it was asked
@@ -194,7 +194,7 @@ export function createPreparation(ctx) {
     note(
       `Run digest: ${included.length} run(s), ${Math.round(Buffer.byteLength(text) / 1000)} KB${left.length ? `, ${left.length} left out` : ""}`,
     );
-    return redact(text, [task.live.secret, ...operatorSecrets(ctx)]);
+    return redact(text, operatorSecrets(ctx));
   }
 
   // Left over from a listener that lost track of it: wait for it, then make room.
@@ -285,7 +285,7 @@ export function createPreparation(ctx) {
   // is a fork's; `pulls`: number → the pull request, as GitHub has it, for imageSource().
   async function pushBranches(task, items) {
     const pulls = new Map();
-    if (!ctx.broker.runOf(task.live.secret)?.push) return { branches: [], fork: false, pulls };
+    if (!ctx.broker.runOf(task.live.id)?.push) return { branches: [], fork: false, pulls };
     let fork = false;
     const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
     const numbers = new Set(items.map((i) => i.replyTo));

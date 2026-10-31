@@ -38,7 +38,7 @@ const LINK = `mutation($input: CreateLinkedBranchInput!) {
 const refPath = (name) => name.split("/").map(encodeURIComponent).join("/");
 
 // `github`, `graphql`: the listener's calls (github.mjs); `policies`: policies.mjs, null without;
-// `runOf(secret)`: the broker's run; `decided(key, entry)`: keeps a decision for the task's page
+// `runOf(id)`: the broker's run; `decided(key, entry)`: keeps a decision for the task's page
 // (decisions.mjs).
 export function createLinkedBranches({ github, graphql, policies, runOf, decided, log }) {
   // `task`'s run, about to start → the branch it created and linked, the issue's one branch
@@ -50,7 +50,7 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
     if (task.kind !== "issue" || live.light || live.fork || !live.branches.includes(pattern)) {
       return null;
     }
-    const run = runOf(live.secret);
+    const run = runOf(live.id);
     if (!run?.push) return null;
     try {
       const existing = await getJson(

@@ -32,7 +32,6 @@ function runOf({
     light,
     fork,
     shots: "f".repeat(24),
-    secret: "s".repeat(32),
     handoff: false,
     record: { provider: null, model: "opus", effort: "high" },
   };
@@ -44,7 +43,14 @@ function runOf({
     name: "deckhand-org-app-12",
     live,
   };
-  return { config, task, agent, bot, publicUrl: "https://deckhand.example" };
+  // Its tokens, as the broker signs them for `sandbox` (broker.mjs issue()).
+  const broker = {
+    issue: (id, sandbox) => ({
+      token: `run-${id}@${sandbox}`,
+      agentToken: `agent-${id}@${sandbox}`,
+    }),
+  };
+  return { config, task, agent, bot, publicUrl: "https://deckhand.example", broker };
 }
 
 const parts = {
@@ -173,9 +179,29 @@ for (const [name, [run, { caches, mounts }]] of Object.entries(CASES)) {
   });
 }
 
-test("sandboxEnv: the run's secret in place of a credential, its prompt, mode and setup", () => {
+test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a credential", () => {
+  const run = runOf();
+  run.config = { ...config, claudeCredential: "CLAUDE_CODE_OAUTH_TOKEN" };
+  const spec = sandboxSpec(run, "p", "m", { ...parts, caches: [], mounts: [] });
+  // Nothing of them before the runner knows where the sandbox runs.
+  assert.ok(!Object.keys(spec.env).some((k) => /TOKEN|SECRET|API_KEY/.test(k)));
+  const env = spec.tokens("net-1");
+  assert.equal(env.DECKHAND_RUN_TOKEN, "run-deckhand-org-app-12-1@net-1");
+  assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "agent-deckhand-org-app-12-1@net-1");
+  assert.equal(env.ANTHROPIC_BASE_URL, "http://listener:8081/anthropic");
+  // Kept on the live run, for its output's redaction after a restart.
+  assert.equal(run.task.live.agentToken, "agent-deckhand-org-app-12-1@net-1");
+  const codex = sandboxSpec(runOf({ agent: AGENTS.codex }), "p", "m", {
+    ...parts,
+    caches: [],
+    mounts: [],
+  });
+  assert.equal(codex.tokens("net-2").OPENAI_API_KEY, "agent-deckhand-org-app-12-1@net-2");
+});
+
+test("sandboxEnv: its prompt, mode and setup", () => {
   const env = sandboxEnv(runOf(), "the prompt", "the message", parts.settings, null);
-  assert.equal(env.DECKHAND_RUN_SECRET, "s".repeat(32));
+  assert.equal(env.DECKHAND_RUN_SECRET, undefined);
   assert.equal(env.SANDBOX_AGENT, "claude");
   assert.equal(env.SANDBOX_PROVIDER, "anthropic");
   assert.equal(env.CLAUDE_CODE_VERSION, "2.0.0");
@@ -209,7 +235,6 @@ test("sandboxEnv: a wrap-up is a brainstorm, light runs skip setup, an engine is
   assert.match(engine.NO_PROXY, /engine/);
   const codex = sandboxEnv(runOf({ agent: AGENTS.codex }), "p", "m", parts.settings, null);
   assert.equal(codex.SANDBOX_PROVIDER, "openai");
-  assert.equal(codex.OPENAI_API_KEY, "s".repeat(32));
   assert.equal(codex.CODEX_VERSION, "0.50.0");
 });
 

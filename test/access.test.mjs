@@ -4,6 +4,7 @@ import { mkdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  egressCache,
   engineFor,
   grantedAccess,
   recheckMounts,
@@ -256,4 +257,36 @@ test("research: any public host, private addresses for the mandatory hosts only,
   assert.ok(!work.hosts.includes("*"));
   assert.ok(work.hosts.includes("nas.lan.example"));
   assert.equal(egressPolicy("example.org", work.hosts, work.trusted).allowed, false);
+});
+
+test("egressCache: an agent whose calls the proxy relays gets the CA, a research run's too; none on an API key", async () => {
+  const agy = agentFor("antigravity");
+  const notes = [];
+  const note = (line) => notes.push(line);
+  const grant = { cachedHosts: [] };
+  // A research run (no GitHub) on a Google AI plan's login: its agent's calls are decrypted.
+  const plan = { agyCredential: "AGY_AUTH_FILE" };
+  assert.deepEqual(await egressCache(grant, async () => "PEM", note, agy, plan, false), {
+    ca: "PEM",
+    cached: [],
+  });
+  // Without the CA it can't run: said, rather than every call failing on TLS.
+  await assert.rejects(
+    egressCache(grant, async () => null, note, agy, plan, false),
+    /the egress proxy has no CA, and its calls to its provider go through it/,
+  );
+  // On a Gemini API key its calls go to the listener directly: nothing to trust.
+  const key = { agyCredential: "GEMINI_API_KEY", brokerUrl: "http://listener:8081" };
+  assert.deepEqual(await egressCache(grant, async () => "PEM", note, agy, key, false), {
+    ca: null,
+    cached: [],
+  });
+  // Claude Code relays nothing.
+  assert.deepEqual(
+    await egressCache(grant, async () => "PEM", note, agentFor("claude"), {}, false),
+    {
+      ca: null,
+      cached: [],
+    },
+  );
 });

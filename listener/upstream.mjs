@@ -1,10 +1,10 @@
 // What the listener's API endpoints share (anthropic.mjs, openai.mjs): a sandbox's call goes
-// on to the provider with the operator's credential in place of the run's secret, and the
+// on to the provider with the operator's credential in place of the run's agent token, and the
 // answer streams back as it comes.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { NOT_ITS_SANDBOX } from "./broker.mjs";
 import { redact } from "./redact.mjs";
+import { AGENT_AUDIENCE } from "./run-token.mjs";
 import { sendJson } from "./web.mjs";
 
 // Plans' credentials (`claude setup-token`, `codex login`, `agy`'s sign-in): logged at start,
@@ -222,7 +222,7 @@ export function credentialFailure(what, error) {
   return `the operator's login for ${what} ${why}: see the listener's log`;
 }
 
-// A provider's endpoint: each call's run from its secret, then where it goes and with which
+// A provider's endpoint: each call's run from its agent token, then where it goes and with which
 // credential, then on to the provider. What differs between providers:
 //
 //   pathRe       the API paths a sandbox may call, the path under the base URL its first group:
@@ -234,7 +234,8 @@ export function credentialFailure(what, error) {
 //   errorShape   { body(type, message), auth, forbidden, unavailable, notFound, busy }: errors in the
 //                provider's shape and its types for each, so the agent shows them as such
 //   notApi       what a refused path says
-//   secretOf     req → the run's secret, from whichever header the agent sent it in
+//   secretOf     req → the run's agent token (or its secret, from before tokens), from
+//                whichever header the agent sent it in
 //   routeOf      run → { base, what, missing }: the provider's base URL (baseOf()), its name in
 //                messages, and why the operator's credential is missing, if it is
 //   drop         request headers the listener sets rather than the sandbox
@@ -244,10 +245,8 @@ export function credentialFailure(what, error) {
 //   secrets      () → the credential's values, redacted from that log line
 //   answered     (run, status, headers, answer): the provider's status, once it answers, with
 //                the request's headers and the answer's
-//   bound        whether a secret only works from its run's sandbox (broker.mjs sentBy()): only
-//                for calls that come straight from it, not through the egress proxy (google.mjs)
 export function createApiProxy({
-  broker, // broker.mjs: the run a secret belongs to
+  broker, // broker.mjs: the run a token belongs to
   pathRe,
   routes,
   errorShape,
@@ -257,7 +256,6 @@ export function createApiProxy({
   drop,
   authHeaders,
   answered = () => {},
-  bound = true,
   secrets = () => [],
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
@@ -275,19 +273,20 @@ export function createApiProxy({
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://broker");
-    const run = broker.runOf(secretOf(req));
-    if (!run) return fail(res, 401, errorShape.auth, "unknown or finished run");
-    // Before anything that writes to the run (its apiError, its notes): a leaked secret
+    // Before anything that writes to the run (its apiError, its notes): a leaked token
     // mustn't spend its budget, nor change what its reply says.
-    if (bound && !(await broker.sentBy(run, req))) {
-      return fail(res, 403, errorShape.forbidden, NOT_ITS_SANDBOX);
+    const checked = await broker.check(secretOf(req), req, AGENT_AUDIENCE);
+    const { run } = checked;
+    if (!run) {
+      const type = checked.status === 403 ? errorShape.forbidden : errorShape.auth;
+      return fail(res, checked.status, type, checked.message);
     }
     const { base, what, missing } = routeOf(run);
     if (missing) return failRun(run, res, 503, errorShape.unavailable, missing);
     const path = pathRe.exec(req.url.split("?")[0])?.[1];
     if (!path || !routes.some(([method, re]) => method === req.method && re.test(path))) {
       // A newer agent that needs another path shows up in the run's log, not only as a 404.
-      // The path is the sandbox's to choose: without the run's secret or tokens, as its output.
+      // The path is the sandbox's to choose: without the run's token or GitHub tokens, as its output.
       const call = redact(`${req.method} ${req.url.split("?")[0]}`, [
         secretOf(req),
         ...run.tokens,

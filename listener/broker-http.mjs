@@ -4,8 +4,8 @@
 // (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
 // (git-gateway.mjs) and the agents' API endpoints
 // (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
-// to), and the runs' files: inbox, CA, digest and screenshots (run-files.mjs). The runs'
-// secrets are the broker's (broker.mjs).
+// to), the runs' files: inbox, CA, digest and screenshots (run-files.mjs), and their tokens'
+// renewal (POST /run/token). The runs' tokens are the broker's (broker.mjs).
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
@@ -13,6 +13,7 @@ import { brokerHost, egressPolicy, githubContent, githubHosts, matchHost } from 
 import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
+import { engineName } from "./runner/engine.mjs";
 import { drainable } from "./drain.mjs";
 import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "./web.mjs";
@@ -45,64 +46,50 @@ function oldPrAnswer(match) {
   };
 }
 
-// How often a run's kept addresses are looked up again: for a secret sent from an address that
-// isn't among them (runAt()), or while its engine's is missing. And how long a sandbox's are
-// kept waiting for its engine's.
-const ADDRESS_RETRY_MS = 5_000;
-
-// Whether the running task's sandbox (or its engine) has address `ip`. Addresses are kept once
-// they hold the sandbox's own, and forgotten once it exits (runs.mjs finish()): Docker may give
-// the address to another sandbox. Until then they are looked up at each question: a run with an
-// engine starts it before its sandbox, and the broker asks about every task whenever any
-// sandbox connects (taskAt(), runFrom()), so a list kept then would hold the engine's alone and
-// refuse the sandbox for good (#517). A run that may have an engine waits for the engine's too,
-// or its engine's connections would be nobody's, but ADDRESS_RETRY_MS at most (an engine gone
-// mid-run is never found): then its list is kept, and looked up again at most every
-// ADDRESS_RETRY_MS until the engine's is in it. `again`: an address not among those kept looks
-// them up again, at most every ADDRESS_RETRY_MS, before the answer is no. One lookup at a time
-// per run: the calls that miss meanwhile share it.
-async function hasAddress(ctx, task, ip, { again = false } = {}) {
+// The ID of the network (or pod) of the task's sandbox, or null: what its tokens are bound to
+// (broker.mjs), which tokenEnv() kept on its live state when it signed them. A run from before
+// tokens, picked up from a listener that didn't keep it, has it looked up once by its
+// network's name (or its pod's): an ID is never reused, so keeping it is no list of addresses
+// to go stale. One lookup at a time, and one that found nothing (its network gone) not again
+// for SANDBOX_RETRY_MS: every connection of every sandbox asks about every task. A run with
+// tokens has none until they are signed (it is starting): nothing to look up. None once it
+// has ended (finish() clears its hosts).
+const SANDBOX_RETRY_MS = 5_000;
+async function sandboxOfTask(ctx, task) {
   const live = task.live;
-  if (!live?.hosts) return false;
-  if (live.ip?.includes(ip)) return true;
-  if (!live.looking) {
+  if (!live?.hosts) return null;
+  if (!live.sandbox && live.secret) {
     const now = (ctx.now ?? Date.now)();
-    const retry = again || noEngineYet(live);
-    if (live.ip && !(retry && now - (live.ipAt ?? 0) >= ADDRESS_RETRY_MS)) return false;
-    // From the lookup's start, whatever it finds: parallel calls, or a sandbox already gone,
-    // don't get around the limit.
-    if (live.ip) live.ipAt = now;
-    live.looking = lookUp(ctx, task, live, now).finally(() => (live.looking = null));
+    if (!live.sandboxLooking && !(now - (live.sandboxMissedAt ?? -Infinity) < SANDBOX_RETRY_MS)) {
+      live.sandboxLooking = Promise.resolve(ctx.runner.sandboxIdOf?.(task.name, live.id))
+        .catch(() => null)
+        .then((id) => {
+          if (id) live.sandbox ??= id;
+          else live.sandboxMissedAt = (ctx.now ?? Date.now)();
+        })
+        .finally(() => (live.sandboxLooking = null));
+    }
+    await live.sandboxLooking;
   }
-  const found = await live.looking;
-  return task.live === live && !!live.hosts && found.includes(ip);
+  return task.live === live && live.hosts ? (live.sandbox ?? null) : null;
 }
 
-// Whether the run has an engine, or may have one, whose address isn't known yet. `live.engine`
-// says whether it started one (runs.mjs launch()); a run saved by a listener from before it
-// was there may have one, so it's treated as one whose engine is missing: kept 5 s after its
-// sandbox's address, then looked up every 5 s until it ends. That costs the runs going across
-// that one update, Kubernetes' included, and only them.
-const noEngineYet = (live) => live.engine !== false && !live.engineIp?.length;
-
-// The run's addresses now → its sandbox's and its engine's, kept in `live` once complete, or
-// once its sandbox's have waited ADDRESS_RETRY_MS for its engine's.
-async function lookUp(ctx, task, live, now) {
-  // One inspection each, so they can't disagree. The engine's count as the run's: its pulls and
-  // containers go out under the run's hosts.
-  const own = (await ctx.runner.address(task.name)) ?? [];
-  const engine = await ctx.runner.engineAddress(task.name);
-  if (task.live !== live || !live.hosts) return [];
-  // Kept as soon as known, never lost to a lookup that failed: the engine's connections are
-  // told apart by it (no decrypted HTTPS, no token).
-  if (engine?.length) live.engineIp = engine;
-  const found = [...own, ...(live.engineIp ?? [])];
-  if (own.length) live.ownAt ??= now;
-  if (own.length && (!noEngineYet(live) || now - live.ownAt >= ADDRESS_RETRY_MS)) {
-    live.ip = found;
-    live.ipAt = now;
+// The running task a connection from `ip` belongs to, by the ID of the network (or pod) the
+// address is on, as the runner tells now (runner.locate()), with whether it is the task's
+// sandbox or its container engine; null for any other container there (the listener's, the
+// proxy's) or none. Nothing per run is kept: a run whose engine starts before its sandbox, or
+// another run's starting meanwhile, changes nothing for the others (#517).
+export async function taskWhere(ctx, ip) {
+  const at = ip ? await ctx.runner.locate?.(ip) : null;
+  if (!at?.sandbox) return null;
+  for (const task of ctx.tasks.values()) {
+    if ((await sandboxOfTask(ctx, task)) !== at.sandbox) continue;
+    if (at.name === engineName(task.name)) return { task, engine: true };
+    // Kubernetes names no container: the pod at that address is the sandbox.
+    if (at.name == null || at.name === task.name) return { task, engine: false };
+    return null;
   }
-  return found;
+  return null;
 }
 
 // The header in which the egress proxy names the sandbox a call it relays came from
@@ -128,38 +115,43 @@ export async function clientAddress(ctx, req) {
   return addressOf(req);
 }
 
-// The broker's record of the running task whose sandbox has address `ip`, or null: what a call
-// without a secret is bound to (github-gateway.mjs). Never its engine's: the builds and
-// containers there don't get the run's secret, and mustn't get its GitHub token without it.
+// The ID of the network (or pod) a call from `ip` binds it to (broker.mjs `sandboxOf`), or
+// null: only from a running task's sandbox or its engine, never from another container on that
+// network, the listener's or the egress proxy's (a call the proxy made itself, with no client
+// to name, to a host the operator named that leads back here).
+export async function sandboxAt(ctx, ip) {
+  const where = await taskWhere(ctx, ip);
+  return where ? (where.task.live.sandbox ?? null) : null;
+}
+
+// The broker's record of the running task whose sandbox `ip` is, or null: what a call without a
+// token is bound to (github-gateway.mjs). Never its engine's: the builds and containers there
+// don't get the run's token, and mustn't get its GitHub token without it.
 export async function runFrom(ctx, ip) {
-  for (const task of ctx.tasks.values()) {
-    if (task.live?.secret && (await hasAddress(ctx, task, ip))) {
-      if (task.live.engineIp?.includes(ip)) return null;
-      return ctx.broker.runOf(task.live.secret) ?? null;
-    }
-  }
-  return null;
+  const where = await taskWhere(ctx, ip);
+  if (!where || where.engine) return null;
+  return ctx.broker.runOf(where.task.live.id) ?? null;
 }
 
 // Whether `ip` is the sandbox's (or engine's) of the running task the broker's `run` is: what
-// binds a run's secret to its sandbox (broker.mjs sentBy()). The run is found by its record,
-// so no secret is compared here.
+// binds the secret of a run from before tokens to its sandbox (broker.mjs sentBy()), by its
+// network's ID as a token is. The run is found by its record, so no secret is compared here.
 export async function runAt(ctx, run, ip) {
   const task = taskOf(ctx, run);
-  return task ? hasAddress(ctx, task, ip, { again: true }) : false;
+  return !!task && (await taskWhere(ctx, ip))?.task === task;
 }
 
 // The running task whose run the broker's record `run` is, or null.
 export function taskOf(ctx, run) {
   for (const task of ctx.tasks.values()) {
-    if (task.live?.secret && ctx.broker.runOf(task.live.secret) === run) return task;
+    if (run && task.live && ctx.broker.runOf(task.live.id) === run) return task;
   }
   return null;
 }
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createBrokerHttp(ctx) {
-  const { config, log, tasks } = ctx;
+  const { config, log } = ctx;
   // GitHub's hosts first: the other relayed ones are Google's.
   const gateway = { service: "githubGateway", name: "GitHub gateway", destroy: true };
   const routes = [
@@ -175,14 +167,6 @@ export function createBrokerHttp(ctx) {
   // agent calls, pushes and files are refused meanwhile.
   let warnedBroker = false;
 
-  // The running task whose sandbox has this address on its network.
-  async function taskAt(ip) {
-    for (const task of tasks.values()) {
-      if (await hasAddress(ctx, task, ip)) return task;
-    }
-    return null;
-  }
-
   async function egressAnswer(req, res) {
     const url = new URL(req.url, "http://broker");
     const ip = url.searchParams.get("ip") ?? "";
@@ -191,7 +175,8 @@ export function createBrokerHttp(ctx) {
     if (!(await fromProxy(ctx, req))) {
       return sendJson(res, { allowed: false }, 403);
     }
-    const task = await taskAt(ip);
+    const where = await taskWhere(ctx, ip);
+    const task = where?.task ?? null;
     // The broker itself (#511): the proxy forwards its plain HTTP (`broker=1`) for the runs'
     // sandboxes and engines (and a pod's agent install, which has no secret), never a build's.
     if (matchHost(host, [brokerHost(config)]) === "exact") {
@@ -233,11 +218,11 @@ export function createBrokerHttp(ctx) {
     // builds and containers don't trust Deckhand's CA. So GitHub's hosts aren't relayed for it
     // but tunnelled, anonymously (the gateway gives its address no token): an exception #411
     // accepted, rather than break builds that fetch from GitHub.
-    const engine = !!live?.engineIp?.includes(ip);
+    const engine = !!where?.engine;
     // GitHub's hosts go to the GitHub gateway, but for a research run (NO_TOKEN): it has no
     // token there, nor the CA, and reads public GitHub anonymously through a tunnel instead,
     // as an engine does.
-    const run = live ? ctx.broker.runOf(live.secret) : null;
+    const run = live ? ctx.broker.runOf(live.id) : null;
     const github = !!live && run?.extra !== NO_TOKEN;
     // GitHub's content hosts only for a run the gateway checks (github-forks.mjs restricted()),
     // every one of them (egress.mjs githubContent()): the others reach them as plain hosts.
@@ -256,6 +241,17 @@ export function createBrokerHttp(ctx) {
     sendJson(res, answer);
   }
 
+  // POST /run/token: a new run token for the one the sandbox sends (`Authorization: Bearer`),
+  // from its own sandbox, while its run lasts (broker.mjs renew()): ../sandbox/deckhand-token
+  // asks every few minutes, and writes it in place of the old one.
+  async function renewToken(req, res) {
+    const [scheme, token] = (req.headers.authorization ?? "").split(" ");
+    const renewed = await ctx.broker.renew(scheme === "Bearer" ? token : "", req);
+    if (!renewed.token) return sendJson(res, { message: renewed.message }, renewed.status);
+    res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
+    res.end(`${renewed.token}\n`);
+  }
+
   // A handler's failure: logged, a 500 when nothing was answered yet.
   const failed = (res, name, destroy) => (error) => {
     log(`${name}: ${error.stack ?? error}`);
@@ -270,6 +266,9 @@ export function createBrokerHttp(ctx) {
     const route = routes.find((r) => (r.match ? r.match(req.url) : req.url.startsWith(r.prefix)));
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
+    }
+    if (req.method === "POST" && req.url === "/run/token") {
+      return renewToken(req, res).catch(failed(res, "Run token", false));
     }
     if (req.url.startsWith("/run/")) {
       return runFiles.handle(req, res).catch(failed(res, "Run files", true));

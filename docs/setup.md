@@ -720,7 +720,7 @@ pick an agent you have a credential for, or the one you chose as default. `SANDB
 without `OPENAI_API_KEY` (or a ChatGPT plan's login) stops the listener at start.
 
 As with Claude Code, the key never enters a sandbox: Codex calls the listener
-(`OPENAI_BASE_URL=<broker>/openai`) with the run's secret as its key, and the listener
+(`OPENAI_BASE_URL=<broker>/openai`) with the run's agent token as its key, and the listener
 forwards the call to OpenAI (or your `OPENAI_BASE_URL`) with yours. The sandbox turns off
 Codex's analytics, update check and plugins, so it needs no host besides GitHub's: not
 `api.openai.com`, and not `api.anthropic.com` either.
@@ -801,7 +801,7 @@ other models (`agy models`) need nothing.
 listener at start.
 
 As with Claude Code and Codex, the key never enters a sandbox: `agy` calls the listener
-(`GOOGLE_GEMINI_BASE_URL=<broker>/google`) with the run's secret in `GEMINI_API_KEY` (and
+(`GOOGLE_GEMINI_BASE_URL=<broker>/google`) with the run's agent token in `GEMINI_API_KEY` (and
 `modelProvider: "gemini"` in its settings), and the listener forwards the call to Google (or
 your `GEMINI_BASE_URL`) with yours.
 
@@ -828,7 +828,7 @@ check them before you set this up. The listener's log warns about it at each sta
 
 On a plan, `agy` has no setting to send its calls to the listener, so its login is kept out of the
 sandboxes another way. The listener holds it; each sandbox gets a token file whose access token
-is the run's secret. For these runs only, the egress proxy decrypts the two hosts that carry
+is the run's agent token. For these runs only, the egress proxy decrypts the two hosts that carry
 the token (`daily-cloudcode-pa.googleapis.com`, `www.googleapis.com`) and hands each request to
 the listener, which checks the secret, puts the plan's access token in its place and sends the
 call on, on the paths `agy` uses only. `agy`'s telemetry (`play.googleapis.com`, which carries
@@ -1319,7 +1319,7 @@ No sandbox gets a GitHub token, an SSH key or the host's git configuration:
   that, so a run can go on for hours. Every run but a research one trusts the egress
   proxy's CA, which certifies GitHub's hosts for the relay.
 - Git fetches from GitHub over HTTPS through the GitHub gateway, and pushes through the listener's git
-  gateway (same port, with the run's secret), which pushes the run's own branch only (its
+  gateway (same port, with the run token), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
   its own (see [Security model](security.md#the-default-branch)): contents only, and
   workflows too for a repository granted `allow_workflows`. A run's
@@ -1336,8 +1336,8 @@ environments with required reviewers: see
 [GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches).
 
 Nor does a sandbox get your Claude credential. Its Claude Code calls the listener (same port,
-`ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's secret where the credential would
-be; the listener checks the secret, puts your credential in its place and forwards the call
+`ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's agent token where the credential would
+be; the listener checks the token, puts your credential in its place and forwards the call
 to Anthropic, streaming the answer back (see [Security model](security.md#tokens)). Codex
 does the same with `OPENAI_BASE_URL=<broker>/openai` and your `OPENAI_API_KEY`, and the
 Antigravity CLI with `GOOGLE_GEMINI_BASE_URL=<broker>/google` and your `GEMINI_API_KEY`, or

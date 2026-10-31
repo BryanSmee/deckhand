@@ -1,5 +1,5 @@
 // Secrets a run must never publish: the operator's Claude credential (out of the sandbox, but
-// a mistake elsewhere could bring it back), the run's own secret, which the sandbox holds, and
+// a mistake elsewhere could bring it back), the run's own tokens, which the sandbox holds, and
 // the GitHub tokens it got.
 // Whatever Claude writes is read by people who may be anyone on a public repo: its reply and
 // its log are redacted before they are posted or stored.

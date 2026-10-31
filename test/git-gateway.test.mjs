@@ -259,6 +259,17 @@ function issueRun(b, branches = ["issue-1-*"]) {
   return secret;
 }
 
+// A work run with tokens on issue 1 (broker.mjs issue()): its token, bound to net-1, the network
+// setup()'s sandboxOf() puts the test's requests on.
+function tokenRun(
+  b,
+  { branches = ["issue-1-*"], fork = false, repo = "org/repo", push = true } = {},
+) {
+  b.register(repo, undefined, { id: "run-1", push });
+  b.allow("run-1", branches, fork);
+  return b.issue("run-1", "net-1").token;
+}
+
 async function setup(
   t,
   {
@@ -267,6 +278,8 @@ async function setup(
     headMs,
     drainMs,
     sentFrom = sandboxAt(),
+    // address → the ID of its network, which a run's token is bound to.
+    sandboxOf = async (ip) => (ip === "127.0.0.1" ? "net-1" : null),
     allowWorkflows,
     // () => github-forks.mjs createForkChecks()'s: whose pushes are read for a fork's objects.
     forks,
@@ -317,7 +330,7 @@ async function setup(
       return Response.json({ default_branch: "main" });
     },
   };
-  const broker = createBroker({ sentFrom });
+  const broker = createBroker({ sentFrom, sandboxOf });
   const secret = register(broker);
   const logs = [];
   const mirrorDir = join(dir, "mirrors");
@@ -411,6 +424,7 @@ async function setup(
     pulls,
     gateway,
     secret,
+    broker,
   };
 }
 
@@ -1288,4 +1302,80 @@ test("a fork's run points its branch at its pull request's commit, as before", a
     await rawPush(run, `${ZERO} ${crafted} refs/heads/issue-1-y`, pack),
     /ok refs\/heads\/issue-1-y/,
   );
+});
+
+// A run with tokens: what it may push is its token's claims, which the broker signed.
+test("a run's token pushes its claims' branches only, of its claims' repo, from its own network", async (t) => {
+  const { work, remote, upstream, seen, broker } = await setup(t, { register: tokenRun });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  assert.equal(upstream("refs/heads/issue-1-x"), "refs/heads/issue-1-x");
+  const other = await git(work, "push", remote(), "HEAD:refs/heads/issue-2-x");
+  assert.equal(other.ok, false);
+  assert.match(other.stderr, /this run can only push issue-1-\*, not issue-2-x/);
+  // The broker's record changed after signing (a bug, say): the token still decides.
+  broker.allow("run-1", ["*"]);
+  const widened = await git(work, "push", remote(), "HEAD:refs/heads/issue-2-x");
+  assert.equal(widened.ok, false);
+  assert.match(widened.stderr, /not issue-2-x/);
+  assert.equal(upstream("refs/heads/issue-2-x"), "");
+  // Another repo's path: refused, naming the claims' repo.
+  const elsewhere = await git(work, "push", remote(undefined, "org/other"), "HEAD:refs/heads/x");
+  assert.equal(elsewhere.ok, false);
+  assert.match(elsewhere.stderr, /this run can only push to org\/repo/);
+  assert.ok(seen.every((s) => !s.url?.includes("org/other")));
+});
+
+test("a token whose claims name another repo, or no branch, pushes nothing", async (t) => {
+  const elsewhere = await setup(t, { register: (b) => tokenRun(b, { repo: "org/other" }) });
+  const refused = await git(
+    elsewhere.work,
+    "push",
+    elsewhere.remote(),
+    "HEAD:refs/heads/issue-1-x",
+  );
+  assert.equal(refused.ok, false);
+  assert.match(refused.stderr, /this run can only push to org\/other/);
+  assert.deepEqual(elsewhere.seen, []);
+  // No branch in its claims (a run that can't push, or one with none): no push at all.
+  for (const options of [{ branches: [] }, { push: false }]) {
+    const none = await setup(t, { register: (b) => tokenRun(b, options) });
+    const res = await git(none.work, "push", none.remote(), "HEAD:refs/heads/issue-1-x");
+    assert.equal(res.ok, false);
+    assert.match(res.stderr, /this run can't push/);
+    assert.deepEqual(none.seen, []);
+  }
+});
+
+test("a token from another network, or one for the agents' endpoints, pushes nothing", async (t) => {
+  const run = await setup(t, { register: tokenRun, sandboxOf: async () => "net-2" });
+  const res = await git(run.work, "push", run.remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /this run's token only works from its own sandbox/);
+  const agent = await setup(t, {
+    register: (b) => (tokenRun(b), b.issue("run-1", "net-1").agentToken),
+  });
+  const refused = await git(agent.work, "push", agent.remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(refused.ok, false);
+  assert.match(refused.stderr, /not meant for this service/);
+  assert.deepEqual(
+    agent.seen.filter((s) => s.method === "POST"),
+    [],
+  );
+});
+
+test("a token's fork claim: a fork's run points its branch at a fork's commit, a work run can't", async (t) => {
+  const forked = await setup(t, {
+    forks: forkChecks,
+    register: (b) => tokenRun(b, { fork: true }),
+  });
+  forked.seed("main");
+  const commit = forkCommit(forked);
+  const pushed = await git(forked.work, "push", forked.remote(), `${commit}:refs/heads/issue-1-x`);
+  assert.ok(pushed.ok, pushed.stderr);
+  const work = await setup(t, { forks: forkChecks, register: tokenRun });
+  work.seed("main");
+  const theirs = forkCommit(work);
+  const refused = await git(work.work, "push", work.remote(), `${theirs}:refs/heads/issue-1-x`);
+  assert.equal(refused.ok, false);
+  assert.match(refused.stderr, /which it doesn't carry and org\/repo doesn't have/);
 });

@@ -74,7 +74,7 @@ export const claude = {
       versionVar: "CLAUDE_CODE_VERSION",
     }),
   // Its environment on `provider`. No credential: Claude Code calls the listener
-  // (anthropic.mjs) with the run's secret in its place, in the variable that gives the
+  // (anthropic.mjs) with the run's agent token in its place, in the variable that gives the
   // provider's header (a gateway's token as a bearer). On a credential the run's entry names
   // (`claude@anthropic:key`), that credential's variable: Claude Code's auth mode matches it.
   env: (config, secret, provider = "anthropic", credential = null) => {

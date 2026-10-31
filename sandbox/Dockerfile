@@ -72,7 +72,7 @@ RUN npm install -g @playwright/mcp@0.0.82 \
     && npm cache clean --force \
     && chmod -R a+rX /ms-playwright
 
-# Git over HTTPS and gh (through its wrapper, ahead of /usr/bin/gh) with the run's secret, which
+# Git over HTTPS and gh (through its wrapper, ahead of /usr/bin/gh) with the run token, which
 # the listener's GitHub gateway swaps for a token.
 COPY sandbox/deckhand-token sandbox/git-credential-deckhand sandbox/gh \
     /usr/local/bin/
