@@ -20,12 +20,14 @@ jobs:
       matrix:
         image:
           - deckhand-broker
+          - deckhand-edge
           - deckhand-egress
           - deckhand-engine
           - deckhand-engine-podman
           - deckhand-github
           - deckhand-listener
           - deckhand-models
+          - deckhand-orchestrator
           - deckhand-policy
           - deckhand-runner
           - deckhand-sandbox

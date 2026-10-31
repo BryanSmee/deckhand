@@ -20,6 +20,11 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # edge/ and orchestrator/ hold placeholders until #506 (#557) replaces them (#558).
+          - image: deckhand-edge
+            dockerfile: edge/Dockerfile
+          - image: deckhand-orchestrator
+            dockerfile: orchestrator/Dockerfile
           - image: deckhand-listener
             dockerfile: listener/Dockerfile
           - image: deckhand-broker
