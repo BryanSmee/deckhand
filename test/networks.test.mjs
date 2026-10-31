@@ -140,6 +140,16 @@ for (const callee of ["broker", "runner", "models"]) {
     // Every internal network of the service's is a caller's or a callee's: the broker's are its
     // callers' alone.
     if (callee === "broker") assert.equal(used.size, own.length);
+    // And a caller shares no other network with it: Docker's DNS answers the service's name
+    // with its address on a network that isn't internal first (`default`), where SERVICE_NETWORKS
+    // names no caller, and every call would be refused.
+    for (const [name, service] of Object.entries(compose.services)) {
+      if (name === callee) continue;
+      const shared = networksOf(service).filter((n) => own.includes(n));
+      const named = shared.filter((n) => used.has(n));
+      if (!named.length) continue;
+      assert.deepEqual(shared, named, `${name} and ${callee} share ${shared.join(", ")}`);
+    }
   });
 }
 

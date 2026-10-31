@@ -617,7 +617,10 @@ which relays them), which credentials it holds (names), their fingerprints, a ru
 and the `models` stream. It is on networks of its own with each: `models-proxy`,
 `models-orchestrator`, internal, with fixed subnets it tells them by (`SERVICE_NETWORKS`); and on
 `broker-models` and `runner-models` to the services it calls, and its way out to the agents'
-APIs ([The models service](#the-models-service)).
+APIs, `models-out`, with nothing else on it ([The models service](#the-models-service)). Not
+`default`, where its callers are: Docker's DNS answers a name with its address on a network that
+isn't internal first, and a call arriving there names no caller. The networks test checks that a
+service and each of its callers share only the network `SERVICE_NETWORKS` names.
 
 The runner is on one network, `runner`, internal and shared with the listener alone, with a
 fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)),

@@ -328,7 +328,10 @@ services:
     # proxy (docs/services.md, Upgrades without downtime).
     stop_grace_period: 630s
     depends_on: [broker]
-    networks: [default, models-proxy, models-orchestrator, broker-models, runner-models]
+    # Its way out to the agents' APIs is a network of its own, not `default`: its callers are on
+    # `default` too, and Docker's DNS would answer `models` with its address there, where it can't
+    # tell them apart (SERVICE_NETWORKS).
+    networks: [models-out, models-proxy, models-orchestrator, broker-models, runner-models]
     environment:
       # Claude Code's credential: one of the three (ANTHROPIC_AUTH_TOKEN for a gateway such
       # as OpenRouter). Never in a file, and never in a sandbox, nor in the listener: this
@@ -536,6 +539,8 @@ networks:
     ipam:
       config:
         - subnet: ${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
+  # The models service's way out (the agents' APIs), with nothing else on it.
+  models-out:
   # The listener and the policy service alone: internal, so the policy service has no way out.
   policy:
     internal: true
