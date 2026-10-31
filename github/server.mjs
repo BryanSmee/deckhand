@@ -6,8 +6,8 @@
 //   PORT                8080
 //   STORE_URL           its store (../lib/store.mjs): file:///data/store, or Redis for two copies
 //                       on several nodes (REDIS_PASSWORD)
-//   APP_DIR             the App's credentials, its key with them (app.json): /app, its own volume
-//                       or Secret, never the store
+//   APP_DIR             the App's credentials, its key with them (app.json): /app-key, its own
+//                       volume or Secret, never the store
 //   SERVICE_NETWORKS    with Docker: each caller's network, service=subnet; none on Kubernetes
 //   BROKER_SERVICE_URL  the broker: its keys, and this service's tokens
 //   POLICY_SERVICE_URL  the policy service: the runs' writes and pushes
@@ -61,7 +61,7 @@ const brokerCaller = createBrokerCaller({
 });
 const broker = createBrokerService({ caller: brokerCaller, log });
 
-const app = createAppHolder({ dir: env.APP_DIR || "/app", api: config.githubApi, log });
+const app = createAppHolder({ dir: env.APP_DIR || "/app-key", api: config.githubApi, log });
 // The App's key never goes in the store: a value holding it is refused there, a blob redacted.
 const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
   password: env.REDIS_PASSWORD,

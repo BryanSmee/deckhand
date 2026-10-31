@@ -20,8 +20,9 @@ const root = join(import.meta.dirname, "..");
 // compose.yaml's services → the services of lib/services.mjs each one runs. The listener runs
 // those that haven't moved out yet (#499): each one gets its own entry then.
 const RUNS = {
-  listener: ["edge", "orchestrator", "github", "models"],
+  listener: ["edge", "orchestrator", "models"],
   broker: ["broker"],
+  github: ["github"],
   runner: ["runner"],
   policy: ["policy"],
   egress: ["proxy"],
@@ -106,34 +107,57 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   assert.deepEqual(runsNetworkPeers(compose.services), ["egress"]);
 });
 
-// The broker tells its callers apart by the network a call arrives on (SERVICE_NETWORKS): each
-// caller's subnet there has to be the one of a network it shares with the broker, and with no
-// other service, or another service's calls would count as its own.
-test("compose.yaml: the broker's SERVICE_NETWORKS names each caller's own network to it", () => {
-  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
-  const subnet = (net) =>
-    /^\$\{[A-Z_]+:-(.+)\}$/.exec(compose.networks[net]?.ipam?.config?.[0]?.subnet ?? "")?.[1];
-  const text = compose.services.broker.environment.SERVICE_NETWORKS.replace(
-    /\$\{[A-Z_]+:-([^}]+)\}/g,
-    "$1",
-  );
-  const callers = Object.fromEntries(text.split(",").map((part) => part.split("=")));
-  const brokerNets = networksOf(compose.services.broker);
-  for (const [caller, cidr] of Object.entries(callers)) {
-    const net = brokerNets.find((n) => subnet(n) === cidr);
-    assert.ok(net, `${caller}=${cidr}: no network of the broker's has that subnet`);
-    const on = Object.entries(compose.services)
-      .filter(([name, service]) => name !== "broker" && networksOf(service).includes(net))
-      .map(([name]) => name);
-    assert.equal(on.length, 1, `${net}: ${on.join(", ")}`);
-    // "edge+orchestrator=…": the services one container still is (lib/service-token.mjs).
-    for (const one of caller.split("+")) {
-      assert.ok(RUNS[on[0]].includes(one), `${net} is ${on[0]}'s, not ${one}'s`);
+// The broker and the github service tell their callers apart by the network a call arrives on
+// (SERVICE_NETWORKS): each caller's subnet there has to be the one of a network it shares with
+// the service, and with no other service, or another service's calls would count as its own.
+for (const callee of ["broker", "github"]) {
+  test(`compose.yaml: the ${callee} service's SERVICE_NETWORKS names each caller's own network to it`, () => {
+    const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+    const subnet = (net) =>
+      /^\$\{[A-Z_]+:-(.+)\}$/.exec(compose.networks[net]?.ipam?.config?.[0]?.subnet ?? "")?.[1];
+    const text = compose.services[callee].environment.SERVICE_NETWORKS.replace(
+      /\$\{[A-Z_]+:-([^}]+)\}/g,
+      "$1",
+    );
+    const callers = Object.fromEntries(text.split(",").map((part) => part.split("=")));
+    // Those it is called over, named after it: `broker-github` is the github service's to the
+    // broker.
+    const nets = networksOf(compose.services[callee]).filter(
+      (n) => n.startsWith(`${callee}-`) && compose.networks[n]?.ipam,
+    );
+    for (const [caller, cidr] of Object.entries(callers)) {
+      const net = nets.find((n) => subnet(n) === cidr);
+      assert.ok(net, `${caller}=${cidr}: no network of the ${callee}'s has that subnet`);
+      const on = Object.entries(compose.services)
+        .filter(([name, service]) => name !== callee && networksOf(service).includes(net))
+        .map(([name]) => name);
+      assert.equal(on.length, 1, `${net}: ${on.join(", ")}`);
+      // "edge+orchestrator=…": the services one container still is (lib/service-token.mjs).
+      for (const one of caller.split("+")) {
+        assert.ok(RUNS[on[0]].includes(one), `${net} is ${on[0]}'s, not ${one}'s`);
+      }
+      assert.equal(compose.networks[net].internal, true, `${net}: no way out`);
     }
-    assert.equal(compose.networks[net].internal, true, `${net}: no way out`);
-  }
-  // Every network of the broker's is a caller's: no other service reaches it.
-  assert.equal(Object.keys(callers).length, brokerNets.length);
+    // Every network it is called over is a caller's: no other reaches it.
+    assert.equal(Object.keys(callers).length, nets.length);
+  });
+}
+
+// The GitHub App's key is the github service's alone (#502): its volume is mounted nowhere
+// else, and nothing else is told where GitHub's key or an installation token is.
+test("compose.yaml: only the github service holds the App's key", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const holders = Object.entries(compose.services)
+    .filter(([, s]) => (s.volumes ?? []).some((v) => String(v).startsWith("github-key:")))
+    .map(([name]) => name);
+  assert.deepEqual(holders, ["github"]);
+  // It gets none of the listener's other secrets.
+  const { github, listener } = compose.services;
+  const secrets = Object.keys(listener.environment).filter(
+    (name) => /TOKEN|KEY|SECRET|AUTH_FILE/.test(name) && !name.startsWith("KUBERNETES_"),
+  );
+  for (const name of secrets)
+    assert.ok(!(name in github.environment), `${name} on the github service`);
 });
 
 // The Docker socket is root on the host: only the runner holds it (#503), and the runner holds
