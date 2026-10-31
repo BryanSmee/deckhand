@@ -118,7 +118,8 @@ export function createApiProxy({
       ]).slice(0, 200);
       noteRefused(run, call, notApi, log, what);
       // A provider's failure before it stays what the reply quotes: the note has this one.
-      run.apiError ??= notApi;
+      if (run.failedIfUnset) run.failedIfUnset(notApi);
+      else run.apiError ??= notApi;
       return fail(res, 404, errorShape.notFound, notApi);
     }
     // /openai/responses?x=1 → <base>/responses?x=1

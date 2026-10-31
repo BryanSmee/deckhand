@@ -66,10 +66,12 @@ export function createRuns({
   // `field` of the run's stored API state set to `value`, the others left as they are: the other
   // copy (or this one before a restart) may have set them. Written only if nobody changed it
   // meanwhile; else read and merged again.
-  async function setField(id, field, value) {
+  // `ifUnset`: only when the store has none (the other copy may have set one).
+  async function setField(id, field, value, { ifUnset = false } = {}) {
     for (;;) {
       const before = await store.get(stateKey(id));
       if (before && before[field] === value) return;
+      if (ifUnset && before?.[field] != null) return;
       const after = { ...EMPTY, ...before, [field]: value };
       if (await store.compareAndSet(stateKey(id), before, after, { ttlMs: STATE_TTL_MS })) return;
     }
@@ -82,9 +84,9 @@ export function createRuns({
     if (known && known.provider === provider && known.credential === credential) return known;
     const state = { ...EMPTY };
     let chain = Promise.resolve();
-    const save = (field, value) => {
+    const save = (field, value, options) => {
       chain = chain
-        .then(() => setField(id, field, value))
+        .then(() => setField(id, field, value, options))
         .catch((error) => log(`Models: run ${id}'s API state (${error.message})`));
     };
     const run = {
@@ -100,6 +102,13 @@ export function createRuns({
           .catch((error) => log(`Models: run ${id}'s note (${error.message})`));
       },
       saved: () => chain,
+      // Why its last call failed, unless one is said already, by this copy or the other: a
+      // provider's failure stays what the reply quotes, over a path refused after it.
+      failedIfUnset(message) {
+        if (state.apiError != null) return;
+        state.apiError = message;
+        save("apiError", message, { ifUnset: true });
+      },
     };
     for (const field of Object.keys(state)) {
       Object.defineProperty(run, field, {

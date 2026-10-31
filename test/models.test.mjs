@@ -376,8 +376,28 @@ test("two copies: each sets only what its calls changed of a run's API state", a
   assert.deepEqual(state.json, {
     apiStatus: 429,
     apiReset: 1_900_000_000_000,
-    apiError: "not an Anthropic API path",
+    apiError: "Anthropic answered 429",
   });
+});
+
+test("two copies: a provider's failure on one stays what the reply quotes, over a path the other refused", async (t) => {
+  const upstream = await fakeAnthropic(t);
+  const ctx = await setup(t, {
+    copies: 2,
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-plan-0123456789",
+      ANTHROPIC_BASE_URL: upstream.url,
+    },
+  });
+  const [a, b] = ctx.copies;
+  const { agentToken } = await ctx.startRun("run-1", { provider: "anthropic" });
+  const limited = await ctx.agentCall(a, "/anthropic/v1/messages", agentToken, {
+    headers: { "x-limit": "1" },
+  });
+  assert.equal(limited.status, 429);
+  assert.equal((await ctx.agentCall(b, "/anthropic/v1/files", agentToken)).status, 404);
+  const state = await ctx.asOrchestrator(a, "GET", "/runs/run-1/api");
+  assert.equal(state.json.apiError, "Anthropic answered 429");
 });
 
 test("two copies changing the same field in turn: the last call's answer is what's kept", async (t) => {
