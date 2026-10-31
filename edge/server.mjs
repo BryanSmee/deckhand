@@ -164,13 +164,14 @@ const internal = createEdgeInternal({
   redeliveries,
   // A listener's session key and sign-outs, with its App: its sessions go on.
   handOver: async ({ sessionKey: legacy, epochs }) => {
+    // The sign-outs first: a key taken without them would let cookies signed out of work again.
+    const count = await importEpochs(store, epochs);
     const taken = typeof legacy === "string" ? Buffer.from(legacy, "base64") : null;
     if (taken?.length >= 32) {
       writeFileSync(join(dataDir, "session.key"), taken, { mode: 0o600 });
       key = taken;
       keySeen = statSync(keyPath).mtimeMs;
     }
-    const count = await importEpochs(store, epochs);
     log(`Sessions: the listener's key${count ? ` and ${count} sign-out(s)` : ""} taken over`);
   },
   log,

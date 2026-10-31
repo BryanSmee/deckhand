@@ -70,7 +70,7 @@ export function createEdgeApp({ dir, log = () => {} }) {
   // A listener's App, from the orchestrator that has its data volume: taken when edge has none
   // yet, or the same App's (asked again after a lost answer). → { status, message } when
   // refused, else null.
-  function takeOver(credentials) {
+  function refusal(credentials) {
     const held = read();
     if (!credentials?.id || !credentials.webhook_secret) {
       return { status: 400, message: "no App's credentials" };
@@ -85,6 +85,11 @@ export function createEdgeApp({ dir, log = () => {} }) {
         ? null
         : { status: 409, message: `edge holds App ${held.id} with other credentials` };
     }
+    return null;
+  }
+  function takeOver(credentials) {
+    const refused = refusal(credentials);
+    if (refused || read()) return refused;
     log(`GitHub App ${credentials.slug ?? credentials.id}: handed over by the orchestrator`);
     save(credentials);
     return null;
@@ -94,6 +99,8 @@ export function createEdgeApp({ dir, log = () => {} }) {
     get: read,
     save,
     takeOver,
+    // What takeOver() would say, taking nothing.
+    refusal,
     info: () => publicPart(read()),
     // The secrets edge holds of them: kept out of its store (lib/store.mjs).
     secrets: () => [read()?.webhook_secret, read()?.client_secret].filter(Boolean),

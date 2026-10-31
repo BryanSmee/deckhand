@@ -85,12 +85,13 @@ export function createEdgeInternal({
     if (route === "GET /app") return sendJson(res, app.info());
     if (route === "PUT /app") {
       const body = (await readJsonBody(req, MAX_BODY)) ?? {};
-      const first = !app.get();
-      const refused = app.takeOver(body.credentials);
+      const refused = app.refusal(body.credentials);
       if (refused) throw new Refused(refused.status, refused.message);
-      // What signs and ends its sessions, only with the App it came with: never replacing a key
-      // edge's own sign-ins were made with.
-      if (first) await handOver(body);
+      // What signs and ends its sessions, only with the App it came with, and before it: never
+      // replacing a key edge's own sign-ins were made with, and asked again whole should it
+      // fail (the App not taken yet, the orchestrator asks again).
+      if (!app.get()) await handOver(body);
+      app.takeOver(body.credentials);
       return sendJson(res, app.info());
     }
     if (route === "POST /from-tags") {

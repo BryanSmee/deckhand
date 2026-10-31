@@ -260,7 +260,14 @@ test("a path with dot segments is refused at edge, never passed on as another", 
       req.on("error", reject);
       req.end();
     });
-  for (const path of ["/shots/../api/state", "/shots/%2e%2e/api/state", "/api/./state"]) {
+  for (const path of [
+    "/shots/../api/state",
+    "/shots/%2e%2e/api/state",
+    "/api/./state",
+    "/shots/..\\api/state",
+    "/shots/..%5capi/state",
+    "/shots/..\\status",
+  ]) {
     assert.equal(await raw(path), 400, path);
   }
   assert.equal(edge.asked.length, 0);

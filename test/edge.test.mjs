@@ -154,7 +154,10 @@ test("a delivery a copy died taking is taken again a minute on; one being taken,
 });
 
 // Edge's internal port, the orchestrator calling it with its service token.
-async function internal(t, { store = openStore("memory:"), dir = tempDir(t), redeliveries } = {}) {
+async function internal(
+  t,
+  { store = openStore("memory:"), dir = tempDir(t), redeliveries, handOver = null } = {},
+) {
   const key = testKey();
   const app = createEdgeApp({ dir });
   const handedOver = [];
@@ -164,7 +167,10 @@ async function internal(t, { store = openStore("memory:"), dir = tempDir(t), red
     keys: new Map([[key.kid, key.publicKey]]),
     bound: networkCallers("orchestrator=127.0.0.0/8"),
     redeliveries: redeliveries ?? createRedeliveries({ store, app: () => null }),
-    handOver: async (body) => handedOver.push(body),
+    handOver: async (body) => {
+      if (handOver) await handOver(body);
+      handedOver.push(body);
+    },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 20))),
   });
   const url = `http://127.0.0.1:${await listening(server)}`;
@@ -272,6 +278,25 @@ test("a listener's App handed over: taken once with its sessions, another App re
   const kept = JSON.parse(readFileSync(join(dir, "app.json"), "utf8"));
   assert.equal(kept.webhook_secret, SECRET);
   assert.equal(kept.client_secret, "cs");
+});
+
+test("a handover whose sessions fail to move takes nothing: asked again, they move then", async (t) => {
+  const dir = tempDir(t);
+  let fail = true;
+  const { client, handedOver, app } = await internal(t, {
+    dir,
+    handOver: async () => {
+      if (fail) throw new Error("the store is away");
+    },
+  });
+  const body = { credentials: CREDENTIALS, sessionKey: null, epochs: { alice: 2 } };
+  await assert.rejects(client.handOver(body), { status: 500 });
+  // Not taken: the orchestrator keeps the listener's files and asks again.
+  assert.equal(app.get(), null);
+  fail = false;
+  assert.deepEqual(await client.handOver(body), publicPart(CREDENTIALS));
+  assert.deepEqual(handedOver, [body]);
+  assert.equal(app.get().webhook_secret, SECRET);
 });
 
 test("two copies: the redeliveries' poller runs on the one holding its lease, then on the other", async (t) => {
