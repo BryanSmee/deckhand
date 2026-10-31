@@ -25,9 +25,6 @@ export const POLL_EVERY_MS = 250;
 export const FILES = ["ca", "digest"];
 
 const inboxKey = (id) => `inbox:${id}`;
-// How many bytes of the runner's file the inbox blob holds: the store redacts blobs (a token
-// in a comment), so the blob's own length isn't the runner's offset.
-const takenKey = (id) => `inbox-taken:${id}`;
 const fileKey = (id, name) => `file:${id}:${name}`;
 const shotKey = (folder, name) => `shot:${folder}/${name}`;
 const sizesKey = (folder) => `shots:${folder}`;
@@ -50,26 +47,13 @@ export function createFiles({ store, runs, now = Date.now, sleep = realSleep, tt
   // screenshot's size.
   const pending = new Map();
 
-  // The runner's append (POST /runs/:id/inbox): `data`, its file's bytes from `offset`. The
-  // blob takes what it doesn't have yet: the same bytes sent again (an answer lost) add
-  // nothing. → { length } (of the runner's file the blob has taken), or { length, gap: true }
-  // when it has less than `offset` (the runner sends from `length` again). Counted apart from
-  // the blob, which the store redacts: the sandbox reads the blob's own offsets, the runner
-  // its file's. Whole lines each time (the runner appends one message at a time), so a
-  // redaction never splits one.
-  async function appendInbox(id, offset, data) {
-    const before = await store.get(takenKey(id));
-    const have = before ?? 0;
-    if (offset > have) return { length: have, gap: true };
-    const rest = data.subarray(have - offset);
-    // Another copy took this append meanwhile: from what it has now.
-    if (!(await store.compareAndSet(takenKey(id), before, have + rest.length, { ttlMs }))) {
-      return appendInbox(id, offset, data);
-    }
-    if (rest.length) await store.appendBlob(inboxKey(id), rest);
-    else if (have === 0) await store.putBlob(inboxKey(id), Buffer.alloc(0));
-    return { length: have + rest.length };
-  }
+  // The runner's append (POST /runs/:id/inbox): `data`, its file's bytes from `offset`, in one
+  // atomic step of the store (appendBlobAt()): the same bytes sent again (an answer lost, or a
+  // retry through the other copy) add nothing, and a later one first is refused. → { length },
+  // or { length, gap: true } when the blob is shorter than `offset` (the runner sends from
+  // `length` again). The blob is the runner's file byte for byte: the runner redacts its lines
+  // before it writes them (runner/inbox.mjs), and the store refuses what it would redact.
+  const appendInbox = (id, offset, data) => store.appendBlobAt(inboxKey(id), offset, data);
 
   // The inbox's whole lines after byte `from`: empty when none came within `timeout` ms, null
   // when the run has none. `signal`: the sandbox went away.
@@ -140,7 +124,6 @@ export function createFiles({ store, runs, now = Date.now, sleep = realSleep, tt
   // A run's inbox and files, once it ended. Its screenshots wait for the orchestrator.
   async function remove(id) {
     await store.deleteBlob(inboxKey(id));
-    await store.delete(takenKey(id));
     for (const name of FILES) await store.deleteBlob(fileKey(id, name));
   }
 

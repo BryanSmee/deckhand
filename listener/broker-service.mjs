@@ -13,8 +13,7 @@ import { keyId, LEGACY_KEY_MS } from "../lib/tokens.mjs";
 
 // The headers the broker reads a sandbox's call by (../broker/http.mjs): the network (or pod)
 // it came from, as the listener vouches for it here, and its run token.
-export const SANDBOX_HEADER = "x-deckhand-sandbox";
-export const RUN_TOKEN_HEADER = "x-deckhand-run-token";
+import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 
 // How often the public keys are read again (a key rotated), and how soon after a failure.
 const KEYS_EVERY_MS = 5 * 60_000;

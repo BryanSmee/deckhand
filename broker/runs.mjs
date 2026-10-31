@@ -113,7 +113,18 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
   }
 
   // When the first broker on this store started: kept, a later copy finds it.
-  const firstStart = store.setIfAbsent(FIRST_START, now()).then(() => store.get(FIRST_START));
+  // Read when a key is imported, again after a failure (a store not reachable yet): nothing
+  // waits on the store while the broker starts. The first copy to start on the store writes it
+  // (server.mjs), so a later import doesn't count as the first start.
+  let firstStart = null;
+  const started = () =>
+    (firstStart ??= store
+      .setIfAbsent(FIRST_START, now())
+      .then(() => store.get(FIRST_START))
+      .catch((error) => {
+        firstStart = null;
+        throw error;
+      }));
 
   const index = (fn) => update(INDEX, (ids) => fn(ids ?? {}));
 
@@ -157,7 +168,7 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
   async function importKey(pem) {
     // During the migration only: within LEGACY_KEY_MS of the broker's first start, when a
     // listener that signed tokens itself can still have runs going.
-    const first = await firstStart;
+    const first = await started();
     if (now() - first > LEGACY_KEY_MS) {
       return { status: 409, message: "an old key is only taken in the broker's first days" };
     }
@@ -348,6 +359,7 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
   }
 
   return {
+    started,
     put,
     issue,
     check,

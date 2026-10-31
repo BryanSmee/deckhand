@@ -23,6 +23,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "../agents/index.mjs";
+import { redact } from "../../lib/redact.mjs";
 
 // The inbox's last line once the listener is done with it.
 export const CLOSE = JSON.stringify({ type: "deckhand", event: "close" });
@@ -78,6 +79,15 @@ export function createInbox({ inboxDir, timers = globalThis, mirror = null }) {
   // what it doesn't have of its inbox (all of it, for a run from before the broker service).
   async function resync(run) {
     if (!mirror) return;
+    // A run's from before the broker service may hold a token's shape: redacted in place first,
+    // as send() writes them now (an offset its sandbox read past one is off by the difference).
+    try {
+      const text = readFileSync(inbox(run), "latin1");
+      const clean = redact(text, []);
+      if (clean !== text) writeFileSync(inbox(run), clean, "latin1");
+    } catch {
+      // No inbox: nothing to copy.
+    }
     await mirror.files(run, { ca: file(run, "ca"), digest: file(run, "digest") });
     await mirror.sync(run, (from) => bytesFrom(run, from));
   }
@@ -93,7 +103,9 @@ export function createInbox({ inboxDir, timers = globalThis, mirror = null }) {
   }
 
   function send(run, text, agent = agentFor()) {
-    appendFileSync(inbox(run), agent.message(text) + "\n");
+    // Without a token's shape (a GitHub token, a run token pasted in a comment): the broker
+    // service's copy is this file byte for byte, and its store takes no token.
+    appendFileSync(inbox(run), redact(agent.message(text), []) + "\n");
     wake(run);
     mirrored(run);
   }

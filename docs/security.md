@@ -372,8 +372,13 @@ looked up once by its name (or its pod's UID, by its pod's). That path goes in a
 
 Both kinds are redacted from runs' output: the run's tokens (its agent's, and the first run
 token, saved with its state so a restart redacts the one the sandbox holds), as its secret
-was, and every run token by its shape, the header the broker signs each one with: the ones a
-sandbox renewed come from the broker service alone, which hands them to nobody else.
+was, and every run token by its shape, the header the broker signs each one with, or its
+claims and signature alone (the header is the same for all, and its `kid` public): the ones a
+sandbox renewed come from the broker service alone, which hands them to nobody else. A
+renewed token cut in pieces (its signature alone, or split across two lines) is no longer
+redacted, as a token listed whole was by any part of 16 characters; its binding to its
+sandbox is what limits a leak. An inbox message shaped like a token is redacted before it
+reaches the sandbox.
 
 **No sandbox holds a GitHub token.** Its `GH_TOKEN`, `deckhand-token` and git credential
 helper hand out the [run token](#run-tokens), and every call to GitHub goes through the listener's GitHub

@@ -20,6 +20,7 @@ import { drainable } from "../lib/drain.mjs";
 import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { isToken } from "../lib/tokens.mjs";
+import { pathOf } from "../lib/service-token.mjs";
 
 // Path prefix → the ctx service that handles it, and how its failures are logged. A failure
 // once the answer started cuts the connection when `destroy`: a half-sent stream (a push, an
@@ -54,16 +55,13 @@ function oldPrAnswer(match) {
 // URL parser would change (no dot segment, encoded or not, no `//`); else null.
 const RUN_PATHS = /^\/run\/(?:token|inbox|ca|digest|shots\/[^/]+)$/;
 export function runPath(url) {
-  const raw = String(url ?? "");
-  const [pathname] = raw.split("?");
-  let parsed;
+  let pathname;
   try {
-    parsed = new URL(raw, "http://listener");
+    pathname = pathOf(url);
   } catch {
     return null;
   }
-  if (parsed.pathname !== pathname || !RUN_PATHS.test(pathname)) return null;
-  return parsed.pathname + parsed.search;
+  return RUN_PATHS.test(pathname) ? String(url) : null;
 }
 
 // The ID of the network (or pod) of the task's sandbox, or null: what its tokens are bound to

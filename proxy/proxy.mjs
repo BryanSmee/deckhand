@@ -36,7 +36,7 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { createBrokerCaller } from "../lib/broker-client.mjs";
+import { createBrokerCaller, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -62,12 +62,8 @@ export function drainMs(text) {
 // the proxy alone). Whatever the client sent in it is replaced.
 export const CLIENT_HEADER = "x-deckhand-client";
 
-// What the broker service reads a sandbox's call by (../broker/http.mjs): the network (or pod)
-// the proxy vouches it came from, and the run token the sandbox sent, moved out of
-// `authorization`, which carries the proxy's own service token there. Whatever the client sent
-// in them is dropped.
-export const SANDBOX_HEADER = "x-deckhand-sandbox";
-export const RUN_TOKEN_HEADER = "x-deckhand-run-token";
+// What the broker service reads a sandbox's call by (lib/broker-client.mjs): whatever the client
+// sent in them is dropped.
 const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER];
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.

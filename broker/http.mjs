@@ -31,8 +31,8 @@ import { runFields, STREAM } from "./runs.mjs";
 
 // The headers the proxy (or the listener, relaying) sets on a sandbox's call: whatever the
 // sandbox sent in them was replaced.
-export const SANDBOX_HEADER = "x-deckhand-sandbox";
-export const RUN_TOKEN_HEADER = "x-deckhand-run-token";
+import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+export { RUN_TOKEN_HEADER, SANDBOX_HEADER };
 
 // Until the runner and the orchestrator move out of the listener, which calls as the
 // orchestrator (#503, #506): the runner's endpoints take it too, and the sandboxes' (its relay).

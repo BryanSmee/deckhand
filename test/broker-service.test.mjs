@@ -7,7 +7,7 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { Agent, request } from "node:http";
 import { test } from "node:test";
 import { accountCallers, createCallers } from "../broker/callers.mjs";
-import { wholeLines } from "../broker/files.mjs";
+import { createFiles, wholeLines } from "../broker/files.mjs";
 import { RENEW_GRACE_MS } from "../broker/runs.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { createSeal } from "../broker/seal.mjs";
@@ -537,15 +537,22 @@ test("on Kubernetes, the pod's service account names the caller, once the API se
   assert.throws(() => createCallers({}), /SERVICE_NETWORKS .* or SERVICE_ACCOUNTS/);
 });
 
-test("the inbox: a message holding a token-shaped string, redacted in the store, keeps the runner's offsets and the sandbox's lines whole", async (t) => {
+test("the inbox: the runner's file byte for byte, a token's shape refused rather than redacted, a failed write sent again whole", async (t) => {
   const { copies, store } = await brokers(t);
   const [broker] = copies;
   const orchestrator = await client(broker, "orchestrator");
   const proxy = await client(broker, "proxy");
   const { token } = await started(orchestrator);
-  // The runner's file, as it grows: each append from the offset the broker says it has.
+  // Redacted, the blob would be shorter than the runner's file, and their offsets apart: the
+  // runner redacts its lines itself (runner/inbox.mjs), the store refuses what it would change.
   const ghp = `ghp_${"a".repeat(36)}`;
-  const lines = [`{"text":"${ghp} is revoked"}\n`, '{"text":"next"}\n', '{"text":"last"}\n'];
+  const refused = await orchestrator("POST", "/runs/run-a/inbox?offset=0", {
+    body: Buffer.from(`{"text":"${ghp} is revoked"}\n`),
+  });
+  assert.equal(refused.status, 500);
+  assert.equal(await store.readBlob("inbox:run-a"), null);
+  // The runner's lines, the same bytes in the blob and its offsets.
+  const lines = ['{"text":"[redacted] is revoked"}\n', '{"text":"next"}\n'];
   let file = Buffer.alloc(0);
   let synced = 0;
   for (const line of lines) {
@@ -553,24 +560,40 @@ test("the inbox: a message holding a token-shaped string, redacted in the store,
     const res = await orchestrator("POST", `/runs/run-a/inbox?offset=${synced}`, {
       body: file.subarray(synced),
     });
-    assert.equal(res.status, 200, res.text);
-    assert.equal(res.json.length, file.length);
+    assert.deepEqual(res.json, { length: file.length });
     synced = res.json.length;
   }
-  // The same bytes again (an answer lost): nothing added.
-  const again = await orchestrator("POST", "/runs/run-a/inbox?offset=0", { body: file });
-  assert.equal(again.json.length, file.length);
-  // The sandbox reads whole, valid lines, the token redacted, each once.
-  let from = 0;
-  const read = [];
-  while (read.length < 3) {
-    const res = await sandboxCall(proxy, "GET", `/run/inbox?from=${from}`, token, "net-a");
-    assert.equal(res.status, 200);
-    for (const line of res.text.split("\n").filter(Boolean)) read.push(JSON.parse(line).text);
-    from += res.body.length;
-  }
-  assert.deepEqual(read, ["[redacted] is revoked", "next", "last"]);
-  assert.ok(!(await store.readBlob("inbox:run-a")).toString().includes(ghp));
+  assert.deepEqual(await store.readBlob("inbox:run-a"), file);
+  const read = await sandboxCall(proxy, "GET", "/run/inbox?from=0", token, "net-a");
+  assert.deepEqual(read.body, file);
+});
+
+test("the inbox: a write the store failed leaves nothing behind, and the same one sent again goes in", async () => {
+  const inner = openStore("memory:");
+  let failing = true;
+  const store = {
+    ...inner,
+    appendBlobAt: async (...args) => {
+      if (failing) {
+        failing = false;
+        throw new Error("Redis timed out");
+      }
+      return inner.appendBlobAt(...args);
+    },
+  };
+  const files = createFiles({ store, runs: { event: async () => {} } });
+  const line = Buffer.from('{"text":"hi"}\n');
+  await assert.rejects(files.appendInbox("r1", 0, line), /timed out/);
+  assert.equal(await inner.readBlob("inbox:r1"), null);
+  assert.deepEqual(await files.appendInbox("r1", 0, line), { length: line.length });
+  assert.deepEqual(await inner.readBlob("inbox:r1"), line);
+  // A later write that comes first is refused, then the earlier one, then the later again.
+  const next = Buffer.from('{"text":"later"}\n');
+  const gap = await files.appendInbox("r1", line.length + next.length, next);
+  assert.equal(gap.gap, true);
+  assert.deepEqual(await files.appendInbox("r1", line.length, next), {
+    length: line.length + next.length,
+  });
 });
 
 test("an old key is taken in the broker's first days only; an expired run's files go with its record", async (t) => {

@@ -49,6 +49,9 @@ export function createBroker({ store, key, callers, now = Date.now, sleep, log =
     log,
   });
   server.startDraining = () => (draining = true);
+  // Its first start on the store, for the old keys' window (runs.mjs importKey()): a store not
+  // up yet is asked again by the first import.
+  runs.started().catch((error) => log(`Broker: its store (${error.message})`));
   return { server, runs, files };
 }
 

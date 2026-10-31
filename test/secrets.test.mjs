@@ -54,6 +54,9 @@ test("a run token is redacted by its shape: the broker service renews them, the 
     { ...testKey(), audience: "deckhand:broker", ttlMs: 60_000 },
   );
   assert.equal(redact(`$ deckhand-token\n${token}\n`, []), "$ deckhand-token\n[redacted]\n");
+  // Its claims and signature alone are the whole token: redacted too.
+  const body = token.split(".").slice(1).join(".");
+  assert.equal(redact(`claims: ${body}`, []), "claims: [redacted]");
   // Another issuer's JWT (another header) stays: a reply may quote one.
   const other = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl";
   assert.equal(redact(other, []), other);

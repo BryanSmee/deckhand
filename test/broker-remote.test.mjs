@@ -11,6 +11,7 @@ import { createCallers } from "../broker/callers.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { createBroker as createListenerBroker } from "../listener/broker.mjs";
 import { createBrokerService, legacyKey } from "../listener/broker-service.mjs";
+import { createInbox } from "../listener/runner/inbox.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyId, LEGACY_KEY_MS, signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
@@ -110,7 +111,6 @@ test("an inbox: the runner's file copied from the offset the broker has, a broke
   // A broker that has less than the listener thinks (another store): from what it has.
   await store.deleteBlob("inbox:run-a");
   await store.putBlob("inbox:run-a", "one\n");
-  await store.set("inbox-taken:run-a", 4);
   writeFileSync(file, "three\n", { flag: "a" });
   await listener.mirror.sync("run-a", bytesFrom);
   assert.equal(await blob(), "one\ntwo\nthree\n");
@@ -189,4 +189,29 @@ test("a token signed with a key the listener doesn't have yet: the keys read aga
   });
   assert.match((await counting.check(forged, "10.0.0.2")).message, /unknown key/);
   assert.equal(asked, 1);
+});
+
+test("the runner's inbox: a token's shape in a message redacted before it is written, its copy the same bytes", async (t) => {
+  const inboxDir = tempDir(t);
+  const copied = [];
+  const inbox = createInbox({
+    inboxDir,
+    mirror: {
+      files: async () => {},
+      sync: async (run, bytesFrom) => copied.push(bytesFrom(0).toString()),
+      forget: () => {},
+    },
+  });
+  await inbox.write("r1", null, null);
+  inbox.send("r1", `my token is ghp_${"b".repeat(36)}, revoked`);
+  const file = readFileSync(join(inboxDir, "r1", "inbox.jsonl"), "utf8");
+  assert.match(file, /my token is \[redacted\], revoked/);
+  assert.ok(!file.includes("ghp_"));
+  JSON.parse(file);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(copied.at(-1), file);
+  // A run's from before: its file redacted in place before it is copied whole.
+  writeFileSync(join(inboxDir, "r1", "inbox.jsonl"), `{"t":"ghp_${"c".repeat(36)}"}\n`);
+  await inbox.resync("r1");
+  assert.equal(copied.at(-1), '{"t":"[redacted]"}\n');
 });

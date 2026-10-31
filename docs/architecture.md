@@ -848,10 +848,14 @@ its network, `x-deckhand-sandbox`, with its own service token):
 The runner's inbox file (`runner/inbox.mjs`, `<dataDir>/runs/<run>/`) is the truth, and the
 broker's blob a copy of it: the CA and digest are put there before the sandbox starts (or the
 start fails), and each change of the inbox is appended from the offset the broker has
-(`POST /runs/:id/inbox?offset=`, `broker-service.mjs` `sync()`). The broker counts the
-runner's offset apart from its blob, which the store redacts (a token in a comment comes out
-`[redacted]`, shorter): the runner's offsets are its file's, the sandbox's the blob's, and
-each append is whole lines. The same bytes sent again add nothing, a broker away gets them once it is back, and a restarted listener sends what the
+(`POST /runs/:id/inbox?offset=`, `broker-service.mjs` `sync()`). Each append is one atomic
+step of the store (`appendBlobAt()`: a Lua script on Redis, under the file backend's lock),
+which skips what the blob already has and refuses a write past its end, so a retry, a lost
+answer or two copies taking writes out of order never lose, repeat or reorder a line, and a
+write the store failed leaves nothing. The blob is the file byte for byte: the runner redacts
+a token's shape in a message before it writes it (a run from before the broker service has
+its file redacted in place once, when it is copied over), and the store refuses an append it
+would redact rather than make the two differ. The same bytes sent again add nothing, a broker away gets them once it is back, and a restarted listener sends what the
 broker doesn't have (all of it, for a run from before the broker service). So either copy of
 the broker, or one restarted, answers from the same offset, and the agent gets every line once.
 A screenshot goes on the broker's `runs` stream, which the listener reads and acknowledges
