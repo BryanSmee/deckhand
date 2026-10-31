@@ -50,8 +50,16 @@ function networksOf(service) {
   return Array.isArray(networks) ? networks : Object.keys(networks);
 }
 
+// Calls without a service token, so not in lib/services.mjs: the egress proxy asks the
+// orchestrator's egress policy about each connection (POLICY_URL), and hands it what it relays
+// there (RELAY_URL), which the listener tells apart by the caller's address.
+const UNTOKENED = [["proxy", "orchestrator"]];
+const untokened = (x, y) =>
+  UNTOKENED.some(([a, b]) => (a === x && b === y) || (a === y && b === x));
 const between = (a, b) =>
-  (RUNS[a] ?? []).some((x) => (RUNS[b] ?? []).some((y) => calls(x, y) || calls(y, x)));
+  (RUNS[a] ?? []).some((x) =>
+    (RUNS[b] ?? []).some((y) => calls(x, y) || calls(y, x) || untokened(x, y)),
+  );
 
 // What is wrong with a compose file's networks: [] when nothing.
 function problems(compose) {

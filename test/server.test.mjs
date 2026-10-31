@@ -5541,6 +5541,7 @@ mounts:
       "delivered",
       "branch",
       "lastPushAt",
+      "exitCode",
       "capabilities",
     ],
   ];
