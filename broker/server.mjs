@@ -6,7 +6,8 @@
 //
 // Settings, from the environment:
 //   PORT              8081
-//   STORE_URL         its store (lib/store.mjs): file:///data/store
+//   STORE_URL         its store (lib/store.mjs): file:///data/store, or Redis for two copies on
+//                     several nodes (REDIS_PASSWORD)
 //   KEY_DIR           its signing key's folder (run-token.key, made on first start): /keys,
 //                     its own volume or Secret, never the store
 //   SERVICE_NETWORKS  with Docker: each caller's network, service=subnet (callers.mjs)
@@ -64,8 +65,13 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
         port: env.KUBERNETES_SERVICE_PORT,
       }),
     });
-    const store = openStore(env.STORE_URL || "file:///data/store");
     const key = signingKey(env.KEY_DIR || "/keys");
+    // Its key never goes in the store: a value holding it is refused there, a blob redacted.
+    const pem = key.privateKey.export({ type: "pkcs8", format: "pem" });
+    const store = openStore(env.STORE_URL || "file:///data/store", {
+      password: env.REDIS_PASSWORD,
+      secrets: () => [pem],
+    });
     const graceMs = drainMs(env.DRAIN_SECONDS);
     started = { ...createBroker({ store, key, callers, log }), graceMs, key };
   } catch (error) {
