@@ -34,7 +34,7 @@ import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
 import { send, sendJson } from "../lib/http.mjs";
 import { apiRoute } from "./web.mjs";
-import { SHOT_NAME } from "./run-files.mjs";
+import { SHOT_NAME } from "../lib/shots.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets

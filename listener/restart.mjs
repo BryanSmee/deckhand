@@ -503,6 +503,11 @@ export function createRestart(ctx) {
       record.credential ?? null,
     );
     watchPushes(task);
+    // The broker service hears it still goes, and gets its inbox and files again (all of them,
+    // for a run from before it, #505): its tokens renew there, its sandbox reads them there.
+    const told = ctx.brokerService?.persist ?? ((what, fn) => fn().catch(() => {}));
+    told(`run ${saved.id}`, () => ctx.broker.restore(saved.id, shots));
+    if (ctx.runner.resync) told(`run ${saved.id}'s files`, () => ctx.runner.resync(saved.id));
     return task;
   }
 

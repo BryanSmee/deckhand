@@ -22,6 +22,8 @@ jobs:
         include:
           - image: deckhand-listener
             dockerfile: listener/Dockerfile
+          - image: deckhand-broker
+            dockerfile: broker/Dockerfile
           - image: deckhand-egress
             dockerfile: proxy/Dockerfile
           - image: deckhand-policy

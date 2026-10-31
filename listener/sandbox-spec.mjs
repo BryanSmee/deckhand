@@ -95,13 +95,14 @@ export function sandboxSpec(
   };
 }
 
-// The run's tokens (broker.mjs issue()), bound to `sandbox`, the ID of its network or pod: the
-// run token, which the sandbox writes to a file and renews (../sandbox/deckhand-token), and
-// the agent's, which its env (agents/) gives it in place of the operator's credential. Kept
-// on the live run too, for its output's redaction after a restart (restart.mjs).
-export function tokenEnv({ config, task, agent, broker }, sandbox) {
+// The run's tokens (broker.mjs issue(), from the broker service), bound to `sandbox`, the ID of
+// its network or pod: the run token, which the sandbox writes to a file and renews with the
+// broker service (../sandbox/deckhand-token), and the agent's, which its env (agents/) gives it
+// in place of the operator's credential. Kept on the live run too, for its output's redaction
+// after a restart (restart.mjs). The broker service takes its screenshots into `live.shots`.
+export async function tokenEnv({ config, task, agent, broker }, sandbox) {
   const { live } = task;
-  const { token, agentToken } = broker.issue(live.id, sandbox);
+  const { token, agentToken } = await broker.issue(live.id, sandbox, live.shots ?? null);
   live.agentToken = agentToken;
   // What the egress policy and its anonymous GitHub calls find the run by (broker-http.mjs).
   live.sandbox = String(sandbox);

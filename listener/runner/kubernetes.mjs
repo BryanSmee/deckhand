@@ -369,11 +369,12 @@ export function createKubernetesRunner({
   now = Date.now,
   sleep = delay,
   timers, // inbox.mjs poll()'s clock
+  mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
   watchMs = WATCH_MS,
 }) {
   const { pendingMs, storageClass, sessionSize, cacheStorageClass, registrySecret } =
     config.kubernetes;
-  const inbox = createInbox({ inboxDir, timers });
+  const inbox = createInbox({ inboxDir, timers, mirror });
   // Runs whose Secret exists before their pod does: relink() leaves them alone.
   const starting = new Set();
   let proxy = { at: -Infinity, addresses: [] };
@@ -400,7 +401,7 @@ export function createKubernetesRunner({
         );
       }
     }
-    inbox.write(run, ca, digest);
+    await inbox.write(run, ca, digest);
     const podLabels = { ...owner, "deckhand.run": labelValue(run), [ROLE]: SANDBOX };
     const made = []; // what start() created, removed again if it fails
     starting.add(run);
@@ -942,6 +943,7 @@ export function createKubernetesRunner({
     close: inbox.close,
     closed: inbox.closed,
     poll: inbox.poll,
+    resync: inbox.resync,
     file: inbox.file,
     wait,
     kill,

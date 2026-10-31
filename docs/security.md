@@ -249,14 +249,15 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 ### Run tokens
 
 A sandbox holds no credential of the operator's and no GitHub token: it holds **run tokens**
-(`lib/tokens.mjs`), JWTs the broker (`listener/broker.mjs`) signs with an **Ed25519**
-key. Every service checks their signature **offline**, with the public key alone: the
-[GitHub gateway](#the-github-gateway), the git gateway, the run's files and the agents' API
-endpoints (`listener/upstream.mjs`) never ask the broker whether a token is genuine. While
-they run inside the listener, they also check that its run is one the broker still knows
-(below), which costs nothing there. No HMAC: a
-service that can check a token can't mint one, which matters once those services run apart
-from the broker (#492). The checks are strict and hand-written on `node:crypto`:
+(`lib/tokens.mjs`), JWTs the **broker service** (`broker/`, a container of its own, #505)
+signs with an **Ed25519** key that no other service holds. Every service checks their
+signature **offline**, with the broker's public keys alone (`GET /keys`): the
+[GitHub gateway](#the-github-gateway), the git gateway and the agents' API endpoints
+(`listener/upstream.mjs`, through `listener/broker.mjs`) never ask the broker whether a token
+is genuine. The listener also checks that its run is one it still has going, which costs
+nothing there. No HMAC: a service that can check a token can't mint one, so the listener, which
+the internet reaches, signs nothing (#492). The checks are strict and hand-written on
+`node:crypto`:
 
 - the algorithm is **EdDSA, always**: the header's `alg` never picks it, and any other
   (`none`, `HS256`…) is refused;
@@ -268,9 +269,18 @@ from the broker (#492). The checks are strict and hand-written on `node:crypto`:
 - `exp` is checked, and a token over 2 KB is never signed (Node takes 16 KB of headers, and
   git's Basic auth adds a third).
 
-The signing key is `run-token.key` in the data volume (owner-only, made on first start), so
-running sandboxes' tokens still check after a restart. Removing it makes a new one: every
-running sandbox's token is refused from then on.
+The signing key is `run-token.key` in the broker's own volume (`broker-keys`, owner-only,
+made on first start; a Secret on Kubernetes), never in the listener's data volume nor in the
+broker's store, so running sandboxes' tokens still check after a restart of either. Removing
+it makes a new one: every running sandbox's token is refused from then on. A listener from
+before the broker service kept it in its data volume: the next one removes it there, keeping
+its public part only (`run-token.pub`), which it hands to the broker (`POST /keys`, the
+orchestrator alone) for the run tokens its sandboxes still hold, for 7 days at most, and only
+in the 7 days after the first broker started on that store: after the migration, no key but
+the broker's own is ever added. The
+broker takes such a key for **run tokens only**, never a service token: a compromised
+orchestrator that handed it a key of its own could mint nothing it can't already ask for (a
+run's first tokens), and no service would take it for another service.
 
 **Claims.** Only what doesn't change during the run, nothing secret: the sandbox may read them,
 to know what it may do. `jti` (the run's id), `repo`, `mode`, `issue`, `fork`, `branches` (what
@@ -282,7 +292,13 @@ got) stays with the listener, by the run's id.
 **Bound to its sandbox.** `sandbox` is the ID of the run's own network (Docker) or of its pod
 (Kubernetes). Each service compares it with the ID of the network the call came from: the
 runner's answer for its source address, or, for a call the egress proxy relayed or
-forwarded (the broker's own calls go through it too), for the address the proxy names (`X-Deckhand-Client`, below). IDs, not addresses or names: both are
+forwarded, for the address the proxy names (`X-Deckhand-Client`, below). The broker service
+has no runner to ask: the proxy, when it forwards a sandbox's call about its own run there,
+names the network itself (`X-Deckhand-Sandbox`, the one the listener's egress policy gave it
+for that connection), moves the sandbox's run token to `X-Deckhand-Run-Token` and sends its
+own service token; the broker believes those headers from the proxy alone (and from the
+listener, which relays the calls that still reach it, vouching the same way), as its
+service token and the network it arrived on prove, and drops what a sandbox sent in them. IDs, not addresses or names: both are
 reused, an ID never. A token that leaks, to a research run on the open web say, gets another
 sandbox neither GitHub, a push, nor calls on the operator's credentials: `403`. The run's
 container engine is on its network, so its calls count as the run's, as they did; no other
@@ -313,17 +329,20 @@ which a running process never reads again. `sandbox/entrypoint.sh` writes the fi
 (`deckhand-token --now`: on Kubernetes it is signed when the pod is created, which may stay
 Pending a while, and the broker takes an expired one from its sandbox, below), and starts
 `deckhand-token --renew` (its first renewal after 30 seconds when that one failed), which asks
-the broker
+the broker service, through the egress proxy
 (`POST /run/token`, presenting the current token) for a new one every 5 minutes and replaces
 the file whole; a failure is retried after 30 seconds, so two may fail in a row. The broker
 refuses to renew another sandbox's token or an ended run's, and one more than 7 days past its
 `exp` (`RENEW_GRACE_MS`): an expired token still renews, from its own sandbox, if it is the one
 the sandbox holds (the newest signed for the run, or the last presented; an older one left in a
-process's environment is dead once expired, as it is no longer redacted), so a broker
+process's environment is dead once expired), so a broker
 away for longer than a token's life doesn't end the run (below). After a restart, the token
 renewed is bound where the one presented was, and the one presented is redacted too. A
 renewal asked within a minute of the last token signed gets that one back: a process asking in
-a loop can't pile up valid tokens. `deckhand-token`
+a loop can't pile up valid tokens. The broker's store holds no token in the clear: the hashes
+of the run's tokens still valid, and that last one sealed (AES-256-GCM, under a key derived
+from the signing key, `broker/seal.mjs`), so that any copy of the broker can hand it back.
+`deckhand-token`
 prints the file, so the gh wrapper, git's credential helper, `deckhand-files` and
 `deckhand-inbox` read it again for each call: the agent is told never to keep it
 (`prompts/sandbox.md`).
@@ -338,8 +357,12 @@ and nothing at the gateways.
 
 **The broker unreachable.** Running sandboxes keep working until their token expires, then
 their calls fail until it is back, when the next renewal (every 30 seconds by then) brings
-them back. While the services run in the listener, that is the
-listener being down anyway.
+them back. The proxy waits for a broker restarting (5 minutes), as for the listener; with two
+copies on one store (Kubernetes, Redis #509), an update leaves one answering. A run that ended
+is ended at the broker before its network goes (`DELETE /runs/:id`, told again until it is
+heard), so either copy refuses its tokens; a record whose end never came expires 8 days after
+its last renewal, and its inbox and files go when the listener next lists the runs (at its
+start, then every hour).
 
 **Runs from before tokens** keep the random secret they started with (`DECKHAND_RUN_SECRET`),
 and no renewal: the broker keeps it by hash, until the run ends, and it still only works from
@@ -347,9 +370,15 @@ that run's sandbox (or its engine), by the network's ID as a token does: the run
 looked up once by its name (or its pod's UID, by its pod's). That path goes in a later release
 ([Restarts](architecture.md#restarts)).
 
-Both kinds are redacted from runs' output: the run's tokens (its agent's, and every run token
-of its still valid, saved with its state so a restart redacts the one the sandbox holds), as
-its secret was.
+Both kinds are redacted from runs' output: the run's tokens (its agent's, and the first run
+token, saved with its state so a restart redacts the one the sandbox holds), as its secret
+was, and every run token by its shape, the header the broker signs each one with, or its
+claims and signature alone (the header is the same for all, and its `kid` public): the ones a
+sandbox renewed come from the broker service alone, which hands them to nobody else. A
+renewed token cut in pieces (its signature alone, or split across two lines) is no longer
+redacted, as a token listed whole was by any part of 16 characters; its binding to its
+sandbox is what limits a leak. An inbox message shaped like a token is redacted before it
+reaches the sandbox.
 
 **No sandbox holds a GitHub token.** Its `GH_TOKEN`, `deckhand-token` and git credential
 helper hand out the [run token](#run-tokens), and every call to GitHub goes through the listener's GitHub
@@ -395,11 +424,14 @@ mechanism: Ed25519, checked offline with its public key, the same strict checks 
   `deckhand:service:<name>`, so a run token is never a service token nor the other way round;
   `exp`, **15 minutes**; `ver`, the claims' format.
 - **Issued to its caller only**: each service asks the broker for its tokens at start and again
-  two thirds into their lifetime (`serviceTokens()`; a broker away is asked again every few
-  seconds while the tokens held last). The broker hands a service tokens only for the services
-  `CALLS` says it calls, and only to the service the request proves it is, never one it names:
-  the network it arrived on with Docker, its pod's projected service account token on
-  Kubernetes (#396, #505).
+  two thirds into their lifetime (`serviceTokens()`, `lib/broker-client.mjs`; a broker away is
+  asked again every few seconds while the tokens held last). The broker hands a service tokens
+  only for the services `CALLS` says it calls, and only to the service the request proves it
+  is, never one it names (`broker/callers.mjs`): the network it arrived on with Docker
+  (`SERVICE_NETWORKS`, compose's `broker-orchestrator` and `broker-proxy`, each a caller's
+  own, internal), its pod's service account on Kubernetes (`SERVICE_ACCOUNTS`): a token
+  projected for the broker alone (audience `deckhand-broker`), which the API server reviews
+  (TokenReview). Neither set: the broker doesn't start.
 - **Bound to its caller**: with Docker, each service is attached only to the networks of the
   services it calls, **one network per caller and callee**, and the service called checks
   which network a call arrived on (its own address on it, `SERVICE_NETWORKS`:
@@ -431,16 +463,26 @@ from a sandbox, every service is reached through the proxy, which vouches for th
 (`X-Deckhand-Client`), never directly. Two services share a network only when one calls the
 other, and a service is on no network it doesn't call or isn't called over, but its way out
 when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted hosts).
-`test/networks.test.mjs` reads `compose.yaml` and fails otherwise, and checks which containers the runner joins to a run's network. Until the broker moves out
-of the listener (#505), the listener joins the runs' networks too, for the endpoints sandboxes
-call directly (the agents' APIs, pushes).
+`test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's
+`SERVICE_NETWORKS` names each caller's own network, and checks which containers the runner
+joins to a run's network. The broker service is on none of them (#505). Until the gateways and
+the agents' endpoints move out of the listener (#502, #504), the listener joins the runs'
+networks too, for the endpoints sandboxes call directly (the agents' APIs, pushes).
+
+**The broker's table** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
+the stream and the screenshots it copies; the runner a run's first tokens and its inbox and
+files; the proxy the sandboxes' calls about their own run. The listener holds the orchestrator
+and the runner until they move out (#503, #506) and calls as the orchestrator, which the
+runner's endpoints, and the sandboxes' (for the calls it relays), take meanwhile. Edge and the
+other services get their own service tokens there and nothing else.
 
 The policy service is the first to have moved out (#501): with Docker Compose it is on one
 network, `policy`, internal (no way out) and shared with the listener alone. A call can only
 come from the listener there, so it doesn't set `SERVICE_NETWORKS`: that comes with a second
-caller's network, when the github service or the broker moves out (#502, #505). The listener
-signs its own service tokens with the broker's key meanwhile, as the orchestrator, and
-publishes the public key the service checks them with (`SERVICE_KEYS_DIR`, the `keys` volume).
+caller's network, when the github service moves out (#502). The listener's service tokens come
+from the broker service, as the orchestrator's, and the broker publishes the public key the
+policy service checks them with (`SERVICE_KEYS_DIR`, the `service-keys` volume, which only the
+broker writes).
 
 To check it by hand, from inside a running sandbox (`docker exec -it <sandbox> sh`), for each
 service (`<service>:<port>`, as `compose.yaml` names them):
@@ -1407,17 +1449,21 @@ of them, keep `/status` from it.
 The data volume (`/data`) holds what the listener keeps; whoever reads it has the App. The
 files holding secrets are the owner's only (`0600`):
 
-| File                     | What                                                              |
-| ------------------------ | ----------------------------------------------------------------- |
-| `app.json`               | the App's private key, client and webhook secrets                 |
-| `session.key`            | signs dashboard sessions                                          |
-| `sessions.json`          | each login's session epoch                                        |
-| `run-token.key`          | signs the runs' tokens ([Run tokens](#run-tokens))                |
-| `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over) |
-| `store/state.json`       | the store's keys: the queued comments, with their authors         |
-| `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes     |
-| `waits.json`             | comments waiting for other issues (`/after`), with their authors  |
-| `credentials/`           | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)     |
+| File                     | What                                                                                                                                      |
+| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.json`               | the App's private key, client and webhook secrets                                                                                         |
+| `session.key`            | signs dashboard sessions                                                                                                                  |
+| `sessions.json`          | each login's session epoch                                                                                                                |
+| `run-token.pub`          | the public part of the key a listener from before the broker service signed the runs' tokens with, for 7 days ([Run tokens](#run-tokens)) |
+| `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over)                                                                         |
+| `store/state.json`       | the store's keys: the queued comments, with their authors                                                                                 |
+| `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes                                                                             |
+| `waits.json`             | comments waiting for other issues (`/after`), with their authors                                                                          |
+| `credentials/`           | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)                                                                             |
+
+The runs' signing key is the broker service's alone, in its own volume (`broker-keys`), with
+its store (`broker-store`: the live runs, the hashes of their tokens, their inbox and files):
+neither is the listener's.
 
 `credentials/` is a folder on the host, mounted read-write (`./credentials` by default): its
 `codex-auth.json` and `agy-auth.json` (or the files `CODEX_AUTH_FILE` and `AGY_AUTH_FILE` point
@@ -1878,7 +1924,7 @@ namespace of its own:
   (`test/policies.test.mjs` tries the known ones with the real binary, through the service).
 - **Each call to the service is authenticated**: a [service token](#service-tokens) the
   broker signed (the listener calls as the orchestrator until it is split, #506), checked
-  offline with the broker's public key, which the listener publishes in a volume the service
+  offline with the broker's public key, which the broker publishes in a volume the service
   mounts read-only (`SERVICE_KEYS_DIR`); its table lets the orchestrator, the github service
   and the broker ask it, nobody else. It answers `/health` and `/ready` without one, and they
   say nothing.

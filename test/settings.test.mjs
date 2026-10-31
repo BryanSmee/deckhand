@@ -1,6 +1,5 @@
-// Every environment variable the listener, the policy service and the egress proxy read is in
-// docs/setup.md: a
-// setting nobody can find is one nobody can change. Every setting config.yaml takes is in
+// Every environment variable the listener, the policy service, the egress proxy and the broker
+// read is in docs/setup.md: a setting nobody can find is one nobody can change. Every setting config.yaml takes is in
 // compose.yaml too, which passes .env's value.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -17,13 +16,14 @@ function sources(dir) {
 }
 
 // SETTINGS, `env.X`, `process.env.X` and `setting("X")`: how config.mjs, server.mjs, runs.mjs,
-// proxy.mjs and the policy service's service.mjs read them.
+// proxy.mjs, the policy service's service.mjs and the broker's server.mjs read them.
 function settingsRead() {
   const names = new Set(Object.keys(SETTINGS));
   for (const source of [
     ...sources("listener"),
     ...sources("proxy"),
     ...sources("policy-service"),
+    ...sources("broker"),
   ]) {
     for (const [, name] of source.matchAll(/\b(?:env\.|setting\(")([A-Z][A-Z0-9_]*)/g))
       names.add(name);

@@ -12,11 +12,12 @@ import {
   createBrokerHttp,
   runAt,
   runFrom,
+  runPath,
   sandboxAt,
   taskWhere,
 } from "../listener/broker-http.mjs";
 import { createBroker } from "../listener/broker.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { localBroker, tempDir, testConfig } from "./helpers.mjs";
 
 // Two running tasks, A and B, on networks net-a and net-b: A's sandbox and its engine, B's
 // sandbox, and the listener on A's. `at`: address → { sandbox, name }, as runner.locate()
@@ -152,10 +153,10 @@ test("sandboxAt: a token binds to its run's sandbox or engine, never the listene
   assert.equal(await sandboxAt(ctx, "10.1.0.8"), null);
   // A's token, as the listener's broker checks it (server.mjs): from the proxy's own address on
   // A's network (a call it made itself, naming no client), refused.
-  const broker = createBroker({ sandboxOf: (ip) => sandboxAt(ctx, ip) });
+  const broker = createBroker({ ...localBroker(), sandboxOf: (ip) => sandboxAt(ctx, ip) });
   broker.register("org/a", undefined, { id: "a" });
   ctx.broker = broker;
-  const { token } = broker.issue("a", "net-a");
+  const { token } = await broker.issue("a", "net-a");
   assert.equal((await broker.check(token, "10.1.0.2")).run.id, "a");
   assert.equal((await broker.check(token, "10.1.0.8")).status, 403);
   assert.equal((await broker.check(token, "10.1.0.9")).status, 403);
@@ -413,12 +414,14 @@ test("egress: the broker's host only for a run's sandbox the proxy forwards, nev
         `http://127.0.0.1:${config.brokerPort}/egress?ip=${ip}&host=listener.test${extra}`,
       )
     ).json();
+  // With the network of the run's sandbox, which the proxy vouches for to the broker service.
   assert.deepEqual(await ask("10.1.0.2"), {
     allowed: true,
     private: false,
     cache: false,
     decrypt: false,
     relay: false,
+    sandbox: "net-a",
   });
   assert.equal((await ask("10.9.9.9")).allowed, false);
   assert.equal((await ask("10.7.7.7")).allowed, false);
@@ -481,4 +484,24 @@ test("egress: a question between a run's engine start and its sandbox's refuses 
   assert.equal((await ask("10.2.0.2", "evil.example")).allowed, false);
   // And A's are still A's.
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
+});
+
+test("runPath: what the listener relays to the broker service, the sandbox's own endpoints on a plain path only", () => {
+  assert.equal(runPath("/run/inbox?from=12"), "/run/inbox?from=12");
+  assert.equal(runPath("/run/token"), "/run/token");
+  assert.equal(runPath("/run/shots/page.png"), "/run/shots/page.png");
+  // The relay carries the listener's service token: never to the orchestrator's endpoints.
+  for (const url of [
+    "/run/../runs",
+    "/run/%2e%2e/keys",
+    "/run/%2E%2E/runs/x/tokens",
+    "/run/./token",
+    "/run//token",
+    "/run/inbox/../../events",
+    "/run/shots/../../shots/x/y.png",
+    "/runs",
+    "/run/other",
+  ]) {
+    assert.equal(runPath(url), null, url);
+  }
 });

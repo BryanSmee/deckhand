@@ -3,6 +3,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { redact } from "../listener/secrets.mjs";
+import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
+import { testKey } from "./helpers.mjs";
 
 const access = "ya29.a0AfB_byC-0123456789abcdefghijklmnopqrstuvwxyz";
 
@@ -44,6 +46,37 @@ test("GitHub tokens are redacted by their shape, whoever issued them", () => {
   );
   // Too short.
   assert.equal(redact("ghs_short", []), "ghs_short");
+});
+
+test("a run token is redacted by its shape: the broker service renews them, the listener lists the first alone", () => {
+  const token = signToken(
+    { ver: TOKEN_VERSION, jti: "run-a" },
+    { ...testKey(), audience: "deckhand:broker", ttlMs: 60_000 },
+  );
+  assert.equal(redact(`$ deckhand-token\n${token}\n`, []), "$ deckhand-token\n[redacted]\n");
+  // Its claims and signature alone are the whole token: redacted too.
+  const body = token.split(".").slice(1).join(".");
+  assert.equal(redact(`claims: ${body}`, []), "claims: [redacted]");
+  // Another issuer's JWT (another header) stays: a reply may quote one.
+  const other = "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjMifQ.c2lnbmF0dXJl";
+  assert.equal(redact(other, []), other);
+});
+
+test("a run token's shape is looked for in linear time, and still after a raw line's \\n", () => {
+  // A prefix repeated without a token after it: each one a scan to the end, were it looked for
+  // inside a base64url run.
+  for (const prefix of ["eyJ2ZXIiOjEs", "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCIsImtpZCI6I"]) {
+    const text = `${prefix}a`.repeat(Math.ceil(1_000_000 / (prefix.length + 1)));
+    const started = performance.now();
+    assert.equal(redact(text, []), text);
+    assert.ok(performance.now() - started < 1000, prefix);
+  }
+  const token = signToken(
+    { ver: TOKEN_VERSION, jti: "run-a" },
+    { ...testKey(), audience: "deckhand:broker", ttlMs: 60_000 },
+  );
+  const line = JSON.stringify({ content: `$ deckhand-token\n${token}\n` });
+  assert.equal(redact(line, []), JSON.stringify({ content: "$ deckhand-token\n[redacted]\n" }));
 });
 
 test("a GitHub token on a line of its own in a raw stream-json line is redacted too", () => {

@@ -1,11 +1,13 @@
-// The broker's HTTP server, on the runs' networks only (compose.yaml doesn't publish its
-// port): the egress proxy's questions (may this sandbox reach this host?, on a port of their
-// own too, listenPolicy()), the GitHub gateway
-// (github-gateway.mjs), which the proxy sends the sandboxes' GitHub calls to, the git gateway
-// (git-gateway.mjs) and the agents' API endpoints
+// The listener's port for sandboxes, on the runs' networks only (compose.yaml doesn't publish
+// it): the egress proxy's questions (may this sandbox reach this host?, on a port of their own
+// too, listenPolicy()), the GitHub gateway (github-gateway.mjs), which the proxy sends the
+// sandboxes' GitHub calls to, the git gateway (git-gateway.mjs) and the agents' API endpoints
 // (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
-// to), the runs' files: inbox, CA, digest and screenshots (run-files.mjs), and their tokens'
-// renewal (POST /run/token). The runs' tokens are the broker's (broker.mjs).
+// to). The runs' tokens are the broker service's (../broker/, #505): their renewal and the
+// runs' files (inbox, CA, digest, screenshots) go there through the proxy; those that still
+// come here (a proxy from before the broker service, a sandbox from before #511) are relayed to
+// it (broker-service.mjs relay()), but a run's from before tokens, answered here from the
+// runner's files (run-files.mjs).
 import { createServer } from "node:http";
 import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
@@ -17,6 +19,8 @@ import { engineName } from "./runner/engine.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "../lib/http.mjs";
+import { isToken } from "../lib/tokens.mjs";
+import { pathOf } from "../lib/service-token.mjs";
 
 // Path prefix → the ctx service that handles it, and how its failures are logged. A failure
 // once the answer started cuts the connection when `destroy`: a half-sent stream (a push, an
@@ -44,6 +48,20 @@ function oldPrAnswer(match) {
       "this sandbox's gh predates its listener: run GH_TOKEN=$(deckhand-token) /usr/bin/gh pr " +
       `${command.trim()} with the same flags instead, which goes through the GitHub gateway`,
   };
+}
+
+// What a sandbox may call the broker service about its own run (`/run/…`, ../broker/http.mjs),
+// relayed by the listener: the path and query as sent, when it is one of those and nothing the
+// URL parser would change (no dot segment, encoded or not, no `//`); else null.
+const RUN_PATHS = /^\/run\/(?:token|inbox|ca|digest|shots\/[^/]+)$/;
+export function runPath(url) {
+  let pathname;
+  try {
+    pathname = pathOf(url);
+  } catch {
+    return null;
+  }
+  return RUN_PATHS.test(pathname) ? String(url) : null;
 }
 
 // The ID of the network (or pod) of the task's sandbox, or null: what its tokens are bound to
@@ -190,7 +208,17 @@ export function createBrokerHttp(ctx) {
       }
       const allowed = forwarded && !!task;
       if (!allowed) log(`Egress: refused the broker for ${ip}`);
-      return sendJson(res, { allowed, private: false, cache: false, decrypt: false, relay: false });
+      // The network (or pod) the call came from, which the proxy vouches for to the broker
+      // service: what the run's token is bound to.
+      const sandbox = allowed ? (task.live.sandbox ?? null) : null;
+      return sendJson(res, {
+        allowed,
+        private: false,
+        cache: false,
+        decrypt: false,
+        relay: false,
+        ...(sandbox && { sandbox }),
+      });
     }
     // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
     const other = task ? null : await ctx.images.egressFor?.(ip, host);
@@ -241,15 +269,25 @@ export function createBrokerHttp(ctx) {
     sendJson(res, answer);
   }
 
-  // POST /run/token: a new run token for the one the sandbox sends (`Authorization: Bearer`),
-  // from its own sandbox, while its run lasts (broker.mjs renew()): ../sandbox/deckhand-token
-  // asks every few minutes, and writes it in place of the old one.
-  async function renewToken(req, res) {
-    const [scheme, token] = (req.headers.authorization ?? "").split(" ");
-    const renewed = await ctx.broker.renew(scheme === "Bearer" ? token : "", req);
-    if (!renewed.token) return sendJson(res, { message: renewed.message }, renewed.status);
-    res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
-    res.end(`${renewed.token}\n`);
+  // A sandbox's call about its own run that came here (`/run/…`): on to the broker service
+  // with its run token, and the network (or pod) it came from as the listener finds it, as the
+  // egress proxy vouches for it there. A run from before tokens, whose secret the broker service
+  // doesn't know, gets its files from here (run-files.mjs), and no renewal.
+  async function runCall(req, res) {
+    const [scheme, credential] = (req.headers.authorization ?? "").split(" ");
+    const token = scheme === "Bearer" ? (credential ?? "") : "";
+    if (isToken(token) && ctx.brokerService) {
+      // The sandbox's own endpoints only, on a plain path: the relay carries the listener's
+      // service token, which "/run/../runs" would take to the orchestrator's.
+      const path = runPath(req.url);
+      if (!path) return sendJson(res, { message: "not found" }, 404);
+      const sandbox = await sandboxAt(ctx, await clientAddress(ctx, req));
+      return ctx.brokerService.relay(req, res, { sandbox, token, path });
+    }
+    if (req.url === "/run/token") {
+      return sendJson(res, { message: "only a run token is renewed" }, 401);
+    }
+    return runFiles.handle(req, res);
   }
 
   // A handler's failure: logged, a 500 when nothing was answered yet.
@@ -267,11 +305,8 @@ export function createBrokerHttp(ctx) {
     if (route) {
       return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
     }
-    if (req.method === "POST" && req.url === "/run/token") {
-      return renewToken(req, res).catch(failed(res, "Run token", false));
-    }
     if (req.url.startsWith("/run/")) {
-      return runFiles.handle(req, res).catch(failed(res, "Run files", true));
+      return runCall(req, res).catch(failed(res, "Run files", true));
     }
     const old = OLD_PR.exec(req.url);
     if (old) {

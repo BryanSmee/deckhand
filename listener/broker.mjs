@@ -1,10 +1,11 @@
-// Run broker: each run's sandbox holds a run token (lib/tokens.mjs) instead of any GitHub token,
-// a JWT the broker signs and renews, and every service checks offline, with the public key: the
-// GitHub gateway (github-gateway.mjs), where the egress proxy relays the sandbox's GitHub calls,
-// swaps it for a token limited to the run's repo, which the sandbox never sees; the git gateway
-// (git-gateway.mjs) lets it push the branches it names; the run's files (run-files.mjs). The
+// The listener's side of the runs' tokens: each run's sandbox holds a run token
+// (lib/tokens.mjs) instead of any GitHub token, a JWT the broker service signs and renews
+// (../broker/, #505), which alone holds the signing key; the listener checks it offline, with
+// the broker's public keys: the GitHub gateway (github-gateway.mjs), where the egress proxy
+// relays the sandbox's GitHub calls, swaps it for a token limited to the run's repo, which the
+// sandbox never sees; the git gateway (git-gateway.mjs) lets it push the branches it names. The
 // agents' API endpoints (upstream.mjs) take another token, for their own audience, in place of
-// the operator's credential. Served on its own port, which only the runs' networks reach.
+// the operator's credential.
 //
 // A token only works from its own sandbox: its `sandbox` claim is the ID of the run's network
 // (Docker) or of its pod (Kubernetes), and each call's is the runner's answer for its source
@@ -13,46 +14,17 @@
 // operator's credential. A run's network goes with it, so its tokens die with it too.
 //
 // What changes during a run (the issues it created, its pushes, the installation tokens it got,
-// its provider's last answer) stays here, by the run's id, the token's `jti`.
+// its provider's last answer) stays here, by the run's id, the token's `jti`. Its first tokens
+// come from the broker service (`issuer`), which is told when the run ends.
 //
 // Runs started before tokens hold a random secret instead, found here by its hash and bound to
 // its sandbox by address (sentBy()), until they end: that path goes in a later release
 // (docs/architecture.md, Restarts).
-import { createHash, generateKeyPairSync, randomBytes } from "node:crypto";
-import {
-  AGENT_AUDIENCE,
-  isToken,
-  keyId,
-  RUN_AUDIENCE,
-  signToken,
-  TOKEN_VERSION,
-  TokenError,
-  verifyToken,
-} from "../lib/tokens.mjs";
+import { createHash, randomBytes } from "node:crypto";
+import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 
 // What a run's token or secret sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
-
-// A run token's lifetime, and how often the sandbox renews it (../sandbox/deckhand-token): two
-// renewals may fail before it expires.
-export const TOKEN_TTL_MS = 15 * 60_000;
-export const RENEW_EVERY_S = 5 * 60;
-
-// The agent token's: it is in the agent's environment from its start, which a running process
-// never reads again, so it can't be renewed. Bound to the run's network or pod as the run token
-// is, it dies with the run; this is only a ceiling.
-export const AGENT_TOKEN_TTL_MS = 7 * 24 * 60 * 60_000;
-
-// How long past its expiry a run token still renews, from its own sandbox and while its run
-// lasts: a broker unreachable for longer than a token's life (a slow update, a host reboot)
-// leaves the sandbox nothing else to present, so its calls fail until the broker is back, not
-// for the rest of the run. As long as the agent token, which outlives a pause of the broker anyway.
-export const RENEW_GRACE_MS = 7 * 24 * 60 * 60_000;
-
-// How soon after a run token was signed a renewal gets that one again rather than a new one: a
-// process that asks in a loop can't fill the run's list of tokens still valid, which its
-// output is redacted of (secretsOf()), nor push one out of it.
-export const RENEW_MIN_MS = 60_000;
 
 // A token's `exp` (ms), unchecked: for the list of a run's tokens to redact, never to trust one.
 function expOf(token) {
@@ -71,11 +43,14 @@ function hash(secret) {
   return createHash("sha256").update(secret).digest("hex");
 }
 
-// A key for a broker without one (the tests): new each time, so its tokens die with it.
-function ephemeralKey() {
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  return { privateKey, publicKey, kid: keyId(publicKey) };
-}
+// Where a broker without the broker service gets its tokens (the tests that sign none): nowhere.
+export const NO_ISSUER = {
+  issue: async () => {
+    throw new Error("no broker service to sign the run's tokens");
+  },
+  put: async () => {},
+  end: async () => {},
+};
 
 // Whether `branch` (without refs/heads/) is one of `patterns`: the same name, or one that
 // starts with a pattern's text before its final "*" ("issue-12-*"). Case-sensitive, as git is.
@@ -104,10 +79,14 @@ export function createBroker({
   // address → the ID of the network (or pod) it is on, as the runner tells (runner/), or null:
   // what binds a token to its sandbox. None: every token is refused.
   sandboxOf = async () => null,
-  // { privateKey, publicKey, kid } (lib/tokens.mjs signingKey()). `keys`: kid → public key, the
-  // ones tokens are checked with: the signing key's, and an older one's while keys rotate.
-  key = ephemeralKey(),
-  keys = new Map([[key.kid, key.publicKey]]),
+  // The broker service (broker-service.mjs createBrokerService()): { issue(id, fields) →
+  // { token, agentToken }, put(id, fields), end(id) }.
+  issuer = NO_ISSUER,
+  // () → kid → public key: what run tokens are checked with, the broker service's (and a key
+  // of the listener's from before it, while its tokens may still be presented).
+  keys = () => new Map(),
+  // () → a promise, once the keys were read again: called when a token names an unknown key.
+  unknownKey = async () => {},
   now = Date.now,
   random = () => randomBytes(32).toString("hex"),
 }) {
@@ -237,64 +216,69 @@ export function createBroker({
     if (run) Object.assign(run, { branches: run.push ? [...branches] : [], fork: fork === true });
   }
 
-  // A token's claims: what doesn't change during the run, nothing secret.
-  function claimsOf(run) {
+  // What the broker service is told of the run: what its tokens claim, the network or pod they
+  // are bound to, and its screenshots' folder (`shots`, uploads go there).
+  function fieldsOf(run) {
     return {
-      ver: TOKEN_VERSION,
-      jti: run.id,
       repo: run.repo,
       mode: run.mode,
       issue: run.issue,
       fork: run.fork,
       branches: run.branches,
       sandbox: run.sandbox,
-      caps: [],
+      shots: run.shots ?? null,
     };
   }
 
-  function signed(run, audience, ttlMs) {
-    const token = signToken(claimsOf(run), {
-      privateKey: key.privateKey,
-      kid: key.kid,
-      audience,
-      ttlMs,
-      now: now(),
-    });
-    if (audience === AGENT_AUDIENCE) run.agentToken = token;
-    else keep(run, token, now() + ttlMs, now());
-    return token;
-  }
-
-  // A new run token in the run's list (secretsOf()), which holds every one still valid, and the
-  // last one presented for renewal whatever its expiry: renew() takes it for RENEW_GRACE_MS, so
-  // while the sandbox holds it (the broker away longer than its life), it is a credential still.
-  // Others expired go as it comes. `at`: when it was signed (0: by a listener before a
-  // restart). Saved with the run's state (changed()), so a restart still redacts what the
-  // sandbox holds.
-  function keep(run, token, exp, at) {
-    const kept = (t) => t.token !== token && (t.exp > now() || t.token === run.presented);
-    run.issued = [...run.issued.filter(kept), { token, exp, at }];
+  // A run token the sandbox was handed, in the run's list (secretsOf()), saved with the run's
+  // state (changed()), so a restart still redacts it. The ones it renews come from the broker
+  // service alone: redact() knows their shape.
+  function keep(run, token, at) {
+    run.issued = [...run.issued.filter((t) => t.token !== token), { token, exp: expOf(token), at }];
     run.changed?.();
   }
 
-  // The run's first tokens, once its sandbox's network (or pod) is known: `sandbox`, its ID.
-  // → { token, agentToken }: the run token, which the sandbox renews (renew()), and the
-  // agent's, for the agents' API endpoints. Throws for a run that ended.
-  function issue(handle, sandbox) {
+  // The run's first tokens, from the broker service, once its sandbox's network (or pod) is
+  // known: `sandbox`, its ID; `shots`, its screenshots' folder (null: none). → { token,
+  // agentToken }: the run token, which the sandbox renews with the broker service, and the
+  // agent's, for the agents' API endpoints. Throws for a run that ended, or a broker service
+  // that refused.
+  async function issue(handle, sandbox, shots = null) {
     const run = runOf(handle);
     if (!run) throw new Error("no such run: it ended");
     if (!sandbox) throw new Error("no sandbox to bind the run's tokens to");
     run.sandbox = String(sandbox);
+    run.shots = shots;
     run.issued = [];
-    const agentToken = signed(run, AGENT_AUDIENCE, AGENT_TOKEN_TTL_MS);
-    return { token: signed(run, RUN_AUDIENCE, TOKEN_TTL_MS), agentToken };
+    const { token, agentToken } = await issuer.issue(run.id, fieldsOf(run));
+    // Ended meanwhile: its tokens name nothing.
+    if (runOf(handle) !== run) {
+      issuer.end(run.id).catch(() => {});
+      throw new Error("no such run: it ended");
+    }
+    run.agentToken = agentToken;
+    keep(run, token, now());
+    return { token, agentToken };
+  }
+
+  // A run a restarted listener picked up: the broker service is told it still goes, with what
+  // its tokens claim, so they still renew there (a run from before the broker service, whose
+  // listener signed them, too). A run from before tokens has nothing there.
+  async function restore(handle, shots = null) {
+    const run = runOf(handle);
+    if (!run || run.secret) return;
+    run.shots = shots;
+    // The hashes of the tokens it handed the sandbox, for the broker's rule past their expiry
+    // (only the newest renews), should it not have the run yet.
+    const issued = run.issued.map((t) => ({ hash: hash(t.token), exp: t.exp }));
+    await issuer.put(run.id, { ...fieldsOf(run), issued });
   }
 
   // The run a call's credential (a token, or a secret from before tokens) names, once checked:
   // { run, claims } or { status, message }. `from`: the call (its request: the address is
   // clientOf()'s, the one the egress proxy names for a call it relayed or forwarded) or the
   // address it came from; `audience`: the service's.
-  async function check(credential, from, audience = RUN_AUDIENCE, graceMs = 0) {
+  async function check(credential, from, audience = RUN_AUDIENCE) {
     const ip = typeof from === "string" ? from : from ? await clientOf(from) : "";
     const unknown = { status: 401, message: "unknown or finished run" };
     if (!credential) return unknown;
@@ -304,9 +288,17 @@ export function createBroker({
       if (!(await sentBy(run, null, ip))) return { status: 403, message: NOT_ITS_SANDBOX };
       return { run, claims: null };
     }
+    const verify = () => verifyToken(credential, { keys: keys(), audience, now: now() });
     let claims;
     try {
-      claims = verifyToken(credential, { keys, audience, now: now(), graceMs });
+      try {
+        claims = verify();
+      } catch (error) {
+        // Signed with a key the listener doesn't have yet (the broker's changed): read again.
+        if (!(error instanceof TokenError) || !/unknown key/.test(error.message)) throw error;
+        await unknownKey();
+        claims = verify();
+      }
     } catch (error) {
       if (!(error instanceof TokenError)) throw error;
       return { status: 401, message: `this run token is refused: ${error.message}` };
@@ -318,37 +310,6 @@ export function createBroker({
       return { status: 403, message: NOT_ITS_SANDBOX };
     }
     return { run, claims };
-  }
-
-  // A new run token for the one the sandbox holds, checked as any call's, but taken up to
-  // RENEW_GRACE_MS past its expiry: { token } or { status, message }. An ended run's is refused
-  // (check()). `from`: as check()'s. The new one is bound where the one presented was, which
-  // check() just compared with the call's network: a restarted listener's record of the run
-  // doesn't know it before. Asked again within RENEW_MIN_MS of the last one signed: that one.
-  async function renew(token, from) {
-    if (!isToken(token)) return { status: 401, message: "only a run token is renewed" };
-    const checked = await check(token, from, RUN_AUDIENCE, RENEW_GRACE_MS);
-    if (!checked.run) return checked;
-    const { run, claims } = checked;
-    // Past its expiry, only the token the sandbox holds renews: the newest signed for the run,
-    // or the last one presented (which a restarted listener may not have signed). An older one,
-    // left behind in a process's environment say, is dead once expired, as it is no longer
-    // redacted (keep()). A run whose tokens a restart didn't keep can't tell: it takes it.
-    const newest = run.issued.at(-1)?.token;
-    const expired = claims.exp * 1000 <= now();
-    if (expired && newest && token !== newest && token !== run.presented) {
-      return { status: 401, message: "this run token is refused: expired" };
-    }
-    run.sandbox ??= claims.sandbox;
-    // Redacted too: after a restart, the one the sandbox held may be in no list yet; and kept
-    // there once expired (keep()).
-    run.presented = token;
-    if (!run.issued.some((t) => t.token === token)) {
-      run.issued = [{ token, exp: claims.exp * 1000, at: 0 }, ...run.issued];
-    }
-    const last = run.issued.at(-1);
-    if (last.at && now() - last.at < RENEW_MIN_MS && last.exp > now()) return { token: last.token };
-    return { token: signed(run, RUN_AUDIENCE, TOKEN_TTL_MS) };
   }
 
   // The tokens signed for the run that its output must not publish (runs.mjs).
@@ -372,11 +333,14 @@ export function createBroker({
     return !!ip && (await sentFrom(run, ip)) === true;
   }
 
+  // The run is over: its tokens and secret name nothing here from now on, and the broker
+  // service is told (`issuer.end()`, which tries again until it hears), so they renew nowhere.
   function revoke(handle) {
     const run = runOf(handle);
-    if (!run) return;
+    if (!run) return Promise.resolve();
     runs.delete(run.id);
     if (run.secret) secrets.delete(run.secret);
+    return run.secret ? Promise.resolve() : issuer.end(run.id);
   }
 
   return {
@@ -386,8 +350,8 @@ export function createBroker({
     watchPushes,
     watchChanges,
     issue,
+    restore,
     check,
-    renew,
     secretsOf,
     issuedOf,
     revoke,

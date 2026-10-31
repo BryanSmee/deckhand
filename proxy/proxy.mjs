@@ -19,7 +19,10 @@
 // credential, ../listener/google.mjs) are decrypted the same way, whether the cache is on or
 // not, and each request goes to the listener (RELAY_URL) instead of the host, with the address
 // of the sandbox it came from (CLIENT_HEADER). Plain HTTP to the listener's broker (BROKER_URL:
-// the agents' APIs, pushes, the run's files) goes to it the same way, for whom the policy allows it.
+// the agents' APIs, pushes) goes to it the same way, for whom the policy allows it; what a
+// sandbox calls there about its own run (`/run/…`: its token's renewal, its inbox and files)
+// goes to the broker service instead (BROKER_SERVICE_URL, ../broker/, #505), vouched for with
+// the proxy's own service token: the network (or pod) it came from, as the policy said.
 // Everything else, and every CONNECT to another host, is forwarded as is: a raw tunnel.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -33,6 +36,7 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
+import { createBrokerCaller, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -57,6 +61,10 @@ export function drainMs(text) {
 // run's token to its sandbox (../listener/broker-http.mjs, which believes it from
 // the proxy alone). Whatever the client sent in it is replaced.
 export const CLIENT_HEADER = "x-deckhand-client";
+
+// What the broker service reads a sandbox's call by (lib/broker-client.mjs): whatever the client
+// sent in them is dropped.
+const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER];
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.
 export function target(authority) {
@@ -86,6 +94,8 @@ export function listenerPolicy(url, timeoutMs = 5000, wait = {}) {
         cache: answer.cache === true,
         decrypt: answer.decrypt === true,
         relay: answer.relay === true,
+        // For the broker's host: the network (or pod) of the run's sandbox.
+        sandbox: typeof answer.sandbox === "string" && answer.sandbox ? answer.sandbox : null,
       };
     } catch {
       return { allowed: false };
@@ -136,6 +146,9 @@ export function policyPath(pathname) {
 
 class Refused extends Error {}
 
+// A run token's shape (../lib/tokens.mjs isToken()): what goes to the broker service.
+const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
+
 // The most a CONNECT's client may send before its answer (a ClientHello sent early).
 export const EARLY_MAX = 16 * 1024;
 
@@ -185,6 +198,9 @@ export function createProxy({
   authority = null, // createAuthority()'s, ready: HTTPS to cached and relayed hosts is decrypted
   relayUrl = null, // where relayed requests go: <relayUrl>/<host><path>
   brokerUrl = null, // the broker, as sandboxes call it: its plain HTTP is forwarded to it
+  // The broker service, where the sandboxes' `/run/…` calls go: { url, header() → the proxy's
+  // service token for it } (../lib/broker-client.mjs). None: to the listener, which relays them.
+  brokerService = null,
   upstreamCa, // what verifies the hosts' certificates, and an https: relayUrl's; default: Node's trust store
   // How relayed requests wait for a listener restarting (wait.mjs): { limitMs, now, sleep }.
   wait = {},
@@ -457,12 +473,35 @@ export function createProxy({
       return forbid("the broker answers that to the proxy alone");
     }
     const from = req.socket.remoteAddress;
-    const { allowed } = await policy(from.replace(/^::ffff:/, ""), to.hostname, {
+    const { allowed, sandbox } = await policy(from.replace(/^::ffff:/, ""), to.hostname, {
       gone: () => req.socket.readableEnded || req.socket.destroyed,
       broker: true,
     });
     if (req.socket.destroyed) return;
     if (!allowed) return forbid("only a running sandbox reaches the listener's broker");
+    // A run token's calls about its own run: to the broker service. A run's from before tokens
+    // (a secret) still to the listener, which has its files.
+    const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
+    if (brokerService && /^\/run\//.test(to.pathname) && JWT.test(token)) {
+      const url = new URL(brokerService.url);
+      url.pathname = to.pathname;
+      url.search = to.search;
+      // Its own token first, from a broker that may be restarting too: waited for as the call is.
+      let authorization;
+      try {
+        authorization = await untilReached(() => brokerService.header(), {
+          ...wait,
+          gone: () => req.socket.destroyed,
+        });
+      } catch {
+        return unreachable(res, "the broker");
+      }
+      return toListener(req, res, url, from, {
+        authorization,
+        [RUN_TOKEN_HEADER]: token,
+        [SANDBOX_HEADER]: sandbox ?? "",
+      });
+    }
     return toListener(req, res, to, from);
   }
 
@@ -480,13 +519,15 @@ export function createProxy({
     return toListener(req, res, url, from);
   }
 
-  // A request on to the listener at `url`, naming its client (`from`). A listener restarting is
-  // waited for: the request is sent once a connection is made, and never again (wait.mjs).
-  async function toListener(req, res, url, from) {
+  // A request on to the listener (or the broker service) at `url`, naming its client (`from`),
+  // with `extra` headers over its own. A listener restarting is waited for: the request is sent
+  // once a connection is made, and never again (wait.mjs).
+  async function toListener(req, res, url, from, extra = {}) {
     const headers = { ...req.headers, host: url.host };
     for (const name of Object.keys(headers)) {
-      if (name.startsWith("proxy-")) delete headers[name];
+      if (name.startsWith("proxy-") || VOUCHED.includes(name)) delete headers[name];
     }
+    Object.assign(headers, extra);
     headers[CLIENT_HEADER] = String(from ?? "").replace(/^::ffff:/, "");
     // A connection per request, as it can't be pooled: closed once answered.
     headers.connection = "close";
@@ -528,7 +569,7 @@ export function createProxy({
     }
     // Only a relayed request names its client: nobody else may pass the name on (should a host
     // the operator names lead back to the listener).
-    delete headers[CLIENT_HEADER];
+    for (const name of VOUCHED) delete headers[name];
     const to = { address, url, host, headers };
     const use = cache?.enabled && cacheOk ? requestUse(req) : "skip";
     if (use !== "skip") return cached(req, res, to, use);
@@ -624,6 +665,17 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The broker as sandboxes call it (the listener's BROKER_URL): their plain HTTP to it is
   // forwarded there, and waits for a listener restarting.
   const brokerUrl = process.env.BROKER_URL || defaultBrokerUrl(relayUrl);
+  // The broker service (#505), where their calls about their own run go, with the proxy's own
+  // service token (asked for in the background: the proxy serves the rest meanwhile). Unset:
+  // they go to the listener, which relays them.
+  const brokerService = process.env.BROKER_SERVICE_URL
+    ? createBrokerCaller({
+        url: process.env.BROKER_SERVICE_URL,
+        podTokenFile: process.env.SERVICE_ACCOUNT_TOKEN_FILE || null,
+        log,
+      })
+    : null;
+  brokerService?.start();
   const https = authority ? ", HTTPS too" : "";
   const proxy = createProxy({
     policy: listenerPolicy(url),
@@ -631,6 +683,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     authority,
     relayUrl,
     brokerUrl,
+    brokerService,
     log,
   });
   proxy.listen(port, () =>
