@@ -40,7 +40,8 @@ const IDLE_MS = 2000;
 const BODY_MS = 10000;
 // The dashboard's posts are small: a comment, an answer, a discussion.
 const MAX_API_BODY = 1024 * 1024;
-// The most deliveries the stream keeps unread: far more than a handover leaves.
+// The most deliveries the stream keeps unread (far more than a handover leaves); one the
+// orchestrator acknowledged goes from it at once (internal.mjs).
 const STREAM_MAX = 10_000;
 
 // Health checks and scripts call from inside the container (docker compose exec). A reverse

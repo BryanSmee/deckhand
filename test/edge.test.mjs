@@ -215,6 +215,8 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
   assert.deepEqual(started, ["d1", "d2", "d3", "d2"]);
   await client.stop();
   assert.deepEqual(await store.read(DELIVERIES, "orchestrator"), []);
+  // Handled, gone from the stream: no reader finds their payloads any more.
+  assert.deepEqual(await store.read(DELIVERIES, "anyone"), []);
 });
 
 test("edge's internal port: the orchestrator's token alone; the App's public parts, never its secrets", async (t) => {

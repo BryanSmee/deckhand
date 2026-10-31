@@ -176,6 +176,24 @@ export function storeContract(name, open) {
     assert.deepEqual(await store.read("runs", "orchestrator"), []);
   });
 
+  test(`${name}: ack's drop: what its one consumer acknowledged goes from the stream`, async (t) => {
+    const { store } = await setup(t);
+    const ids = [];
+    for (const n of [1, 2, 3]) ids.push(await store.append("deliveries", { n }));
+    await store.read("deliveries", "orchestrator", { count: 2 });
+    // The third wasn't read: neither acknowledged nor dropped.
+    assert.equal(await store.ack("deliveries", "orchestrator", ids, { drop: true }), 2);
+    assert.deepEqual(
+      (await store.read("deliveries", "orchestrator")).map((e) => e.event.n),
+      [3],
+    );
+    // Gone for any reader: a new consumer finds only what was left.
+    assert.deepEqual(
+      (await store.read("deliveries", "another")).map((e) => e.event.n),
+      [3],
+    );
+  });
+
   test(`${name}: a stream keeps its last maxLength events`, async (t) => {
     const { store } = await setup(t);
     for (let n = 1; n <= 7; n++) await store.append("progress", { n }, { maxLength: 3 });

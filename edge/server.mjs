@@ -21,10 +21,11 @@
 //   SERVICE_NETWORKS    with Docker, the orchestrator's network to it (orchestrator=<subnet>)
 //   DRAIN_SECONDS       how long a stopping copy lets its requests finish (a live log): 25
 import { randomUUID } from "node:crypto";
-import { statSync, writeFileSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { activePassive } from "../lib/active.mjs";
+import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
@@ -168,7 +169,8 @@ const internal = createEdgeInternal({
     const count = await importEpochs(store, epochs);
     const taken = typeof legacy === "string" ? Buffer.from(legacy, "base64") : null;
     if (taken?.length >= 32) {
-      writeFileSync(join(dataDir, "session.key"), taken, { mode: 0o600 });
+      // Whole or not at all: the other copy, reading it meanwhile, never sees it cut short.
+      writeFileAtomic(keyPath, taken, { mode: 0o600 });
       key = taken;
       keySeen = statSync(keyPath).mtimeMs;
     }

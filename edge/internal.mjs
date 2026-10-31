@@ -75,10 +75,12 @@ export function createEdgeInternal({
     if (route === "GET /events") return events(res, url);
     if (route === "POST /events/ack") {
       const { ids } = (await readJsonBody(req, MAX_BODY)) ?? {};
+      // Handled: gone from the stream, its payload with it (what people wrote isn't kept on).
       const acked = await store.ack(
         DELIVERIES,
         CONSUMER,
         Array.isArray(ids) ? ids.map(String) : [],
+        { drop: true },
       );
       return sendJson(res, { acked });
     }

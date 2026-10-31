@@ -490,6 +490,8 @@ filesystem, without capabilities.
   a redelivery of one taken comes within it), which both copies share: one GitHub sends twice, or that reaches
   both copies, goes on once. It goes on the `deliveries` stream in that store, with the secrets
   edge holds redacted from what people wrote (`storable()`), and only then is answered `202`.
+  Once the orchestrator acknowledges it, it goes from the stream, its payload with it (the file
+  store rewrites the stream's file once it holds 100 lines of them).
   The store away: `503`, its GUID freed, and GitHub marks it failed for the redeliveries to ask
   again. Their poller (the App's one write, `POST /as-app/app/hook/deliveries/:id/attempts` at
   the github service, edge's alone) runs on one copy, the holder of the store's lease

@@ -298,3 +298,20 @@ test("file: two processes' increments on one folder are never lost; a crashed on
   }
   assert.equal(await fileStore({ dir }).get("n"), 201 + 3 * 400);
 });
+
+test("file: acknowledged with drop, a stream's events leave its memory and, past 100, its file (#506)", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  for (let n = 0; n < 250; n++) {
+    const id = await store.append("deliveries", { n, text: "x".repeat(1000) });
+    await store.read("deliveries", "orchestrator");
+    await store.ack("deliveries", "orchestrator", [id], { drop: true });
+  }
+  const file = readFileSync(join(dir, "streams", "deliveries.jsonl"), "utf8");
+  assert.ok(file.split("\n").filter(Boolean).length < 100, "acknowledged lines kept");
+  // Read again from the folder (a restart, the other copy): none of them comes back.
+  const again = fileStore({ dir });
+  assert.deepEqual(await again.read("deliveries", "another"), []);
+  const id = await again.append("deliveries", { n: 250 });
+  assert.equal(Number(id), 251);
+});
