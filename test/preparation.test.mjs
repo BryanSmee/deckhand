@@ -9,7 +9,7 @@ import { agentFor } from "../listener/agents/index.mjs";
 import { createPreparation } from "../listener/preparation.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { sandboxEnv, sandboxSpec, sessionOf } from "../listener/sandbox-spec.mjs";
-import { capabilityPolicies, tempDir, testConfig } from "./helpers.mjs";
+import { capabilityPolicies, grantedOf, tempDir, testConfig } from "./helpers.mjs";
 
 const REPO_YAML = `setup: npm ci
 instructions: AGENTS.md
@@ -24,9 +24,9 @@ const comment = (n) => ({
   body: `comment ${n}`,
 });
 
-// A preparation for org/repo with the grant `text` and `comments` on issue #12, and what it
-// asked of the images and GitHub.
-function prepared(t, text, comments = [comment(1), comment(2)]) {
+// A preparation for org/repo with the grant `text`, the grants its policies give (`grants`) and
+// `comments` on issue #12, and what it asked of the images and GitHub.
+function prepared(t, text, comments = [comment(1), comment(2)], grants = ["research"]) {
   const dir = realpathSync(tempDir(t));
   mkdirSync(join(dir, "org"));
   writeFileSync(join(dir, "org", "repo.yaml"), text);
@@ -43,7 +43,7 @@ function prepared(t, text, comments = [comment(1), comment(2)]) {
       caches: fail("the repo's caches"),
     },
     egressCa: fail("the egress CA"),
-    policies: capabilityPolicies(),
+    policies: capabilityPolicies({ grants }),
     broker: { allow: fail("branches"), runOf: fail("its run"), grant: () => {} },
     github: async (repo, method, path) => {
       calls.push(`${method} ${path}`);
@@ -84,7 +84,7 @@ function prepared(t, text, comments = [comment(1), comment(2)]) {
 }
 
 test("a research run: the base image, no mounts, caches, engine, CA, screenshots or setup", async (t) => {
-  const { run, task, config, calls } = prepared(t, "allow_research: true\ncached_hosts: [x.org]\n");
+  const { run, task, config, calls } = prepared(t, "cached_hosts: [x.org]\n");
   const parts = await run();
   assert.deepEqual(calls, [
     // Its visibility, for its capabilities' input.
@@ -140,7 +140,7 @@ test("a research run reads its issue's thread: title, description, the last 50 c
   const many = Array.from({ length: 120 }, (_, i) => comment(i + 1));
   // What redaction hides of it: a GitHub token, whoever got it (the run's own never reach it).
   many[119].body = `a token: ghs_${"a".repeat(36)}`;
-  const { run, notes } = prepared(t, "allow_research: true\n", many);
+  const { run, notes } = prepared(t, "", many);
   const { digest } = await run();
   assert.match(
     digest,
@@ -153,13 +153,13 @@ test("a research run reads its issue's thread: title, description, the last 50 c
   assert.ok(notes.includes("Thread: #12, 50 of 120 comment(s)"));
 });
 
-test("a research run without allow_research stops before anything but its visibility is asked for", async (t) => {
-  const { run, calls } = prepared(t, "hosts: [pypi.org]\n");
+test("a research run without the `research` grant stops before anything but its visibility is asked for", async (t) => {
+  const { run, calls } = prepared(t, "hosts: [pypi.org]\n", undefined, []);
   await assert.rejects(
     run(),
     (e) =>
       e instanceof RunError &&
-      /^Claude can't run here: the capabilities its policies give a `research` run don't hold\.\n\n- `internet`: the operator's grants don't set `allow_research: true` for this repository/.test(
+      /^Claude can't run here: the capabilities its policies give a `research` run don't hold\.\n\n- `internet`: the operator's policies don't grant `research` to this repository \(`allow_grant`\)/.test(
         e.message,
       ),
   );
@@ -173,7 +173,8 @@ test("a research run without allow_research stops before anything but its visibi
 // `keepsCaches`, `noCaches`: the images'; `linkedBranches`: linked-branch.mjs's; `cancel`:
 // cancelled while its image is looked up; `env`: more of the operator's settings; `policies`:
 // what decides its capabilities (helpers.mjs capabilityPolicies()), Deckhand's defaults by
-// default; `mode`: its mode; `pullFails`: GitHub fails to give #7.
+// default; `grants`: what they grant the repo; `mode`: its mode; `pullFails`: GitHub fails to
+// give #7.
 async function workRun(
   t,
   head,
@@ -190,6 +191,7 @@ async function workRun(
     noCaches,
     env = {},
     policies = capabilityPolicies(),
+    grants = [],
     mode = "work",
     pullFails = false,
     reopen,
@@ -222,7 +224,7 @@ async function workRun(
     },
     egressCa: async () => ca,
     linkedBranches,
-    policies,
+    policies: { ...policies, grants: grantedOf(grants) },
     broker: {
       allow: (id, branches, fork) =>
         calls.push(`allow ${branches.join(" ")}${fork ? " (a fork's)" : ""}`),
@@ -334,7 +336,7 @@ test("on the Kubernetes runner, a granted Dockerfile stops the run with a reply 
   await assert.rejects(
     workRun(t, "org/repo", {
       runner: "kubernetes",
-      grant: "allow_dockerfile: true\n",
+      grants: ["dockerfile"],
       yaml: "dockerfile: Dockerfile\n",
     }),
     (error) =>
@@ -350,7 +352,8 @@ test("on the Kubernetes runner with a registry, a granted Dockerfile builds, wit
   const { parts } = await workRun(t, "org/repo", {
     runner: "kubernetes",
     env: { KUBERNETES_REGISTRY: "registry.example.com/dh", KUBERNETES_REGISTRY_SECRET: "pull" },
-    grant: "allow_dockerfile: true\nhosts: [pypi.org]\n",
+    grant: "hosts: [pypi.org]\n",
+    grants: ["dockerfile"],
     yaml: "dockerfile: Dockerfile\n",
     imageFor: async (request) => {
       asked.push(request);
@@ -513,7 +516,7 @@ test("a light run on a pull request: the repository's image, not its branch's, a
   const imageFor = async (request) => (asked.push(request), "deckhand-repo:main");
   const { task, parts, calls } = await workRun(t, "org/repo", {
     mode: "brainstorm",
-    grant: "allow_dockerfile: true\nallow_branch_docker_images: true\n",
+    grants: ["dockerfile", "branch_docker_images"],
     yaml: "dockerfile: Dockerfile\nsetup: npm ci\ncaches: [/home/node/.npm]\n",
     imageFor,
   });
@@ -557,10 +560,10 @@ test("a run whose capabilities break a dependency, or whose policies fail, doesn
 });
 
 test("`pull` with `internet` on a repository not known to be public: refused unless the operator names it", async (t) => {
-  const grant = "allow_research: true\n";
+  const grants = ["research"];
   const open = capabilityPolicies({ operator: () => ["pull", "internet"] });
   await assert.rejects(
-    workRun(t, "org/repo", { policies: open, grant }),
+    workRun(t, "org/repo", { policies: open, grants }),
     (e) =>
       e instanceof RunError &&
       /- `pull` with `internet`: a private repository's code next to the open internet: .+ Refused unless an allow rule of the operator's policies gives `pull\+internet`/.test(
@@ -568,7 +571,7 @@ test("`pull` with `internet` on a repository not known to be public: refused unl
       ),
   );
   const named = capabilityPolicies({ operator: () => ["pull", "internet", "pull+internet"] });
-  const { task, notes } = await workRun(t, "org/repo", { policies: named, grant });
+  const { task, notes } = await workRun(t, "org/repo", { policies: named, grants });
   assert.deepEqual(task.live.capabilities, ["pull", "internet"]);
   assert.deepEqual(task.live.hosts, ["*"]);
   assert.ok(
@@ -617,7 +620,7 @@ test("an analysis's digest is the public one unless the repo was and still is pr
 });
 
 test("once its capabilities are decided, a run's first message is made again for the volume they give it", async (t) => {
-  const { run, task, notes } = prepared(t, "allow_research: true\n");
+  const { run, task, notes } = prepared(t, "");
   const seen = [];
   const parts = await run({
     reopen: async (note) => {
@@ -708,18 +711,24 @@ test("a pull request that can't be looked up, with a policy denying forks `push`
 test("a run with the open internet gets no host mount, which says so", async (t) => {
   const nfs = join(realpathSync(tempDir(t)), "nfs");
   mkdirSync(join(nfs, "data"), { recursive: true });
-  const grant = `allow_research: true\nmounts: [${nfs}]\n`;
+  const grant = `mounts: [${nfs}]\n`;
+  const grants = ["research"];
   const yaml = `mounts:\n  - ${nfs}/data\n`;
   // The operator gives work runs the open internet, the risky combination named too.
   const internet = capabilityPolicies({
     operator: () => ["pull", "push", "internet", "pull+internet"],
   });
-  const { parts, notes } = await workRun(t, "org/repo", { grant, yaml, policies: internet });
+  const { parts, notes } = await workRun(t, "org/repo", {
+    grant,
+    grants,
+    yaml,
+    policies: internet,
+  });
   assert.deepEqual(parts.access.mounts, []);
   assert.deepEqual(parts.access.hosts, ["*"]);
   assert.ok(notes.some((n) => /^No host mounts: this run reaches the open internet/.test(n)));
   // Without it, the mount as granted.
-  const plain = await workRun(t, "org/repo", { grant, yaml });
+  const plain = await workRun(t, "org/repo", { grant, grants, yaml });
   assert.deepEqual(
     plain.parts.access.mounts.map((m) => m.target),
     [`${nfs}/data`],
@@ -731,7 +740,7 @@ test("a run with the open internet gets no caches, which later runs trust, and s
     operator: () => ["pull", "push", "setup", "internet", "pull+internet"],
   });
   const { parts, calls, notes } = await workRun(t, "org/repo", {
-    grant: "allow_research: true\n",
+    grants: ["research"],
     policies: internet,
   });
   assert.deepEqual(parts.prepared.caches, []);

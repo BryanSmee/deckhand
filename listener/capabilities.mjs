@@ -8,13 +8,14 @@
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
 // config page shows it for each mode (repos.mjs). Format: ../docs/repo-config.md#capabilities.
 import { BUILT_IN, customMode, MODES, RESEARCH } from "./modes.mjs";
-import { ungranted } from "./grants.mjs";
+import { GRANTS, notGranted, ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 
 // The catalogue: each capability's name, the capabilities it needs (`needs`), the
 // .deckhand.yaml keys that ask for it (`config`, settings fields: repo-config.mjs) and the
-// grant that gates it (`grant`, grants.mjs), if any: one the policies allow and the config asks
-// for stops the run without its grant, unless `optional`. What it gives (`what`) and what enforces
+// grant that gates it (`grant`, grants.mjs GRANTS: the operator's `allow_grant` rules, per
+// repository), if any: one the policies allow and the config asks for stops the run without its
+// grant, unless `optional`. What it gives (`what`) and what enforces
 // it (`enforcedBy`). The reads are the token's permissions (#497: github-app.mjs
 // READ_PERMISSIONS), and need `pull`, without which a run gets nothing from GitHub at all.
 export const CAPABILITIES = [
@@ -43,7 +44,7 @@ export const CAPABILITIES = [
     name: "image:repo",
     needs: ["pull"],
     config: ["dockerfile"],
-    grant: "allowDockerfile",
+    grant: "dockerfile",
     what: "the image built from the repository's Dockerfile",
     enforcedBy: "the listener at start",
   },
@@ -52,7 +53,7 @@ export const CAPABILITIES = [
     // The less trusted of the two images: a policy denying `image:repo` denies it too.
     needs: ["push", "image:repo"],
     config: ["dockerfile"],
-    grant: "allowBranchDockerImages",
+    grant: "branch_docker_images",
     // Without its grant, the run takes the repository's image instead: nothing stops it.
     optional: true,
     what: "on a pull request, the image built from its branch's Dockerfile",
@@ -62,7 +63,7 @@ export const CAPABILITIES = [
     name: "docker",
     needs: ["pull"],
     config: ["docker"],
-    grant: "allowDocker",
+    grant: "docker",
     what: "a container engine next to the sandbox",
     enforcedBy: "the listener at start",
   },
@@ -70,7 +71,7 @@ export const CAPABILITIES = [
     name: "preview",
     needs: [],
     config: ["preview"],
-    grant: "allowPreview",
+    grant: "preview",
     what: "the repository's preview hook on its pull requests",
     // The hook runs on pull request events, whichever run opened them (previews.mjs).
     enforcedBy: "not per run yet: the hook runs on pull request events",
@@ -78,7 +79,7 @@ export const CAPABILITIES = [
   {
     name: "internet",
     needs: [],
-    grant: "allowResearch",
+    grant: "research",
     what: "any public host, beyond the hosts the operator grants",
     enforcedBy: "the egress proxy",
   },
@@ -237,7 +238,7 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
     if (!asked(settings, c)) {
       return row("not-asked", files, `.deckhand.yaml doesn't set ${c.config.join(" or ")}`);
     }
-    if (c.grant && !grant?.[c.grant]) return row("not-granted", files, grantNote(c));
+    if (c.grant && !grant?.[GRANTS[c.grant]]) return row("not-granted", files, notGranted(c.grant));
     return row("used", files);
   });
   const dropped = narrow(capabilities, warnings);
@@ -356,17 +357,6 @@ const ignoredRisk = (rule, name, layer) =>
 const unknown = (rule, name, layer) =>
   `\`${rule}\` of the ${layer === "repo" ? "repository's" : "operator's"} policies names \`${name}\`, which isn't a capability Deckhand knows (${[...KNOWN].map((n) => `\`${n}\``).join(", ")})`;
 
-// Why a capability its grant gates isn't used.
-const GRANT_KEYS = {
-  allowDockerfile: "allow_dockerfile",
-  allowBranchDockerImages: "allow_branch_docker_images",
-  allowDocker: "allow_docker",
-  allowPreview: "allow_preview",
-  allowResearch: "allow_research",
-};
-const grantNote = (c) =>
-  `the operator's grants don't set \`${GRANT_KEYS[c.grant]}: true\` for this repository`;
-
 // The modes a repository's runs can be in, as its config page lists them: the built-in ones
 // that start a run (not `policy`, a dry run), `review` only with its `review` block, `research`
 // only with its grant (`/mode research` is refused without: task-modes.mjs), then the repo's own
@@ -461,6 +451,6 @@ export const catalogueView = () =>
     what: c.what,
     needs: c.needs,
     config: c.config ?? [],
-    grant: c.grant ? GRANT_KEYS[c.grant] : null,
+    grant: c.grant ?? null,
     enforcedBy: c.enforcedBy,
   }));

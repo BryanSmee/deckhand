@@ -12,7 +12,7 @@
 // long-lived should run until it is done.
 import { createWriteStream, mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import { grantFor, loadGrants, ungranted } from "./grants.mjs";
+import { grantOf, grantsBy, ungranted } from "./grants.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 
 export const MAX_WAITING = 3;
@@ -203,10 +203,10 @@ export async function previewHook(ctx, { repo, base, event }, payload) {
   if (!(await ctx.previews.runs())) {
     return skip(`${event}: preview hook of ${repo} not run: ${refusal(config)}`);
   }
-  // Root on the host: only when the operator's grants say so (grants.mjs).
+  // Root on the host: only when the operator's grants and policies say so (grants.mjs).
   let grant;
   try {
-    grant = grantFor(loadGrants(config), config, repo);
+    grant = await grantOf(config, repo, { granted: grantsBy(ctx.policies) });
   } catch (error) {
     return skip(`${event}: preview hook of ${repo} not run: ${error.message}`);
   }

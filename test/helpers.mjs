@@ -178,7 +178,7 @@ export const evalResult = (deny, allow = true) => ({
 // as the layer's first file's.
 // `calls`: each one, with the staged files; `evals()`: the queries.
 export function fakeOpa({
-  answer = () => evalResult([]),
+  answer = (files, input) => evalResult([], grantDecision(files, input)),
   queried = () => {},
   checked = () => ({ code: 0, stdout: "" }),
   capabilities = { builtins: [{ name: "count" }] },
@@ -292,6 +292,32 @@ export function fakeOpa({
   };
   return { run, serve, calls, evals: () => calls.filter((c) => c.args[0] === "eval") };
 }
+
+// The operator's policy file granting `repo` the grants `names` (grants.mjs GRANTS, #498), as an
+// operator writes one: what fakeOpa() reads back (grantDecision()), and the real opa evaluates.
+export const grantsPolicy = (names, repo = "org/repo") =>
+  `package deckhand\n\nallow_grant if {\n  input.repo.name == "${repo}"\n  input.grant in {${names.map((n) => `"${n}"`).join(", ")}}\n}\n`;
+
+// fakeOpa()'s answer to `allow_grant` for a layer's `files`: whether one of them, written as
+// grantsPolicy() writes it, gives `input.grant` to `input.repo.name`. Any other decision: allowed.
+function grantDecision(files, input) {
+  if (input?.decision !== "grant") return true;
+  return Object.values(files ?? {}).some((text) =>
+    [...text.matchAll(/input\.repo\.name == "([^"]+)"\s*input\.grant in \{([^}]*)\}/g)].some(
+      ([, repo, names]) => repo === input.repo?.name && names.includes(`"${input.grant}"`),
+    ),
+  );
+}
+
+// What policies.mjs grants() says of a repository the operator's policies grant `names` (none
+// for any other when `repo` is given): grants.mjs grantOf()'s `granted`.
+export const grantedOf =
+  (names, repo = null) =>
+  async (asked) => ({
+    granted: new Set(!repo || asked.toLowerCase() === repo ? names : []),
+    files: ["grants.rego"],
+    denied: [],
+  });
 
 // The policy service's engine as the listener sees it through HTTP (policy-client.mjs): each
 // request and answer through JSON, so that nothing but what the wire carries gets across.
@@ -743,11 +769,13 @@ export function defaultCapabilities({ mode, custom_mode }) {
 // The policies' capabilityRules() (policies.mjs) without opa: each input gets what
 // `operator(input)` names from the operator's layer (file "mode.rego"), and a repo's own mode
 // what `repo(input)` names from the repo's ("repo.rego"), none by default. `denies(input)`:
-// [{ capability, reason }] of the operator's. `inputs`: what it was asked about.
+// [{ capability, reason }] of the operator's. `inputs`: what it was asked about. `grants`: the
+// names its grants() gives every repository.
 export function capabilityPolicies({
   operator = defaultCapabilities,
   repo = () => [],
   denies = () => [],
+  grants = [],
 } = {}) {
   const inputs = [];
   const layer = (names, file, deny = []) => ({
@@ -756,6 +784,8 @@ export function capabilityPolicies({
   });
   return {
     inputs,
+    // The grants (grants.mjs GRANTS) the operator's policies give the repository: `grants`.
+    grants: grantedOf(grants),
     capabilityRules: async (_repo, _ref, asked) => {
       inputs.push(...Object.values(asked));
       return {

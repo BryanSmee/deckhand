@@ -290,7 +290,7 @@ test("greedy: allowed and asked for by the config, granted when a grant gates it
   assert.equal(row(ungranted, "docker").status, "not-granted");
   assert.equal(row(ungranted, "image:branch").status, "not-granted");
   assert.deepEqual(ungranted.errors, [
-    "`docker`: the operator's grants don't set `allow_docker: true` for this repository",
+    "`docker`: the operator's policies don't grant `docker` to this repository (`allow_grant`)",
   ]);
   // Grants that can't be read give nothing they gate.
   assert.equal(row(outcome({ grant: null }), "internet").status, "not-granted");
@@ -674,7 +674,7 @@ test("the config page: a config key its grant doesn't give stops every mode with
   const of = (mode) => outcomes.modes.find((m) => m.mode === mode);
   // A brainstorm gets no `docker`, yet doesn't start: what its run would stop with.
   assert.deepEqual(of("brainstorm").errors, [
-    "docker: the operator's grants don't set `allow_docker: true` for this repository",
+    "docker: the operator's policies don't grant `docker` to this repository (`allow_grant`)",
   ]);
   // A work run, which asks for it: the capability's own refusal, once.
   assert.equal(of("work").errors.length, 1);

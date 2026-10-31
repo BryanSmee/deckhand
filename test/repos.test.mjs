@@ -128,7 +128,8 @@ const grantsOf = (grants, config) => () => {
   return typeof grants === "function" ? value : grantsFrom(value, config);
 };
 
-function setup({ env = {}, grants = {}, fs, ...repos } = {}) {
+// `granted(repo)`: what the operator's policies grant it (grants.mjs grantsBy()), none by default.
+function setup({ env = {}, grants = {}, granted = null, fs, ...repos } = {}) {
   const gh = fakeGitHub(repos);
   const clock = { now: 1_000_000 };
   const app = createGitHubApp({
@@ -142,6 +143,7 @@ function setup({ env = {}, grants = {}, fs, ...repos } = {}) {
     config,
     store,
     grants: grantsOf(grants, config),
+    granted,
     fs,
     now: () => clock.now,
   });
@@ -312,8 +314,16 @@ async function call(
   });
 }
 
-function apiSetup({ grants = {}, fs, app = () => null, policies, backlogs, ...opts } = {}) {
-  const s = setup({ grants, fs, ...opts });
+function apiSetup({
+  grants = {},
+  granted = null,
+  fs,
+  app = () => null,
+  policies,
+  backlogs,
+  ...opts
+} = {}) {
+  const s = setup({ grants, granted, fs, ...opts });
   const started = [];
   const api = createRepoApi({
     config: s.config,
@@ -322,6 +332,7 @@ function apiSetup({ grants = {}, fs, app = () => null, policies, backlogs, ...op
     backlogs,
     app,
     grants: grantsOf(grants, s.config),
+    granted,
     fs,
     now: () => s.clock.now,
     publicUrl: () => "https://deckhand.example.com",
@@ -503,12 +514,13 @@ test("an invalid config shows as such in the list", async () => {
   assert.equal(rows[0].readAt, 1_000_000);
 });
 
-// What runs refuse, each against the grant that allows it: [.deckhand.yaml, its grant file].
+// What runs refuse, each against the grant that allows it: [.deckhand.yaml, its grant file, the
+// grants its policies give].
 function refusedCases(root) {
   return {
-    dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "allow_dockerfile: true"],
-    preview: ["preview:\n  command: ./preview.sh\n", "allow_preview: true"],
-    mounts: [`mounts: [${root}/data]\n`, `mounts: [${root}]`],
+    dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "", ["dockerfile"]],
+    preview: ["preview:\n  command: ./preview.sh\n", "", ["preview"]],
+    mounts: [`mounts: [${root}/data]\n`, `mounts: [${root}]`, []],
   };
 }
 
@@ -517,11 +529,12 @@ function refusedSetup(t) {
   mkdirSync(join(root, "data"));
   const cases = refusedCases(root);
   const files = Object.fromEntries(Object.entries(cases).map(([k, [file]]) => [`org/${k}`, file]));
-  const grants = { files: {} };
+  const grants = { files: {}, names: {} };
   const s = apiSetup({
     first: Object.keys(cases).map((k) => info(`org/${k}`)),
     files,
     grants: () => grantsFrom(grants.files, s.config),
+    granted: async (repo) => ({ granted: new Set(grants.names[repo] ?? []), files: [] }),
   });
   return { ...s, cases, grants };
 }
@@ -553,6 +566,9 @@ test("a fully granted config is configured; editing a grant shows without GitHub
   grants.files = Object.fromEntries(
     Object.entries(cases).map(([repo, [, grant]]) => [`org/${repo}.yaml`, `${grant}\n`]),
   );
+  grants.names = Object.fromEntries(
+    Object.entries(cases).map(([repo, [, , names]]) => [`org/${repo}`, names]),
+  );
   assert.deepEqual(await statuses(api), {
     "org/dockerfile": "configured",
     "org/mounts": "configured",
@@ -565,6 +581,7 @@ test("a fully granted config is configured; editing a grant shows without GitHub
   // The list read no config again: the grants are checked against the kept settings.
   assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
   grants.files = {};
+  grants.names = {};
   assert.equal((await statuses(api))["org/preview"], "invalid");
 });
 
@@ -572,7 +589,7 @@ test("a repo's broken grant makes that repo invalid only", async () => {
   const { api } = apiSetup({
     first: [info("org/app"), info("org/other")],
     configured: ["org/app", "org/other"],
-    grants: { "default.yaml": "allow_dockerfile: true\n", "org/app.yaml": "hosts: [bad host]\n" },
+    grants: { "default.yaml": "hosts: [pypi.org]\n", "org/app.yaml": "hosts: [bad host]\n" },
   });
   assert.deepEqual(await statuses(api), { "org/app": "invalid", "org/other": "configured" });
   const { body } = await call(api, "GET", "/api/repos/org/app/config");
@@ -749,7 +766,13 @@ test("the list's refused checks are the run preflight's: both go through grantCh
   const repos = readFileSync(new URL("../listener/repos.mjs", import.meta.url), "utf8");
   assert.match(
     repos,
-    /check =\s+has && !errors \?\s+grantCheck\(config, info\.full_name, settings/,
+    /check =\s+has && !errors\s+\? await grantCheck\(config, info\.full_name, settings, \{ load, granted, fs \}\)/,
+  );
+  // With what the operator's policies grant, as the run's preflight asks them.
+  const preparation = readFileSync(new URL("../listener/preparation.mjs", import.meta.url), "utf8");
+  assert.match(
+    preparation,
+    /grantedAccess\(config, task, settings, \{[^}]*granted: grantsBy\(ctx\.policies\)/,
   );
   assert.match(repos, /refusedByGrants\(check\)/);
 });
@@ -811,6 +834,7 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   );
   assert.deepEqual(body.effective.grant, {
     files: ["default.yaml"],
+    grantFiles: [],
     allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
@@ -830,24 +854,20 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
 test("auto-merge: the row's badge and the config's warnings follow the grant, visibility and hook", async () => {
   const merge = "review:\n  on: ready\n  fix: true\n  merge: true\n";
   const repos = {
-    "org/priv": [{}, "allow_auto_merge: true\n", merge],
-    "org/pub": [{ private: false }, "allow_auto_merge: true\n", merge],
-    "org/pubok": [{ private: false }, "allow_auto_merge: public\n", merge],
-    "org/none": [{}, "", merge],
-    "org/hook": [{}, "allow_auto_merge: true\nallow_preview: true\n", `${merge}preview: ./x.sh\n`],
+    "org/priv": [{}, ["auto_merge"], merge],
+    "org/pub": [{ private: false }, ["auto_merge"], merge],
+    "org/pubok": [{ private: false }, ["auto_merge_public"], merge],
+    "org/none": [{}, [], merge],
+    "org/hook": [{}, ["auto_merge", "preview"], `${merge}preview: ./x.sh\n`],
     "org/ack": [
       {},
-      "allow_auto_merge: true\nallow_preview: true\nacknowledge_automerge_and_preview_is_highly_dangerous: true\n",
+      ["auto_merge", "preview", "acknowledge_automerge_and_preview_is_highly_dangerous"],
       `${merge}preview: ./x.sh\n`,
     ],
-    "org/manual": [{}, "allow_auto_merge: true\n", "review:\n  merge: true\n"],
+    "org/manual": [{}, ["auto_merge"], "review:\n  merge: true\n"],
   };
-  const grants = {};
-  for (const [repo, [, grant]] of Object.entries(repos)) {
-    if (grant) grants[`${repo}.yaml`] = grant;
-  }
   const { api } = apiSetup({
-    grants,
+    granted: async (repo) => ({ granted: new Set(repos[repo][1]), files: ["grants.rego"] }),
     first: Object.entries(repos).map(([repo, [extra]]) => info(repo, extra)),
     files: Object.fromEntries(Object.entries(repos).map(([repo, [, , yaml]]) => [repo, yaml])),
   });
@@ -868,11 +888,14 @@ test("auto-merge: the row's badge and the config's warnings follow the grant, vi
     );
   for (const repo of ["org/priv", "org/pubok", "org/ack"])
     assert.deepEqual(await warnings(repo), [], repo);
-  assert.match((await warnings("org/none"))[0], /don't set `allow_auto_merge: true`/);
-  assert.match((await warnings("org/pub"))[0], /is public.*`allow_auto_merge: true`, not `public`/);
+  assert.match((await warnings("org/none"))[0], /don't grant `auto_merge`/);
+  assert.match(
+    (await warnings("org/pub"))[0],
+    /is public.*grant it `auto_merge`, not `auto_merge_public`/,
+  );
   assert.match(
     (await warnings("org/hook"))[0],
-    /`acknowledge_automerge_and_preview_is_highly_dangerous: true`, nothing is merged/,
+    /don't grant `acknowledge_automerge_and_preview_is_highly_dangerous` to this repository \(`allow_grant`\), nothing is merged/,
   );
   // The parse's own warning, once.
   assert.deepEqual(await warnings("org/manual"), [

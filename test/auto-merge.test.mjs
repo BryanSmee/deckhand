@@ -254,7 +254,7 @@ test("auto-merge: nothing without the grant, on: ready, review.merge, or from /m
   assert.equal(await open.settle(), null);
   assert.match(
     open.replies[0].text,
-    /the repository is public.*`allow_auto_merge: true`, not `public`/,
+    /the repository is public.*grant it `auto_merge`, not `auto_merge_public`/,
   );
   const granted = setup(t, { grant: "public", info: { private: false } });
   assert.ok(await granted.settle());
@@ -1190,7 +1190,7 @@ test("auto-merge with a granted preview hook: only with the operator's long ackn
   assert.equal(hook.merges().length, 0);
   assert.match(
     hook.replies[0].text,
-    /preview hook runs its default branch as root on the host.*`acknowledge_automerge_and_preview_is_highly_dangerous: true`/,
+    /preview hook runs its default branch as root on the host.*don't grant `acknowledge_automerge_and_preview_is_highly_dangerous`/,
   );
   // Asked of nobody: the config alone refuses it.
   assert.equal(hook.calls.length, 0);

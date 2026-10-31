@@ -14,18 +14,26 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { loadConfig, parseConfigFile } from "../listener/config.mjs";
 import {
-  autoMergeGrants,
+  ANY_REPO,
+  autoMergeFiles,
   autoMergeProblems,
+  grantCheck,
+  GRANTS,
   GrantsError,
   grantErrors,
+  grantFields,
   grantFor,
+  grantOf as grantWithPolicies,
   grantsFrom,
   loadGrants,
+  NO_GRANTS,
   previewProblem,
+  REPO_ONLY,
   resolveMounts,
   ungranted,
+  withGrants,
 } from "../listener/grants.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { grantedOf, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a" });
 
@@ -53,6 +61,7 @@ const NOTHING = {
   allowWorkflows: false,
   allowAutoMerge: false,
   acknowledgeAutoMergePreview: false,
+  grantFiles: [],
   mounts: [],
   allowProjects: [],
   limits: config.limits,
@@ -82,6 +91,7 @@ mounts:
     allowWorkflows: false,
     allowAutoMerge: false,
     acknowledgeAutoMergePreview: false,
+    grantFiles: [],
     allowProjects: [],
     limits: { cpus: "4", memory: "4g", pids: 4096 },
     mounts: [
@@ -119,21 +129,15 @@ test("allow_projects: a repo's own file lists <organization>/<number>, never def
   );
 });
 
-test("default.yaml: flags unless a repo's own file says, hosts added, limits as the base", () => {
+test("default.yaml: hosts added, limits as the base", () => {
   const files = {
-    "default.yaml": `allow_dockerfile: true
-hosts: [pypi.org]
+    "default.yaml": `hosts: [pypi.org]
 limits: { memory: 8g, cpus: 3 }
 `,
-    "org/closed.yaml": "allow_dockerfile: false\n",
-    "org/api.yaml":
-      "hosts: [files.example.com, pypi.org]\nlimits: { cpus: 4 }\nallow_preview: true\n",
+    "org/closed.yaml": "cached_hosts: [pypi.org]\n",
+    "org/api.yaml": "hosts: [files.example.com, pypi.org]\nlimits: { cpus: 4 }\n",
   };
   const api = grantOf(files, "Org/API");
-  assert.deepEqual(
-    [api.allowDockerfile, api.allowPreview, api.allowBranchDockerImages],
-    [true, true, false],
-  );
   assert.deepEqual(api.hosts, ["pypi.org", "files.example.com"]);
   assert.deepEqual(api.hostFiles, {
     "pypi.org": "default.yaml",
@@ -145,13 +149,13 @@ limits: { memory: 8g, cpus: 3 }
   assert.deepEqual(api.files, ["default.yaml", "org/api.yaml"]);
 
   const closed = grantOf(files, "org/closed");
-  assert.equal(closed.allowDockerfile, false);
+  assert.deepEqual(closed.cachedHosts, ["pypi.org"]);
   assert.deepEqual(closed.hosts, ["pypi.org"]);
   assert.deepEqual(closed.limits, { cpus: "3", memory: "8g", pids: 2048 });
 
   // A repo without a file of its own: default.yaml alone.
   const other = grantOf(files, "elsewhere/any");
-  assert.deepEqual([other.allowDockerfile, other.allowPreview], [true, false]);
+  assert.deepEqual(other.hosts, ["pypi.org"]);
   assert.deepEqual(other.mounts, []);
   assert.equal(other.limitsFile, "default.yaml");
   assert.deepEqual(other.files, ["default.yaml"]);
@@ -159,10 +163,10 @@ limits: { memory: 8g, cpus: 3 }
 
 test("a folder of several owners and repos, matched case-insensitively", (t) => {
   const { config: c } = folder(t, {
-    "default.yaml": "allow_dockerfile: true\n",
+    "default.yaml": "hosts: [pypi.org]\n",
     "acme/api.yaml": "hosts: [api.example.com]\n",
     "acme/Web.yaml": "hosts: [web.example.com]\n",
-    "Globex/tools.yaml": "allow_preview: true\n",
+    "Globex/tools.yaml": "cached_hosts: [pypi.org]\n",
     "README.md": "# Who owns what",
     CODEOWNERS: "acme/ @acme/platform\n",
     ".git/config": "[core]\n",
@@ -170,10 +174,13 @@ test("a folder of several owners and repos, matched case-insensitively", (t) => 
     "acme/notes.txt": "skipped",
   });
   const grants = loadGrants(c);
-  assert.deepEqual(grantFor(grants, c, "ACME/api").hosts, ["api.example.com"]);
-  assert.deepEqual(grantFor(grants, c, "acme/web").hosts, ["web.example.com"]);
-  assert.equal(grantFor(grants, c, "globex/Tools").allowPreview, true);
-  assert.equal(grantFor(grants, c, "globex/tools").allowDockerfile, true);
+  assert.deepEqual(grantFor(grants, c, "ACME/api").hosts, ["pypi.org", "api.example.com"]);
+  assert.deepEqual(grantFor(grants, c, "acme/web").hosts, ["pypi.org", "web.example.com"]);
+  assert.deepEqual(grantFor(grants, c, "globex/Tools").cachedHosts, ["pypi.org"]);
+  assert.deepEqual(grantFor(grants, c, "globex/tools").files, [
+    "default.yaml",
+    "Globex/tools.yaml",
+  ]);
   assert.deepEqual(grantFor(grants, c, "acme/other").files, ["default.yaml"]);
   assert.deepEqual(grantErrors(grants), []);
 });
@@ -182,7 +189,7 @@ test("a broken repo file stops that repo only, naming the file", (t) => {
   const { config: c } = folder(t, {
     "default.yaml": "hosts: [pypi.org]\n",
     "acme/api.yaml": "hosts: [bad host]\nlimits: { memory: lots }\n",
-    "acme/web.yaml": "allow_preview: true\n",
+    "acme/web.yaml": "cached_hosts: [pypi.org]\n",
   });
   const grants = loadGrants(c);
   assert.throws(
@@ -194,7 +201,7 @@ test("a broken repo file stops that repo only, naming the file", (t) => {
         error.message,
       ),
   );
-  assert.equal(grantFor(grants, c, "acme/web").allowPreview, true);
+  assert.deepEqual(grantFor(grants, c, "acme/web").cachedHosts, ["pypi.org"]);
   assert.deepEqual(grantFor(grants, c, "globex/any").hosts, ["pypi.org"]);
   // What the listener says at start, without refusing to.
   assert.deepEqual(
@@ -216,7 +223,12 @@ test("each repo file's errors, one list per file", () => {
   bad("network: host\n", /network: unknown \(hosts, cached_hosts, limits, mounts/);
   // Gone with a repo's own hosts: ignoring it would quietly take them away.
   bad("allow_repo_hosts: true\n", /allow_repo_hosts: gone, list the hosts .* under hosts here/);
-  bad("allow_preview: 1\n", /allow_preview: expected true or false/);
+  // Moved to the operator's policies (#498): what to write instead, with the repo's name.
+  bad(
+    "allow_preview: true\n",
+    /allow_preview: moved to the operator's policies \(#498\): `allow_grant if \{ input\.repo\.name == "org\/repo"; input\.grant == "preview" \}` in policy\/ of the grants folder/,
+  );
+  bad("allow_auto_merge: public\n", /`auto_merge_public` for `public`/);
   bad("- a\n", /org\/repo\.yaml: expected a mapping/);
   // The old single file's layout, copied as is.
   bad("org/repo:\n  hosts: [pypi.org]\n", /org\/repo: unknown/);
@@ -272,9 +284,9 @@ test("a broken default.yaml or a misplaced file stops every run", (t) => {
 
 test("symlinks: followed inside the folder, an error leading outside it", (t) => {
   const outside = realpathSync(tempDir(t, "deckhand-outside-"));
-  writeFileSync(join(outside, "api.yaml"), "allow_preview: true\n");
+  writeFileSync(join(outside, "api.yaml"), "hosts: [pypi.org]\n");
   mkdirSync(join(outside, "globex"));
-  writeFileSync(join(outside, "globex", "tools.yaml"), "allow_preview: true\n");
+  writeFileSync(join(outside, "globex", "tools.yaml"), "hosts: [pypi.org]\n");
   const { dir, config: c } = folder(t, { "acme/api.yaml": "hosts: [pypi.org]\n" });
   symlinkSync(join(dir, "acme", "api.yaml"), join(dir, "acme", "web.yaml"));
   symlinkSync(join(outside, "api.yaml"), join(dir, "acme", "leak.yaml"));
@@ -302,17 +314,17 @@ test("an edit applies to the next load, without a restart; a repo's file is read
     "acme/api.yaml": "",
     "acme/web.yaml": "",
   });
-  const texts = { "acme/api.yaml": "allow_preview: false\n" };
+  const texts = { "acme/api.yaml": "hosts: [a.example.com]\n" };
   const read = [];
   const reader = (path) => {
     const file = path.slice(dir.length + 1);
     read.push(file);
     return texts[file] ?? readFileSync(path, "utf8");
   };
-  assert.equal(grantFor(loadGrants(c, reader), c, "acme/api").allowPreview, false);
+  assert.deepEqual(grantFor(loadGrants(c, reader), c, "acme/api").hosts, ["a.example.com"]);
   assert.deepEqual(read, ["default.yaml", "acme/api.yaml"]);
-  texts["acme/api.yaml"] = "allow_preview: true\n";
-  assert.equal(grantFor(loadGrants(c, reader), c, "acme/api").allowPreview, true);
+  texts["acme/api.yaml"] = "hosts: [b.example.com]\n";
+  assert.deepEqual(grantFor(loadGrants(c, reader), c, "acme/api").hosts, ["b.example.com"]);
   // An unreadable file stops its repo only.
   const denied = (path) => {
     if (path.endsWith("api.yaml")) throw Object.assign(new Error("denied"), { code: "EACCES" });
@@ -351,8 +363,8 @@ test("a preview hook or a Dockerfile without its grant: one line each, naming th
   const settings = { preview: { command: "./preview.sh" }, dockerfile: "Dockerfile" };
   const none = grantOf({}, "org/repo");
   assert.deepEqual(ungranted(none, settings), [
-    "preview: the operator's grants don't set `allow_preview: true` for this repository",
-    "dockerfile: the operator's grants don't set `allow_dockerfile: true` for this repository",
+    "preview: the operator's policies don't grant `preview` to this repository (`allow_grant`)",
+    "dockerfile: the operator's policies don't grant `dockerfile` to this repository (`allow_grant`)",
   ]);
   const both = { ...none, allowPreview: true, allowDockerfile: true };
   assert.deepEqual(ungranted(both, settings), []);
@@ -557,68 +569,145 @@ test("mounts: writable by uid 1000 as owner (write bit or not), group 1000 or an
   assert.equal(refusedWith({ mode: 0o1555, uid: 1000, gid: 0 }), 1);
 });
 
-test("allow_workflows: a repository's own file only", () => {
-  const own = { "org/repo.yaml": "allow_workflows: true\n" };
-  assert.equal(grantOf(own, "org/repo").allowWorkflows, true);
-  assert.equal(grantOf(own, "org/other").allowWorkflows, false);
-  // Workflow files run with the repo's Actions secrets: never every repo at once.
-  assert.throws(
-    () => grantsFrom({ "default.yaml": "allow_workflows: true\n" }, config),
-    (error) =>
-      error instanceof GrantsError &&
-      error.file === "default.yaml" &&
-      /default\.yaml: allow_workflows: only a repository's own file grants it/.test(error.message),
-  );
-  assert.throws(
-    () => grantOf({ "org/repo.yaml": "allow_workflows: 1\n" }, "org/repo"),
-    /allow_workflows: expected true or false/,
-  );
-});
-
-test("allow_auto_merge: a repository's own file only, true or public", () => {
-  const own = {
-    "org/repo.yaml": "allow_auto_merge: true\n",
-    "org/pub.yaml": "allow_auto_merge: public\n",
-  };
-  assert.equal(grantOf(own, "org/repo").allowAutoMerge, true);
-  assert.equal(grantOf(own, "org/pub").allowAutoMerge, "public");
-  assert.equal(grantOf(own, "org/other").allowAutoMerge, false);
-  assert.deepEqual(autoMergeGrants(grantsFrom(own, config)), [
-    { repo: "org/repo", value: true },
-    { repo: "org/pub", value: "public" },
+test("the yes-or-no grants: the operator's policies', each a field of the grant (#498)", () => {
+  // Every grant sets a field nothing else does but auto-merge's two.
+  assert.deepEqual(Object.keys(GRANTS).sort(), [
+    "acknowledge_automerge_and_preview_is_highly_dangerous",
+    "auto_merge",
+    "auto_merge_public",
+    "branch_docker_images",
+    "docker",
+    "dockerfile",
+    "preview",
+    "research",
+    "workflows",
   ]);
-  // Model output on the default branch with no human reading it: never every repo at once.
-  assert.throws(
-    () => grantsFrom({ "default.yaml": "allow_auto_merge: true\n" }, config),
-    (error) =>
-      error instanceof GrantsError &&
-      error.file === "default.yaml" &&
-      /default\.yaml: allow_auto_merge: only a repository's own file grants it/.test(error.message),
-  );
-  assert.throws(
-    () => grantOf({ "org/repo.yaml": "allow_auto_merge: yes-please\n" }, "org/repo"),
-    /allow_auto_merge: expected true, false or public/,
-  );
+  assert.deepEqual(grantFields(new Set()), NO_GRANTS);
+  assert.deepEqual(grantFields(new Set(["docker", "preview"])), {
+    ...NO_GRANTS,
+    allowDocker: true,
+    allowPreview: true,
+  });
+  // `auto_merge_public`: a public repository too, whether `auto_merge` is given or not.
+  assert.equal(grantFields(new Set(["auto_merge"])).allowAutoMerge, true);
+  assert.equal(grantFields(new Set(["auto_merge_public"])).allowAutoMerge, "public");
+  assert.equal(grantFields(new Set(["auto_merge", "auto_merge_public"])).allowAutoMerge, "public");
+  // A name nobody knows grants nothing.
+  assert.deepEqual(grantFields(new Set(["everything"])), NO_GRANTS);
+  // Those given one repository at a time: an engine, workflows, auto-merge.
+  assert.deepEqual([...REPO_ONLY].sort(), [
+    "acknowledge_automerge_and_preview_is_highly_dangerous",
+    "auto_merge",
+    "auto_merge_public",
+    "docker",
+    "workflows",
+  ]);
+  assert.match(ANY_REPO, /^[^\w]+\/[^\w]+$/);
+  const grant = grantOf({ "org/repo.yaml": "hosts: [pypi.org]\n" }, "org/repo");
+  const said = { granted: new Set(["workflows"]), files: ["grants.rego"], denied: [] };
+  assert.deepEqual(withGrants(grant, said), {
+    ...grant,
+    allowWorkflows: true,
+    grantFiles: ["grants.rego"],
+  });
+  assert.equal(withGrants(grant, null), grant);
 });
 
-test("acknowledge_automerge_and_preview_is_highly_dangerous: per repository only, and what it lets through", () => {
+test("grantOf: the folder's grant with what the policies grant; their failure a GrantsError", async () => {
+  const load = () => grantsFrom({ "org/repo.yaml": "hosts: [pypi.org]\n" }, config);
+  const granted = grantedOf(["docker", "auto_merge"], "org/repo");
+  const repo = await grantWithPolicies(config, "Org/Repo", { load, granted });
+  assert.deepEqual([repo.hosts, repo.allowDocker, repo.allowAutoMerge], [["pypi.org"], true, true]);
+  const other = await grantWithPolicies(config, "org/other", { load, granted });
+  assert.equal(other.allowDocker, false);
+  // No policies: nothing granted (fail closed).
+  assert.equal((await grantWithPolicies(config, "org/repo", { load })).allowDocker, false);
+  await assert.rejects(
+    grantWithPolicies(config, "org/repo", {
+      load,
+      granted: async () => ({ error: "policy error: opa didn't answer" }),
+    }),
+    (error) =>
+      error instanceof GrantsError &&
+      error.file === null &&
+      /the operator's policies can't decide org\/repo's: policy error: opa didn't answer/.test(
+        error.message,
+      ),
+  );
+  // grantCheck() says it as a broken grants file: no run starts.
+  const check = await grantCheck(
+    config,
+    "org/repo",
+    { mounts: [], docker: { cache: false } },
+    { load, granted: async () => ({ error: "x" }) },
+  );
+  assert.ok(check.error instanceof GrantsError);
+  const ok = await grantCheck(
+    config,
+    "org/repo",
+    { mounts: [], docker: { cache: false } },
+    { load, granted },
+  );
+  assert.deepEqual(ok.missing, []);
+});
+
+test("each grant's former key is an error saying what to write, in default.yaml too", () => {
+  const keys = {
+    allow_preview: "preview",
+    allow_dockerfile: "dockerfile",
+    allow_branch_docker_images: "branch_docker_images",
+    allow_docker: "docker",
+    allow_research: "research",
+    allow_workflows: "workflows",
+    allow_auto_merge: "auto_merge",
+    acknowledge_automerge_and_preview_is_highly_dangerous:
+      "acknowledge_automerge_and_preview_is_highly_dangerous",
+  };
+  for (const [key, name] of Object.entries(keys)) {
+    assert.throws(
+      () => grantOf({ "org/repo.yaml": `${key}: true\n` }, "org/repo"),
+      (error) =>
+        error instanceof GrantsError &&
+        error.file === "org/repo.yaml" &&
+        error.message.includes(
+          `${key}: moved to the operator's policies (#498): \`allow_grant if { input.repo.name == "org/repo"; input.grant == "${name}" }\``,
+        ),
+      key,
+    );
+    // default.yaml: no repository to name, every run stops.
+    assert.throws(
+      () => grantsFrom({ "default.yaml": `${key}: false\n` }, config),
+      (error) =>
+        error instanceof GrantsError &&
+        error.file === "default.yaml" &&
+        error.message.includes(`\`allow_grant if { input.grant == "${name}" }\``),
+      key,
+    );
+  }
+});
+
+test("autoMergeFiles: the operator's policy files that name an auto-merge grant", () => {
+  const files = new Map([
+    ["grants.rego", 'package deckhand\n\nallow_grant if {\n  input.grant in {"auto_merge"}\n}\n'],
+    ["public.rego", 'package deckhand\n\nallow_grant if input.grant == "auto_merge_public"\n'],
+    ["docker.rego", 'package deckhand\n\nallow_grant if input.grant == "docker"\n'],
+    ["note.rego", '# "auto_merge" is off here\npackage deckhand\n'],
+  ]);
+  assert.deepEqual(autoMergeFiles(files), ["grants.rego", "public.rego"]);
+});
+
+test("acknowledge_automerge_and_preview_is_highly_dangerous: what it lets through", () => {
   const key = "acknowledge_automerge_and_preview_is_highly_dangerous";
-  assert.equal(
-    grantOf({ "org/repo.yaml": `${key}: true\n` }, "org/repo").acknowledgeAutoMergePreview,
-    true,
-  );
-  assert.equal(grantOf({}, "org/repo").acknowledgeAutoMergePreview, false);
-  assert.throws(
-    () => grantsFrom({ "default.yaml": `${key}: true\n` }, config),
-    new RegExp(`default\\.yaml: ${key}: only a repository's own file grants it`),
-  );
   const settings = {
     review: { on: "ready", merge: true },
     preview: { command: "./x.sh" },
   };
   const grant = { allowAutoMerge: true, allowPreview: true };
   assert.equal(previewProblem(grant, settings).includes(key), true);
-  assert.match(autoMergeProblems(grant, settings, true)[0], new RegExp(`${key}: true\`, nothing`));
+  assert.match(
+    autoMergeProblems(grant, settings, true)[0],
+    new RegExp(`don't grant \`${key}\` to this repository \\(\`allow_grant\`\\), nothing`),
+  );
   // The merge's gates say it themselves.
   assert.deepEqual(autoMergeProblems(grant, settings, true, { preview: false }), []);
   assert.equal(previewProblem({ ...grant, acknowledgeAutoMergePreview: true }, settings), null);
@@ -636,10 +725,13 @@ test("autoMergeProblems: the grant, the repository's visibility and `review.on: 
   assert.deepEqual(autoMergeProblems({}, { review: { ...review, merge: false } }), []);
   assert.match(
     autoMergeProblems({ allowAutoMerge: false }, settings, true)[0],
-    /allow_auto_merge: true/,
+    /don't grant `auto_merge`/,
   );
-  assert.match(autoMergeProblems(null, settings)[0], /allow_auto_merge: true/);
-  assert.match(autoMergeProblems({ allowAutoMerge: true }, settings, false)[0], /public/);
+  assert.match(autoMergeProblems(null, settings)[0], /don't grant `auto_merge`/);
+  assert.match(
+    autoMergeProblems({ allowAutoMerge: true }, settings, false)[0],
+    /public and the operator's policies grant it `auto_merge`, not `auto_merge_public`/,
+  );
   // Unknown visibility: the merge checks it.
   assert.deepEqual(autoMergeProblems({ allowAutoMerge: true }, settings, null), []);
   assert.match(
@@ -648,27 +740,11 @@ test("autoMergeProblems: the grant, the repository's visibility and `review.on: 
   );
 });
 
-test("allow_docker: a repository's own file only, and `docker` without it is refused", () => {
-  assert.equal(grantOf({ "org/repo.yaml": "allow_docker: true\n" }, "org/repo").allowDocker, true);
-  assert.equal(
-    grantOf({ "org/other.yaml": "allow_docker: true\n" }, "org/repo").allowDocker,
-    false,
-  );
-  // An engine for every repository would be too broad to grant by accident.
-  assert.throws(
-    () => grantsFrom({ "default.yaml": "allow_docker: true\n" }, config),
-    (error) =>
-      error instanceof GrantsError &&
-      /default\.yaml: allow_docker: only a repository's own file grants it/.test(error.message),
-  );
-  assert.throws(
-    () => grantOf({ "org/repo.yaml": "allow_docker: yes please\n" }, "org/repo"),
-    /allow_docker: expected true or false/,
-  );
+test("`docker` without its grant is refused", () => {
   const none = grantOf({}, "org/repo");
   const settings = { preview: null, dockerfile: null, docker: { cache: false } };
   assert.deepEqual(ungranted(none, settings), [
-    "docker: the operator's grants don't set `allow_docker: true` for this repository",
+    "docker: the operator's policies don't grant `docker` to this repository (`allow_grant`)",
   ]);
   assert.deepEqual(ungranted({ ...none, allowDocker: true }, settings), []);
 });

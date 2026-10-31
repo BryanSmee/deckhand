@@ -70,7 +70,7 @@ test("modes: apart from work, fresh and the dashboard's kind, built-in or the re
 test("modes: a review is apart and fresh; no read capability gives workflows", () => {
   assert.equal(isApart("review"), true);
   assert.equal(isFresh({ settings: {} }, "review"), true);
-  // Workflows: the git gateway's push token only (allow_workflows), never a sandbox's.
+  // Workflows: the git gateway's push token only (the `workflows` grant), never a sandbox's.
   assert.ok(Object.values(READ_PERMISSIONS).every((names) => !names.includes("workflows")));
 });
 
@@ -136,13 +136,19 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   );
   assert.doesNotMatch(text, /ALLOWED_HOSTS|allow_repo_hosts/);
   assert.match(text, /Host mount roots granted to this repository: `\/srv\/data \(read-write\)`/);
-  assert.match(text, /`preview` in `.deckhand.yaml`: not granted: .* sets `allow_preview`/);
-  assert.match(text, /`dockerfile` in `.deckhand.yaml`: not granted: .* sets `allow_dockerfile`/);
+  assert.match(
+    text,
+    /`preview` in `.deckhand.yaml`: not granted: .* grant this repository `preview`/,
+  );
+  assert.match(
+    text,
+    /`dockerfile` in `.deckhand.yaml`: not granted: .* grant this repository `dockerfile`/,
+  );
   const granted = { ...grant, allowPreview: true, allowDockerfile: true };
   const open = promptFor(issue, { mode: "onboarding", settings, config, grant: granted });
   assert.match(open, /`preview` in `.deckhand.yaml`: allowed/);
   assert.match(open, /`dockerfile` in `.deckhand.yaml`: allowed\n/);
-  assert.match(text, /`\.github\/workflows\/`: not granted: .* sets `allow_workflows`/);
+  assert.match(text, /`\.github\/workflows\/`: not granted: .* grant this repository `workflows`/);
   const workflows = { ...grant, allowWorkflows: true };
   const editable = promptFor(issue, { mode: "onboarding", settings, config, grant: workflows });
   assert.match(editable, /`\.github\/workflows\/`: allowed: .* mentions `secrets`/);
@@ -213,7 +219,7 @@ test("prompts: work runs are told whether their pushes may change workflow files
   ]) {
     assert.match(
       promptFor(task, { ...extra, grant }),
-      /GitHub refuses pushes that add or change files under `\.github\/workflows\/`[^]*`allow_workflows`\): leave them out/,
+      /GitHub refuses pushes that add or change files under `\.github\/workflows\/`[^]*grant `workflows`\): leave them out/,
     );
     assert.match(
       promptFor(task, { ...extra, grant: granted }),

@@ -118,7 +118,7 @@ colour: blue
   );
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, [
-    "allow_branch_docker_images: ignored here, the operator's grants folder sets it for this repository",
+    "allow_branch_docker_images: ignored here, the operator's policies grant `branch_docker_images` to this repository",
     // Only the operator lists hosts: a repo's are no longer read.
     "hosts: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
     // So does what the egress proxy keeps for every run.

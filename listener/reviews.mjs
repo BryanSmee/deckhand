@@ -49,6 +49,7 @@ import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
 import {
   DECISIONS,
+  OPERATOR_ONLY,
   denyKept,
   INPUT_VERSION,
   isPolicyError,
@@ -544,7 +545,7 @@ export async function mergeRefusal(
   const info = await getJson(github, repo, `/repos/${repo}`);
   if (info.private !== true && grant?.allowAutoMerge !== "public") {
     return {
-      why: "the repository is public, and the operator's grant says `allow_auto_merge: true`, not `public`",
+      why: "the repository is public, and the operator's policies grant it `auto_merge`, not `auto_merge_public`",
     };
   }
   const method = settings.review?.mergeMethod ?? "squash";
@@ -1200,7 +1201,8 @@ export function openedBy(config, pr) {
 // queues a work item (tasks.mjs). `github`: the App's calls (server.mjs). `busy(key)`: the
 // task has a run going or queued. `now`: the clock, for forgetting old pull requests.
 // `reply(repo, number, text)`: a comment with the listener's token; `grantOf(repo)`: the
-// operator's grant for it (grants.mjs grantFor()), null when its grants have errors;
+// operator's grant for it, with what its policies grant (grants.mjs grantOf()): a promise of
+// it, or null when its grants have errors;
 // `merged(repo, pr)`: a pull request it merged, for the dashboard; `sleep(ms)`: the wait
 // between asks of `mergeable_state`; `policies`: the policies' engine (policies.mjs), none
 // without; `decided(repo, pr, entry)`: a decision a policy was asked for, for the task's page
@@ -1767,7 +1769,7 @@ export function createReviews({
   async function mergeMode(repo, base) {
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.merge) return null;
-    const grant = grantOf(repo);
+    const grant = await grantOf(repo);
     if (autoMergeProblems(grant, settings, null, { preview: false }).length) return null;
     return { settings, grant };
   }
@@ -2552,6 +2554,8 @@ export function createReviews({
       return { decision, messages, layers };
     };
     for (const decision of DECISIONS) {
+      // A repository's grants are no decision on a pull request: its config page says them.
+      if (OPERATOR_ONLY.has(decision)) continue;
       // No run to start: a comment on this pull request asking for one, by whoever asked.
       if (decision === "run") {
         for (const sample of runSamples(repo, pr, found, by, now, settings)) {

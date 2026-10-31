@@ -53,7 +53,7 @@ test("serverSetup: the engine, the hosts granted in all, who may sign in on whic
     t,
     {
       "default.yaml": "hosts: [pypi.org, registry.npmjs.org]\ncached_hosts: [deb.debian.org]\n",
-      "acme/api.yaml": 'hosts: ["*.example.com", pypi.org]\nallow_docker: true\n',
+      "acme/api.yaml": 'hosts: ["*.example.com", pypi.org]\n',
       "acme/site.yaml": "hosts: [cdn.example.org]\n",
     },
     {
@@ -134,7 +134,7 @@ test("serverSetup: a repo's file with errors is named, not quoted, and grants no
 
 test("serverSetup: a broken default.yaml stops every run: no host count, its file named", (t) => {
   const { setup } = setupWith(t, {
-    "default.yaml": "allow_docker: true\n",
+    "default.yaml": "mounts: [/srv]\n",
     "acme/api.yaml": "hosts: [cdn.example.org]\n",
   });
   assert.deepEqual(setup.proxy, { on: true, hosts: null });

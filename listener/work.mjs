@@ -171,6 +171,8 @@ export function createWorkApi({
   order = createOrder(),
   queueOrder = () => [],
   reviews = null,
+  // What the operator's policies grant a repo (grants.mjs grantsBy()): research's, for its mode.
+  granted = null,
   publicUrl = () => null,
   // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
   fromKey = () => null,
@@ -205,7 +207,7 @@ export function createWorkApi({
           url: i.html_url,
           ...subIssues(i),
         })),
-      modes: errors.length ? [] : offeredModes(repo, settings),
+      modes: errors.length ? [] : await offeredModes(repo, settings),
       errors: errors.length > 0,
       // Who may see it, as for the dashboard's tasks: unknown while the config has errors.
       users: errors.length ? null : settings.users,
@@ -220,10 +222,10 @@ export function createWorkApi({
   }
 
   // Not `policy`: a dry run of a pull request's policies, never an issue's run.
-  function offeredModes(repo, settings) {
-    const granted = !researchRefusal(config, repo);
+  async function offeredModes(repo, settings) {
+    const research = !(await researchRefusal(config, repo, { granted }));
     return modeNames(settings).filter(
-      (m) => !["onboarding", "policy"].includes(m) && (m !== "research" || granted),
+      (m) => !["onboarding", "policy"].includes(m) && (m !== "research" || research),
     );
   }
 

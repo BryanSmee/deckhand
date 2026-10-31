@@ -6,23 +6,36 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { grantsFrom } from "../listener/grants.mjs";
 import { blobOf, buildPlan, buildProblem, previewJob } from "../runner/hooks.mjs";
-import { tempDir } from "./helpers.mjs";
+import { grantedOf, tempDir } from "./helpers.mjs";
 
 const config = { prefix: "dh", limits: {}, grantsDir: "/nowhere" };
 const grantsOf = (text) => () => grantsFrom({ "org/repo.yaml": text }, config);
 
-test("a build: with allow_dockerfile, a plain path, a branch only with its own grant", () => {
-  const grants = grantsOf("allow_dockerfile: true\n");
+test("a build: with the `dockerfile` grant, a plain path, a branch only with its own grant", async () => {
+  const grants = grantsOf("hosts: [pypi.org]\n");
+  const granted = grantedOf(["dockerfile"]);
+  const problem = (asked, given = granted) => buildProblem(config, asked, grants, given);
   const asked = { repo: "org/repo", ref: "main", dockerfile: "docker/Dockerfile" };
-  assert.equal(buildProblem(config, asked, grants), null);
-  assert.equal(buildProblem(config, { repo: "org/repo" }, grants), null);
-  assert.match(buildProblem(config, { ...asked, dockerfile: "../x" }, grants), /not a plain path/);
+  assert.equal(await problem(asked), null);
+  assert.equal(await problem({ repo: "org/repo" }), null);
+  assert.match(await problem({ ...asked, dockerfile: "../x" }), /not a plain path/);
   assert.match(
-    buildProblem(config, { ...asked, branch: true }, grants),
-    /allow_branch_docker_images/,
+    await problem({ ...asked, branch: true }),
+    /don't grant `branch_docker_images` to this repository/,
   );
-  assert.match(buildProblem(config, asked, grantsOf("")), /allow_dockerfile/);
-  assert.throws(() => buildProblem(config, { ...asked, repo: "org/../x" }, grants), /repo\?/);
+  assert.equal(
+    await problem({ ...asked, branch: true }, grantedOf(["dockerfile", "branch_docker_images"])),
+    null,
+  );
+  // Without the operator's policies granting it (or without policies): refused.
+  assert.match(await problem(asked, grantedOf([])), /don't grant `dockerfile`/);
+  assert.match(await problem(asked, null), /don't grant `dockerfile`/);
+  await assert.rejects(problem({ ...asked, repo: "org/../x" }), /repo\?/);
+  // The policies can't decide: no build.
+  await assert.rejects(
+    problem(asked, async () => ({ error: "policy error: x" })),
+    (error) => error.status === 403 && /can't decide org\/repo's/.test(error.message),
+  );
 });
 
 test("a preview hook: its command and image from the default branch's config, its Dockerfile's image built", async (t) => {
@@ -48,9 +61,10 @@ test("a preview hook: its command and image from the default branch's config, it
     pull_request: { number: 5 },
   };
   const job = { repo: "org/repo", event: "pull_request", payload };
-  const both = grantsOf("allow_preview: true\nallow_dockerfile: true\n");
+  const grants = grantsOf("hosts: [pypi.org]\n");
+  const both = { grants, granted: grantedOf(["preview", "dockerfile"]) };
   files("preview:\n  command: ./up.sh\ndockerfile: Dockerfile\n");
-  const found = await previewJob(config, job, { checkout, imageFor, grants: both });
+  const found = await previewJob(config, job, { checkout, imageFor, ...both });
   assert.equal(found.hook.command, "./up.sh");
   assert.equal(found.image, "dh-repo-org-repo:abc");
   assert.deepEqual(checkouts, [null]);
@@ -58,19 +72,22 @@ test("a preview hook: its command and image from the default branch's config, it
   assert.equal(built[0].blob, blobOf(Buffer.from("FROM x\n")));
   assert.equal(blobOf(Buffer.from("")), "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
   // Each refusal says why: no grant, a Dockerfile it may not build, no hook, another event.
-  const refused = (grants, why) =>
-    assert.rejects(previewJob(config, job, { checkout, imageFor, grants }), why);
-  await refused(grantsOf(""), /allow_preview/);
-  await refused(grantsOf("allow_preview: true\n"), /allow_dockerfile/);
+  const refused = (names, why) =>
+    assert.rejects(
+      previewJob(config, job, { checkout, imageFor, grants, granted: grantedOf(names) }),
+      why,
+    );
+  await refused([], /don't grant `preview`/);
+  await refused(["preview"], /don't grant `dockerfile`/);
   files("max_parallel: 2\n");
-  await refused(both, /has no preview hook/);
+  await refused(["preview", "dockerfile"], /has no preview hook/);
   await assert.rejects(
-    previewJob(config, { ...job, event: "push" }, { checkout, imageFor, grants: both }),
+    previewJob(config, { ...job, event: "push" }, { checkout, imageFor, ...both }),
     /event\?/,
   );
   // An event the runner can't tie to the repository asked: another's, or without its subject.
   const event = (asked) =>
-    assert.rejects(previewJob(config, asked, { checkout, imageFor, grants: both }), (error) => {
+    assert.rejects(previewJob(config, asked, { checkout, imageFor, ...both }), (error) => {
       assert.equal(error.status, 400);
       return true;
     });
@@ -82,7 +99,7 @@ test("a preview hook: its command and image from the default branch's config, it
 });
 
 test("a build's plan: the default branch unless a branch is asked (and granted), GitHub's blob, granted hosts only", async () => {
-  const grants = grantsOf("allow_dockerfile: true\nhosts: [pypi.org]\n");
+  const grants = grantsOf("hosts: [pypi.org]\n");
   const cfg = { ...config, githubUrl: "https://github.com", githubApi: "https://api.github.com" };
   const asked = [];
   const blobOf = async (repo, path, ref) => (asked.push([repo, path, ref]), "sha-1");

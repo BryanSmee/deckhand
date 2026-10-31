@@ -264,13 +264,15 @@ services:
     # runner), lets its other calls finish (an image's build), then releases its lease, and lets
     # the preview hooks running end (cut past the grace period). Sandboxes keep running.
     stop_grace_period: 5m
-    # The listener's, and its own to the broker service (its tokens, the runs' inboxes and files).
-    networks: [runner, broker-runner]
+    # The listener's, its own to the broker service (its tokens, the runs' inboxes and files), and
+    # its own to the policy service (what the operator's policies grant a repository).
+    networks: [runner, broker-runner, policy-runner]
     environment:
       # The settings the runner reads too, as the listener does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
       # GRANTS_DIR: the listener's grants folder, which the runner checks every spec, build and
-      # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs).
+      # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs), with what its
+      # policies grant, asked of the policy service (POLICY_SERVICE_URL, its default).
       GRANTS_DIR: ${GRANTS_DIR:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       RUNNER: ${RUNNER:-}
@@ -332,8 +334,9 @@ services:
       # - /nfs/work:/nfs/work:ro
 
   # The policy service (docs/services.md): Deckhand's, the operator's and the repositories' Rego
-  # policies, evaluated by long-lived `opa` servers for the listener. No secret, no state, and no
-  # network but the listener's: an internal one, without a way out.
+  # policies, evaluated by long-lived `opa` servers for the listener, and for the runner the
+  # grants the operator's give a repository. No secret, no state, and no network but its
+  # callers': internal ones, without a way out.
   policy:
     build:
       context: .
@@ -343,7 +346,7 @@ services:
     # Stopping lets the decisions in flight finish (2 s each at most): the listener waits for the
     # next copy meanwhile, up to 30 s, rather than refuse them (docs/architecture.md#restarts).
     stop_grace_period: 30s
-    networks: [policy]
+    networks: [policy, policy-runner]
     environment:
       # The operator's policies: GRANTS_DIR/policy/*.rego, below. Empty: /etc/deckhand/grants.
       GRANTS_DIR: ${GRANTS_DIR:-}
@@ -453,6 +456,9 @@ networks:
         - subnet: ${BROKER_RUNNER_SUBNET:-10.231.250.32/28}
   # The listener and the policy service alone: internal, so the policy service has no way out.
   policy:
+    internal: true
+  # The runner and the policy service alone, the same.
+  policy-runner:
     internal: true
   # The listener and the runner: one calls the other, nothing else is on it, and it has no way
   # out. Its subnet is fixed, as each tells its caller by it (SERVICE_NETWORKS): RUNNER_SUBNET in

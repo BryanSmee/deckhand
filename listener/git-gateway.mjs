@@ -272,7 +272,8 @@ export function createGitGateway({
   // policies.mjs's: `allow_push` and `deny_push` on each branch a push updates. None: every push
   // is refused.
   policies = null,
-  allowWorkflows = () => false, // (repo) => whether its grant sets `allow_workflows`
+  // (repo) → whether the operator's policies grant it `workflows` (grants.mjs), or a promise of it
+  allowWorkflows = () => false,
   // github-forks.mjs createForkChecks(): whose pushes are checked for a fork's objects
   // (restricted()). None: nobody's.
   forks = null,
@@ -455,7 +456,7 @@ export function createGitGateway({
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
     // tree, needn't carry them, and its next fetch would bring them as the repository's own.
     const strict = forks?.restricted(may) === true;
-    const workflows = workflowsGranted(repo);
+    const workflows = await workflowsGranted(repo);
     if (!strict && !workflows) return { body: parsed.body, token: null, parsed };
     // Only now: a push of no branch of the run's (a fork's pull request has none) never gets it.
     if (!workflows) return checkSpooled(req, res, { repo, run, github }, parsed, base, null, true);
@@ -589,7 +590,7 @@ export function createGitGateway({
   // would be refused. Null when they pass, or the repo isn't granted `allow_workflows`.
   // Throws when they can't be checked.
   async function checkBranch(repo, branch, into) {
-    if (!workflowsGranted(repo)) return null;
+    if (!(await workflowsGranted(repo))) return null;
     const github = app();
     if (!github) throw new Error("the GitHub App is not set up");
     const base = await defaultBranch(github, repo);
@@ -598,10 +599,10 @@ export function createGitGateway({
     return workflowRefusals(found.map((f) => ({ ...f, ref: branch }))).get(branch) ?? null;
   }
 
-  // Whether the repo's grant sets `allow_workflows` now; not when it can't be read.
-  function workflowsGranted(repo) {
+  // Whether the repo is granted `workflows` now; not when that can't be decided.
+  async function workflowsGranted(repo) {
     try {
-      return allowWorkflows(repo) === true;
+      return (await allowWorkflows(repo)) === true;
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
       return false;

@@ -783,7 +783,13 @@ test("the capabilities: what the engine refuses, and a union's error said as the
       message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
     },
   ]);
-  assert.deepEqual(ROUTES["POST /capabilities"], ROUTES["POST /evaluate"]);
+  // The deciders', but the runner's: it asks the grants alone (#498).
+  assert.deepEqual(
+    ROUTES["POST /capabilities"],
+    ROUTES["POST /evaluate"].filter((caller) => caller !== "runner"),
+  );
+  assert.ok(ROUTES["GET /policies"].includes("runner"));
+  assert.ok(!ROUTES["POST /check"].includes("runner"));
 });
 
 test("the capabilities of many modes: in parts the service takes, one answer", async (t) => {

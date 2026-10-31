@@ -19,11 +19,12 @@ import { createEngine } from "./engine.mjs";
 // The services that decide (lib/services.mjs CALLS): the orchestrator (merges, reviews, fixes,
 // linked branches, reviewers, the config check, `/mode policy` and the Policies tab), the github
 // service (a run's writes) and the broker. Until they leave the listener, it calls as the
-// orchestrator.
+// orchestrator. The runner asks the grants a repository gets (#498), the operator's alone: a
+// decision, not the capabilities nor a repository's files' check.
 const DECIDERS = ["orchestrator", "github", "broker"];
 export const ROUTES = {
-  "GET /policies": DECIDERS,
-  "POST /evaluate": DECIDERS,
+  "GET /policies": [...DECIDERS, "runner"],
+  "POST /evaluate": [...DECIDERS, "runner"],
   "POST /capabilities": DECIDERS,
   "POST /check": DECIDERS,
 };

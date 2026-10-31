@@ -21,7 +21,7 @@ import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
 import { grantsFrom } from "../listener/grants.mjs";
-import { fakeDocker, tempDir } from "./helpers.mjs";
+import { fakeDocker, grantedOf, tempDir } from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const signing = { privateKey, kid: keyId(publicKey) };
@@ -89,10 +89,11 @@ function host({ lines = ['{"type":"result","result":"Done."}'] } = {}) {
 
 // One copy of the runner service, listening; its lease on `store` (shared by the copies).
 // `bound`: its callers' networks; `brokerTokens`: what the broker gives a run being started.
-// The grants folder: org/repo may run preview hooks and build its Dockerfile; and its default
-// branch's files, as the github service's tarball unpacks them.
-const grants = () =>
-  grantsFrom({ "org/repo.yaml": "allow_preview: true\nallow_dockerfile: true\n" }, config);
+// The grants folder, and what the operator's policies grant: org/repo may run preview hooks and
+// build its Dockerfile; and its default branch's files, as the github service's tarball unpacks
+// them.
+const grants = () => grantsFrom({ "org/repo.yaml": "hosts: [pypi.org]\n" }, config);
+const granted = grantedOf(["preview", "dockerfile"], "org/repo");
 const checkout = async () => {
   const dir = tempDir(null, "deckhand-checkout-");
   writeFileSync(
@@ -149,6 +150,7 @@ async function copy(
     lease,
     watchMs: 50,
     grants,
+    granted,
     checkout,
     blobOf:
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
@@ -301,12 +303,12 @@ test("a preview hook sent again with its key is queued once", async (t) => {
   const build = { repo: "org/other", ref: "main", dockerfile: "Dockerfile", blob: "b" };
   const refused = await call(url, "POST", "/images", { sub: "orchestrator", body: build });
   assert.equal(refused.status, 403);
-  assert.match((await refused.json()).message, /allow_dockerfile/);
+  assert.match((await refused.json()).message, /don't grant `dockerfile`/);
   const branch = { ...build, repo: "org/repo", branch: true };
   assert.match(
     (await (await call(url, "POST", "/images", { sub: "orchestrator", body: branch })).json())
       .message,
-    /allow_branch_docker_images/,
+    /don't grant `branch_docker_images`/,
   );
 });
 

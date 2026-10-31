@@ -411,8 +411,8 @@ function projectsText(projects) {
 
 // Opt-in: the built-in review mode (modes.mjs, reviews.mjs), `true` for "/mode review" only.
 // Every key is checked, like a mode's: a mistyped one would change what it does unnoticed.
-// It widens nothing (a light run with a read-only token), so no grant; `merge` does, and only
-// the operator's `allow_auto_merge` makes it merge (grants.mjs autoMergeProblems()).
+// It widens nothing (a run with a read-only token), so no grant; `merge` does, and only the
+// operator's `auto_merge` grant makes it merge (grants.mjs autoMergeProblems()).
 function parseReview(value, { key, settings, config, fail, warn }) {
   if (value === false) return;
   const review = {
@@ -654,10 +654,13 @@ export const KEYS = {
     display: ({ value, row, refused, config }) =>
       refused(value) ?? row(value ?? `none: the base image ${config.image}`),
   },
-  // Moved to the operator's grants folder (grants.mjs): a repo can't allow itself this.
+  // The operator's to grant (grants.mjs GRANTS, `branch_docker_images`): a repo can't allow
+  // itself this.
   allow_branch_docker_images: {
     parse: (value, { key, warn }) => {
-      warn(`${key}: ignored here, the operator's grants folder sets it for this repository`);
+      warn(
+        `${key}: ignored here, the operator's policies grant \`branch_docker_images\` to this repository`,
+      );
     },
     display: ({ settings, grant, known, row, unknown }) =>
       !known && settings.dockerfile
@@ -666,7 +669,7 @@ export const KEYS = {
             String(grant.allowBranchDockerImages && !!settings.dockerfile),
             grant.allowBranchDockerImages && !settings.dockerfile
               ? "granted, but the repository has no dockerfile"
-              : "the operator's grants",
+              : "the operator's policies",
           ),
   },
   // { cache } when its runs get a container engine (runner/engine.mjs), with its grant.
@@ -748,7 +751,7 @@ export const KEYS = {
       // Not refused: the reviews run, only the merge waits for a human (grants.mjs).
       const merge =
         value?.merge && known && !grant.allowAutoMerge
-          ? "nothing is merged: the operator's grants don't set allow_auto_merge"
+          ? "nothing is merged: the operator's policies don't grant auto_merge"
           : null;
       const model = mode ? `${mode.model}/${mode.effort}` : null;
       return row(reviewText(value), [model, merge].filter(Boolean).join("; ") || null);

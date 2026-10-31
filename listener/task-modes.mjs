@@ -2,6 +2,7 @@
 // the issue's current mode, its brainstorm or its work session. Keeps the issue's brainstorm
 // (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
 import { researchRefusal } from "./access.mjs";
+import { grantsBy } from "./grants.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
 import { customMode, INBOX } from "./modes.mjs";
@@ -135,7 +136,9 @@ export function createTaskModes(ctx) {
   // Research (modes.mjs RESEARCH), only with the operator's grant: without it, a reply that names
   // it and no run. Kept in modes.json like the repo's modes: comments go on in it.
   async function startResearch(item, key) {
-    const refused = researchRefusal(ctx.config, item.repo);
+    const refused = await researchRefusal(ctx.config, item.repo, {
+      granted: grantsBy(ctx.policies),
+    });
     if (refused) {
       const where = taskKey(item.repo, item.id);
       log(`${where}: research refused: ${refused}`);
@@ -218,8 +221,10 @@ export function createTaskModes(ctx) {
 
   // The reply to a "/mode" Claude can't run: the modes there are. No run starts.
   async function unknownMode(item, what) {
-    const note = (m) =>
-      m === "research" && researchRefusal(ctx.config, item.repo) ? " (not granted here)" : "";
+    const research = await researchRefusal(ctx.config, item.repo, {
+      granted: grantsBy(ctx.policies),
+    });
+    const note = (m) => (m === "research" && research ? " (not granted here)" : "");
     const list = modeNames(item.settings)
       .map((m) => `\`${m}\`${note(m)}`)
       .join(", ");

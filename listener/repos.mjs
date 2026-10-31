@@ -21,7 +21,7 @@ import {
   autoMergeProblems,
   GrantsError,
   grantCheck,
-  grantFor,
+  grantOf,
   loadGrants,
   refusedByGrants,
 } from "./grants.mjs";
@@ -101,13 +101,15 @@ export function appLinks(githubUrl, app, installations = []) {
 
 // `app`: asApp(), asInstallation(), request(), remember() and rememberPermissions()
 // (github-app.mjs), and settings(), which reads the App's settings again (server.mjs checkApp()). `store`: the
-// onboarding store (onboarding.mjs). `grants()` and `fs` (realpath, stat): what a run reads
-// too, the operator's grants folder and the listener's filesystem.
+// onboarding store (onboarding.mjs). `grants()`, `granted(repo)` and `fs` (realpath, stat): what
+// a run reads too, the operator's grants folder, what its policies grant (grants.mjs grantsBy())
+// and the listener's filesystem.
 export function createRepoList({
   app,
   config,
   store,
   grants = () => loadGrants(config),
+  granted = null,
   fs = {},
   now = Date.now,
   log = () => {},
@@ -193,11 +195,13 @@ export function createRepoList({
   // What the row shows: { has, invalid, autoMerge, at }. Invalid when no run would start: the
   // file's errors, or what the operator's grants refuse in it (as grantCheck() is the run's
   // preflight). Checked at each call: an edited grant shows without reading GitHub.
-  function judged(info, known, load) {
+  async function judged(info, known, load) {
     if (!known) return null;
     const { at, has, errors, settings } = known;
     const check =
-      has && !errors ? grantCheck(config, info.full_name, settings, { load, fs }) : null;
+      has && !errors
+        ? await grantCheck(config, info.full_name, settings, { load, granted, fs })
+        : null;
     const invalid = has && (errors || refusedByGrants(check));
     const autoMerge =
       !invalid &&
@@ -246,7 +250,7 @@ export function createRepoList({
     const worker = async () => {
       while (next < infos.length) {
         const i = next++;
-        const found = judged(infos[i], await configState(infos[i]), load);
+        const found = await judged(infos[i], await configState(infos[i]), load);
         rows[i] = repoStatus(infos[i], found, store.get(infos[i].full_name));
       }
     };
@@ -264,7 +268,7 @@ export function createRepoList({
     const info = (await repos()).find((r) => sameRepo(r.full_name, repo));
     if (!info) return null;
     const { file, parsed, known } = await read(info);
-    const found = judged(info, known, grantsOnce());
+    const found = await judged(info, known, grantsOnce());
     return { info, file, parsed, row: repoStatus(info, found, store.get(info.full_name)) };
   }
 
@@ -366,6 +370,7 @@ export function createRepoApi({
   publicUrl = () => null,
   start,
   grants = () => loadGrants(config),
+  granted = null,
   fs,
   now = Date.now,
   log = () => {},
@@ -455,7 +460,7 @@ export function createRepoApi({
     try {
       const all = grants();
       everyRepo = false;
-      grant = grantFor(all, config, info.full_name);
+      grant = await grantOf(config, info.full_name, { load: () => all, granted });
     } catch (error) {
       log(`Repositories: ${error.message ?? error}`);
       grantsError = grantsErrorView(error, everyRepo);
