@@ -388,12 +388,12 @@ export function createProxy({
   const broker = brokerUrl ? new URL(brokerUrl).origin : null;
 
   // Plain HTTP: the request line holds the absolute URL. The CA's certificate, the
-  // listener's to hand to sandboxes, at /deckhand-ca.crt; /ready, for a readiness probe: a
-  // draining proxy takes no new connection, so it doesn't answer it.
+  // listener's to hand to sandboxes, at /deckhand-ca.crt; /ready, for a readiness probe: 503
+  // once draining, on a connection kept alive from before (new ones aren't taken).
   async function forward(req, res) {
     if (req.url === "/ready") {
-      res.writeHead(200, { "content-type": "text/plain" });
-      return res.end("ready\n");
+      res.writeHead(draining ? 503 : 200, { "content-type": "text/plain" });
+      return res.end(draining ? "draining\n" : "ready\n");
     }
     if (req.url === "/deckhand-ca.crt") {
       // Made again when near its end: each run asks for it.

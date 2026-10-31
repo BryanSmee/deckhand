@@ -29,6 +29,7 @@ COPY docs/ docs/
 COPY prompts/ prompts/
 COPY sandbox/ sandbox/
 COPY listener/ listener/
+COPY lib/ lib/
 COPY server.example/ server.example/
 COPY compose.yaml AGENTS.md README.md ./
 # The release it is (a git tag, .github/workflows/release-workflow.yml); "dev" from source.

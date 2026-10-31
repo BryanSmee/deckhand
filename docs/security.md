@@ -430,7 +430,7 @@ from a sandbox, every service is reached through the proxy, which vouches for th
 (`X-Deckhand-Client`), never directly. Two services share a network only when one calls the
 other, and a service is on no network it doesn't call or isn't called over, but its way out
 when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted hosts).
-`test/networks.test.mjs` reads `compose.yaml` and fails otherwise. Until the broker moves out
+`test/networks.test.mjs` reads `compose.yaml` and fails otherwise, and checks which containers the runner joins to a run's network. Until the broker moves out
 of the listener (#505), the listener joins the runs' networks too, for the endpoints sandboxes
 call directly (the agents' APIs, pushes).
 

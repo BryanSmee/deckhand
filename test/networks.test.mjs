@@ -3,11 +3,16 @@
 // network a service is on is one it calls or is called over, or its way to the internet when it
 // needs one, and a runs' network holds the egress proxy alone (and the sandboxes, which the
 // runner attaches). A service added to compose.yaml has to say here what it runs.
+//
+// compose.yaml declares no runs' network: the runner creates one per run (runner/networks.mjs),
+// so the `deckhand.role: runs` rule below only holds the fixtures to it, for when a deployment
+// declares them. What the runner joins to a run's network is tested apart, at the end.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { calls } from "../lib/services.mjs";
+import { createNetworks } from "../listener/runner/networks.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
 
 const root = join(import.meta.dirname, "..");
@@ -130,4 +135,29 @@ test("the check fails on a network that joins too much", () => {
     problems({ services: { listener: { labels: { "deckhand.role": "egress" } } } }),
     ["deckhand.role=egress names a service that isn't the proxy"],
   );
+});
+
+test("a run's network: the runner joins the proxy to it, and the listener until its broker moves out", async () => {
+  const connected = [];
+  const docker = async (args) => {
+    if (args[0] === "network" && args[1] === "connect") connected.push(args.at(-1));
+    if (args[0] === "network" && args[1] === "inspect") return { code: 0, out: "true", err: "" };
+    return { code: 0, out: "deckhand", err: "" };
+  };
+  const networks = createNetworks({
+    config: {
+      prefix: "deckhand",
+      subnets: null,
+      listenerContainer: "listener-container",
+      egressContainer: "egress-container",
+      brokerUrl: "http://listener:8081",
+      egressProxy: "http://egress:3128",
+    },
+    docker,
+    log: () => {},
+    now: () => 0,
+  });
+  await networks.create("deckhand-run-1");
+  // The listener: for the endpoints its broker serves sandboxes directly (#505 removes it).
+  assert.deepEqual(connected, ["listener-container", "egress-container"]);
 });

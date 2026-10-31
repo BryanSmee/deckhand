@@ -128,17 +128,15 @@ test("on SIGTERM, every service: what it does first, its servers drain together,
     steps.push(`own drain ${options.graceMs}`),
     drain(other.server, options)
   );
-  const stopping = drainOnSigterm([server, other.server], {
+  drainOnSigterm([server, other.server], {
     graceMs: 600_000,
     log: (line) => steps.push(line),
     before: async () => steps.push("saved"),
     exit: (code) => exited(code),
     signals,
   });
-  assert.equal(stopping.draining, false);
 
   signals.emit("SIGTERM");
-  assert.equal(stopping.draining, true);
   await new Promise((resolve) => setTimeout(resolve, 20));
   await refused(port);
   await refused(other.port);

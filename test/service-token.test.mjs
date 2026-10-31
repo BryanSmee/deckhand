@@ -181,6 +181,10 @@ test("SERVICE_NETWORKS: service=subnet, nothing else", () => {
   assert.throws(() => networkCallers("sandbox=10.0.0.0/24"), /expected service=subnet/);
   assert.throws(() => networkCallers("edge=10.0.0.1/24"), /expected service=subnet/);
   assert.throws(() => networkCallers("edge"), /expected service=subnet/);
+  assert.throws(
+    () => networkCallers("edge=172.30.0.0/16,orchestrator=172.30.2.0/24"),
+    /orchestrator=172\.30\.2\.0\/24 overlaps edge=172\.30\.0\.0\/16/,
+  );
 });
 
 test("the broker issues a caller tokens for the services it calls, never others", () => {

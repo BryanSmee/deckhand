@@ -138,7 +138,9 @@ export function storeContract(name, open) {
     assert.ok(Number(ids[0]) < Number(ids[1]) && Number(ids[1]) < Number(ids[2]));
     const events = (list) => list.map((e) => e.event.n);
 
-    // A copy reads them, handles none and stops: the next one reads them all again.
+    // A copy reads them, handles none and stops: the next one reads them all again. One reader
+    // at a time per consumer (the lease holder, lib/store.mjs), so nothing is handed to one
+    // reader rather than another.
     assert.deepEqual(events(await store.read("runs", "orchestrator")), [1, 2, 3]);
     assert.deepEqual(events(await store.read("runs", "orchestrator")), [1, 2, 3]);
     // Acknowledged out of order: what is left comes back, oldest first.
@@ -181,5 +183,14 @@ export function storeContract(name, open) {
     assert.equal(await store.deleteBlob("runs/1/log"), true);
     assert.equal(await store.deleteBlob("runs/1/log"), false);
     assert.equal(await store.readBlob("runs/1/log"), null);
+  });
+
+  test(`${name}: a stream, a consumer or a blob needs a name`, async (t) => {
+    const { store } = await setup(t);
+    await assert.rejects(store.append("", { n: 1 }), /not a name/);
+    await assert.rejects(store.read("runs", ""), /not a name/);
+    await assert.rejects(store.ack("", "edge", ["1"]), /not a name/);
+    await assert.rejects(store.putBlob("", "x"), /not a name/);
+    await assert.rejects(store.readBlob(""), /not a name/);
   });
 }

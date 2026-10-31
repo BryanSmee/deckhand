@@ -73,6 +73,23 @@ test("file: names stay in their folder, whatever they hold", async (t) => {
   assert.equal(readdirSync(join(dir, "streams")).length, 1);
 });
 
+test("file: a name too long for a file name is cut and hashed, and stays its own", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  const deep = `runs/42/files/${"src/components/".repeat(12)}`;
+  await store.putBlob(`${deep}index.ts`, "a");
+  await store.putBlob(`${deep}other.ts`, "b");
+  await store.append(`progress/${"x".repeat(300)}`, { n: 1 });
+  assert.equal((await store.readBlob(`${deep}index.ts`)).toString(), "a");
+  assert.equal((await store.readBlob(`${deep}other.ts`)).toString(), "b");
+  const names = [...readdirSync(join(dir, "blobs")), ...readdirSync(join(dir, "streams"))];
+  assert.equal(names.length, 3);
+  for (const file of names) assert.ok(Buffer.byteLength(file) <= 255, file);
+  // A short name holding the hash's mark is never taken for a cut one.
+  await store.putBlob("a~b", "c");
+  assert.equal((await store.readBlob("a~b")).toString(), "c");
+});
+
 test("file: a trimmed stream's file is rewritten, not left to grow", async (t) => {
   const dir = tempDir(t);
   const store = fileStore({ dir });

@@ -110,8 +110,10 @@ file backend on one node, Redis on several (#509).
 
 ### Draining
 
-Every service drains the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
-accepting connections, finishes those in flight within its grace period, then exits. With two
+Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
+accepting connections, finishes those in flight within its grace period, then exits. The proxy
+uses it so far; the listener keeps its own handler (`listener/server.mjs`), and each service uses
+`drainOnSigterm()` as it moves out. With two
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.
 
