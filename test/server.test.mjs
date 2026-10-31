@@ -742,6 +742,19 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     for (const req of held) req.destroy();
   });
 
+  test("the App's key: handed over to the github service by a listener that held it, then removed", async (t) => {
+    const { dir, listener } = await listen(t);
+    await listener.until("handed over to the github service, removed from app.json");
+    const kept = JSON.parse(readFileSync(join(dir, "app.json"), "utf8"));
+    assert.equal(kept.pem, undefined);
+    // What edge keeps: the webhook secret, the OAuth client's.
+    assert.equal(kept.webhook_secret, SECRET);
+    assert.equal(kept.client_secret, "cs");
+    const held = JSON.parse(readFileSync(join(dir, "github-service", "app.json"), "utf8"));
+    assert.equal(held.pem, PEM);
+    assert.equal(held.webhook_secret, undefined);
+  });
+
   test("a delivery whose handling throws is logged, and the next one is still handled", async (t) => {
     const { listener, send } = await listen(t);
     assert.equal((await send(null)).status, 202);

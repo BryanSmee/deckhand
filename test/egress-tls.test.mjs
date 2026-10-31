@@ -35,6 +35,7 @@ async function setup(
     cacheOn = true,
     decrypt = true,
     relayUrl = null,
+    githubService = null,
     wait = {},
     held = null, // a promise the policy's answers wait for (a listener slow to answer)
   } = {},
@@ -66,12 +67,21 @@ async function setup(
       asked.push(host);
       await held;
       const cache = host === "cached.test";
-      const relay = host === "relayed.test";
-      return { allowed: true, private: true, cache, decrypt: (cache && decrypt) || relay, relay };
+      // GitHub's, to the github service, with the run's network the listener vouches for.
+      const github = host === "github.test";
+      const relay = host === "relayed.test" || github;
+      return {
+        allowed: true,
+        private: true,
+        cache,
+        decrypt: (cache && decrypt) || relay,
+        relay,
+        ...(github && { service: "github", sandbox: "net-1" }),
+      };
     },
     // A relayed host is never resolved: its requests go to the listener.
     lookup: async (host) => {
-      if (host === "relayed.test") throw new Error("relayed.test resolved");
+      if (host === "relayed.test" || host === "github.test") throw new Error(`${host} resolved`);
       return [{ address: "127.0.0.1", family: 4 }];
     },
     blocked: () => false,
@@ -79,6 +89,7 @@ async function setup(
     authority,
     upstreamCa,
     relayUrl,
+    githubService,
     wait,
   });
   const proxyPort = await listening(proxy);
@@ -273,6 +284,38 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
   // No relay URL (or no CA): refused, never a tunnel that would reach the host.
   const nowhere = await setup(t);
   await assert.rejects(nowhere.tunnel("relayed.test", 443), /403/);
+});
+
+test("GitHub's relayed hosts go to the github service: the run's credential apart, its network vouched for", async (t) => {
+  const heard = [];
+  const answer = (req, res) => {
+    heard.push({ url: req.url, headers: req.headers });
+    res.end("ok");
+  };
+  const listener = await serve(t, answer);
+  const github = await serve(t, answer);
+  const { get, authority } = await setup(t, {
+    relayUrl: `${listener.url}/relay`,
+    githubService: { url: github.url, header: async () => "Bearer proxy-token" },
+  });
+  const res = await get("github.test", "/repos/o/r?x=1", authority.certificate(), {
+    authorization: "token run-token",
+    // What a sandbox says of itself goes nowhere.
+    "x-deckhand-sandbox": "net-other",
+    "x-deckhand-run-authorization": "token other",
+  });
+  assert.equal(res.body, "ok");
+  assert.equal(heard.length, 1);
+  const [{ url, headers }] = heard;
+  assert.equal(url, "/relay/github.test/repos/o/r?x=1");
+  assert.equal(headers.host, new URL(github.url).host);
+  assert.equal(headers.authorization, "Bearer proxy-token");
+  assert.equal(headers["x-deckhand-run-authorization"], "token run-token");
+  assert.equal(headers["x-deckhand-sandbox"], "net-1");
+  // The agents' relayed hosts still go to the listener.
+  await get("relayed.test", "/v1/x", authority.certificate());
+  assert.equal(heard.at(-1).url, "/relay/relayed.test/v1/x");
+  assert.equal(heard.at(-1).headers.host, new URL(listener.url).host);
 });
 
 test("a relayed host to an https: listener: over verified TLS, one connection per request", async (t) => {
