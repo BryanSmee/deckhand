@@ -5,7 +5,7 @@
 import { sameRepo } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
-import { Refused, refuse } from "./web.mjs";
+import { Refused, refuse } from "../lib/http.mjs";
 
 // `github(repo, method, path, body, expected)`: the App's calls. `repoSettings(repo, base)`:
 // the default branch's config.

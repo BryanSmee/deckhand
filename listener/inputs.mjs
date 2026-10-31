@@ -9,7 +9,7 @@ import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { allTicked, parseQuestions, questionsSection } from "./questions.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
 // has them.

@@ -15,7 +15,7 @@
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { sendJson } from "./web.mjs";
+import { sendJson } from "../lib/http.mjs";
 
 // A screenshot's size, and all of a run's: they are public once linked, and on the
 // listener's disk.

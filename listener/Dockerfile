@@ -63,6 +63,8 @@ RUN case "$TARGETARCH" in \
     && buildctl --version
 WORKDIR /app
 COPY listener/*.mjs listener/
+# The modules every service shares (lib/), beside the listener's as in the repository.
+COPY lib/ lib/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/
 # GitHub's GraphQL schema, pinned (vendor/update-schema.mjs), which the gateway validates against.
 COPY --from=vendor /vendor/graphql.mjs listener/vendor/

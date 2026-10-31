@@ -92,7 +92,8 @@ import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { latestReview } from "./reviews.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
 import { taskId } from "./spelling.mjs";
-import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
+import { readJsonBody, refuse, send } from "../lib/http.mjs";
+import { apiRoute } from "./web.mjs";
 
 // How long a repo's open issues are served before they are read again (in the background):
 // the dashboard polls them.

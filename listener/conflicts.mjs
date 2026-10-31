@@ -19,7 +19,7 @@ import { getJson } from "./github.mjs";
 import { denyKept, passed } from "./policies.mjs";
 import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // How often the watcher wakes up; each repo is checked at its own interval.
 const TICK_MS = 60_000;

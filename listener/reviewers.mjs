@@ -13,7 +13,7 @@ import { getJson, paginate } from "./github.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { isPolicyError, pullInput } from "./policies.mjs";
 import { sameTask } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // A requested head commit is forgotten after this: the pull request is long merged or closed.
 const KEEP_MS = 90 * 24 * 3600_000;

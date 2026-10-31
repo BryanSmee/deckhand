@@ -1,9 +1,9 @@
-// Draining on SIGTERM (listener/drain.mjs): the broker, or the egress proxy, takes no new
+// Draining on SIGTERM (lib/drain.mjs): the broker, or the egress proxy, takes no new
 // connection while the calls in flight finish, then resolves; or the grace period ends first.
 import assert from "node:assert/strict";
 import { Agent, request } from "node:http";
 import { test } from "node:test";
-import { drain, drainable } from "../listener/drain.mjs";
+import { drain, drainable } from "../lib/drain.mjs";
 import { serve } from "./helpers.mjs";
 
 // A server whose /stream answers (an agent's) stay open in `streams`, for the test to write

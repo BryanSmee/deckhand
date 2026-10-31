@@ -6,7 +6,7 @@ import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs
 import { loadCredentials, saveCredentials } from "../listener/github-app.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { persistentMap, readJson, writeJsonAtomic } from "../listener/store.mjs";
+import { persistentMap, readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { createTitles } from "../listener/titles.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -82,7 +82,7 @@ test("persistentMap: the file's object as a Map, saved whole in the same format"
   assert.equal(statSync(join(dir, "waits.json")).mode & 0o777, 0o600);
 });
 
-test("every state file is written through store.mjs: no temporary file left behind", async (t) => {
+test("every state file is written through lib/files.mjs: no temporary file left behind", async (t) => {
   const dir = temp(t);
   const brainstorms = createBrainstorms({
     path: join(dir, "brainstorms.json"),

@@ -14,9 +14,9 @@ import { restricted } from "./github-forks.mjs";
 import { NO_TOKEN } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { engineName } from "./runner/engine.mjs";
-import { drainable } from "./drain.mjs";
+import { drainable } from "../lib/drain.mjs";
 import { createRunFiles } from "./run-files.mjs";
-import { sendJson } from "./web.mjs";
+import { sendJson } from "../lib/http.mjs";
 
 // Path prefix → the ctx service that handles it, and how its failures are logged. A failure
 // once the answer started cuts the connection when `destroy`: a half-sent stream (a push, an
@@ -296,7 +296,7 @@ export function createBrokerHttp(ctx) {
     return server;
   }
 
-  // The egress policy alone, on its own port: the broker's drains on SIGTERM (drain.mjs) while
+  // The egress policy alone, on its own port: the broker's drains on SIGTERM (lib/drain.mjs) while
   // the calls in flight finish, but every sandbox connection, to any host, waits on this
   // answer, so it stays open until the listener exits. The broker's port answers /egress too,
   // for a proxy whose POLICY_URL still names it.

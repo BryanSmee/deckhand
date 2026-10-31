@@ -7,8 +7,8 @@ RUN apk add --no-cache openssl
 WORKDIR /app
 COPY proxy/proxy.mjs proxy/addresses.mjs proxy/cached.mjs proxy/cache.mjs proxy/authority.mjs \
   proxy/atomic.mjs proxy/wait.mjs proxy/
-# Draining on SIGTERM, the listener's too.
-COPY listener/drain.mjs listener/
+# Draining on SIGTERM, every service's (lib/).
+COPY lib/drain.mjs lib/
 # The egress cache's folder, the node user's: a new volume mounted there takes its owner. The
 # CA lives in it too (ca/).
 RUN mkdir /cache && chown node:node /cache

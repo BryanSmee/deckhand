@@ -12,7 +12,7 @@
 import { parseKey, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { respelled, taskId } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // The longest name, in characters: a lane's header is one line.
 export const MAX_NAME = 60;

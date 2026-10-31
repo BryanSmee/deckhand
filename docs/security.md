@@ -248,7 +248,7 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 ### Run tokens
 
 A sandbox holds no credential of the operator's and no GitHub token: it holds **run tokens**
-(`listener/run-token.mjs`), JWTs the broker (`listener/broker.mjs`) signs with an **Ed25519**
+(`lib/tokens.mjs`), JWTs the broker (`listener/broker.mjs`) signs with an **Ed25519**
 key. Every service checks their signature **offline**, with the public key alone: the
 [GitHub gateway](#the-github-gateway), the git gateway, the run's files and the agents' API
 endpoints (`listener/upstream.mjs`) never ask the broker whether a token is genuine. While

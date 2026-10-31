@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { join, relative, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getJson } from "./github.mjs";
-import { redact } from "./redact.mjs";
+import { redact } from "../lib/redact.mjs";
 
 // Where a repo's policies are, on its default branch, and the operator's, in GRANTS_DIR.
 export const POLICY_DIR = ".deckhand/policy";

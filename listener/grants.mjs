@@ -38,7 +38,7 @@ import { join, posix } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
 import { hostProblem } from "./egress.mjs";
 import { PLAIN_PATH, projectName, RESERVED } from "./repo-config.mjs";
-import { isMap, parseYaml } from "./yaml.mjs";
+import { isMap, parseYaml } from "../lib/yaml.mjs";
 
 // The sandbox's user (sandbox/Dockerfile): who must not be able to rewrite a read-write
 // mount's path.

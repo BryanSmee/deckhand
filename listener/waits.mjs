@@ -10,7 +10,7 @@ import { issueOutcome, parseKey, sameRepo, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { plain, revive } from "./restart.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
 const CHECK_MS = 5 * 60_000;

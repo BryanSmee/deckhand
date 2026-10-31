@@ -50,7 +50,7 @@ import { denyKept, INPUT_VERSION, isPolicyError, passed, pullInput, RULES } from
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // The repo's `severity: *` labels' names, most severe first.
 export const SEVERITIES = ["critical", "high", "medium", "low"];

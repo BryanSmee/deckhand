@@ -11,7 +11,7 @@ import { issueItem, sameRepo, taskKey } from "./events.mjs";
 import { OPEN } from "./modes.mjs";
 import { clip, format, minutes } from "./runlog.mjs";
 import { redact } from "./secrets.mjs";
-import { refuse } from "./web.mjs";
+import { refuse } from "../lib/http.mjs";
 
 // How many runs one analysis reads: 10 unless asked, 50 at most.
 export const DEFAULT_RUNS = 10;

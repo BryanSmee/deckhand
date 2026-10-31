@@ -15,7 +15,7 @@ import { chmodSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GITHUB_HEADERS } from "./github-app.mjs";
 import { escape, page as html, same } from "./html.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 export const SESSION_COOKIE = "deckhand_session";
 const STATE_COOKIE = "deckhand_oauth_state";

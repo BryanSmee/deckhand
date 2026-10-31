@@ -4,7 +4,7 @@
 // from GitHub and kept in titles.json and closed.json, so a restart doesn't ask again.
 import { parseKey } from "./events.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // events.mjs issueOutcome() ("open", "done", "not-done") → the dashboard's closed state: null
 // (open), "completed" (a pull request: merged) or "not_planned".

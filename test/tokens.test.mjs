@@ -12,7 +12,7 @@ import {
   signToken,
   TokenError,
   verifyToken,
-} from "../listener/run-token.mjs";
+} from "../lib/tokens.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const NOW = 1_900_000_000_000;

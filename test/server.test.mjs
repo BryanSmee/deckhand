@@ -2079,7 +2079,7 @@ mounts:
       readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".live.json")),
       [],
     );
-    // Its state was written whole each time (store.mjs).
+    // Its state was written whole each time (lib/files.mjs).
     assert.deepEqual(leftovers(dir), []);
   });
 

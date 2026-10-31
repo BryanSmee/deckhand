@@ -3,7 +3,7 @@
 // at read and name no secret, since GitHub runs a branch's own workflows on push and
 // pull_request.
 //
-// The listener has no dependencies, so it reads them with its own parser. Not yaml.mjs's: a
+// The listener has no dependencies, so it reads them with its own parser. Not lib/yaml.mjs's: a
 // config the default branch owns can be read loosely (JSON escapes, typed scalars, `...`
 // ending the file), a file a sandbox wrote can't: this one decodes every escape GitHub does
 // and refuses the rest. A strict subset of YAML: block mappings and sequences, plain, quoted

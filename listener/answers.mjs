@@ -6,7 +6,7 @@
 // (`items`) the form sends one answer per question, `{ options: [i], text }`; not parsed, one
 // free text for them all.
 import { unmarked } from "./events.mjs";
-import { refuse } from "./web.mjs";
+import { refuse } from "../lib/http.mjs";
 
 // GitHub keeps 65536 characters of a comment (comments.mjs cuts longer ones): answers stay
 // well under, with room for the questions' titles.

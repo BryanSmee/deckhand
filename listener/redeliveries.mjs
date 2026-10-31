@@ -8,7 +8,7 @@
 // The last scan's time and the GUIDs asked for are kept in redeliveries.json: the next scan,
 // after a restart too, looks back that far, within GitHub's 3 days.
 import { UNREAD_EVENTS } from "./github-app.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 // How long GitHub keeps deliveries.
 export const RETENTION_MS = 3 * 24 * 3600_000;

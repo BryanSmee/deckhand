@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { YamlError, parseYaml } from "../listener/yaml.mjs";
+import { YamlError, parseYaml } from "../lib/yaml.mjs";
 
 test("mappings, lists, scalars and comments", () => {
   const doc = parseYaml(`---

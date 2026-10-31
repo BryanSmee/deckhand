@@ -3,7 +3,7 @@
 // still its last. A new run shows it again with no cleanup here; the entries it leaves are
 // dropped on the next start (prune()). Kept in dismissed.json.
 import { respellMap, taskId } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 export function createDismissals({ path, now = Date.now } = {}) {
   const dismissed = persistentMap(path);

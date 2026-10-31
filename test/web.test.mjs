@@ -1,16 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { escape, page, same } from "../listener/html.mjs";
-import {
-  Refused,
-  apiRoute,
-  parseJson,
-  readBody,
-  readJsonBody,
-  refuse,
-  sameOrigin,
-  sendJson,
-} from "../listener/web.mjs";
+import { Refused, parseJson, readBody, readJsonBody, refuse, sendJson } from "../lib/http.mjs";
+import { apiRoute, sameOrigin } from "../listener/web.mjs";
 import { serve } from "./helpers.mjs";
 
 test("html: escape, same, and a page with its own style", async (t) => {

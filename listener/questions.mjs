@@ -10,7 +10,7 @@ import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { MARKER, saysMore, taskKey } from "./events.mjs";
 import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
-import { Refused } from "./web.mjs";
+import { Refused } from "../lib/http.mjs";
 
 // Starts the final message of a run that stopped to ask the maintainer (../prompts/sandbox.md).
 export const NEEDS_INPUT = "<!-- needs-input -->";

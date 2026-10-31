@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
-import { DRAIN_MS } from "../listener/drain.mjs";
+import { DRAIN_MS } from "../lib/drain.mjs";
 import {
   createProxy,
   defaultBrokerUrl,

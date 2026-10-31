@@ -20,7 +20,7 @@ import { agentFor, entryName } from "./agents/index.mjs";
 import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
@@ -154,7 +154,7 @@ export function loadRuns(logDir, { max = READ_MAX, log = console.error } = {}) {
 
 export const summaryPath = (logPath) => logPath.replace(/\.log$/, ".json");
 
-// What loadRuns() lists a finished run with. Written whole (store.mjs), so a crash damages no
+// What loadRuns() lists a finished run with. Written whole (lib/files.mjs), so a crash damages no
 // summary; one that can't be written leaves its log to be read again at the next start.
 export function saveSummary(record, log = console.error) {
   const { logPath, ...summary } = record;

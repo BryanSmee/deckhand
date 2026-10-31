@@ -33,7 +33,7 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { drain, drainable } from "../listener/drain.mjs";
+import { drain, drainable } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
 // Where they were first: the tests import them from here.
@@ -570,7 +570,7 @@ export function createProxy({
     tunnel(req, client, head).catch(() => client.destroy());
   });
   // On SIGTERM: no new connection, those open finish (tunnels, and requests in decrypted ones)
-  // → whether all did within the grace period (../listener/drain.mjs).
+  // → whether all did within the grace period (../lib/drain.mjs).
   server.drain = (options) => {
     draining = true;
     closeIdle();

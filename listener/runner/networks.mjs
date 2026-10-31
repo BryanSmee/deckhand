@@ -3,7 +3,7 @@
 // the host names sandboxes know them by (BROKER_URL, EGRESS_PROXY).
 import { hostname } from "node:os";
 import { checked, labelArgs } from "../docker.mjs";
-import { freeBlocks } from "../subnets.mjs";
+import { freeBlocks } from "../../lib/subnets.mjs";
 
 // How long the proxy's addresses are trusted, and how often a caller that isn't among them
 // may make the runner look again (a sandbox could ask the broker's port in a loop).
