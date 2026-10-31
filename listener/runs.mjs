@@ -442,13 +442,17 @@ export function createRuns(ctx) {
 
   // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
   // what is stored is what the dashboard shows, and the result is what gets posted.
+  // The installation tokens the github service's gateway used for it, by the fingerprints it
+  // sent (server.mjs, its `token` events: `scrubs` on the broker's run), though neither the
+  // sandbox nor the listener ever had them; redact() also knows their shape (`ghs_…`), for those
+  // a restarted listener no longer has, or one cut short, which a fingerprint doesn't find.
   function hidden(live, line) {
-    return redact(line, secretValues(live));
+    const scrubs = ctx.broker.runOf(live.id)?.scrubs ?? [];
+    return scrubs.reduce((text, scrub) => scrub(text), redact(line, secretValues(live)));
   }
 
-  // The GitHub tokens the gateway used for it too (broker.mjs), while the broker holds the run,
-  // though its sandbox never had them: redact() also knows their shape, for those a restarted
-  // listener no longer lists.
+  // Its own tokens (or secret), the operator's credentials, and any GitHub token the listener's
+  // broker lists for it (none since the github service: hidden() has their fingerprints).
   function secretValues(live) {
     const tokens = ctx.broker.runOf(live.id)?.tokens ?? [];
     return [live.secret, ...ctx.broker.secretsOf(live.id), ...operatorSecrets(ctx), ...tokens];
@@ -803,13 +807,32 @@ export function createRuns(ctx) {
     }
   }
 
+  // The run's state at the github service: tried a few times, then logged, so that a CI step
+  // counting reruns from the run's own copy (cleanUp()) can be traced to it. Null: not read.
+  async function githubState(live, tries = 3) {
+    if (!ctx.githubRunState) return null;
+    for (let i = 1; ; i++) {
+      try {
+        return await ctx.githubRunState(live.id);
+      } catch (error) {
+        if (i >= tries) {
+          log(
+            `${live.key}: its state at the github service not read (${error.message}): its reruns are as the run started`,
+          );
+          return null;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000 * i).unref?.());
+      }
+    }
+  }
+
   // A run's end, however it ends (cleanUp(), restart.mjs requeue()): its record's summary
   // saved, its token, sandbox and saved state gone, its slot free.
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
     // What it did on GitHub, the github service's: its reruns, for the CI step (cleanUp()).
-    const state = await ctx.githubRunState?.(live.id).catch(() => null);
+    const state = await githubState(live);
     if (Array.isArray(state?.reruns)) live.reruns.splice(0, live.reruns.length, ...state.reruns);
     if (Array.isArray(state?.created))
       live.created.splice(0, live.created.length, ...state.created);

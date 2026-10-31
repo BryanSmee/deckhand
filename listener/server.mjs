@@ -9,7 +9,7 @@
 // preview hooks are the runner service's (../runner/), the only one with the Docker socket.
 import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { fingerprint } from "../lib/fingerprints.mjs";
+import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
@@ -971,6 +971,12 @@ printing.unref();
 githubService.consume({
   pushed: async ({ run, branch, at }) => ctx.broker.runOf(run)?.pushed?.({ branch, at }),
   note: async ({ run, message }) => ctx.broker.runOf(run)?.note?.(message),
+  // An installation token the gateway used for a run, by its fingerprint: what its log and reply
+  // are redacted of (runs.mjs hidden()), the token itself never leaving the service.
+  token: async ({ run, fingerprints }) => {
+    const found = ctx.broker.runOf(run);
+    if (found) (found.scrubs ??= []).push(fingerprintRedactor(fingerprints));
+  },
   pull: async ({ key, pr }) => {
     if (typeof key === "string" && pr && pulls.record(key, pr)) {
       log(`${key}: pull request #${pr.number} ${pr.state}`);

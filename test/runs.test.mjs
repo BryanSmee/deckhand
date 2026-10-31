@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { RunError } from "../listener/access.mjs";
 import { createRuns, reopenedMode } from "../listener/runs.mjs";
@@ -47,7 +48,10 @@ function fakeRunner(fails = null) {
   return runner;
 }
 
-function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {}, answer, fails } = {}) {
+function setup(
+  t,
+  { mode = "idea", graceMs = 60, tokens = [], scrubs = [], config = {}, answer, fails } = {},
+) {
   const dir = tempDir(t);
   const runner = fakeRunner(fails);
   const answers = [];
@@ -65,7 +69,11 @@ function setup(t, { mode = "idea", graceMs = 60, tokens = [], config = {}, answe
     stopping: false,
     runs: [],
     tasks: new Map(),
-    broker: { runOf: () => ({ tokens: new Set(tokens) }), secretsOf: () => [], revoke: () => {} },
+    broker: {
+      runOf: () => ({ tokens: new Set(tokens), scrubs }),
+      secretsOf: () => [],
+      revoke: () => {},
+    },
     onboarded: { isIssue: () => false },
     brainstorms: { replied: () => {} },
     livePath: (id) => join(dir, `${id}.live.json`),
@@ -343,6 +351,16 @@ test("the GitHub tokens the broker gave the run are redacted from its log and it
   assert.ok(!log.includes(issued) && !log.includes(other));
   // The raw line has `\n` before the second: still redacted (no word boundary needed).
   assert.match(log, /gh auth token: \[redacted\]\\n\$ gh auth token\\n\[redacted\]/);
+});
+
+test("the installation tokens the github service used: redacted from the log and reply by their fingerprints", async (t) => {
+  const used = "v1.fedcba9876543210fedcba9876543210";
+  const scrubs = [fingerprintRedactor(fingerprint([used]))];
+  const { runner, answers, following, logPath } = setup(t, { scrubs });
+  runner.out(result(`It was ${used}.`));
+  await following;
+  assert.match(answers[0], /^It was \[redacted\]\./);
+  assert.ok(!readFileSync(logPath, "utf8").includes(used));
 });
 
 // #241: output without end (setup's, an agent's) would fill the data volume.

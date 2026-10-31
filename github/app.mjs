@@ -23,16 +23,21 @@ export function createAppHolder({
   api = "https://api.github.com",
   fetch = globalThis.fetch,
   now = Date.now,
+  setTimer = setTimeout,
   log = () => {},
 }) {
   const file = join(dir, "app.json");
   // /setup's last conversion, for a listener that didn't get its answer (convert()).
   const setupFile = join(dir, "setup.json");
   const codeHash = (code) => createHash("sha256").update(code).digest("hex");
-  // The edge's secrets it holds go once the listener had its time to ask again.
+  // The edge's secrets it holds go once the listener had its time to ask again: at start, at
+  // each conversion, and when that time is over (a timer, armed while the file is there).
   function sweep() {
     const kept = readJson(setupFile);
-    if (kept && !(now() - kept.at < SETUP_KEPT_MS)) rmSync(setupFile, { force: true });
+    if (!kept) return;
+    const left = SETUP_KEPT_MS - (now() - kept.at);
+    if (!(left > 0)) return rmSync(setupFile, { force: true });
+    setTimer(sweep, left + 1000).unref?.();
   }
   sweep();
   let app = null;
@@ -75,6 +80,7 @@ export function createAppHolder({
     // The same code again: its answer was lost on its way to the listener, which reloads the
     // page. GitHub converts a code once: what the listener needs of it is kept a while here,
     // the service's own volume, the key apart.
+    sweep();
     const kept = readJson(setupFile);
     if (app && kept?.code === codeHash(code) && now() - kept.at < SETUP_KEPT_MS) {
       return { credentials: kept.credentials };
@@ -118,6 +124,7 @@ export function createAppHolder({
       { mode: 0o600 },
     );
     save(credentials);
+    sweep();
     log(`Setup: GitHub App ${made.slug} (id ${made.id}) stored`);
     return { credentials: rest };
   }

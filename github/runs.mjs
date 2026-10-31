@@ -11,7 +11,7 @@
 // for the same run in this copy (their per-run memories are by object), its fields and state
 // read again from the store on each call.
 import { createHash, randomUUID } from "node:crypto";
-import { fingerprintRedactor } from "../lib/fingerprints.mjs";
+import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 import { NOT_ITS_SANDBOX } from "../listener/broker.mjs";
 
@@ -129,6 +129,19 @@ export function createRuns({
     return last;
   }
 
+  // A run's installation tokens: each new one's fingerprint goes to the orchestrator.
+  function tokenSet(id) {
+    const tokens = new Set();
+    const add = tokens.add.bind(tokens);
+    tokens.add = (token) => {
+      if (!tokens.has(token)) {
+        void event({ type: "token", run: id, fingerprints: fingerprint([token]) });
+      }
+      return add(token);
+    };
+    return tokens;
+  }
+
   // The run's object, its fields and state as the store has them now; null once it ended.
   async function load(id) {
     if (typeof id !== "string" || !id) return null;
@@ -141,8 +154,10 @@ export function createRuns({
     if (!run) {
       run = {
         id,
-        // The installation tokens used for it: what its writes are redacted of (the gateway).
-        tokens: new Set(),
+        // The installation tokens used for it: what its writes are redacted of (the gateway), and
+        // the orchestrator its log and reply, by their fingerprints (a `token` event): never the
+        // tokens themselves.
+        tokens: tokenSet(id),
         note: (message) => void event({ type: "note", run: id, message }),
         pushed: ({ branch, at }) => void event({ type: "pushed", run: id, branch, at }),
         update: (fn) => update(run, fn),

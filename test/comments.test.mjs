@@ -254,7 +254,8 @@ test("the listener's reactions with the github service: noted there before GitHu
     ["claim", "org/repo", "issue_comment:5", "rocket", true],
     ["POST", "/repos/Org/Repo/issues/comments/5/reactions"],
   ]);
-  // A service that doesn't answer: logged, the reaction still added.
+  // A service that doesn't answer: logged, and the reaction not added (a run could take it off
+  // otherwise: fail closed).
   const logs = [];
   const down = createComments({
     config: {},
@@ -265,8 +266,10 @@ test("the listener's reactions with the github service: noted there before GitHu
     log: (line) => logs.push(line),
   });
   const other = { repo: "org/repo", comment: { id: 6 } };
+  const posts = order.length;
   down.received(other);
-  assert.equal(await other.eyes, 40);
+  assert.equal(await other.eyes, null);
+  assert.equal(order.length, posts);
   assert.match(logs[0], /Noting the listener's reaction: the github service: 503/);
 });
 

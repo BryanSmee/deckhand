@@ -20,9 +20,10 @@ that file asks for, so none can:
 - Sandbox tokens (what the [GitHub gateway](#the-github-gateway) adds to a sandbox's calls:
   no sandbox holds one) only **read** the code (`contents: read`). They can't push, write files
   through the API or merge a pull request, whatever the repo's settings.
-- Pushes go through the listener's **git gateway** (`listener/git-gateway.mjs`), on the
-  broker's port: the sandbox's git sends them there (`url.<broker>/git/.pushInsteadOf`),
-  with the run token. The gateway reads the ref updates at the start of the push (at most
+- Pushes go through the **git gateway** (`listener/git-gateway.mjs`, in the
+  [github service](#the-github-service)): the sandbox's git sends them to the broker's address
+  (`url.<broker>/git/.pushInsteadOf`), with the run token, and the egress proxy sends them on to
+  the github service. The gateway reads the ref updates at the start of the push (at most
   64 KiB of them, within 30 seconds; a refused push's pack is read and dropped for a minute
   at most, so git shows the refusal) and
   forwards it to GitHub with a token of its own only when every one is one of **the run's
@@ -213,13 +214,13 @@ run's branch was checked at its tip. Not checked:
   changed, runs a merge nobody checked. Limit environments' deployment branches (below) so that
   such a merge still can't read their secrets.
 
-The mirrors take a copy of each granted repository in the data volume; a mirror's first fetch
-clones the repository, and may take up to an hour. A push is saved in the listener's temporary
-directory while it is checked, one push per run at a time, up to GitHub's 2 GiB. That
-directory is the listener container's own writable layer, usually on the same host disk as the
-data volume: plan for the repositories' size plus up to 2 GiB per run in parallel, or give
-`/tmp` a size-limited `tmpfs` (commented out in `compose.yaml`) so a full one only refuses
-pushes.
+The mirrors take a copy of each granted repository in the github service's data volume
+(`github-data`); a mirror's first fetch clones the repository, and may take up to an hour. A
+push is saved in the github service's temporary directory while it is checked, one push per
+run at a time, up to GitHub's 2 GiB. That directory is the github service container's own
+writable layer, usually on the same host disk as its data volume: plan for the repositories'
+size plus up to 2 GiB per run in parallel, or give the github service's `/tmp` a size-limited
+`tmpfs` (commented out in `compose.yaml`) so a full one only refuses pushes.
 
 Where GitHub enforces them, an enforced ruleset on the default branch (a pull request with an
 approval, no bypass for the App or GitHub Actions) and environments with required reviewers or
@@ -451,17 +452,20 @@ can read.
   anyway). Comments on a pull request take `issues: write`.
 - Tokens are cached per repository and permission set, renewed 10 minutes before their
   end, and shared by that repository's runs with the same permissions. GitHub makes them
-  valid for an hour, which the listener can't shorten, but none leaves the listener, so none
+  valid for an hour, which Deckhand can't shorten, but none leaves the github service, so none
   outlives its run in a sandbox: once the run ends, its run token gets nothing. Uninstalling the
   App, or suspending its installation, revokes them at once.
 
-What a run prints doesn't publish one either way: the broker keeps the installation tokens
-the gateway used for each run, and the listener redacts them from the run's log (what the
-dashboard shows), the run analysis digest and its reply, as `[redacted]`, a defence in depth
-now that the sandbox never sees them. Anything shaped like a GitHub token (`ghs_`, `ghp_`,
+What a run prints doesn't publish one either way: the github service sends the listener the
+fingerprint of each installation token its gateway used for a run (a `token` event,
+`lib/fingerprints.mjs`: never the token), and the listener redacts what matches from the run's
+log (what the dashboard shows), the run analysis digest and its reply, as `[redacted]`, a
+defence in depth now that the sandbox never sees them. A fingerprint finds a whole token only:
+one cut short in the output, which the listener found down to 16 characters when it held the
+tokens itself, is left to the shape check. Anything shaped like a GitHub token (`ghs_`, `ghp_`,
 `gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted too,
-wherever it came from: a token a restarted listener no longer lists, or one the agent found
-elsewhere.
+wherever it came from: a token a restarted listener has no fingerprint of any more, or one the
+agent found elsewhere.
 
 ### The runner service
 

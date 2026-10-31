@@ -4,7 +4,7 @@
 // the epoch and the idempotency keys.
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
@@ -13,7 +13,7 @@ import { RUN_AUTH_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createAppHolder } from "../github/app.mjs";
 import { createGithubClient } from "../github/client.mjs";
-import { createRuns, SLOT_MS } from "../github/runs.mjs";
+import { createRuns, SLOT_MS, STREAM } from "../github/runs.mjs";
 import { createGithubService, GITHUB_STATUS, mutates } from "../github/service.mjs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { loadConfig } from "../listener/config.mjs";
@@ -648,4 +648,88 @@ test("a caller's token signed with a key the service hasn't read yet: the broker
     },
   });
   assert.equal(other.status, 401);
+});
+
+test("an idempotency key is the orchestrator's, for its call alone: edge's query with it changes nothing", async (t) => {
+  let n = 0;
+  const { a, b, call, github } = await setup(t, {
+    answer: (req) => (req.url.endsWith("/graphql") ? [200, { data: { n: ++n } }] : null),
+  });
+  const ask = (copy, sub, query) =>
+    call(copy, sub, "POST", "/graphql/org/repo", {
+      body: { query },
+      headers: { "idempotency-key": "run-1:reply" },
+    });
+  // Edge reads with the key a run's reply will carry: nothing kept.
+  assert.deepEqual((await (await ask(a, "edge", "query { viewer { login } }")).json()).data, {
+    n: 1,
+  });
+  const reply = "mutation { addDiscussionComment(input: {}) { clientMutationId } }";
+  const posted = await ask(b, "orchestrator", reply);
+  assert.equal(posted.headers.get("x-deckhand-replayed"), null);
+  assert.deepEqual((await posted.json()).data, { n: 2 });
+  // The same key on another path is another call.
+  const rest = await call(
+    a,
+    "orchestrator",
+    "POST",
+    "/as/org/repo/repos/org/repo/issues/1/comments",
+    {
+      body: { body: "x" },
+      headers: { "idempotency-key": "run-1:reply" },
+    },
+  );
+  assert.equal(rest.headers.get("x-deckhand-replayed"), null);
+  assert.equal(
+    github.calls.filter((c) => c.method === "POST" && !c.url.endsWith("/access_tokens")).length,
+    3,
+  );
+});
+
+test("setup.json, the conversion's answer kept for a lost one: gone once its hour is over", async (t) => {
+  const dir = tempDir(t);
+  let time = 1_000_000;
+  const timers = [];
+  const fetch = async (url) =>
+    url.endsWith("/conversions")
+      ? Response.json({ id: 5, slug: "x", pem: PEM, webhook_secret: "w", client_secret: "c" })
+      : Response.json({ id: 77 });
+  const holder = () =>
+    createAppHolder({
+      dir,
+      fetch,
+      now: () => time,
+      setTimer: (fn, ms) => (timers.push({ fn, at: time + ms }), { unref() {} }),
+    });
+  const app = holder();
+  const made = await app.convert("code1");
+  assert.equal(made.credentials.webhook_secret, "w");
+  assert.ok(existsSync(join(dir, "setup.json")));
+  // Asked again within the hour: the same answer.
+  time += 30 * 60_000;
+  assert.equal((await app.convert("code1")).credentials.webhook_secret, "w");
+  // Past it, the timer armed removes the file, with the edge's secrets in it.
+  time += 31 * 60_000;
+  for (const timer of timers.splice(0)) if (timer.at <= time) timer.fn();
+  assert.equal(existsSync(join(dir, "setup.json")), false);
+  assert.equal((await app.convert("code1")).status, 409);
+});
+
+test("an installation token a run's call used: its fingerprint to the orchestrator, never the token", async (t) => {
+  const { a, run, relayed, store } = await setup(t);
+  const r = await run("r1");
+  assert.equal((await relayed(a, r, "GET", "/repos/org/repo")).status, 200);
+  const events = (await store.read(STREAM, "test", { count: 100 })).map((e) => e.event);
+  const tokens = events.filter((e) => e.type === "token");
+  assert.equal(tokens.length, 1);
+  assert.equal(tokens[0].run, "r1");
+  const token = "ghs_installationtoken0123456789abcdefABCDEF";
+  assert.equal(JSON.stringify(tokens[0]).includes(token), false);
+  assert.equal(fingerprintRedactor(tokens[0].fingerprints)(`a ${token} b`), "a [redacted] b");
+  // The same token again: no new event.
+  await relayed(a, r, "GET", "/repos/org/repo");
+  const again = (await store.read(STREAM, "test", { count: 100 })).filter(
+    (e) => e.event.type === "token",
+  );
+  assert.equal(again.length, 1);
 });

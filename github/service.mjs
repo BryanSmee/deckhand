@@ -386,7 +386,10 @@ export function createGithubService({
     }
   }
 
-  async function once(req, make) {
+  // `caller`: the guard's. Only the orchestrator's keys count, each its own with the call's
+  // method and path: edge, which only reads, can't take a key the orchestrator's write will
+  // carry, and have its answer given in that write's place.
+  async function once(req, caller, make) {
     const read = async () => {
       const answer = await make();
       return {
@@ -397,8 +400,9 @@ export function createGithubService({
       };
     };
     const key = req.headers[IDEMPOTENCY_HEADER];
-    if (typeof key !== "string" || !key) return read();
-    const slot = `idempotency/${createHash("sha256").update(key).digest("hex")}`;
+    if (caller !== "orchestrator" || typeof key !== "string" || !key) return read();
+    const scoped = JSON.stringify([caller, req.method, req.url, key]);
+    const slot = `idempotency/${createHash("sha256").update(scoped).digest("hex")}`;
     const started = now();
     for (;;) {
       if (await store.setIfAbsent(slot, { state: "pending" }, { ttlMs: PENDING_TTL_MS })) {
@@ -441,10 +445,10 @@ export function createGithubService({
   }
 
   // A call as the App's: `make()` → GitHub's Response. A GET streamed, a write made once.
-  async function asGitHub(req, res, make) {
+  async function asGitHub(req, res, caller, make) {
     if (!app.get()) throw new Refused(412, "no GitHub App yet: set it up at /setup");
     if (req.method === "GET") return streamAnswer(res, await make());
-    sendAnswer(res, await once(req, make));
+    sendAnswer(res, await once(req, caller, make));
   }
 
   async function bodyOf(req) {
@@ -530,7 +534,7 @@ export function createGithubService({
     if (m) {
       const repo = repoOf(m[1], m[2]);
       const body = await bodyOf(req);
-      return asGitHub(req, res, () =>
+      return asGitHub(req, res, caller, () =>
         app.get().request(repo, req.method, m[3] + url.search, body, expected(req)),
       );
     }
@@ -544,7 +548,7 @@ export function createGithubService({
       if (!app.get()) throw new Refused(412, "no GitHub App yet: set it up at /setup");
       return sendAnswer(
         res,
-        await once(req, () => app.get().request(repo, "POST", "/graphql", body)),
+        await once(req, caller, () => app.get().request(repo, "POST", "/graphql", body)),
       );
     }
     m = /^\/as-app(\/.*)$/.exec(path);
@@ -552,11 +556,13 @@ export function createGithubService({
     if (m && req.method !== "GET" && !/^\/app\/hook\/deliveries\/\d+\/attempts$/.test(m[1])) {
       throw new Refused(403, `no ${req.method} as the App but a delivery's redelivery`);
     }
-    if (m) return asGitHub(req, res, () => app.get().asApp(req.method, m[1] + url.search));
+    if (m) return asGitHub(req, res, caller, () => app.get().asApp(req.method, m[1] + url.search));
     m = /^\/as-installation\/(\d+)(\/.*)$/.exec(path);
     if (m) {
       const id = Number(m[1]);
-      return asGitHub(req, res, () => app.get().asInstallation(id, req.method, m[2] + url.search));
+      return asGitHub(req, res, caller, () =>
+        app.get().asInstallation(id, req.method, m[2] + url.search),
+      );
     }
     if (path === "/app") {
       if (req.method === "GET") return sendJson(res, app.info());

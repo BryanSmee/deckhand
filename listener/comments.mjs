@@ -166,16 +166,19 @@ export function createComments({
   };
   // Before GitHub is asked, so no run's removal slips in between; kept if the POST fails (a
   // run's same reaction then stays, fail closed). `held`: false once the listener took it off.
+  // → whether it was noted: a reaction whose claim the github service didn't take isn't added
+  // (a run could take it off otherwise: fail closed).
   async function claim(repo, comment, content, held = true) {
-    if (comment.discussion) return;
+    if (comment.discussion) return true;
     const key = claimKey(repo, comment, content);
     if (shared) {
       try {
         await shared(...key.split(" "), held);
+        return true;
       } catch (error) {
         log(`Noting the listener's reaction: ${error.message ?? error}`);
+        return false;
       }
-      return;
     }
     claims.delete(key);
     if (held) claims.set(key, Date.now());
@@ -185,6 +188,7 @@ export function createComments({
     } catch (error) {
       log(`Saving the listener's reactions: ${error.message ?? error}`);
     }
+    return true;
   }
   // Whether the listener added reaction `content` on `subject` (reactionSubject()'s) of `repo`.
   function listenerReacted(repo, subject, content) {
@@ -194,7 +198,10 @@ export function createComments({
   // Reaction failures (already removed, 403, 404…) are logged and never break a run.
   async function react(repo, comment, content) {
     const kind = comment.review ? "pulls/comments" : "issues/comments";
-    await claim(repo, comment, content);
+    if (!(await claim(repo, comment, content))) {
+      log(`Reaction on comment ${comment.id}: not added, its claim not noted`);
+      return null;
+    }
     try {
       if (comment.discussion) {
         // Removed by content rather than id (settle()): any truthy value will do.

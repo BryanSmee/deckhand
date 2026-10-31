@@ -235,7 +235,7 @@ branches](security.md#github-actions-on-deckhands-branches).
 Every run starts from an image:
 
 - **The base image** (`SANDBOX_IMAGE`, `deckhand-sandbox`): the harness only: `git`, `gh`
-  (through the listener's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with Chromium, the
+  (through the github service's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with Chromium, the
   entrypoint and the draft pull request hooks. No project toolchain, and **no Claude Code**:
   before the first run that needs it, the listener installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
@@ -1195,7 +1195,7 @@ deny_request_review contains "the first request only" if input.when == "fix"
 
 ### The GitHub input
 
-A run's sandbox holds no GitHub token: its calls go through the listener's GitHub gateway
+A run's sandbox holds no GitHub token: its calls go through the github service's GitHub gateway
 ([security model](security.md)). Each **REST write** (anything but `GET` and `HEAD`, whatever
 tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
 
