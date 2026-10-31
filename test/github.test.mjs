@@ -126,11 +126,20 @@ test("fetchTitle: an issue's title and closed state, a discussion's through Grap
   assert.deepEqual(await fetchTitle(github, "o/r", "discussion", 5), { title: "Talk" });
 });
 
-test("listLabelled: the first page of open issues with the label, which must be a list", async () => {
-  const path = "/repos/o/r/issues?labels=needs%20input&state=open&sort=updated&per_page=100";
-  const { github, calls } = fake({ [path]: Response.json([{ number: 1 }]) });
-  assert.deepEqual(await listLabelled(github, "o/r", "needs input"), [{ number: 1 }]);
-  assert.equal(calls[0].path, path);
-  const other = fake({ [path]: Response.json({}) });
+test("listLabelled: every page of open issues with the label, which must be a list", async () => {
+  const path = (page) =>
+    `/repos/o/r/issues?labels=needs%20input&state=open&sort=updated&per_page=100&page=${page}`;
+  const full = Array.from({ length: 100 }, (_, i) => ({ number: i + 2 }));
+  const { github, calls } = fake({
+    [path(1)]: Response.json(full),
+    [path(2)]: Response.json([{ number: 1 }]),
+  });
+  const all = await listLabelled(github, "o/r", "needs input");
+  assert.deepEqual([all.length, all.at(-1)], [101, { number: 1 }]);
+  assert.deepEqual(
+    calls.map((c) => c.path),
+    [path(1), path(2)],
+  );
+  const other = fake({ [path(1)]: Response.json({}) });
   await assert.rejects(listLabelled(other.github, "o/r", "needs input"), /no list/);
 });

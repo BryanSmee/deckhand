@@ -18,7 +18,10 @@
 //   brainstorm      a brainstorm waits for the maintainer's next comment
 //   idle-brainstorm a brainstorm without a comment for a while; the next one restores it
 //   needs-input     the last run stopped to ask, or the issue carries the needs-input label
-//                   (open questions in its body, inputs.mjs), with or without a run
+//                   (open questions in its body, inputs.mjs), with or without a run. A run's
+//                   questions no longer wait once they are set aside: the label taken off by
+//                   a person, or the issue or its pull request closed or merged after the run
+//                   asked (dismissals.mjs setAside())
 //   done, error, interrupted, cancelled   how the last run ended (interrupted: the listener
 //                   restarted; cancelled: someone stopped it, `/cancel` or the dashboard)
 // A task whose last run is error, interrupted or cancelled is `rerunnable` when it may run
@@ -98,14 +101,18 @@ export function rerunnable(t) {
 // did; else null: a new run, or the needs-input label, makes it ask again.
 function dismissedOf(t, d) {
   const last = t.runs[0];
-  if (!d || !last || last.id !== d.runId || !FAILED.includes(last.status)) return null;
+  // A run's questions set aside (dismissals.mjs setAside()) aren't a failure dismissed.
+  if (!d || d.questions || !last || last.id !== d.runId || !FAILED.includes(last.status)) {
+    return null;
+  }
   return t.state === last.status ? { by: d.by, at: d.at } : null;
 }
 
-function questionsFor(t, last, input) {
+// `aside`: the run's questions were set aside, so only the issue's body asks.
+function questionsFor(t, last, input, aside) {
   if (t.state !== "needs-input") return null;
   // The run's are the latest: one starting takes the label off.
-  if (last?.status === "needs-input" && last.questions) {
+  if (!aside && last?.status === "needs-input" && last.questions) {
     return { source: "run", runId: last.id, ...last.questions };
   }
   return input?.questions ? { source: "issue", ...input.questions } : null;
@@ -113,9 +120,10 @@ function questionsFor(t, last, input) {
 
 // `runs`: newest first; `queued`, `brainstorms`, `waits`: as http.mjs's state() has them;
 // `inputs`: the open issues labelled needs-input (inputs.mjs list()); `dismissals`: the
-// dismissed runs (dismissals.mjs list()); `pr(key)`, `decisions(key)`: its pull request
-// (pulls.mjs) and policy decisions, newest first (decisions.mjs), for when it last changed;
-// `reviewed(repo, number)`: its pull request's entry in reviews.json, for its `review`.
+// dismissed runs and those whose questions were set aside (dismissals.mjs list());
+// `pr(key)`, `decisions(key)`: its pull request (pulls.mjs) and policy decisions, newest first
+// (decisions.mjs), for when it last changed; `reviewed(repo, number)`: its pull request's entry
+// in reviews.json, for its `review`.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({
@@ -138,7 +146,8 @@ export function board({
   const dismissed = byKey(dismissals);
   for (const t of tasks.values()) {
     const k = one(t.key);
-    settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k));
+    const aside = dismissed.get(k)?.questions ? dismissed.get(k) : null;
+    settle(t, waiting.get(k), talks.get(k), held.get(k), labelled.get(k), aside);
     inReview(t, waiting.get(k), pr(t.key), reviewed);
     t.dismissed = dismissedOf(t, dismissed.get(k));
     t.updatedAt = updatedAt(t, pr(t.key), decisions(t.key));
@@ -209,8 +218,10 @@ function newTask(key, repo) {
 }
 
 // A task's kind, mode, state and the rest, from its last run `t.runs[0]` and its queued entry
-// `q`, brainstorm `b`, wait `w` and needs-input label `input`, each if it has one.
-function settle(t, q, b, w, input) {
+// `q`, brainstorm `b`, wait `w` and needs-input label `input`, each if it has one. `aside`:
+// its entry when a run's questions were set aside (dismissals.mjs), which hold the task only
+// while that run is its last.
+function settle(t, q, b, w, input, aside = null) {
   const last = t.runs[0];
   t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
   t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
@@ -225,15 +236,23 @@ function settle(t, q, b, w, input) {
   else if (b?.status === "active") t.state = "brainstorm";
   else if (b?.status === "idle") t.state = "idle-brainstorm";
   else t.state = last ? runState(last) : "done";
+  // A run's questions nobody will answer: set aside since it asked.
+  const setAside = !!last && aside?.runId === last.id;
+  if (t.state === "needs-input" && setAside) t.state = "done";
   // The label outlasts how the last run ended (a run starting takes it off), not a live one,
-  // and is what a wait whose issues are done still waits for (waits.mjs).
+  // and is what a wait whose issues are done still waits for (waits.mjs). With the run's
+  // questions set aside, the label it put (still on an issue left open when its pull request
+  // merged) doesn't hold the task: open questions in the issue's body do, or the label put back
+  // since, which asks again.
   const answers = t.state === "waiting" && w.answers;
-  if (input && (answers || ENDED.includes(t.state))) {
+  const putBack = setAside && (input?.since ?? 0) > aside.at;
+  const holds = !setAside || putBack || !!input?.questions;
+  if (input && (answers || (ENDED.includes(t.state) && holds))) {
     t.state = "needs-input";
     t.kind ??= "issue";
     t.since = Math.max(t.since, input.since ?? 0);
   }
-  const asked = questionsFor(t, last, input);
+  const asked = questionsFor(t, last, input, setAside && !putBack);
   if (asked) t.questions = asked;
   if (b && b.status !== "stopped") {
     t.kind = "brainstorm";

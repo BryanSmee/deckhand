@@ -341,6 +341,17 @@ test("the dashboard follows the label, added or removed by anyone, and closed is
   assert.equal(label("unlabeled", "needs-input").questions, undefined);
   // What a comment waiting for the answers starts on (waits.mjs).
   assert.equal(label("unlabeled", "needs-input").answered, true);
+  // A run's questions there are set aside too (applyInput()).
+  assert.deepEqual(label("unlabeled", "needs-input").unlabelled, { by: "alice", at: null });
+  // When: the issue's `updated_at`, which a redelivery has from before a run since.
+  const later = issues("unlabeled", { label: { name: "needs-input" } });
+  later.issue.updated_at = "2026-10-31T12:00:00Z";
+  const when = inputEvent(config, "issues", later, BOT).unlabelled.at;
+  assert.equal(when, Date.parse("2026-10-31T12:00:00Z"));
+  assert.equal(label("labeled", "needs-input").unlabelled, undefined);
+  // Unless the App's bot took it off: a run starting, or a comment that may start nothing.
+  const byBot = label("unlabeled", "needs-input", { sender: { login: BOT, type: "Bot" } });
+  assert.deepEqual([byBot.track, byBot.answered, byBot.unlabelled], [false, true, undefined]);
   const closed = issues("unlabeled", { label: { name: "needs-input" } });
   closed.issue.state = "closed";
   assert.equal(inputEvent(config, "issues", closed, BOT).answered, undefined);
@@ -376,6 +387,53 @@ test("an allowed user's comment on a labelled issue takes the label off; Deckhan
   assert.equal(pr.track, undefined);
   assert.equal(pr.title, null);
   assert.equal(pr.comment, undefined);
+});
+
+test("a pull request's label taken off, or put back, comes as a pull_request delivery", () => {
+  const delivery = (more = {}) => ({
+    action: "unlabeled",
+    installation: { id: 1 },
+    repository: { full_name: "org/repo", default_branch: "main" },
+    pull_request: { number: 9, title: "A change", labels: [], updated_at: "2026-10-31T12:00:00Z" },
+    label: { name: "needs-input" },
+    sender: { login: "mallory", type: "User" },
+    ...more,
+  });
+  assert.deepEqual(inputEvent(config, "pull_request", delivery(), BOT), {
+    repo: "org/repo",
+    key: "org/repo#pr-9",
+    number: 9,
+    title: null,
+    base: "main",
+    unlabelled: { by: "mallory", at: Date.parse("2026-10-31T12:00:00Z") },
+  });
+  // The App's bot taking it off: the listener's own doing, which answers nothing.
+  const bot = delivery({ sender: { login: BOT, type: "Bot" } });
+  assert.equal(inputEvent(config, "pull_request", bot, BOT), null);
+  // Put back by someone else: its questions ask again. By the bot (a run asking): nothing.
+  const back = inputEvent(config, "pull_request", delivery({ action: "labeled" }), BOT);
+  assert.deepEqual(
+    [back.relabelled, back.unlabelled],
+    [{ by: "mallory", at: Date.parse("2026-10-31T12:00:00Z") }, undefined],
+  );
+  const asking = delivery({ action: "labeled", sender: { login: BOT, type: "Bot" } });
+  assert.equal(inputEvent(config, "pull_request", asking, BOT), null);
+  // Put back on a closed or merged pull request: its close still holds.
+  const shut = delivery({ action: "labeled" });
+  shut.pull_request = { ...shut.pull_request, state: "closed" };
+  assert.equal(inputEvent(config, "pull_request", shut, BOT), null);
+  // A redelivery (events.mjs replayedPull()): when it happened is the original payload's.
+  const replayed = delivery({ replayed_updated_at: "2026-10-30T09:00:00Z" });
+  const old = inputEvent(config, "pull_request", replayed, BOT).unlabelled.at;
+  assert.equal(old, Date.parse("2026-10-30T09:00:00Z"));
+  // Another label, another action, another repo, no installation, or no label configured.
+  assert.equal(inputEvent(config, "pull_request", delivery({ label: { name: "bug" } }), BOT), null);
+  assert.equal(inputEvent(config, "pull_request", delivery({ action: "edited" }), BOT), null);
+  const elsewhere = delivery({ repository: { full_name: "evil/repo" } });
+  assert.equal(inputEvent(config, "pull_request", elsewhere, BOT), null);
+  assert.equal(inputEvent(config, "pull_request", delivery({ installation: null }), BOT), null);
+  const off = { ...config, needsInputLabel: "" };
+  assert.equal(inputEvent(off, "pull_request", delivery(), BOT), null);
 });
 
 // The listener's state and services applyInput() touches, each call kept.
@@ -439,6 +497,27 @@ test("applyInput: the label and the list follow the change, by the repo's own us
   const off = inputCtx();
   await applyInput(off.ctx, { ...change, label: undefined, track: false, answered: true });
   assert.deepEqual(off.calls.at(-1), ["answered", 3]);
+  // The questions of the task's last run, if it asked, are set aside: it no longer waits.
+  const aside = inputCtx();
+  aside.ctx.runs = [{ id: "r2", key: "org/repo#3", status: "needs-input" }];
+  aside.ctx.dismissals = {
+    setAsideOn: (runs, key, by, at) => {
+      aside.calls.push(["aside", runs.length, key, by, at]);
+      return "org/repo#3";
+    },
+  };
+  const unlabelled = { by: "carol", at: 5 };
+  await applyInput(aside.ctx, { ...change, label: undefined, track: false, unlabelled });
+  assert.deepEqual(
+    aside.calls.filter(([what]) => what === "aside"),
+    [["aside", 1, "org/repo#3", "carol", 5]],
+  );
+  // A pull request's label put back: they wait again.
+  aside.ctx.dismissals.restoreOn = (runs, key, at) => (aside.calls.push(["back", key, at]), key);
+  const pr = { repo: "org/repo", key: "org/repo#pr-9", number: 9, title: null, base: "main" };
+  await applyInput(aside.ctx, { ...pr, relabelled: { by: "carol", at: 6 } });
+  assert.deepEqual(aside.calls.at(-2), ["back", "org/repo#pr-9", 6]);
+  assert.match(aside.calls.at(-1)[1], /org\/repo#pr-9: label put back/);
 });
 
 const ticked = (a, b) =>

@@ -41,7 +41,7 @@ import {
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
-import { pullEntry, taskKey } from "./events.mjs";
+import { hasLabel, pullEntry, taskKey } from "./events.mjs";
 import {
   createGitHub,
   fetchPull,
@@ -75,7 +75,7 @@ import { createRunnerClient } from "../runner/client.mjs";
 import { createServicesHttp } from "./services-http.mjs";
 import { createRunEvents } from "./run-events.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
-import { createDismissals } from "./dismissals.mjs";
+import { askedOn, closedTasks, createDismissals, setAsideClosed } from "./dismissals.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
@@ -355,15 +355,31 @@ const pulls = createPulls({
   getPull: (repo, number) => fetchPull(github, repo, number),
 });
 
+// Failed runs dismissed from the dashboard, and runs whose questions were set aside (their
+// needs-input label taken off), while each is its task's last (dismissals.mjs).
+const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
+
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
+// One whose label came off meanwhile sets its run's questions aside, as the delivery would,
+// once the issue itself says so: a listing read page by page can miss one that moved between
+// pages. Its `updated_at` is when, at the latest: a run that asked since still waits.
 const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
+  dropped: (repo, number) => {
+    const key = taskKey(repo, number);
+    if (!askedOn(ctx.runs, key)) return;
+    lookup(repo, `/repos/${repo}/issues/${number}`)
+      .then((issue) => {
+        if (issue?.state === "open" && hasLabel(issue.labels, config.needsInputLabel)) return;
+        const at = Date.parse(issue?.updated_at) || null;
+        const aside = dismissals.setAsideOn(ctx.runs, key, null, at);
+        if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);
+      })
+      .catch((error) => log(`${key}: its label: ${error.message ?? error}`));
+  },
 });
-
-// Failed runs dismissed from the dashboard, while each is its task's last (dismissals.mjs).
-const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
 // The run order the maintainer set on the dashboard: which queued task starts next (order.mjs).
 const order = createOrder({ path: join(config.dataDir, "order.json") });
@@ -850,6 +866,24 @@ const spelled = await ctx.unifySpellings({
 for (const state of keyed) state.respell(spelled);
 // A run since a dismissal shows its task again: its entry is stale.
 dismissals.prune(ctx.runs);
+// Issues and pull requests that closed or merged after their run asked, while no listener heard
+// it: their questions set aside, as the `closed` delivery would have (http.mjs). GitHub says
+// when each closed; a run that asked after that still waits.
+if (ctx.app) {
+  setAsideClosed({
+    runs: ctx.runs,
+    dismissals,
+    tasks: closedTasks(ctx.runs, titles.closed, (key) => pulls.get(key)),
+    // Gone (404) or deleted (410): null, as never closed.
+    closedAt: async (repo, number) => {
+      const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
+      return issue?.closed_at ? Date.parse(issue.closed_at) : null;
+    },
+    log,
+  })
+    .then((keys) => keys.length && log(`Closed since their run asked: ${keys.join(", ")}`))
+    .catch((error) => log(`Closed since their run asked: ${error.stack ?? error}`));
+}
 
 // Before any request is served: runs still going since the previous listener (their inboxes
 // and logs asked of the runner), then what it left queued (comments for those runs are

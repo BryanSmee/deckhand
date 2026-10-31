@@ -12,8 +12,15 @@ import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
-// has them.
-export function createInputs({ path, listLabelled, now = Date.now, log = () => {} }) {
+// has them. `dropped(repo, number)`: an issue sync() found no longer labelled (or no longer
+// open), as an `unlabeled` delivery would have said (questions.mjs applyInput()).
+export function createInputs({
+  path,
+  listLabelled,
+  dropped = () => {},
+  now = Date.now,
+  log = () => {},
+}) {
   const inputs = persistentMap(path);
   const save = inputs.save;
 
@@ -68,6 +75,7 @@ export function createInputs({ path, listLabelled, now = Date.now, log = () => {
         if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
         inputs.delete(key);
         changed = true;
+        dropped(repo, parseKey(key).number);
       }
       // Bodies edited meanwhile: their questions as they are now.
       for (const [key, entry] of found) {

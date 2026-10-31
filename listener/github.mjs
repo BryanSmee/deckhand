@@ -98,12 +98,12 @@ export function fetchPull(github, repo, number) {
   return getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
 }
 
-// The repo's open issues labelled `label` (inputs.mjs).
+// The repo's open issues labelled `label` (inputs.mjs), every page: one missing from the list
+// is taken for one whose label came off, its run's questions set aside.
 export function listLabelled(github, repo, label) {
   const name = encodeURIComponent(label);
-  return listOf(
-    github,
-    repo,
-    `/repos/${repo}/issues?labels=${name}&state=open&sort=updated&per_page=100`,
+  return paginate(
+    (path) => github(repo, "GET", path),
+    `/repos/${repo}/issues?labels=${name}&state=open&sort=updated`,
   );
 }

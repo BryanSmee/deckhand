@@ -1,7 +1,7 @@
 // What the listener writes on GitHub for a run: its reply (a comment, or in a discussion's
 // thread), the reactions on the comments it handled, and the needs-input label.
 import { join } from "node:path";
-import { MARKER } from "./events.mjs";
+import { hasLabel, MARKER } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { reactionSubject } from "./github-writes.mjs";
 import { persistentMap } from "../lib/files.mjs";
@@ -34,15 +34,8 @@ export const REACTION_ENUM = {
 // reaction removed then is one the listener added before that many others.
 const MAX_CLAIMED = 5000;
 
-// Whether `labels` (an issue's, as GitHub has them: names or { name }) hold `name`. GitHub's
-// label names are case-insensitive: a "Needs-Input" set by hand is the same label.
-export function hasLabel(labels, name) {
-  if (!name) return false;
-  const wanted = name.toLowerCase();
-  return (labels ?? []).some(
-    (l) => (typeof l === "string" ? l : l?.name)?.toLowerCase() === wanted,
-  );
-}
+// Whether an issue's labels hold one: events.mjs's, which replays need too.
+export { hasLabel };
 
 // Whether pull request `pr` (as GitHub has it), or issue `issue` (its number, or null: none),
 // where runs put the label, waits for the maintainer's input. `github`: the App's calls.

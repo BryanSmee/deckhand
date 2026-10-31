@@ -466,6 +466,69 @@ test("dismissed: while the dismissed run is the task's last and the task ended a
   assert.equal(tasks.find((t) => t.key === "acme/api#1").state, "error");
 });
 
+test("a run's questions no longer wait once set aside, unless the label is put back since", () => {
+  const asked = { items: [], raw: "1. Which?" };
+  const ask = (key, at = 30) => run(key, at, { status: "needs-input", questions: asked });
+  const aside = (key, runId) => ({ key, runId, by: "alice", at: 40, questions: true });
+  const body = { items: [], raw: "1. In the body?" };
+  const tasks = board({
+    runs: [
+      ask("acme/api#1"),
+      ask("acme/api#2"),
+      ask("acme/api#3"),
+      ask("acme/api#3", 20),
+      ask("acme/api#4"),
+      run("acme/api#5", 30, { status: "error" }),
+      ask("acme/api#6"),
+      ask("acme/api#7"),
+      ask("acme/api#8"),
+    ],
+    queued: [],
+    brainstorms: [],
+    inputs: [
+      // The label its run put, still on the issue (its pull request merged, say).
+      { key: "acme/api#6", since: 30, questions: null },
+      // Open questions in the issue's body.
+      { key: "acme/api#7", since: 30, questions: body },
+      // The label put back after it was taken off: it asks again.
+      { key: "acme/api#8", since: 50, questions: null },
+    ],
+    dismissals: [
+      aside("Acme/API#1", "acme/api#1-30"),
+      // An older run's: the last one still asks.
+      aside("acme/api#3", "acme/api#3-20"),
+      // A failure dismissed isn't a run's questions set aside.
+      { key: "acme/api#4", runId: "acme/api#4-30", by: "alice", at: 40 },
+      aside("acme/api#5", "acme/api#5-30"),
+      aside("acme/api#6", "acme/api#6-30"),
+      aside("acme/api#7", "acme/api#7-30"),
+      aside("acme/api#8", "acme/api#8-30"),
+    ],
+  });
+  const states = Object.fromEntries(tasks.map((t) => [t.key, t.state]));
+  assert.deepEqual(states, {
+    "acme/api#1": "done",
+    "acme/api#2": "needs-input",
+    "acme/api#3": "needs-input",
+    "acme/api#4": "needs-input",
+    "acme/api#5": "error",
+    "acme/api#6": "done",
+    "acme/api#7": "needs-input",
+    "acme/api#8": "needs-input",
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  // No form for questions nobody waits on; the run keeps how it ended.
+  assert.equal(of("acme/api#1").questions, undefined);
+  assert.equal(of("acme/api#1").runs[0].status, "needs-input");
+  assert.equal(of("acme/api#6").questions, undefined);
+  assert.equal(of("acme/api#2").questions.source, "run");
+  // The body's questions, not the run's; the label put back offers the run's again.
+  assert.deepEqual(of("acme/api#7").questions, { source: "issue", ...body });
+  assert.equal(of("acme/api#8").questions.source, "run");
+  // Set aside on a failed run: not a dismissal.
+  assert.equal(of("acme/api#5").dismissed, null);
+});
+
 test("a task's update time is the latest Deckhand saw, and orders the list", () => {
   const tasks = board({
     runs: [
