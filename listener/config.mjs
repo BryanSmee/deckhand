@@ -326,6 +326,11 @@ export function loadConfig(env, file = NO_FILE) {
     policyPort,
     // How sandboxes reach the broker on their network (compose service name by default).
     brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
+    // The policy service, which evaluates every policy decision (../policy-service/, #501).
+    policyServiceUrl: (env.POLICY_SERVICE_URL || "http://policy:8181").replace(/\/$/, ""),
+    // Where the broker's public key goes for the services that check its tokens offline (the
+    // policy service mounts it read-only). Empty: not published.
+    serviceKeysDir: env.SERVICE_KEYS_DIR || null,
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
     // in the environment, read by the listener's Anthropic endpoint only.
     claudeCredential: credentialName(env),

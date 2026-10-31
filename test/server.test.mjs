@@ -20,7 +20,7 @@ import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
-import { tempDir } from "./helpers.mjs";
+import { evalResult, fakeOpa, servePolicies, tempDir } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 // The App's key, one for every listener: making one takes a while.
@@ -37,8 +37,6 @@ const RW_MOUNT = "/usr";
 // (fixtures/fake-docker.sh says how).
 function fakeDocker(dir) {
   symlinkSync(new URL("fixtures/fake-docker.sh", import.meta.url).pathname, join(dir, "docker"));
-  // And an `opa` that denies nothing (fixtures/allow-opa.sh), for Deckhand's default policies.
-  symlinkSync(new URL("fixtures/allow-opa.sh", import.meta.url).pathname, join(dir, "opa"));
 }
 
 // Stops the fake sandboxes a test leaves running.
@@ -368,7 +366,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     writeFileSync(join(dir, "grants", "org", "repo.yaml"), text);
   }
 
-  async function listen(t, files, extra = {}) {
+  // `opa`: the policy service's (fakeOpa()'s, allowing everything by default).
+  async function listen(t, files, extra = {}, { opa } = {}) {
     // Removed once the file is done: its listener and sandboxes are stopped by then.
     const dir = tempDir(null);
     fakeDocker(dir);
@@ -378,6 +377,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       req.url === "/deckhand-ca.crt" ? res.end(TEST_CA) : res.writeHead(404).end(),
     );
     await new Promise((resolve) => egress.listen(0, "127.0.0.1", resolve));
+    // The policy service, with an opa that denies nothing, for Deckhand's default policies: the
+    // listener's own service tokens, its broker's key published in keys/, are checked there.
+    const policyService = await servePolicies(t, {
+      grantsDir: join(dir, "grants"),
+      keysDir: join(dir, "keys"),
+      ...(opa && { opa }),
+    });
     writeFileSync(
       join(dir, "app.json"),
       JSON.stringify({
@@ -406,6 +412,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       // The egress proxy asks from here: in the tests, the fake sandbox itself.
       EGRESS_PROXY: `http://127.0.0.1:${egress.address().port}`,
       GRANTS_DIR: join(dir, "grants"),
+      POLICY_SERVICE_URL: policyService,
+      SERVICE_KEYS_DIR: join(dir, "keys"),
       ...(typeof extra === "function" ? extra(dir, github) : extra),
     };
     let listener = start(settings);
@@ -3415,15 +3423,18 @@ modes:
   });
 
   test("a run the policies refuse (deny_run): a reply quoting them, nothing runs, the decision kept", async (t) => {
-    const { dir, github, send } = await listen(t, {}, (dir) => {
-      // An opa whose every deny rule says "not today", for this listener only.
-      rmSync(join(dir, "opa"));
-      symlinkSync(new URL("fixtures/refuse-opa.sh", import.meta.url).pathname, join(dir, "opa"));
-      // A file of the operator's: opa is asked (Deckhand's alone, the listener decides itself).
-      mkdirSync(join(dir, "grants", "policy"), { recursive: true });
-      writeFileSync(join(dir, "grants", "policy", "fridays.rego"), "package deckhand\n");
-      return {};
-    });
+    const { dir, github, send } = await listen(
+      t,
+      {},
+      (dir) => {
+        // A file of the operator's: opa is asked (Deckhand's alone, the listener decides itself).
+        mkdirSync(join(dir, "grants", "policy"), { recursive: true });
+        writeFileSync(join(dir, "grants", "policy", "fridays.rego"), "package deckhand\n");
+        return {};
+      },
+      // The policy service's opa: every deny rule says "not today", for this listener only.
+      { opa: fakeOpa({ answer: () => evalResult(["not today"]) }) },
+    );
     await send(comment("alice", "Deckhand\nShip it."));
     await until(() => replies(github).length === 1, "the refusal");
     assert.equal(

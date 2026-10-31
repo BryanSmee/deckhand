@@ -4,7 +4,9 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { allowOnly, builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
+import { createPolicies } from "../listener/policies.mjs";
+import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   askAfterRun,
@@ -15,7 +17,14 @@ import {
   openerOf,
   runFields,
 } from "../listener/reviewers.mjs";
-import { policyEngine, tempDir, testConfig, hasOpa } from "./helpers.mjs";
+import {
+  localService,
+  policyEngine,
+  policyEngineOf,
+  tempDir,
+  testConfig,
+  hasOpa,
+} from "./helpers.mjs";
 
 const config = { ...testConfig({ ALLOWED_USERS: "alice,bob" }), bot: "deckhand-app[bot]" };
 
@@ -321,11 +330,17 @@ function defaults(t, operator = new Map(), repo = null) {
       }
       return new Response("{}", { status: 404 });
     },
-    run: opaRunner(),
-    readBuiltIn: () =>
-      new Map([...allowOnly(), ["gh-reviewers.rego", builtInPolicies().get("gh-reviewers.rego")]]),
-    readOperator: () => operator,
-    tmp: tempDir(t),
+    service: localService(
+      policyEngineOf(t, {
+        opa: opaBinary(),
+        readBuiltIn: () =>
+          new Map([
+            ...allowOnly(),
+            ["gh-reviewers.rego", builtInPolicies().get("gh-reviewers.rego")],
+          ]),
+        readOperator: () => operator,
+      }),
+    ),
   });
 }
 

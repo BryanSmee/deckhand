@@ -93,7 +93,7 @@ that file asks for, so none can:
   since the pull request's workflows then run from that merge with a base that may have
   changed since the last push. GitHub refuses an update with conflicts, which the run rebases
   locally as before. Deckhand's default policy for it, `policy/gh-update-branch.rego` (shipped
-  in the listener's image), refuses nothing: work runs update their branch, and a repository's
+  in the policy service's image), refuses nothing: work runs update their branch, and a repository's
   own modes once its `.deckhand/policy/` allows them (`allow_github`).
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
@@ -435,6 +435,13 @@ when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted h
 of the listener (#505), the listener joins the runs' networks too, for the endpoints sandboxes
 call directly (the agents' APIs, pushes).
 
+The policy service is the first to have moved out (#501): with Docker Compose it is on one
+network, `policy`, internal (no way out) and shared with the listener alone. A call can only
+come from the listener there, so it doesn't set `SERVICE_NETWORKS`: that comes with a second
+caller's network, when the github service or the broker moves out (#502, #505). The listener
+signs its own service tokens with the broker's key meanwhile, as the orchestrator, and
+publishes the public key the service checks them with (`SERVICE_KEYS_DIR`, the `keys` volume).
+
 To check it by hand, from inside a running sandbox (`docker exec -it <sandbox> sh`), for each
 service (`<service>:<port>`, as `compose.yaml` names them):
 
@@ -531,7 +538,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   pull request: the thread is looked up on GitHub by its first comment, must be on that pull
   request, and its first comment's author (and whether it is the App's bot) goes to the
   policies. Their default (`policy/gh-review-threads.rego`: never resolving a person's thread;
-  a repository's own modes only once it allows them) ships in the listener's image like Deckhand's other default policies. A new review,
+  a repository's own modes only once it allows them) ships in the policy service's image like Deckhand's other default policies. A new review,
   or a review comment that answers no thread, stays in no ceiling. A
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
@@ -1804,17 +1811,23 @@ GraphQL mutation's field), under its mode's built-in ceiling:
 a deny always wins, and with no allow rule matching it is refused, so an empty or replaced file
 refuses rather than opens, and a new decision starts closed.
 
-They come in **two layers**, evaluated by one `opa` process per decision (as before allow
-rules: a built-in mode pays nothing extra), each in a namespace of its own:
+They come in **two layers**, evaluated together by the policy service (#501, below) in one
+query of one `opa` (as before allow rules: a built-in mode pays nothing extra), each in a
+namespace of its own:
 
-- **The operator's**: Deckhand ships its own in the listener's image
+- **The operator's**: Deckhand ships its own in the policy service's image
   ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows each
   decision but `run`, `run.rego`, which allows each mode where it makes sense (brainstorms and
   onboarding on issues only), `github.rego`, a `gh-<feature>.rego` per `gh` feature, and
-  `review.rego`), which
-  hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, read
-  again at each decision: one with the same name as Deckhand's replaces it, others add to
-  them. **Their allow rules are the ceiling** of every repository.
+  `review.rego`), which hold without any setup. Yours are the `*.rego` files of `policy/` in the
+  grants folder, which the policy service mounts read-only and reads again at each decision: one
+  with the same name as Deckhand's replaces it, others add to them. **Their allow rules are the
+  ceiling** of every repository: a caller sends a repository's files, never yours. The listener
+  reads your folder too and sends, with each decision, a digest of the operator's layer it
+  expects: the service refuses a decision whose digest isn't its own layer's, and the listener
+  refuses every decision while the service reads other files than its own (a grants folder it
+  doesn't mount, or mounts elsewhere, which it would read as none), so your rules are never
+  dropped unseen.
 - **A repository's**, in `.deckhand/policy/` on its default branch. Its deny rules apply to
   every run of the repository. Its allow rules count only for its own `modes:`, whose runs need
   your allow **and** its own: a repository mode does nothing until its repository allows it,
@@ -1829,7 +1842,8 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
   template string, whose expressions aren't read, is refused),
   so they can't define or replace a rule of yours or of your libraries (a helper or a package
   of the same name is its own). Their `data.` references are moved along, so their own
-  libraries resolve; one written otherwise only reads yours. A compile error in either layer
+  libraries resolve; one written otherwise only reads yours (never another repository's: an
+  `opa` holds one repository's files at most). A compile error in either layer
   refuses the decision, as any policy error. The grants (`allow_auto_merge` and the rest: settings of yours, not
   rules) and the built-in gates stay what they are, so any repository may have policies, with
   no grant: they never drop one of your refusals, a gate's or a mode's ceiling (a light
@@ -1842,16 +1856,31 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
 - **A pull request can't change them for itself**: they are read from the default branch, and
   `.deckhand/` is among the files Deckhand trusts, so a pull request that changes a policy is
   never merged by itself.
-- **They run in the listener, isolated**: the pinned `opa` binary of the listener's image
-  (version and sha256 in `listener/Dockerfile`), one process per decision, with an empty
-  environment, a 2-second limit, and a capabilities file without `opa.runtime` (the
+- **They run in the policy service, isolated** (`policy-service/`, #501): a service of its own,
+  which holds no secret, keeps no state and has no network but its callers' (with Docker
+  Compose, an internal network it shares with the listener alone: no way out), running as a
+  user, on a read-only filesystem, without capabilities. The listener starts no `opa`. The
+  pinned `opa` binary of its image (version and sha256 in `policy-service/Dockerfile`) runs as
+  **long-lived servers**, each with one **policy set** loaded at its start (your layer, with or
+  without one repository's), listening on a Unix socket in its own temp folder (no port), with
+  an empty environment; a few are kept (8, the least recently used idle one stopped first), so
+  a decision doesn't start a process. `opa run` takes no capabilities file, so **a set is
+  compiled first with `opa check`** and a capabilities file without `opa.runtime` (the
   environment), `http.send`, `net.*` (the network, DNS included), `json.match_schema` and
   `json.verify_schema` (a schema's `$ref` reads a local `file://` path, `allow_net` or not) and
-  `trace`, and no host allowed (`allow_net: []`). A policy decides from its input only: it
-  can't read the listener's secrets or files, or reach anything. The capabilities are the
-  pinned binary's own minus these, so a new `opa` version is checked for builtins that read
-  files or the network before it is pinned (`test/policies.test.mjs` tries the known ones
-  with the real binary).
+  `trace`, and no host allowed (`allow_net: []`), and **only a set that passes is served**: a
+  policy that calls one is refused at load, its decisions with it. A decision's query has
+  **2 seconds**: past them it is cut, which cancels its evaluation in `opa`, and the decision is
+  refused. A policy decides from its input only: it can't read the service's files, or reach
+  anything. The capabilities are the pinned binary's own minus these, so a new `opa` version
+  is checked for builtins that read files or the network before it is pinned
+  (`test/policies.test.mjs` tries the known ones with the real binary, through the service).
+- **Each call to the service is authenticated**: a [service token](#service-tokens) the
+  broker signed (the listener calls as the orchestrator until it is split, #506), checked
+  offline with the broker's public key, which the listener publishes in a volume the service
+  mounts read-only (`SERVICE_KEYS_DIR`); its table lets the orchestrator, the github service
+  and the broker ask it, nobody else. It answers `/health` and `/ready` without one, and they
+  say nothing.
 - **Their errors too**: what a failure says (opa's error, GitHub's) is cut and redacted like a
   message below: an error may quote what a policy read.
 - **What they say is shown, not trusted**: each message is put on one line, cut to 200
@@ -1877,8 +1906,10 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
   sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says
   why); for `github`, the run's write is refused, so a broken policy stops every run's writes
   in that repository. Deckhand's own `github.rego` defines `deny_github` everywhere, so every
-  run's GitHub write starts an `opa` process: an `opa` that is missing or fails (its temp
-  folder unwritable, say) stops the runs' writes in every repository. A refusal only
+  run's GitHub write asks the policy service: a policy service that can't be reached stops the
+  runs' writes in every repository. The listener waits up to 30 seconds for one that refuses
+  its connection or is draining (an update, a restart), then refuses; so does an `opa` that
+  doesn't start (its temp folder unwritable, say). A refusal only
   ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
   appear in its onboarding pull request's config check and its config panel on the dashboard.
 - **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user

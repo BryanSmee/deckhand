@@ -18,7 +18,7 @@ import {
   reviewLoop,
   trustedFile,
 } from "../listener/reviews.mjs";
-import { policyEngine, tempDir, testConfig } from "./helpers.mjs";
+import { localService, policyEngine, policyEngineOf, tempDir, testConfig } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]", needsInputLabel: "needs-input" };
 
@@ -820,8 +820,7 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
     policies: createPolicies({
       config: {},
       github: async () => new Response("{}", { status: 404 }),
-      readBuiltIn: () => new Map(),
-      tmp: tempDir(t),
+      service: localService(policyEngineOf(t, { builtIn: {} })),
     }),
   });
   const said = await empty.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
