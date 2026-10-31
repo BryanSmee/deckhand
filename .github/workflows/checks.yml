@@ -1,0 +1,98 @@
+name: Checks
+
+# AGENTS.md's checks, on every pull request and push to main: one job each, so a failure says
+# which. GitHub-hosted runners, so a fork's pull request runs on a throwaway machine, with nothing
+# to take: read-only contents, no secret.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    # As the runner's own user, not root: some tests need a directory root could write anyway.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      # The real opa, so its tests don't skip: the version and sha256 policy-service/Dockerfile
+      # pins, read from it, so the two can't differ.
+      - name: Install opa
+        run: |
+          dockerfile=policy-service/Dockerfile
+          version=$(sed -n 's/^ARG OPA_VERSION=//p' "$dockerfile")
+          sum=$(sed -n 's/^ *amd64) sum=\([0-9a-f]*\) ;;.*/\1/p' "$dockerfile")
+          test -n "$version" && test -n "$sum"
+          curl -fsSLo "$RUNNER_TEMP/opa" "https://github.com/open-policy-agent/opa/releases/download/v${version}/opa_linux_amd64_static"
+          echo "$sum  $RUNNER_TEMP/opa" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 "$RUNNER_TEMP/opa" "$RUNNER_TEMP/bin/opa"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: opa version && jq --version && id
+      - name: Bundle graphql-js
+        working-directory: listener/vendor
+        run: npm ci --no-audit --no-fund && npm run build
+      # Fails, too, when a real-opa test skipped: opa is on the PATH here.
+      - name: Tests
+        run: |
+          node --test --test-force-exit \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=tap --test-reporter-destination="$RUNNER_TEMP/tests.tap"
+          if grep "# SKIP no opa on the PATH" "$RUNNER_TEMP/tests.tap"; then
+            echo "::error::real-opa tests skipped"
+            exit 1
+          fi
+
+  dashboard:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - run: npm ci --no-audit --no-fund
+      - run: npm test
+      - run: npm run build
+
+  syntax:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: node --check
+        run: |
+          node --check listener/server.mjs runner/server.mjs broker/server.mjs
+          node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged
+      - name: bash -n
+        run: |
+          for f in sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install \
+            sandbox/agents/codex/install sandbox/agents/antigravity/install \
+            sandbox/agents/antigravity/refresh sandbox/agents/npm-install \
+            sandbox/agents/release-install sandbox/deckhand-token sandbox/gh \
+            sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh \
+            test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do
+            bash -n "$f" || exit 1
+          done
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - run: npx --yes prettier@3 --check .
