@@ -54,7 +54,6 @@ export function createImages({
   config,
   backend, // the runner's images and volumes (runner/images.mjs)
   jobs, // its short containers (runner/jobs.mjs)
-  readFile, // (repo, path, ref) → { sha, text } or null (repo-config.mjs readRepoFile)
   checkout, // (repo, ref) → a folder with the repo's files (checkout.mjs)
   log = () => {},
 }) {
@@ -81,12 +80,14 @@ export function createImages({
   // `onBuild(tag)` is called when a build starts or is already under way; `output` gets its
   // log (the first caller's only). `branch`: `ref` is a pull request's head (imageRef()).
   // `access`: the run's { hosts, trusted } (access.mjs), which a build may reach on a runner
-  // whose builder goes through the egress proxy (Kubernetes).
+  // whose builder goes through the egress proxy (Kubernetes). `blob`: the Dockerfile's blob at
+  // `ref`, which the caller read (the runner reads nothing of GitHub's but a tarball).
   async function imageFor({
     repo,
     ref,
     branch = false,
     dockerfile,
+    blob,
     onBuild = () => {},
     output,
     access = {},
@@ -98,10 +99,11 @@ export function createImages({
       return config.image;
     }
     const id = await baseId();
-    const file = await readFile(repo, dockerfile, ref);
-    if (!file)
-      throw new Error(`${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref}`);
-    const tag = named(imageTag(config, repo, id, dockerfile, file.sha, branch ? ref : null));
+    if (!blob)
+      throw new Error(
+        `${dockerfile} (the config's dockerfile) is not in ${repo} at ${ref ?? "its default branch"}`,
+      );
+    const tag = named(imageTag(config, repo, id, dockerfile, blob, branch ? ref : null));
     if ((await backend.id(tag)) !== null) return tag;
     if (!builds.has(tag)) {
       const build = buildImage(repo, ref, dockerfile, tag, output, access).finally(() =>
@@ -115,7 +117,7 @@ export function createImages({
   }
 
   async function buildImage(repo, ref, dockerfile, tag, output, { hosts, trusted }) {
-    log(`${repo}: building ${tag} from ${dockerfile} at ${ref}`);
+    log(`${repo}: building ${tag} from ${dockerfile} at ${ref ?? "its default branch"}`);
     const dir = await checkout(repo, ref);
     try {
       const built = await backend.build({

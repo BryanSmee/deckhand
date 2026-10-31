@@ -12,13 +12,13 @@ test("a checkout is GitHub's tarball without its top folder", async (t) => {
   writeFileSync(join(src, "org-repo-abc1234", "docker", "Dockerfile"), "FROM x\n");
   const tarball = execFileSync("tar", ["-czf", "-", "-C", src, "org-repo-abc1234"]);
   const asked = [];
-  const request = async (repo, method, path) => {
-    asked.push(`${method} ${path}`);
+  const download = async (repo, ref) => {
+    asked.push(`${repo} ${ref}`);
     return new Response(tarball);
   };
   const tmp = tempDir(t, "deckhand-tmp-");
-  const dir = await checkout(request, "org/repo", "feature/x", { tmp });
-  assert.deepEqual(asked, ["GET /repos/org/repo/tarball/feature%2Fx"]);
+  const dir = await checkout(download, "org/repo", "feature/x", { tmp });
+  assert.deepEqual(asked, ["org/repo feature/x"]);
   assert.equal(readFileSync(join(dir, "docker", "Dockerfile"), "utf8"), "FROM x\n");
 
   // A refused download or a broken archive leaves nothing behind.

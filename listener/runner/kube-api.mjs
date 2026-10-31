@@ -1,5 +1,5 @@
 // The Kubernetes API, as the Kubernetes runner (kubernetes.mjs) calls it: in the cluster, with
-// the listener's ServiceAccount (its token and the cluster's CA under SERVICE_ACCOUNT), over
+// the runner's ServiceAccount (its token and the cluster's CA under SERVICE_ACCOUNT), over
 // node:https. No client library, no kubectl. `fetch` is injected so tests play the API; the
 // default one is inClusterFetch().
 import { readFileSync } from "node:fs";

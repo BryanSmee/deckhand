@@ -7,7 +7,7 @@ import { KEEP_TAGS, createImages, imageRef, imageTag } from "../listener/images.
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
 import { createDockerImages } from "../listener/runner/images.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { tempDir, testConfig, withBlobs } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
 const A = repoImage(config, "org/a");
@@ -59,16 +59,17 @@ const onDocker = (docker) => ({
 function setup(t, options, blob = "blob1") {
   const fake = fakeDocker(options);
   const checkouts = [];
-  const images = createImages({
-    config,
-    ...onDocker(fake.docker),
-    readFile: async (repo, path, ref) =>
-      path === "missing" ? null : { sha: `${blob}@${ref}`, text: "" },
-    checkout: async (repo, ref) => {
-      checkouts.push(ref);
-      return tempDir(t, "deckhand-ctx-");
-    },
-  });
+  const images = withBlobs(
+    createImages({
+      config,
+      ...onDocker(fake.docker),
+      checkout: async (repo, ref) => {
+        checkouts.push(ref);
+        return tempDir(t, "deckhand-ctx-");
+      },
+    }),
+    async (repo, path, ref) => (path === "missing" ? null : { sha: `${blob}@${ref}` }),
+  );
   return { ...fake, images, checkouts };
 }
 
@@ -130,16 +131,18 @@ test("a new base image or a changed Dockerfile means a new tag", () => {
 test("a branch build never takes the default branch's tag", async (t) => {
   const fake = fakeDocker();
   const checkouts = [];
-  const images = createImages({
-    config,
-    ...onDocker(fake.docker),
+  const images = withBlobs(
+    createImages({
+      config,
+      ...onDocker(fake.docker),
+      checkout: async (repo, ref) => {
+        checkouts.push(ref);
+        return tempDir(t, "deckhand-ctx-");
+      },
+    }),
     // The same Dockerfile blob at both refs: only the build context may differ.
-    readFile: async () => ({ sha: "same", text: "" }),
-    checkout: async (repo, ref) => {
-      checkouts.push(ref);
-      return tempDir(t, "deckhand-ctx-");
-    },
-  });
+    async () => ({ sha: "same" }),
+  );
   const ask = (ref, branch) =>
     images.imageFor({ repo: "org/a", ref, branch, dockerfile: "Dockerfile" });
   const branch = await ask("abc", true);

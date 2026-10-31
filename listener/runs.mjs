@@ -29,7 +29,6 @@ import {
   enterPhase,
   minutes,
   newRecord,
-  openLog,
   outcome,
   phaseOf,
   questionsOf,
@@ -38,6 +37,7 @@ import {
   timed,
   writeEvent,
 } from "./runlog.mjs";
+import { logSent } from "./restart.mjs";
 import { sandboxSpec } from "./sandbox-spec.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
@@ -136,7 +136,6 @@ export function createRuns(ctx) {
       {
         title: ctx.titles.get(key),
         agent: light ? config.brainstormAgent : config.agent,
-        logDir: ctx.logDir,
       },
     );
     // The issues it creates and the comments it posts, as GitHub answers its calls
@@ -165,7 +164,8 @@ export function createRuns(ctx) {
       talk: mode === "brainstorm" || mode === "stop",
       light,
       record,
-      logFile: openLog(record.logPath),
+      // Its log, the runner's (../runner/client.mjs openRemote()): written at once, sent in order.
+      logFile: ctx.runLogs.open(id),
       // Its agent's token, saved with it for redaction (restart.mjs): the broker's are gone
       // after a restart.
       agentToken: null,
@@ -303,10 +303,9 @@ export function createRuns(ctx) {
         : "";
     const fast = record.speed === "fast" ? "/fast" : "";
     log(
-      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}${fast}), log ${record.logPath}`,
+      `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}${fast}), log ${record.id}`,
     );
-    const { logPath: _, ...meta } = record;
-    logFile.write(JSON.stringify({ type: "listener", ...meta, message: text }) + "\n");
+    logFile.write(JSON.stringify({ type: "listener", ...record, message: text }) + "\n");
     const note = (message) => writeEvent(logFile, "note", { message });
     if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
     if (record.speedNote) note(record.speedNote);
@@ -680,6 +679,9 @@ export function createRuns(ctx) {
     live.trusted = null;
     live.cached = null;
     live.uncached = null;
+    // Its output at the runner first: the dashboard's live view reads it to its end once the
+    // run's status changes (runlog.mjs stream()).
+    await logSent(live);
     try {
       // Stopped on purpose: whatever the exit looked like, not an error.
       if (live.cancelled) return await endCancelled(task);
@@ -783,7 +785,9 @@ export function createRuns(ctx) {
     const revoked = ctx.broker.revoke(live.id);
     await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
     live.record.finishedAt = Date.now();
-    saveSummary(live.record, log);
+    saveSummary(ctx.logDir, live.record, log);
+    // What it wrote last, at the runner before its state goes.
+    await logSent(live);
     await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));
     live.over = true;
     clearTimeout(live.soon);

@@ -189,7 +189,7 @@ test("previewHook: a runner without preview containers skips it before any image
       errors: [],
     }),
     images: { imageFor: async () => assert.fail("no image for a hook that can't run") },
-    previews: { runs: false, run: async () => assert.fail("not queued") },
+    previews: { runs: async () => false, run: async () => assert.fail("not queued") },
   };
   await previewHook(ctx, { repo: "org/a", base: "trunk", event: "pull_request" }, {});
   assert.deepEqual(skipped, [

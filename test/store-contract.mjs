@@ -194,6 +194,10 @@ export function storeContract(name, open) {
     assert.equal((await store.readBlob("runs/1/log")).toString(), "line 1\nline 2\n");
     assert.equal((await store.readBlob("runs/1/log", { offset: 7 })).toString(), "line 2\n");
     assert.equal((await store.readBlob("runs/1/log", { offset: 99 })).length, 0);
+    // A part of it, and its size, without reading it.
+    assert.equal((await store.readBlob("runs/1/log", { offset: 5, length: 3 })).toString(), "1\nl");
+    assert.equal(await store.blobSize("runs/1/log"), 14);
+    assert.equal(await store.blobSize("runs/2/log"), null);
     await store.putBlob("runs/1/log", "whole");
     assert.equal((await store.readBlob("runs/1/log")).toString(), "whole");
     // A name can't climb out of the blobs.

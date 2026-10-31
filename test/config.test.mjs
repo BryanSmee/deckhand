@@ -812,3 +812,11 @@ test("SANDBOX_FAST_MODE: off until the operator says allowed", () => {
   assert.equal(loadConfig({ SANDBOX_FAST_MODE: "Allowed" }, file(base)).fastMode, true);
   assert.equal(loadConfig({ SANDBOX_FAST_MODE: "off" }, file(base)).fastMode, false);
 });
+
+test("SERVICE_NETWORKS: checked at start; none is the runner's, never the listener's", () => {
+  const load = (value) => loadConfig({ ALLOWED_USERS: "a", SERVICE_NETWORKS: value });
+  assert.equal(load("runner=172.31.253.0/24").serviceNetworks, "runner=172.31.253.0/24");
+  assert.equal(load("runner=0.0.0.0/0").serviceNetworks, "runner=0.0.0.0/0");
+  assert.throws(() => load("none"), /none is the runner's.*NetworkPolicy/);
+  assert.throws(() => load("runner=nowhere"), /SERVICE_NETWORKS: expected service=subnet/);
+});

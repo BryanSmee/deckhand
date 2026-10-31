@@ -2,7 +2,7 @@
 // one and no other engine has it, else the run's own volume. The engine is on the run's
 // network as `engine`, labelled deckhand.engine rather than deckhand.run so it is never taken
 // for a sandbox, and removed with its run.
-import { checked, labelArgs, removeVolume } from "../docker.mjs";
+import { checked, containerLabels, labelArgs, removeVolume, volumeLabels } from "../docker.mjs";
 import { ENGINE_HOST, engineArgs, engineBackend, engineName, engineVolume } from "./engine.mjs";
 
 export function createEngines({ config, docker }) {
@@ -48,7 +48,7 @@ export function createEngines({ config, docker }) {
     const volume = cached ? shared : engineVolume(run);
     const owner = { "deckhand.owner": config.prefix };
     // One left by a run that never got its sandbox: a task has one run at a time.
-    await docker(["rm", "--force", "--volumes", engineName(name)]);
+    await removeEngine(name);
     checked(
       await docker([
         ...["volume", "create"],
@@ -63,7 +63,8 @@ export function createEngines({ config, docker }) {
         "--detach",
         "--name",
         engineName(name),
-        ...labelArgs({ ...owner, "deckhand.engine": run, ...labels }),
+        // Its own last: a spec's labels never make it another deployment's or another run's.
+        ...labelArgs({ ...labels, ...owner, "deckhand.engine": run }),
         ...["--network", run, "--network-alias", ENGINE_HOST],
         // Its only way out, like the sandbox's: pulls, builds and its containers go through it.
         ...["-e", `EGRESS_PROXY=${config.egressProxy}`],
@@ -89,11 +90,23 @@ export function createEngines({ config, docker }) {
 
   // The engine of the sandbox `name` and its run's own volume (with its image's anonymous
   // ones); the repo's cache volume stays. Either may be missing.
+  // Only one of this deployment's engines (its labels), and only that run's volume: never a
+  // container or a volume of the host's that has the name (../../runner/service.mjs).
   async function remove(name, run) {
-    await docker(["rm", "--force", "--volumes", engineName(name)]);
+    await removeEngine(name, run);
     if (!run) return;
     caches.delete(run);
-    await removeVolume(docker, engineVolume(run));
+    const labels = await volumeLabels(docker, engineVolume(run));
+    if (labels?.owner === config.prefix && labels.engine === run) {
+      await removeVolume(docker, engineVolume(run));
+    }
+  }
+
+  async function removeEngine(name, run) {
+    const labels = await containerLabels(docker, engineName(name));
+    if (!labels || labels.owner !== config.prefix || !labels.engine) return;
+    if (run && labels.engine !== run) return;
+    await docker(["rm", "--force", "--volumes", engineName(name)]);
   }
 
   // The run's cache volume is free again: its engine is gone (relink()).

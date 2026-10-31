@@ -4,7 +4,6 @@
 // are only redacted line by line as they are written. Built from format()'s entries, which
 // clip tool details and outputs, redacted again, capped in size. Pure, apart from reading
 // the logs and startAnalysis(), which opens the analysis's issue and queues its run.
-import { readFileSync } from "node:fs";
 import { agentFor } from "./agents/index.mjs";
 import { ensureLabel } from "./comments.mjs";
 import { issueItem, sameRepo, taskKey } from "./events.mjs";
@@ -216,16 +215,21 @@ function toolLines(entries, { isPublic = false } = {}) {
 // `secrets`, while the whole stays under `max` bytes; the older runs beyond it are left out,
 // and the header says so. `partOf(run)`: its part (runDigest()), null when its log is gone.
 // → { text, bytes, included: [id], left: [id] }.
-export function buildDigest(
+export async function buildDigest(
   runs,
-  { partOf = logPart, secrets = [], max = MAX_DIGEST, selection = null } = {},
+  { partOf, secrets = [], max = MAX_DIGEST, selection = null } = {},
 ) {
   const parts = [];
   const left = [];
   let size = 0;
   let full = false;
   for (const run of runs) {
-    const raw = partOf(run);
+    // The newest first, until the digest is full: an older run's log isn't read for nothing.
+    if (full) {
+      left.push(run.id);
+      continue;
+    }
+    const raw = await partOf(run);
     if (raw === null) {
       left.push(run.id);
       continue;
@@ -255,28 +259,36 @@ export function buildDigest(
   return { text, bytes: Buffer.byteLength(text), included: parts.map((p) => p.id), left };
 }
 
-// A run's part, from its log; null when the log is gone (removed by retention, say).
-export function logPart(run, options) {
+// A run's part, from its log (`readLog(id)`: its text, the runner's, ../runner/client.mjs);
+// null when the log is gone (removed by retention, say) or can't be read now.
+export async function logPart(run, options, readLog) {
   let text;
   try {
-    text = readFileSync(run.logPath, "utf8");
+    text = await readLog(run.id);
   } catch {
     return null;
   }
+  if (!text) return null;
   return runDigest(run, text.split("\n"), options);
 }
 
 // The listener's half: previews for the form, the digest for the run. `runs()`: ctx.runs;
 // `secrets()`: the values no digest may carry (runs.mjs hidden()). Each run's part is kept
 // once built: a finished run's log no longer changes, and the form previews often.
-export function createAnalysis({ runs, secrets = () => [], partOf = logPart, max = MAX_DIGEST }) {
+export function createAnalysis({
+  runs,
+  secrets = () => [],
+  readLog = async () => null,
+  partOf = (run, options) => logPart(run, options, readLog),
+  max = MAX_DIGEST,
+}) {
   // "<run id> <public>" → { id, finishedAt, part }: a few KB each, not the log.
   const cache = new Map();
-  const cachedIn = (isPublic) => (run) => {
+  const cachedIn = (isPublic) => async (run) => {
     const key = `${run.id} ${isPublic}`;
     const known = cache.get(key);
     if (known?.finishedAt === run.finishedAt) return known.part;
-    const part = partOf(run, { isPublic });
+    const part = await partOf(run, { isPublic });
     if (part !== null) cache.set(key, { id: run.id, finishedAt: run.finishedAt, part });
     return part;
   };
@@ -289,9 +301,9 @@ export function createAnalysis({ runs, secrets = () => [], partOf = logPart, max
   };
   return {
     // What the form shows: how many runs match, the digest's size and the kinds there are.
-    preview(repo, selection) {
+    async preview(repo, selection) {
       const selected = selectRuns(runs(), repo, selection);
-      const { bytes, included, left } = digestOf(selected, selection);
+      const { bytes, included, left } = await digestOf(selected, selection);
       return {
         runs: selected.map((r) => r.id),
         included: included.length,

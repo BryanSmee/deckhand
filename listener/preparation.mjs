@@ -183,7 +183,7 @@ export function createPreparation(ctx) {
       asked.private === true &&
       (await getJson(ctx.github, task.repo, `/repos/${task.repo}`).catch(() => null))?.private ===
         true;
-    const { text, included, left } = ctx.analysis.digest(task.repo, asked.runs, asked, {
+    const { text, included, left } = await ctx.analysis.digest(task.repo, asked.runs, asked, {
       isPublic: !isPrivate,
     });
     if (!included.length) {
@@ -260,10 +260,12 @@ export function createPreparation(ctx) {
       await ctx.images.installAgent(agentOf(task), output);
       // A light run runs no setup: no caches, which work runs trust. Nor a run whose comments
       // came from a fork's pull request: its code would write into what every later run uses.
+      // What the runner keeps (the runner service's GET /info, ../runner/client.mjs).
+      const { keepsCaches, noCaches } = (await ctx.images.info?.()) ?? ctx.images;
       if (task.live.fork && !task.live.light && settings.caches?.length)
         note("No caches: a pull request from a fork");
-      else if (!task.live.light && settings.caches?.length && ctx.images.keepsCaches === false)
-        note(`No caches: ${ctx.images.noCaches ?? `the ${config.runner} runner keeps none`}`);
+      else if (!task.live.light && settings.caches?.length && keepsCaches === false)
+        note(`No caches: ${noCaches ?? `the ${config.runner} runner keeps none`}`);
       const caches =
         task.live.light || task.live.fork
           ? []

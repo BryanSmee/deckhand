@@ -1,5 +1,6 @@
-// The listener end to end, without Docker or GitHub: a fake `docker` on PATH plays the
-// sandbox (asks the broker for a token, prints a result), a local server plays GitHub.
+// The listener end to end, without Docker or GitHub: the runner service beside it (runner/), a
+// fake `docker` on the runner's PATH plays the sandbox (asks the broker for a token, prints a
+// result), a local server plays GitHub.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
@@ -97,16 +98,21 @@ async function fakeGitHub(files = {}) {
         return res.end(JSON.stringify({ content, encoding: "base64" }));
       }
       // Other branches' files are keyed "<branch>:<path>".
-      const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=(.+)$/.exec(req.url);
+      // Without a ref, the default branch's (the runner's blob lookups).
+      const file = /^\/repos\/org\/repo\/contents\/([^?]+)(?:\?ref=(.+))?$/.exec(req.url);
       if (file) {
         const path = decodeURIComponent(file[1]);
-        const ref = decodeURIComponent(file[2]);
+        const ref = file[2] === undefined ? "trunk" : decodeURIComponent(file[2]);
         const text = ref === "trunk" ? files[path] : files[`${ref}:${path}`];
         if (text === undefined) return res.writeHead(404).end("{}");
         const content = Buffer.from(text).toString("base64");
         return res.end(JSON.stringify({ type: "file", sha: `blob-${text.length}`, content }));
       }
-      if (req.url === "/repos/org/repo/tarball/trunk" && tarball) {
+      // The default branch's, by name or without a ref (the runner's preview hooks).
+      if (
+        ["/repos/org/repo/tarball/trunk", "/repos/org/repo/tarball"].includes(req.url) &&
+        tarball
+      ) {
         res.setHeader("content-type", "application/gzip");
         return res.end(tarball);
       }
@@ -313,6 +319,30 @@ async function fakeGitHub(files = {}) {
   };
 }
 
+// The runs' logs, as the runner keeps them (its store's blobs, runner/logs.mjs): their texts, by
+// run id. Asked again until `ready(texts)` holds, for one still on its way to the runner.
+function runLogs(dir) {
+  const blobs = join(dir, "runner-store", "blobs");
+  if (!existsSync(blobs)) return new Map();
+  return new Map(
+    readdirSync(blobs)
+      .map((file) => [decodeURIComponent(file), file])
+      .filter(([key]) => key.startsWith("logs/"))
+      .map(([key, file]) => [key.slice("logs/".length), readFileSync(join(blobs, file), "utf8")]),
+  );
+}
+
+// The one run's log of a test with a single run, once it is all at the runner: its live state
+// goes after its last write is sent (runs.mjs teardown()).
+async function onlyLog(dir) {
+  const live = () => readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json"));
+  for (let tries = 0; live() || !runLogs(dir).size; tries++) {
+    if (tries > 500) throw new Error("timed out waiting for the run's log at the runner");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return [...runLogs(dir).values()][0];
+}
+
 // What the tests' egress proxies serve as their CA's certificate.
 const TEST_CA = "-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----\n";
 
@@ -326,8 +356,10 @@ function tarOf(files) {
   return execFileSync("tar", ["-czf", "-", "-C", dir, "org-repo-abc"]);
 }
 
-function start(env) {
-  const child = spawn(process.execPath, ["listener/server.mjs"], {
+// `script`: the listener's or the runner's; `also()`: more output its until() and output() read
+// (the runner's, for the listener's: what a run does is logged on both sides).
+function start(env, { script = "listener/server.mjs", also = () => "" } = {}) {
+  const child = spawn(process.execPath, [script], {
     cwd: new URL("..", import.meta.url).pathname,
     env,
     stdio: ["ignore", "pipe", "pipe"],
@@ -335,17 +367,37 @@ function start(env) {
   let out = "";
   child.stdout.on("data", (d) => (out += d));
   child.stderr.on("data", (d) => (out += d));
+  const all = () => out + also();
   const until = (text) =>
     new Promise((resolve, reject) => {
       const timer = setInterval(
         () =>
-          (typeof text === "string" ? out.includes(text) : text.test(out)) &&
-          (clearInterval(timer), resolve(out)),
+          (typeof text === "string" ? all().includes(text) : text.test(all())) &&
+          (clearInterval(timer), resolve(all())),
         20,
       );
       child.on("exit", (code) => (clearInterval(timer), reject(new Error(`exit ${code}: ${out}`))));
     });
-  return { child, until, output: () => out };
+  return { child, until, output: all, own: () => out };
+}
+
+// A port nothing listens on now: the runner's and the broker's, which each needs of the other's
+// before either has started. Below the range the OS picks ports 0 from (32768 and up), so that
+// another test's listener can't take it meanwhile.
+let nextPort = 20000 + (process.pid % 400) * 30;
+async function freePort() {
+  for (;;) {
+    const port = nextPort++;
+    if (nextPort >= 32000) nextPort = 20000;
+    const server = createServer();
+    const free = await new Promise((resolve) => {
+      server.once("error", () => resolve(false));
+      server.listen(port, "127.0.0.1", () => resolve(true));
+    });
+    if (!free) continue;
+    await new Promise((resolve) => server.close(resolve));
+    return port;
+  }
 }
 
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
@@ -380,12 +432,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       req.url === "/deckhand-ca.crt" ? res.end(TEST_CA) : res.writeHead(404).end(),
     );
     await new Promise((resolve) => egress.listen(0, "127.0.0.1", resolve));
-    // The broker service, which signs the runs' tokens and the listener's service tokens: the
-    // listener calls it from loopback, as the orchestrator. Its public key goes in keys/.
+    // The broker service, which signs the runs' tokens and the services' own: the listener (as
+    // the orchestrator, edge and models) and the runner call it from loopback, each asking as
+    // itself. Its public key goes in keys/.
     const brokerService = createBrokerService({
       store: openStore("memory:"),
       key: testKey(),
-      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+      callers: createCallers({ networks: "edge+orchestrator+models+runner=127.0.0.0/8" }),
       keysDir: join(dir, "keys"),
     }).server;
     await new Promise((resolve) => brokerService.listen(0, "127.0.0.1", resolve));
@@ -409,16 +462,23 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         pem: PEM,
       }),
     );
-    // Port 0: the OS picks free ports, which the listener logs. The broker's URL gets its port.
+    // Port 0: the OS picks free ports, which the listener logs. The runner's and the broker's
+    // are picked first: the runner calls the one, the sandboxes it starts the other.
+    const runnerPort = await freePort();
+    const firstBrokerPort = await freePort();
     const settings = {
       BROKER_SERVICE_URL: `http://127.0.0.1:${brokerService.address().port}`,
       PATH: `${dir}:${process.env.PATH}`,
       DATA_DIR: dir,
       ALLOWED_USERS: "alice,bob",
       PORT: "0",
-      BROKER_PORT: "0",
+      BROKER_PORT: String(firstBrokerPort),
       POLICY_PORT: "0",
-      BROKER_URL: "http://127.0.0.1",
+      SERVICES_PORT: "0",
+      BROKER_URL: `http://127.0.0.1:${firstBrokerPort}`,
+      RUNNER_URL: `http://127.0.0.1:${runnerPort}`,
+      // Everything the runner calls from, and is called from, is this host's.
+      SERVICE_NETWORKS: "runner=127.0.0.0/8",
       GITHUB_API: github.url,
       PUBLIC_URL: "https://hooks.example.com",
       DEBOUNCE_MS: "0",
@@ -429,21 +489,45 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       POLICY_SERVICE_URL: policyService,
       ...(typeof extra === "function" ? extra(dir, github) : extra),
     };
-    let listener = start(settings);
+    // The runner: the same settings (those it reads), its own port and store, the broker
+    // service's keys, the listener's services port as its orchestrator and github service.
+    // Started once the listener's is known.
+    let runner = null;
+    let runnerSettings = null;
+    const runnerOut = () => runner?.own() ?? "";
+    const startRunner = (more = {}) => {
+      runner = start({ ...runnerSettings, ...more }, { script: "runner/server.mjs" });
+      return runner.until(/Deckhand runner \(\w+\) on :\d+/);
+    };
+    let listener = start(settings, { also: runnerOut });
     t.after(() => {
       listener.child.kill("SIGKILL");
+      runner?.child.kill("SIGKILL");
       github.server.close();
       egress.close();
       brokerService.closeAllConnections();
       brokerService.close();
       stopSandboxes(dir);
     });
+    const servicesPort = Number(
+      (await listener.until(/Services on :(\d+)\n/)).match(/Services on :(\d+)\n/)[1],
+    );
+    runnerSettings = {
+      ...settings,
+      PORT: String(runnerPort),
+      SERVICE_NETWORKS: "edge+orchestrator+models=127.0.0.0/8",
+      STORE_URL: `file://${join(dir, "runner-store")}`,
+      ORCHESTRATOR_URL: `http://127.0.0.1:${servicesPort}`,
+      SERVICE_KEYS_DIR: join(dir, "keys"),
+    };
+    await startRunner();
     const [port, brokerPort, policyPort] = await ports(listener);
     // Restarts keep them: the sandboxes still running talk to the broker at a fixed URL.
     Object.assign(settings, {
       PORT: String(port),
       BROKER_PORT: String(brokerPort),
       POLICY_PORT: String(policyPort),
+      SERVICES_PORT: String(servicesPort),
       BROKER_URL: `http://127.0.0.1:${brokerPort}`,
     });
     // `id`: its GUID (X-GitHub-Delivery), for a redelivery.
@@ -466,9 +550,18 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       const { child } = old;
       const exited = new Promise((resolve) => child.on("exit", resolve));
       const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
-      listener = start({ ...settings, ...more });
+      listener = start({ ...settings, ...more }, { also: runnerOut });
       await ports(listener);
       return { code, output: old.output() };
+    };
+    // The runner stopped (SIGTERM unless said otherwise) and another started on the same store,
+    // with `more` settings: the listener carries on with it.
+    const restartRunner = async ({ signal = "SIGTERM", ...more } = {}) => {
+      const { child } = runner;
+      const exited = new Promise((resolve) => child.on("exit", resolve));
+      if (child.exitCode === null && !child.signalCode) child.kill(signal);
+      await exited;
+      await startRunner(more);
     };
     return {
       dir,
@@ -476,11 +569,15 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       get listener() {
         return listener;
       },
+      get runner() {
+        return runner;
+      },
       port,
       brokerPort,
       policyPort,
       send,
       restart,
+      restartRunner,
     };
   }
 
@@ -657,14 +754,16 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       () => !readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json")),
       "the run's state to go",
     );
-    for (const file of readdirSync(join(dir, "logs"))) {
-      const log = readFileSync(join(dir, "logs", file), "utf8");
+    // Its summary and its log, the runner's.
+    const kept = readdirSync(join(dir, "logs")).map((f) =>
+      readFileSync(join(dir, "logs", f), "utf8"),
+    );
+    for (const log of [...kept, ...runLogs(dir).values()]) {
       assert.ok(!log.includes(secret) && !log.includes(credential));
       assert.ok(!log.includes(agentToken));
     }
     // Its log's first line says it ran on the plan, for the dashboard after a restart.
-    const logFile = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".log"));
-    const header = JSON.parse(readFileSync(join(dir, "logs", logFile), "utf8").split("\n")[0]);
+    const header = JSON.parse((await onlyLog(dir)).split("\n")[0]);
     assert.deepEqual(
       [header.provider, header.credential, header.auth],
       ["anthropic", null, "plan"],
@@ -1020,6 +1119,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
   test("a run that fails for another reason, or with no fallback left, ends with its error", async (t) => {
     const { dir, github, send } = await falling(t, "codex", ["claude@anthropic", "codex@openai"]);
     writeFileSync(join(dir, "task-fails"), "");
+    // Its sandbox's exit code, which the runner says as it removes it (runner/events.mjs).
+    writeFileSync(join(dir, "exit-code"), "3\n");
     // Codex fails too here, but the task's own failure comes first: no fallback.
     rmSync(join(dir, "failing"));
     await send(comment("alice"));
@@ -1028,6 +1129,16 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.match(
       JSON.parse(replies(github)[0].body).body,
       /^Claude stopped with an error\.\n\n> The tests still fail\./,
+    );
+    // On its summary, and said in its log, after its end.
+    const summary = () => {
+      const file = readdirSync(join(dir, "logs")).find((f) => /-\d+\.json$/.test(f));
+      return file && JSON.parse(readFileSync(join(dir, "logs", file), "utf8"));
+    };
+    await until(() => summary()?.exitCode === 3, "the exit code");
+    await until(
+      () => [...runLogs(dir).values()][0]?.includes("Its sandbox exited with code 3"),
+      "its note",
     );
   });
 
@@ -1634,12 +1745,12 @@ mounts:
       github.requests.some((r) => r.method === "DELETE" && /comments\/99\/reactions/.test(r.path)),
     );
     assert.doesNotMatch(ctx.listener.output(), /Falling back|done \(error\)/);
-    // The dashboard's list, rebuilt from the logs after a restart, keeps it cancelled.
+    // The dashboard's list, rebuilt from the summaries after a restart, keeps it cancelled, and
+    // its log at the runner says who.
     await ctx.restart();
-    const logs = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
-    const cancelled = logs
-      .map((f) => readFileSync(join(dir, "logs", f), "utf8"))
-      .filter((text) => /"event":"cancelled","by":"alice"/.test(text));
+    const cancelled = [...runLogs(dir).values()].filter((text) =>
+      /"event":"cancelled","by":"alice"/.test(text),
+    );
     assert.equal(cancelled.length, 1);
   });
 
@@ -1981,9 +2092,10 @@ mounts:
 
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
-    // The sandbox no longer has the address the requests come from; a restarted listener
-    // looks its addresses up again.
+    // The sandbox no longer has the address the requests come from; a restarted runner looks
+    // its addresses up again.
     writeFileSync(join(ctx.dir, "elsewhere"), "");
+    await ctx.restartRunner();
     await ctx.restart();
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
     const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
@@ -2143,7 +2255,9 @@ mounts:
     writeFileSync(join(dir, "nets", "deckhand-gone-1"), "egress-1\n");
     // `docker compose up -d`: new containers, on none of the runs' networks.
     writeFileSync(join(dir, "nets", net), joined()[0] + "\n");
-    await ctx.restart({ LISTENER_CONTAINER: "listener-2", EGRESS_CONTAINER: "egress-2" });
+    // The runner's settings: it joins them.
+    await ctx.restartRunner({ LISTENER_CONTAINER: "listener-2", EGRESS_CONTAINER: "egress-2" });
+    await ctx.restart();
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
     assert.ok(joined().includes("listener-2"));
     assert.ok(joined().includes("egress-2"));
@@ -2206,8 +2320,7 @@ mounts:
     assert.equal(replies(github).length, 1);
     assert.match(JSON.parse(replies(github)[0].body).body, /^All done\./);
     // Its log on the dashboard holds Claude's answer once.
-    const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
-    const results = readFileSync(join(dir, "logs", log), "utf8").match(/"type":"result"/g);
+    const results = (await onlyLog(dir)).match(/"type":"result"/g);
     assert.equal(results.length, 1);
   });
 
@@ -2330,8 +2443,7 @@ mounts:
     assert.equal(replies(github).length, 1);
     assert.match(JSON.parse(replies(github)[0].body).body, /^Answered\./);
     // Both answers once each in the run's log, and the duration of both in the footer.
-    const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
-    const text = readFileSync(join(dir, "logs", log), "utf8");
+    const text = await onlyLog(dir);
     assert.equal(text.match(/"type":"result"/g).length, 2);
     assert.equal(text.match(/pull\/13/g).length, 1);
     // Its phases: setup right after its first line, then each once, the restart in between.
@@ -3321,8 +3433,7 @@ modes:
     assert.equal(answers["raw.githubusercontent.com"].relay, false);
     assert.equal(answers["github.com"].relay, true);
     // The run's record names the mode.
-    const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
-    const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
+    const meta = JSON.parse((await onlyLog(dir)).split("\n")[0]);
     assert.equal(meta.taskMode, "audit");
     assert.equal(meta.kind, "issue");
     await listener.until("done (ok)");
@@ -3430,8 +3541,7 @@ modes:
     writeFileSync(join(dir, "go"), "");
     await until(() => replies(github).length === 2, "the research reply");
     assert.match(JSON.parse(replies(github)[1].body).body, /🔎 research: replies go on in it/);
-    const [log] = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
-    const meta = JSON.parse(readFileSync(join(dir, "logs", log), "utf8").split("\n")[0]);
+    const meta = JSON.parse((await onlyLog(dir)).split("\n")[0]);
     assert.equal(meta.kind, "research");
     await listener.until("done (ok)");
   });
@@ -5075,11 +5185,7 @@ mounts:
       /--user 1000:1000 --cap-drop ALL --security-opt no-new-privileges/,
     );
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^NO_PROXY=.*,engine$/m);
-    const logs = readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".log"));
-    assert.match(
-      readFileSync(join(dir, "logs", logs[0]), "utf8"),
-      /Container engine: podman, the repository's cache/,
-    );
+    assert.match(await onlyLog(dir), /Container engine: podman, the repository's cache/);
 
     // A fork's pull request: no engine.
     rmSync(join(dir, "engine-args"));

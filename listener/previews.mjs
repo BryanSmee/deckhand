@@ -38,7 +38,11 @@ export function createPreviews({
   let count = 0;
   mkdirSync(logDir, { recursive: true });
 
-  // `hook`: { command, image, timeoutMinutes }; `image`: what it runs in. Resolves to the
+  // A job that won't run: the checkout it came with goes.
+  const discard = (job) => job.dir && rmSync(job.dir, { recursive: true, force: true });
+
+  // `hook`: { command, image, timeoutMinutes }; `image`: what it runs in; `dir`: the checkout
+  // it runs in, when it comes with one (the runner's), else fetched at `ref`. Resolves to the
   // hook's exit code once it ran, or null when it was dropped or replaced.
   function run(job) {
     const { repo, event, payload } = job;
@@ -51,9 +55,11 @@ export function createPreviews({
       const [old] = queue.waiting.splice(replaced, 1);
       log(`${repo}: preview hook for ${about} ${old.entry.action ?? ""} replaced by a newer event`);
       hooks.delete(old.name);
+      discard(old.job);
       old.resolve(null);
     } else if (queue.waiting.length >= MAX_WAITING) {
       log(`${repo}: ${MAX_WAITING} preview hooks waiting already: ${event} dropped`);
+      discard(job);
       return Promise.resolve(null);
     }
     const name = `${config.prefix}-preview-${slug}-${now()}-${++count}`;
@@ -86,15 +92,17 @@ export function createPreviews({
       });
   }
 
-  async function start(name, entry, { repo, event, payload, ref, hook, image }) {
+  async function start(name, entry, job) {
+    const { repo, event, payload, ref, hook, image } = job;
     entry.state = "running";
     entry.since = now();
     const logFile = createWriteStream(join(logDir, `${name}.log`));
-    let dir = null;
+    // The runner's own checkout, the one its config was read from (../runner/hooks.mjs).
+    let dir = job.dir ?? null;
     let timer = null;
     try {
       if (!containers) throw new Error(refusal(config));
-      dir = await checkout(repo, ref);
+      dir ??= await checkout(repo, ref);
       await containers.create({
         name,
         repo,
@@ -126,20 +134,22 @@ export function createPreviews({
     return [...hooks].map(([name, h]) => ({ name, ...h }));
   }
 
-  // Whether the runner can run hooks at all: previewHook() asks before it builds or queues one.
-  return { run, status, runs: Boolean(containers) };
+  // Whether the runner can run hooks at all: previewHook() asks before it builds or queues one
+  // (the runner service's client asks the runner, ../runner/client.mjs).
+  return { run, status, runs: async () => Boolean(containers) };
 }
 
-// A delivery's preview hook (events.mjs previewEvent()), run when the repo's config has one
-// and the operator's grants allow it: it runs as root on the host. `ctx` (server.mjs): the
-// listener's state and services, `ctx.previews` the queue above.
+// A delivery's preview hook (events.mjs previewEvent()), asked of the runner when the repo's
+// config has one and the operator's grants allow it (skipped here, said in the log): it runs
+// as root on the host. `ctx` (server.mjs): the listener's state and services, `ctx.previews`
+// the runner's queue (../runner/client.mjs).
 export async function previewHook(ctx, { repo, base, event }, payload) {
   const { config, skip } = ctx;
   const { settings, errors } = await ctx.repoSettings(repo, base);
   if (errors.length) return skip(`${event}: ${CONFIG_FILE} of ${repo} has errors`);
   if (!settings.preview) return skip(`${event}: ${repo} has no preview hook`);
   // Before the image's build and the queue: neither helps a runner that can't run it.
-  if (!ctx.previews.runs) {
+  if (!(await ctx.previews.runs())) {
     return skip(`${event}: preview hook of ${repo} not run: ${refusal(config)}`);
   }
   // Root on the host: only when the operator's grants say so (grants.mjs).
@@ -153,8 +163,7 @@ export async function previewHook(ctx, { repo, base, event }, payload) {
   if (missing.length) {
     return skip(`${event}: preview hook of ${repo} not run: ${missing.join("; ")}`);
   }
-  const image =
-    settings.preview.image ??
-    (await ctx.images.imageFor({ repo, ref: base, dockerfile: settings.dockerfile }));
-  await ctx.previews.run({ repo, event, payload, ref: base, hook: settings.preview, image });
+  // The runner reads its command and image itself, from the default branch's config, and
+  // checks the grants again (../runner/hooks.mjs): it runs as root on the host.
+  await ctx.previews.run({ repo, event, payload });
 }

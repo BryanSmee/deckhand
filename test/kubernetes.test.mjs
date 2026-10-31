@@ -459,8 +459,29 @@ test("isolationProblem: any policy that widens what a sandbox may reach or what 
     { matchExpressions: [{ key: "deckhand.role", operator: "In", values: ["egress"] }] },
     { matchExpressions: [{ key: "app", operator: "Exists" }] },
   ]) {
-    const spec = { ...all, policyTypes: ["Egress"], egress: [{ to: [{ podSelector }] }] };
+    const spec = {
+      ...all,
+      policyTypes: ["Egress"],
+      egress: [{ to: [{ podSelector }], ports: [{ port: 8081 }] }],
+    };
     assert.equal(isolationProblem(add(spec), labels), null, JSON.stringify(podSelector));
+  }
+  // Their other ports (the listener's services port gives the runner's tokens): each rule names
+  // its ports, the proxy's and the broker's only.
+  const listener = { podSelector: { matchLabels: { app: "listener" } } };
+  for (const [ports, open] of [
+    [undefined, "every port"],
+    [[{ port: 8083 }], "port 8083"],
+    [[{ port: 8081, endPort: 8090 }], "port 8081"],
+    [[{ port: "http" }], "port http"],
+    [[{ protocol: "TCP" }], "every port"],
+    [[{ port: 8081 }, { protocol: "TCP" }], "every port"],
+  ]) {
+    const spec = { ...all, policyTypes: ["Egress"], egress: [{ to: [listener], ports }] };
+    assert.match(
+      isolationProblem(add(spec), labels),
+      new RegExp(`extra lets sandbox pods reach ${open} `),
+    );
   }
   const notApp = { matchExpressions: [{ key: "app", operator: "DoesNotExist" }] };
   assert.match(
@@ -679,6 +700,13 @@ test("list and state: this deployment's sandbox pods, Pending and Running as run
   assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
   assert.equal(await runner.state("dh-other"), "exited");
   assert.equal(await runner.state("dh-gone"), null);
+  // Its sandbox container's exit code, once it ended (the run events'): none while it runs.
+  assert.equal(await runner.exitCode("dh-other"), null);
+  objects.pods.get("dh-other").status.containerStatuses = [
+    { name: "sandbox", state: { terminated: { exitCode: 137 } } },
+  ];
+  assert.equal(await runner.exitCode("dh-other"), 137);
+  assert.equal(await runner.exitCode("dh-gone"), null);
   // The API failing isn't "none".
   const broken = setup(t, {
     fail: () => Response.json({ message: "etcd down" }, { status: 500 }),
@@ -1195,4 +1223,19 @@ test("follow: a log stream that outlives its pod is let go, the rest of the log 
   await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
   assert.deepEqual(err, ["one", "two"]);
   assert.ok(logged.some((l) => /its stream outlived the pod, reading the rest/.test(l)));
+});
+
+test("remove: never a pod or a Secret of the namespace that isn't this deployment's run's", async (t) => {
+  const { runner, objects } = setup(t);
+  // The namespace's own: a pod named like a sandbox, a Secret named like a run's.
+  objects.pods.set("myapp", { metadata: { name: "myapp", labels: { app: "myapp" } }, status: {} });
+  objects.secrets.set("myapp-1-env", { metadata: { name: "myapp-1-env", labels: {} } });
+  await runner.remove("myapp", "myapp-1");
+  assert.ok(objects.pods.has("myapp"));
+  assert.ok(objects.secrets.has("myapp-1-env"));
+  // Its own, as before.
+  await runner.start(spec());
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.equal(objects.pods.has("dh-org-repo-12-abc"), false);
+  assert.equal(objects.secrets.has("dh-org-repo-12-abc-1730000000-env"), false);
 });

@@ -4,11 +4,13 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import {
   aliasOf,
+  cliEnv,
   CLOSE,
   createDockerRunner,
   LINE_CUT,
@@ -16,8 +18,8 @@ import {
 } from "../listener/runner/docker.mjs";
 import { MAX_READ } from "../listener/runner/inbox.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { overlaps, parseCidr } from "../lib/subnets.mjs";
-import { tempDir } from "./helpers.mjs";
+import { parseCidr } from "../lib/subnets.mjs";
+import { fakeDocker, tempDir } from "./helpers.mjs";
 
 const SPEC = { user: SANDBOX_USER, limits: { cpus: "1", memory: "1g", pids: 256 } };
 
@@ -32,182 +34,6 @@ const config = {
   enginePodmanImage: "dh-engine-podman",
 };
 
-// A Docker that keeps networks and containers: `nets` maps a network to its containers,
-// `containers` a container to its run label and state. `answers`: canned answers by
-// subcommand (or a function of the arguments giving one, or nothing), over the fake's own.
-// `runtimes`: the host's Docker's (`docker info`). `volumes` maps a volume to its labels.
-// `subnets` maps a network to its subnet; `taken`: subnets Docker refuses as overlapping
-// though no network it lists has them (another project's, created meanwhile).
-function fakeDocker({ answers = {}, routeOut = false, runtimes = ["runc"], taken = [] } = {}) {
-  const nets = new Map();
-  const subnets = new Map();
-  const internal = new Set();
-  const volumes = new Map();
-  const containers = new Map([
-    ["me", { project: "deckhand", ip: "10.0.0.1" }],
-    ["egress-id", { project: "deckhand", ip: "10.0.0.3", role: "egress" }],
-  ]);
-  const ok = (out = "") => ({ code: 0, out, err: "" });
-  const missing = { code: 1, out: "", err: "No such object" };
-  const networksOf = (name) =>
-    Object.fromEntries(
-      [...nets]
-        .filter(([, on]) => on.has(name))
-        .map(([n]) => [n, { IPAddress: containers.get(name).ip }]),
-    );
-  const docker = async (args) => {
-    const key = ["network", "volume"].includes(args[0]) ? `${args[0]} ${args[1]}` : args[0];
-    const answer = typeof answers[key] === "function" ? answers[key](args) : answers[key];
-    if (answer) return answer;
-    const last = args.at(-1);
-    switch (key) {
-      case "network create":
-        if (nets.has(last)) return { code: 1, out: "", err: "already exists" };
-        if (args.includes("--subnet")) {
-          const subnet = args[args.indexOf("--subnet") + 1];
-          if ([...subnets.values(), ...taken].some((s) => overlaps(s, subnet))) {
-            return { code: 1, out: "", err: "Pool overlaps with other one on this address space" };
-          }
-          subnets.set(last, subnet);
-        }
-        nets.set(last, new Set());
-        if (args.includes("--internal") && !routeOut) internal.add(last);
-        return ok();
-      case "network inspect":
-        if (args.join(" ").includes("IPAM")) {
-          return ok(
-            args
-              .slice(4)
-              .filter((n) => nets.has(n))
-              .map((n) => (subnets.has(n) ? `${subnets.get(n)} ` : ""))
-              .join("\n"),
-          );
-        }
-        if (args.join(" ").includes("IPv4Address")) {
-          // Each run network's ID and its containers' addresses (networks.mjs locate()).
-          return ok(
-            args
-              .slice(4)
-              .filter((n) => nets.has(n))
-              .map((n) => {
-                const ips = [...nets.get(n)].map((c) => ` ${c}|${containers.get(c).ip}/24|`);
-                return `id-${n}${ips.join("")}`;
-              })
-              .join("\n"),
-          );
-        }
-        if (!nets.has(last)) return missing;
-        if (args[3] === "{{.Id}}") return ok(`id-${last}`);
-        return args.join(" ").includes("Containers")
-          ? ok([...nets.get(last)].map((c) => `${c} `).join(""))
-          : ok(String(internal.has(last)));
-      case "network connect":
-        if (!nets.has(args.at(-2))) return missing;
-        if (nets.get(args.at(-2)).has(last))
-          return { code: 1, out: "", err: "endpoint already exists" };
-        nets.get(args.at(-2)).add(last);
-        return ok();
-      case "network disconnect":
-        nets.get(args.at(-2))?.delete(last);
-        return ok();
-      case "network rm":
-        if (nets.get(last)?.size) return { code: 1, out: "", err: "has active endpoints" };
-        nets.delete(last);
-        subnets.delete(last);
-        return ok();
-      case "network ls":
-        if (args.includes("--quiet")) return ok([...nets.keys()].join("\n"));
-        return ok([...nets.keys()].filter((n) => n.startsWith("dh-")).join("\n"));
-      case "run": {
-        const name = args[args.indexOf("--name") + 1];
-        if (containers.has(name)) return { code: 125, out: "", err: "name already in use" };
-        const label = (key) => args.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
-        const net = args[args.indexOf("--network") + 1];
-        const volume = args.find((a) => a.startsWith("type=volume,src="))?.split(/[=,]/)[3];
-        const engine = label("deckhand.engine");
-        const ip = engine ? "10.1.0.3" : "10.1.0.2";
-        containers.set(name, { run: label("deckhand.run"), engine, volume, running: true, ip });
-        nets.get(net)?.add(name);
-        return ok();
-      }
-      case "stop":
-        if (!containers.has(last)) return missing;
-        containers.get(last).running = false;
-        return ok();
-      case "rm":
-        for (const on of nets.values()) on.delete(last);
-        containers.delete(last);
-        return ok();
-      case "info":
-        return ok(JSON.stringify(Object.fromEntries(runtimes.map((r) => [r, {}]))));
-      case "volume create":
-        if (!volumes.has(last)) {
-          const labels = args.filter((a, i) => args[i - 1] === "--label");
-          volumes.set(last, Object.fromEntries(labels.map((l) => l.split("="))));
-        }
-        return ok(last);
-      case "volume inspect":
-        return volumes.has(last) ? ok("[]") : missing;
-      case "volume rm":
-        if ([...containers.values()].some((c) => c.volume === last)) {
-          return { code: 1, out: "", err: "volume is in use" };
-        }
-        return volumes.delete(last) ? ok() : missing;
-      case "volume ls":
-        return ok(
-          [...volumes]
-            .filter(([, l]) => l["deckhand.engine"])
-            .map(([v, l]) => `${v}\t${l["deckhand.engine"]}`)
-            .join("\n"),
-        );
-      case "ps":
-        if (args.join(" ").includes("label=deckhand.engine")) {
-          return ok(
-            [...containers]
-              .filter(([, c]) => c.engine)
-              .map(([n, c]) => `${n}\t${c.engine}`)
-              .join("\n"),
-          );
-        }
-        if (args.some((a) => a.startsWith("volume="))) {
-          const volume = args.find((a) => a.startsWith("volume=")).slice("volume=".length);
-          return ok(
-            [...containers]
-              .filter(([, c]) => c.volume === volume)
-              .map(([n]) => n)
-              .join("\n"),
-          );
-        }
-        if (args.join(" ").includes("deckhand.role=egress")) {
-          return ok(
-            [...containers]
-              .filter(([, c]) => c.role === "egress")
-              .map(([n]) => n)
-              .join("\n"),
-          );
-        }
-        return ok(
-          [...containers]
-            .filter(([, c]) => c.run)
-            .map(([n, c]) => `${n}\t${c.run}\t${c.running ? "running" : "exited"}`)
-            .join("\n"),
-        );
-      case "inspect": {
-        const c = containers.get(last);
-        if (!c) return missing;
-        const format = args[2];
-        if (format.includes("compose.project")) return ok(c.project ?? "");
-        if (format.includes("deckhand.run")) return ok(c.run ?? "");
-        if (format.includes("State")) return ok(c.running ? "running" : "exited");
-        return ok(JSON.stringify(networksOf(last)));
-      }
-      default:
-        return ok();
-    }
-  };
-  return { docker, nets, subnets, internal, containers, volumes };
-}
-
 // `before(args)`: may hold a call back (a promise) before the fake answers it.
 function runner({
   answers = {},
@@ -219,6 +45,7 @@ function runner({
   now,
   before = () => {},
   engine = config.engine,
+  listener = config.listenerContainer,
 } = {}) {
   const calls = [];
   const fake = fakeDocker({ answers, routeOut, runtimes, taken });
@@ -229,7 +56,7 @@ function runner({
   };
   const inboxDir = tempDir(null, "deckhand-runs-");
   const runner = createDockerRunner({
-    config: { ...config, engine, subnets: subnets ?? null },
+    config: { ...config, engine, subnets: subnets ?? null, listenerContainer: listener },
     docker,
     spawn,
     inboxDir,
@@ -365,6 +192,25 @@ test("start: the run's own internal network, with the listener and the proxy on 
   // Two sandboxes never share a network.
   assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id", "me"]);
   assert.deepEqual([...nets.get("dh-b-1")].sort(), ["dh-b", "egress-id", "me"]);
+});
+
+test("start: without LISTENER_CONTAINER, the runner joins the one labelled as the broker, in its own project", async () => {
+  const { r, calls, nets, containers } = runner({ listener: "" });
+  // The runner's own container (its host name) says which compose project it is in.
+  containers.set(hostname(), { project: "deckhand", ip: "10.0.0.2" });
+  containers.set("listener-id", { project: "deckhand", ip: "10.0.0.4", role: "broker" });
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  assert.match(
+    calls.map((c) => c.args.join(" ")).join("\n"),
+    /^ps --filter label=deckhand\.role=broker --filter label=com\.docker\.compose\.project=deckhand/m,
+  );
+  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id", "listener-id"]);
+  // None labelled so: no run starts, saying what to set.
+  containers.delete("listener-id");
+  await assert.rejects(
+    r.start({ run: "dh-b-1", name: "dh-b", image: "i" }),
+    /the listener's container wasn't found \(0 labelled deckhand\.role=broker\): set LISTENER_CONTAINER/,
+  );
 });
 
 // SANDBOX_SUBNETS, as config.mjs gives it.
@@ -703,10 +549,11 @@ test("relink: a recreated listener and proxy join the running sandboxes' network
 });
 
 test("relink: networks whose run is gone are removed, not those of runs starting", async () => {
-  const { r, nets } = runner();
+  const { r, nets, netLabels } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   // Left by a listener that lost track of its run, and another deployment's.
   nets.set("dh-gone-1", new Set(["me", "egress-id"]));
+  netLabels.set("dh-gone-1", { "deckhand.owner": "dh", "deckhand.run": "dh-gone-1" });
   nets.set("other-1", new Set());
   // A run whose network exists, its sandbox not yet.
   let go;
@@ -978,7 +825,10 @@ test("start: the engine first, on the run's network as `engine`, then the sandbo
   assert.match(joined, /-e EGRESS_PROXY=http:\/\/egress:3128 /);
   assert.equal(engine.at(-1), "dh-engine");
   // Labelled as the run's engine, never as a sandbox: list() doesn't see it.
-  assert.match(joined, /--label deckhand\.engine=dh-a-1 --label deckhand\.task=org\/repo#1/);
+  assert.match(
+    joined,
+    /--label deckhand\.task=org\/repo#1 --label deckhand\.owner=dh --label deckhand\.engine=dh-a-1/,
+  );
   assert.doesNotMatch(joined, /deckhand\.run=/);
   assert.deepEqual(await r.list(), [{ name: "dh-a", run: "dh-a-1", running: true }]);
   // Never privileged, never the host's socket.
@@ -1122,7 +972,60 @@ test("relink: an engine of a run still starting stays", async () => {
 
 test("start: an engine a previous run of the task left behind goes first", async () => {
   const { r, containers } = runner();
-  containers.set("dh-a-engine", { engine: "dh-a-0", running: true });
+  containers.set("dh-a-engine", { owner: "dh", engine: "dh-a-0", running: true });
   await r.start(withEngine());
   assert.equal(containers.get("dh-a-engine").engine, "dh-a-1");
+});
+
+test("start: the docker CLI keeps its own loader and Docker variables, whatever the sandbox's", () => {
+  const env = cliEnv(
+    { TASK_PROMPT: "Do it", LD_PRELOAD: "/data/x.so", DOCKER_HOST: "tcp://evil:2375", PATH: "/x" },
+    { PATH: "/usr/bin", DOCKER_HOST: "unix:///var/run/docker.sock", HOME: "/root" },
+  );
+  assert.deepEqual(env, {
+    PATH: "/usr/bin",
+    DOCKER_HOST: "unix:///var/run/docker.sock",
+    HOME: "/root",
+    TASK_PROMPT: "Do it",
+  });
+});
+
+test("remove: only a run's network of this deployment, and a start removes only the one it made", async () => {
+  const { r, nets, calls } = runner();
+  // The host's own, and another run's of the same task whose name a start is given again.
+  nets.set("bridge", new Set(["db", "web"]));
+  await r.remove("dh-a", "bridge");
+  assert.deepEqual([...nets.get("bridge")].sort(), ["db", "web"]);
+  assert.ok(!calls.some((c) => c.args.join(" ").startsWith("network disconnect")));
+  await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
+  await assert.rejects(r.start({ run: "dh-a-1", name: "dh-b", image: "i" }), /wasn't created/);
+  assert.ok(nets.has("dh-a-1"));
+});
+
+test("remove: never a container or a volume of the host's that has a sandbox's or an engine's name", async () => {
+  const { r, containers, volumes, calls } = runner();
+  // The operator's own, named like a sandbox, its engine and that engine's volume.
+  containers.set("myapp", { running: true, ip: "10.0.0.8" });
+  containers.set("myapp-engine", { running: true, ip: "10.0.0.9" });
+  volumes.set("myapp-1-engine", {});
+  await r.remove("myapp", "myapp-1");
+  assert.ok(containers.has("myapp") && containers.has("myapp-engine"));
+  assert.ok(volumes.has("myapp-1-engine"));
+  assert.ok(
+    !calls.some((c) =>
+      ["rm", "volume rm"].includes(c.args.slice(0, c.args[0] === "volume" ? 2 : 1).join(" ")),
+    ),
+  );
+  // Another deployment's engine, or another run's of ours: left too.
+  containers.set("dh-b-engine", { owner: "other", engine: "dh-b-1", running: true });
+  containers.set("dh-c-engine", { owner: "dh", engine: "dh-c-0", running: true });
+  await r.remove("dh-b", "dh-b-1");
+  await r.remove("dh-c", "dh-c-1");
+  assert.ok(containers.has("dh-b-engine") && containers.has("dh-c-engine"));
+  // Its own, with its run's engine and volume: removed.
+  await r.start(withEngine());
+  assert.ok(containers.has("dh-a-engine"));
+  await r.remove("dh-a", "dh-a-1");
+  assert.ok(!containers.has("dh-a") && !containers.has("dh-a-engine"));
+  assert.ok(!volumes.has("dh-a-1-engine"));
 });

@@ -232,8 +232,8 @@ export function createBrokerHandler({
     if (req.method === "GET" && url.pathname === "/keys")
       return sendJson(res, await runs.publicKeys());
     if (req.method === "POST" && url.pathname === "/service-tokens") {
-      const caller = await callers.callerOf(req);
-      const { audiences } = (await readJsonBody(req, BODY_MAX)) ?? {};
+      const { audiences, service } = (await readJsonBody(req, BODY_MAX)) ?? {};
+      const caller = await callers.callerOf(req, typeof service === "string" ? service : null);
       const tokens = issueServiceTokens(
         caller,
         Array.isArray(audiences) ? audiences : [],

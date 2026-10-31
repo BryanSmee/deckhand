@@ -13,7 +13,7 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
-import { localBroker, tempDir } from "./helpers.mjs";
+import { fileLogs, localBroker, tempDir } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it.
 function saveRun(dir, id, issue, record) {
@@ -32,7 +32,7 @@ function saveRun(dir, id, issue, record) {
   return secret;
 }
 
-test("a restored run's calls go to its provider, or its agent's own when none was saved", (t) => {
+test("a restored run's calls go to its provider, or its agent's own when none was saved", async (t) => {
   const dir = tempDir(t);
   const broker = createBroker({});
   const ctx = {
@@ -42,7 +42,8 @@ test("a restored run's calls go to its provider, or its agent's own when none wa
     logDir: dir,
     runs: [],
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker,
     running: 0,
   };
@@ -53,7 +54,7 @@ test("a restored run's calls go to its provider, or its agent's own when none wa
   });
   const codex = saveRun(dir, "r2", 2, { agent: "codex" });
   const old = saveRun(dir, "r3", 3, {});
-  createRestart(ctx).restoreRuns();
+  await createRestart(ctx).restoreRuns();
   assert.equal(broker.runOf(fallback).provider, "openrouter");
   // Why the listener started it, for the policies, as before the restart.
   assert.equal(broker.runOf(fallback).reason, "review-fix");
@@ -76,12 +77,13 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
     logDir: dir,
     runs: [],
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker,
     running: 0,
   };
   const secret = saveRun(dir, "r1", 1, { agent: "claude" });
-  createRestart(ctx).restoreRuns();
+  await createRestart(ctx).restoreRuns();
   // What the git gateway calls once GitHub took a push.
   broker.runOf(secret).pushed({ branch: "issue-1-x", at: 1234 });
   const task = [...ctx.tasks.values()][0];
@@ -102,7 +104,8 @@ test("a restored run keeps the issues it created, the comments it posted and the
     logDir: dir,
     runs: [],
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker,
     running: 0,
   };
@@ -121,7 +124,7 @@ test("a restored run keeps the issues it created, the comments it posted and the
   );
   // Saved before runs kept them: none.
   const old = saveRun(dir, "r2", 2, { agent: "claude" });
-  createRestart(ctx).restoreRuns();
+  await createRestart(ctx).restoreRuns();
   const run = broker.runOf(secret);
   assert.deepEqual(run.created, [
     { number: 30, at: 5 },
@@ -163,7 +166,8 @@ test("a restored run keeps the network its tokens are bound to, and saves it aga
     logDir: dir,
     runs: [],
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker,
     running: 0,
   };
@@ -172,7 +176,7 @@ test("a restored run keeps the network its tokens are bound to, and saves it aga
   writeFileSync(join(dir, "r1.live.json"), JSON.stringify({ ...saved, sandbox: "net-1" }));
   // Saved before runs kept it: looked up when asked (broker-http.mjs sandboxOfTask()).
   const old = saveRun(dir, "r2", 2, { agent: "claude" });
-  createRestart(ctx).restoreRuns();
+  await createRestart(ctx).restoreRuns();
   const of = (s) => [...ctx.tasks.values()].find((task) => task.live.secret === s).live;
   assert.equal(of(secret).sandbox, "net-1");
   assert.equal(broker.runOf("r1").sandbox, "net-1");
@@ -229,7 +233,8 @@ function twoSpellings(t, { live, newest }) {
     logDir: dir,
     runs: loadRuns(dir, { log: () => {} }),
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker: createBroker({}),
     running: 0,
     store: fileStore(),
@@ -239,7 +244,7 @@ function twoSpellings(t, { live, newest }) {
 async function restarted(ctx, options) {
   const restart = createRestart(ctx);
   const spelled = options && (await restart.unifySpellings(options));
-  restart.restoreRuns();
+  await restart.restoreRuns();
   await restart.loadQueue();
   return spelled;
 }
@@ -365,7 +370,8 @@ test("a restored run keeps the phase its log is in, and saves it again", async (
     logDir: dir,
     runs: [],
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker: createBroker({}),
     running: 0,
   };
@@ -376,14 +382,14 @@ test("a restored run keeps the phase its log is in, and saves it again", async (
     JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), logPhase: "push" }),
   );
   const restart = createRestart(ctx);
-  const [task] = restart.restoreRuns();
+  const [task] = await restart.restoreRuns();
   assert.equal(task.live.logPhase, "push");
   task.live.logPhase = "work";
   await restart.saveLive(task);
   assert.equal(JSON.parse(readFileSync(path, "utf8")).logPhase, "work");
 });
 
-test("a restored run's record takes its log's phase: scheduled through a restart", (t) => {
+test("a restored run's record takes its log's phase: scheduled through a restart", async (t) => {
   const dir = tempDir(t);
   const ctx = {
     config: { dataDir: dir },
@@ -392,7 +398,8 @@ test("a restored run's record takes its log's phase: scheduled through a restart
     logDir: dir,
     runs: [],
     runsById: new Map(),
-    runner: { closed: () => false },
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
     broker: createBroker({}),
     running: 0,
   };
@@ -408,7 +415,7 @@ test("a restored run's record takes its log's phase: scheduled through a restart
   live("r3", 3, { agent: "claude", phase: null }, "setup");
   live("r4", 4, { agent: "claude", phase: "building image" }, "image");
   live("r5", 5, { agent: "claude", phase: null }, "work");
-  createRestart(ctx).restoreRuns();
+  await createRestart(ctx).restoreRuns();
   const states = board({ runs: ctx.runs, queued: [], brainstorms: [] });
   assert.deepEqual(Object.fromEntries(states.map((t) => [t.number, t.state])), {
     1: "scheduled",
@@ -480,7 +487,8 @@ test("across a restart, a run's tokens still check, and a run from before them k
       logDir: dir,
       runs: [],
       runsById: new Map(),
-      runner: { closed: () => false },
+      runner: { closed: async () => false },
+      runLogs: fileLogs(dir),
       broker,
       running: 0,
     };
@@ -513,7 +521,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
   await service.runs.end("new");
 
   const { broker, restart } = make();
-  restart.restoreRuns();
+  await restart.restoreRuns();
   // The token the sandbox holds is redacted at once, before it is renewed.
   assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
   // The broker service hears the run goes on, with its claims: its token renews there, from
@@ -536,6 +544,36 @@ test("across a restart, a run's tokens still check, and a run from before them k
   assert.equal(await service.runs.get("old"), null);
 });
 
+test("a runner slow to say whether a restored run's inbox is open: the start goes on, the run takes comments once it says", async (t) => {
+  const dir = tempDir(t);
+  let answer;
+  const asked = new Promise((resolve) => (answer = resolve));
+  const delivered = [];
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: () => asked },
+    runLogs: fileLogs(dir),
+    broker: createBroker({}),
+    running: 0,
+    deliverLater: (task) => delivered.push(task.live.id),
+  };
+  saveRun(dir, "r1", 1, { agent: "claude" });
+  const started = Date.now();
+  const [task] = await createRestart(ctx).restoreRuns({ waitMs: 30 });
+  assert.ok(Date.now() - started < 1000);
+  // Not known yet: no comment goes to it meanwhile.
+  assert.equal(task.live.open, false);
+  answer(false);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(task.live.open, true);
+  assert.deepEqual(delivered, ["r1"]);
+});
+
 // A listener's context for the queue's tests: its tasks (tasks.mjs) and restart.mjs on `store`,
 // with a pause of a minute (`debounceMs`). `startLater` records what is re-armed rather than
 // arming it, unless `real`.
@@ -551,6 +589,7 @@ function queueContext(t, dir, store, { real = false } = {}) {
     track: () => {},
     settle: async () => {},
     received: () => {},
+    runLogs: fileLogs(dir),
     store,
   };
   Object.assign(ctx, createTasks(ctx), createRestart(ctx));
@@ -642,7 +681,7 @@ test("a comment both in the queue and in a run's saved state is the run's alone"
   const ctx = queueContext(t, dir, store);
   ctx.broker = createBroker({});
   ctx.runner = { closed: () => false };
-  ctx.restoreRuns();
+  await ctx.restoreRuns();
   await ctx.loadQueue();
   const task = ctx.tasks.get("org/repo#1");
   assert.equal(task.live.handled.length, 1);
@@ -791,7 +830,7 @@ test("a restored run whose sandbox never started: its comments in the queue befo
   ctx.shotsDir = dir;
   Object.assign(ctx, { teardown: createRuns(ctx).teardown });
   const writes = recordingWrites(store, livePath);
-  await ctx.reattach(ctx.restoreRuns());
+  await ctx.reattach(await ctx.restoreRuns());
   assert.throws(() => readFileSync(livePath), { code: "ENOENT" });
   // The last write while its state was there already had the comment back: never in neither.
   const last = writes.findLast((w) => w.live);
@@ -1032,7 +1071,7 @@ test("a run's end the queue couldn't be written for: over, its put-back comments
   const next = queueContext(t, dir, store);
   next.broker = createBroker({});
   next.runner = { closed: () => false };
-  assert.deepEqual(next.restoreRuns(), []);
+  assert.deepEqual(await next.restoreRuns(), []);
   down.on = false;
   await next.loadQueue();
   assert.deepEqual(next.armed, [["1", undefined]]);

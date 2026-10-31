@@ -22,20 +22,31 @@ export { POD_TOKEN_HEADER };
 
 const ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
-// SERVICE_ACCOUNTS → username (`system:serviceaccount:<namespace>:<name>`) → service.
+// SERVICE_ACCOUNTS → username (`system:serviceaccount:<namespace>:<name>`) → the services it
+// may be. Services that still run in one pod (the listener's, until #506) share its account:
+// "edge+orchestrator+models=deckhand:deckhand-listener", as networkCallers() takes them.
 export function accountCallers(text) {
   const accounts = new Map();
   for (const part of String(text ?? "")
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean)) {
-    const match = /^([\w-]+)=([a-z0-9.-]+):([a-z0-9.-]+)$/.exec(part);
-    if (!match || !SERVICES.includes(match[1])) {
+    const match = /^([\w+-]+)=([a-z0-9.-]+):([a-z0-9.-]+)$/.exec(part);
+    const services = match ? match[1].split("+") : [];
+    if (!match || !services.every((service) => SERVICES.includes(service))) {
       throw new Error(`SERVICE_ACCOUNTS: expected service=namespace:name, got ${part}`);
     }
-    accounts.set(`system:serviceaccount:${match[2]}:${match[3]}`, match[1]);
+    accounts.set(`system:serviceaccount:${match[2]}:${match[3]}`, services);
   }
   return accounts;
+}
+
+// The one of `proven` (the services a network or an account may be) that a request is: the
+// only one, or the one it names (`wanted`) among them. Never one it names alone.
+function oneOf(proven, wanted) {
+  if (!proven?.length) return null;
+  if (proven.length === 1 && (wanted == null || wanted === proven[0])) return proven[0];
+  return proven.includes(wanted) ? wanted : null;
 }
 
 // The API server's TokenReview, with the broker's own service account: → the token's
@@ -86,7 +97,7 @@ export function inClusterReview({ host, port, account = ACCOUNT, read = readFile
     });
 }
 
-// → (req) → the calling service, or null. `networks`: SERVICE_NETWORKS; `accounts`:
+// → { bound, callerOf(req, wanted) → the calling service, or null }. `networks`: SERVICE_NETWORKS; `accounts`:
 // SERVICE_ACCOUNTS, with `review` (inClusterReview()'s).
 export function createCallers({ networks, accounts, review }) {
   const byNetwork = networks ? networkCallers(networks) : null;
@@ -100,12 +111,14 @@ export function createCallers({ networks, accounts, review }) {
     // What serviceGuard() checks the network of each call against: on Kubernetes,
     // NetworkPolicies do it.
     bound: byNetwork,
-    async callerOf(req) {
-      if (byNetwork) return byNetwork(req.socket.localAddress);
+    // `wanted`: the service the request says it is (its body's `service`), needed where more
+    // than one share a network or an account.
+    async callerOf(req, wanted = null) {
+      if (byNetwork) return oneOf(byNetwork(req.socket.localAddress), wanted);
       const token = req.headers[POD_TOKEN_HEADER];
       if (typeof token !== "string" || !token) return null;
       const username = await review(token);
-      return (username && byAccount.get(username)) ?? null;
+      return oneOf(username ? byAccount.get(username) : null, wanted);
     },
   };
 }

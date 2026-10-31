@@ -412,6 +412,65 @@ now that the sandbox never sees them. Anything shaped like a GitHub token (`ghs_
 wherever it came from: a token a restarted listener no longer lists, or one the agent found
 elsewhere.
 
+### The runner service
+
+The host's Docker socket is root on the host, and the Kubernetes API's credentials can start
+any pod in the runner's namespace: only the runner service holds either (`runner/`, #503,
+[architecture.md](architecture.md#the-runner-service)). The listener, which the internet reaches
+(webhooks, the dashboard), has neither: a hole in it no longer gives the host. What the runner
+does, it does for its callers, each endpoint naming which (`runner/service.mjs` `ROUTES`, checked
+with their service tokens first, below):
+
+| Caller       | May                                                                                                                                         |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; queue preview hooks; write and remove logs |
+| edge         | read a run's log (the dashboard's live view)                                                                                                |
+| broker       | ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent; read a run's inbox and files                   |
+| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                     |
+
+None can act on a container or a network that isn't one of this deployment's runs: the runner
+stops, follows and removes only the sandboxes it lists by their labels (`deckhand.owner`,
+`deckhand.run`), their engines, volumes, pods and Secrets only when their own labels say they are
+that run's, a sandbox's run must be its own (`<name>-<ms>`), and a network goes only when its
+labels say it is that run's (a start removes only the one it made). None can name a container's
+image, mounts or capabilities beyond a sandbox spec
+(`listener/sandbox-spec.mjs`), which the runner turns into Docker's options as it did in the
+listener: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
+checks the spec again first, against the grants folder it reads itself (`runner/spec-check.mjs`):
+the sandbox's user, no capability, the base image or the run's repository's own, the task's own
+sandbox name (from its `deckhand.task`) and exactly its session volumes, the agents' volumes
+read-only and the repository's own caches, plain volume names and paths (nothing Docker would
+read as another option), host paths resolved again (`..`, symlinks, in its own filesystem: mount
+each granted root on the runner too) inside a root granted to that repository, read-only unless
+granted read-write, an engine only with `allow_docker`, the operator's limits for the repository
+(its engine's too), its task's label only, and no environment variable that would change what
+its own docker CLI does (`LD_*`, `DOCKER_*`, `SSL_CERT_*`, `PATH`…: one list, which the CLI keeps
+its own values for, `listener/runner/docker.mjs` `cliName()`). A cache volume is prepared (as
+root, to hand it to the sandbox's user) only in the base image or the repository's own, at plain
+paths. A repo image builds only with `allow_dockerfile` (a branch's with
+`allow_branch_docker_images`), from what the runner decides: the default branch's files unless a
+branch's is asked and granted, the Dockerfile's blob as the github service says it (`GET
+/blobs/…`), the hosts the grants give;
+and a preview hook, which runs as root with the socket, only with `allow_preview`: the runner
+reads its command and image itself, from the repository's default branch's config in its own
+checkout, and runs it in that checkout, never from the orchestrator's call (`runner/hooks.mjs`). A compromised listener can
+still start a run (it is the orchestrator until #506), never one that is root on the host. The runner holds no GitHub credential: a
+build's context and a preview hook start from the repository's tarball, which it gets from the
+github service (the listener's services port, `GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
+blob id, `GET /blobs/…`, the runner's only routes there, for an allowed repository, its names,
+path and ref checked before they make an API path), and a run's first tokens come from the
+orchestrator (`POST /runs/<run>/tokens`, only while that run starts), which has the broker sign
+them with its own claims: the runner can't choose what a run's tokens allow. Every orchestrator call carries its
+fencing epoch: an older one than the newest the runner saw is refused (`409`).
+
+On Docker, the runner and the listener share one internal network (`runner` in `compose.yaml`,
+`RUNNER_SUBNET`), which nothing else is on and which has no way out; the runner is on no other.
+Each tells its caller by the subnet a call arrives on (`SERVICE_NETWORKS`): the runner takes the
+listener's three services there (edge, the orchestrator, models), the listener's services port the
+runner alone. The runner has one more network, to the broker service alone (`broker-runner`): its
+own service tokens, the runs' inboxes and files it copies there. It checks its callers' tokens
+with the broker's public keys (the `service-keys` volume, read-only).
+
 ### Service tokens
 
 Once the listener is split into services (#499, [services.md](services.md)), each one calls
@@ -470,19 +529,23 @@ the agents' endpoints move out of the listener (#502, #504), the listener joins 
 networks too, for the endpoints sandboxes call directly (the agents' APIs, pushes).
 
 **The broker's table** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
-the stream and the screenshots it copies; the runner a run's first tokens and its inbox and
-files; the proxy the sandboxes' calls about their own run. The listener holds the orchestrator
-and the runner until they move out (#503, #506) and calls as the orchestrator, which the
-runner's endpoints, and the sandboxes' (for the calls it relays), take meanwhile. Edge and the
-other services get their own service tokens there and nothing else.
+the stream and the screenshots it copies; a run's first tokens, which it asks for when the runner
+asks it (their claims are the orchestrator's, never the runner's); the runner the runs' inboxes
+and files it copies there; the proxy the sandboxes' calls about their own run. The listener holds
+the orchestrator until it moves out (#506) and calls as it; the runner's endpoints still take the
+orchestrator too (a listener from before the runner service copies the inboxes during an
+update), and so do the sandboxes' (for the calls it relays). Edge, models and the other services
+get their own service tokens there and nothing else.
 
-The policy service is the first to have moved out (#501): with Docker Compose it is on one
-network, `policy`, internal (no way out) and shared with the listener alone. A call can only
+The runner is on one network, `runner`, internal and shared with the listener alone, with a
+fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)).
+The policy service (#501), with Docker Compose, is on another, `policy`, internal (no way out)
+and shared with the listener alone too. A call can only
 come from the listener there, so it doesn't set `SERVICE_NETWORKS`: that comes with a second
 caller's network, when the github service moves out (#502). The listener's service tokens come
 from the broker service, as the orchestrator's, and the broker publishes the public key the
-policy service checks them with (`SERVICE_KEYS_DIR`, the `service-keys` volume, which only the
-broker writes).
+policy service and the runner check them with (`SERVICE_KEYS_DIR`, the `service-keys` volume,
+which only the broker writes).
 
 To check it by hand, from inside a running sandbox (`docker exec -it <sandbox> sh`), for each
 service (`<service>:<port>`, as `compose.yaml` names them):
@@ -1470,11 +1533,23 @@ neither is the listener's.
 at) are account-wide logins the listener rewrites at each refresh. Keep it out of git and
 readable by root alone, like `.env`.
 
-Run logs (`logs/<run>.log`) have the operator's credentials, the run's tokens and its GitHub
-tokens redacted (see
-[The Claude credential](#the-claude-credential)). Their summaries (`logs/<run>.json`) hold
-what the log's first line does, the run's comments included, and its screenshots' folder.
-Both, and the screenshots, go after `LOG_RETENTION_DAYS` (90 by default).
+Run logs, which the runner keeps in its own volume ([The runner's data](#the-runners-data)),
+have the operator's credentials, the run's tokens and its GitHub tokens redacted (see
+[The Claude credential](#the-claude-credential)): the listener redacts each line before it
+sends it. Their summaries (`logs/<run>.json`, the listener's) hold what the log's first line
+does, the run's comments included, and its screenshots' folder. Both, and the screenshots, go
+after `LOG_RETENTION_DAYS` (90 by default).
+
+`store/` holds the listener's fencing epoch (nothing secret, [The runner
+service](#the-runner-service)).
+
+### The runner's data
+
+The runner's volume (`runner-data`, its `/data`) holds its store: the runs' logs (redacted as
+above), their events, the newest orchestrator epoch it saw and its lease; nothing that signs or
+opens anything. The `runs` volume holds each run's inbox (the comments it got, their authors'
+text), the egress proxy's CA certificate and a run analysis's digest. Whoever reads them reads
+what the dashboard shows of the runs.
 
 ## The dashboard's actions
 
@@ -1609,12 +1684,13 @@ The containers the listener starts around runs get the same treatment where they
 Claude Code install runs as root with only `CHOWN` (to take over an older volume); the one
 that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
-The Docker socket stays in the listener (and in preview hooks, which a repo's maintainers
-configure and only run with `allow_preview` in its grants file, see
-[Per-repo config](repo-config.md#preview-hook)). No sandbox gets it, nor does a container
-engine. Image builds only run for repositories granted `allow_dockerfile`.
+The Docker socket is the runner service's alone ([The runner service](#the-runner-service)),
+and preview hooks', which a repo's maintainers configure and only run with `allow_preview` in
+its grants file (see [Per-repo config](repo-config.md#preview-hook)). Neither the listener, nor
+any sandbox, nor a container engine gets it. Image builds only run for repositories granted
+`allow_dockerfile`.
 
-**Optional: a socket proxy.** The listener only uses the docker CLI, so it can talk to a
+**Optional: a socket proxy.** The runner only uses the docker CLI, so it can talk to a
 socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST` instead of
 the socket itself. It needs: `CONTAINERS`, `IMAGES`, `BUILD`, `VOLUMES`, `NETWORKS`, `POST`
 and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`, `image ls/rm`,

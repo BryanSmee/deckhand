@@ -1,6 +1,6 @@
-// Every environment variable the listener, the policy service, the egress proxy and the broker
-// read is in docs/setup.md: a setting nobody can find is one nobody can change. Every setting config.yaml takes is in
-// compose.yaml too, which passes .env's value.
+// Every environment variable the listener, the runner, the policy service, the egress proxy and
+// the broker read is in docs/setup.md: a setting nobody can find is one nobody can change. Every
+// setting config.yaml takes is in compose.yaml too, which passes .env's value.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ function settingsRead() {
   const names = new Set(Object.keys(SETTINGS));
   for (const source of [
     ...sources("listener"),
+    ...sources("runner"),
     ...sources("proxy"),
     ...sources("policy-service"),
     ...sources("broker"),
@@ -44,7 +45,7 @@ test("the listener, the policy service and the proxy read settings that the scan
   }
 });
 
-test("docs/setup.md documents every setting the listener, the policy service and the proxy read", () => {
+test("docs/setup.md documents every setting the listener, the runner, the policy service, the proxy and the broker read", () => {
   const doc = readFileSync(join(root, "docs/setup.md"), "utf8");
   const missing = settingsRead().filter((name) => !doc.includes(`\`${name}\``));
   assert.deepEqual(missing, [], `not in docs/setup.md: ${missing.join(", ")}`);

@@ -42,15 +42,15 @@ export function createBackend({
   };
 }
 
-// The API with the listener's ServiceAccount: a listener outside the cluster (or without a
-// token, automountServiceAccountToken: false) stops at start, saying so.
+// The API with the runner's ServiceAccount: a runner outside the cluster (or without a token,
+// automountServiceAccountToken: false) stops at start, saying so.
 function inCluster(config, readNamespace) {
   try {
     return createKubeApi({ namespace: config.kubernetes.namespace || readNamespace() });
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     throw new ConfigError(
-      `RUNNER: kubernetes, but there is no ServiceAccount at ${SERVICE_ACCOUNT} (${error.path}): the listener runs in the cluster, with its ServiceAccount's token mounted (docs/setup.md, Kubernetes runner)`,
+      `RUNNER: kubernetes, but there is no ServiceAccount at ${SERVICE_ACCOUNT} (${error.path}): the runner runs in the cluster, with its ServiceAccount's token mounted (docs/setup.md, Kubernetes runner)`,
     );
   }
 }
