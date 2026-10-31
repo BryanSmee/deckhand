@@ -261,8 +261,8 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-runner:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping ends the output streams it serves (the listener follows again from the next
-    # runner), lets its other calls finish (an image's build), then releases its lease.
-    # Sandboxes keep running.
+    # runner), lets its other calls finish (an image's build), then releases its lease, and lets
+    # the preview hooks running end (cut past the grace period). Sandboxes keep running.
     stop_grace_period: 5m
     # The listener's, and its own to the broker service (its tokens, the runs' inboxes and files).
     networks: [runner, broker-runner]

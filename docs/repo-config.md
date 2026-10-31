@@ -841,9 +841,10 @@ replaces it, so the hook may not see every event: have it bring the preview to t
 event describes (open, updated, closed) rather than react to each action. A hook is **busy** for as
 long as its command runs: the listener's `/status` lists it and isn't idle meanwhile, so a
 restart that waits for it doesn't cut a deployment short. The runner, stopping for an update,
-lets a running hook finish within its grace period (`DRAIN_SECONDS`, 280 s by default) and
-drops the hooks still waiting, saying so in its log: the next event for that pull request or
-workflow run runs the hook again. A hook that starts something
+lets a running hook finish within its grace period (`DRAIN_SECONDS`, 280 s by default), then
+stops and removes it, and drops the hooks still waiting, saying so in its log: the next event
+for that pull request or workflow run runs the hook again. Its other copy takes events
+meanwhile, so a repository's next hook may start before that last one ends. A hook that starts something
 should wait until it is up before exiting. Its output is kept in the runner's volume
 (`runner-data`), under `previews/`.
 

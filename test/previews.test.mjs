@@ -188,6 +188,31 @@ test("drain: the running hook finishes, those waiting and those queued after are
   assert.deepEqual(previews.status(), []);
 });
 
+test("cut: a hook still running is killed, then removed: none left behind", async () => {
+  const logs = [];
+  const { previews, calls, release } = setup({ log: (line) => logs.push(line) });
+  const done = previews.run({
+    repo: "org/a",
+    event: "pull_request",
+    payload: { action: "opened", pull_request: { number: 1 } },
+    ref: "trunk",
+    hook,
+    image: "x",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const [name] = previews.status().map((h) => h.name);
+  // The fake's `docker start` ends once the container is killed, as Docker's does.
+  const cutting = previews.cut();
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.ok(calls.some((c) => c[0] === "kill" && c[1] === name));
+  release();
+  await cutting;
+  await done;
+  assert.ok(calls.some((c) => c[0] === "rm" && c.at(-1) === name));
+  assert.match(logs.join("\n"), /cut: the runner is stopping/);
+  assert.deepEqual(previews.status(), []);
+});
+
 test("a runner without preview containers refuses the hook: nothing runs", async () => {
   const logs = [];
   let checkouts = 0;

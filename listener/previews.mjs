@@ -123,6 +123,26 @@ export function createPreviews({
     return Promise.all([...running]).then(() => {});
   }
 
+  // The grace period over with hooks still running: each container killed, then removed (its
+  // run's `finally`), within `waitMs`. Not left behind as root with the socket, with no timer
+  // and no copy that knows of it.
+  async function cut({ waitMs = 10_000 } = {}) {
+    const names = [...hooks].filter(([, h]) => h.state === "running").map(([name]) => name);
+    if (!names.length || !containers) return;
+    for (const name of names)
+      log(`${hooks.get(name).repo}: preview hook ${name} cut: the runner is stopping`);
+    await Promise.all(names.map((name) => containers.kill(name)));
+    let timer;
+    await Promise.race([
+      Promise.all([...running]),
+      new Promise((resolve) => {
+        timer = setTimeout(resolve, waitMs);
+        timer.unref?.();
+      }),
+    ]);
+    clearTimeout(timer);
+  }
+
   async function start(name, entry, job) {
     const { repo, event, payload, ref, hook, image } = job;
     entry.state = "running";
@@ -167,7 +187,7 @@ export function createPreviews({
 
   // Whether the runner can run hooks at all: previewHook() asks before it builds or queues one
   // (the runner service's client asks the runner, ../runner/client.mjs).
-  return { run, status, drain, runs: async () => Boolean(containers) };
+  return { run, status, drain, cut, runs: async () => Boolean(containers) };
 }
 
 // A delivery's preview hook (events.mjs previewEvent()), asked of the runner when the repo's

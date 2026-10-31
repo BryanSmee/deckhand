@@ -646,25 +646,30 @@ export function createRunnerService({
       watching = null;
     },
     // SIGTERM: output streams end now (their callers follow again, from the next copy), the
-    // other calls finish, and so do the preview hooks running (those waiting are dropped,
-    // logged: previews.mjs drain()), within `graceMs`; then the lease goes to the other copy.
+    // other calls finish, then the lease goes to the other copy at once: a preview hook needs
+    // none. The hooks running still end here, within what is left of `graceMs`, and are cut
+    // (killed, removed) past it; those waiting are dropped, logged (previews.mjs drain()).
     async stop({ graceMs = DRAIN_MS } = {}) {
       stopping = true;
+      const deadline = now() + graceMs;
       clearInterval(watching);
       for (const res of streams) res.destroy();
-      let timer;
-      const late = new Promise((resolve) => {
-        timer = setTimeout(() => resolve(false), graceMs);
-        timer.unref?.();
-      });
       const hooks = Promise.resolve(previews.drain?.()).then(() => true);
-      const [calls, ran] = await Promise.all([
-        drain(server, { graceMs }),
-        Promise.race([hooks, late]),
+      const calls = await drain(server, { graceMs });
+      await lease.stop();
+      let timer;
+      const ran = await Promise.race([
+        hooks,
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, deadline - now()));
+          timer.unref?.();
+        }),
       ]);
       clearTimeout(timer);
-      if (!ran) log("Stopping: a preview hook still running at the end of the grace period, cut");
-      await lease.stop();
+      if (!ran) {
+        log("Stopping: a preview hook still running at the end of the grace period, cut");
+        await previews.cut?.();
+      }
       return calls && ran;
     },
   };

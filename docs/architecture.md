@@ -975,9 +975,10 @@ a network of its own (`broker-runner`), and checks its callers' with the broker'
 store answers; the other answers `503` (and `/ready` says so, the readiness probe's), which
 callers try again on the next copy (`lib/service-client.mjs`). On SIGTERM the active copy ends
 the output streams and log reads it serves (their callers come back), lets its other calls
-finish (an image's build) and the preview hooks running end, within its grace period, drops
-those waiting (logged: their queue is the process's), then releases the lease, and the waiting copy takes it at once (it
-asks every 250 ms). On a crash, or a store that no longer answers it, the lease expires
+finish (an image's build), drops the preview hooks waiting (logged: their queue is the
+process's), then releases the lease, and the waiting copy takes it at once (it asks every
+250 ms). The preview hooks running need no lease: the stopped copy lets them end within what
+is left of its grace period, then kills and removes those still running. On a crash, or a store that no longer answers it, the lease expires
 (15 s) and the other copy takes over; the stopped one, by its own clock, no longer acts. Either
 copy finds the sandboxes again by their labels, and the logs and events in the store: the file
 store for one node, Redis for copies on several (`STORE_URL`, docs/setup.md, The store). The

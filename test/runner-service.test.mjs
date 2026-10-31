@@ -882,8 +882,9 @@ test("logs: the same append through two copies at once is written once", async (
   assert.equal((await store.readBlob(`logs/${id}`)).toString(), "one line\n");
 });
 
-// An update stops a copy: a preview hook running isn't cut, its lease goes once it ends.
-test("stop: the preview hooks running end before the lease goes to the other copy", async (t) => {
+// An update stops a copy: its lease goes once its calls are done, so the other copy acts at once;
+// a preview hook running, which needs no lease, still ends there, and is cut past the grace.
+test("stop: the lease goes at once, the preview hooks running end after it or are cut", async (t) => {
   const store = fileStore();
   const backend = host();
   let release;
@@ -892,23 +893,27 @@ test("stop: the preview hooks running end before the lease goes to the other cop
   const a = await copy(t, {
     store,
     backend,
-    previews: { drain: () => (drained++, running) },
+    previews: { drain: () => (drained++, running), cut: async () => assert.fail("not cut") },
   });
   const b = await copy(t, { store, backend });
   let stopped = false;
   const stopping = a.service.stop({ graceMs: 5000 }).then((all) => ((stopped = true), all));
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await until(() => b.lease.active(), "the other copy's lease, while the hook runs");
   assert.equal(drained, 1);
-  assert.equal(stopped, false, "waits for the hook");
-  assert.equal(b.lease.active(), false);
+  assert.equal(stopped, false, "the hook is waited for");
   release();
   assert.equal(await stopping, true);
-  await until(() => b.lease.active(), "the other copy's lease");
   // One still running at the end of the grace: cut, and said.
-  const c = await copy(t, { store, backend, previews: { drain: () => new Promise(() => {}) } });
+  let cut = 0;
+  const c = await copy(t, {
+    store,
+    backend,
+    previews: { drain: () => new Promise(() => {}), cut: async () => cut++ },
+  });
   await b.service.stop({ graceMs: 10 });
   await until(() => c.lease.active(), "the third copy's lease");
   assert.equal(await c.service.stop({ graceMs: 20 }), false);
+  assert.equal(cut, 1);
 });
 
 // A push between the Dockerfile's lookup and the download of the files: planned again, once.
