@@ -21,7 +21,6 @@
 // its sandbox by address (sentBy()), until they end: that path goes in a later release
 // (docs/architecture.md, Restarts).
 import { createHash, randomBytes } from "node:crypto";
-import { NO_TOKEN } from "./github-app.mjs";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 
 // What a run's token or secret sent from elsewhere than its sandbox gets.
@@ -91,7 +90,7 @@ export function createBroker({
   now = Date.now,
   random = () => randomBytes(32).toString("hex"),
 }) {
-  // id → { id, repo, extra, push, mode, branches, sandbox, issued, provider, credential, note,
+  // id → { id, repo, push, mode, branches, sandbox, issued, provider, credential, note,
   // pushed, apiStatus, apiReset, apiError, tokens }: `id`, the run's (its tokens' `jti`),
   // `sandbox`, the network or pod its tokens are bound to (issue()), `agentToken` and `issued`,
   // its agent's token and its run tokens still valid ({ token, exp, at }), the newest last
@@ -108,8 +107,9 @@ export function createBroker({
   // hash(secret) → the same entry, for a run from before tokens (register()'s `secret`).
   const secrets = new Map();
 
-  // `extra`: permissions this run's GitHub calls get beyond or instead of the sandbox's usual
-  // ones, or NO_TOKEN (github-app.mjs): none at all, for a research run on the open internet.
+  // What its token reads is its capabilities' (`caps`, github-app.mjs readsOf()); each write
+  // the GitHub gateway checked gets the one permission it needs besides (github-writes.mjs
+  // writePermissions()).
   // `push`: whether it may push and change its pull requests, which only work runs do (light
   // runs' pushes would run in the issue's next work run). Decided by the kind of run, not
   // its token: fail closed. `mode`: the run's (modes.mjs), for what the GitHub gateway refuses
@@ -129,7 +129,6 @@ export function createBroker({
   // run's id, or its secret.
   function register(
     repo,
-    extra,
     {
       push = false,
       mode = null,
@@ -149,7 +148,6 @@ export function createBroker({
     const run = {
       id: id ?? random(),
       repo: repo.toLowerCase(),
-      extra,
       push: push === true,
       mode,
       issue: Number.isInteger(issue) ? issue : null,
@@ -161,8 +159,9 @@ export function createBroker({
       branches: [],
       fork: false,
       // Its capabilities (capabilities.mjs), once its start decided them (grant()); a restarted
-      // run's as saved, none for one saved before capabilities (its token as its mode gave it).
+      // run's as saved (restart.mjs). None until then: its token reads nothing, nor clones.
       caps: [],
+      decided: false,
       sandbox: typeof sandbox === "string" && sandbox ? sandbox : null,
       issued: (Array.isArray(issued) ? issued : [])
         .filter(isToken)
@@ -233,11 +232,12 @@ export function createBroker({
     if (run) withCaps(run, caps);
   }
 
-  // A run without `pull` gets no GitHub token at all (NO_TOKEN), whatever its mode's permissions:
-  // its token's reads would reach the code (#497 maps the rest to the token).
+  // What its token reads follows them (github-app.mjs readsOf()), and a run without `pull` gets
+  // nothing from GitHub at all (github-gateway.mjs).
+  // `decided`: whether they are (a run before grant() has none yet, which says nothing of them).
   function withCaps(run, caps) {
     run.caps = caps.filter((c) => typeof c === "string");
-    if (!run.caps.includes("pull")) run.extra = NO_TOKEN;
+    run.decided = true;
   }
 
   // What the broker service is told of the run: what its tokens claim, the network or pod they

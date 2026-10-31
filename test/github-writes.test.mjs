@@ -642,7 +642,17 @@ const GITHUB = {
 };
 function run(mode, { push = mode === "work", issue = 1, branches = ["issue-1-*"] } = {}) {
   const branch = push ? branches : [];
-  return { repo: "org/repo", mode, push, issue, base: "main", branches: branch, created: [] };
+  // With its default reads: every issue (a run without them: issue #497's tests).
+  return {
+    repo: "org/repo",
+    mode,
+    push,
+    issue,
+    base: "main",
+    branches: branch,
+    created: [],
+    caps: ["pull", "read:issues", "read:pulls"],
+  };
 }
 
 const write = (method, path, body = {}) => ({ method, path, body: json(body) });
@@ -2283,7 +2293,12 @@ test("a rerun through the gateway: its installation's Actions permission named f
     wroteWrite: checks.answered,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
-  const secret = broker.register("org/repo", undefined, { mode: "work", push: true, issue: 1 });
+  const secret = broker.register("org/repo", {
+    mode: "work",
+    push: true,
+    issue: 1,
+    caps: ["pull", "read:issues", "read:pulls", "read:actions"],
+  });
   broker.allow(secret, ["issue-1-*"]);
   const rerun = () =>
     fetch(`${url}/relay/127.0.0.1/repos/org/repo/actions/runs/100/rerun-failed-jobs`, {
@@ -2477,7 +2492,12 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
     }).check,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
-  const secret = broker.register("org/repo", undefined, { mode: "work", push: true, issue: 1 });
+  const secret = broker.register("org/repo", {
+    mode: "work",
+    push: true,
+    issue: 1,
+    caps: ["pull", "read:issues", "read:pulls", "read:actions"],
+  });
   const notes = [];
   broker.provide(secret, "anthropic", (line) => notes.push(line));
   const post = (path, body) =>
@@ -3272,3 +3292,80 @@ deny_github contains "only work runs answer review threads" if {
     assert.match((await open.check(work, replyTo(8, 43))).message, /`reply` on `pr`/);
   },
 );
+
+test("without read:issues: a sub-issue gets a comment or a reaction, not a write GitHub answers with it", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check } = createWriteChecks({
+    policies: allowingPolicies,
+    needsInputLabel: () => null,
+    lookup,
+  });
+  const work = { ...run("work"), caps: ["pull", "read:pulls"] };
+  for (const w of [
+    write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
+    write("POST", "repos/org/repo/issues/2/comments", { body: "x" }),
+    write("POST", "repos/org/repo/issues/2/reactions", { content: "+1" }),
+    write("POST", "repos/org/repo/issues", { title: "x" }),
+  ]) {
+    assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
+  }
+  for (const w of [
+    write("PATCH", "repos/org/repo/issues/2", {}),
+    write("PATCH", "repos/org/repo/issues/2", { body: "x" }),
+    write("POST", "repos/org/repo/issues/2/labels", { labels: ["a"] }),
+  ]) {
+    const got = await check(work, w);
+    assert.equal(got?.status, 403, `${w.method} ${w.path}`);
+    assert.match(
+      got.message,
+      /don't give `read:issues`: it can't .* on sub_issue #2, whose answer is that issue/,
+    );
+  }
+  // A blocking issue it didn't create: GitHub answers with it.
+  const open = fakeLookup({ ...GITHUB, open: [{ number: 3, id: 903 }] });
+  const { check: checkOpen } = createWriteChecks({
+    policies: allowingPolicies,
+    needsInputLabel: () => null,
+    lookup: open.lookup,
+  });
+  const block = write("POST", "repos/org/repo/issues/1/dependencies/blocked_by", { issue_id: 903 });
+  assert.match((await checkOpen(work, block)).message, /its blocking issue is one it created/);
+  assert.equal(await checkOpen(run("work"), block), null);
+  // With read:issues, as before.
+  assert.equal(
+    await check(run("work"), write("PATCH", "repos/org/repo/issues/2", { body: "x" })),
+    null,
+  );
+});
+
+test("without read:issues: a sub-issue link, removal or new priority only for an issue it created", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const { check, answered } = createWriteChecks({
+    policies: allowingPolicies,
+    needsInputLabel: () => null,
+    lookup,
+    bot: BOT,
+  });
+  const work = { ...run("work"), caps: ["pull", "read:pulls"] };
+  answered(work, GRAPHQL_CREATE, 200, created(30));
+  // #2 is already under its issue: GitHub may answer with it.
+  for (const w of [
+    write("DELETE", "repos/org/repo/issues/1/sub_issue", { sub_issue_id: 202 }),
+    write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 202 }),
+  ]) {
+    const got = await check(work, w);
+    assert.equal(got?.status, 403, `${w.method} ${w.path}`);
+    assert.match(got.message, /links, unlinks or reorders only issues it created/);
+  }
+  // One it created: linked and unlinked.
+  for (const w of [
+    write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 900 }),
+    write("DELETE", "repos/org/repo/issues/1/sub_issue", { sub_issue_id: 900 }),
+  ]) {
+    assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
+  }
+  // With read:issues, as before.
+  const full = run("work");
+  const unlink = write("DELETE", "repos/org/repo/issues/1/sub_issue", { sub_issue_id: 202 });
+  assert.equal(await check(full, unlink), null);
+});

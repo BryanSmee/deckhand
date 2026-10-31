@@ -96,8 +96,8 @@ line go on in the issue's current mode (`modes.json`).
 
 `/mode research` (repos granted `allow_research`) is a built-in light mode for the open web
 (`OPEN` in `modes.mjs`): any public host (`researchAccess()` in `access.mjs`), and nothing of
-the repo's. No clone (`SANDBOX_NO_CLONE`), no GitHub token (the broker's `NO_TOKEN`,
-which the GitHub gateway refuses: GitHub's hosts aren't relayed for it, and it reads public
+the repo's. No clone (`SANDBOX_NO_CLONE`), no GitHub token (no `pull` capability,
+so the GitHub gateway refuses it: GitHub's hosts aren't relayed for it, and it reads public
 GitHub anonymously through a tunnel), the base image, no setup, caches, mounts, engine, CA or
 screenshots, and volumes of its own
 (`<name>-research-…`). Its input is the issue's thread, which `preparation.mjs`
@@ -454,10 +454,10 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   write is refused); parses and validates its GraphQL
   against GitHub's pinned schema and holds each mutation field to the same checks, its node
   IDs looked up likewise, forwarding the document printed again (`github-graphql.mjs`); and
-  sends the call on with a token limited to the run's repo that only reads (`readsOf()`: the
-  sandbox's reads and its mode's, `permissionsFor()`), a write that passed getting one with
-  only the write permission it needs besides (`github-writes.mjs` `writePermissions()`),
-  streaming the
+  sends the call on with a token limited to the run's repo that only reads what its
+  capabilities give (`readsOf()`; its own issue alone without `read:issues`), a write that
+  passed getting one with only the write permission it needs besides (`github-writes.mjs`
+  `writePermissions()`), streaming the
   answer back (`upstream.mjs` `forward()`). The CA certifies GitHub for this
   (`proxy/authority.mjs` `EXCLUDED` keeps only the agents' providers): no sandbox's GitHub
   traffic carries a token any more, so a leaked CA key opens none, and a CA from before,

@@ -395,12 +395,14 @@ gateway, which adds the token. In this document, "a sandbox's token" or "a run's
 that token: what the gateway sends GitHub for the run's calls, never something the sandbox
 can read.
 
-- It is an installation token minted for the run's repository only, and **it only reads**:
-  the code, issues, pull requests, CI's results (`listener/github-app.mjs`
-  `SANDBOX_PERMISSIONS`), and what its mode reads besides (`listener/modes.mjs`
-  `permissionsFor()`: a discussion run's discussions; a research run gets none). It can't
-  push (pushes go through the git gateway, with the run token). The organization's projects
-  only for a run the policies allow `read_projects`, in a repository granted one
+- It is an installation token minted for the run's repository only, for each call, and **it
+  only reads what the run's [capabilities](#capabilities) give** (`listener/github-app.mjs`
+  `READ_PERMISSIONS`, `readsOf()`), which GitHub enforces: `pull` gives `contents: read`,
+  `read:issues` `issues: read`, `read:pulls` `pull_requests: read`, `read:discussions`
+  `discussions: read`, `read:actions` `actions`, `checks` and `statuses: read`, and every token
+  reads the repository's metadata. A run without `pull` gets nothing from GitHub at all. It
+  can't push (pushes go through the git gateway, with the run token). The organization's
+  projects only for a run the policies allow `read_projects`, in a repository granted one
   ([Projects](repo-config.md#projects)).
 - **A token per write.** Each write the gateway checked and the policies allowed gets a token
   of its own, minted for that call, with the run's reads and only the write permission it
@@ -411,6 +413,33 @@ can read.
   milestone), `contents: write` to ready or draft one or update its branch, `actions: write`
   for a rerun, `organization_projects: write` for a project's item. Anything else the run
   sends gets the read-only token, so nothing unchecked can write.
+- **A `read:*` capability is a limit on what a run is given and can ask for, not a promise
+  that the rest stays secret.** A run without `read:issues` can't list or read the
+  repository's issues, but with `pull` the code's history, commit messages and pull request
+  descriptions may quote them, and its prompt holds its own issue's thread.
+- **Its own issue, without `read:issues`**: the one case the gateway checks itself. The REST
+  paths of its issue and its comments (`/repos/<owner>/<repo>/issues/<n>`, `…/comments`, by
+  the repository's name: `ownIssuePath()`, or by its id as GitHub's pagination links name it,
+  `repositories/<id>/…`, the id looked up: `ownIssueId()`) and, in GraphQL, `repository(owner:, name:)` naming
+  its repository then `issue(number:)` or `issueOrPullRequest(number:)` naming its issue
+  (`listener/github-graphql.mjs` `issueReads()`) get a token minted with `issues: read` for
+  that call alone, as a checked write gets its write permissions. Any other read of issues is
+  refused, saying why: over REST a list, a search, another issue, an issue's events or a
+  comment by its id; in GraphQL, any field whose value may be an issue (`node`, `nodes`, a
+  connection of issues, `search` but of repositories, users or discussions, a fragment on an
+  interface an issue implements), anywhere in the call, below its own issue too (its `parent`,
+  sub-issues, a timeline item's `source`); and, in a call that reads its own issue, any other
+  issue's comments (`User.issueComments`, a timeline's items, a pull request's conversation) or
+  project items, whose field values hold their issue's title, labels and assignees (but its own
+  issue's `projectItems`): send those apart, with a token that doesn't read issues.
+- **Writes, without `read:issues`**: a write's token writes issues, which reads them all, and
+  GitHub answers a write with what it wrote to. So such a run writes to an issue it can't read
+  (a sub-issue, another issue the policies let it write to) only by a comment or a reaction, whose answer
+  is the comment or the reaction (`listener/github-writes.mjs` `UNREAD`): editing, labelling,
+  assigning or closing one is refused, and a "blocked by" link's blocker, like a sub-issue it
+  links, unlinks or reorders, must be an issue it created. A mutation's answer may only name the issue or project item it wrote to (its `id`, `number`, `url`),
+  hold the comment it wrote, and nothing else of issues, the rest refused the same way.
+  A review still never reads its thread (below).
 - **No sandbox token writes pull requests** outside those checked writes, so no sandbox can
   review one: `pull_requests: write` would let a run approve any pull request of its
   repository as the App, its own included, or replace a review mode's request for changes
@@ -618,8 +647,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   there, such a call gets `401`). The proxy names that address in an `X-Deckhand-Client` header, replacing any
   the client sent (and drops one from every request it doesn't relay), and the listener believes it only from the proxy's own addresses: a
   sandbox that sets it itself is judged by its own address. A token that doesn't check, an
-  unknown or finished run's, or any other credential, gets `401`; another sandbox's `403`; a research
-  run (`NO_TOKEN`) `403`, whatever it sends.
+  unknown or finished run's, or any other credential, gets `401`; another sandbox's `403`; a run
+  without `pull` (a research run: `readsGitHub()`) `403`, whatever it sends.
 - **Pushes** to GitHub's web host (`git-receive-pack`) are refused: they go to the git
   gateway (`pushInsteadOf`), as before.
 - **Writes are redacted before GitHub gets them.** The body of every call but a read (`GET`,
@@ -818,16 +847,20 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   qualifier stay readable, as any pull request's state and any search. Without the permissions, the REST reads are
   refused, naming them; a GraphQL read goes on with a token that lacks them, and GitHub's
   refusal of those fields comes back as Deckhand's message (`explained()`).
-- **On to GitHub** with a token for the run's repository: the run's reads, and only for a
-  write that passed these checks the one write permission it needs
-  (`listener/github-writes.mjs` `writePermissions()`, [Tokens](#tokens)), read-only for
-  everything else (`listener/github-app.mjs` `readsOf()`), so no write reaches GitHub
-  unchecked (`token …` for the
+- **On to GitHub** with a token for the run's repository: what its capabilities read
+  (`listener/github-app.mjs` `readsOf()`, and its own issue for a call that reads only that),
+  and only for a write that passed these checks the one write permission it needs
+  (`listener/github-writes.mjs` `writePermissions()`, [Tokens](#tokens)), so no write reaches
+  GitHub unchecked (`token …` for the
   API, Basic with `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
   cookies dropped. An optional permission its installation hasn't accepted
   (`OPTIONAL_PERMISSIONS`, [setup](setup.md#when-the-app-needs-a-new-permission)) is left
   out of the token, and a call that needs it (`NEEDS`, `listener/github-gateway.mjs`) refused,
-  naming it: a required one it lacks fails the token, as GitHub refuses it. The answer streams back as it comes, with the agents' endpoints' limits
+  naming it: a required one it lacks fails the token, as GitHub refuses it. A read whose
+  permission the run's capabilities don't give (CI without `read:actions`) is refused naming the
+  capability, over REST, and GitHub's refusal of those fields explained, over GraphQL.
+  `discussions` stays required: only discussion runs read them (`read:discussions`), and their
+  token fails without it, as before. The answer streams back as it comes, with the agents' endpoints' limits
   (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
   calls in flight per run.
 - **A work run that isn't a fork's gets nothing that would bring a fork's code**: a fork's
@@ -853,7 +886,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
   rather than the gateway, so what they get is anonymous (both accepted in pull request
   #411):
-  - **A research run** (`NO_TOKEN`) isn't relayed: it gets no CA and nothing from the
+  - **A run without `pull`** (a research run) isn't relayed: it gets no CA and nothing from the
     gateway, and reads public GitHub (other projects' READMEs, issues, releases) as it did
     before the gateway.
   - **A run's [container engine](#container-engine)**: its builds and containers don't trust
@@ -2137,18 +2170,20 @@ of its own (`<issue>-bare-…`, a light mode's `<issue>-light-bare-…`: no earl
 transcript), and only the hosts every run
 needs.
 
-| Capability                         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | Grant                        | Enforced by                                                                      |
-| ---------------------------------- | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------------- | -------------------------------------------------------------------------------- |
-| `pull`                             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                              | the listener at start; the GitHub gateway (no token without it)                  |
-| `push`                             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                              | the git gateway                                                                  |
-| `setup`                            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                              | the listener at start                                                            |
-| `image:repo`                       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `allow_dockerfile`           | the listener at start                                                            |
-| `image:branch`                     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `allow_branch_docker_images` | the listener at start (never a fork's)                                           |
-| `docker`                           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `allow_docker`               | the listener at start (never for a fork's pull request)                          |
-| `preview`                          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `allow_preview`              | not per run yet: the hook runs on pull request events                            |
-| `internet`                         | any public host (as [research runs](#research-runs))                   |                      |                             | `allow_research`             | the egress proxy                                                                 |
-| `read:issues`, `read:pulls`        | the repository's issues, pull requests                                 | `pull`               |                             |                              | not yet: the token follows the mode until #497 (then the GitHub gateway's token) |
-| `read:discussions`, `read:actions` | its discussions, its GitHub Actions runs and logs                      | `pull`               |                             |                              | not yet: the token follows the mode until #497 (then the GitHub gateway's token) |
+| Capability         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | Grant                        | Enforced by                                                                        |
+| ------------------ | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------------- | ---------------------------------------------------------------------------------- |
+| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                              | the listener at start; GitHub (`contents: read`); the gateway (nothing without it) |
+| `push`             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                              | the git gateway                                                                    |
+| `setup`            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                              | the listener at start                                                              |
+| `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `allow_dockerfile`           | the listener at start                                                              |
+| `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `allow_branch_docker_images` | the listener at start (never a fork's)                                             |
+| `docker`           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `allow_docker`               | the listener at start (never for a fork's pull request)                            |
+| `preview`          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `allow_preview`              | not per run yet: the hook runs on pull request events                              |
+| `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `allow_research`             | the egress proxy                                                                   |
+| `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                              | GitHub (`issues: read`); the gateway (its own issue only without it)               |
+| `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                              | GitHub (`pull_requests: read`)                                                     |
+| `read:discussions` | its discussions                                                        | `pull`               |                             |                              | GitHub (`discussions: read`)                                                       |
+| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses       | `pull`               |                             |                              | GitHub (`actions`, `checks`, `statuses: read`)                                     |
 
 **Greedy**: a capability is used when the policies allow it, when a key of `.deckhand.yaml`
 asks for it if it has one, and when its grant gives it if one gates it. Allowed and asked for
@@ -2160,8 +2195,8 @@ a run that fails them doesn't start, and its reply says why:
 
 - **Dependencies**: `setup`, `image:repo`, `push`, `docker` and the `read:*` need `pull`;
   `image:branch` needs `push` and `image:repo` (a policy denying the repository's image denies
-  a branch's too). The reads need it until #497 gives them to the token on their
-  own: a run without `pull` gets no GitHub token at all. A deny narrows: what needs a capability
+  a branch's too). The reads are the token's permissions ([Tokens](#the-github-gateway)), and
+  need it: a run without `pull` gets nothing from GitHub at all. A deny narrows: what needs a capability
   denied, not asked for or not granted isn't used either, with a warning (deny `push` to forks'
   runs, and they keep their code and reads, without `image:branch`). A capability whose need no
   allow rule gives refuses the run: the allow rules contradict themselves.
@@ -2169,8 +2204,8 @@ a run that fails them doesn't start, and its reply says why:
   doesn't get `push`, whatever the policies allow, nor what needs it, with a warning: it
   has no branch to push or open a pull request from until #498.
 - **Modes that need the code**: a review (its verdict decides fixes and merges) and a discussion
-  (read with its token) don't start without `pull`; a research run doesn't start with it, as
-  it has no token to clone with until #497.
+  (read with its token) don't start without `pull`; a research run doesn't start with it: its
+  input is the issue's thread, with nothing of the repository's.
 - **What later runs trust**: a run that isn't a fork's and gets `push`, `setup` (caches) or
   `docker` (an engine), whatever its mode, is refused a fork's code at the gateways
   (`github-forks.mjs restricted()`), as work runs always were, and clones whole (its blobs
@@ -2212,8 +2247,8 @@ tab and in a run's log, and for a repository's rules in its config check and Con
 is a risky combination's name anywhere but your allow rules.
 
 Deckhand's defaults (`policy/mode-<mode>.rego`) give each built-in mode what its traits gave
-before capabilities: work runs (a maintainer's, fix and conflict runs) everything but
-`internet`; brainstorms, inbox entries, discussions (with
+before capabilities, and the reads its token had: work runs (a maintainer's, fix and conflict
+runs) everything but `internet` and `read:discussions`; brainstorms, inbox entries, discussions (with
 `read:discussions`), onboarding, analyses and reviews `pull`, `image:repo` and the reads, and so
 neither `push`, `setup` nor an engine; research `internet` alone. A review or a brainstorm on a
 pull request no longer runs on its branch's image, which needs `push`. `mode-work.rego` also
@@ -2221,8 +2256,8 @@ gives the repository's own modes work's, as your ceiling: they get what their re
 policies allow within it. Until those allow it something, its runs are refused with a reply
 naming the rule to add: started, they would answer without the code their mode expects. What
 a run writes to GitHub and where it pushes are the same files' (`allow_github`, `allow_push`:
-[The GitHub gateway](#the-github-gateway)); the mode's traits still decide what a run with
-`pull` has its token read and its volumes until #497–#498 move them.
+[The GitHub gateway](#the-github-gateway)), and what its token reads follows its capabilities;
+the mode's traits still decide its volumes until #498 moves them.
 
 ## Research runs
 

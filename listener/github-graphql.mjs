@@ -7,6 +7,8 @@
 //   a matching `operationName`), is refused, and so is a subscription;
 // - a query goes on: the token it gets only reads (github-app.mjs readsOf()); one that selects
 //   CI's results beyond Actions says so (checkReads()), for `read_checks` and its permissions;
+//   a run without `read:issues` reads its own issue only (issueReads()): any other issue a
+//   query may reach is refused;
 // - each field of a mutation, through its fragments and under any alias, must be one MUTATIONS
 //   names, with only the input fields it knows: any other is refused before any policy runs;
 // - its targets come from GitHub: the node IDs it names (inline or in its variables, which
@@ -888,6 +890,138 @@ export function checkSelections(schema, doc, op) {
   };
 }
 
+// What a call reads of issues, for a run without `read:issues` (issue #497) → { own, other }:
+// `own`, whether it reads the run's own issue, as `repository(owner:, name:)` naming the run's
+// repository then `issue(number:)` or `issueOrPullRequest(number:)` naming its issue, at the
+// root, under any alias (variables resolved, `variables` coerced); `other`, the first other
+// field that may read an issue (null when none): one selected where the value may be an Issue
+// (`node`, `search`, a connection's `nodes`, a fragment on an interface Issue implements…),
+// or whose type is a connection of issues, anywhere else, below the own issue too (its
+// `parent`, `subIssues`, `trackedIssues`, a timeline item's `source`), and a search but of
+// repositories, users or discussions (its `issueCount` counts issues).
+// A mutation's token writes issues, which reads every one: its answer may name the issue it
+// wrote to (what each root field returns, `createIssue { issue }`, `addReaction { subject }`:
+// IDENTITY's fields only, as that may be a sub-issue the run can't read), hold the comment it
+// wrote (`addComment { commentEdge }`), and nothing else of issues.
+// Issues' comments: a call whose token reads issues (one that reads its own issue, or a
+// mutation) reads only its own issue's (`comments`) and the comment its mutation wrote, not
+// another's (`User.issueComments`, a timeline's items, a comment's `issue`): any other field
+// that may be one is `other` then. Project items likewise (their field values hold their
+// issue's title, labels, assignees): only its own issue's (`projectItems`), or the item a
+// mutation added (IDENTITY). Without that token, GitHub decides (a pull request's
+// conversation reads with `pull_requests`). Fields are followed with their types, through
+// fragments; a named fragment is walked once per place kind, on its own type: wider than where
+// it is spread, never narrower.
+const ISSUE_LISTS = new Set(["IssueConnection", "IssueEdge"]);
+const COMMENT_TYPES = new Set(["IssueComment", "IssueCommentConnection", "IssueCommentEdge"]);
+const NO_ISSUE_SEARCH = new Set(["REPOSITORY", "USER", "DISCUSSION"]);
+// A project item, its connection and edge, its field values: named from ProjectV2Item.
+const projectItem = (name) => String(name ?? "").startsWith("ProjectV2Item");
+// What a mutation's answer may select of the issue (or a comment) it wrote to: what names it.
+const IDENTITY = new Set(["id", "number", "url", "resourcePath", "databaseId", "fullDatabaseId"]);
+export function issueReads(schema, doc, op, variables, run) {
+  const fragments = new Map(
+    doc.definitions
+      .filter((d) => d.kind === Kind.FRAGMENT_DEFINITION)
+      .map((d) => [d.name.value, d]),
+  );
+  const named = (type) => {
+    let t = type;
+    while (t?.ofType) t = t.ofType;
+    return t;
+  };
+  const possible = (type) => {
+    if (!type) return [];
+    const members = schema.getPossibleTypes(type) ?? [];
+    return members.length ? members : [type];
+  };
+  const within = (runtime, type) => {
+    const names = new Set(possible(type).map((t) => t.name));
+    return runtime.filter((t) => names.has(t.name));
+  };
+  const may = (types, name) => types.some((t) => t.name === name);
+  const value = (node) =>
+    node?.kind === Kind.VARIABLE ? variables?.[node.name.value] : node?.value;
+  const arg = (field, name) => value(field.arguments?.find((a) => a.name.value === name)?.value);
+  const mutation = op.operation === "mutation";
+  const root = mutation ? schema.getMutationType() : schema.getQueryType();
+  const found = { own: false, other: null };
+  // The first field that may read another issue's comment, or a project item: `other` when the
+  // token reads issues.
+  let comment = null;
+  let item = null;
+  const seen = new Set();
+  // `place`: "root" (the operation's own fields), "repo" (those of a repository(owner:, name:)
+  // naming the run's), "own" (those of its own issue), "written" (those of the issue or comment a
+  // mutation wrote to: IDENTITY), "comments" (those of its comments, or of the comment a mutation
+  // wrote), "items" (its own issue's project items), "payload" (those of a mutation's answer)
+  // or "" (anywhere else); `from`, the field whose value the set selects on,
+  // which a refusal names.
+  function walk(set, parent, runtime, place, from) {
+    for (const node of set?.selections ?? []) {
+      if (found.other) return;
+      if (node.kind === Kind.FIELD) {
+        const name = node.name.value;
+        if (name === "__typename") continue;
+        if (place === "written") {
+          const issueish =
+            may(runtime, "Issue") || may(runtime, "IssueComment") || may(runtime, "ProjectV2Item");
+          if (issueish && !IDENTITY.has(name)) return void (found.other = name);
+        } else if (may(runtime, "Issue")) {
+          if (place !== "own") return void (found.other = from ?? name);
+          found.own = true;
+        }
+        if (may(runtime, "IssueComment") && !["own", "comments", "written"].includes(place)) {
+          comment ??= from ?? name;
+        }
+        const type = named(parent?.getFields?.()[name]?.type);
+        if (ISSUE_LISTS.has(type?.name)) return void (found.other = name);
+        const items = projectItem(type?.name);
+        if (
+          items &&
+          !["items", "written", "payload"].includes(place) &&
+          !(place === "own" && name === "projectItems")
+        ) {
+          item ??= name;
+        }
+        if (name === "search" && !NO_ISSUE_SEARCH.has(arg(node, "type"))) {
+          return void (found.other = name);
+        }
+        const comments = COMMENT_TYPES.has(type?.name);
+        if (comments && !["own", "comments", "payload"].includes(place)) comment ??= name;
+        let inner = "";
+        if (place === "root" && mutation) inner = "payload";
+        else if (place === "root" && name === "repository") {
+          const repo = `${arg(node, "owner")}/${arg(node, "name")}`.toLowerCase();
+          if (repo === run.repo) inner = "repo";
+        } else if (place === "repo" && ["issue", "issueOrPullRequest"].includes(name)) {
+          const number = Number(arg(node, "number"));
+          if (Number.isInteger(run.issue) && number === run.issue) inner = "own";
+        } else if (place === "payload" && (may(possible(type), "Issue") || items)) {
+          inner = "written";
+        } else if (items && (place === "items" || place === "own")) inner = "items";
+        else if (comments && ["own", "comments", "payload"].includes(place)) inner = "comments";
+        walk(node.selectionSet, type, possible(type), inner, name);
+      } else if (node.kind === Kind.INLINE_FRAGMENT) {
+        const type = node.typeCondition ? schema.getType(node.typeCondition.name.value) : parent;
+        const here = node.typeCondition ? within(runtime, type) : runtime;
+        walk(node.selectionSet, type, here, place, from);
+      } else if (node.kind === Kind.FRAGMENT_SPREAD) {
+        const fragment = fragments.get(node.name.value);
+        const key = `${node.name.value}\0${place}`;
+        if (!fragment || seen.has(key)) continue;
+        seen.add(key);
+        const type = schema.getType(fragment.typeCondition.name.value);
+        walk(fragment.selectionSet, type, possible(type), place, from);
+      }
+    }
+  }
+  walk(op.selectionSet, root, [root], "root", null);
+  if (!found.other && comment && (found.own || mutation)) found.other = comment;
+  if (!found.other && item && (found.own || mutation)) found.other = item;
+  return found;
+}
+
 // Whether a createIssue field's answer names the issue it created where github-writes.mjs
 // answered() reads it (`issue.url`, else `issue.html_url`), as GitHub's own fields: `issue`
 // and `url` unaliased (or aliased to themselves), and no `html_url`, which GraphQL's Issue
@@ -1116,7 +1250,22 @@ export function createGraphqlChecks({
     );
     const { reads, paths: readPaths } = checkSelections(schema(), doc, op);
     if (op.operation !== "mutation") {
+      // Without `read:issues`, its own issue alone: its token then reads issues for this call.
+      let ownIssue = false;
+      if (!run.caps?.includes("read:issues")) {
+        const found = issueReads(schema(), doc, op, parsed.coerced?.coerced ?? {}, run);
+        if (found.other) {
+          return {
+            refused: refusal(
+              403,
+              `${found.other}: this run's capabilities don't give \`read:issues\`, so it reads ${Number.isInteger(run.issue) ? `its own issue only, as repository(owner:, name:) { issue(number: ${run.issue}) }` : "no issue"}`,
+            ),
+          };
+        }
+        ownIssue = found.own;
+      }
       return {
+        ownIssue,
         body: forwarded,
         write: false,
         creates: [],
@@ -1173,6 +1322,18 @@ export function createGraphqlChecks({
         const keyed = { ...refused, message: `${field.key}: ${refused.message}` };
         if (refused.failed) Object.defineProperty(keyed, "failed", { value: true });
         return done(keyed);
+      }
+    }
+    // Its token writes issues, which reads every one: its answer holds only what it wrote.
+    if (!run.caps?.includes("read:issues")) {
+      const found = issueReads(schema(), doc, op, parsed.coerced?.coerced ?? {}, run);
+      if (found.other) {
+        return done(
+          refusal(
+            403,
+            `${found.other}: this run's capabilities don't give \`read:issues\`, so a mutation's answer may only name what it wrote to`,
+          ),
+        );
       }
     }
     done(null);

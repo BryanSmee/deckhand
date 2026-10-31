@@ -13,7 +13,7 @@ import { agentFor } from "./agents/index.mjs";
 import { addressOf } from "./broker.mjs";
 import { brokerHost, egressPolicy, githubContent, githubHosts, matchHost } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
-import { NO_TOKEN } from "./github-app.mjs";
+import { tunnelsGitHub } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { engineName } from "./runner/engine.mjs";
 import { drainable } from "../lib/drain.mjs";
@@ -247,11 +247,11 @@ export function createBrokerHttp(ctx) {
     // but tunnelled, anonymously (the gateway gives its address no token): an exception #411
     // accepted, rather than break builds that fetch from GitHub.
     const engine = !!where?.engine;
-    // GitHub's hosts go to the GitHub gateway, but for a research run (NO_TOKEN): it has no
-    // token there, nor the CA, and reads public GitHub anonymously through a tunnel instead,
-    // as an engine does.
+    // GitHub's hosts go to the GitHub gateway, but for a run whose capabilities give no `pull`
+    // (a research run): it has no token there, nor the CA, and reads public GitHub anonymously
+    // through a tunnel instead, as an engine does (github-app.mjs tunnelsGitHub()).
     const run = live ? ctx.broker.runOf(live.id) : null;
-    const github = !!live && run?.extra !== NO_TOKEN;
+    const github = !!live && !tunnelsGitHub(run);
     // GitHub's content hosts only for a run the gateway checks (github-forks.mjs restricted()),
     // every one of them (egress.mjs githubContent()): the others reach them as plain hosts.
     const files = github && restricted(run) && githubContent(host) ? [host] : [];

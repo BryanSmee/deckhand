@@ -1,14 +1,14 @@
 // What each kind of run is: the built-in modes, and the repo's own (its config's `modes:`,
 // customMode()) that add their `light` and `fresh` to them. Pure: no state, no I/O.
-import { DISCUSSION_PERMISSIONS, NO_TOKEN } from "./github-app.mjs";
 
 // The listener's own modes, each with its traits:
 // - picked: "/mode" picks it; the others come from the inbox, discussions, "/stop" and the
 //   dashboard's Analyze (analysis.mjs).
 // - light: it reads the code and answers, without a branch or the repo's setup. What its
-//   sandbox gets is its capabilities (capabilities.mjs), and what it writes to GitHub and where
-//   it pushes are the policies' (`allow_github`, `allow_push`), which Deckhand's defaults
-//   (../policy/mode-*.rego) give as these traits did: the traits still decide its volumes.
+//   sandbox gets is its capabilities (capabilities.mjs), what its token reads too (#497), and
+//   what it writes to GitHub and where it pushes are the policies' (`allow_github`,
+//   `allow_push`), which Deckhand's defaults (../policy/mode-*.rego) give as these traits did:
+//   the traits still decide its volumes.
 // - fresh: a new session each time. An inbox issue collects unrelated entries, so each entry
 //   is a run of its own (entryRun()); an analysis reads its digest, nothing before.
 // - open: the open internet, with nothing of the repo's: no GitHub token, and volumes of its
@@ -17,10 +17,6 @@ import { DISCUSSION_PERMISSIONS, NO_TOKEN } from "./github-app.mjs";
 //   `allow_research` (access.mjs researchRefusal()).
 // - inbox: inbox issues and discussion categories are their own trigger (workItem()).
 // - kind: what the dashboard shows its runs as (kindOf()).
-// - permissions: what its token reads beyond the sandbox's (permissionsFor()). It only reads:
-//   each write the policies allow gets a token of its own, with only the permission that write
-//   needs (github-gateway.mjs). A discussion run reads its discussion. Research gets none
-//   (NO_TOKEN): a web page it reads can't make it read the repo.
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
 // Their names are reserved: a repo's `modes:` can't take them (repo-config.mjs). The
 // dashboard has a copy of the list (format.ts), checked by a test.
@@ -43,7 +39,6 @@ export const MODES = {
     light: true,
     open: true,
     kind: "research",
-    permissions: NO_TOKEN,
     prompt: "research.md",
   },
   // A brainstorm's wrap-up.
@@ -71,7 +66,6 @@ export const MODES = {
     light: true,
     inbox: true,
     kind: "discussion",
-    permissions: DISCUSSION_PERMISSIONS,
     prompt: "discussion.md",
   },
   analyze: { light: true, fresh: true, prompt: "analyze.md" },
@@ -166,10 +160,4 @@ export function sessionName(name, light, mode) {
 // What the dashboard shows a run or queued task as.
 export function kindOf(mode, kind) {
   return builtIn(mode)?.kind ?? kind;
-}
-
-// What a run's token reads beyond the sandbox's (github-app.mjs SANDBOX_PERMISSIONS), or
-// NO_TOKEN: a built-in mode's, else nothing more.
-export function permissionsFor(mode) {
-  return builtIn(mode)?.permissions;
 }
