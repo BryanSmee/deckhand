@@ -8,6 +8,7 @@
 // token is checked (runs.mjs) and swapped for the credential, in the header the credential
 // takes, and the request goes on to Anthropic; the answer streams back as it comes. The token
 // dies with the run.
+import { agentTokenOf } from "../lib/broker-client.mjs";
 import { NAMED } from "../listener/agents/credentials.mjs";
 import { baseOf, createApiProxy } from "./upstream.mjs";
 
@@ -20,10 +21,7 @@ export function resetOf(headers) {
 }
 
 // The run's agent token, from whichever header Claude Code sent it in.
-function secretOf(req) {
-  const [scheme, value] = (req.headers.authorization ?? "").split(" ");
-  return scheme === "Bearer" ? value : req.headers["x-api-key"];
-}
+const secretOf = (req) => agentTokenOf(req.headers);
 
 // Anthropic's API under /v1, nothing else (createApiProxy()).
 const API_PATH = /^\/anthropic\/(v1(?:\/[A-Za-z0-9_-]+)+)$/;

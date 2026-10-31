@@ -17,7 +17,7 @@ import { tunnelsGitHub } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { engineName } from "./runner/engine.mjs";
 import { drainable } from "../lib/drain.mjs";
-import { agentTokenOf } from "./models-service.mjs";
+import { agentTokenOf } from "../lib/broker-client.mjs";
 import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { isToken } from "../lib/tokens.mjs";
@@ -311,7 +311,11 @@ export function createBrokerHttp(ctx) {
         return sendJson(res, { message: "not found" }, 404);
       }
       const sandbox = await sandboxAt(ctx, await clientAddress(ctx, req));
-      return ctx.models.relay(req, res, { sandbox, token: agentTokenOf(req), path: req.url });
+      return ctx.models.relay(req, res, {
+        sandbox,
+        token: agentTokenOf(req.headers),
+        path: req.url,
+      });
     },
   };
 

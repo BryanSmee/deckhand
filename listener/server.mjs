@@ -142,6 +142,9 @@ try {
   process.exit(1);
 }
 const held = await models.credentials();
+// Their fingerprints too, before any run's output is read (the runs restored below): read again
+// every minute from then on.
+await models.start();
 const stray = AGENT_SECRETS.filter((name) => env[name]);
 if (stray.length) {
   log(
@@ -955,10 +958,8 @@ const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
 // Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
 brokerService.consume({ shotsDir });
-// The models service's: the agents' calls it refused, each a line in its run's log; and the
-// credentials' fingerprints, read again as the plans' logins refresh.
+// The models service's: the agents' calls it refused, each a line in its run's log.
 models.consume({ note: (event) => ctx.broker.runOf(event.run)?.note?.(event.message) });
-models.start();
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();

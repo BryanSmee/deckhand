@@ -12,7 +12,7 @@
 //   GET /health, /ready: liveness, and readiness (503 once draining).
 import { createHash, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
-import { RUN_TOKEN_HEADER } from "../lib/broker-client.mjs";
+import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER } from "../lib/broker-client.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
@@ -44,21 +44,34 @@ const MIN_LENGTH = 16;
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
-// What redacts `values` from a text without them (lib/redact.mjs hashed()): a salt, and each
-// value's length and salted SHA-256. A credential has too many unknown characters to be found
-// back from its hash; a part of one would not, so only whole values are.
+// What redacts `values` from a text without them (lib/redact.mjs): a salt, each value's length
+// and salted SHA-256, and the salted SHA-256 of each of its CHUNK-long parts at fixed offsets
+// (past a JWT's header, which every token of its issuer shares), so that a part of one cut off
+// (#242) is found too, when it holds a whole chunk: any part of 2 × CHUNK - 1 characters. Not
+// every offset: from the hashes of every window, a value would be found back one character at a
+// time; from fixed chunks, only those whose characters are mostly known (a prefix, `sk-ant-…`),
+// a few characters, and the rest has too many unknown ones.
+export const CHUNK = 16;
+const JWT_HEADER = /^eyJ[A-Za-z0-9_-]*\.eyJ/;
 export function fingerprints(values, salt = randomBytes(16).toString("hex")) {
+  const hash = (text) =>
+    createHash("sha256")
+      .update(salt + text)
+      .digest("hex");
   const unique = [
     ...new Set(values.filter((v) => typeof v === "string" && v.length >= MIN_LENGTH)),
   ];
+  const chunks = new Set();
+  for (const value of unique) {
+    const own = JWT_HEADER.exec(value)?.[0].length ?? 0;
+    for (let i = own; i + CHUNK <= value.length; i += CHUNK)
+      chunks.add(hash(value.slice(i, i + CHUNK)));
+  }
   return {
     salt,
-    values: unique.map((value) => ({
-      length: value.length,
-      hash: createHash("sha256")
-        .update(salt + value)
-        .digest("hex"),
-    })),
+    values: unique.map((value) => ({ length: value.length, hash: hash(value) })),
+    chunk: CHUNK,
+    chunks: [...chunks],
   };
 }
 
@@ -86,9 +99,7 @@ export function createModelsHandler({
   // caller's service token, checked already.
   function agentCall(req, res, prefix) {
     const token = String(req.headers[RUN_TOKEN_HEADER] ?? "");
-    delete req.headers.authorization;
-    delete req.headers["x-api-key"];
-    delete req.headers["x-goog-api-key"];
+    for (const name of AGENT_TOKEN_HEADERS) delete req.headers[name];
     if (prefix === "google") req.headers["x-goog-api-key"] = token;
     else req.headers.authorization = `Bearer ${token}`;
     const endpoint = prefix === "relay" ? endpoints.google : endpoints[prefix];

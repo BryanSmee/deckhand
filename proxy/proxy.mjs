@@ -38,7 +38,13 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { createBrokerCaller, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import {
+  AGENT_TOKEN_HEADERS,
+  agentTokenOf,
+  createBrokerCaller,
+  RUN_TOKEN_HEADER,
+  SANDBOX_HEADER,
+} from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -157,16 +163,6 @@ const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 // The agents' API calls on the broker's host (BROKER_URL/anthropic, /openai, /google): the
 // models service's (#504), which holds the operator's credentials.
 const AGENT_PATH = /^\/(?:anthropic|openai|google)\//;
-// The headers an agent's CLI sends its run's agent token in: moved to RUN_TOKEN_HEADER for the
-// models service, which reads its caller's service token in `authorization`.
-const AGENT_TOKEN_HEADERS = ["authorization", "x-api-key", "x-goog-api-key"];
-
-// The agent token a call carries, from whichever header its CLI sent it in.
-export function agentTokenOf(headers) {
-  const bearer = /^Bearer (\S+)$/.exec(headers.authorization ?? "")?.[1];
-  return bearer ?? String(headers["x-api-key"] ?? headers["x-goog-api-key"] ?? "");
-}
-
 // The most a CONNECT's client may send before its answer (a ClientHello sent early).
 export const EARLY_MAX = 16 * 1024;
 

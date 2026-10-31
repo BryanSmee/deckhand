@@ -24,8 +24,10 @@ const WAIT_EVERY_MS = 500;
 const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 
 // The key the logins are sealed with, a file in `dir` (models.key, owner-only): made once, when
-// there is none. Every copy needs the same one (one volume, or one Secret on Kubernetes): a new
-// key leaves the stored logins unreadable, and each starts again from its file.
+// there is none. Every copy needs the same one (one volume, or one Secret on Kubernetes). A new
+// key (or another store) leaves the stored logins unreadable, and each starts again from its
+// file, whose refresh token the first refresh spent: the ChatGPT plan's needs a new sign-in then
+// (docs/setup.md, The models service).
 export function loginKey(dir) {
   const path = join(dir, "models.key");
   try {
@@ -41,6 +43,17 @@ export function loginKey(dir) {
 }
 
 export const loginSeal = (key) => sealWith(key, "models logins");
+
+// Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
+// providerError()). `refused`: an expired, reused or revoked refresh token, which signing in
+// again fixes; else the file is the problem (upstream.mjs credentialFailure()).
+export class LoginError extends Error {
+  status = 401;
+  constructor(message, { refused = false } = {}) {
+    super(message);
+    this.refused = refused;
+  }
+}
 
 // The login `name` ("chatgpt", "antigravity") of `file` in `store`, sealed with `seal`
 // (loginSeal()'s). `parse(text)`: the file's login, or a LoginError naming it. `holder`: this
@@ -156,4 +169,45 @@ export function sharedLogin({
   }
 
   return { load, refresh };
+}
+
+// A plan's login as its endpoint uses it (chatgpt.mjs, antigravity-login.mjs): sharedLogin()'s,
+// with what differs between plans. `due(login)`: whether it needs a refresh now; `refresh(login)`
+// → the new login; `headersOf(login)`: the headers that make a call the plan's; `accessOf(login)`:
+// its access token; `secretsOf(login)`: its tokens. → { headers, refused, secrets }.
+export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...options }) {
+  const shared = sharedLogin(options);
+  let last = null; // the login as last used, for refused() and secrets()
+  let stale = null; // an access token the upstream refused: refreshed on the next call
+  // One refresh at a time in this copy too: every caller awaits it.
+  let refreshing = null;
+
+  const usable = (saved) => {
+    last = saved.login;
+    if (saved.broken) throw new LoginError(saved.broken.message, saved.broken);
+    return saved;
+  };
+
+  // The headers that make a call the plan's. Throws when there is no usable login.
+  async function headers() {
+    let saved = usable(await shared.load());
+    if (accessOf(saved.login) === stale || due(saved.login)) {
+      refreshing ??= shared.refresh(saved, refresh).finally(() => (refreshing = null));
+      saved = usable(await refreshing);
+      stale = null;
+    }
+    return headersOf(saved.login);
+  }
+
+  // The upstream refused this access token (401): the next call refreshes it first, once.
+  function refused(authorization) {
+    const token = String(authorization).replace(/^Bearer /, "");
+    if (last && token === accessOf(last)) stale = token;
+  }
+
+  // Its tokens as last used: redacted from runs' output like the other credentials, though no
+  // sandbox has them (http.mjs fingerprints).
+  const secrets = () => (last ? secretsOf(last) : []);
+
+  return { headers, refused, secrets };
 }

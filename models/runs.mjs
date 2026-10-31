@@ -30,6 +30,7 @@ const STREAM_MAX = 10_000;
 const MAX_VIEWS = 1000;
 
 export const stateKey = (id) => `api:${id}`;
+const EMPTY = { apiStatus: null, apiReset: null, apiError: null };
 
 // `keys`: { get(kid) } → the broker's run keys; `unknownKey()`: read again (a key the copy hasn't
 // seen); `record(id)`: the broker's run (GET /runs/:id) → { provider, credential, sandbox }, null
@@ -62,17 +63,27 @@ export function createRuns({
     }
   }
 
-  // Its API state, saved as it changes: a chain per run, so that the last change is the one
-  // kept.
+  // `field` of the run's stored API state set to `value`, the others left as they are: the other
+  // copy (or this one before a restart) may have set them. Written only if nobody changed it
+  // meanwhile; else read and merged again.
+  async function setField(id, field, value) {
+    for (;;) {
+      const before = await store.get(stateKey(id));
+      const after = { ...EMPTY, ...before, [field]: value };
+      if (await store.compareAndSet(stateKey(id), before, after, { ttlMs: STATE_TTL_MS })) return;
+    }
+  }
+
+  // Its API state, saved field by field as it changes: a chain per run, so that this copy's last
+  // change to a field is the one kept.
   function view(id, provider, credential) {
     const known = views.get(id);
     if (known && known.provider === provider && known.credential === credential) return known;
-    const state = { apiStatus: null, apiReset: null, apiError: null };
+    const state = { ...EMPTY };
     let chain = Promise.resolve();
-    const save = () => {
-      const saved = { ...state };
+    const save = (field, value) => {
       chain = chain
-        .then(() => store.set(stateKey(id), saved, { ttlMs: STATE_TTL_MS }))
+        .then(() => setField(id, field, value))
         .catch((error) => log(`Models: run ${id}'s API state (${error.message})`));
     };
     const run = {
@@ -96,7 +107,7 @@ export function createRuns({
         set: (value) => {
           if (state[field] === value) return;
           state[field] = value;
-          save();
+          save(field, value);
         },
       });
     }
@@ -149,10 +160,12 @@ export function createRuns({
     return { run: view(claims.jti, provider, credential), claims };
   }
 
-  // The run's API state (GET /runs/:id/api): what this copy or the other saved.
+  // The run's API state (GET /runs/:id/api): what this copy (its saves under way included) or
+  // the other saved. The other copy's under way are a few milliseconds' worth: the run's agent
+  // has exited by the time the orchestrator asks.
   async function state(id) {
     await views.get(id)?.saved();
-    return (await store.get(stateKey(id))) ?? { apiStatus: null, apiReset: null, apiError: null };
+    return { ...EMPTY, ...(await store.get(stateKey(id))) };
   }
 
   return { check, state };

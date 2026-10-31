@@ -951,12 +951,18 @@ the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`
   lease in the store, and the others wait for its result; a refused refresh is saved too, so no
   copy spends the login again until the file is replaced.
 - **What the listener learns.** Which credentials are set, by name (its settings need them:
-  which agents may run, `FALLBACKS`), and their **fingerprints** for redaction (a salt, and each
-  value's length and salted SHA-256: `GET /fingerprints`), never a value. It redacts a
-  credential that shows whole in a run's output (whatever `.`, `/`, `=` are next to it), but not
-  a part of one cut off, as it does the run's own tokens: the credentials never enter a sandbox,
-  this only catches a mistake bringing one back. A part of a credential would be found back from
-  its hash, a whole one has too many unknown characters.
+  which agents may run, `FALLBACKS`), and their **fingerprints** for redaction (`GET
+/fingerprints`: a salt, each value's length and salted SHA-256, and the salted SHA-256 of
+  each of its 16-character parts at fixed offsets), never a value. It reads them before it
+  restores any run, and every minute after. It redacts a credential that shows whole in a run's
+  output (whatever `.`, `/`, `=` are next to it), and a run of characters that holds one of its
+  parts, whole: any part of a credential 31 characters long or more (a value cut off in an error
+  message, #242), glued to other characters or not. A shorter part may get through, where the
+  run's own tokens are redacted from 16 characters: the hashes of every 16-character window of a
+  credential would give it back one character at a time; those of fixed parts only give back the
+  few unknown characters of a part that is mostly known (`sk-ant-api03-` and 3 more), and the
+  rest has too many. The credentials never enter a sandbox: this only catches a mistake bringing
+  one back.
 
 ### The Claude credential
 
@@ -984,9 +990,10 @@ and end up in a public comment.
   (what the dashboard shows) and from its reply before posting it, as `[redacted]`: the value,
   or any part of it 16 characters long or more (a value cut off in an error message); a value
   shorter than that isn't redacted (it would be no credential, and would redact ordinary words),
-  and an encoded or split one gets through. Your credential, which it doesn't hold, it redacts
-  whole, by its fingerprint (see [The models service](#the-models-service)): which is why the
-  credential isn't there to begin with. A JWT's header and the `.eyJ` that starts its payload don't count
+  and an encoded or split one gets through. Your credential, which it doesn't hold, it redacts by
+  its fingerprints, whole or a part of 31 characters or more (see
+  [The models service](#the-models-service)): which is why the credential isn't there to begin
+  with. A JWT's header and the `.eyJ` that starts its payload don't count
   towards those 16 characters: every token its issuer signs shares them, so other JWTs in a
   reply stay readable.
 - When the models service can't use an operator's login (a refresh that failed, a file it can't

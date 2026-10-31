@@ -12,7 +12,7 @@
 // auth.openai.com/oauth/token, with Codex's own OAuth client id.
 import { randomBytes } from "node:crypto";
 import { openStore } from "../lib/store.mjs";
-import { loginSeal, sharedLogin } from "./logins.mjs";
+import { LoginError, loginSeal, planLogin } from "./logins.mjs";
 
 export const CHATGPT_URL = "https://chatgpt.com/backend-api/codex";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
@@ -36,17 +36,6 @@ function accountOf(tokens) {
     id: tokens.account_id ?? auth.chatgpt_account_id ?? null,
     fedramp: auth.chatgpt_account_is_fedramp === true,
   };
-}
-
-// Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
-// providerError()). `refused`: an expired, reused or revoked refresh token, which signing in
-// again fixes; else the file is the problem (upstream.mjs credentialFailure()).
-class LoginError extends Error {
-  status = 401;
-  constructor(message, { refused = false } = {}) {
-    super(message);
-    this.refused = refused;
-  }
 }
 
 export function createChatgptLogin({
@@ -75,22 +64,8 @@ export function createChatgptLogin({
     }
     return json;
   };
-  const shared = sharedLogin({
-    store,
-    seal,
-    name: "chatgpt",
-    file,
-    parse,
-    now,
-    ...(holder && { holder }),
-    ...(sleep && { sleep }),
-  });
-  let last = null; // the login as last used, for secrets()
-  let stale = null; // an access token the upstream refused: refreshed on the next call
-
   function due(json) {
     const { access_token } = json.tokens;
-    if (access_token === stale) return true;
     const exp = claims(access_token).exp;
     if (typeof exp === "number") return exp * 1000 - EARLY_MS <= now();
     const last = Date.parse(json.last_refresh ?? "");
@@ -133,41 +108,26 @@ export function createChatgptLogin({
     };
   }
 
-  // One refresh at a time in this copy too: every caller awaits it.
-  let refreshing = null;
-
-  // The headers that make a call the plan's. Throws when there is no usable login.
-  async function headers() {
-    let saved = await shared.load();
-    last = saved.login;
-    if (saved.broken) throw new LoginError(saved.broken.message, saved.broken);
-    if (due(saved.login)) {
-      refreshing ??= shared.refresh(saved, refresh).finally(() => (refreshing = null));
-      saved = await refreshing;
-      if (saved.broken) throw new LoginError(saved.broken.message, saved.broken);
-      last = saved.login;
-      stale = null;
-    }
-    const account = accountOf(saved.login.tokens);
-    return {
-      authorization: `Bearer ${saved.login.tokens.access_token}`,
-      ...(account.id && { "chatgpt-account-id": account.id }),
-      ...(account.fedramp && { "x-openai-fedramp": "true" }),
-    };
-  }
-
-  // The upstream refused this access token (401): the next call refreshes it first, once.
-  function refused(authorization) {
-    const token = String(authorization).replace(/^Bearer /, "");
-    if (token === last?.tokens.access_token) stale = token;
-  }
-
-  // Its tokens as last used: redacted from runs' output like the other credentials, though no
-  // sandbox has them (http.mjs fingerprints).
-  function secrets() {
-    const tokens = last?.tokens ?? {};
-    return [tokens.access_token, tokens.refresh_token];
-  }
-
-  return { headers, refused, secrets };
+  return planLogin({
+    store,
+    seal,
+    name: "chatgpt",
+    file,
+    parse,
+    now,
+    ...(holder && { holder }),
+    ...(sleep && { sleep }),
+    due,
+    refresh,
+    headersOf: (json) => {
+      const account = accountOf(json.tokens);
+      return {
+        authorization: `Bearer ${json.tokens.access_token}`,
+        ...(account.id && { "chatgpt-account-id": account.id }),
+        ...(account.fedramp && { "x-openai-fedramp": "true" }),
+      };
+    },
+    accessOf: (json) => json.tokens.access_token,
+    secretsOf: (json) => [json.tokens.access_token, json.tokens.refresh_token],
+  });
 }

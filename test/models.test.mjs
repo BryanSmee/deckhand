@@ -293,6 +293,11 @@ test("the orchestrator learns the credentials' names and fingerprints, never the
     assert.match(out, /\[redacted\]/);
   }
   assert.equal(redact("nothing secret here at all", prints), "nothing secret here at all");
+  // A part of it cut off (#242), or glued to other characters: found by a whole chunk it holds.
+  for (const part of [KEY.slice(3, 34), `${KEY.slice(0, 31)}xyz`]) {
+    const out = redact(`invalid key (${part})`, prints);
+    assert.equal(out, "invalid key ([redacted])", out);
+  }
 });
 
 test("a run's API state and the calls refused it reach the orchestrator", async (t) => {
@@ -327,6 +332,32 @@ test("a run's API state and the calls refused it reach the orchestrator", async 
   while (!notes.length) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(notes[0].run, "run-1");
   assert.match(notes[0].message, /refused the agent's call POST \/anthropic\/v1\/files/);
+});
+
+test("two copies: each sets only what its calls changed of a run's API state", async (t) => {
+  const upstream = await fakeAnthropic(t);
+  const ctx = await setup(t, {
+    copies: 2,
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-plan-0123456789",
+      ANTHROPIC_BASE_URL: upstream.url,
+    },
+  });
+  const [a, b] = ctx.copies;
+  const { agentToken } = await ctx.startRun("run-1", { provider: "anthropic" });
+  // The plan's limit, through one copy; a refused path, through the other.
+  const limited = await ctx.agentCall(a, "/anthropic/v1/messages", agentToken, {
+    headers: { "x-limit": "1" },
+  });
+  assert.equal(limited.status, 429);
+  assert.equal((await ctx.agentCall(b, "/anthropic/v1/files", agentToken)).status, 404);
+  const state = await ctx.asOrchestrator(b, "GET", "/runs/run-1/api");
+  // The limit and its reset stay, for the fallback: the other copy only set why its call failed.
+  assert.deepEqual(state.json, {
+    apiStatus: 429,
+    apiReset: 1_900_000_000_000,
+    apiError: "not an Anthropic API path",
+  });
 });
 
 test("two copies: a streaming call in flight finishes while its copy drains, the other takes new ones", async (t) => {

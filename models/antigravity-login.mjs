@@ -17,7 +17,7 @@
 // expiry}}, `expiry` an RFC 3339 time (checked against agy 1.4.0).
 import { randomBytes } from "node:crypto";
 import { openStore } from "../lib/store.mjs";
-import { loginSeal, sharedLogin } from "./logins.mjs";
+import { LoginError, loginSeal, planLogin } from "./logins.mjs";
 
 const EARLY_MS = 5 * 60_000;
 // What makes `agy` refresh: an expiry that has passed (not Go's zero time, which never expires).
@@ -27,17 +27,6 @@ const EXPIRED = "2000-01-01T00:00:00Z";
 // or revoked, retrying won't help. `agy` itself says "Please sign in" for that and for a Google
 // it couldn't reach alike.
 const REFUSED = /invalid_grant|invalid_client|unauthorized_client|revoked/i;
-
-// Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
-// providerError()). `refused`: a refresh Google refused, which signing in again fixes; else the
-// file is the problem (upstream.mjs credentialFailure()).
-class LoginError extends Error {
-  status = 401;
-  constructor(message, { refused = false } = {}) {
-    super(message);
-    this.refused = refused;
-  }
-}
 
 // The token file's JSON, or a LoginError naming `file`.
 function parseLogin(text, file) {
@@ -70,21 +59,7 @@ export function createAntigravityLogin({
   sleep,
   log = () => {},
 }) {
-  const shared = sharedLogin({
-    store,
-    seal,
-    name: "antigravity",
-    file,
-    parse: (text) => parseLogin(text, file),
-    now,
-    ...(holder && { holder }),
-    ...(sleep && { sleep }),
-  });
-  let last = null; // the login as last used, for secrets()
-  let stale = null; // an access token Google refused: refreshed on the next call
-
   function due(json) {
-    if (json.token.access_token === stale) return true;
     const expiry = Date.parse(json.token.expiry ?? "");
     return !Number.isFinite(expiry) || expiry - EARLY_MS <= now();
   }
@@ -118,36 +93,19 @@ export function createAntigravityLogin({
     return next;
   }
 
-  // One refresh at a time in this copy too: every caller awaits it.
-  let refreshing = null;
-
-  // The header that makes a call the plan's. Throws when there is no usable login.
-  async function headers() {
-    let saved = await shared.load();
-    last = saved.login;
-    if (saved.broken) throw new LoginError(saved.broken.message, saved.broken);
-    if (due(saved.login)) {
-      refreshing ??= shared.refresh(saved, refresh).finally(() => (refreshing = null));
-      saved = await refreshing;
-      if (saved.broken) throw new LoginError(saved.broken.message, saved.broken);
-      last = saved.login;
-      stale = null;
-    }
-    return { authorization: `Bearer ${saved.login.token.access_token}` };
-  }
-
-  // Google refused this access token (401): the next call refreshes it first, once.
-  function refused(authorization) {
-    const token = String(authorization).replace(/^Bearer /, "");
-    if (token === last?.token.access_token) stale = token;
-  }
-
-  // Its tokens as last used: redacted from runs' output like the other credentials, though no
-  // sandbox has them (http.mjs fingerprints).
-  function secrets() {
-    const token = last?.token ?? {};
-    return [token.access_token, token.refresh_token];
-  }
-
-  return { headers, refused, secrets };
+  return planLogin({
+    store,
+    seal,
+    name: "antigravity",
+    file,
+    parse: (text) => parseLogin(text, file),
+    now,
+    ...(holder && { holder }),
+    ...(sleep && { sleep }),
+    due,
+    refresh,
+    headersOf: (json) => ({ authorization: `Bearer ${json.token.access_token}` }),
+    accessOf: (json) => json.token.access_token,
+    secretsOf: (json) => [json.token.access_token, json.token.refresh_token],
+  });
 }

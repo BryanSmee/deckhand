@@ -5,7 +5,7 @@
 // fallbacks read it), the `models` stream (the calls it refused a run, for its log), and the
 // agents' calls that reach the listener rather than the service (a proxy from before it),
 // relayed on as they stream.
-import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { forward, forwarded } from "../lib/upstream.mjs";
 
@@ -14,13 +14,6 @@ import { forward, forwarded } from "../lib/upstream.mjs";
 const PRINTS_EVERY_MS = 60_000;
 const PRINTS_KEPT_MS = 24 * 60 * 60_000;
 const RETRY_MS = 5_000;
-
-// The agent's token, from whichever header its CLI sent it in.
-export function agentTokenOf(req) {
-  const [scheme, value] = (req.headers.authorization ?? "").split(" ");
-  if (scheme === "Bearer" && value) return value;
-  return String(req.headers["x-api-key"] ?? req.headers["x-goog-api-key"] ?? "");
-}
 
 // `urls`: MODELS_SERVICE_URL (its copies, comma-separated); `token()`: the Authorization
 // header for it (the listener's service token, as the orchestrator).
@@ -61,19 +54,30 @@ export function createModelsService({
     }
   }
 
-  // The fingerprints' sets, the newest last: { at, salt, values }.
+  // The fingerprints' sets, the newest last: { at, salt, values, chunk, chunks }.
   let sets = [];
   async function readPrints() {
     try {
-      const { salt, values } = await client.json("GET", "/fingerprints", { waitMs: 10_000 });
+      const answer = await client.json("GET", "/fingerprints", { waitMs: 10_000 });
+      const { salt } = answer;
       // One set per salt (a copy of the service, until it restarts), with what it said before
       // too: a token refreshed away may still show in a run's output for a while.
-      const fresh = Array.isArray(values) ? values : [];
-      const before = sets.find((s) => s.salt === salt)?.values ?? [];
+      const before = sets.find((s) => s.salt === salt);
+      const fresh = Array.isArray(answer.values) ? answer.values : [];
       const hashes = new Set(fresh.map((v) => v.hash));
-      const merged = [...before.filter((v) => !hashes.has(v.hash)), ...fresh].slice(-200);
+      const values = [...(before?.values ?? []).filter((v) => !hashes.has(v.hash)), ...fresh];
+      const chunks = new Set([...(before?.chunks ?? []), ...(answer.chunks ?? [])]);
       const kept = sets.filter((s) => now() - s.at < PRINTS_KEPT_MS && s.salt !== salt);
-      sets = [...kept, { at: now(), salt, values: merged }];
+      sets = [
+        ...kept,
+        {
+          at: now(),
+          salt,
+          chunk: answer.chunk,
+          values: values.slice(-200),
+          chunks: [...chunks].slice(-2000),
+        },
+      ];
       later(readPrints, PRINTS_EVERY_MS);
     } catch (error) {
       log(`Models: its fingerprints (${error.message}), asking again`);
@@ -82,7 +86,7 @@ export function createModelsService({
   }
 
   // What lib/redact.mjs takes among the secrets: the fingerprints of the agents' credentials.
-  const prints = () => sets.map(({ salt, values }) => ({ salt, values }));
+  const prints = () => sets.map(({ at, ...set }) => set);
 
   // The run's API state, once it ended: { apiStatus, apiReset, apiError }, or nulls when the
   // service doesn't answer soon (the reply then says less).
@@ -130,7 +134,7 @@ export function createModelsService({
   async function relay(req, res, { sandbox, token: agentToken, path }) {
     const target = new URL(`${first}${path}`);
     const headers = {
-      ...forwarded(req.headers, ["authorization", "x-api-key", "x-goog-api-key"]),
+      ...forwarded(req.headers, AGENT_TOKEN_HEADERS),
       host: target.host,
       authorization: await token(),
       [RUN_TOKEN_HEADER]: agentToken,

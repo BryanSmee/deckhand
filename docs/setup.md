@@ -1237,9 +1237,13 @@ their values. The providers' addresses (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
 
 The plans' refreshed logins are in its store (the `models-store` volume, or Redis with
 `STORE_URL`), sealed with a key made on its first start, `models.key` in the `models-keys`
-volume (`KEY_DIR`), which no other service mounts: back it up, or the plans start again from
-their files. Two copies may run side by side on one store (Kubernetes): a login is refreshed by
-one of them at a time.
+volume (`KEY_DIR`), which no other service mounts: back up both. A store or a key the service
+can't read its logins from (the volume lost, a new `models.key`, `STORE_URL` moved to Redis)
+starts each plan again from its file, which it never writes: the ChatGPT plan's refresh token in
+it was spent by the first refresh, so **sign in again** (`codex login`, [With a ChatGPT
+plan](#with-a-chatgpt-plan)) when you change either; the Google AI plan's may still work, or
+needs a new sign-in too. Two copies may run side by side on one store (Kubernetes): a login is
+refreshed by one of them at a time.
 
 The proxy and the listener each reach it over an internal network of their own
 (`models-proxy`, `models-orchestrator`), and it tells them apart by that network
