@@ -2737,10 +2737,14 @@ mounts:
     assert.match(output, /Saved 1 task\(s\) with queued comments/);
     await settled(ctx.github, [99, 100]);
     await until(() => prompts(ctx.dir).length === 2, "two runs");
-    const [first, second] = prompts(ctx.dir);
+    // Each its own run, side by side: which sandbox starts first is the broker's answers' order.
+    const all = prompts(ctx.dir);
+    const first = all.find((p) => p.includes("A dark mode"));
+    const second = all.find((p) => p.includes("Keyboard shortcuts"));
     assert.match(first, /A dark mode\n$/);
     assert.doesNotMatch(first, /Keyboard shortcuts/);
     assert.match(second, /Keyboard shortcuts\n$/);
+    assert.doesNotMatch(second, /A dark mode/);
   });
 
   test("a burst of comments on an ordinary issue is still one run", async (t) => {
