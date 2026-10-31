@@ -179,13 +179,13 @@ for (const [name, [run, { caches, mounts }]] of Object.entries(CASES)) {
   });
 }
 
-test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a credential", () => {
+test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a credential", async () => {
   const run = runOf();
   run.config = { ...config, claudeCredential: "CLAUDE_CODE_OAUTH_TOKEN" };
   const spec = sandboxSpec(run, "p", "m", { ...parts, caches: [], mounts: [] });
   // Nothing of them before the runner knows where the sandbox runs.
   assert.ok(!Object.keys(spec.env).some((k) => /TOKEN|SECRET|API_KEY/.test(k)));
-  const env = spec.tokens("net-1");
+  const env = await spec.tokens("net-1");
   assert.equal(env.DECKHAND_RUN_TOKEN, "run-deckhand-org-app-12-1@net-1");
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "agent-deckhand-org-app-12-1@net-1");
   assert.equal(env.ANTHROPIC_BASE_URL, "http://listener:8081/anthropic");
@@ -196,7 +196,7 @@ test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a 
     caches: [],
     mounts: [],
   });
-  assert.equal(codex.tokens("net-2").OPENAI_API_KEY, "agent-deckhand-org-app-12-1@net-2");
+  assert.equal((await codex.tokens("net-2")).OPENAI_API_KEY, "agent-deckhand-org-app-12-1@net-2");
 });
 
 test("sandboxEnv: its prompt, mode and setup", () => {

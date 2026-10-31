@@ -18,6 +18,8 @@ import { createGoogleRelay } from "./google.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { planWarning } from "./upstream.mjs";
 import { createBroker } from "./broker.mjs";
+import { createBrokerService, legacyKey } from "./broker-service.mjs";
+import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { clientAddress, createBrokerHttp, runAt, runFrom, sandboxAt } from "./broker-http.mjs";
 import { createGitGateway } from "./git-gateway.mjs";
 import { createForkChecks } from "./github-forks.mjs";
@@ -68,7 +70,6 @@ import { createRestart } from "./restart.mjs";
 import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
-import { signingKey } from "../lib/tokens.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createBackend } from "./runner/index.mjs";
@@ -123,10 +124,23 @@ function log(...args) {
   console.log(new Date().toISOString(), ...args);
 }
 
+// The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
+// its stream of their events. The key the listener signed tokens with before it moves out of
+// the data volume, but for its public part (legacyKey()).
+const brokerService = createBrokerService({
+  caller: createBrokerCaller({
+    url: config.brokerServiceUrl,
+    podTokenFile: config.serviceAccountTokenFile,
+    log,
+  }),
+  legacy: legacyKey(config.dataDir, { log }),
+  log,
+});
+
 // Where sandboxes, images and the listener's own short containers run (RUNNER).
 let backend;
 try {
-  backend = createBackend({ config, inboxDir: runsDir, log });
+  backend = createBackend({ config, inboxDir: runsDir, mirror: brokerService.mirror, log });
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
   console.error(error.message);
@@ -371,11 +385,13 @@ Object.assign(ctx, {
     logDir: join(config.dataDir, "previews"),
     log,
   }),
-  // Runs' tokens, signed with a key kept in the data volume, so they still check after a
-  // restart; and the secrets of runs from before them. Both work from their own sandbox alone,
-  // whether it calls the broker directly or through the egress proxy.
+  // Runs' tokens, signed by the broker service and checked here with its public keys; and the
+  // secrets of runs from before them. Both work from their own sandbox alone, whether it calls
+  // the listener directly or through the egress proxy.
+  brokerService,
   broker: createBroker({
-    key: signingKey(config.dataDir),
+    issuer: brokerService.issuer,
+    keys: brokerService.keys,
     sandboxOf: (ip) => sandboxAt(ctx, ip),
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),
@@ -822,7 +838,17 @@ ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // queue.json is only written when the listener stops: after a crash, the keys of comments it
 // lost stay in order.json, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
-ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
+// The broker service's keys first: the restored runs' tokens are checked with them.
+brokerService
+  .start()
+  .catch((error) => log(`Broker: ${error.stack ?? error}`))
+  .then(() => ctx.reattach(restored))
+  .catch((error) => log(`Re-attaching: ${error.stack ?? error}`))
+  // Runs the broker service still has that ended while the listener was down.
+  .then(() => brokerService.reconcile([...ctx.tasks.values()].flatMap((t) => t.live?.id ?? [])))
+  .catch((error) => log(`Broker: its runs: ${error.message ?? error}`));
+// Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
+brokerService.consume({ shotsDir });
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
@@ -862,6 +888,8 @@ process.on("SIGTERM", () => {
   history.stop();
   redeliveries.stop();
   clearInterval(relinking);
+  // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
+  brokerService.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).
   web.close();

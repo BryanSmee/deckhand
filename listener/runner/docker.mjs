@@ -97,8 +97,9 @@ export function createDockerRunner({
   log = () => {},
   now = Date.now,
   timers, // inbox.mjs poll()'s clock
+  mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
 }) {
-  const inbox = createInbox({ inboxDir, timers });
+  const inbox = createInbox({ inboxDir, timers, mirror });
   const networks = createNetworks({ config, docker, log, now });
   const engines = createEngines({ config, docker });
   // Runs whose network exists before their sandbox does: relink() leaves them alone.
@@ -115,7 +116,7 @@ export function createDockerRunner({
   async function start(spec) {
     const { run, name, image, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
     const args = sandboxArgs(spec);
-    inbox.write(run, ca, digest);
+    await inbox.write(run, ca, digest);
     const all = {
       "deckhand.owner": config.prefix,
       "deckhand.run": run,
@@ -278,6 +279,7 @@ export function createDockerRunner({
     close: inbox.close,
     closed: inbox.closed,
     poll: inbox.poll,
+    resync: inbox.resync,
     file: inbox.file,
     wait,
     kill,

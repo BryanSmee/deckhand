@@ -16,24 +16,7 @@ import { randomBytes } from "node:crypto";
 import { mkdirSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { sendJson } from "../lib/http.mjs";
-
-// A screenshot's size, and all of a run's: they are public once linked, and on the
-// listener's disk.
-export const MAX_SHOT = 10 * 1024 * 1024;
-export const MAX_SHOTS = 100 * 1024 * 1024;
-
-// The names a sandbox may upload, which GET /shots serves (http.mjs, from this one), and what
-// each type's file starts with: a file of another kind isn't served as an image. The
-// sandbox's deckhand-files keeps a copy.
-export const SHOT_NAME = /^[\w.-]+\.(png|jpe?g|webp)$/;
-const MAGIC = {
-  png: (b) => b.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex")),
-  jpg: (b) => b.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex")),
-  jpeg: (b) => b.subarray(0, 3).equals(Buffer.from("ffd8ff", "hex")),
-  webp: (b) =>
-    b.subarray(0, 4).toString("latin1") === "RIFF" &&
-    b.subarray(8, 12).toString("latin1") === "WEBP",
-};
+import { isImage, MAX_SHOT, MAX_SHOTS, readCapped, SHOT_NAME } from "../lib/shots.mjs";
 
 // How long GET /run/inbox waits for a line: under the sandbox's own timeout (deckhand-inbox).
 const POLL_MS = 25_000;
@@ -104,7 +87,7 @@ export function createRunFiles(ctx, { taskOf }) {
     try {
       const body = await readCapped(req, reserved);
       if (body === null) return tooBig();
-      if (!MAGIC[match[1]](body)) {
+      if (!isImage(name, body)) {
         return sendJson(res, { message: `not a ${match[1].toUpperCase()} file` }, 415);
       }
       mkdirSync(folder, { recursive: true });
@@ -151,16 +134,4 @@ function folderSize(folder, except) {
     }
   }
   return total;
-}
-
-// The request's body, or null past `max` bytes (the rest isn't read).
-async function readCapped(req, max) {
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of req) {
-    size += chunk.length;
-    if (size > max) return null;
-    chunks.push(chunk);
-  }
-  return Buffer.concat(chunks);
 }

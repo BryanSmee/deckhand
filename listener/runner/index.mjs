@@ -17,13 +17,15 @@ export function createBackend({
   docker = dockerCli,
   kubeApi,
   inboxDir,
+  // The broker service's copy of the runs' inboxes and files (inbox.mjs).
+  mirror = null,
   log = () => {},
   readNamespace = () => readFileSync(`${SERVICE_ACCOUNT}/namespace`, "utf8").trim(),
 }) {
   if (config.runner === "kubernetes") {
     const api = kubeApi ?? inCluster(config, readNamespace);
     return {
-      runner: createKubernetesRunner({ config, api, inboxDir, log }),
+      runner: createKubernetesRunner({ config, api, inboxDir, mirror, log }),
       images: createKubernetesImages({ config, api, log }),
       // No short containers: what needs them (an agent's install, a cache's chown, preview
       // hooks, the Antigravity login's refresh) says so.
@@ -34,7 +36,7 @@ export function createBackend({
     throw new Error(`RUNNER: expected docker or kubernetes, got ${config.runner}`);
   }
   return {
-    runner: createDockerRunner({ config, docker, inboxDir, log }),
+    runner: createDockerRunner({ config, docker, inboxDir, mirror, log }),
     images: createDockerImages({ config, docker }),
     jobs: createDockerJobs({ config, docker }),
   };

@@ -4,14 +4,13 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { signingKey } from "../lib/tokens.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { createRestart } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { loadRuns } from "../listener/runlog.mjs";
-import { tempDir } from "./helpers.mjs";
+import { localBroker, tempDir } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it.
 function saveRun(dir, id, issue, record) {
@@ -458,12 +457,13 @@ test("queued comments keep when they were queued through a restart: the run orde
 
 test("across a restart, a run's tokens still check, and a run from before them keeps its secret", async (t) => {
   const dir = tempDir(t);
-  const key = signingKey(dir);
+  // The broker service outlives the listener's restart: both listeners ask the same one.
+  const service = localBroker();
   const networks = { "10.9.0.5": "net-new", "10.9.1.5": "net-old" };
   const make = () => {
     // The old run's sandbox at 10.9.1.5, as broker-http.mjs runAt() tells.
     const broker = createBroker({
-      key,
+      ...service,
       sandboxOf: async (ip) => networks[ip] ?? null,
       sentFrom: async (run, ip) => run.id === "old" && ip === "10.9.1.5",
     });
@@ -484,7 +484,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
   const first = make();
   first.broker.register("org/repo", undefined, { id: "new", push: true, mode: "work" });
   first.broker.allow("new", ["issue-1-*"]);
-  const { token, agentToken } = first.broker.issue("new", "net-new");
+  const { token, agentToken } = await first.broker.issue("new", "net-new");
   writeFileSync(
     join(dir, "new.live.json"),
     JSON.stringify({
@@ -493,6 +493,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
       mode: "work",
       light: false,
       agentToken,
+      sandbox: "net-new",
       runTokens: first.broker.issuedOf("new"),
       branches: ["issue-1-*"],
       record: { id: "new", key: "org/repo#1", agent: "claude" },
@@ -502,28 +503,29 @@ test("across a restart, a run's tokens still check, and a run from before them k
   );
   // And one a listener from before tokens started: its secret, and no renewal.
   const secret = saveRun(dir, "old", 2, { agent: "claude" });
+  // The broker service lost the run meanwhile (one from before it, #505).
+  await service.runs.end("new");
 
   const { broker, restart } = make();
   restart.restoreRuns();
   // The token the sandbox holds is redacted at once, before it is renewed.
   assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
-  // Renewed by the next listener, bound where it was (the saved state of a listener that didn't
-  // keep `sandbox` says nothing: the token presented does), and it works, as do the next ones.
-  const renewed = await broker.renew(token, "10.9.0.5");
+  // The broker service hears the run goes on, with its claims: its token renews there, from
+  // its own sandbox, and the renewed ones check here.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual((await service.runs.get("new")).branches, ["issue-1-*"]);
+  const renewed = await service.runs.renew(token, "net-new");
   assert.ok(renewed.token);
+  assert.equal((await service.runs.renew(token, "net-old")).status, 403);
   assert.equal((await broker.check(renewed.token, "10.9.0.5")).run.id, "new");
   assert.equal((await broker.check(renewed.token, "10.9.1.5")).status, 403);
-  const again = await broker.renew(renewed.token, "10.9.0.5");
-  assert.equal((await broker.check(again.token, "10.9.0.5")).run.id, "new");
-  // The token the sandbox held across the restart is redacted too, not only those renewed since.
-  assert.ok(broker.secretsOf("new").includes(token));
-  assert.equal((await broker.check(agentToken, "10.9.0.5", "deckhand:agents")).run.id, "new");
   assert.equal((await broker.check(agentToken, "10.9.0.5", "deckhand:agents")).run.id, "new");
   assert.deepEqual(broker.runOf("new").branches, ["issue-1-*"]);
   // Its agent token is redacted from its output still: the live state kept it.
   assert.ok(broker.secretsOf("new").includes(agentToken));
-  // The old run's secret works from its own sandbox alone, and has nothing to renew.
+  // The old run's secret works from its own sandbox alone, and the broker service has nothing
+  // of it.
   assert.equal((await broker.check(secret, "10.9.1.5")).run.id, "old");
   assert.equal((await broker.check(secret, "10.9.0.5")).status, 403);
-  assert.equal((await broker.renew(secret, "10.9.1.5")).status, 401);
+  assert.equal(await service.runs.get("old"), null);
 });

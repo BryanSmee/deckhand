@@ -1,5 +1,5 @@
-# What an operator runs: the listener, the egress proxy, and the sandbox image runs start
-# from. Each sandbox sits on an internal network of its own, which the listener creates and
+# What an operator runs: the listener, the broker service, the egress proxy, and the sandbox
+# image runs start from. Each sandbox sits on an internal network of its own, which the listener creates and
 # joins itself and the egress proxy to: the proxy is their only way out (see docs/security.md).
 #
 #   cp .env.example .env    # then set a Claude credential (and ALLOWED_USERS, or in config.yaml)
@@ -43,6 +43,11 @@ services:
     #   - /tmp:size=4g
     ports:
       - "${PORT:-8080}:8080"
+    # The broker service signs the runs' tokens: the listener asks it for them as runs start.
+    depends_on: [broker]
+    # Its own way out (webhooks, GitHub, the agents' APIs, registries), and the broker's network
+    # of its own, over which it calls the broker as the orchestrator.
+    networks: [default, broker-orchestrator]
     environment:
       # Every setting but the secrets and the wiring below can be in config.yaml instead
       # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
@@ -171,9 +176,11 @@ services:
       ENGINE_PODMAN_IMAGE: *engine-podman-image
       # The host's path of the socket mounted below: preview hooks get it too.
       DOCKER_SOCKET: ${DOCKER_SOCKET:-/var/run/docker.sock}
-      # How sandboxes reach the token broker: this service, joined to each run's network
-      # under this name.
+      # How sandboxes reach the listener's gateways and agents' endpoints: this service, joined
+      # to each run's network under this name.
       BROKER_URL: http://listener:8081
+      # The broker service, which signs the runs' tokens (#505).
+      BROKER_SERVICE_URL: http://broker:8081
       # Their only way out: the egress service below (its deckhand.role label), joined the same
       # way.
       EGRESS_PROXY: http://egress:3128
@@ -199,6 +206,33 @@ services:
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro
 
+  # The runs' tokens and the services' own, signed with a key only this service holds; the live
+  # runs and their files (inbox, CA, digest, screenshots), which sandboxes reach through the
+  # egress proxy (docs/services.md). One copy here: an update is a wait of a few seconds for
+  # the runs' calls to it, which the proxy waits through (docs/architecture.md#restarts).
+  broker:
+    build:
+      context: .
+      dockerfile: broker/Dockerfile
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-broker:${DECKHAND_VERSION:-latest}
+    restart: unless-stopped
+    # Its calls in flight finish first: the inboxes' long polls (25 s), uploads (DRAIN_SECONDS).
+    stop_grace_period: 35s
+    environment:
+      # Who calls, by the network a call arrives on: each caller has one of its own to the
+      # broker, whose subnet is fixed below (docs/security.md#service-tokens).
+      SERVICE_NETWORKS: orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28}
+    volumes:
+      # Its signing key (run-token.key, made on first start): this volume alone, never the
+      # store nor another service's.
+      - broker-keys:/keys
+      # The live runs, their files and their events (lib/store-file.mjs).
+      - broker-store:/data
+    networks: [broker-orchestrator, broker-proxy]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
   # The sandboxes' egress proxy: asks the listener, for each connection, whether that
   # sandbox may reach that host.
   egress:
@@ -217,6 +251,11 @@ services:
       POLICY_URL: http://listener:8082/egress
       RELAY_URL: http://listener:8081/relay
       BROKER_URL: http://listener:8081
+      # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
+      # and files (#505).
+      BROKER_SERVICE_URL: http://broker:8081
+    # Its way out (the hosts granted to runs, the listener), and its network to the broker.
+    networks: [default, broker-proxy]
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
@@ -262,6 +301,22 @@ services:
     restart: "no"
     network_mode: none
 
+# One network per caller of the broker, internal (no way out), with a subnet the broker tells
+# its callers apart by (SERVICE_NETWORKS above): set BROKER_ORCHESTRATOR_SUBNET and
+# BROKER_PROXY_SUBNET in .env if these clash with a network of the host's.
+networks:
+  default:
+  broker-orchestrator:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28}
+  broker-proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BROKER_PROXY_SUBNET:-10.231.250.16/28}
+
 volumes:
   data:
   screenshots:
@@ -269,3 +324,5 @@ volumes:
   runs:
     name: ${RUNS_VOLUME:-deckhand-runs}
   egress-cache:
+  broker-keys:
+  broker-store:

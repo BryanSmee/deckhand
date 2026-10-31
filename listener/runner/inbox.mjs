@@ -5,6 +5,11 @@
 // follows its offset (poll(), ../run-files.mjs) and feeds it to the agent, so a restarted
 // listener neither loses nor repeats a line. The folder also holds the egress proxy's CA and
 // a run analysis's digest, which the sandbox fetches once at start (file()).
+//
+// The file is the truth, and the broker service has a copy (`mirror`, ../broker-service.mjs,
+// #505): the CA and the digest before the sandbox starts, the inbox appended from the same
+// offset after each change, so the sandbox reads it from either copy of the broker. Only the
+// runs from before tokens are still answered from here (poll(), file()).
 import {
   appendFileSync,
   closeSync,
@@ -34,19 +39,47 @@ const FILES = { ca: "egress-ca.crt", digest: "digest.md" };
 // The most one poll() answers: whole lines only, so a longer one comes alone.
 export const MAX_READ = 1024 * 1024;
 
-// `timers`: { setTimeout, clearTimeout }, a clock of the tests' own.
-export function createInbox({ inboxDir, timers = globalThis }) {
+// `timers`: { setTimeout, clearTimeout }, a clock of the tests' own. `mirror`: the broker
+// service's copy ({ files(run, { ca, digest }), sync(run, bytesFrom), forget(run) }), none in
+// the tests that don't need it.
+export function createInbox({ inboxDir, timers = globalThis, mirror = null }) {
   const inbox = (run) => join(inboxDir, run, INBOX);
   // run → the poll()s waiting for its next line, woken by send() and close().
   const waiting = new Map();
 
   // The run's folder: its inbox file, empty, and the proxy's CA and the digest when start()
-  // has them. The sandbox reads none of it directly.
-  function write(run, ca, digest) {
+  // has them. The sandbox reads none of it directly: the broker service has them before it
+  // starts, or the start fails.
+  async function write(run, ca, digest) {
     mkdirSync(join(inboxDir, run), { recursive: true });
     writeFileSync(inbox(run), "");
     if (ca) writeFileSync(join(inboxDir, run, FILES.ca), ca);
     if (digest) writeFileSync(join(inboxDir, run, FILES.digest), digest);
+    if (!mirror) return;
+    await mirror.files(run, { ca: ca || null, digest: digest || null });
+    await mirror.sync(run, (from) => bytesFrom(run, from));
+  }
+
+  // The inbox file's bytes from `from`, or null once it is gone (the run ended).
+  function bytesFrom(run, from) {
+    try {
+      return readFileSync(inbox(run)).subarray(from);
+    } catch {
+      return null;
+    }
+  }
+
+  // The broker service's copy, after each change: tried again until it has it.
+  function mirrored(run) {
+    mirror?.sync(run, (from) => bytesFrom(run, from)).catch(() => {});
+  }
+
+  // A run a restarted listener picked up: the broker service gets its CA and digest again, and
+  // what it doesn't have of its inbox (all of it, for a run from before the broker service).
+  async function resync(run) {
+    if (!mirror) return;
+    await mirror.files(run, { ca: file(run, "ca"), digest: file(run, "digest") });
+    await mirror.sync(run, (from) => bytesFrom(run, from));
   }
 
   // Where the sandbox gets them (../run-files.mjs): values, not secrets. `brokerUrl` is read at
@@ -62,11 +95,13 @@ export function createInbox({ inboxDir, timers = globalThis }) {
   function send(run, text, agent = agentFor()) {
     appendFileSync(inbox(run), agent.message(text) + "\n");
     wake(run);
+    mirrored(run);
   }
 
   function close(run) {
     if (!closed(run)) appendFileSync(inbox(run), CLOSE + "\n");
     wake(run);
+    mirrored(run);
   }
 
   function closed(run) {
@@ -145,7 +180,8 @@ export function createInbox({ inboxDir, timers = globalThis }) {
   function remove(run) {
     rmSync(join(inboxDir, run), { recursive: true, force: true });
     wake(run);
+    mirror?.forget(run);
   }
 
-  return { write, env, send, close, closed, poll, file, remove };
+  return { write, resync, env, send, close, closed, poll, file, remove };
 }

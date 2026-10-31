@@ -1,0 +1,81 @@
+// Deckhand's broker service (#505, docs/services.md): the one service holding the tokens'
+// signing key. It signs and renews the runs' tokens and the services' own, keeps the live runs
+// and their files in its store, and serves the endpoints a sandbox calls about its own run,
+// through the egress proxy. Two copies may run side by side on one store (Redis, #509): every
+// call either one answers, the other could have.
+//
+// Settings, from the environment:
+//   PORT              8081
+//   STORE_URL         its store (lib/store.mjs): file:///data/store
+//   KEY_DIR           its signing key's folder (run-token.key, made on first start): /keys,
+//                     its own volume or Secret, never the store
+//   SERVICE_NETWORKS  with Docker: each caller's network, service=subnet (callers.mjs)
+//   SERVICE_ACCOUNTS  on Kubernetes: each caller's service account, service=namespace:name
+//   DRAIN_SECONDS     how long a stopping copy lets its calls finish: 30, over an inbox's long
+//                     poll (25 s), under compose's stop_grace_period
+import { pathToFileURL } from "node:url";
+import { drainOnSigterm } from "../lib/drain.mjs";
+import { openStore } from "../lib/store.mjs";
+import { signingKey } from "../lib/tokens.mjs";
+import { createCallers, inClusterReview } from "./callers.mjs";
+import { createFiles } from "./files.mjs";
+import { createBrokerServer } from "./http.mjs";
+import { createRuns, RECORD_TTL_MS } from "./runs.mjs";
+
+export const DRAIN_MS = 30_000;
+
+// DRAIN_SECONDS → milliseconds.
+export function drainMs(text) {
+  if (text === undefined || text === "") return DRAIN_MS;
+  if (!/^\d+$/.test(text)) throw new Error(`DRAIN_SECONDS: expected seconds, got ${text}`);
+  return Number(text) * 1000;
+}
+
+// The broker's parts on `store`, with `key`: what the tests start too. → { server, runs, files }.
+export function createBroker({ store, key, callers, now = Date.now, sleep, log = () => {} }) {
+  const runs = createRuns({ store, key, now });
+  const files = createFiles({ store, runs, now, sleep, ttlMs: RECORD_TTL_MS });
+  let draining = false;
+  const server = createBrokerServer({
+    runs,
+    files,
+    callers,
+    signing: key,
+    store,
+    draining: () => draining,
+    now,
+    sleep,
+    log,
+  });
+  server.startDraining = () => (draining = true);
+  return { server, runs, files };
+}
+
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  const log = (...args) => console.log(new Date().toISOString(), ...args);
+  const env = process.env;
+  let started;
+  try {
+    const callers = createCallers({
+      networks: env.SERVICE_NETWORKS,
+      accounts: env.SERVICE_ACCOUNTS,
+      review: inClusterReview({
+        host: env.KUBERNETES_SERVICE_HOST,
+        port: env.KUBERNETES_SERVICE_PORT,
+      }),
+    });
+    const store = openStore(env.STORE_URL || "file:///data/store");
+    const key = signingKey(env.KEY_DIR || "/keys");
+    const graceMs = drainMs(env.DRAIN_SECONDS);
+    started = { ...createBroker({ store, key, callers, log }), graceMs, key };
+  } catch (error) {
+    console.error(`Broker: ${error.message}`);
+    process.exit(1);
+  }
+  const { server, graceMs, key } = started;
+  const port = Number(env.PORT ?? 8081);
+  server.listen(port, () => log(`Broker on :${port}, key ${key.kid}`));
+  // A rolling update starts the next copy first: this one, out of rotation (/ready), lets the
+  // inbox polls and uploads in flight finish, then exits.
+  drainOnSigterm([server], { graceMs, log, before: async () => server.startDraining() });
+}

@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBroker, RENEW_GRACE_MS } from "../listener/broker.mjs";
+import { createBroker } from "../listener/broker.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
-import { sandboxAt } from "./helpers.mjs";
+import { localBroker, sandboxAt } from "./helpers.mjs";
 
 test("a run keeps why the listener started it, which deny_github reads", () => {
   const broker = createBroker({ sentFrom: sandboxAt() });
@@ -84,22 +84,25 @@ test("a run's branches: none until allowed, and never for a run that can't push"
   assert.equal(broker.runOf(work), undefined);
 });
 
-// A broker whose runs' networks are at known addresses: address → network ID.
+// A broker whose runs' networks are at known addresses: address → network ID. Its tokens come
+// from the broker service's runs, in memory (`service`).
 function tokenBroker(networks = { "10.9.0.5": "net-a", "10.9.1.5": "net-b" }) {
   const clock = { now: 1_900_000_000_000 };
+  const service = localBroker({ now: () => clock.now });
   const broker = createBroker({
+    ...service,
     sandboxOf: async (ip) => networks[ip] ?? null,
     now: () => clock.now,
   });
-  return { broker, clock };
+  return { broker, clock, service };
 }
 
 test("a run's tokens name it from its own sandbox's network alone", async () => {
-  const { broker } = tokenBroker();
+  const { broker, service } = tokenBroker();
   const id = broker.register("Org/A", undefined, { id: "run-a", mode: "work", push: true });
   assert.equal(id, "run-a");
   broker.allow(id, ["issue-1-*"]);
-  const { token, agentToken } = broker.issue(id, "net-a");
+  const { token, agentToken } = await broker.issue(id, "net-a", "0123456789abcdef01234567");
   const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
   assert.deepEqual(
     { ...claims, iat: 0, exp: 0 },
@@ -118,6 +121,8 @@ test("a run's tokens name it from its own sandbox's network alone", async () => 
       exp: 0,
     },
   );
+  // The broker service has the run, and its screenshots' folder.
+  assert.equal((await service.runs.get("run-a")).shots, "0123456789abcdef01234567");
   assert.equal((await broker.check(token, "10.9.0.5")).run, broker.runOf(id));
   // Another sandbox's network, an address on none, or none at all.
   for (const ip of ["10.9.1.5", "10.9.2.5", "", undefined]) {
@@ -134,12 +139,14 @@ test("a run's tokens name it from its own sandbox's network alone", async () => 
   assert.equal((await broker.check("run-a", "10.9.0.5")).status, 401);
   // Both go in its output's redaction.
   assert.deepEqual(broker.secretsOf(id), [agentToken, token]);
-  // Ended: refused, and the network is no longer there to vouch for it anyway.
-  broker.revoke(id);
+  // Ended: refused here, and ended at the broker service too, which renews it no more.
+  await broker.revoke(id);
   assert.deepEqual(await broker.check(token, "10.9.0.5"), {
     status: 401,
     message: "unknown or finished run",
   });
+  assert.equal(await service.runs.get("run-a"), null);
+  assert.equal((await service.runs.renew(token, "net-a")).status, 401);
 });
 
 test("a token from another broker's key is refused, as one signed for another sandbox", async () => {
@@ -147,44 +154,15 @@ test("a token from another broker's key is refused, as one signed for another sa
   const other = tokenBroker().broker;
   other.register("org/a", undefined, { id: "run-a" });
   broker.register("org/a", undefined, { id: "run-a" });
-  const { token } = other.issue("run-a", "net-a");
+  const { token } = await other.issue("run-a", "net-a");
   assert.match((await broker.check(token, "10.9.0.5")).message, /unknown key/);
-  const mine = broker.issue("run-a", "net-b").token;
+  const mine = (await broker.issue("run-a", "net-b")).token;
   assert.equal((await broker.check(mine, "10.9.0.5")).status, 403);
   assert.equal((await broker.check(mine, "10.9.1.5")).run.id, "run-a");
 });
 
-test("a run longer than its token's lifetime keeps working, renewing every 5 minutes", async () => {
-  const { broker, clock } = tokenBroker();
-  broker.register("org/a", undefined, { id: "run-a" });
-  const first = broker.issue("run-a", "net-a").token;
-  let token = first;
-  const renewals = [];
-  for (let minute = 5; minute <= 60; minute += 5) {
-    clock.now += 5 * 60_000;
-    const renewed = await broker.renew(token, "10.9.0.5");
-    assert.ok(renewed.token, `renewed at ${minute} minutes`);
-    token = renewed.token;
-    renewals.push(token);
-    assert.ok((await broker.check(token, "10.9.0.5")).run);
-  }
-  // An hour on, the first token expired long ago; the last one works.
-  assert.match((await broker.check(first, "10.9.0.5")).message, /expired/);
-  // Those still valid are kept for redaction, with its agent's: not those expired.
-  assert.deepEqual(broker.secretsOf("run-a").slice(1), renewals.slice(-3));
-  assert.equal(broker.secretsOf("run-a").length, 4);
-  // Never from another sandbox, nor for an ended run.
-  assert.equal((await broker.renew(token, "10.9.1.5")).status, 403);
-  broker.revoke("run-a");
-  assert.deepEqual(await broker.renew(token, "10.9.0.5"), {
-    status: 401,
-    message: "unknown or finished run",
-  });
-  assert.equal((await broker.renew("a-secret", "10.9.0.5")).status, 401);
-});
-
 test("a run from before tokens keeps its secret, bound to its sandbox's address", async () => {
-  const broker = createBroker({ sentFrom: sandboxAt("10.9.0.5") });
+  const broker = createBroker({ sentFrom: sandboxAt("10.9.0.5"), ...localBroker() });
   const secret = broker.register("org/a", undefined, { id: "old", secret: "kept-secret" });
   assert.equal(secret, "kept-secret");
   assert.equal(broker.runOf("old"), broker.runOf("kept-secret"));
@@ -197,85 +175,67 @@ test("a run from before tokens keeps its secret, bound to its sandbox's address"
   broker.register("org/a", undefined, { id: "new" });
   assert.equal(broker.runOf("new").secret, undefined);
   broker.revoke("new");
-  assert.throws(() => broker.issue("new", "net-a"), /ended/);
+  await assert.rejects(broker.issue("new", "net-a"), /ended/);
 });
 
-test("a token expired while the broker was away still renews, from its sandbox, within the grace", async () => {
-  const { broker, clock } = tokenBroker();
+test("without the broker service, no run gets a token", async () => {
+  const broker = createBroker({});
   broker.register("org/a", undefined, { id: "run-a" });
-  const { token } = broker.issue("run-a", "net-a");
-  // The broker unreachable for an hour (a slow update, a host reboot): the token expired.
-  clock.now += 60 * 60_000;
-  assert.match((await broker.check(token, "10.9.0.5")).message, /expired/);
-  // Its calls fail until the broker is back, then the next renewal brings the run back.
-  const renewed = await broker.renew(token, "10.9.0.5");
-  assert.equal((await broker.check(renewed.token, "10.9.0.5")).run.id, "run-a");
-  // The expired one still renews within the grace: still redacted, as the one presented last.
-  assert.ok(broker.secretsOf("run-a").includes(token));
-  // Never from another sandbox, never past the grace, never for an ended run.
-  assert.equal((await broker.renew(token, "10.9.1.5")).status, 403);
-  clock.now += RENEW_GRACE_MS;
-  assert.match((await broker.renew(token, "10.9.0.5")).message, /expired/);
-  broker.revoke("run-a");
-  assert.equal((await broker.renew(renewed.token, "10.9.0.5")).status, 401);
+  await assert.rejects(broker.issue("run-a", "net-a"), /no broker service/);
 });
 
-test("a renewal asked again within a minute gets the same token: nothing valid leaves the redaction list", async () => {
-  const { broker, clock } = tokenBroker();
+test("a run that ends while its tokens are being signed gets none, and ends at the broker service", async () => {
+  const service = localBroker();
+  const ended = [];
+  let release;
+  const broker = createBroker({
+    ...service,
+    issuer: {
+      ...service.issuer,
+      issue: async (id, fields) => {
+        await new Promise((resolve) => (release = resolve));
+        return service.issuer.issue(id, fields);
+      },
+      end: async (id) => (ended.push(id), service.issuer.end(id)),
+    },
+  });
   broker.register("org/a", undefined, { id: "run-a" });
-  let changed = 0;
-  broker.watchChanges("run-a", () => changed++);
-  const { token, agentToken } = broker.issue("run-a", "net-a");
-  // A process asking in a loop: the token it holds back, the list unchanged.
-  for (let i = 0; i < 10; i++) {
-    clock.now += 1000;
-    assert.equal((await broker.renew(token, "10.9.0.5")).token, token);
-  }
-  assert.deepEqual(broker.secretsOf("run-a"), [agentToken, token]);
-  // A minute on, a new one; every one still valid stays listed, saved each time (changed()).
-  clock.now += 60_000;
-  const first = (await broker.renew(token, "10.9.0.5")).token;
-  assert.notEqual(first, token);
-  assert.equal((await broker.renew(first, "10.9.0.5")).token, first);
-  clock.now += 60_000;
-  const second = (await broker.renew(first, "10.9.0.5")).token;
-  assert.notEqual(second, first);
-  assert.deepEqual(broker.secretsOf("run-a"), [agentToken, token, first, second]);
-  assert.deepEqual(broker.issuedOf("run-a"), [token, first, second]);
-  assert.equal(changed, 3);
+  const issued = broker.issue("run-a", "net-a");
+  await new Promise((resolve) => setImmediate(resolve));
+  await broker.revoke("run-a");
+  release();
+  await assert.rejects(issued, /ended/);
+  assert.deepEqual(ended, ["run-a", "run-a"]);
+  assert.equal(await service.runs.get("run-a"), null);
 });
 
-test("a restarted broker redacts the run tokens saved with the run, before any renewal", async () => {
-  const { broker } = tokenBroker();
-  broker.register("org/a", undefined, { id: "run-a" });
-  const { token } = broker.issue("run-a", "net-a");
+test("a restarted listener redacts the run tokens saved with the run, and tells the broker service it goes on", async () => {
+  const { broker, service } = tokenBroker();
+  broker.register("org/a", undefined, { id: "run-a", mode: "work", push: true });
+  broker.allow("run-a", ["issue-1-*"]);
+  const { token } = await broker.issue("run-a", "net-a");
+  // The broker service lost it meanwhile (a run from before it): told again, with its claims.
+  await service.runs.end("run-a");
   const again = tokenBroker().broker;
-  again.register("org/a", undefined, { id: "run-a", issued: broker.issuedOf("run-a") });
-  assert.deepEqual(again.secretsOf("run-a"), [token]);
-});
-
-test("past its expiry, only the token the sandbox holds renews, not an older one left behind", async () => {
-  const { broker, clock } = tokenBroker();
-  broker.register("org/a", undefined, { id: "run-a" });
-  const a = broker.issue("run-a", "net-a").token;
-  const tokens = [a];
-  for (let i = 0; i < 3; i++) {
-    clock.now += 5 * 60_000;
-    tokens.push((await broker.renew(tokens.at(-1), "10.9.0.5")).token);
-  }
-  const [, b, c, d] = tokens;
-  // Half an hour on, the broker away meanwhile: all of them expired.
-  clock.now += 30 * 60_000;
-  // A (the first, still in a process's environment, say) and B: dead.
-  for (const old of [a, b]) {
-    assert.match((await broker.renew(old, "10.9.0.5")).message, /expired/);
-  }
-  // C was presented last, D is the newest: D renews.
-  const e = (await broker.renew(d, "10.9.0.5")).token;
-  assert.ok(e);
-  // What still renews is what is redacted: D, presented last, and E; C is dead now too.
-  assert.match((await broker.renew(c, "10.9.0.5")).message, /expired/);
-  const listed = broker.secretsOf("run-a");
-  assert.ok(listed.includes(d) && listed.includes(e));
-  for (const old of [a, b, c]) assert.ok(!listed.includes(old));
+  const restarted = createBroker({ ...service, sandboxOf: async () => "net-a" });
+  restarted.register("org/a", undefined, {
+    id: "run-a",
+    mode: "work",
+    push: true,
+    sandbox: "net-a",
+    issued: broker.issuedOf("run-a"),
+  });
+  restarted.allow("run-a", ["issue-1-*"]);
+  assert.deepEqual(restarted.secretsOf("run-a"), [token]);
+  await restarted.restore("run-a", "0123456789abcdef01234567");
+  const record = await service.runs.get("run-a");
+  assert.equal(record.sandbox, "net-a");
+  assert.deepEqual(record.branches, ["issue-1-*"]);
+  assert.equal(record.shots, "0123456789abcdef01234567");
+  assert.ok((await service.runs.renew(token, "net-a")).token);
+  // A run from before tokens has nothing there.
+  restarted.register("org/a", undefined, { id: "old", secret: "kept" });
+  await restarted.restore("old");
+  assert.equal(await service.runs.get("old"), null);
+  assert.equal(again.size(), 0);
 });

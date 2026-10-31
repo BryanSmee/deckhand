@@ -19,8 +19,11 @@ import { createServer, request } from "node:http";
 import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
+import { createCallers } from "../broker/callers.mjs";
+import { createBroker as createBrokerService } from "../broker/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
-import { tempDir } from "./helpers.mjs";
+import { openStore } from "../lib/store.mjs";
+import { tempDir, testKey } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 // The App's key, one for every listener: making one takes a while.
@@ -374,8 +377,18 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         pem: PEM,
       }),
     );
+    // The broker service, which signs the runs' tokens: the listener calls it from loopback,
+    // as the orchestrator.
+    const brokerService = createBrokerService({
+      store: openStore("memory:"),
+      key: testKey(),
+      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+    }).server;
+    await new Promise((resolve) => brokerService.listen(0, "127.0.0.1", resolve));
+    brokerService.unref();
     // Port 0: the OS picks free ports, which the listener logs. The broker's URL gets its port.
     const settings = {
+      BROKER_SERVICE_URL: `http://127.0.0.1:${brokerService.address().port}`,
       PATH: `${dir}:${process.env.PATH}`,
       DATA_DIR: dir,
       ALLOWED_USERS: "alice,bob",
@@ -397,6 +410,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       listener.child.kill("SIGKILL");
       github.server.close();
       egress.close();
+      brokerService.closeAllConnections();
+      brokerService.close();
       stopSandboxes(dir);
     });
     const [port, brokerPort, policyPort] = await ports(listener);

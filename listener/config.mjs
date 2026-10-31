@@ -326,6 +326,11 @@ export function loadConfig(env, file = NO_FILE) {
     policyPort,
     // How sandboxes reach the broker on their network (compose service name by default).
     brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
+    // The broker service (../broker/, #505), which signs the runs' tokens: where the listener
+    // asks for them, and for its own service token. On Kubernetes, the pod's token projected
+    // for it, which proves who calls.
+    brokerServiceUrl: (env.BROKER_SERVICE_URL || "http://broker:8081").replace(/\/$/, ""),
+    serviceAccountTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
     // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
     // in the environment, read by the listener's Anthropic endpoint only.
     claudeCredential: credentialName(env),
