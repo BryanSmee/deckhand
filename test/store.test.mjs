@@ -119,11 +119,37 @@ test("file: events trimmed by maxLength stay gone after a restart", async (t) =>
   assert.deepEqual(await read(fileStore({ dir }), "other"), [5, 6, 7, 8, 9]);
 });
 
-test("openStore: file: and memory:, nothing else", async (t) => {
+test("openStore: file:, memory: and redis:, nothing else", async (t) => {
   const dir = tempDir(t);
   const store = openStore(`file://${dir}`);
   await store.set("a", 1);
   assert.deepEqual(readdirSync(dir).includes("state.json"), true);
   assert.equal(await openStore("memory:").get("a"), null);
-  assert.throws(() => openStore("redis://store:6379"), /isn't a store/);
+  assert.throws(() => openStore("postgres://store:5432"), /isn't a store/);
+});
+
+test("openStore: a known secret, a private key or a GitHub token is never written", async (t) => {
+  const dir = tempDir(t);
+  const signingKey = "sk-signing-0123456789abcdef0123456789";
+  const store = openStore(`file://${dir}`, { secrets: () => [signingKey] });
+  const pem = "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----";
+  const token = `ghs_${"a".repeat(36)}`;
+  const writes = [
+    () => store.set("app", { key: pem }),
+    () => store.setIfAbsent("signing", signingKey),
+    () => store.compareAndSet("signing", null, `prefix ${signingKey.slice(0, 20)}`),
+    () => store.append("runs", { token }),
+    () => store.putBlob("log", Buffer.from(`key: ${signingKey}`)),
+    () => store.appendBlob("log", `${token}\n`),
+  ];
+  for (const write of writes) await assert.rejects(write(), /a secret can't go in the store/);
+  // Nothing of them was written.
+  assert.equal(await store.get("app"), null);
+  assert.equal(await store.get("signing"), null);
+  assert.deepEqual(await store.read("runs", "edge"), []);
+  assert.equal(await store.readBlob("log"), null);
+  // The rest goes through.
+  await store.set("app", { id: 42 });
+  assert.deepEqual(await store.get("app"), { id: 42 });
+  assert.ok(!readFileSync(join(dir, "state.json"), "utf8").includes("signing-0123"));
 });

@@ -1206,6 +1206,44 @@ them, kept across its runs and mounted by concurrent ones; the sandbox pod's `fs
 new one its user's (see above for what the class has to do for that). Without it, runs go
 without caches, said once in the run's log.
 
+## The store
+
+The services the listener is being split into ([services.md](services.md)) keep their state
+in a store, which each one's `STORE_URL` names. The listener doesn't use it yet: it keeps its
+state in `/data` until the split.
+
+- **`file:///data/store`**, a folder in the service's volume: on Docker Compose, and on one
+  node, where each service runs one copy.
+- **`redis://[user:password@]host:6379[/db]`**, or **`rediss://`** over TLS: on several nodes
+  (a k3s cluster with more than one), where two copies of a service run on different nodes and
+  a ReadWriteOnce volume can't be on both. `?prefix=` changes what goes before every key
+  (`deckhand:`), for two deployments sharing one Redis. `REDIS_PASSWORD` gives the password
+  when it isn't in the URL (from a Kubernetes Secret, say).
+
+The Redis backend speaks to Redis 7 or later (or Valkey) by itself, without a package. Its
+leases and keys expire on Redis's clock, so copies on nodes whose clocks drift agree. Each
+call is one Lua script, so Redis Cluster isn't supported: run a single primary, with a replica
+if you want one. Configure it as follows (`redis.conf`, or the server's arguments):
+
+```conf
+# Kept on disk: a lease's epoch and the streams' events must outlive a restart of Redis. With
+# everysec, a crash loses at most the last second.
+appendonly yes
+appendfsync everysec
+# Never evict: an evicted lease would start again at epoch 1, an evicted event would be lost.
+maxmemory-policy noeviction
+# A password (or an ACL user, `user deckhand on >… ~deckhand:* +@all`), and no other
+# network than the services' own.
+requirepass <a long random password>
+```
+
+Ready-made Kubernetes manifests, Redis's included, are on their way (issue #396).
+
+Secrets never go in the store: the App's key, the signing key and the agents' credentials
+stay in their service's own secret or volume. A write holding one the service knows, a
+private key or a GitHub token is refused (`lib/store.mjs`, `withoutSecrets()`): with Redis,
+every service using it could read it otherwise.
+
 ## Container engine
 
 A sandbox has no Docker: it never gets the host's socket, and its hardening (uid 1000, no
