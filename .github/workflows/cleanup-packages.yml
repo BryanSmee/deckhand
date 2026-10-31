@@ -21,6 +21,7 @@ jobs:
         image:
           - deckhand-listener
           - deckhand-egress
+          - deckhand-policy
           - deckhand-sandbox
           - deckhand-engine
           - deckhand-engine-podman

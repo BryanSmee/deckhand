@@ -6,8 +6,10 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { branchName, createLinkedBranches } from "../listener/linked-branch.mjs";
-import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
-import { policyEngine, tempDir, hasOpa } from "./helpers.mjs";
+import { createPolicies } from "../listener/policies.mjs";
+import { builtInPolicies } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
+import { localService, policyEngine, policyEngineOf, tempDir, hasOpa } from "./helpers.mjs";
 
 // A work run on org/repo#12, from main: `live` over it.
 const taskOf = (live = {}, task = {}) => ({
@@ -269,9 +271,7 @@ test(
         }
         return new Response("{}", { status: 404 });
       },
-      run: opaRunner(),
-      readBuiltIn: () => builtIn,
-      tmp: tempDir(t),
+      service: localService(policyEngineOf(t, { opa: opaBinary(), readBuiltIn: () => builtIn })),
     });
     const deny = (mode, custom_mode, reason = null) =>
       policies.deny("deny_link_branch", "org/repo", "main", () => ({

@@ -17,8 +17,18 @@ import {
   runTraits,
 } from "../listener/github-writes.mjs";
 import { ceilingOf, MODES } from "../listener/modes.mjs";
-import { allowOnly, builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
-import { policyEngine, sandboxAt, serve, tempDir, hasOpa } from "./helpers.mjs";
+import { createPolicies } from "../listener/policies.mjs";
+import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
+import {
+  localService,
+  policyEngine,
+  policyEngineOf,
+  sandboxAt,
+  serve,
+  tempDir,
+  hasOpa,
+} from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 
@@ -920,10 +930,13 @@ test(
         }
         return new Response("{}", { status: 404 });
       },
-      run: opaRunner(),
-      readOperator: () => new Map(Object.entries(operator)),
-      readBuiltIn: () => new Map([...allowOnly(), ["gh-own-comments.rego", rego]]),
-      tmp: tempDir(t),
+      service: localService(
+        policyEngineOf(t, {
+          opa: opaBinary(),
+          readBuiltIn: () => new Map([...allowOnly(), ["gh-own-comments.rego", rego]]),
+          readOperator: () => new Map(Object.entries(operator)),
+        }),
+      ),
       now: (() => {
         let clock = 0;
         // Each decision a day apart: the repo's listing is read again.
@@ -2133,16 +2146,17 @@ test(
   async (t) => {
     const files = builtIn();
     assert.ok(files.size);
-    const policies = createPolicies({
-      config: {},
-      github: async () => new Response("{}", { status: 404 }),
-      run: opaRunner(),
-      readBuiltIn: () => files,
-      tmp: tempDir(t),
-    });
-    assert.deepEqual(await policies.checkOperator(), { errors: [], warnings: [] });
+    // Each file alone, as the operator's layer of a policy service of its own.
+    const alone = (one) =>
+      createPolicies({
+        config: {},
+        github: async () => new Response("{}", { status: 404 }),
+        service: localService(policyEngineOf(t, { opa: opaBinary(), readBuiltIn: () => one })),
+      });
+    assert.deepEqual(await alone(files).checkOperator(), { errors: [], warnings: [] });
     for (const [name, text] of files) {
       const one = new Map([[name, text]]);
+      const policies = alone(one);
       for (const [mode, light] of [
         ["work", false],
         ["brainstorm", true],
@@ -2181,9 +2195,13 @@ test(
     const policies = createPolicies({
       config: {},
       github: async () => new Response("{}", { status: 404 }),
-      run: opaRunner(),
-      readBuiltIn: () => new Map([...allowOnly(), ["github.rego", builtIn().get("github.rego")]]),
-      tmp: tempDir(t),
+      service: localService(
+        policyEngineOf(t, {
+          opa: opaBinary(),
+          readBuiltIn: () =>
+            new Map([...allowOnly(), ["github.rego", builtIn().get("github.rego")]]),
+        }),
+      ),
     });
     const ask = (mode, action, kind, labels_added = [], more = {}) =>
       policies.deny("deny_github", "org/repo", "main", () => ({
@@ -2269,10 +2287,13 @@ test(
           }
           return new Response("{}", { status: 404 });
         },
-        run: opaRunner(),
-        readBuiltIn: builtIn,
-        readOperator: () => new Map(Object.entries(operator)),
-        tmp: tempDir(t),
+        service: localService(
+          policyEngineOf(t, {
+            opa: opaBinary(),
+            readBuiltIn: builtIn,
+            readOperator: () => new Map(Object.entries(operator)),
+          }),
+        ),
       });
     const policies = rerunPolicies();
     const rerun = (mode, attempt, light = false) =>
@@ -2353,11 +2374,14 @@ test(
           }
           return new Response("{}", { status: 404 });
         },
-        run: opaRunner(),
         // Deckhand's defaults as the image ships them: github.rego beside it.
-        readOperator: () => new Map(),
-        readBuiltIn: builtIn,
-        tmp: tempDir(t),
+        service: localService(
+          policyEngineOf(t, {
+            opa: opaBinary(),
+            readOperator: () => new Map(),
+            readBuiltIn: builtIn,
+          }),
+        ),
       });
     const checks = (policies) =>
       createWriteChecks({
@@ -2420,9 +2444,7 @@ test(
       const policies = createPolicies({
         config: {},
         github,
-        run: opaRunner(),
-        readBuiltIn: () => files,
-        tmp: tempDir(t),
+        service: localService(policyEngineOf(t, { opa: opaBinary(), readBuiltIn: () => files })),
       });
       return policies.deny("deny_github", "org/repo", "main", () => ({
         repo: "org/repo",
@@ -2483,10 +2505,13 @@ test(
           }
           return new Response("{}", { status: 404 });
         },
-        run: opaRunner(),
-        readBuiltIn: () => files,
-        readOperator: () => operator,
-        tmp: tempDir(t),
+        service: localService(
+          policyEngineOf(t, {
+            opa: opaBinary(),
+            readBuiltIn: () => files,
+            readOperator: () => operator,
+          }),
+        ),
       });
     const read = (policies, mode, light) =>
       createReadChecks({ policies }).checkRead(
@@ -2555,9 +2580,7 @@ deny_github contains "only plan runs create labels" if {
         }
         return new Response("{}", { status: 404 });
       },
-      run: opaRunner(),
-      readOperator: () => new Map(),
-      tmp: tempDir(t),
+      service: localService(policyEngineOf(t, { opa: opaBinary(), readOperator: () => new Map() })),
     });
     const { check } = createWriteChecks({
       needsInputLabel: () => null,
@@ -2601,9 +2624,12 @@ test(
         }
         return new Response("{}", { status: 404 });
       },
-      run: opaRunner(),
-      readOperator: () => new Map([["gh-reactions.rego", String(rego)]]),
-      tmp: tempDir(t),
+      service: localService(
+        policyEngineOf(t, {
+          opa: opaBinary(),
+          readOperator: () => new Map([["gh-reactions.rego", String(rego)]]),
+        }),
+      ),
       now: (() => {
         let clock = 0;
         // Each decision a day apart: the repo's listing is read again.
@@ -2680,10 +2706,13 @@ test(
           }
           return new Response("{}", { status: 404 });
         },
-        run: opaRunner(),
-        readBuiltIn: builtIn,
-        readOperator: () => new Map(Object.entries(operator)),
-        tmp: tempDir(t),
+        service: localService(
+          policyEngineOf(t, {
+            opa: opaBinary(),
+            readBuiltIn: builtIn,
+            readOperator: () => new Map(Object.entries(operator)),
+          }),
+        ),
       });
     const checks = (policies) =>
       createWriteChecks({
@@ -2903,10 +2932,13 @@ deny_github contains "only work runs answer review threads" if {
           }
           return new Response("{}", { status: 404 });
         },
-        run: opaRunner(),
-        readBuiltIn: builtIn,
-        readOperator: () => operator,
-        tmp: tempDir(t),
+        service: localService(
+          policyEngineOf(t, {
+            opa: opaBinary(),
+            readBuiltIn: builtIn,
+            readOperator: () => operator,
+          }),
+        ),
       });
     const checks = (policies) =>
       createWriteChecks({

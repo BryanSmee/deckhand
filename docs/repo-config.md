@@ -971,12 +971,13 @@ deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
 
 **The files**: every `*.rego` file of `.deckhand/policy/` on the default branch (not its
 subfolders), in package `deckhand`; a file in another package is a library its layer's files
-can import. **Two layers**, evaluated by one `opa`, the repository's packages moved under
+can import. **Two layers**, evaluated together by Deckhand's policy service (one `opa` with both
+layers loaded, never another repository's), the repository's packages moved under
 `deckhand_repository` (its `data.` references too): neither can define the other's rules. A
 repository's file must start with `package …`, after comments only, and use `sprintf()`, not
 template strings (`$"…"`):
 
-- **The operator's**: [Deckhand's defaults](#the-default-policies), in the listener's image,
+- **The operator's**: [Deckhand's defaults](#the-default-policies), in the policy service's image,
   under the operator's grants folder `policy/` ([security model](security.md#policies)), where
   a file **with the same name** replaces Deckhand's (one with only `package deckhand` drops it).
   Its allow rules are the ceiling: Deckhand's `allow.rego` allows every decision.
@@ -985,9 +986,9 @@ template strings (`$"…"`):
   rule for a built-in mode's run is ignored (for `merge`, `review` and `fix`, a config check
   error). Its file named as one of Deckhand's or the operator's replaces nothing (a warning).
 
-When only Deckhand's files apply, allowing the decision and none defining its deny rule, no
-`opa` runs (and the task's page keeps nothing); for `run`, the listener decides as `run.rego`
-would. The repository's folder is listed once, then
+When only Deckhand's files apply, allowing the decision and none defining its deny rule, the
+policy service isn't asked (and the task's page keeps nothing); for `run`, the listener decides as
+`run.rego` would. The repository's folder is listed once, then
 again after a push to its default branch (or 10 minutes).
 
 <!-- modes.rego: test/linked-branch.test.mjs evaluates this block with the real opa -->
@@ -1028,13 +1029,14 @@ settings, not rules.
 
 **Fail closed**: a policy that doesn't compile, takes more than 2 seconds, or makes an allow
 rule anything but a boolean or a deny rule anything but a set of strings refuses the decision,
-with a single `policy error: …` reason, whatever the other layer says. So does a policy folder
-that GitHub can't list. The onboarding pull request's config check compiles its branch's
+with a single `policy error: …` reason, whatever the other layer says. So do a policy folder
+that GitHub can't list and a policy service that can't be reached. The onboarding pull request's config check compiles its branch's
 policies and reports their errors.
 
 **What a policy can call**: Rego's builtins, without those that read the environment, the
-network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
-`json.verify_schema`) and `trace`: a policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
+network or the service's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
+`json.verify_schema`) and `trace`: a file that calls one doesn't compile, and refuses every
+decision of its layer. A policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
 
 <!-- onboarding: skip (listener/prompts.mjs leaves the inputs out of the onboarding prompt) -->
 
@@ -1441,7 +1443,7 @@ already, so its later runs get none.
 ### The default policies
 
 The ceilings leave room for what a prompt may need one day; Deckhand's default policies narrow
-them to what its prompts ask for. They ship in the listener's image (`policy/` in Deckhand's
+them to what its prompts ask for. They ship in the policy service's image (`policy/` in Deckhand's
 repository) and hold without any setup, in the operator's layer, under the operator's files:
 
 - **`allow.rego`** allows every decision (`run`: `run.rego`): the ceilings and the deny rules decide. The
@@ -1626,7 +1628,7 @@ modes that aren't light. Deckhand's default file, `gh-own-comments.rego`, narrow
 | `edit` a comment it posted   | ✅ allowed                          | ❌ (its replies are the listener's: its ceiling) | ❌ no token | ✅ once the repository allows them  |
 | `delete` a comment it posted | ❌ denied, the operator may broaden | ❌                                               | ❌ no token | ❌ denied, the operator may broaden |
 
-The file ships in the listener's image ([The default policies](#the-default-policies)), so
+The file ships in the policy service's image ([The default policies](#the-default-policies)), so
 this holds without any setup. The operator's `policy/gh-own-comments.rego` replaces it for every
 repository (a file without the rule on `delete`, say): never past the ceiling. A repository's
 own modes edit theirs once its `allow_github` lets them.
@@ -1661,7 +1663,7 @@ Deckhand's default file, `policy/gh-reactions.rego`, narrows the ceiling:
 | `react` on its issue or pull request, and their comments | ✅ allowed          | ✅ on its own issue and its comments (its ceiling) | ❌ no token | ✅ once the repository allows them |
 | `unreact`                                                | ✅ its own only     | ✅ its own only                                    | ❌ no token | ✅ its own only, likewise          |
 
-The file ships in the listener's image ([The default policies](#the-default-policies)), so
+The file ships in the policy service's image ([The default policies](#the-default-policies)), so
 this holds without any setup: it refuses nothing, the ceiling decides. A repository's
 `allow_github` lets its own modes react, up to their ceiling, and its deny rule refuses
 reactions altogether there:
@@ -1690,7 +1692,7 @@ the reply.
 | `resolve` a person's thread     | ❌ denied, the operator may broaden | ❌ (no ceiling) | ❌ no token | ❌ denied, the operator may broaden |
 | `unresolve` a thread            | ✅ allowed                          | ❌ (no ceiling) | ❌ no token | ✅ once the repository allows them  |
 
-The file ships in the listener's image ([The default policies](#the-default-policies)). The
+The file ships in the policy service's image ([The default policies](#the-default-policies)). The
 operator's `policy/gh-review-threads.rego` replaces it for every repository (a copy without the
 rule on `resolve` lets work runs resolve anyone's threads): never past the ceiling. A
 repository's deny rule narrows it for its runs.
