@@ -197,7 +197,7 @@ services:
       # The runner below, and the network it calls this service's services port from (8083: a
       # run's first tokens, the repos' tarballs).
       RUNNER_URL: http://runner:8080
-      SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-172.31.253.0/24}
+      SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-10.231.250.48/28}
     volumes:
       # The App's credentials (app.json), the runs' summaries, queue and brainstorm state.
       - data:/data
@@ -311,7 +311,7 @@ services:
       # port (a run's first tokens, the repos' tarballs).
       ORCHESTRATOR_URL: http://listener:8083
       # Its callers, the listener's services, on the network they share.
-      SERVICE_NETWORKS: edge+orchestrator+models=${RUNNER_SUBNET:-172.31.253.0/24}
+      SERVICE_NETWORKS: edge+orchestrator+models=${RUNNER_SUBNET:-10.231.250.48/28}
       # The broker's public keys, which its callers' service tokens are checked with.
       SERVICE_KEYS_DIR: /service-keys
     volumes:
@@ -456,12 +456,13 @@ networks:
     internal: true
   # The listener and the runner: one calls the other, nothing else is on it, and it has no way
   # out. Its subnet is fixed, as each tells its caller by it (SERVICE_NETWORKS): RUNNER_SUBNET in
-  # .env for another one.
+  # .env for another one. Outside Docker's default pools (172.17-172.31/16, 192.168/16), which a
+  # busy host has already handed out, like the broker's networks beside it.
   runner:
     internal: true
     ipam:
       config:
-        - subnet: ${RUNNER_SUBNET:-172.31.253.0/24}
+        - subnet: ${RUNNER_SUBNET:-10.231.250.48/28}
 
 volumes:
   data:
