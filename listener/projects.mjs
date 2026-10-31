@@ -5,6 +5,7 @@
 // repo (`allow_projects`, grants.mjs) are written; runs only add items (github-writes.mjs), so
 // the board moves as the listener sees the work, not as a run says. Nothing here stops a run:
 // a move that fails is logged, and noted in the run's log when a run started it.
+import { answersOnly } from "./capabilities.mjs";
 import { repoAllowed } from "./config.mjs";
 import { linkedIssue } from "./events.mjs";
 
@@ -204,14 +205,15 @@ export function createProjects({
     return done;
   }
 
-  // A work run starting on an issue: its `start` option. Light runs only read and answer.
+  // A work run starting on an issue: its `start` option. A run without `push` only reads and
+  // answers (capabilities.mjs answersOnly()): its capabilities are decided by then.
   // Not a run asked from the issue's pull request (a review's fix, a comment there: its
   // `replyTo`), nor one once that pull request is ready or merged: the issue stays where the
   // pull request's steps put it. `errors`: those of the config the run read (runs.mjs begin()):
   // with any, nothing moves, as for a delivery (the runs.mjs caller only gets here once the run
   // passed its checks, which refuse it then).
   function started(task, note, errors = []) {
-    if (task.live?.light || task.kind !== "issue") return Promise.resolve([]);
+    if (answersOnly(task.live) || task.kind !== "issue") return Promise.resolve([]);
     if (errors?.length) return Promise.resolve([]);
     const replyTo = task.live?.replyTo;
     if (replyTo != null && replyTo !== task.number) return Promise.resolve([]);

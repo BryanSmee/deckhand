@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { READ_PERMISSIONS } from "../listener/github-app.mjs";
-import { isFresh, isLight, kindOf } from "../listener/modes.mjs";
+import { isApart, isFresh, kindOf } from "../listener/modes.mjs";
 import {
   compactTables,
   firstMessage,
@@ -30,7 +30,7 @@ const settings = {
   brainstormEffort: "low",
   trigger: "Deckhand",
   modes: {
-    audit: { light: true, instructions: "docs/audit.md" },
+    audit: { instructions: "docs/audit.md" },
     triage: { session: "fresh", instructions: "docs/triage.md" },
   },
 };
@@ -44,12 +44,13 @@ const config = {
 };
 const grant = { hosts: ["registry.npmjs.org"], mounts: [{ root: "/srv/data", readOnly: false }] };
 
-test("modes: light, fresh and the dashboard's kind, built-in or the repo's own", () => {
-  assert.equal(isLight(issue, "brainstorm"), true);
-  assert.equal(isLight(issue, "discussion"), true);
-  assert.equal(isLight(issue, "audit"), true);
-  assert.equal(isLight(issue, "work"), false);
-  assert.equal(isLight(issue, "triage"), false);
+test("modes: apart from work, fresh and the dashboard's kind, built-in or the repo's own", () => {
+  assert.equal(isApart("brainstorm"), true);
+  assert.equal(isApart("discussion"), true);
+  // The repo's own modes never are: their capabilities pick their volumes.
+  assert.equal(isApart("audit"), false);
+  assert.equal(isApart("work"), false);
+  assert.equal(isApart("triage"), false);
   assert.equal(isFresh(issue, "idea"), true);
   assert.equal(isFresh(issue, "triage"), true);
   assert.equal(isFresh(issue, "discussion"), false);
@@ -57,19 +58,19 @@ test("modes: light, fresh and the dashboard's kind, built-in or the repo's own",
   assert.equal(kindOf("bug", "issue"), "bug");
   assert.equal(kindOf("audit", "pr"), "pr");
   // An analysis reads the code and its digest, in a session of its own.
-  assert.equal(isLight(issue, "analyze"), true);
+  assert.equal(isApart("analyze"), true);
   assert.equal(isFresh(issue, "analyze"), true);
   assert.equal(kindOf("analyze", "issue"), "issue");
-  // Research: light, its session kept, its own kind.
-  assert.equal(isLight(issue, "research"), true);
+  // Research: apart, its session kept, its own kind.
+  assert.equal(isApart("research"), true);
   assert.equal(isFresh(issue, "research"), false);
   assert.equal(kindOf("research", "issue"), "research");
 });
 
-test("modes: a review is light and fresh; no read capability gives workflows", () => {
-  assert.equal(isLight({ settings: {} }, "review"), true);
+test("modes: a review is apart and fresh; no read capability gives workflows", () => {
+  assert.equal(isApart("review"), true);
   assert.equal(isFresh({ settings: {} }, "review"), true);
-  // Workflows: the git gateway's push token only (allow_workflows), never a sandbox's.
+  // Workflows: the git gateway's push token only (the `workflows` grant), never a sandbox's.
   assert.ok(Object.values(READ_PERMISSIONS).every((names) => !names.includes("workflows")));
 });
 
@@ -135,13 +136,19 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   );
   assert.doesNotMatch(text, /ALLOWED_HOSTS|allow_repo_hosts/);
   assert.match(text, /Host mount roots granted to this repository: `\/srv\/data \(read-write\)`/);
-  assert.match(text, /`preview` in `.deckhand.yaml`: not granted: .* sets `allow_preview`/);
-  assert.match(text, /`dockerfile` in `.deckhand.yaml`: not granted: .* sets `allow_dockerfile`/);
+  assert.match(
+    text,
+    /`preview` in `.deckhand.yaml`: not granted: .* grant this repository `preview`/,
+  );
+  assert.match(
+    text,
+    /`dockerfile` in `.deckhand.yaml`: not granted: .* grant this repository `dockerfile`/,
+  );
   const granted = { ...grant, allowPreview: true, allowDockerfile: true };
   const open = promptFor(issue, { mode: "onboarding", settings, config, grant: granted });
   assert.match(open, /`preview` in `.deckhand.yaml`: allowed/);
   assert.match(open, /`dockerfile` in `.deckhand.yaml`: allowed\n/);
-  assert.match(text, /`\.github\/workflows\/`: not granted: .* sets `allow_workflows`/);
+  assert.match(text, /`\.github\/workflows\/`: not granted: .* grant this repository `workflows`/);
   const workflows = { ...grant, allowWorkflows: true };
   const editable = promptFor(issue, { mode: "onboarding", settings, config, grant: workflows });
   assert.match(editable, /`\.github\/workflows\/`: allowed: .* mentions `secrets`/);
@@ -164,15 +171,26 @@ test("prompts: onboarding and the sandbox's rules point to Deckhand's own source
   assert.match(rules, /`\/usr\/local\/share\/deckhand\/src`/);
 });
 
-test("prompts: a repo's mode, light or not, with its instructions", () => {
-  const own = { name: "audit", light: true };
-  const light = promptFor(pr, { mode: "audit", own, instructions: "Review it.\n", settings });
+test("prompts: a repo's mode, with `push` or not, with its instructions", () => {
+  const own = { name: "audit" };
+  const read = ["pull", "read:issues"];
+  const light = promptFor(pr, {
+    mode: "audit",
+    own,
+    instructions: "Review it.\n",
+    settings,
+    capabilities: read,
+  });
   assert.match(light, /^You are in the "audit" mode of this repository, on pull request #13/);
-  assert.match(light, /your GitHub token can only read/);
+  assert.match(
+    light,
+    /You can't push, create a branch or open a pull request: this run doesn't have the `push` capability/,
+  );
+  assert.match(light, /The project's setup was skipped/);
   assert.match(light, /from the repository:\n\nReview it\.$/);
   const heavy = promptFor(issue, {
     mode: "triage",
-    own: { name: "triage", light: false },
+    own: { name: "triage" },
     instructions: "Triage.",
     settings,
   });
@@ -182,7 +200,7 @@ test("prompts: a repo's mode, light or not, with its instructions", () => {
   );
   const onPr = promptFor(pr, {
     mode: "fix",
-    own: { name: "fix", light: false },
+    own: { name: "fix" },
     instructions: "Fix.",
     settings,
     branches: ["feature/x"],
@@ -192,7 +210,7 @@ test("prompts: a repo's mode, light or not, with its instructions", () => {
 
 test("prompts: work runs are told whether their pushes may change workflow files", () => {
   const granted = { ...grant, allowWorkflows: true };
-  const own = { name: "triage", light: false };
+  const own = { name: "triage" };
   const mode = { mode: "triage", own, instructions: "Triage.", settings };
   for (const [task, extra] of [
     [issue, { mode: "work", settings }],
@@ -201,15 +219,15 @@ test("prompts: work runs are told whether their pushes may change workflow files
   ]) {
     assert.match(
       promptFor(task, { ...extra, grant }),
-      /GitHub refuses pushes that add or change files under `\.github\/workflows\/`[^]*`allow_workflows`\): leave them out/,
+      /GitHub refuses pushes that add or change files under `\.github\/workflows\/`[^]*grant `workflows`\): leave them out/,
     );
     assert.match(
       promptFor(task, { ...extra, grant: granted }),
       /Pushes may add or change files under `\.github\/workflows\/`[^]*top-level `permissions:`[^]*mention `secrets`/,
     );
   }
-  // A light mode never pushes, nor a fork's pull request: nothing to say.
-  const light = { ...mode, own: { name: "audit", light: true } };
+  // A mode's run without `push` never pushes, nor a fork's pull request: nothing to say.
+  const light = { ...mode, own: { name: "audit" }, capabilities: ["pull"] };
   assert.doesNotMatch(promptFor(issue, { ...light, grant }), /workflows/);
   const fork = { settings, branches: [], grant: granted };
   assert.doesNotMatch(promptFor(pr, { ...fork, mode: "work" }), /workflows/);
@@ -752,8 +770,8 @@ test("prompts: a work run follows its capabilities: no push, no branch talk; no 
   const pr13 = promptFor(pr, { ...work, capabilities: read });
   assert.match(pr13, /`gh pr diff 13`/);
   assert.doesNotMatch(pr13, /fork|gh pr checkout/);
-  // A repo's own mode that isn't light, the same, its instructions after.
-  const own = { name: "triage", light: false, instructions: "docs/triage.md" };
+  // A repo's own mode, the same, its instructions after.
+  const own = { name: "triage", instructions: "docs/triage.md" };
   const mode = promptFor(issue, {
     ...work,
     mode: "triage",

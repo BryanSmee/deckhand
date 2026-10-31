@@ -1,5 +1,5 @@
 // The checks the git gateway runs on the workflow files a push of a repo granted
-// `allow_workflows` changes (git-gateway.mjs): a workflow a sandbox wrote must cap its token
+// `workflows` changes (git-gateway.mjs): a workflow a sandbox wrote must cap its token
 // at read and name no secret, since GitHub runs a branch's own workflows on push and
 // pull_request.
 //

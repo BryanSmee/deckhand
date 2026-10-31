@@ -1,4 +1,4 @@
-// The git gateway's copies of the repos granted `allow_workflows` (git-gateway.mjs): a bare
+// The git gateway's copies of the repos granted `workflows` (git-gateway.mjs): a bare
 // mirror per repo under the listener's data, so a push's workflow files can be read before
 // GitHub gets them. A push is a thin pack: its deltas may point at objects GitHub already
 // has, so it is indexed against the mirror, fetched just before (`index-pack --fix-thin`).

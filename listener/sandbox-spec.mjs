@@ -5,7 +5,7 @@
 // broker (broker.mjs, which signs the run's tokens: tokens()) }.
 import { proxyEnv } from "./egress.mjs";
 import { restricted } from "./github-forks.mjs";
-import { isFresh, OPEN, sessionName } from "./modes.mjs";
+import { isApart, isFresh, RESEARCH } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
 import { SCREENSHOT_DIR } from "./runner/inbox.mjs";
 
@@ -118,19 +118,27 @@ export async function tokenEnv({ config, task, agent, broker }, sandbox) {
 const capabilitiesOf = (live) => new Set(live.capabilities ?? []);
 
 // Whether the gateways check the run's fetches (github-forks.mjs restricted(), on what the broker
-// has: `push` from its mode, its capabilities, whether it is a fork's): it gets what the repo's
-// later runs trust, so it may not fetch a fork's code.
-const checked = (live) =>
-  restricted({ push: !live.light, fork: live.fork, caps: live.capabilities ?? [] });
+// has: its capabilities, whether it is a fork's): it gets what the repo's later runs trust, so it
+// may not fetch a fork's code.
+const checked = (live) => restricted({ fork: live.fork, caps: live.capabilities ?? [] });
 
-// The name its volumes start with. A light mode's runs and work runs never share one, as the
-// issue's sessions are theirs: a comment without a trigger line goes on with work's only
-// (task-modes.mjs, sessionNames()). Within each, apart:
+// The name a run in `mode` of the issue `name` starts its volumes with before its capabilities
+// are decided: its mode's (modes.mjs `volumes`), where runs.mjs looks for a session to continue.
+// sessionOf() may then pick another of the same mode's.
+export function sessionName(name, mode) {
+  if (RESEARCH.has(mode)) return `${name}-research`;
+  return isApart(mode) ? `${name}-light` : name;
+}
+
+// The name its volumes start with. Runs in a mode with volumes of its own (`live.light`: modes.mjs
+// `volumes`, apart) and work runs never share one, as the issue's sessions are theirs: a comment
+// without a trigger line goes on with work's only (task-modes.mjs, sessionNames()). Within each,
+// apart:
 // - a run without `pull` (`-bare`: nothing of the repository's, not even an earlier run's clone
 //   or transcript);
 // - a run that doesn't stash from one that does (`push`, as for how it starts: SANDBOX_LIGHT,
 //   sandboxEnv()): its reset throws away what the other leaves uncommitted for its next run. A
-//   work run without `push` gets `-readonly`;
+//   work run without `push` gets `-readonly`, a run apart with it `-push`;
 // - a run the gateways check from one they don't (`-trusted`: it gets caches, an engine or a
 //   branch, so it never starts where a run that may fetch a fork's code left it);
 // - a run that reaches the open internet (`-open`) from one that doesn't: whatever a page gets
@@ -138,7 +146,7 @@ const checked = (live) =>
 //   nor is read by, a run that has caches or a token without it.
 // Research runs have their own (sessionName()).
 export function sessionOf(name, live) {
-  if (OPEN.has(live.mode)) return sessionName(name, live.light, live.mode);
+  if (RESEARCH.has(live.mode)) return sessionName(name, live.mode);
   const kept = keptSession(name, live);
   return capabilitiesOf(live).has("internet") ? `${kept}-open` : kept;
 }
@@ -149,21 +157,24 @@ function keptSession(name, live) {
   const own = live.light ? `${name}-light` : name;
   if (live.capabilities && !caps.has("pull")) return `${own}-bare`;
   const stashes = live.capabilities ? caps.has("push") : !live.light;
-  if (!live.light && stashes) return name;
-  // A light mode's run never has `push` (capabilities.mjs outcomeOf() drops it), so never
-  // stashes: the light runs' volumes are the ones that don't.
+  if (stashes) return live.light ? `${own}-push` : name;
   const base = live.light ? own : `${name}-readonly`;
   return checked(live) ? `${base}-trusted` : base;
 }
 
 // Every name sessionOf() may give a run of the issue `name` that isn't a research run: a work
-// run's (`light` false) or a light one's (true), either when `light` is undefined; the two never
+// run's (`light` false) or one apart's (true), either when `light` is undefined; the two never
 // share one. Where a comment without a trigger line looks for a session to go on with, before
 // the run's capabilities are decided (task-modes.mjs).
 export function sessionNames(name, light) {
   const each = (names) => names.flatMap((n) => [n, `${n}-open`]);
   const work = each([name, `${name}-readonly`, `${name}-readonly-trusted`, `${name}-bare`]);
-  const lighter = each([`${name}-light`, `${name}-light-trusted`, `${name}-light-bare`]);
+  const lighter = each([
+    `${name}-light`,
+    `${name}-light-trusted`,
+    `${name}-light-bare`,
+    `${name}-light-push`,
+  ]);
   if (light === undefined) return [...work, ...lighter];
   return light ? lighter : work;
 }

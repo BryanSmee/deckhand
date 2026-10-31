@@ -62,7 +62,6 @@ export function runFields(record) {
   return {
     mode,
     custom_mode: !!mode && !BUILT_IN.has(mode),
-    light: record ? record.light === true : false,
     reason: record?.reason ?? null,
   };
 }

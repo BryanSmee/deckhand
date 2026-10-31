@@ -3,7 +3,7 @@
 // cache, and a container engine. What is refused stops the run with a reply (RunError).
 import { agentFor } from "./agents/index.mjs";
 import { mandatoryHosts, operatorHosts } from "./egress.mjs";
-import { grantCheck, resolveMounts } from "./grants.mjs";
+import { grantCheck, notGranted, resolveMounts } from "./grants.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { CONFIG_FILE, engineCacheVolume } from "./repo-config.mjs";
 
@@ -48,10 +48,11 @@ function refusedMounts(refused, name) {
 // reach, its host mounts and limits. Refused mounts, and a preview hook or Dockerfile
 // without their grant, stop the run, and the reply lists them. `task`: the run's (tasks.mjs),
 // `agent` its agent, `note(text)` a line in its log.
-// `fs`: the file system the mounts are resolved on (grants.mjs resolveMounts()), for tests.
-export function grantedAccess(config, task, settings, { agent, note, log, fs }) {
+// `fs`: the file system the mounts are resolved on (grants.mjs resolveMounts()), for tests;
+// `granted(repo)`: what the operator's policies grant it (policies.mjs grants(), grantsBy()).
+export async function grantedAccess(config, task, settings, { agent, note, log, fs, granted }) {
   const { repo } = task;
-  const check = grantCheck(config, repo, settings, { fs });
+  const check = await grantCheck(config, repo, settings, { fs, granted });
   if (check.error) {
     log(`${repo}: ${check.error.message}`);
     const where = check.error.file
@@ -63,7 +64,7 @@ export function grantedAccess(config, task, settings, { agent, note, log, fs }) 
   if (missing.length) {
     log(`${repo}: ${CONFIG_FILE} asks for what its grant doesn't allow: ${missing.join("; ")}`);
     throw new RunError(
-      `${configErrors(task.base, missing, agent.displayName)}\n\nThe operator can add these to the repository's file in the grants folder (see Deckhand's docs/security.md), or the repository can remove them from \`${CONFIG_FILE}\`.`,
+      `${configErrors(task.base, missing, agent.displayName)}\n\nThe operator can grant these to the repository with \`allow_grant\` rules in the grants folder's policies (see Deckhand's docs/security.md#the-grants), or the repository can remove them from \`${CONFIG_FILE}\`.`,
     );
   }
   const { mounts, refused, notes } = check.mounts;
@@ -86,14 +87,16 @@ export function grantedAccess(config, task, settings, { agent, note, log, fs }) 
   };
 }
 
-// Why a research run (modes.mjs OPEN) can't run in `repo`, or null: its grants have errors, or
-// don't set `allow_research`. Checked when `/mode research` is asked for (task-modes.mjs), and
-// again when a run with `internet` starts (capabilities.mjs, bareAccess()): the grant may be
-// gone meanwhile.
-export function researchRefusal(config, repo, check = grantCheck(config, repo, { mounts: [] })) {
+// Why a research run (modes.mjs RESEARCH) can't run in `repo`, or null: its grants have errors, or
+// the operator's policies don't grant it `research`. Checked when `/mode research` is asked for
+// (task-modes.mjs), and again when a run with `internet` starts (capabilities.mjs,
+// bareAccess()): the grant may be gone meanwhile. `granted(repo)`: grantedAccess()'s; `check`:
+// grantCheck()'s, when the caller has it.
+export async function researchRefusal(config, repo, { granted = null, check = null } = {}) {
+  check ??= await grantCheck(config, repo, { mounts: [] }, { granted });
   if (check.error) return grantsRefusal(check);
   if (!check.grant.allowResearch) {
-    return "research runs need the operator's `allow_research: true` grant for this repository (in its file of the grants folder, or `default.yaml`; see Deckhand's docs/security.md)";
+    return `research runs need the \`research\` grant: ${notGranted("research")} (see Deckhand's docs/security.md#the-grants)`;
   }
   return null;
 }
@@ -104,10 +107,12 @@ export function researchRefusal(config, repo, check = grantCheck(config, repo, {
 // for what it serves. Without, only those. Nothing else of the repo's: no mounts, no cached
 // hosts (no CA), its limits only. Its config's requests (a preview hook, a Dockerfile) don't
 // matter: none of it runs.
-export function bareAccess(config, task, { agent, log, internet }) {
-  const check = grantCheck(config, task.repo, { mounts: [] });
+export async function bareAccess(config, task, { agent, log, internet, granted }) {
+  const check = await grantCheck(config, task.repo, { mounts: [] }, { granted });
   if (check.error) log(`${task.repo}: ${check.error.message}`);
-  const refused = internet ? researchRefusal(config, task.repo, check) : grantsRefusal(check);
+  const refused = internet
+    ? await researchRefusal(config, task.repo, { check })
+    : grantsRefusal(check);
   if (refused) throw new RunError(`${cantRun(agent)}: ${refused}.`);
   const { grant } = check;
   const trusted = mandatoryHosts(config, agent);

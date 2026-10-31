@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, realpathSync, symlinkSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { grantFor, grantsFrom } from "../listener/grants.mjs";
+import { grantFor, grantsFrom, withGrants } from "../listener/grants.mjs";
 import { KEYS, parseRepoConfig } from "../listener/repo-config.mjs";
 import { effectiveView } from "../listener/repo-view.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
@@ -12,12 +12,20 @@ const config = testConfig({
   MAX_PARALLEL: "3",
 });
 
-// `grants`: the grants folder's files, { "owner/repo.yaml": text }.
-function view(yaml, grants = {}, repo = "org/app") {
+// `grants`: the grants folder's files, { "owner/repo.yaml": text }; `granted`: the grants the
+// operator's policies give the repo (grants.mjs GRANTS).
+function view(yaml, grants = {}, repo = "org/app", granted = []) {
   const { settings } = parseRepoConfig(yaml, config);
-  const grant = grantFor(grantsFrom(grants, config), config, repo);
+  const grant = grantOf(grants, repo, granted);
   return effectiveView(config, repo, settings, grant);
 }
+
+// What grants.mjs grantOf() gives `repo`, its policies granting `names`.
+const grantOf = (grants, repo, names, cfg = config) =>
+  withGrants(grantFor(grantsFrom(grants, cfg), cfg, repo), {
+    granted: new Set(names),
+    files: names.length ? ["grants.rego"] : [],
+  });
 
 const byKey = (rows, key) => rows.find((r) => r.key === key);
 
@@ -31,7 +39,6 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
       "modes:",
       "  audit:",
       "    instructions: .github/audit.md",
-      "    light: true",
     ].join("\n"),
   );
   assert.deepEqual(byKey(settings, "users"), {
@@ -49,9 +56,9 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
   // Not granted: it stops runs, and says which grant is missing.
   assert.equal(byKey(settings, "dockerfile").value, "docker/Dockerfile");
   assert.equal(byKey(settings, "dockerfile").source, "refused");
-  assert.match(byKey(settings, "dockerfile").note, /allow_dockerfile: true/);
-  // A light mode takes the brainstorms' model and effort by default (customMode()).
-  assert.equal(byKey(settings, "modes.audit").value, ".github/audit.md · best/medium · light");
+  assert.match(byKey(settings, "dockerfile").note, /don't grant dockerfile/);
+  // A mode takes work's model and effort by default (customMode()).
+  assert.equal(byKey(settings, "modes.audit").value, ".github/audit.md · sonnet/medium");
   assert.deepEqual(byKey(settings, "limits"), {
     key: "limits",
     value: "2 CPUs, 4g memory, 2048 processes",
@@ -157,10 +164,11 @@ test("broken grants: what needs a grant is unknown, not refused", () => {
 
 test("dockerfile and preview: from the repo once granted", () => {
   const yaml = "dockerfile: Dockerfile\npreview: ./preview.sh\n";
-  const { settings, grant } = view(yaml, {
-    "org/app.yaml":
-      "allow_dockerfile: true\nallow_preview: true\nallow_branch_docker_images: true\n",
-  });
+  const { settings, grant } = view(yaml, {}, "org/app", [
+    "dockerfile",
+    "preview",
+    "branch_docker_images",
+  ]);
   assert.equal(byKey(settings, "dockerfile").source, "repo");
   assert.deepEqual(
     [byKey(settings, "preview").value, byKey(settings, "preview").source],
@@ -168,15 +176,15 @@ test("dockerfile and preview: from the repo once granted", () => {
   );
   assert.equal(byKey(settings, "allow_branch_docker_images").value, "true");
   assert.equal(grant.allowPreview, true);
+  assert.deepEqual(grant.grantFiles, ["grants.rego"]);
   assert.equal(byKey(view("preview: ./preview.sh\n").settings, "preview").source, "refused");
 });
 
-test("docker: refused without allow_docker; granted, its engine noted when there is none", () => {
+test("docker: refused without its grant; granted, its engine noted when there is none", () => {
   const refused = byKey(view("docker: true\n").settings, "docker");
   assert.equal(refused.source, "refused");
-  assert.match(refused.note, /allow_docker: true/);
-  const grants = { "org/app.yaml": "allow_docker: true\n" };
-  const granted = view("docker: { cache: true }\n", grants);
+  assert.match(refused.note, /don't grant docker/);
+  const granted = view("docker: { cache: true }\n", {}, "org/app", ["docker"]);
   assert.deepEqual(byKey(granted.settings, "docker"), {
     key: "docker",
     value: "a container engine, its cache kept",
@@ -185,11 +193,11 @@ test("docker: refused without allow_docker; granted, its engine noted when there
   });
   assert.equal(granted.grant.allowDocker, true);
   assert.equal(granted.grant.allowWorkflows, false);
-  const workflows = view("", { "org/app.yaml": "allow_workflows: true\n" });
+  const workflows = view("", {}, "org/app", ["workflows"]);
   assert.equal(workflows.grant.allowWorkflows, true);
   const withEngine = { ...config, engine: "sysbox" };
   const { settings } = parseRepoConfig("docker: true\n", withEngine);
-  const grant = grantFor(grantsFrom(grants, withEngine), withEngine, "org/app");
+  const grant = grantOf({}, "org/app", ["docker"], withEngine);
   const row = byKey(effectiveView(withEngine, "org/app", settings, grant).settings, "docker");
   assert.equal(row.note, null);
   assert.equal(byKey(view("").settings, "docker").value, "none");

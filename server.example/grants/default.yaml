@@ -10,8 +10,8 @@
 # HTTPS too: public mirrors downloaded from again and again (docs/setup.md#download-cache).
 # cached_hosts: [deb.debian.org, dl-cdn.alpinelinux.org]
 
-# The yes-or-no grants, all false by default; a repository's own file overrides each one.
-# allow_dockerfile: false
+# The yes-or-no grants (a Dockerfile, a preview hook, an engine, research, workflows,
+# auto-merge) aren't here: policy/grants.rego grants them, repository by repository.
 
 # Every sandbox's limits, instead of the built-in 2 CPUs, 4g of memory and 2048 processes;
 # a repository's own file can set its own.

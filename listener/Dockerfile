@@ -24,7 +24,7 @@ RUN npm run build
 # The listener has no other dependencies: the dashboard's build and graphql-js's bundle, no
 # node_modules.
 FROM node:26-alpine
-# git: the git gateway reads the workflow files a push of a repo granted `allow_workflows`
+# git: the git gateway reads the workflow files a push of a repo granted `workflows`
 # changes, against a mirror of it (git-mirror.mjs). No Docker CLI: the runner has it.
 RUN apk add --no-cache git
 WORKDIR /app

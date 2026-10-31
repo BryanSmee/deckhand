@@ -19,7 +19,7 @@ export const APP_PERMISSIONS = {
   checks: "read",
   statuses: "read",
   discussions: "write",
-  // Only the git gateway's push token carries it, for repos granted `allow_workflows`.
+  // Only the git gateway's push token carries it, for repos granted `workflows`.
   workflows: "write",
   // Projects (v2) of the organizations it is installed on: the listener moves the issues of
   // repos whose `projects:` names one, and runs add items to those granted `allow_projects`
@@ -155,7 +155,7 @@ export const tunnelsGitHub = (run) => !!run?.decided && !readsGitHub(run);
 export const ISSUES_WRITE = { issues: "write" };
 // The git gateway's own token for a push it lets through: never handed to a sandbox.
 export const PUSH_PERMISSIONS = { contents: "write" };
-// Its token for a push of a repo granted `allow_workflows` (grants.mjs): GitHub refuses any
+// Its token for a push of a repo granted `workflows` (grants.mjs): GitHub refuses any
 // push that adds or changes a file under .github/workflows/ without it.
 export const WORKFLOW_PUSH_PERMISSIONS = { ...PUSH_PERMISSIONS, workflows: "write" };
 

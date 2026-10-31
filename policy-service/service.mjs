@@ -19,11 +19,12 @@ import { createEngine } from "./engine.mjs";
 // The services that decide (lib/services.mjs CALLS): the orchestrator (merges, reviews, fixes,
 // linked branches, reviewers, the config check, `/mode policy` and the Policies tab), the github
 // service (a run's writes) and the broker. Until they leave the listener, it calls as the
-// orchestrator.
+// orchestrator. The runner asks the grants a repository gets (#498), the operator's alone: a
+// decision, not the capabilities nor a repository's files' check.
 const DECIDERS = ["orchestrator", "github", "broker"];
 export const ROUTES = {
-  "GET /policies": DECIDERS,
-  "POST /evaluate": DECIDERS,
+  "GET /policies": [...DECIDERS, "runner"],
+  "POST /evaluate": [...DECIDERS, "runner"],
   "POST /capabilities": DECIDERS,
   "POST /check": DECIDERS,
 };
@@ -63,6 +64,15 @@ export function grantsDirOf(env, read = undefined) {
   return readSettings(env, settingSource(env, file, specs), specs).GRANTS_DIR;
 }
 
+// What the runner may ask (#498): a repository's grants, of the operator's layer alone. It
+// checks specs, builds and preview hooks against them, and has no business with a run's writes or
+// a repository's own files. Throws a Refused otherwise.
+export function runnerAsks(body) {
+  if (body.decision !== "grant" || body.repo != null || body.repoAllow) {
+    throw new Refused(403, "the runner asks a repository's grants only, of the operator's layer");
+  }
+}
+
 // `engine`: createEngine()'s; `guard(req)` → the caller, or a Refused (serviceGuard()).
 export function createPolicyService({ engine, guard, log = () => {} }) {
   let draining = false;
@@ -75,12 +85,15 @@ export function createPolicyService({ engine, guard, log = () => {} }) {
         return res.end(draining && req.url === "/ready" ? "draining\n" : "ok\n");
       }
       try {
-        guard(req);
+        const caller = guard(req);
         const path = req.url.split("?")[0];
         if (req.method === "GET" && path === "/policies") return send(res, 200, engine.policies());
         const body = await readJsonBody(req, MAX_BODY);
         if (!body || typeof body !== "object") throw new Refused(400, "expected an object");
-        if (path === "/evaluate") return send(res, 200, await engine.evaluate(body));
+        if (path === "/evaluate") {
+          if (caller === "runner") runnerAsks(body);
+          return send(res, 200, await engine.evaluate(body));
+        }
         // What a run gets as it starts (#495): every mode of a config page in one call.
         if (path === "/capabilities") {
           return send(res, 200, await engine.evaluateCapabilities(body));
