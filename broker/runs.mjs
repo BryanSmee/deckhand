@@ -344,8 +344,12 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
     const live = [];
     const dead = new Set();
     for (const id of ids) (await get(id)) ? live.push(id) : dead.add(id);
-    // Only those found gone: another copy may have added one meanwhile. Their files go too.
-    for (const id of dead) await expired(id);
+    // Only those found gone: another copy may have added one meanwhile. Their files go too,
+    // unless the run started again meanwhile (its id is reused): read once more right before.
+    for (const id of dead) {
+      if (await get(id)) dead.delete(id);
+      else await expired(id);
+    }
     if (dead.size) {
       await index((all) =>
         Object.fromEntries(

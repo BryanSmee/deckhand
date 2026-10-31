@@ -855,7 +855,9 @@ answer or two copies taking writes out of order never lose, repeat or reorder a 
 write the store failed leaves nothing. The blob is the file byte for byte: the runner redacts
 a token's shape in a message before it writes it (a run from before the broker service has
 its file redacted in place once, when it is copied over), and the store refuses an append it
-would redact rather than make the two differ. The same bytes sent again add nothing, a broker away gets them once it is back, and a restarted listener sends what the
+would redact rather than make the two differ: the broker's own key (its own part, not the PEM
+armour every key shares, so a message quoting `-----BEGIN PRIVATE KEY-----` goes through), which
+holds up that run's inbox from there, as it should never be in a comment. The same bytes sent again add nothing, a broker away gets them once it is back, and a restarted listener sends what the
 broker doesn't have (all of it, for a run from before the broker service). So either copy of
 the broker, or one restarted, answers from the same offset, and the agent gets every line once.
 A screenshot goes on the broker's `runs` stream, which the listener reads and acknowledges

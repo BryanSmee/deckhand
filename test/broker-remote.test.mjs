@@ -8,7 +8,8 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
-import { createBroker } from "../broker/server.mjs";
+import { createBroker, storeSecrets } from "../broker/server.mjs";
+import { createRuns } from "../broker/runs.mjs";
 import { createBroker as createListenerBroker } from "../listener/broker.mjs";
 import { createBrokerService, legacyKey } from "../listener/broker-service.mjs";
 import { createInbox } from "../listener/runner/inbox.mjs";
@@ -214,4 +215,44 @@ test("the runner's inbox: a token's shape in a message redacted before it is wri
   writeFileSync(join(inboxDir, "r1", "inbox.jsonl"), `{"t":"ghp_${"c".repeat(36)}"}\n`);
   await inbox.resync("r1");
   assert.equal(copied.at(-1), '{"t":"[redacted]"}\n');
+});
+
+test("a message quoting a PEM's armour goes through send() and the broker whole; the broker's own key never does", async (t) => {
+  // The store as the broker opens it: its key's own part is the secret, not the armour.
+  const key = testKey();
+  const store = openStore("memory:", { secrets: () => storeSecrets(key) });
+  const broker = await service(t, { store, key });
+  const listener = remote(t, broker);
+  const inboxDir = tempDir(t);
+  const inbox = createInbox({ inboxDir, mirror: listener.mirror });
+  await inbox.write("r1", null, null);
+  const other = testKey().privateKey.export({ type: "pkcs8", format: "pem" });
+  inbox.send("r1", `A fixture's key, for the test:\n${other}`);
+  const file = () => readFileSync(join(inboxDir, "r1", "inbox.jsonl"));
+  await until(async () => (await store.readBlob("inbox:r1"))?.equals(file()));
+  assert.match(file().toString(), /BEGIN PRIVATE KEY/);
+  // The broker's own key is refused there, and what follows waits behind it.
+  const own = key.privateKey.export({ type: "pkcs8", format: "pem" });
+  const before = await store.readBlob("inbox:r1");
+  inbox.send("r1", own);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.deepEqual(await store.readBlob("inbox:r1"), before);
+});
+
+test("an expired run's files go, unless its id started again before they did", async () => {
+  const store = openStore("memory:");
+  const removed = [];
+  const runs = createRuns({ store, key: testKey(), expired: async (id) => removed.push(id) });
+  await runs.issue("gone", { repo: "o/r", sandbox: "net-1" });
+  await runs.issue("again", { repo: "o/r", sandbox: "net-2" });
+  await store.delete("run:gone");
+  // "again" found expired, then started anew before its files went.
+  const get = store.get;
+  let first = true;
+  store.get = async (name) => {
+    if (name === "run:again" && first) return ((first = false), null);
+    return get(name);
+  };
+  assert.deepEqual(await runs.list(), []);
+  assert.deepEqual(removed, ["gone"]);
 });

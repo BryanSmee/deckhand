@@ -32,6 +32,16 @@ export function drainMs(text) {
   return Number(text) * 1000;
 }
 
+// What its store refuses or redacts of the signing key (lib/store.mjs `secrets`): the key's own
+// part, past the armour and the 16 bytes every Ed25519 PKCS8 key starts with
+// (`MC4CAQAwBQYDK2VwBCIEI`, 21 base64 characters, the 22nd shared with the key). The whole PEM
+// would refuse any message quoting `-----BEGIN PRIVATE KEY-----`, which is no secret.
+export function storeSecrets(key) {
+  const pem = key.privateKey.export({ type: "pkcs8", format: "pem" });
+  const body = pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "");
+  return [body.slice(22)];
+}
+
 // The broker's parts on `store`, with `key`: what the tests start too. → { server, runs, files }.
 export function createBroker({ store, key, callers, now = Date.now, sleep, log = () => {} }) {
   const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
@@ -70,10 +80,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     });
     const key = signingKey(env.KEY_DIR || "/keys");
     // Its key never goes in the store: a value holding it is refused there, a blob redacted.
-    const pem = key.privateKey.export({ type: "pkcs8", format: "pem" });
+    const secrets = storeSecrets(key);
     const store = openStore(env.STORE_URL || "file:///data/store", {
       password: env.REDIS_PASSWORD,
-      secrets: () => [pem],
+      secrets: () => secrets,
     });
     const graceMs = drainMs(env.DRAIN_SECONDS);
     started = { ...createBroker({ store, key, callers, log }), graceMs, key };
