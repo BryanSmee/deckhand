@@ -40,6 +40,32 @@ test("resp: replies parsed whatever the chunks they arrive in", () => {
   assert.equal(replies.length, 7);
 });
 
+test("resp: a large reply in many chunks is joined once", () => {
+  const replies = [];
+  const feed = replyParser((reply) => replies.push(reply));
+  const body = Buffer.alloc(4 * 1024 * 1024, 7);
+  const wire = Buffer.concat([Buffer.from(`$${body.length}\r\n`), body, Buffer.from("\r\n:1\r\n")]);
+  const concat = Buffer.concat;
+  let copied = 0;
+  Buffer.concat = (list, ...rest) => {
+    const joined = concat(list, ...rest);
+    copied += joined.length;
+    return joined;
+  };
+  try {
+    for (let i = 0; i < wire.length; i += 16 * 1024) feed(wire.subarray(i, i + 16 * 1024));
+  } finally {
+    Buffer.concat = concat;
+  }
+  assert.deepEqual(replies, [body, 1]);
+  assert.ok(copied < 2 * wire.length, `${copied} bytes copied for ${wire.length}`);
+});
+
+test("resp: what isn't a Redis reply throws", () => {
+  const feed = replyParser(() => {});
+  assert.throws(() => feed(Buffer.from("HTTP/1.1 400 Bad Request\r\n")), /not a Redis reply/);
+});
+
 test("resp: Redis URLs", () => {
   assert.deepEqual(parseRedisUrl("redis://store"), {
     host: "store",
@@ -59,6 +85,9 @@ test("resp: Redis URLs", () => {
   });
   assert.equal(parseRedisUrl("redis://store", { password: "env" }).password, "env");
   assert.throws(() => parseRedisUrl("redis://store/x"), /a number/);
+  // A user without a password would send no AUTH, and fail later on NOAUTH.
+  assert.throws(() => parseRedisUrl("redis://deckhand@store"), /no password/);
+  assert.equal(parseRedisUrl("redis://deckhand@store", { password: "env" }).user, "deckhand");
   assert.throws(() => parseRedisUrl("http://store"), /not a Redis URL/);
 });
 
@@ -127,6 +156,26 @@ test("resp: a dropped connection fails the calls in flight, the next call reconn
   assert.equal(String(await client.call("ECHO", "y")), "y");
   // Authenticated again on the new connection.
   assert.equal(redis.got.filter(([name]) => name === "AUTH").length, 2);
+});
+
+test("resp: a call nothing answers fails in time, and the next one connects again", async (t) => {
+  let answer = false;
+  const redis = await fakeRedis(t, () => (answer ? "+PONG\r\n" : undefined));
+  const client = redisClient(redis.url, { timeoutMs: 100 });
+  t.after(() => client.close());
+  const started = Date.now();
+  await assert.rejects(client.call("PING"), /didn't answer within 100 ms/);
+  assert.ok(Date.now() - started < 1000);
+  answer = true;
+  assert.equal(await client.call("PING"), "PONG");
+});
+
+test("resp: a server that isn't Redis fails the calls, the client doesn't crash", async (t) => {
+  const redis = await fakeRedis(t, () => "HTTP/1.1 400 Bad Request\r\n\r\n");
+  const client = redisClient(redis.url);
+  t.after(() => client.close());
+  await assert.rejects(client.call("PING"), /not a Redis reply/);
+  await assert.rejects(client.call("PING"), /not a Redis reply/);
 });
 
 test("resp: a refused password fails the call, and the next tries again", async (t) => {
@@ -306,9 +355,10 @@ test("redis: a known secret is never written to it", { skip }, async (t) => {
   t.after(() => store.close());
   await assert.rejects(store.set("app", { key: appKey }), /a secret can't go in the store/);
   await assert.rejects(store.append("runs", { token: signingKey }), /a secret/);
-  await assert.rejects(store.putBlob("log", `signed with ${signingKey}\n`), /a secret/);
+  await store.putBlob("log", `signed with ${signingKey}\n`);
   const client = redisClient(redisUrl);
   t.after(() => client.close());
   const [, keys] = await client.call("SCAN", "0", "MATCH", `${prefix}*`, "COUNT", 1000);
-  assert.deepEqual(keys, []);
+  assert.deepEqual(keys.map(String), [`${prefix}b:log`]);
+  assert.equal(String(await client.call("GET", `${prefix}b:log`)), "signed with [redacted]\n");
 });

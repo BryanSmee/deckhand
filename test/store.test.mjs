@@ -23,6 +23,7 @@ test("file: keys, leases, streams, consumers and blobs outlive a restart", async
   await before.release("orchestrator", "copy-a", lease.epoch);
   const ids = [];
   for (const n of [1, 2, 3]) ids.push(await before.append("runs", { n }));
+  await before.read("runs", "orchestrator");
   await before.ack("runs", "orchestrator", [ids[0], ids[2]]);
   await before.appendBlob("log", "a");
   await before.close();
@@ -134,20 +135,36 @@ test("openStore: a known secret, a private key or a GitHub token is never writte
   const store = openStore(`file://${dir}`, { secrets: () => [signingKey] });
   const pem = "-----BEGIN PRIVATE KEY-----\nMIIE\n-----END PRIVATE KEY-----";
   const token = `ghs_${"a".repeat(36)}`;
+  // In a value or an event: refused.
   const writes = [
     () => store.set("app", { key: pem }),
     () => store.setIfAbsent("signing", signingKey),
     () => store.compareAndSet("signing", null, `prefix ${signingKey.slice(0, 20)}`),
     () => store.append("runs", { token }),
-    () => store.putBlob("log", Buffer.from(`key: ${signingKey}`)),
-    () => store.appendBlob("log", `${token}\n`),
   ];
   for (const write of writes) await assert.rejects(write(), /a secret can't go in the store/);
-  // Nothing of them was written.
   assert.equal(await store.get("app"), null);
   assert.equal(await store.get("signing"), null);
   assert.deepEqual(await store.read("runs", "edge"), []);
-  assert.equal(await store.readBlob("log"), null);
+  // In a blob (a run's log): redacted, the rest kept, a test fixture's private key too.
+  await store.putBlob("log", Buffer.from(`key: ${signingKey}\n`));
+  await store.appendBlob("log", `${token}\n`);
+  await store.appendBlob("log", `$ cat test/fixture.pem\n${pem}\n`);
+  assert.equal(
+    (await store.readBlob("log")).toString(),
+    `key: [redacted]\n[redacted]\n$ cat test/fixture.pem\n${pem}\n`,
+  );
+  // Bytes around a secret come back as they were.
+  const bytes = Buffer.concat([
+    Buffer.from([0xff, 0x00]),
+    Buffer.from(signingKey),
+    Buffer.from([0x80]),
+  ]);
+  await store.putBlob("shot", bytes);
+  assert.deepEqual(
+    await store.readBlob("shot"),
+    Buffer.concat([Buffer.from([0xff, 0x00]), Buffer.from("[redacted]"), Buffer.from([0x80])]),
+  );
   // The rest goes through.
   await store.set("app", { id: 42 });
   assert.deepEqual(await store.get("app"), { id: 42 });

@@ -79,6 +79,10 @@ export function storeContract(name, open) {
     assert.equal(await store.increment("window", 1, { ttlMs: 100 }), 2);
     clock.at += 100;
     assert.equal(await store.increment("window", 1, { ttlMs: 100 }), 1);
+    // A fraction, then compared as the number it is.
+    assert.equal(await store.increment("f", 1), 1);
+    assert.equal(await store.increment("f", 0.1), 1.1);
+    assert.equal(await store.compareAndSet("f", 1.1, 2), true);
     await store.set("text", "a");
     await assert.rejects(store.increment("text"), /isn't a number/);
   });
@@ -155,6 +159,21 @@ export function storeContract(name, open) {
     await store.append("runs", { n: 4 });
     assert.deepEqual(events(await store.read("runs", "orchestrator")), [4]);
     assert.deepEqual(await store.read("other", "orchestrator"), []);
+  });
+
+  test(`${name}: only events read are acknowledged`, async (t) => {
+    const { store } = await setup(t);
+    const ids = [];
+    for (const n of [1, 2, 3]) ids.push(await store.append("runs", { n }));
+    const events = (list) => list.map((e) => e.event.n);
+    // Not read yet: nothing to acknowledge, it is read as any other.
+    assert.equal(await store.ack("runs", "orchestrator", [ids[0]]), 0);
+    assert.deepEqual(events(await store.read("runs", "orchestrator", { count: 2 })), [1, 2]);
+    // The third wasn't read: it stays.
+    assert.equal(await store.ack("runs", "orchestrator", ids), 2);
+    assert.deepEqual(events(await store.read("runs", "orchestrator")), [3]);
+    assert.equal(await store.ack("runs", "orchestrator", [ids[2], "999", "x"]), 1);
+    assert.deepEqual(await store.read("runs", "orchestrator"), []);
   });
 
   test(`${name}: a stream keeps its last maxLength events`, async (t) => {

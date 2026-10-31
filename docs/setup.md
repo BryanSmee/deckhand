@@ -1232,17 +1232,25 @@ appendonly yes
 appendfsync everysec
 # Never evict: an evicted lease would start again at epoch 1, an evicted event would be lost.
 maxmemory-policy noeviction
-# A password (or an ACL user, `user deckhand on >… ~deckhand:* +@all`), and no other
-# network than the services' own.
-requirepass <a long random password>
+# No other network than the services' own, and a user allowed the store's commands and keys
+# only (those its scripts call included: Redis checks them too). REDIS_PASSWORD, with
+# redis://deckhand@redis:6379 as STORE_URL.
+user default off
+user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +getrange +set +append +select +ping +quit
 ```
+
+`requirepass <a long random password>` (the `default` user) works too, but leaves it every
+command, `FLUSHALL` and `CONFIG` included. A call Redis doesn't answer within 5 seconds fails,
+and the next one connects again: a copy that loses Redis learns in time that it can't renew
+its lease.
 
 Ready-made Kubernetes manifests, Redis's included, are on their way (issue #396).
 
 Secrets never go in the store: the App's key, the signing key and the agents' credentials
 stay in their service's own secret or volume. A write holding one the service knows, a
-private key or a GitHub token is refused (`lib/store.mjs`, `withoutSecrets()`): with Redis,
-every service using it could read it otherwise.
+private key or a GitHub token is refused in a value or an event (`lib/store.mjs`,
+`withoutSecrets()`): with Redis, every service using it could read it otherwise. In a blob (a
+run's log, its files), the secrets and GitHub tokens are redacted instead.
 
 ## Container engine
 
