@@ -3,7 +3,8 @@
 import assert from "node:assert/strict";
 import { Agent, request } from "node:http";
 import { test } from "node:test";
-import { drain, drainable } from "../lib/drain.mjs";
+import { EventEmitter } from "node:events";
+import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { serve } from "./helpers.mjs";
 
 // A server whose /stream answers (an agent's) stay open in `streams`, for the test to write
@@ -112,4 +113,41 @@ test("the grace period ends first: resolves false", async (t) => {
   ends.fn();
   assert.equal(await drained, false);
   streams[0].destroy();
+});
+
+test("on SIGTERM, every service: what it does first, its servers drain together, then it exits", async (t) => {
+  const { server, port, streams } = await streaming(t);
+  const other = await streaming(t);
+  const stream = await get(port, "/stream", false);
+  const signals = new EventEmitter();
+  const steps = [];
+  let exited;
+  const exitedOnce = new Promise((resolve) => (exited = resolve));
+  // One with a drain of its own (the proxy's): used, with the grace period.
+  other.server.drain = (options) => (
+    steps.push(`own drain ${options.graceMs}`),
+    drain(other.server, options)
+  );
+  const stopping = drainOnSigterm([server, other.server], {
+    graceMs: 600_000,
+    log: (line) => steps.push(line),
+    before: async () => steps.push("saved"),
+    exit: (code) => exited(code),
+    signals,
+  });
+  assert.equal(stopping.draining, false);
+
+  signals.emit("SIGTERM");
+  assert.equal(stopping.draining, true);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  await refused(port);
+  await refused(other.port);
+  streams[0].end("data: 2\n\n");
+  assert.equal(await stream.body(), "data: 1\n\ndata: 2\n\n");
+  assert.equal(await exitedOnce, 0);
+  assert.deepEqual(steps, [
+    "Stopping: open connections finish first (600 s at most)",
+    "saved",
+    "own drain 600000",
+  ]);
 });
