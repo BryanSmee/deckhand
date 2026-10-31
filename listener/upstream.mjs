@@ -89,6 +89,9 @@ export function baseOf(upstream) {
 // `transform(status, headers, body)`: the answer read whole, up to `maxTransform` bytes, and
 // sent back as it returns it (null: as it was); past that size, it goes on as it comes, as is
 // (github-gateway.mjs's GraphQL reads without a permission, whose error it explains).
+// `settle()`: awaited once the answer came whole, before its end is sent: what the call changed
+// is kept (the github service's store) before the client can send its next call, to the other
+// copy maybe. Its length isn't sent ahead, so that the client sees the end only then.
 export function forward(
   req,
   res,
@@ -106,6 +109,7 @@ export function forward(
     follow,
     transform,
     maxTransform = 1024 * 1024,
+    settle,
   },
 ) {
   const sender = (url) => (url.protocol === "https:" ? httpsRequest : httpRequest);
@@ -131,14 +135,17 @@ export function forward(
       }
       if (transform) return transformed(answer);
       answered(answer.statusCode, answer.headers);
-      res.writeHead(answer.statusCode, forwarded(answer.headers));
+      const headers = forwarded(answer.headers, settle ? ["content-length"] : []);
+      res.writeHead(answer.statusCode, headers);
       // Server-sent events: each chunk goes on as it arrives.
       answer.on("data", idle);
       if (tap) answer.on("data", tap);
-      answer.pipe(res);
-      answer.on("end", resolve);
+      answer.pipe(res, { end: !settle });
+      answer.on("end", settle ? () => settled().then(() => (res.end(), resolve())) : resolve);
       answer.on("error", () => (res.destroy(), resolve()));
     };
+    // settle()'s failure is the caller's to log: the answer ends all the same.
+    const settled = () => Promise.resolve(settle?.()).catch(() => {});
     // The answer held until it ends, then transform()'s; past maxTransform, what was held and
     // the rest go on as they come.
     const transformed = (answer) => {
@@ -154,11 +161,11 @@ export function forward(
         if (size <= maxTransform) return;
         passing = true;
         answered(answer.statusCode, answer.headers);
-        res.writeHead(answer.statusCode, forwarded(answer.headers));
+        res.writeHead(answer.statusCode, forwarded(answer.headers, settle ? ["content-length"] : []));
         for (const held of chunks) res.write(held);
       });
       answer.on("end", () => {
-        if (passing) return (res.end(), resolve());
+        if (passing) return settled().then(() => (res.end(), resolve()));
         const held = Buffer.concat(chunks);
         let body = held;
         try {
@@ -171,8 +178,7 @@ export function forward(
           ...forwarded(answer.headers),
           "content-length": String(body.length),
         });
-        res.end(body);
-        resolve();
+        settled().then(() => (res.end(body), resolve()));
       });
       answer.on("error", () => (res.destroy(), resolve()));
     };

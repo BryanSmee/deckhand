@@ -323,6 +323,20 @@ function readBody(req, max, idleMs, clock) {
   });
 }
 
+// A run's calls in flight, counted in this process: the gateway's default (`inFlight`).
+export function countInFlight() {
+  const calls = new WeakMap();
+  return {
+    take(run, max) {
+      const n = calls.get(run) ?? 0;
+      if (n >= max) return false;
+      calls.set(run, n + 1);
+      return true;
+    },
+    release: (run) => calls.set(run, (calls.get(run) ?? 1) - 1),
+  };
+}
+
 export function createGithubGateway({
   broker, // broker.mjs: the run a token belongs to
   app, // () => the GitHub App (github-app.mjs), or null before /setup
@@ -373,6 +387,9 @@ export function createGithubGateway({
   repoId = async () => null,
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
+  // { take(run, max) → whether the run had fewer than `max` calls in flight, now one more;
+  // release(run) }: this process's count by default, the github service's store for its copies.
+  inFlight = countInFlight(),
   maxWrite = MAX_WRITE,
   idleMs = IDLE_MS,
   clock = globalThis,
@@ -385,8 +402,7 @@ export function createGithubGateway({
   // GraphQL's path as route() decodes it, and the spellings GitHub may read as it too.
   const graphqlPaths = new Set(["graphql", graphql.pathname.slice(1).toLowerCase()]);
   const isGraphql = (path) => graphqlPaths.has(path.toLowerCase().replace(/\/+$/, ""));
-  // run → its calls in flight; run → what its log noted.
-  const inFlight = new WeakMap();
+  // run → what its log noted.
   const noted = new WeakMap();
 
   // GitHub's error shape, which gh shows as is.
@@ -515,11 +531,9 @@ export function createGithubGateway({
     // A file host's call holds no token, and was a plain host's before: not counted, so a setup
     // that downloads many files at once isn't cut off part-way.
     const counted = !where.file;
-    const calls = inFlight.get(run) ?? 0;
-    if (counted && calls >= maxInFlight) {
+    if (counted && !(await inFlight.take(run, maxInFlight))) {
       return fail(res, 429, `more than ${maxInFlight} calls at once`);
     }
-    if (counted) inFlight.set(run, calls + 1);
     // A rerun's slot (github-writes.mjs reserve()): free again once the call is over, unless
     // GitHub's answer made it a rerun done.
     let slot = null;
@@ -705,8 +719,8 @@ export function createGithubGateway({
         lacks: lacks && { message: lacks.message, paths: readPaths },
       });
     } finally {
-      slot?.release?.();
-      if (counted) inFlight.set(run, inFlight.get(run) - 1);
+      await slot?.release?.();
+      if (counted) await inFlight.release(run);
     }
   }
 
@@ -964,6 +978,18 @@ export function createGithubGateway({
       else answer = null;
     };
     const at = Date.now();
+    // What the answer changed, kept before its end reaches the run (`settle`, forward()), so that
+    // its next call sees it whichever copy of the github service takes it; after a call GitHub
+    // never answered, once forward() is over. Once either way.
+    let kept = null;
+    const after = () =>
+      (kept ??= (async () => {
+        if (refs && status === 200) await forks.remember(run, advertised, refs.refs());
+        if (!watched || !answer) return;
+        await wroteWrite(run, { ...watched, at }, status, Buffer.concat(answer));
+      })().catch((error) =>
+        log(`GitHub gateway: after ${clip(run, `${req.method} ${target.pathname}`)}: ${error}`),
+      ));
     // An Actions log's redirect, followed here: HTTPS only (or the API's own scheme, a test's
     // plain HTTP), with none of the run's or the App's credentials, the signed URL being its own.
     const logs = api && req.method === "GET" && ACTIONS_LOGS.test(path);
@@ -995,6 +1021,7 @@ export function createGithubGateway({
       ...((watched || advertised) && {
         tap,
         answered: (code, _, lost) => (status = lost ? 0 : code),
+        settle: after,
       }),
       ...(logs && { follow }),
       ...(lacks && {
@@ -1012,13 +1039,7 @@ export function createGithubGateway({
         maxTransform: MAX_ANSWER,
       }),
     });
-    if (refs && status === 200) forks.remember(run, advertised, refs.refs());
-    if (!watched || !answer) return;
-    try {
-      wroteWrite(run, { ...watched, at }, status, Buffer.concat(answer));
-    } catch (error) {
-      log(`GitHub gateway: after ${clip(run, `${watched.method} ${target.pathname}`)}: ${error}`);
-    }
+    await after();
   }
 
   return { handle };
