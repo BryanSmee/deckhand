@@ -60,7 +60,7 @@ test("another algorithm, none among them, is refused whatever the header says", 
     refused(() => check(`${head}.${body}.${signature.toString("base64url")}`), /EdDSA/);
   }
   // `none`'s empty signature isn't even a token's shape.
-  refused(() => check(`${b64({ alg: "none" })}.${body}.`), /not a run token/);
+  refused(() => check(`${b64({ alg: "none" })}.${body}.`), /not a token/);
   // An HMAC "signed" with the public key, the classic confusion: refused on its alg alone.
   refused(() => check(`${b64({ alg: "HS256", kid: key.kid })}.${body}.AAAA`), /EdDSA/);
 });
