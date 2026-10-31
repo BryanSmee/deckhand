@@ -1565,10 +1565,15 @@ allow_grant if {
   `acknowledge_automerge_and_preview_is_highly_dangerous` (an engine, workflow files run with
   the Actions secrets, merges nobody reviewed are too broad to grant every repository by
   accident). The listener asks each of them again for two repositories nobody has: `*/*`, and
-  `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that grants
-  it there, so to every repository or to all of an owner's (`startswith`, `glob.match`), gives it
-  to none, and the listener logs why: list each `input.repo.name`. The others may go to every
-  repository (a rule without `input.repo.name`).
+  `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that also
+  grants it there (one without `input.repo.name`, a `startswith` on the owner, a `glob.match`
+  with `*`) gives it to none, and the listener logs why. This is a best-effort check, not a
+  guarantee: a rule that doesn't match those two names (`regex.match("^acme/[a-z-]+$", …)`,
+  `endswith(input.repo.name, "/api")`) still grants every repository it matches. List each
+  `input.repo.name`. The others may go to every repository (a rule without `input.repo.name`).
+- **Auto-merge is two grants**: `auto_merge_public` merges on a private repository too, so a
+  `deny_grant` keeping a repository out of auto-merge names both:
+  `input.grant in {"auto_merge", "auto_merge_public"}`.
 - **Yours only**: only the operator's layer (Deckhand's `policy/` under the grants folder's
   `policy/`) is asked. A repository's own `.deckhand/policy/` `allow_grant` or `deny_grant` is
   ignored, and a config check error.

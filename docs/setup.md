@@ -1178,7 +1178,11 @@ Deckhand's `mode-work.rego` gives every repository mode work's writes as the cei
 maintainers remove it, and in `.deckhand/policy/` give the mode an `allow_capabilities` rule
 without `push`, and `allow_github` and `allow_push` rules that leave it out: a rule on
 `input.custom_mode` alone now gives a former comment-only mode work's writes (issues, pull
-requests, labels, sub-issues).
+requests, labels, sub-issues). Such a mode's runs, without `push`, still move no project item and
+set no needs-input label when they stop to ask, as before. What is decided before a run's
+capabilities treats every repository mode as work now: its runs queue in work's order rather
+than before work runs, a comment in it takes the issue's needs-input label off, and
+`wait_for_answers` holds it back.
 
 `light` is gone from every policy input too (`allow_run`, `allow_github`, `allow_push`,
 `allow_link_branch`, `allow_request_review`): a rule reading `input.light`, yours or a

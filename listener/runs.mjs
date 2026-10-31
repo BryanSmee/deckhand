@@ -10,6 +10,7 @@ import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
 import { brainstormDefaults, customMode, entryRun, isApart, isFresh } from "./modes.mjs";
+import { answersOnly } from "./capabilities.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -804,8 +805,8 @@ export function createRuns(ctx) {
     } else await post(task, text);
     live.replied = true;
     ctx.saveLive(task);
-    // Light runs ask questions all along: no label for those.
-    if (status === "needs-input" && config.needsInputLabel && !live.light) {
+    // Runs that only answer (no `push`) ask questions all along: no label for those.
+    if (status === "needs-input" && config.needsInputLabel && !answersOnly(live)) {
       await ctx.label(task.repo, task.number, true);
     }
   }

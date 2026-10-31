@@ -884,7 +884,7 @@ function parseMode(name, mode, settings, config, fail, warn = () => {}) {
       bad(
         key,
         "gone: what a mode's runs get and write is decided by the policies now",
-        `Remove ${where}.light, and narrow the mode in .deckhand/policy/ so it only reads and answers: \`allow_capabilities\` without \`push\`, and \`allow_github\` and \`allow_push\` rules that leave it out (one on \`input.custom_mode\` alone gives it work's writes: docs/repo-config.md#modes).`,
+        `Remove ${where}.light, and narrow the mode in .deckhand/policy/ so it only reads and answers: \`allow_capabilities\` without \`push\`, and \`allow_github\` and \`allow_push\` rules that leave it out (one on \`input.custom_mode\` alone gives it work's writes). Its runs then move no project item and set no needs-input label, but queue as work's and are held by \`wait_for_answers\` (docs/repo-config.md#modes).`,
       );
     } else if (!MODE_KEYS.includes(key)) {
       bad(key, `unknown key (expected ${MODE_KEYS.join(", ")})`);

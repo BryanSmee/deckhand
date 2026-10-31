@@ -449,7 +449,10 @@ error, listed in the reply:
   only reads and answers, write an `allow_capabilities` rule without `push` (`pull` and the
   `read:*` it needs), and make sure your `allow_github` and `allow_push` rules leave it out: one
   on `input.custom_mode` alone gives it work's writes (issues, pull requests, labels…). A
-  policy reading `input.light` is said by the config check: no input has it any more.
+  policy reading `input.light` is said by the config check: no input has it any more. A run
+  without `push` moves no project item and sets no needs-input label; but every repository mode
+  now queues as work, takes the needs-input label off as it starts, and waits with
+  `wait_for_answers`, as these are decided before its capabilities.
 - **Fresh modes** (`session: fresh`) start a new session on every run and don't keep it:
   the issue stays in the mode it was in, and its next run continues its own session.
 - **A mode narrows, never widens**: the hosts, mounts and limits of every run of the repo

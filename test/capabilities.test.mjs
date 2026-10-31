@@ -5,6 +5,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  answersOnly,
   CAPABILITIES,
   capabilitiesInput,
   KNOWN,
@@ -895,3 +896,14 @@ test(
     for (const name of names) assert.equal(gates[name](none), false, `${name}: by default`);
   },
 );
+
+test("answersOnly: a run without `push` once decided, else a mode apart; no label nor project for it", () => {
+  // Decided: the capabilities alone, whatever the mode.
+  assert.equal(answersOnly({ light: false, capabilities: ["pull", "read:issues"] }), true);
+  assert.equal(answersOnly({ light: false, capabilities: ["pull", "push"] }), false);
+  assert.equal(answersOnly({ light: true, capabilities: ["pull", "push"] }), false);
+  // Not yet: its mode's volumes.
+  assert.equal(answersOnly({ light: true, capabilities: null }), true);
+  assert.equal(answersOnly({ light: false, capabilities: null }), false);
+  assert.equal(answersOnly(null), false);
+});

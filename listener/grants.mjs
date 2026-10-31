@@ -87,7 +87,8 @@ export const GRANTS = {
 // so every repo at once would be too broad by accident. Asked again for repositories no one has,
 // anywhere (ANY_REPO) and under the asked one's owner (ownerProbe()): a rule that gives it there
 // (to every repository, or to all of an owner's: `startswith`, `glob.match`) gives it nowhere
-// (policies.mjs grants()). A rule listing names one by one passes.
+// (policies.mjs grants()). Best effort: a wide rule that misses both names (a `regex.match`, an
+// `endswith`) isn't caught. A rule listing names one by one passes.
 export const REPO_ONLY = new Set([
   "docker",
   "workflows",
@@ -143,13 +144,24 @@ const MOVED = {
 // repository's file, a `deny_grant` keeps out what a rule for every repository would give it);
 // a REPO_ONLY key in default.yaml was never valid there; any other value, the rule granting it.
 function moved(key, file, value) {
-  const name = value === "public" ? "auto_merge_public" : MOVED[key];
+  const publicMerge = key === "allow_auto_merge" && value === "public";
+  const name = publicMerge ? "auto_merge_public" : MOVED[key];
   const repo = REPO_FILE.exec(file);
   const own = repo && `${repo[1]}/${repo[2]}`.toLowerCase();
   const where = "in policy/ of the grants folder (docs/security.md#the-grants)";
+  // Neither true, false nor (auto-merge's) public: never valid, and no rule to copy from it.
+  if (value !== true && value !== false && !publicMerge) {
+    const allowed = key === "allow_auto_merge" ? "true, false or public" : "true or false";
+    return `${key}: gone (#498), and its value ${JSON.stringify(value)} never was valid (${allowed}): remove it, and grant what the repository needs ${where}`;
+  }
   if (value === false) {
+    // Either auto-merge grant merges on a private repository: keeping it out takes both.
+    const which =
+      key === "allow_auto_merge"
+        ? 'input.grant in {"auto_merge", "auto_merge_public"}'
+        : `input.grant == "${name}"`;
     const keep = own
-      ? `; to keep from ${own} a grant your policies give every repository, \`deny_grant contains "…" if { input.repo.name == "${own}"; input.grant == "${name}" }\` ${where}`
+      ? `; to keep from ${own} a grant your policies give every repository, \`deny_grant contains "…" if { input.repo.name == "${own}"; ${which} }\` ${where}`
       : "";
     return `${key}: gone (#498), remove it: nothing is granted unless the operator's policies grant it${keep}`;
   }

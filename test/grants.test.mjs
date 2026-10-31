@@ -729,6 +729,44 @@ test("each grant's former key is an error saying what to write, in default.yaml 
   }
 });
 
+test("a former grant key's other values: never valid, no rule to copy; auto-merge's deny takes both", () => {
+  const said = (files) => {
+    try {
+      grantFor(grantsFrom(files, config), config, "org/repo");
+    } catch (error) {
+      return error.message;
+    }
+    return "";
+  };
+  // `public` is auto-merge's alone; another value of any key was never valid: no rule suggested.
+  for (const [key, value] of [
+    ["allow_preview", "public"],
+    ["allow_docker", "public"],
+    ["allow_dockerfile", '"no"'],
+    ["allow_research", '"false"'],
+    ["allow_auto_merge", "yes-please"],
+  ]) {
+    const text = said({ "org/repo.yaml": `${key}: ${value}\n` });
+    assert.match(
+      text,
+      new RegExp(`${key}: gone \\(#498\\), and its value .* never was valid`),
+      key,
+    );
+    assert.doesNotMatch(text, /allow_grant if|auto_merge_public/, key);
+  }
+  assert.match(
+    said({ "org/repo.yaml": "allow_auto_merge: maybe\n" }),
+    /never was valid \(true, false or public\)/,
+  );
+  // allow_auto_merge: false in a repository's file: keeping it out takes both grants, as either
+  // merges on a private repository.
+  assert.ok(
+    said({ "org/repo.yaml": "allow_auto_merge: false\n" }).includes(
+      'input.repo.name == "org/repo"; input.grant in {"auto_merge", "auto_merge_public"}',
+    ),
+  );
+});
+
 test("autoMergeFiles: the operator's policy files that name an auto-merge grant", () => {
   const files = new Map([
     ["grants.rego", 'package deckhand\n\nallow_grant if {\n  input.grant in {"auto_merge"}\n}\n'],

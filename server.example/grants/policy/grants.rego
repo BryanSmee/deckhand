@@ -12,8 +12,9 @@ package deckhand
 #   input.grant in {"dockerfile", "preview", "research"}
 # }
 
-# Granted one repository at a time only (a rule giving them to every repository, or to all of an
-# owner's by a prefix or a glob, gives them to none: list each input.repo.name): `docker` (a container engine next to its sandboxes), `workflows` (its pushes may change
+# Granted one repository at a time only: list each input.repo.name (a rule that also matches
+# "*/*" or "<owner>/*", as one for every repository or an owner's prefix does, gives them to none;
+# a check at best, other wide rules aren't caught): `docker` (a container engine next to its sandboxes), `workflows` (its pushes may change
 # .github/workflows/), `auto_merge` (UNSAFE: `review.merge` merges Deckhand's pull requests with no
 # human reading them; `auto_merge_public` on a public repository too) and, EVEN MORE UNSAFE,
 # `acknowledge_automerge_and_preview_is_highly_dangerous` (auto-merge while its preview hook runs

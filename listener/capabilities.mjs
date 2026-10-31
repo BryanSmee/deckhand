@@ -440,6 +440,13 @@ export async function capabilityNameWarnings({ repo, settings, decide }) {
   return [...warnings];
 }
 
+// Whether a live run (runs.mjs) only reads and answers: one without `push` once its start
+// decided its capabilities, else (before that) one whose mode has volumes of its own. It moves
+// no project item and sets no needs-input label: a repository mode its policies give no `push`
+// (a former `light: true` one, #498) as a brainstorm.
+export const answersOnly = (live) =>
+  Array.isArray(live?.capabilities) ? !live.capabilities.includes("push") : !!live?.light;
+
 // The capabilities a run gets, for its log: "pull, push, setup" or "none".
 export const listed = (used) => (used.length ? used.join(", ") : "none");
 
