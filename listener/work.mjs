@@ -402,6 +402,8 @@ export function createWorkApi({
       author: user,
       base,
       settings,
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
     });
   }
 
@@ -840,6 +842,7 @@ export function createWorkApi({
       author: user,
       base,
       settings,
+      dashboard: true,
     };
     await accept(issue ? linkTo(item, issue) : item);
     return `Review of #${number} queued.`;
@@ -941,6 +944,7 @@ export function createWorkApi({
       author: user,
       base,
       settings,
+      dashboard: true,
     });
     return { message: `Sent to #${number}.`, url: posted.html_url, task: taskKey(repo, number) };
   }

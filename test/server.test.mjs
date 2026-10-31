@@ -79,6 +79,22 @@ async function fakeGitHub(files = {}) {
       for (const w of [...waiters]) if (w.match(entry)) w.resolve(entry);
       for (const h of holds) if (h.match(entry)) await h.released;
       res.setHeader("content-type", "application/json");
+      // The repo's policies (.deckhand/policy/ on its default branch), keyed "policy:<name>":
+      // listed, then read by blob. None: a 404, as GitHub answers for a missing folder.
+      const policies = Object.keys(files).filter((k) => k.startsWith("policy:"));
+      if (req.url === "/repos/org/repo/contents/.deckhand/policy?ref=trunk" && policies.length) {
+        const list = policies.map((k) => ({
+          type: "file",
+          name: k.slice(7),
+          sha: `policy-${k.slice(7)}`,
+        }));
+        return res.end(JSON.stringify(list));
+      }
+      const policyBlob = /^\/repos\/org\/repo\/git\/blobs\/policy-(.+)$/.exec(req.url);
+      if (policyBlob && files[`policy:${policyBlob[1]}`] !== undefined) {
+        const content = Buffer.from(files[`policy:${policyBlob[1]}`]).toString("base64");
+        return res.end(JSON.stringify({ content, encoding: "base64" }));
+      }
       // Other branches' files are keyed "<branch>:<path>".
       const file = /^\/repos\/org\/repo\/contents\/([^?]+)\?ref=(.+)$/.exec(req.url);
       if (file) {
@@ -2753,6 +2769,10 @@ mounts:
   test("a discussion in the repo's category is answered in it, with a discussions token", async (t) => {
     const { dir, github, listener, send } = await listen(t, {
       ".deckhand.yaml": "inbox:\n  discussions: Ask Claude\n",
+      // Its author and labels, for the policies' allow_run (run-policy.mjs).
+      "graphql:discussion(number: $number) { author": JSON.stringify({
+        data: { repository: { discussion: { author: { login: "alice" }, labels: { nodes: [] } } } },
+      }),
     });
     await send(discussion("General"), "discussion");
     await listener.until(`category "General" doesn't call Deckhand`);
@@ -2782,6 +2802,9 @@ mounts:
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
     assert.ok(args.includes("deckhand.task=org/repo#discussion-8"));
   });
+
+  // The repo's allow rule for its mode audit: without it, the mode doesn't run.
+  const AUDIT_RUNS = 'package deckhand\n\nallow_run if input.mode == "audit"\n';
 
   const MODES = `setup: npm ci
 model: opus
@@ -3187,7 +3210,12 @@ modes:
   test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
     const { dir, github, listener, send } = await listen(
       t,
-      { ".deckhand.yaml": MODES, ".deckhand/audit.md": "Read the diff and list the risks." },
+      {
+        ".deckhand.yaml": MODES,
+        ".deckhand/audit.md": "Read the diff and list the risks.",
+        // Its own mode runs once it allows it (allow_run, run-policy.mjs).
+        "policy:modes.rego": AUDIT_RUNS,
+      },
       (dir) => {
         writeGrant(dir, "hosts: [registry.npmjs.org, pypi.org]\n");
         return {};
@@ -3384,6 +3412,32 @@ modes:
     assert.equal(lastRun(dir), "work full");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_SESSION=$/m);
     assert.equal(brainstormOf(dir), undefined);
+  });
+
+  test("a run the policies refuse (deny_run): a reply quoting them, nothing runs, the decision kept", async (t) => {
+    const { dir, github, send } = await listen(t, {}, (dir) => {
+      // An opa whose every deny rule says "not today", for this listener only.
+      rmSync(join(dir, "opa"));
+      symlinkSync(new URL("fixtures/refuse-opa.sh", import.meta.url).pathname, join(dir, "opa"));
+      return {};
+    });
+    await send(comment("alice", "Deckhand\nShip it."));
+    await until(() => replies(github).length === 1, "the refusal");
+    assert.equal(
+      JSON.parse(replies(github)[0].body).body,
+      "No `work` run: the policies refuse it: `not today`.\n\n<!-- deckhand -->",
+    );
+    // Its input was read: the issue the comment is on.
+    assert.ok(
+      github.requests.some((r) => r.method === "GET" && r.path === "/repos/org/repo/issues/12"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.equal(exists(join(dir, "run-args")), null);
+    const [kept] = JSON.parse(readFileSync(join(dir, "decisions.json"), "utf8"))["org/repo#12"];
+    assert.deepEqual(
+      [kept.decision, kept.rule, kept.denied, kept.messages, kept.input.mode, kept.input.sender],
+      ["run", "deny_run", true, ["not today"], "work", "alice"],
+    );
   });
 
   test("/after #77: waits, through a restart, and runs the comment once #77 is done", async (t) => {
@@ -3635,7 +3689,10 @@ mounts:
   });
 
   test("a mode whose instructions file is missing: the reply says so", async (t) => {
-    const { dir, github, send } = await listen(t, { ".deckhand.yaml": MODES });
+    const { dir, github, send } = await listen(t, {
+      ".deckhand.yaml": MODES,
+      "policy:modes.rego": AUDIT_RUNS,
+    });
     await send(comment("alice", "Deckhand\n/mode audit"));
     const reply = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",

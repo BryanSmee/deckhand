@@ -379,6 +379,8 @@ export async function startAnalysis(
       base,
       settings,
       comment: null,
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
       // Whether the digest may quote what only the dashboard showed (runDigest()): only on a
       // repo GitHub said was private.
       analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes, private: isPrivate },

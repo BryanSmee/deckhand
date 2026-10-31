@@ -536,11 +536,9 @@ export function pullSize(pr) {
 // issue (linkedIssue()) is that issue's task, whose title the payload doesn't have (the
 // dashboard fetches it, titles.mjs). One that only says it does, from an issue comment's
 // payload without its head, is the pull request's own until its head is looked up
-// (`claims`, see linkTo()).
+// (`claims`, see linkTo()). Brainstorms, `/stop` and onboarding are refused there by Deckhand's
+// policy/run.rego (`allow_run`, run-policy.mjs), which an operator may replace.
 function prItem(config, skip, repo, pull, { trigger, mode, after = null }, text, comment) {
-  if (trigger === "stop" || mode === "brainstorm" || mode === "onboarding") {
-    return skip(`${mode ?? "brainstorm"}s are on issues: pull request comments are about the code`);
-  }
   const { number: pr, title } = pull;
   const item = {
     repo,

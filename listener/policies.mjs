@@ -1,8 +1,9 @@
-// Rules as code (issues #292, #494): Rego policies that allow and refuse what the listener asks
+// Rules as code (issues #292, #494, #488): Rego policies that allow and refuse what the listener asks
 // them, after its built-in gates, evaluated by the pinned `opa` binary (listener/Dockerfile).
 // Each decision has two rules of package `deckhand`: `allow_<decision>`, true when it allows, and
 // `deny_<decision>`, a set of strings, the reasons shown to the maintainer (or the run, for
-// `deny_github`). Decisions: `merge`, `review`, `fix`, `link_branch` for the branch the listener
+// `deny_github`). Decisions: `run` for a run a person starts (run-policy.mjs), `merge`,
+// `review`, `fix`, `link_branch` for the branch the listener
 // links to a work run's issue (linked-branch.mjs), `request_review` for the reviewers it
 // requests (reviewers.mjs), and `github` for a run's GitHub writes (github-writes.mjs). A
 // decision is allowed when an allow rule matches and no deny rule does: a deny always wins.
@@ -41,7 +42,15 @@ const OPERATOR_DIR = "policy";
 export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url));
 
 // The decisions the listener asks the policies about, each with its two rules.
-export const DECISIONS = ["merge", "review", "fix", "link_branch", "request_review", "github"];
+export const DECISIONS = [
+  "run",
+  "merge",
+  "review",
+  "fix",
+  "link_branch",
+  "request_review",
+  "github",
+];
 
 // The rules the listener evaluates: another `allow_*` or `deny_*` rule is a mistake the config
 // check says.
@@ -296,7 +305,8 @@ export function operatorPolicies(config, read = (path) => readFileSync(path, "ut
 }
 
 // Deckhand's allow rules (policy/allow.rego): every decision allowed unless a deny rule says
-// otherwise, as before allow rules. Its name, and the map createPolicies() gets by default.
+// otherwise, as before allow rules; all but `run`, which policy/run.rego allows where each mode
+// makes sense. Its name, and the map createPolicies() gets by default.
 export const ALLOW = "allow.rego";
 export const allowOnly = (dir = BUILT_IN_DIR) =>
   new Map([[ALLOW, readFileSync(join(dir, ALLOW), "utf8")]]);
@@ -339,6 +349,11 @@ export function unallowed(decision, doc, layer) {
     case "github": {
       const on = doc.target?.kind ? ` on \`${doc.target.kind}\`` : "";
       return `no ${rules} allows \`${doc.action}\`${on} for ${run(doc.mode)}`;
+    }
+    case "run": {
+      const on = { issue: "an issue", pr: "a pull request", discussion: "a discussion" };
+      const where = on[doc.target?.kind] ? ` on ${on[doc.target.kind]}` : "";
+      return `no ${rules} allows ${run(doc.mode)}${where}`;
     }
     case "link_branch":
       return `no ${rules} allows linking a branch for ${run(doc.mode)}`;

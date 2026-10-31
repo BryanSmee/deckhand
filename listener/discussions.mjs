@@ -232,6 +232,8 @@ export function createDiscussionApi({
       author: user,
       base,
       settings,
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
     });
     return {
       message: `Discussion #${d.number} started.`,
@@ -272,6 +274,8 @@ export function createDiscussionApi({
       author: user,
       base,
       settings,
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
     });
     return { message: `Sent to discussion #${number}.`, url: c.url };
   }

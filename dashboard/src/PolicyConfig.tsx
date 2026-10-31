@@ -19,6 +19,9 @@ const COMMAND = "Deckhand /mode policy";
 // What deny_github reads, field by field.
 const GITHUB_INPUT =
   "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-github-input";
+// What deny_run reads.
+const RUN_INPUT =
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-run-input";
 
 // The layer a file is evaluated in: Deckhand's and the operator's together, the repo's apart.
 const layerOf = (f: PolicyFile) => (f.source === "repo" ? "repo" : "operator");
@@ -78,6 +81,13 @@ const DECISIONS: {
   refused: (until: string) => string;
   builtIn?: boolean;
 }[] = [
+  {
+    decision: "run",
+    name: "Runs people start",
+    denies:
+      "A denial starts no run (a trigger comment, /mode, a comment that goes on in a mode, the dashboard, an inbox entry, a discussion): the reply quotes the messages.",
+    refused: (until) => `No run a person asks for starts ${until}.`,
+  },
   {
     decision: "merge",
     builtIn: true,
@@ -220,6 +230,17 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         null).{" "}
         <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
           The GitHub input
+        </a>
+      </p>
+      <p class={styles.model}>
+        <code>deny_run</code> reads the run a person asks for, before it is queued: its{" "}
+        <code>mode</code>, <code>custom_mode</code>, <code>trigger</code> (<code>comment</code>,{" "}
+        <code>dashboard</code>, <code>inbox</code>, <code>discussion</code>), <code>sender</code>{" "}
+        and the <code>target</code> its comment is on (<code>kind</code>, <code>labels</code>,{" "}
+        <code>author</code>). Deckhand's <code>run.rego</code> keeps brainstorms and onboarding on
+        issues.{" "}
+        <a href={RUN_INPUT} target="_blank" rel="noreferrer">
+          The run input
         </a>
       </p>
       <section class={styles.decisions} aria-label="Decisions">

@@ -998,7 +998,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   const samples = results.filter((r) => r.sample);
   if (samples.length) {
     parts.push(
-      "The sample lines (`github`'s writes and read, `link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
+      "The sample lines (`run`'s comments, `github`'s writes and read, `link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
     );
   }
   parts.push(
@@ -1107,6 +1107,39 @@ export function linkSample(repo, pr, issue = null) {
       oid: pr.base?.sha ?? null,
     },
   };
+}
+
+// What a dry run asks `deny_run` about, on pull request `pr` (GitHub's), whose task is `issue`'s
+// (the one it closes, GitHub's) or its own: a trigger comment on it, from `sender` (who asked
+// for the dry run), starting a work run, and one asking for a brainstorm there, which Deckhand's
+// policy/run.rego refuses. → [{ what, input }] (docs/repo-config.md#the-run-input, as
+// run-policy.mjs runInput() builds it).
+export function runSamples(repo, pr, issue = null, sender = null) {
+  const sample = (what, mode, light) => ({
+    what,
+    input: {
+      decision: "run",
+      repo: repo.toLowerCase(),
+      mode,
+      custom_mode: false,
+      light,
+      fresh: false,
+      trigger: "comment",
+      sender,
+      target: {
+        kind: "pr",
+        number: pr.number,
+        labels: (pr.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),
+        author: pr.user?.login ?? null,
+      },
+      issue: issue?.number ?? null,
+      pr: { draft: !!pr.draft, base: pr.base?.ref ?? null, head: pr.head?.ref ?? null },
+    },
+  });
+  return [
+    sample("a trigger comment on it starting a work run", "work", false),
+    sample("`/mode brainstorm` on it", "brainstorm", true),
+  ];
 }
 
 // How much of the input a dry run's reply shows: GitHub takes 65536 characters a comment.
@@ -2462,7 +2495,7 @@ export function createReviews({
   // now → { text, denials }: the reply (dryRunText()) and how many messages the rules denied
   // with. Nothing is reviewed, fixed, merged or kept as a decision: a maintainer debugging a
   // rule doesn't wait for a ready event.
-  async function dryRun({ repo, base, number }) {
+  async function dryRun({ repo, base, number, by = null }) {
     if (!policies) return { text: dryRunText({ number, files: [] }), denials: 0 };
     const described = await policies.describe(repo, base);
     // What decide() evaluates: a file the operator's replaces isn't.
@@ -2508,6 +2541,15 @@ export function createReviews({
       return { decision, messages, layers };
     };
     for (const decision of DECISIONS) {
+      // No run to start: a comment on this pull request asking for one, by whoever asked.
+      if (decision === "run") {
+        for (const sample of runSamples(repo, pr, found, by)) {
+          const said = await ask(decision, () => sample.input);
+          const input = { version: INPUT_VERSION, ...sample.input };
+          results.push({ ...said, sample: sample.what, input });
+        }
+        continue;
+      }
       // No write to decide on: a comment on this pull request, by a run whose own it is and
       // by a brainstorm elsewhere.
       if (decision === "github") {

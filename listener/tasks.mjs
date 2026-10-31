@@ -237,7 +237,21 @@ export function createTasks(ctx) {
     return !!issue && unanswered(item, issue);
   }
 
-  async function accept(item) {
+  // Task key → the accept() of its latest item, settled: the next waits for it.
+  const accepting = new Map();
+
+  // Queues `item` after the items of its task that came before: modeOf() awaits (the policies,
+  // a session look-up), and a follow-up mustn't pass the comment that creates the task.
+  function accept(item) {
+    const key = taskKey(item.repo, item.id);
+    const queued = (accepting.get(key) ?? Promise.resolve()).then(() => queue(item));
+    const settled = queued.catch(() => {});
+    accepting.set(key, settled);
+    settled.then(() => accepting.get(key) === settled && accepting.delete(key));
+    return queued;
+  }
+
+  async function queue(item) {
     // Its default branch, as GitHub said: "main" when it didn't.
     item.base ||= "main";
     const name = await containerName(item.repo, item.id);

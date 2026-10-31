@@ -295,6 +295,13 @@ test("Deckhand's default files: under the operator's, which replace them by name
   );
   const github = card("GitHub writes and checks");
   expect(within(github).getByText("Active")).toBeTruthy();
+  // No allow_run here (Deckhand's run.rego isn't in this list): never allowed.
+  const run = card("Runs people start");
+  expect(within(run).getByText("Never allowed")).toBeTruthy();
+  expect(run.textContent).toContain("No run a person asks for starts");
+  const runInput = screen.getByRole("link", { name: "The run input" });
+  expect(runInput.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-run-input$/);
+  expect(runInput.closest("p")!.textContent).toMatch(/trigger.*sender.*target/);
   // The same rule refuses reads of CI's checks too.
   expect(github.textContent).toContain("its reads of CI's checks (read_checks");
   // What deny_github reads of the run, and where its input is documented.
@@ -318,6 +325,7 @@ test("policies that compile: no banner, each decision active or without rules, w
   expect(within(card("Auto-merge")).getByText("Active")).toBeTruthy();
   expect(within(card("Fix run")).getByText("No deny rule")).toBeTruthy();
   expect(within(card("Reviewers")).getByText("No deny rule")).toBeTruthy();
+  expect(within(card("Runs people start")).getByText("Never allowed")).toBeTruthy();
   expect(rows().every((r) => /Yes|—/.test(r.textContent!))).toBe(true);
   expect(screen.getByLabelText("Policy warnings").textContent).toContain("deny_wip");
   // Every source folded.
