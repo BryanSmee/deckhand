@@ -129,6 +129,10 @@ test("root, capabilities, another image, another's volumes: refused, each said",
         volumes: [
           { kind: "session", name: `${hashed}-light-claude`, path: "/home/node/.claude" },
           { kind: "session", name: `${hashed}-fork-workspace`, path: "/workspace" },
+          // A run without `pull`'s, and a light run's that gets what later runs trust
+          // (sandbox-spec.mjs sessionOf()).
+          { kind: "session", name: `${hashed}-bare-workspace`, path: "/w1" },
+          { kind: "session", name: `${hashed}-light-trusted-claude`, path: "/w2" },
           { kind: "session", name: `${hashed}-claude-code`, path: "/x" },
         ],
       }),

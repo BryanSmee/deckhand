@@ -68,11 +68,20 @@ export const runOf = (name, run) =>
   run.startsWith(`${name}-`) &&
   /^\d+$/.test(run.slice(String(name).length + 1));
 
-// A task's session volumes (sandbox-spec.mjs, modes.mjs sessionName()): its workspace and each
-// agent's session, for its work, its light runs and its research, with the fork's workspace.
+// A task's session volumes (sandbox-spec.mjs sessionOf(), modes.mjs sessionName()): its workspace
+// and each agent's session, for its work, its light runs (and those that get what later runs
+// trust, `-light-trusted`), its research and its runs without `pull` (`-bare`), with the fork's
+// workspace.
 function sessionVolumes(name) {
   const out = new Set();
-  for (const base of [name, `${name}-light`, `${name}-research`]) {
+  const bases = [
+    name,
+    `${name}-light`,
+    `${name}-light-trusted`,
+    `${name}-research`,
+    `${name}-bare`,
+  ];
+  for (const base of bases) {
     out.add(`${base}-workspace`).add(`${base}-fork-workspace`);
     for (const agent of Object.values(AGENTS)) out.add(`${base}-${agent.session.volume}`);
   }

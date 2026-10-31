@@ -964,7 +964,10 @@ test("buildOutput: whole lines, each step's first after when it came, the rest a
   ]);
 });
 
-test("loadRuns: a run's record mode as its capabilities corrected it", (t) => {
+// A log a listener kept itself is summarized as moveLogs() sends it to the runner (#503): with the
+// mode its run's capabilities corrected (a live run's summary has it from its record).
+test("moveLogs: a run's summary has its record mode as its capabilities corrected it", async (t) => {
+  const logs = { upload: async () => {} };
   const dir = tempDir(t);
   writeFileSync(
     join(dir, "deckhand-org-repo-5-1000.log"),
@@ -977,6 +980,7 @@ test("loadRuns: a run's record mode as its capabilities corrected it", (t) => {
       line({ type: "listener", event: "session", at: 1003, mode: "continue" }),
     ].join("\n"),
   );
+  await moveLogs(dir, logs).done;
   const [run] = loadRuns(dir);
   assert.equal(run.mode, "start");
   // Not a line of its own in the log: the note says it.
@@ -994,7 +998,8 @@ test("loadRuns: a run's record mode as its capabilities corrected it", (t) => {
       "",
     ].join("\n"),
   );
-  const loaded = loadRuns(dir, { max: 1024, log: () => {} }).find((r) => r.key === "org/repo#6");
+  await moveLogs(dir, logs, { max: 1024, log: () => {} }).done;
+  const loaded = loadRuns(dir).find((r) => r.key === "org/repo#6");
   assert.equal(loaded.mode, "continue");
 });
 
