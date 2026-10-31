@@ -735,7 +735,9 @@ one that stopped:
   in the store only encrypted by their service (the broker's, #505): they stay in its file;
 - **the timers, as deadlines**: a task's pause before its run (or before the comments go to
   its running session) is `dueAt`, saved with the queue; a run's silent-end grace
-  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run; a brainstorm's idle time was
+  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (one that passed while no listener
+  was there gets 10 s for the follow to read what the sandbox wrote meanwhile, which pushes it
+  back); a brainstorm's idle time was
   already `deadline` (`brainstorms.json`). The `setTimeout`s stay, and are re-armed from the
   deadline at start: what was left of it, or at once when it passed (a deadline saved by a
   listener from before them, none: the pause starts again). The waits' checks
@@ -747,8 +749,8 @@ one that stopped:
 
 A comment moves from the queue to a run's state in that order: the run's state is written, then
 the queue without it (`restart.mjs` `take()`, for a run's start and a running session's
-comments: until the run's state has it, every write of the queue, another task's or a 👀's,
-still has it); and back the other way at a run's end, or a restored run whose sandbox never
+comments: until a write of the run's state that has it succeeds, every write of the queue,
+another task's or a 👀's, still has it, once); and back the other way at a run's end, or a restored run whose sandbox never
 started (the queue with the comments put back, then the run's state removed, `runs.mjs`
 `teardown()`). A listener killed between the two writes finds the comment in both, and leaves
 it to the run (`loadQueue()`, by `queueId`): never in neither. A run's start takes its task's
@@ -759,7 +761,7 @@ a copy taking over from another (#506): `unifySpellings()`, `restoreRuns()` (the
 their tokens work again, comments find them), `loadQueue()` (the tasks rebuilt from the store,
 their deadlines re-armed), then `reattach()`. On SIGTERM the listener starts no more runs and
 only waits for the writes under way. A `queue.json`, which listeners from before #508 wrote on
-SIGTERM, is read once and moved to the store.
+SIGTERM, is read once and moved to the store (removed once the store took it).
 
 The next listener finds the sandboxes by their labels, follows their output from where the
 previous one stopped (a listener killed within a second of reading some lines reads them again,

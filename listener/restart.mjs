@@ -138,15 +138,17 @@ export function createRestart(ctx) {
   // the store whenever they change (tasks.mjs, runs.mjs): a listener killed at any moment
   // leaves them to the next one. Whole each time, the latest state when the write begins: a
   // call while one waits to begin joins it, one while it is under way comes after it.
-  // Resolves once its state is written; a failed write is logged, the next one tries again.
+  // Resolves once its state is written, to whether it was: a failed write is logged, the next
+  // one tries again.
   let saving = Promise.resolve();
   let waiting = null;
   function saveQueue() {
     waiting ??= saving.then(() => {
       waiting = null;
-      return ctx.store
-        .set(QUEUE_KEY, queueState())
-        .catch((error) => log(`Saving the queue: ${error.stack ?? error}`));
+      return ctx.store.set(QUEUE_KEY, queueState()).then(
+        () => true,
+        (error) => (log(`Saving the queue: ${error.stack ?? error}`), false),
+      );
     });
     saving = waiting;
     return waiting;
@@ -168,7 +170,9 @@ export function createRestart(ctx) {
   }
 
   // Comments a run or a running session is taking (take()): out of `pending`, not yet in the
-  // run's saved state. task → [items], still written with the queue meanwhile.
+  // run's saved state. live → [items], still written with the queue meanwhile, until a write
+  // of the run's state that has them succeeds (saveLive() moved()), or the run is over (they
+  // are back in `pending` then, or answered).
   const moving = new Map();
 
   // Comments `items` of `task`, out of its `pending` now, taken by its run: written in the run's
@@ -176,19 +180,29 @@ export function createRestart(ctx) {
   // queue (another task's, a 👀 known) still has them: a listener killed meanwhile finds them
   // in the queue, or in both (loadQueue() leaves them to the run), never in neither.
   function take(task, items) {
-    moving.set(task, [...(moving.get(task) ?? []), ...items]);
-    return saveLive(task).then(() => {
-      const left = (moving.get(task) ?? []).filter((item) => !items.includes(item));
-      if (left.length) moving.set(task, left);
-      else moving.delete(task);
-      return saveQueue();
-    });
+    const { live } = task;
+    moving.set(live, [...(moving.get(live) ?? []), ...items]);
+    return saveLive(task).then(() => saveQueue());
+  }
+
+  // The run's state was written with `handled`: those of its comments are in it.
+  function moved(live, handled) {
+    const left = (moving.get(live) ?? []).filter((item) => !handled.includes(item));
+    if (left.length) moving.set(live, left);
+    else moving.delete(live);
+  }
+
+  function takenBy(live) {
+    if (!live) return [];
+    if (live.over) moving.delete(live);
+    return moving.get(live) ?? [];
   }
 
   function queueState() {
     const saved = {};
     for (const [key, t] of tasks) {
-      const all = [...(moving.get(t) ?? []), ...t.pending];
+      // Once each: one a run put back in `pending` may still be moving.
+      const all = [...new Set([...takenBy(t.live), ...t.pending])];
       if (!all.length && !Object.keys(t.next).length) continue;
       const pending = all.map((item) => plainWith(item, eyesOf(item)));
       // The comments' text and authors: the store is the listener's own (its files the
@@ -240,9 +254,9 @@ export function createRestart(ctx) {
       // Its run began before: these comments weren't checked against the repo's users then.
       else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task, dueAt)));
     }
-    // In the store as it is now (one spelling, without what was dropped), queue.json no more.
-    await saveQueue();
-    rmSync(queuePath, { force: true });
+    // In the store as it is now (one spelling, without what was dropped); queue.json no more,
+    // once its comments are there.
+    if (await saveQueue()) rmSync(queuePath, { force: true });
   }
 
   // What a listener needs to carry on with a run started by a previous one: written when it
@@ -256,8 +270,10 @@ export function createRestart(ctx) {
     const live = task.live;
     clearTimeout(live.soon);
     live.soon = null;
+    // Whether it was written.
     const write = async () => {
-      if (live.over) return;
+      if (live.over) return false;
+      const handled = [...live.handled];
       const { logPath, ...record } = live.record;
       const state = {
         task: pick(task),
@@ -290,10 +306,12 @@ export function createRestart(ctx) {
       };
       // The run's tokens (or its secret, from before tokens) are in it: the owner's only.
       writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
+      moved(live, handled);
+      return true;
     };
     live.saving = (live.saving ?? Promise.resolve())
       .then(write)
-      .catch((error) => log(`${live.key}: saving its state: ${error.stack ?? error}`));
+      .catch((error) => (log(`${live.key}: saving its state: ${error.stack ?? error}`), false));
     return live.saving;
   }
 

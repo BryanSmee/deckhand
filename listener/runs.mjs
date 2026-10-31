@@ -50,10 +50,15 @@ class Cancelled extends Error {}
 // background work behind can go on, or never exit (#204).
 export const ANSWER_GRACE_MS = 2 * 60_000;
 
+// How long a restored run whose grace passed while no listener was there waits for its
+// sandbox's output from meanwhile before it is stopped (follow()).
+const CATCH_UP_MS = 10_000;
+
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
   const { config, log } = ctx;
   const graceMs = ctx.answerGraceMs ?? ANSWER_GRACE_MS;
+  const catchUpMs = ctx.catchUpMs ?? CATCH_UP_MS;
 
   // The run's agent (agents/), by the name its record keeps across a restart.
   const agentOf = (task) => agentFor(task.live.record.agent);
@@ -369,8 +374,12 @@ export function createRuns(ctx) {
   async function follow(task) {
     const live = task.live;
     // A run that answered before the listener restarted: what was left of its grace (saved
-    // before its deadline was: all of it).
-    if (live.answered) linger(task, live.graceUntil ?? undefined);
+    // before its deadline was: all of it). One that passed while no listener was there gets
+    // a moment for the follow to read what its sandbox wrote meanwhile, which pushes it back.
+    if (live.answered) {
+      const caughtUp = Date.now() + Math.min(graceMs, catchUpMs);
+      linger(task, live.graceUntil == null ? undefined : Math.max(live.graceUntil, caughtUp));
+    }
     try {
       for (;;) {
         await ctx.runner.follow(task.name, {

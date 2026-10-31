@@ -244,11 +244,32 @@ test("a run that answered before a restart: what was left of its grace, when it 
   runner.exited();
   await following;
   ctx.stopping = false;
-  const next = createRuns({ ...ctx, answerGraceMs: 60_000 });
+  const next = createRuns({ ...ctx, answerGraceMs: 60_000, catchUpMs: 20 });
   await next.follow(task);
   assert.equal(runner.kills, 1);
   assert.ok(Date.now() >= graceUntil);
   assert.ok(Date.now() < graceUntil + 5000);
+});
+
+test("a run whose grace passed while no listener was there: what its sandbox wrote meanwhile is read before any stop", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  // Its deadline long gone; its sandbox went on (a background task's turn).
+  task.live.graceUntil = Date.now() - 60_000;
+  const next = createRuns({ ...ctx, answerGraceMs: 200, catchUpMs: 100 });
+  const followed = next.follow(task);
+  // The follow's backlog: a line written while no listener was there.
+  await sleep(30);
+  runner.out(JSON.stringify({ type: "assistant", message: { content: [] } }));
+  await sleep(150);
+  assert.equal(runner.kills, 0);
+  // Silent for its grace from that line on: stopped then.
+  await followed;
+  assert.equal(runner.kills, 1);
 });
 
 test("a run that answered before a restart, saved before its grace's deadline was: all of it again", async (t) => {

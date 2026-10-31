@@ -815,3 +815,77 @@ test("a restored comment's 👀 is in the queue's first write after a restart", 
   await ctx.loadQueue();
   assert.deepEqual(writes, [41]);
 });
+
+test("a comment taken, then put back while its run's state isn't written yet: in the queue once", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const ctx = queueContext(t, dir, store, { real: true });
+  ctx.broker = {};
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.live = {
+    id: "r1",
+    key: "org/repo#1",
+    record: { id: "r1" },
+    lines: { out: 0, err: 0 },
+    handled: [],
+    unanswered: [],
+  };
+  ctx.tasks.set("org/repo#1", task);
+  let eyes;
+  const item = queued("1", { queueId: "q-1" });
+  item.eyes = new Promise((resolve) => (eyes = resolve));
+  task.live.handled.push(item);
+  ctx.take(task, [item]);
+  // The agent exited without answering it (runs.mjs finish()).
+  task.pending.unshift(item);
+  await ctx.saveQueue();
+  assert.deepEqual(
+    (await store.get(QUEUE_KEY))["org/repo#1"].pending.map((i) => i.queueId),
+    ["q-1"],
+  );
+  eyes(null);
+});
+
+test("a run's state that couldn't be written: its comments stay in the queue until one is", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const ctx = queueContext(t, dir, store, { real: true });
+  ctx.broker = {};
+  // Its folder gone: the write fails.
+  ctx.logDir = join(dir, "missing");
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.live = {
+    id: "r1",
+    key: "org/repo#1",
+    record: { id: "r1" },
+    lines: { out: 0, err: 0 },
+    handled: [],
+    unanswered: [],
+  };
+  ctx.tasks.set("org/repo#1", task);
+  const item = queued("1", { queueId: "q-1", eyes: Promise.resolve(3) });
+  task.live.handled.push(item);
+  await ctx.take(task, [item]);
+  const ids = async () =>
+    ((await store.get(QUEUE_KEY))["org/repo#1"]?.pending ?? []).map((i) => i.queueId);
+  assert.deepEqual(await ids(), ["q-1"]);
+  // Written at last: out of the queue.
+  ctx.logDir = dir;
+  ctx.saveLive(task);
+  await task.live.saving;
+  await ctx.saveQueue();
+  assert.deepEqual(await ids(), []);
+});
+
+test("a queue.json whose comments the store didn't take stays for the next start", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  store.set = async () => {
+    throw new Error("the store is down");
+  };
+  const path = join(dir, "queue.json");
+  writeFileSync(path, JSON.stringify([{ ...queued("7"), pending: [queued("7")], next: {} }]));
+  const ctx = queueContext(t, dir, store);
+  await ctx.loadQueue();
+  assert.ok(readFileSync(path, "utf8").includes('"id":"7"'));
+});
