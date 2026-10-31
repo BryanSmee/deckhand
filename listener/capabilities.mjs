@@ -243,13 +243,12 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
     if (c.grant && !grant?.[c.grant]) return row("not-granted", files, grantNote(c));
     return row("used", files);
   });
-  // A light mode's run doesn't get `push`, whatever the policies allow: its token can't push or
-  // open a pull request (its mode's permissions and write ceiling, until #496 and #498), and
-  // it would start as a work run in the light runs' volumes, which other runs reset without
+  // A light mode's run doesn't get `push`, whatever the policies allow: it has no branch to push
+  // or open a pull request from (its `light` trait, until #498), and it would start as a work run in the light runs' volumes, which other runs reset without
   // stashing (sandbox-spec.mjs sessionOf()). What needs it goes with it (narrow()).
   const push = capabilities.find((c) => c.name === "push");
   if (mode !== null && isLight({ settings }, mode) && push.used) {
-    const reason = `\`${mode}\` is a light mode: its token can't push or open a pull request until #496 and #498`;
+    const reason = `\`${mode}\` is a light mode: it has no branch to push or open a pull request from until #498`;
     Object.assign(push, { status: "denied", used: false, files: [], reason });
     warnings.push(`\`push\` isn't used: ${reason}`);
   }

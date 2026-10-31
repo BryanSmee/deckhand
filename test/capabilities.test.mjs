@@ -649,7 +649,7 @@ test("a light mode's run doesn't get `push`, whatever the policies allow, nor wh
     });
     const push = said.capabilities.find((c) => c.name === "push");
     assert.equal(push.status, "denied", mode);
-    assert.match(push.reason, /is a light mode: its token can't push/, mode);
+    assert.match(push.reason, /is a light mode: it has no branch to push/, mode);
     assert.ok(!said.used.includes("push") && !said.used.includes("image:branch"), mode);
     assert.ok(said.used.includes("pull") && said.used.includes("setup"), mode);
     assert.deepEqual(said.errors, [], mode);

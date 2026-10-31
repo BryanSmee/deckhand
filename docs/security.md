@@ -689,7 +689,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify and one outside the run's repository are refused before any
     policy runs, and so is every write of a run whose refused writes already cost 100 look-ups
-    on GitHub (`MAX_REFUSED_LOOKUPS`: they share the listener's rate limit), and so are the **built-in checks** that hold whatever a policy says: a link's
+    on GitHub in the last hour (`MAX_REFUSED_LOOKUPS`: they share the listener's rate limit;
+    each look-up counts as it is made, and is given back when its write goes on or GitHub or
+    the policy service failed), and so are the **built-in checks** that hold whatever a policy says: a link's
     child and blocker (above), a reaction removed only if the run added it, an assignee, a
     project, a pull request's branch ([The default branch](#the-default-branch)), a rerun
     (below), `NEEDS_INPUT_LABEL` (which a run's label writes neither add nor remove on the
@@ -2164,8 +2166,8 @@ a run that fails them doesn't start, and its reply says why:
   runs, and they keep their code and reads, without `image:branch`). A capability whose need no
   allow rule gives refuses the run: the allow rules contradict themselves.
 - **Light modes don't push**: a light mode's run (Deckhand's or a repository's `light: true`)
-  doesn't get `push`, whatever the policies allow, nor what needs it, with a warning: its
-  token can't push or open a pull request until #496 and #498.
+  doesn't get `push`, whatever the policies allow, nor what needs it, with a warning: it
+  has no branch to push or open a pull request from until #498.
 - **Modes that need the code**: a review (its verdict decides fixes and merges) and a discussion
   (read with its token) don't start without `pull`; a research run doesn't start with it, as
   it has no token to clone with until #497.

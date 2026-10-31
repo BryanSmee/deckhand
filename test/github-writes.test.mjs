@@ -12,6 +12,7 @@ import {
   createReadChecks,
   createWriteChecks,
   MAX_REFUSED_LOOKUPS,
+  REFUSED_WINDOW_MS,
   runTraits,
 } from "../listener/github-writes.mjs";
 import { createPolicies } from "../listener/policies.mjs";
@@ -1832,31 +1833,70 @@ test("the built-in checks hold whatever the policies allow: links, blockers, rea
   await refused(react("pulls/comments/11"), /comment 11 isn't there/, 404);
 });
 
-test("a run's refused writes cost GitHub look-ups up to MAX_REFUSED_LOOKUPS, then none", async () => {
+test("a run's refused writes cost GitHub look-ups up to MAX_REFUSED_LOOKUPS an hour, then none", async () => {
   const { lookup, calls } = fakeLookup(GITHUB);
-  // The policies refuse every write, as Deckhand's do a review's.
-  const policies = { deny: async () => ["no rule allows it"] };
-  const { check } = createWriteChecks({ policies, needsInputLabel: () => null, lookup });
-  const review = run("review");
+  let clock = START;
+  // The policies refuse writes on #3, as Deckhand's refuse a work run's on another issue.
+  const policies = {
+    deny: async (r, repo, ref, input) => (input().target.number === 3 ? ["no rule allows it"] : []),
+  };
+  const { check } = createWriteChecks({
+    policies,
+    needsInputLabel: () => null,
+    lookup,
+    now: () => clock,
+  });
+  const work = run("work");
   const comment = (n) => write("POST", `repos/org/repo/issues/${n}/comments`, { body: "x" });
+  // Its writes that go on cost nothing of it.
+  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++) assert.equal(await check(work, comment(1)), null);
   let refused = 0;
-  while ((await check(review, comment(3))).status === 403) refused++;
+  while ((await check(work, comment(3))).status === 403) refused++;
   // #3 costs two look-ups (the issue, its parent): refused by the policies until the budget.
   assert.equal(refused, MAX_REFUSED_LOOKUPS / 2);
   const looked = calls.length;
-  const spent = await check(review, comment(1));
+  const spent = await check(work, comment(1));
   assert.equal(spent.status, 429);
-  assert.match(spent.message, /refused writes cost 100 look-ups on GitHub already/);
+  assert.match(spent.message, /refused writes cost 100 look-ups on GitHub in the last hour/);
   assert.equal(calls.length, looked);
-  // Another run has its own, and its writes that go on cost nothing of it.
-  const { check: some } = createWriteChecks({
-    policies: { deny: async (r, repo, ref, input) => (input().target.number === 3 ? ["no"] : []) },
-    needsInputLabel: () => null,
-    lookup,
-  });
+  // An hour later, the window has room: its own issue's comment goes on again.
+  clock += REFUSED_WINDOW_MS + 1;
+  assert.equal(await check(work, comment(1)), null);
+});
+
+test("MAX_REFUSED_LOOKUPS: writes checked at once each count, as their look-ups are made", async () => {
+  const { lookup, calls } = fakeLookup(GITHUB);
+  const policies = { deny: async () => ["no rule allows it"] };
+  const { check } = createWriteChecks({ policies, needsInputLabel: () => null, lookup });
+  const review = run("review");
+  const comment = write("POST", "repos/org/repo/issues/3/comments", { body: "x" });
+  // Far more than a run's calls in flight at once, all started before any ends.
+  const answers = await Promise.all(Array.from({ length: 200 }, () => check(review, comment)));
+  assert.ok(calls.length <= MAX_REFUSED_LOOKUPS, `${calls.length} look-ups`);
+  assert.ok(answers.some((a) => a.status === 429));
+  assert.equal((await check(review, comment)).status, 429);
+});
+
+test("MAX_REFUSED_LOOKUPS: GitHub or the policy service failing costs the run nothing", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  let down = true;
+  const failing = async (repo, path) => {
+    if (down && path.endsWith("/issues/1")) throw new Error("GitHub is down");
+    return lookup(repo, path);
+  };
+  let broken = true;
+  const policies = { deny: async () => (broken ? ["policy error: opa timed out"] : []) };
+  const { check } = createWriteChecks({ policies, needsInputLabel: () => null, lookup: failing });
   const work = run("work");
-  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++) assert.equal(await some(work, comment(1)), null);
-  assert.equal((await some(work, comment(3))).status, 403);
+  const comment = (n) => write("POST", `repos/org/repo/issues/${n}/comments`, { body: "x" });
+  for (let i = 0; i < 2 * MAX_REFUSED_LOOKUPS; i++) {
+    assert.equal((await check(work, comment(1))).status, 502);
+    assert.match((await check(work, comment(2))).message, /policy error/);
+  }
+  // Both back: its allowed writes go on.
+  [down, broken] = [false, false];
+  assert.equal(await check(work, comment(1)), null);
+  assert.equal(await check(work, comment(2)), null);
 });
 
 // GitHub's answer to a run's REST reaction: 201 when it added it, 200 when it was there.

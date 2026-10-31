@@ -1213,9 +1213,10 @@ tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
    one file per mode ([the default policies](#the-default-policies)); no rule, no write.
 
 A write's target is looked up on GitHub (with the listener's token, whose rate limit every run
-shares) before the policies are asked: once a run's refused writes have cost 100 look-ups, its
-next writes are refused (`429`) before any, so a run steered into writes no rule allows can't
-spend that limit.
+shares) before the policies are asked: once the writes a rule or a built-in check refused have
+cost a run 100 look-ups in the last hour, its next writes are refused (`429`) before any, until
+the hour has room again, so a run steered into writes no rule allows can't spend that limit.
+Writes that go on, and those GitHub or the policy service failed to check, cost nothing of it.
 
 A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
 issues: the parent, its target, and the child, by its id: the child must be an issue the run

@@ -62,11 +62,15 @@ export const ACTIONS_WRITE = { actions: "write" };
 // a workflow run, the policies read it (`target.attempt`).
 export const MAX_RERUNS = 2;
 // How many look-ups on GitHub (with the listener's token, whose rate limit every run shares) a
-// run's writes may cost when the checks or the policies refuse them: each write's target is
-// looked up before the policies are asked, so a run that only reads, steered by what it read
-// into writes no rule allows, would otherwise spend them unbounded. Past it, its writes are
-// refused before any look-up. A run whose writes go on spends none of it.
+// run's writes may cost in REFUSED_WINDOW_MS when a rule or a built-in check refuses them: each
+// write's target is looked up before the policies are asked, so a run that only reads, steered
+// by what it read into writes no rule allows, would otherwise spend them unbounded. Each
+// look-up counts as it is made, so writes checked at once can't each pass on the same count,
+// and is given back when its write goes on or failed for no fault of the run's (GitHub or the
+// policy service failing). Past it, the run's writes are refused before another look-up, until
+// the window has room again.
 export const MAX_REFUSED_LOOKUPS = 100;
+export const REFUSED_WINDOW_MS = 60 * 60_000;
 // A workflow run's or job's conclusions a rerun is for.
 export const RERUN_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
 // The events whose runs test a branch's head: a push to it, its pull request.
@@ -526,7 +530,7 @@ const MAX_HOPS = 5;
 // `projects(repo)`: the projects the operator's grants let its runs write, ["acme/3"] (grants.mjs
 // allowProjects), none by default; `users(repo)`: the logins a run may assign there
 // (ALLOWED_USERS, narrowed by the repo's `users`), in lower case: none by default; `log`: the
-// listener's.
+// listener's; `now`: the clock (MAX_REFUSED_LOOKUPS' window).
 export function createWriteChecks({
   lookup,
   bot = () => null,
@@ -537,9 +541,17 @@ export function createWriteChecks({
   pulls = createPullChecks({ lookup }),
   listenerReacted = () => false,
   log = () => {},
+  now = Date.now,
 }) {
-  // run → the look-ups on GitHub its refused writes cost (MAX_REFUSED_LOOKUPS).
+  // run → [{ at, n }]: the look-ups on GitHub its writes cost, those being checked included
+  // (MAX_REFUSED_LOOKUPS).
   const spent = new WeakMap();
+  const costOf = (run) => {
+    const since = now() - REFUSED_WINDOW_MS;
+    const kept = (spent.get(run) ?? []).filter((e) => e.at >= since);
+    spent.set(run, kept);
+    return kept.reduce((sum, e) => sum + e.n, 0);
+  };
   // Required, so a caller that forgets it fails here rather than leaving the label unguarded:
   // () => null where nothing waits for answers.
   if (typeof needsInputLabel !== "function") {
@@ -928,25 +940,36 @@ export function createWriteChecks({
   // same as check(). `memo`: a Map that keeps GitHub's answers across the writes of one call (a
   // GraphQL call's several fields), so the same target is looked up once.
   async function checkWrite(run, write, memo = new Map()) {
-    const used = spent.get(run) ?? 0;
-    if (used >= MAX_REFUSED_LOOKUPS) {
-      return refusal(
+    const spentOut = () =>
+      refusal(
         429,
-        `this run's refused writes cost ${used} look-ups on GitHub already: Deckhand checks no more of its writes`,
+        `this run's refused writes cost ${MAX_REFUSED_LOOKUPS} look-ups on GitHub in the last hour: Deckhand checks no more of its writes until then`,
       );
+    if (costOf(run) >= MAX_REFUSED_LOOKUPS) return spentOut();
+    // This write's look-ups, counted as they are made.
+    const cost = { at: now(), n: 0, over: false };
+    spent.get(run).push(cost);
+    const { failed, ...refused } = (await checked(run, write, memo, cost)) ?? {};
+    if (cost.over) return spentOut();
+    const charged = refused.status && !failed && refused.status !== 502 && refused.status !== 503;
+    if (!charged) {
+      const list = spent.get(run) ?? [];
+      if (list.includes(cost)) list.splice(list.indexOf(cost), 1);
     }
-    const counter = { looked: 0 };
-    const refused = await checked(run, write, memo, counter);
-    if (refused) spent.set(run, used + counter.looked);
-    return refused;
+    return refused.status ? refused : null;
   }
 
-  // checkWrite()'s work, each look-up it makes counted in `counter.looked`.
-  async function checked(run, write, memo, counter) {
+  // checkWrite()'s work, each look-up it makes counted in `cost.n`; past the budget, a look-up
+  // fails and `cost.over` says why.
+  async function checked(run, write, memo, cost) {
     const get = (repo, path) => {
       const key = `${repo} ${path}`;
       if (!memo.has(key)) {
-        counter.looked++;
+        if (costOf(run) >= MAX_REFUSED_LOOKUPS) {
+          cost.over = true;
+          return Promise.reject(new Error("the run's look-ups for refused writes are spent"));
+        }
+        cost.n++;
         memo.set(key, lookup(repo, path));
       }
       return memo.get(key);
@@ -1218,7 +1241,12 @@ export function createWriteChecks({
     };
     const messages = await policies.deny("deny_github", run.repo, run.base || "main", () => input);
     if (!messages.length) return null;
-    return refusal(403, `the policies refuse it: ${messages.join("; ")}`);
+    // A policy that couldn't be evaluated (the service restarting, opa timing out) isn't the
+    // run's doing: checkWrite() doesn't charge its look-ups.
+    return {
+      ...refusal(403, `the policies refuse it: ${messages.join("; ")}`),
+      failed: messages.some((m) => m.startsWith("policy error")),
+    };
   }
 
   return { check, checkWrite, answered };
