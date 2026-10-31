@@ -87,10 +87,12 @@ export interface Run {
   summary?: string | null;
   // How many comments reached it while it ran. Sent, not shown.
   delivered?: number;
-  // The branch of its last push GitHub took, and when (listener/git-gateway.mjs); null when
-  // it hasn't pushed, absent for runs from before they were recorded.
+  // The branch of its last push GitHub took, and when (the github service's git gateway); null
+  // when it hasn't pushed, absent for runs from before they were recorded.
   branch?: string | null;
   lastPushAt?: number | null;
+  // How its sandbox exited, once the runner said (listener/run-events.mjs). Sent, not shown.
+  exitCode?: number | null;
 }
 
 // draft, ready for review, merged, or closed without merging.
