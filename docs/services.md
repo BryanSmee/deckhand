@@ -1,10 +1,11 @@
 # Services (target)
 
 Where the listener is headed once it is split (#499, its parts #500 to #509). Today the policy
-service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505) and the
-runner (#503, [architecture.md](architecture.md#the-runner-service)) are out, beside the egress
-proxy; the rest is still one process, the listener: [architecture.md](architecture.md) describes
-what runs now.
+service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505), the
+runner (#503, [architecture.md](architecture.md#the-runner-service)) and the github service (#502,
+[architecture.md](architecture.md#the-github-service)) are out, beside the egress proxy; the
+rest is still one process, the listener: [architecture.md](architecture.md) describes what runs
+now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
 reaches holds neither the App's key, the operator's agent credentials nor the Docker socket, and
@@ -122,7 +123,8 @@ file backend on one node, Redis on several (#509).
 
 Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
 accepting connections, finishes those in flight within its grace period, then exits. The proxy,
-the policy service and the broker (30 s, over an inbox's long poll) use it so far (the policy
+the policy service, the broker (30 s, over an inbox's long poll) and the github service (280 s:
+pushes, clones) use it so far (the policy
 service's and the broker's `/ready` answer 503 from then on, for a readiness probe); the runner
 drains its own way (its output streams first, then its lease, `runner/service.mjs` `stop()`); the
 listener keeps its own handler (`listener/server.mjs`), and each service uses
