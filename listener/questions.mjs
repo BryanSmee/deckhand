@@ -8,6 +8,7 @@
 // changes.
 import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
+import { askedOn } from "./dismissals.mjs";
 import { MARKER, saysMore, taskKey } from "./events.mjs";
 import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 import { Refused } from "../lib/http.mjs";
@@ -285,11 +286,16 @@ function editedInput({ p, issue, change, labelled, who, questions }) {
   return { ...change, label: false, by, track: false, answered: listed, ticked };
 }
 
-// Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels.
+// Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels. Taken
+// off, the questions of a run that asked there no longer wait either (`unlabelled`: { pr, by },
+// applyInput()).
 function labelInput({ p, issue, name, change, questions }) {
   if (!hasLabel([p.label], name)) return null;
   if (issue.state === "closed") return { ...change, track: false };
-  if (p.action === "unlabeled") return { ...change, track: false, answered: true };
+  if (p.action === "unlabeled") {
+    const unlabelled = { pr: !!issue.pull_request, by: p.sender?.login ?? null };
+    return { ...change, track: false, answered: true, unlabelled };
+  }
   return { ...change, track: true, questions: questions() };
 }
 
@@ -363,6 +369,16 @@ export async function applyInput(ctx, change) {
   const { ignoredTicks } = change;
   if (track !== undefined) ctx.inputs.set(key, track, asked, ignoredTicks);
   else if (asked !== undefined) ctx.inputs.update(key, asked, ignoredTicks);
+  // The label taken off: a run's questions there are set aside, so its task no longer shows as
+  // waiting for input (board.mjs). A run starting takes it off too: that run is then the
+  // task's last, and still running, so nothing is set aside.
+  if (change.unlabelled) {
+    const { pr, by: who } = change.unlabelled;
+    for (const asked of askedOn(ctx.runs, repo, number, pr)) {
+      ctx.dismissals.setAside(asked.key, asked.runId, who);
+      log(`${asked.key}: label removed, its last run's questions set aside`);
+    }
+  }
   // Answered: a comment that waited for the answers starts (waits.mjs).
   if (change.answered) await ctx.waits.answered(repo, number);
 }

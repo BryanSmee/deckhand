@@ -466,6 +466,58 @@ test("dismissed: while the dismissed run is the task's last and the task ended a
   assert.equal(tasks.find((t) => t.key === "acme/api#1").state, "error");
 });
 
+test("a run's questions no longer wait once closed, merged, or their label taken off", () => {
+  const asked = { items: [], raw: "1. Which?" };
+  const ask = (key, at = 30) => run(key, at, { status: "needs-input", questions: asked });
+  const aside = (key, runId) => ({ key, runId, by: "alice", at: 40, questions: true });
+  const tasks = board({
+    runs: [
+      ask("acme/api#1"),
+      ask("acme/api#2"),
+      ask("acme/api#3"),
+      ask("acme/api#4"),
+      ask("acme/api#5"),
+      ask("acme/api#6"),
+      ask("acme/api#7"),
+      ask("acme/api#7", 20),
+      run("acme/api#8", 30, { status: "error" }),
+    ],
+    queued: [],
+    brainstorms: [],
+    // The label put back since: it asks again.
+    inputs: [{ key: "acme/api#6", since: 50, questions: null }],
+    dismissals: [
+      aside("Acme/API#3", "acme/api#3-30"),
+      aside("acme/api#6", "acme/api#6-30"),
+      // An older run's: the last one still asks.
+      aside("acme/api#7", "acme/api#7-20"),
+      // A failure dismissed isn't a run's questions set aside.
+      { key: "acme/api#5", runId: "acme/api#5-30", by: "alice", at: 40 },
+      aside("acme/api#8", "acme/api#8-30"),
+    ],
+    // #1's pull request merged, #4's issue closed.
+    pr: (key) => (key === "acme/api#1" ? { number: 9, state: "merged" } : null),
+    closed: (key) => (key === "acme/api#4" ? "completed" : null),
+  });
+  const states = Object.fromEntries(tasks.map((t) => [t.key, t.state]));
+  assert.deepEqual(states, {
+    "acme/api#1": "done",
+    "acme/api#2": "needs-input",
+    "acme/api#3": "done",
+    "acme/api#4": "done",
+    "acme/api#5": "needs-input",
+    "acme/api#6": "needs-input",
+    "acme/api#7": "needs-input",
+    "acme/api#8": "error",
+  });
+  const of = (key) => tasks.find((t) => t.key === key);
+  // No form for questions nobody waits on; the run keeps how it ended.
+  assert.equal(of("acme/api#1").questions, undefined);
+  assert.equal(of("acme/api#1").runs[0].status, "needs-input");
+  assert.equal(of("acme/api#2").questions.source, "run");
+  assert.equal(of("acme/api#8").dismissed, null);
+});
+
 test("a task's update time is the latest Deckhand saw, and orders the list", () => {
   const tasks = board({
     runs: [

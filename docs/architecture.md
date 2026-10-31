@@ -141,7 +141,11 @@ false).
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
 `prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
-request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts.
+request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts. Its questions stop
+waiting earlier when nobody will answer them: once the issue or its pull request is closed or
+merged, or when someone takes the label off by hand (`dismissals.mjs` `setAside()`, kept in
+`dismissed.json` while that run is the task's last). The task then shows as `done`, and the run
+keeps its `needs-input` outcome.
 
 An issue can wait for answers without a run stopping to ask: inbox runs file issues with an
 **Open questions** section, and people write some by hand. When an allowed user or the App's bot

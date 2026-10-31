@@ -341,6 +341,8 @@ test("the dashboard follows the label, added or removed by anyone, and closed is
   assert.equal(label("unlabeled", "needs-input").questions, undefined);
   // What a comment waiting for the answers starts on (waits.mjs).
   assert.equal(label("unlabeled", "needs-input").answered, true);
+  // A run's questions there are set aside too (applyInput()).
+  assert.deepEqual(label("unlabeled", "needs-input").unlabelled, { pr: false, by: "alice" });
   const closed = issues("unlabeled", { label: { name: "needs-input" } });
   closed.issue.state = "closed";
   assert.equal(inputEvent(config, "issues", closed, BOT).answered, undefined);
@@ -439,6 +441,22 @@ test("applyInput: the label and the list follow the change, by the repo's own us
   const off = inputCtx();
   await applyInput(off.ctx, { ...change, label: undefined, track: false, answered: true });
   assert.deepEqual(off.calls.at(-1), ["answered", 3]);
+  // The questions of a run that asked there are set aside, so its task no longer waits.
+  const runs = [
+    { id: "r2", key: "org/repo#3", status: "needs-input", replyTo: 3 },
+    { id: "r1", key: "org/repo#4", status: "needs-input", replyTo: 4 },
+  ];
+  const aside = inputCtx();
+  aside.ctx.runs = runs;
+  aside.ctx.dismissals = {
+    setAside: (key, runId, by) => aside.calls.push(["aside", key, runId, by]),
+  };
+  const unlabelled = { pr: false, by: "carol" };
+  await applyInput(aside.ctx, { ...change, label: undefined, track: false, unlabelled });
+  assert.deepEqual(
+    aside.calls.filter(([what]) => what === "aside"),
+    [["aside", "org/repo#3", "r2", "carol"]],
+  );
 });
 
 const ticked = (a, b) =>

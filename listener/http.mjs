@@ -179,6 +179,7 @@ export function createHttp(ctx, { dashboardDir }) {
       pr: (key) => ctx.pulls.get(key),
       decisions: (key) => ctx.decisions?.get(key) ?? [],
       reviewed: (repo, number) => ctx.reviews?.entry(repo, number) ?? null,
+      closed: (key) => ctx.titles.closed(key),
     }).slice(0, 200);
     return { shown, queued };
   }
