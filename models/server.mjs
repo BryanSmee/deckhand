@@ -107,6 +107,14 @@ export function unreadableCredentials(env, { access = accessSync } = {}) {
   return problems;
 }
 
+// The credentials' values in `env`, to redact: not the plans' login variables, which hold a
+// file's path (the credentials folder's by default, withCredentialFiles()), no secret: a reply
+// naming /data/credentials would be garbled. The logins' tokens are their endpoints' secrets().
+export const credentialValues = (env) =>
+  AGENT_SECRETS.filter((name) => !Object.hasOwn(CREDENTIAL_FILES, name))
+    .map((name) => env[name])
+    .filter(Boolean);
+
 // The credentials `env` holds, by name (AGENT_SECRETS): what the listener is told it has.
 export const credentialNames = (env) => AGENT_SECRETS.filter((name) => env[name]);
 
@@ -212,11 +220,7 @@ export function createModels({
     credentials: credentialNames(env),
     ...(salt && { salt }),
     // What runs' output is redacted of, by the orchestrator, from their fingerprints alone.
-    secrets: () => [
-      ...AGENT_SECRETS.map((name) => env[name]),
-      ...openai.secrets(),
-      ...google.secrets(),
-    ],
+    secrets: () => [...credentialValues(env), ...openai.secrets(), ...google.secrets()],
     keys,
     bound,
     draining: () => draining,
@@ -267,7 +271,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     // The credentials never go in the store: a value holding one is refused there.
     const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
       password: env.REDIS_PASSWORD,
-      secrets: () => AGENT_SECRETS.map((name) => env[name]).filter(Boolean),
+      secrets: () => credentialValues(env),
     });
     const runner = runnerOf({ urls: config.runnerUrl, caller, log });
     const models = createModels({

@@ -25,6 +25,7 @@ import { fingerprints } from "../models/http.mjs";
 import {
   createModels,
   credentialNames,
+  credentialValues,
   runnerOf,
   unreadableCredentials,
 } from "../models/server.mjs";
@@ -670,4 +671,16 @@ test("a credentials folder or login the models service can't read is said at sta
   assert.equal(folder.length, 1);
   assert.match(folder[0], /the credentials folder \/data\/credentials/);
   assert.deepEqual(unreadableCredentials({ DATA_DIR: "/data" }, { access: () => {} }), []);
+});
+
+test("the plans' login files are no secret: their paths are neither fingerprinted nor redacted", () => {
+  const env = {
+    ANTHROPIC_API_KEY: KEY,
+    CODEX_AUTH_FILE: "/data/credentials/codex-auth.json",
+    AGY_AUTH_FILE: "/data/credentials/agy-auth.json",
+  };
+  assert.deepEqual(credentialValues(env), [KEY]);
+  const prints = [fingerprints(credentialValues(env))];
+  const text = "reads /data/credentials/agy-auth.json, mounted at /data/credentials:ro.";
+  assert.equal(redact(text, prints), text);
 });
