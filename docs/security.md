@@ -944,7 +944,8 @@ the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`
   call any more.
 - **The plans' logins, in its store, sealed.** A refreshed login (the ChatGPT plan's, the
   Google AI plan's) is kept in the service's store, encrypted with AES-256-GCM under a key only
-  its containers hold (`models.key`, in a volume or Secret of its own: `models/logins.mjs`):
+  its containers hold (`models.key`, in a volume or Secret of its own, the same for every copy: a
+  login sealed with another key is refused, never written over: `models/logins.mjs`):
   the store may be Redis, which every service reads (#509). The operator's file is where a login
   starts, never written: the store's login is used until the file's content changes (a new
   sign-in). Their refresh tokens are single-use, so one copy refreshes at a time, holding a

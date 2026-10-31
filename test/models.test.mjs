@@ -602,6 +602,16 @@ test("the listener's relay: a copy it can't reach fails that call, the next ones
   assert.deepEqual(heard, ["/anthropic/v1/messages"]);
 });
 
+test("loginKey(): two copies starting together on an empty volume keep the first one's key", () => {
+  const dir = tempDir(null, "deckhand-models-key-");
+  let first = null;
+  // The other copy links its key in place between this one's read and its link.
+  const key = loginKey(dir, { beforeLink: () => (first ??= loginKey(dir)) });
+  assert.deepEqual(key, first);
+  assert.deepEqual(loginKey(dir), first);
+  assert.deepEqual(readdirSync(dir), ["models.key"]);
+});
+
 test("loginKey(): made once, then read; the same key for every caller", () => {
   const dir = tempDir(null, "deckhand-models-key-");
   const key = loginKey(dir);

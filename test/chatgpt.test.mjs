@@ -78,8 +78,9 @@ test("a token about to expire: refreshed once for concurrent runs, and kept seal
   for (const headers of all) assert.equal(headers.authorization, `Bearer ${access(60, 1)}`);
   // Kept sealed in the store, the file left as it was.
   const raw = await store.get("login:chatgpt");
-  assert.ok(!raw.includes("rt-2") && !raw.includes(access(60, 1)));
-  const { login: saved } = JSON.parse(seal.open(raw));
+  assert.equal(raw.kid, seal.kid);
+  assert.ok(!raw.sealed.includes("rt-2") && !raw.sealed.includes(access(60, 1)));
+  const { login: saved } = JSON.parse(seal.open(raw.sealed));
   assert.equal(saved.tokens.refresh_token, "rt-2");
   assert.equal(saved.tokens.access_token, access(60, 1));
   assert.equal(saved.tokens.id_token, idToken);
@@ -234,4 +235,29 @@ test("a read-only file: used as it is, never written", async (t) => {
   assert.equal((await login.headers()).authorization, `Bearer ${access(60, 1)}`);
   assert.equal(server.calls.length, 1);
   assert.equal(JSON.parse(await readFile(file, "utf8")).tokens.refresh_token, "rt-1");
+});
+
+test("a copy with another models.key refuses the stored login, never writes the file's over it", async (t) => {
+  const file = await authFile(t, { access_token: access(4) });
+  const store = openStore("memory:");
+  const server = tokenServer();
+  const a = createChatgptLogin({
+    file,
+    store,
+    seal: loginSeal(randomBytes(32)),
+    fetch: server.fetch,
+    now: () => NOW,
+  });
+  await a.headers();
+  const before = await store.get("login:chatgpt");
+  const b = createChatgptLogin({
+    file,
+    store,
+    seal: loginSeal(randomBytes(32)),
+    fetch: server.fetch,
+    now: () => NOW,
+  });
+  await assert.rejects(b.headers(), /sealed with another models\.key than this copy's/);
+  assert.deepEqual(await store.get("login:chatgpt"), before);
+  assert.equal(server.calls.length, 1);
 });

@@ -125,8 +125,9 @@ test("near its expiry: one refresh by `agy models` for concurrent calls, kept se
   assert.equal(input.token.refresh_token, "1//refresh");
   // Kept for the next start, sealed in the store; the file left as it was.
   const raw = await store.get("login:antigravity");
-  assert.ok(!raw.includes("ya29.fresh"));
-  assert.equal(JSON.parse(seal.open(raw)).login.token.access_token, "ya29.fresh");
+  assert.equal(raw.kid, seal.kid);
+  assert.ok(!raw.sealed.includes("ya29.fresh"));
+  assert.equal(JSON.parse(seal.open(raw.sealed)).login.token.access_token, "ya29.fresh");
   assert.equal(JSON.parse(readFileSync(file, "utf8")).token.access_token, "ya29.old");
   assert.match(logs.join("\n"), /refreshed the Google AI plan's login/);
   // Fresh now: no second refresh.

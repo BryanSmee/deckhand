@@ -27,7 +27,7 @@ const sha256 = (text) => createHash("sha256").update(text).digest("hex");
 // key (or another store) leaves the stored logins unreadable, and each starts again from its
 // file, whose refresh token the first refresh spent: the ChatGPT plan's needs a new sign-in then
 // (docs/setup.md, The models service).
-export function loginKey(dir) {
+export function loginKey(dir, { beforeLink = () => {} } = {}) {
   const path = join(dir, "models.key");
   const read = () => {
     const key = Buffer.from(readFileSync(path, "utf8").trim(), "base64");
@@ -40,10 +40,12 @@ export function loginKey(dir) {
     if (error.code !== "ENOENT") throw error;
   }
   // Written whole aside, then linked in place only if there is still none: two copies starting
-  // together on an empty volume keep the one that got there first, and read it.
+  // together on an empty volume keep the one that got there first, and read it. `beforeLink()`:
+  // the tests' other copy, getting there first.
   const tmp = `${path}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   writeFileSync(tmp, `${randomBytes(32).toString("base64")}\n`, { mode: 0o600 });
   try {
+    beforeLink();
     linkSync(tmp, path);
   } catch (error) {
     if (error.code !== "EEXIST") throw error;
@@ -53,7 +55,15 @@ export function loginKey(dir) {
   return read();
 }
 
-export const loginSeal = (key) => sealWith(key, "models logins");
+// `kid`: which key it is (a hash of something derived from it, nothing of the key), stored with
+// each sealed login: a copy with another key says so rather than take the login for none.
+export const loginSeal = (key) => ({
+  ...sealWith(key, "models logins"),
+  kid: Buffer.from(hkdfSync("sha256", key, "deckhand", "models key id", 8)).toString("hex"),
+});
+
+// A login sealed with another models.key than this copy's: every copy needs the same one.
+export class KeyMismatch extends Error {}
 
 // The credentials' fingerprints' salt (http.mjs fingerprints()), from the same key: every copy
 // has it, and it outlives a restart. Not secret (the listener holds it), and nothing of the key.
@@ -99,8 +109,17 @@ export function sharedLogin({
     return { seed: read.seed, text };
   }
 
+  // The store's value, { kid, sealed }, opened; null when there is none. Sealed with another key
+  // (a copy whose models.key isn't this one's): refused, never written over, which would put the
+  // file's spent login in place of the other copy's refreshed one.
   const opened = (raw) => {
-    const text = raw === null ? null : seal.open(raw);
+    if (raw === null) return null;
+    if (raw?.kid !== seal.kid) {
+      throw new KeyMismatch(
+        `the ${name} login in the store is sealed with another models.key than this copy's: every copy of the models service needs the same one (docs/setup.md, The models service)`,
+      );
+    }
+    const text = seal.open(raw.sealed);
     try {
       return text ? JSON.parse(text) : null;
     } catch {
@@ -121,7 +140,7 @@ export function sharedLogin({
       text ??= await readFile(file, "utf8");
       seed = sha256(text);
       const fresh = { seed, login: parse(text), broken: null };
-      const sealed = seal.seal(JSON.stringify(fresh));
+      const sealed = { kid: seal.kid, sealed: seal.seal(JSON.stringify(fresh)) };
       // Another copy's refresh meanwhile: read again, rather than write a spent login over it.
       if (await store.compareAndSet(key, raw, sealed)) return { ...fresh, raw: sealed };
     }
@@ -129,7 +148,10 @@ export function sharedLogin({
 
   // Saved over `before` (load()'s), unless another copy changed it meanwhile.
   async function save(before, next) {
-    const sealed = seal.seal(JSON.stringify({ seed: before.seed, ...next }));
+    const sealed = {
+      kid: seal.kid,
+      sealed: seal.seal(JSON.stringify({ seed: before.seed, ...next })),
+    };
     return store.compareAndSet(key, before.raw, sealed);
   }
 

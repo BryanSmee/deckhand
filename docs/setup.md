@@ -1243,7 +1243,11 @@ starts each plan again from its file, which it never writes: the ChatGPT plan's 
 it was spent by the first refresh, so **sign in again** (`codex login`, [With a ChatGPT
 plan](#with-a-chatgpt-plan)) when you change either; the Google AI plan's may still work, or
 needs a new sign-in too. Two copies may run side by side on one store (Kubernetes): a login is
-refreshed by one of them at a time.
+refreshed by one of them at a time. **Every copy must mount the same `models.key`** (one volume,
+or one Kubernetes Secret holding the file, never one per pod): a copy whose key isn't the one a
+login was sealed with refuses it, saying so in its log and in runs' errors, rather than replace
+the other copy's refreshed login with the file's spent one. Its fingerprints' salt comes from the
+key too, so copies with one key give the listener one set.
 
 The proxy and the listener each reach it over an internal network of their own
 (`models-proxy`, `models-orchestrator`), and it tells them apart by that network
