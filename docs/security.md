@@ -1471,7 +1471,8 @@ repository, for every repository, are too broad to grant by accident, so they ar
 repository at a time. The yes-or-no keys these files had before #498 (`allow_dockerfile`,
 `allow_preview`, `allow_branch_docker_images`, `allow_docker`, `allow_research`,
 `allow_workflows`, `allow_auto_merge`, `acknowledge_automerge_and_preview_is_highly_dangerous`)
-are errors too, each saying the `allow_grant` rule to write instead
+are errors too, each saying what to do instead: for `true`, the `allow_grant` rule to write;
+for `false`, which granted nothing, to remove it
 ([Upgrading](setup.md#upgrading-the-grants-498)).
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository

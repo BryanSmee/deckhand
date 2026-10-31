@@ -230,7 +230,10 @@ test("each repo file's errors, one list per file", () => {
     "allow_preview: true\n",
     /allow_preview: moved to the operator's policies \(#498\): `allow_grant if \{ input\.repo\.name == "org\/repo"; input\.grant == "preview" \}` in policy\/ of the grants folder/,
   );
-  bad("allow_auto_merge: public\n", /`auto_merge_public` for `public`/);
+  bad(
+    "allow_auto_merge: public\n",
+    /`allow_grant if \{ input\.repo\.name == "org\/repo"; input\.grant == "auto_merge_public" \}`/,
+  );
   bad("- a\n", /org\/repo\.yaml: expected a mapping/);
   // The old single file's layout, copied as is.
   bad("org/repo:\n  hosts: [pypi.org]\n", /org\/repo: unknown/);
@@ -636,6 +639,15 @@ test("grantOf: the folder's grant with what the policies grant; their failure a 
         error.message,
       ),
   );
+  // A grants file with errors: no grant, whatever the policies say (the git gateway's
+  // `workflows` included, server.mjs: it takes the throw for no).
+  await assert.rejects(
+    grantWithPolicies(config, "org/repo", {
+      load: () => grantsFrom({ "org/repo.yaml": "hosts: [bad host]\n" }, config),
+      granted: grantedOf(["workflows"]),
+    }),
+    (error) => error instanceof GrantsError && error.file === "org/repo.yaml",
+  );
   // grantCheck() says it as a broken grants file: no run starts.
   const check = await grantCheck(
     config,
@@ -676,15 +688,44 @@ test("each grant's former key is an error saying what to write, in default.yaml 
         ),
       key,
     );
-    // default.yaml: no repository to name, every run stops.
-    assert.throws(
-      () => grantsFrom({ "default.yaml": `${key}: false\n` }, config),
-      (error) =>
-        error instanceof GrantsError &&
-        error.file === "default.yaml" &&
-        error.message.includes(`\`allow_grant if { input.grant == "${name}" }\``),
-      key,
-    );
+    // `false` granted nothing: the key goes, never a rule that would grant it. A repository's own
+    // file is told how to keep out a grant its policies give every repository.
+    for (const file of ["default.yaml", "org/repo.yaml"]) {
+      const said = (() => {
+        try {
+          grantFor(grantsFrom({ [file]: `${key}: false\n` }, config), config, "org/repo");
+        } catch (error) {
+          return error.message;
+        }
+        return "";
+      })();
+      assert.match(said, new RegExp(`${key}: gone \\(#498\\), remove it: nothing is granted`), key);
+      assert.doesNotMatch(said, /allow_grant/, `${key} in ${file}`);
+      assert.equal(said.includes("deny_grant"), file !== "default.yaml", `${key} in ${file}`);
+    }
+    // `true` in default.yaml: a rule for every repository, but for what was only ever a
+    // repository's own to grant, which never was valid there.
+    const wide = (() => {
+      try {
+        grantsFrom({ "default.yaml": `${key}: true\n` }, config);
+      } catch (error) {
+        return error.message;
+      }
+      return "";
+    })();
+    if (REPO_ONLY.has(name)) {
+      assert.match(
+        wide,
+        /never valid in default\.yaml: grant `[\w]+` one repository at a time/,
+        key,
+      );
+      assert.ok(
+        wide.includes(`input.repo.name == "<owner>/<repo>"; input.grant == "${name}"`),
+        key,
+      );
+    } else {
+      assert.ok(wide.includes(`\`allow_grant if { input.grant == "${name}" }\``), key);
+    }
   }
 });
 

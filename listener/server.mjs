@@ -605,8 +605,11 @@ ctx.gitGateway = createGitGateway({
   broker: ctx.broker,
   app: () => ctx.app,
   policies,
-  // Asked on each push: a grant taken back applies to the next one.
-  allowWorkflows: async (repo) => (await policies.grants(repo)).granted?.has("workflows") === true,
+  // Asked on each push: a grant taken back applies to the next one. Through grantOf(), as every
+  // other grant: a repository whose grants file has errors has none (it throws: the gateway
+  // takes that for no).
+  allowWorkflows: async (repo) =>
+    (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflows === true,
   // A work run that isn't a fork's pushes nothing that reaches a fork's objects.
   forks: forkChecks,
   githubUrl: config.githubUrl,

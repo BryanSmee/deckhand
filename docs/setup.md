@@ -1142,6 +1142,7 @@ every run, in `default.yaml`) until you move it. Its message gives the rule to w
 | `allow_auto_merge: true`                                      | `auto_merge` (one repository at a time)        |
 | `allow_auto_merge: public`                                    | `auto_merge_public` (one repository at a time) |
 | `acknowledge_automerge_and_preview_is_highly_dangerous: true` | the same name (one repository at a time)       |
+| any of them `: false`                                         | none: remove the key                           |
 
 ```yaml
 # server/grants/acme/api.yaml, before
@@ -1160,8 +1161,13 @@ allow_grant if {
 }
 ```
 
-`input.repo.name` is lower case. A key of `default.yaml` becomes a rule without
-`input.repo.name`, for the grants that allow it. `hosts`, `cached_hosts`, `mounts`, `limits` and
+`input.repo.name` is lower case. A `true` key of `default.yaml` becomes a rule without
+`input.repo.name`, for the grants that may go to every repository (`dockerfile`,
+`branch_docker_images`, `preview`, `research`); the others were never valid there. A `false` key
+granted nothing, and nothing is granted by default now: remove it, never write a rule for it. In
+a repository's own file, where it kept a grant of `default.yaml`'s from that repository, write a
+`deny_grant` rule naming it instead, if a rule of yours grants it to every repository. Each
+key's error says which applies. `hosts`, `cached_hosts`, `mounts`, `limits` and
 `allow_projects` stay in the YAML. The runner now asks the policy service too: take the new
 `compose.yaml` (or add an internal `policy-runner` network to your `runner` and `policy`
 services).

@@ -138,13 +138,27 @@ const MOVED = {
   acknowledge_automerge_and_preview_is_highly_dangerous:
     "acknowledge_automerge_and_preview_is_highly_dangerous",
 };
-const moved = (key, file) => {
-  const name = MOVED[key];
+// What a grants file's former key (`key`: `value`, in `file`) says to do now. Its value
+// decides: `false` granted nothing, and nothing is granted by default now, so the key goes (in a
+// repository's file, a `deny_grant` keeps out what a rule for every repository would give it);
+// a REPO_ONLY key in default.yaml was never valid there; any other value, the rule granting it.
+function moved(key, file, value) {
+  const name = value === "public" ? "auto_merge_public" : MOVED[key];
   const repo = REPO_FILE.exec(file);
-  const which = repo ? `input.repo.name == "${`${repo[1]}/${repo[2]}`.toLowerCase()}"; ` : "";
-  const more = key === "allow_auto_merge" ? ` (\`auto_merge_public\` for \`public\`)` : "";
-  return `${key}: moved to the operator's policies (#498): \`allow_grant if { ${which}input.grant == "${name}" }\`${more} in policy/ of the grants folder (docs/security.md#the-grants)`;
-};
+  const own = repo && `${repo[1]}/${repo[2]}`.toLowerCase();
+  const where = "in policy/ of the grants folder (docs/security.md#the-grants)";
+  if (value === false) {
+    const keep = own
+      ? `; to keep from ${own} a grant your policies give every repository, \`deny_grant contains "…" if { input.repo.name == "${own}"; input.grant == "${name}" }\` ${where}`
+      : "";
+    return `${key}: gone (#498), remove it: nothing is granted unless the operator's policies grant it${keep}`;
+  }
+  if (!own && REPO_ONLY.has(name)) {
+    return `${key}: gone (#498), and never valid in default.yaml: grant \`${name}\` one repository at a time, \`allow_grant if { input.repo.name == "<owner>/<repo>"; input.grant == "${name}" }\` ${where}`;
+  }
+  const which = own ? `input.repo.name == "${own}"; ` : "";
+  return `${key}: moved to the operator's policies (#498): \`allow_grant if { ${which}input.grant == "${name}" }\` ${where}`;
+}
 
 // The keys listing hosts: what a run may reach, and of those, what the egress proxy may keep
 // in its cache, HTTPS too (proxy/cache.mjs, proxy/authority.mjs).
@@ -175,7 +189,7 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
       // Ignoring it would quietly take away the hosts the repo's .deckhand.yaml added.
       fail(`${key}: gone, list the hosts its sandboxes may reach under hosts here`);
     } else if (Object.hasOwn(MOVED, key)) {
-      fail(moved(key, file));
+      fail(moved(key, file, v));
     } else if (Object.hasOwn(HOST_LISTS, key)) {
       parseHosts(key, v, grant[HOST_LISTS[key]], fail);
     } else if (key === "limits") {
