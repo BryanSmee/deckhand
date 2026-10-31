@@ -200,7 +200,8 @@ export function createBrokerService({
     const done = state.chain.then(step);
     state.chain = done.catch((error) => {
       log(`Broker: run ${run}'s inbox (${error.message}), trying again`);
-      later(() => sync(run, bytesFrom), RETRY_MS);
+      // Unless the run ended meanwhile (forget()).
+      later(() => inboxes.get(run) === state && sync(run, bytesFrom).catch(() => {}), RETRY_MS);
     });
     return done;
   }

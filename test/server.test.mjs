@@ -1114,7 +1114,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // Uploaded through the broker, served under SCREENSHOT_URL as before.
     assert.equal(readFileSync(join(dir, "shot-answer"), "utf8"), "204");
     const token = runEnv.match(/^SCREENSHOT_URL=.*\/shots\/(\w+)$/m)[1];
-    const served = await fetch(`http://127.0.0.1:${port}/shots/${token}/page.png`);
+    // The listener copies it from the broker's stream a moment after its upload.
+    let served;
+    for (let i = 0; i < 100; i++) {
+      served = await fetch(`http://127.0.0.1:${port}/shots/${token}/page.png`);
+      if (served.status === 200) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
     assert.equal(served.status, 200);
     assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
     // Out through the egress proxy only, the broker directly.

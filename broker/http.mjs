@@ -68,6 +68,15 @@ const BODY_MAX = 64 * 1024;
 const INBOX_MAX = 8 * 1024 * 1024;
 const FILE_MAX = 4 * 1024 * 1024;
 
+// A path segment, decoded; one that isn't valid percent-encoding is refused.
+function decoded(segment) {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    throw new Refused(400, "not a plain path");
+  }
+}
+
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
 // `runs`, `files`: runs.mjs's and files.mjs's; `callers`: callers.mjs's; `signing`: the key, for
@@ -132,7 +141,7 @@ export function createBrokerHandler({
     }
     const shot = /^\/run\/shots\/([^/]+)$/.exec(path)?.[1];
     if (req.method === "PUT" && shot) {
-      const { status, message } = await files.putShot(req, record, decodeURIComponent(shot));
+      const { status, message } = await files.putShot(req, record, decoded(shot));
       return status === 204 ? res.writeHead(204).end() : sendJson(res, { message }, status);
     }
     sendJson(res, { message: "not found" }, 404);
@@ -154,7 +163,7 @@ export function createBrokerHandler({
   async function serviceCall(req, res, url) {
     const path = url.pathname;
     const id = /^\/runs\/([^/]+)/.exec(path)?.[1];
-    const run = id && decodeURIComponent(id);
+    const run = id && decoded(id);
     if (req.method === "GET" && path === "/runs") return sendJson(res, { runs: await runs.list() });
     if (req.method === "PUT" && run && path === `/runs/${id}`) {
       const body = await readJsonBody(req, BODY_MAX);
@@ -204,7 +213,7 @@ export function createBrokerHandler({
     }
     const shot = /^\/shots\/([^/]+)\/([^/]+)$/.exec(path);
     if (shot && (req.method === "GET" || req.method === "DELETE")) {
-      const [folder, name] = shot.slice(1).map(decodeURIComponent);
+      const [folder, name] = shot.slice(1).map(decoded);
       if (req.method === "DELETE")
         return sendJson(res, { deleted: await files.deleteShot(folder, name) });
       const data = await files.getShot(folder, name);
