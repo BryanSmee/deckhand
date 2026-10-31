@@ -231,11 +231,14 @@ export function secretOf(header) {
 // JSON decoded, so an escaped character can't split a secret, and replaced in place; then the
 // rest as text (a number, or a body that isn't JSON). A body that isn't UTF-8 is redacted as
 // bytes (latin1 keeps each one). Null when nothing was redacted.
-export function redactBody(body, secrets) {
+// `scrub(text)`: more that is redacted the same way, by what isn't held here (the operator's
+// credentials' fingerprints, the github service's: lib/fingerprints.mjs).
+export function redactBody(body, secrets, scrub = (text) => text) {
+  const clean = (text) => scrub(redact(text, secrets));
   const text = body.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(body)) {
     const bytes = body.toString("latin1");
-    const out = redact(bytes, secrets);
+    const out = clean(bytes);
     return out === bytes ? null : Buffer.from(out, "latin1");
   }
   let out = text;
@@ -244,11 +247,11 @@ export function redactBody(body, secrets) {
     // In valid JSON, a quote outside a string starts one: the literals are exactly these.
     out = text.replace(/"(?:[^"\\]|\\.)*"/g, (literal) => {
       const value = JSON.parse(literal);
-      const clean = redact(value, secrets);
-      return clean === value ? literal : JSON.stringify(clean);
+      const cleaned = clean(value);
+      return cleaned === value ? literal : JSON.stringify(cleaned);
     });
   } catch {}
-  out = redact(out, secrets);
+  out = clean(out);
   return out === text ? null : Buffer.from(out);
 }
 
@@ -323,6 +326,21 @@ function readBody(req, max, idleMs, clock) {
   });
 }
 
+// A run's calls in flight, counted in this process: the gateway's default (`inFlight`).
+export function countInFlight() {
+  const calls = new WeakMap();
+  return {
+    // → the call's slot, or null when the run has `max` in flight.
+    take(run, max) {
+      const n = calls.get(run) ?? 0;
+      if (n >= max) return null;
+      calls.set(run, n + 1);
+      return {};
+    },
+    release: (run) => calls.set(run, (calls.get(run) ?? 1) - 1),
+  };
+}
+
 export function createGithubGateway({
   broker, // broker.mjs: the run a token belongs to
   app, // () => the GitHub App (github-app.mjs), or null before /setup
@@ -345,6 +363,10 @@ export function createGithubGateway({
   // run → the secrets its writes must not carry, besides its GitHub tokens: its own tokens (or secret) and the
   // operator's credentials (secrets.mjs operatorSecrets()).
   secrets = () => [],
+  // run → (text) → the text without what `secrets` can't list: the operator's credentials (and
+  // a run from before tokens' secret), by their fingerprints, where they aren't held (the github
+  // service's, lib/fingerprints.mjs).
+  scrub = () => (text) => text,
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
@@ -373,6 +395,10 @@ export function createGithubGateway({
   repoId = async () => null,
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
+  // { take(run, max) → a slot when the run had fewer than `max` calls in flight, else null;
+  // release(run, slot) }: this process's count by default, the github service's store for its
+  // copies.
+  inFlight = countInFlight(),
   maxWrite = MAX_WRITE,
   idleMs = IDLE_MS,
   clock = globalThis,
@@ -385,8 +411,7 @@ export function createGithubGateway({
   // GraphQL's path as route() decodes it, and the spellings GitHub may read as it too.
   const graphqlPaths = new Set(["graphql", graphql.pathname.slice(1).toLowerCase()]);
   const isGraphql = (path) => graphqlPaths.has(path.toLowerCase().replace(/\/+$/, ""));
-  // run → its calls in flight; run → what its log noted.
-  const inFlight = new WeakMap();
+  // run → what its log noted.
   const noted = new WeakMap();
 
   // GitHub's error shape, which gh shows as is.
@@ -515,11 +540,10 @@ export function createGithubGateway({
     // A file host's call holds no token, and was a plain host's before: not counted, so a setup
     // that downloads many files at once isn't cut off part-way.
     const counted = !where.file;
-    const calls = inFlight.get(run) ?? 0;
-    if (counted && calls >= maxInFlight) {
+    const inFlightSlot = counted ? await inFlight.take(run, maxInFlight) : null;
+    if (counted && !inFlightSlot) {
       return fail(res, 429, `more than ${maxInFlight} calls at once`);
     }
-    if (counted) inFlight.set(run, calls + 1);
     // A rerun's slot (github-writes.mjs reserve()): free again once the call is over, unless
     // GitHub's answer made it a rerun done.
     let slot = null;
@@ -705,8 +729,8 @@ export function createGithubGateway({
         lacks: lacks && { message: lacks.message, paths: readPaths },
       });
     } finally {
-      slot?.release?.();
-      if (counted) inFlight.set(run, inFlight.get(run) - 1);
+      await slot?.release?.();
+      if (inFlightSlot) await inFlight.release(run, inFlightSlot);
     }
   }
 
@@ -876,24 +900,25 @@ export function createGithubGateway({
     try {
       text = decodeURIComponent(call);
     } catch {}
-    return redact(text, [...secrets(run), ...run.tokens]).slice(0, 200);
+    return scrub(run)(redact(text, [...secrets(run), ...run.tokens])).slice(0, 200);
   }
 
   // Whether `target` holds one of the run's secrets, as sent or percent-decoded.
   function urlHolds(run, req, target) {
     const values = [...secrets(run), secretOf(req.headers.authorization), ...run.tokens];
+    const clean = scrub(run);
     const raw = target.pathname + target.search;
     let decoded = raw;
     try {
       decoded = decodeURIComponent(raw.replaceAll("+", " "));
     } catch {}
-    return redact(raw, values) !== raw || redact(decoded, values) !== decoded;
+    return [raw, decoded].some((text) => clean(redact(text, values)) !== text);
   }
 
   // The write's body without the run's secrets; noted when it had one. It still goes on.
   function redacted(run, req, body, call) {
     const values = [...secrets(run), secretOf(req.headers.authorization), ...run.tokens];
-    const clean = redactBody(body, values);
+    const clean = redactBody(body, values, scrub(run));
     if (!clean) return body;
     note(run, `Deckhand redacted a secret from the run's GitHub write ${clip(run, call)}`);
     log(`GitHub gateway: redacted a secret from ${clip(run, call)} for ${run.repo}`);
@@ -964,6 +989,18 @@ export function createGithubGateway({
       else answer = null;
     };
     const at = Date.now();
+    // What the answer changed, kept before its end reaches the run (`settle`, forward()), so that
+    // its next call sees it whichever copy of the github service takes it; after a call GitHub
+    // never answered, once forward() is over. Once either way.
+    let kept = null;
+    const after = () =>
+      (kept ??= (async () => {
+        if (refs && status === 200) await forks.remember(run, advertised, refs.refs());
+        if (!watched || !answer) return;
+        await wroteWrite(run, { ...watched, at }, status, Buffer.concat(answer));
+      })().catch((error) =>
+        log(`GitHub gateway: after ${clip(run, `${req.method} ${target.pathname}`)}: ${error}`),
+      ));
     // An Actions log's redirect, followed here: HTTPS only (or the API's own scheme, a test's
     // plain HTTP), with none of the run's or the App's credentials, the signed URL being its own.
     const logs = api && req.method === "GET" && ACTIONS_LOGS.test(path);
@@ -995,6 +1032,7 @@ export function createGithubGateway({
       ...((watched || advertised) && {
         tap,
         answered: (code, _, lost) => (status = lost ? 0 : code),
+        settle: after,
       }),
       ...(logs && { follow }),
       ...(lacks && {
@@ -1012,13 +1050,7 @@ export function createGithubGateway({
         maxTransform: MAX_ANSWER,
       }),
     });
-    if (refs && status === 200) forks.remember(run, advertised, refs.refs());
-    if (!watched || !answer) return;
-    try {
-      wroteWrite(run, { ...watched, at }, status, Buffer.concat(answer));
-    } catch (error) {
-      log(`GitHub gateway: after ${clip(run, `${watched.method} ${target.pathname}`)}: ${error}`);
-    }
+    await after();
   }
 
   return { handle };

@@ -115,6 +115,23 @@ export async function taskWhere(ctx, ip) {
   return null;
 }
 
+// A sandbox's GitHub or git call that reached the listener (a proxy from before the github
+// service, #502, or a sandbox's own): on to the github service, naming the network (or pod) it
+// came from as the proxy would. Git's pushes bind to the sandbox or its engine, as a run token
+// does; GitHub's hosts to the sandbox alone, as a call without a token is found by it.
+export async function relayToGithub(ctx, req, res) {
+  let path;
+  try {
+    path = pathOf(req.url);
+  } catch {
+    return sendJson(res, { message: "not a plain path" }, 400);
+  }
+  const where = await taskWhere(ctx, await clientAddress(ctx, req));
+  const git = path.startsWith("/git/");
+  const sandbox = where && (git || !where.engine) ? (where.task.live.sandbox ?? "") : "";
+  return ctx.githubService.relay(req, res, { sandbox, path: req.url });
+}
+
 // The header in which the egress proxy names the sandbox a call it relays came from
 // (../proxy/proxy.mjs): believed from the proxy alone.
 export const CLIENT_HEADER = "x-deckhand-client";
@@ -276,6 +293,13 @@ export function createBrokerHttp(ctx) {
     }
     if (!answer.allowed)
       log(`Egress: refused ${host} for ${task ? taskKey(task.repo, task.id) : ip}`);
+    // GitHub's hosts go to the github service (#502), which the proxy vouches the call's network
+    // (or pod) to: the sandbox's, never its engine's, whose calls bind to no run there.
+    const toGithub = answer.relay && matchHost(host, [...githubHosts(config), ...files]) !== null;
+    if (toGithub) {
+      answer.service = "github";
+      if (!engine && live.sandbox) answer.sandbox = live.sandbox;
+    }
     sendJson(res, answer);
   }
 

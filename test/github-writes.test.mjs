@@ -912,7 +912,7 @@ const restIssue = (number, repo = "Org/Repo") =>
     repository_url: `https://api.github.com/repos/${repo}`,
   });
 
-test("the issues a run created: GitHub's answers to its own creates, REST and GraphQL", () => {
+test("the issues a run created: GitHub's answers to its own creates, REST and GraphQL", async () => {
   const { answered } = createWriteChecks({
     policies: allowingPolicies,
     needsInputLabel: () => null,
@@ -921,24 +921,24 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
   const work = run("work");
   let saved = 0;
   work.changed = () => saved++;
-  answered(work, GRAPHQL_CREATE, 200, created(30));
-  answered(work, REST_CREATE, 201, restIssue(35));
+  await answered(work, GRAPHQL_CREATE, 200, created(30));
+  await answered(work, REST_CREATE, 201, restIssue(35));
   // Again, refused by GitHub, another repository's, not an issue's answer, not a create.
-  answered(work, GRAPHQL_CREATE, 200, created(30));
-  answered(work, GRAPHQL_CREATE, 502, created(40));
-  answered(work, REST_CREATE, 422, restIssue(41));
-  answered(work, GRAPHQL_CREATE, 200, created(42, "org/other"));
-  answered(work, REST_CREATE, 201, restIssue(43, "org/other"));
-  answered(
+  await answered(work, GRAPHQL_CREATE, 200, created(30));
+  await answered(work, GRAPHQL_CREATE, 502, created(40));
+  await answered(work, REST_CREATE, 422, restIssue(41));
+  await answered(work, GRAPHQL_CREATE, 200, created(42, "org/other"));
+  await answered(work, REST_CREATE, 201, restIssue(43, "org/other"));
+  await answered(
     work,
     GRAPHQL_CREATE,
     200,
     json({ data: { updateIssue: { issue: { url: "https://github.com/org/repo/issues/44" } } } }),
   );
-  answered(work, GRAPHQL_CREATE, 200, Buffer.from("not json"));
+  await answered(work, GRAPHQL_CREATE, 200, Buffer.from("not json"));
   // A call creating none (its answer names one all the same), and one creating two, aliased.
-  answered(work, { ...GRAPHQL_CREATE, creates: [] }, 200, created(46));
-  answered(
+  await answered(work, { ...GRAPHQL_CREATE, creates: [] }, 200, created(46));
+  await answered(
     work,
     { ...GRAPHQL_CREATE, creates: ["a", "b"] },
     200,
@@ -949,7 +949,7 @@ test("the issues a run created: GitHub's answers to its own creates, REST and Gr
       },
     }),
   );
-  answered(
+  await answered(
     work,
     { ...write("POST", "repos/org/repo/issues/1/comments", {}), at: START },
     201,
@@ -997,7 +997,7 @@ const restComment = (id, repo = "Org/Repo") =>
     html_url: `https://github.com/${repo}/pull/7#issuecomment-${id}`,
   });
 
-test("the comments a run posted: GitHub's answers to its own comments, REST and GraphQL", () => {
+test("the comments a run posted: GitHub's answers to its own comments, REST and GraphQL", async () => {
   const { answered } = createWriteChecks({
     policies: allowingPolicies,
     needsInputLabel: () => null,
@@ -1006,26 +1006,26 @@ test("the comments a run posted: GitHub's answers to its own comments, REST and 
   const work = run("work");
   let saved = 0;
   work.changed = () => saved++;
-  answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
-  answered(work, GRAPHQL_COMMENT, 200, commented(3000000002, "Org/Repo", "pull/7"));
-  answered(work, REST_COMMENT, 201, restComment(3000000003));
+  await answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
+  await answered(work, GRAPHQL_COMMENT, 200, commented(3000000002, "Org/Repo", "pull/7"));
+  await answered(work, REST_COMMENT, 201, restComment(3000000003));
   // Again, refused by GitHub, another repository's, a call that posted none (its answer names
   // one all the same), an issue created, not a comment.
-  answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
-  answered(work, GRAPHQL_COMMENT, 502, commented(41));
-  answered(work, REST_COMMENT, 422, restComment(42));
-  answered(work, GRAPHQL_COMMENT, 200, commented(43, "org/other"));
-  answered(work, REST_COMMENT, 201, restComment(44, "org/other"));
-  answered(work, { ...GRAPHQL_COMMENT, comments: [] }, 200, commented(45));
-  answered(work, REST_CREATE, 201, restComment(46));
-  answered(
+  await answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
+  await answered(work, GRAPHQL_COMMENT, 502, commented(41));
+  await answered(work, REST_COMMENT, 422, restComment(42));
+  await answered(work, GRAPHQL_COMMENT, 200, commented(43, "org/other"));
+  await answered(work, REST_COMMENT, 201, restComment(44, "org/other"));
+  await answered(work, { ...GRAPHQL_COMMENT, comments: [] }, 200, commented(45));
+  await answered(work, REST_CREATE, 201, restComment(46));
+  await answered(
     work,
     GRAPHQL_COMMENT,
     200,
     json({ data: { addComment: { commentEdge: { node: { url: "https://github.com/x" } } } } }),
   );
   // Its issues beside them, which a link's child is looked for among.
-  answered(work, GRAPHQL_CREATE, 200, created(30));
+  await answered(work, GRAPHQL_CREATE, 200, created(30));
   assert.deepEqual(work.created, [
     { comment: 3000000001, at: START },
     { comment: 3000000002, at: START },
@@ -1072,8 +1072,8 @@ test("a run edits and deletes the comments it posted, never the listener's, anot
     policies,
   });
   const work = run("work");
-  answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
-  answered(work, REST_COMMENT, 201, restComment(3000000002));
+  await answered(work, GRAPHQL_COMMENT, 200, commented(3000000001));
+  await answered(work, REST_COMMENT, 201, restComment(3000000002));
   // Its own: edited and deleted, as these policies allow (Deckhand's refuse deleting, below).
   const edit = write("PATCH", "repos/org/repo/issues/comments/3000000001", { body: "fixed" });
   assert.equal(await check(work, edit), null);
@@ -1155,9 +1155,9 @@ test(
           repo,
         }),
       });
-    const posted = ({ answered }, mode, push = mode === "work") => {
+    const posted = async ({ answered }, mode, push = mode === "work") => {
       const r = run(mode, { push });
-      answered(r, GRAPHQL_COMMENT, 200, commented(3000000001));
+      await answered(r, GRAPHQL_COMMENT, 200, commented(3000000001));
       return r;
     };
     const edit = write("PATCH", "repos/org/repo/issues/comments/3000000001", { body: "x" });
@@ -1168,17 +1168,17 @@ test(
         "the policies refuse it: a run doesn't delete its comments unless the operator's policies let it: edit yours instead",
     };
     const defaults = checks();
-    assert.equal(await defaults.check(posted(defaults, "work"), edit), null);
-    assert.deepEqual(await defaults.check(posted(defaults, "work"), remove), deleting);
+    assert.equal(await defaults.check(await posted(defaults, "work"), edit), null);
+    assert.deepEqual(await defaults.check(await posted(defaults, "work"), remove), deleting);
     // A brainstorm's replies are the listener's, an inbox entry's and a review's too.
     for (const mode of ["brainstorm", "idea", "review"]) {
-      assert.deepEqual(await defaults.check(posted(defaults, mode), edit), {
+      assert.deepEqual(await defaults.check(await posted(defaults, mode), edit), {
         status: 403,
         message: `the policies refuse it: no rule allows \`edit\` on \`created_comment\` for a \`${mode}\` run`,
       });
     }
     // The repository's own modes: nothing, until the repository allows them.
-    assert.deepEqual(await defaults.check(posted(defaults, "deploy", true), edit), {
+    assert.deepEqual(await defaults.check(await posted(defaults, "deploy", true), edit), {
       status: 403,
       message:
         "the policies refuse it: no rule of .deckhand/policy/ allows `edit` on `created_comment` for a `deploy` run",
@@ -1187,18 +1187,18 @@ test(
       {},
       { "modes.rego": 'package deckhand\n\nallow_github if input.mode == "deploy"\n' },
     );
-    assert.equal(await allowed.check(posted(allowed, "deploy", true), edit), null);
+    assert.equal(await allowed.check(await posted(allowed, "deploy", true), edit), null);
     // The operator's deny still wins.
-    assert.deepEqual(await allowed.check(posted(allowed, "deploy", true), remove), deleting);
+    assert.deepEqual(await allowed.check(await posted(allowed, "deploy", true), remove), deleting);
     // A repository's same-name file replaces nothing: it only adds rules.
     const same = checks({}, { "mode-work.rego": "package deckhand\n" });
-    assert.deepEqual(await same.check(posted(same, "work"), remove), deleting);
+    assert.deepEqual(await same.check(await posted(same, "work"), remove), deleting);
     // The operator's does: here, without the rule on deleting.
     const rego = builtInPolicies().get("mode-work.rego");
     const lenient = rego.replace(/\n# A deleted comment[\s\S]*?\n}\n/, "\n");
     assert.notEqual(lenient, rego);
     const operator = checks({ "mode-work.rego": lenient });
-    assert.equal(await operator.check(posted(operator, "work"), remove), null);
+    assert.equal(await operator.check(await posted(operator, "work"), remove), null);
   },
 );
 
@@ -1370,7 +1370,7 @@ test("a rerun: the failed runs of its own pull request's head, from GitHub, at m
   // Each passes, its slot freed again (GitHub refused it, say) before the next.
   const passes = async (r, w) => {
     assert.equal(await check(r, w), null, w.path);
-    w.rerun.release();
+    await w.rerun.release();
   };
   await passes(work, rerun(100));
   await passes(work, job(500));
@@ -1469,18 +1469,18 @@ test("a rerun GitHub took is kept on the run, as its check resolved it, without 
   assert.equal(saved, 1);
   // Refused by GitHub: not counted, its slot free again.
   const refused = await checked("repos/org/repo/actions/runs/100/rerun-failed-jobs");
-  answered(work, refused, 403, json({}));
+  await answered(work, refused, 403, json({}));
   // Not answered at all (0: the gateway's lost answer): it may have gone out, so it counts.
   const lost = { ...run("work"), reruns: [] };
   const lostCall = { ...write("POST", "repos/org/repo/actions/runs/100/rerun-failed-jobs") };
   assert.equal(await check(lost, lostCall), null);
-  answered(lost, { ...lostCall, graphql: false, at: START }, 0, Buffer.alloc(0));
+  await answered(lost, { ...lostCall, graphql: false, at: START }, 0, Buffer.alloc(0));
   assert.deepEqual(lost.reruns, [{ run_id: 100, sha: "aaa", at: START }]);
   const failed = await checked("repos/org/repo/actions/runs/107/rerun-failed-jobs");
   down = true;
   // Kept at once, before the gateway's answer is over.
-  answered(work, job, 201, Buffer.alloc(0));
-  answered(work, failed, 201, json({}));
+  await answered(work, job, 201, Buffer.alloc(0));
+  await answered(work, failed, 201, json({}));
   assert.deepEqual(work.reruns, [
     { run_id: 100, sha: "aaa", at: START },
     { run_id: 107, sha: "aaa", at: START },
@@ -1521,7 +1521,7 @@ test("reruns at the same time: each takes a slot once its checks pass, so the bo
   const third = write("POST", "repos/org/repo/actions/jobs/500/rerun");
   assert.match((await check(work, third)).message, /reran or is rerunning 2/);
   // GitHub refused it: the slot is free again.
-  answered(work, taken, 422, json({}));
+  await answered(work, taken, 422, json({}));
   assert.equal(await check(work, third), null);
 });
 
@@ -1606,8 +1606,8 @@ test(
     );
     // Created the prompts' way (`gh issue create`, GraphQL), and over REST: linked, then written
     // like a sub-issue.
-    answered(work, GRAPHQL_CREATE, 200, created(30));
-    answered(work, REST_CREATE, 201, restIssue(35));
+    await answered(work, GRAPHQL_CREATE, 200, created(30));
+    await answered(work, REST_CREATE, 201, restIssue(35));
     for (const id of [900, 905])
       assert.equal(await check(work, link(1, { sub_issue_id: id })), null);
     assert.equal(
@@ -1626,7 +1626,7 @@ test(
       /no rule allows `edit` on `other_issue` for a `work` run/,
     );
     // An answer naming an older issue (an aliased field, say) doesn't make it the run's.
-    answered(work, GRAPHQL_CREATE, 200, created(31));
+    await answered(work, GRAPHQL_CREATE, 200, created(31));
     assert.match((await check(work, link(1, { sub_issue_id: 901 }))).message, /links only/);
     assert.match(
       (await check(work, write("PATCH", "repos/org/repo/issues/31", { body: "x" }))).message,
@@ -1638,7 +1638,7 @@ test(
     const read = (query) => ({ ...GRAPHQL_CREATE, creates: [], body: json({ query }) });
     for (const n of [50, 34]) {
       const before = work.created.length;
-      answered(
+      await answered(
         work,
         read(
           `query { createIssue: repository(owner: "org", name: "repo") { issue(number: ${n}) { url } } }`,
@@ -1648,7 +1648,7 @@ test(
       );
       assert.equal(work.created.length, before, `#${n}`);
     }
-    answered(work, GRAPHQL_CREATE, 200, created(50));
+    await answered(work, GRAPHQL_CREATE, 200, created(50));
     assert.match(
       (await check(work, write("PATCH", "repos/org/repo/issues/50", { title: "x" }))).message,
       /on `other_issue`/,
@@ -1664,8 +1664,8 @@ test(
     assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
     // An inbox entry links under the parents it created only, the children it created too.
     const idea = run("idea");
-    answered(idea, GRAPHQL_CREATE, 200, created(30));
-    answered(idea, GRAPHQL_CREATE, 200, created(35));
+    await answered(idea, GRAPHQL_CREATE, 200, created(30));
+    await answered(idea, GRAPHQL_CREATE, 200, created(35));
     assert.equal(await check(idea, link(30, { sub_issue_id: 905 })), null);
     assert.match((await check(idea, link(3, { sub_issue_id: 905 }))).message, /on `other_issue`/);
     assert.match((await check(idea, link(34, { sub_issue_id: 905 }))).message, /on `other_issue`/);
@@ -1694,8 +1694,8 @@ test(
       assert.equal(await check(work, w), null, `${w.method} ${w.path}`);
     }
     // An issue it created, blocked by another it created.
-    answered(work, GRAPHQL_CREATE, 200, created(30));
-    answered(work, REST_CREATE, 201, restIssue(35));
+    await answered(work, GRAPHQL_CREATE, 200, created(30));
+    await answered(work, REST_CREATE, 201, restIssue(35));
     assert.equal(await check(work, block(35, 900)), null);
     // A closed issue it didn't create, a pull request, an id the repo's open issues don't have.
     for (const id of [960, 908, 9]) {
@@ -1712,8 +1712,8 @@ test(
     );
     // An inbox entry links the issues it created, and nothing else.
     const idea = run("idea");
-    answered(idea, GRAPHQL_CREATE, 200, created(30));
-    answered(idea, GRAPHQL_CREATE, 200, created(35));
+    await answered(idea, GRAPHQL_CREATE, 200, created(30));
+    await answered(idea, GRAPHQL_CREATE, 200, created(35));
     assert.equal(await check(idea, block(35, 900)), null);
     assert.equal(await check(idea, block(35, 903)), null);
     assert.match((await check(idea, block(3, 900))).message, /on `other_issue`/);
@@ -1818,8 +1818,8 @@ test("the built-in checks hold whatever the policies allow: links, blockers, rea
     );
   }
   assert.equal(await check(work, link(1, { sub_issue_id: 202, replace_parent: false })), null);
-  answered(work, GRAPHQL_CREATE, 200, created(30));
-  answered(work, REST_CREATE, 201, restIssue(35));
+  await answered(work, GRAPHQL_CREATE, 200, created(30));
+  await answered(work, REST_CREATE, 201, restIssue(35));
   for (const id of [900, 905]) assert.equal(await check(work, link(1, { sub_issue_id: id })), null);
   assert.equal(
     await kindOf(write("PATCH", "repos/org/repo/issues/30", { body: "x" })),
@@ -1827,8 +1827,8 @@ test("the built-in checks hold whatever the policies allow: links, blockers, rea
   );
   // The bot's issue another run filed, an older one an answer named, a person's: not the run's.
   await refused(link(1, { sub_issue_id: 904 }), /links only/);
-  answered(work, GRAPHQL_CREATE, 200, created(31));
-  answered(work, GRAPHQL_CREATE, 200, created(50));
+  await answered(work, GRAPHQL_CREATE, 200, created(31));
+  await answered(work, GRAPHQL_CREATE, 200, created(50));
   for (const n of [34, 31, 50]) {
     assert.equal(
       await kindOf(write("PATCH", `repos/org/repo/issues/${n}`, { body: "x" })),
@@ -2023,11 +2023,11 @@ test("reactions: a run removes only those it added, never the listener's", async
     message: "a run removes only the reactions it added, never the listener's or anyone else's",
   });
   // The run adds 👀 where the bot had it already (200): still not its own.
-  answered(work, post("issues/comments/11", "eyes"), ...reacted(501, "eyes", 200));
+  await answered(work, post("issues/comments/11", "eyes"), ...reacted(501, "eyes", 200));
   assert.equal((await check(work, remove("issues/comments/11", 501))).status, 403);
   assert.equal(saved, 0);
   // One it added (201) it removes, by its id, on that comment only.
-  answered(work, post("issues/comments/11", "+1"), ...reacted(502, "+1"));
+  await answered(work, post("issues/comments/11", "+1"), ...reacted(502, "+1"));
   assert.equal(saved, 1);
   assert.deepEqual(work.created, [
     { reaction: { subject: "issue_comment:11", content: "+1", id: 502 }, at: START },
@@ -2036,26 +2036,26 @@ test("reactions: a run removes only those it added, never the listener's", async
   assert.equal((await check(work, remove("issues/comments/12", 502))).status, 403);
   assert.equal((await check(work, remove("issues/1", 502))).status, 403);
   // On its pull request too, and on a review comment.
-  answered(work, post("issues/7", "rocket"), ...reacted(503, "rocket"));
-  answered(work, post("pulls/comments/17", "heart"), ...reacted(504, "heart"));
+  await answered(work, post("issues/7", "rocket"), ...reacted(503, "rocket"));
+  await answered(work, post("pulls/comments/17", "heart"), ...reacted(504, "heart"));
   assert.equal(await check(work, remove("issues/7", 503)), null);
   assert.equal(await check(work, remove("pulls/comments/17", 504)), null);
   // Another repository's, a failed one, the same one twice: not kept.
-  answered(
+  await answered(
     work,
     { ...post("issues/1", "+1"), path: "/repos/org/other/issues/1/reactions" },
     ...reacted(505, "+1"),
   );
-  answered(work, post("issues/1", "+1"), 422, json({ message: "Validation Failed" }));
-  answered(work, post("issues/7", "rocket"), ...reacted(503, "rocket"));
+  await answered(work, post("issues/1", "+1"), 422, json({ message: "Validation Failed" }));
+  await answered(work, post("issues/7", "rocket"), ...reacted(503, "rocket"));
   assert.equal(work.created.length, 3);
   // Removed (204), it is no longer the run's: the listener's 👀 on that comment since, the
   // same bot's, isn't.
-  answered(work, post("issues/comments/12", "eyes"), ...reacted(510, "eyes"));
+  await answered(work, post("issues/comments/12", "eyes"), ...reacted(510, "eyes"));
   const remove510 = remove("issues/comments/12", 510);
   assert.equal(await check(work, remove510), null);
   saved = 0;
-  answered(work, { ...remove510, at: START }, 204, Buffer.alloc(0));
+  await answered(work, { ...remove510, at: START }, 204, Buffer.alloc(0));
   assert.equal(saved, 1);
   assert.equal(
     work.created.some((c) => c.reaction?.id === 510),
@@ -2063,7 +2063,7 @@ test("reactions: a run removes only those it added, never the listener's", async
   );
   assert.equal((await check(work, remove510)).status, 403);
   // A removal GitHub refused keeps it.
-  answered(work, { ...remove("issues/7", 503), at: START }, 404, json({}));
+  await answered(work, { ...remove("issues/7", 503), at: START }, 404, json({}));
   assert.equal(await check(work, remove("issues/7", 503)), null);
   // The issues it created are still read apart from its reactions: none to look up here.
   const link = write("POST", "repos/org/repo/issues/1/sub_issues", { sub_issue_id: 999 });
@@ -2102,12 +2102,14 @@ test("reactions: never one the listener added, on any task's comment, though the
     await check(work, write("POST", add("eyes").path.slice(1), { content: "eyes" })),
     null,
   );
-  answered(work, add("eyes"), ...reacted(700, "eyes"));
-  answered(work, add("+1"), ...reacted(701, "+1"));
+  await answered(work, add("eyes"), ...reacted(700, "eyes"));
+  await answered(work, add("+1"), ...reacted(701, "+1"));
   const remove = (id) => write("DELETE", `repos/org/repo/issues/comments/21/reactions/${id}`);
   assert.equal(await check(work, remove(700)), null);
   // The listener takes the comment in for #2's task: GitHub answers its POST with the run's 👀.
-  listener.received({ repo: "Org/Repo", comment: { id: 21 } });
+  const item = { repo: "Org/Repo", comment: { id: 21 } };
+  listener.received(item);
+  await item.eyes;
   assert.deepEqual(posted, ["POST /repos/Org/Repo/issues/comments/21/reactions"]);
   assert.deepEqual(await check(work, remove(700)), {
     status: 403,
@@ -2117,8 +2119,10 @@ test("reactions: never one the listener added, on any task's comment, though the
   assert.equal(await check(work, remove(701)), null);
   // And one the listener has: never kept as the run's, though GitHub answered the run 201.
   const fresh = run("work");
-  listener.received({ repo: "org/repo", comment: { id: 13 } });
-  answered(
+  const other = { repo: "org/repo", comment: { id: 13 } };
+  listener.received(other);
+  await other.eyes;
+  await answered(
     fresh,
     { ...add("eyes"), path: "/repos/org/repo/issues/comments/13/reactions" },
     ...reacted(702, "eyes"),
@@ -2126,7 +2130,7 @@ test("reactions: never one the listener added, on any task's comment, though the
   assert.deepEqual(fresh.created, []);
 });
 
-test("reactions: a run keeps its newest ones only", () => {
+test("reactions: a run keeps its newest ones only", async () => {
   const { answered } = createWriteChecks({
     policies: allowingPolicies,
     needsInputLabel: () => null,
@@ -2140,7 +2144,7 @@ test("reactions: a run keeps its newest ones only", () => {
       body: json({}),
       at: id,
     };
-    answered(work, post, ...reacted(id, "+1"));
+    await answered(work, post, ...reacted(id, "+1"));
   }
   const kept = work.created.filter((c) => c.reaction).map((c) => c.reaction.id);
   assert.equal(kept.length, 100);
@@ -2947,13 +2951,13 @@ test(
         needsInputLabel: () => null,
         policies: defaultPolicies(t, { repo }),
       });
-      const reacting = (mode) => {
+      const reacting = async (mode) => {
         const r = run(mode, { push: mode === "work" || mode === "deploy" });
         const post = { method: "POST", path: react.path, body: react.body, at: START };
-        answered(r, post, ...reacted(9, "+1"));
+        await answered(r, post, ...reacted(9, "+1"));
         return r;
       };
-      return (mode, w) => check(reacting(mode), w);
+      return async (mode, w) => check(await reacting(mode), w);
     };
     const check = checksWith();
     for (const mode of ["work", "brainstorm", "stop"]) {
@@ -3096,7 +3100,7 @@ test("the needs-input label: a run neither adds nor removes it on its sub-issues
     needsInputLabel: () => "needs-input",
   });
   const work = run("work");
-  answered(work, GRAPHQL_CREATE, 200, created(30));
+  await answered(work, GRAPHQL_CREATE, 200, created(30));
   for (const n of [2, 30]) {
     const refused = [
       write("DELETE", `repos/org/repo/issues/${n}/labels/needs-input`),
@@ -3355,7 +3359,7 @@ test("without read:issues: a sub-issue link, removal or new priority only for an
     bot: BOT,
   });
   const work = { ...run("work"), caps: ["pull", "read:pulls"] };
-  answered(work, GRAPHQL_CREATE, 200, created(30));
+  await answered(work, GRAPHQL_CREATE, 200, created(30));
   // #2 is already under its issue: GitHub may answer with it.
   for (const w of [
     write("DELETE", "repos/org/repo/issues/1/sub_issue", { sub_issue_id: 202 }),

@@ -47,6 +47,8 @@ export const ANSWER_GRACE_MS = 2 * 60_000;
 // follow has skipped what was read before, for its sandbox's output from meanwhile before it is
 // stopped (follow()).
 const CATCH_UP_MS = 10_000;
+// The most a run's end waits for its state at the github service, every try included.
+const GITHUB_STATE_MS = 10_000;
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createRuns(ctx) {
@@ -454,13 +456,17 @@ export function createRuns(ctx) {
 
   // A line of the sandbox's output without the secrets it must not publish (secrets.mjs):
   // what is stored is what the dashboard shows, and the result is what gets posted.
+  // The installation tokens the github service's gateway used for it, by the fingerprints it
+  // sent (server.mjs, its `token` events: `scrubs` on the broker's run), though neither the
+  // sandbox nor the listener ever had them; redact() also knows their shape (`ghs_…`), for those
+  // a restarted listener no longer has, or one cut short, which a fingerprint doesn't find.
   function hidden(live, line) {
-    return redact(line, secretValues(live));
+    const scrubs = ctx.broker.runOf(live.id)?.scrubs ?? [];
+    return scrubs.reduce((text, scrub) => scrub(text), redact(line, secretValues(live)));
   }
 
-  // The GitHub tokens the gateway used for it too (broker.mjs), while the broker holds the run,
-  // though its sandbox never had them: redact() also knows their shape, for those a restarted
-  // listener no longer lists.
+  // Its own tokens (or secret), the operator's credentials, and any GitHub token the listener's
+  // broker lists for it (none since the github service: hidden() has their fingerprints).
   function secretValues(live) {
     const tokens = ctx.broker.runOf(live.id)?.tokens ?? [];
     return [live.secret, ...ctx.broker.secretsOf(live.id), ...operatorSecrets(ctx), ...tokens];
@@ -695,7 +701,11 @@ export function createRuns(ctx) {
   // (comments.mjs): finish() then ends the run as failed, `live.replied` still false.
   function post(task, text) {
     const { live } = task;
-    return ctx.answer(target(task, live.replyTo), hidden(live, text), { full: runLink(task) });
+    // Once per run (`live.replied`): asked again after a handover, it isn't posted twice.
+    return ctx.answer(target(task, live.replyTo), hidden(live, text), {
+      full: runLink(task),
+      key: `${live.id}:reply`,
+    });
   }
 
   // The run on the dashboard, where its whole answer is, should GitHub take only its start.
@@ -819,11 +829,31 @@ export function createRuns(ctx) {
     }
   }
 
+  // The run's state at the github service, within GITHUB_STATE_MS in all (its client tries a
+  // service that is away again until then): the run holds its slot meanwhile. Not read: logged,
+  // so that a CI step counting reruns from the run's own copy (cleanUp()) can be traced to it.
+  async function githubState(live) {
+    if (!ctx.githubRunState) return null;
+    try {
+      return await ctx.githubRunState(live.id, { waitMs: GITHUB_STATE_MS });
+    } catch (error) {
+      log(
+        `${live.key}: its state at the github service not read (${error.message}): its reruns are as the run started`,
+      );
+      return null;
+    }
+  }
+
   // A run's end, however it ends (cleanUp(), restart.mjs requeue()): its record's summary
   // saved, its token, sandbox and saved state gone, its slot free.
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
+    // What it did on GitHub, the github service's: its reruns, for the CI step (cleanUp()).
+    const state = await githubState(live);
+    if (Array.isArray(state?.reruns)) live.reruns.splice(0, live.reruns.length, ...state.reruns);
+    if (Array.isArray(state?.created))
+      live.created.splice(0, live.created.length, ...state.created);
     // The broker service hears it first, so its tokens renew nowhere once its network goes; a
     // broker that doesn't answer soon is told again later (broker-service.mjs end()).
     const revoked = ctx.broker.revoke(live.id);

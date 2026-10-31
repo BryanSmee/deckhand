@@ -126,6 +126,7 @@ test("the policy waits for the listener rather than refusing every host", async 
     relay: true,
     models: false,
     sandbox: null,
+    service: null,
   });
   assert.deepEqual(asked, ["/egress?ip=10.0.0.2&host=api.github.com"]);
   assert.equal(clock.sleeps.length, 2);

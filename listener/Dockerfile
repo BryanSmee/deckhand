@@ -12,33 +12,20 @@ RUN npm ci
 COPY dashboard/ ./
 RUN npm run build
 
-# graphql-js, the listener's one runtime package (AGENTS.md): bundled into a single file the
-# GitHub gateway imports (github-graphql.mjs), so the image has no node_modules either.
-FROM --platform=$BUILDPLATFORM node:26-alpine AS vendor
-WORKDIR /vendor
-COPY listener/vendor/package.json listener/vendor/package-lock.json ./
-RUN npm ci
-COPY listener/vendor/graphql.entry.mjs ./
-RUN npm run build
-
-# The listener has no other dependencies: the dashboard's build and graphql-js's bundle, no
-# node_modules.
+# The listener has no dependencies: the dashboard's build, no node_modules. graphql-js is the
+# github service's (../github/Dockerfile), which runs the gateways; the listener holds no GitHub
+# App key nor Docker CLI.
 FROM node:26-alpine
-# git: the git gateway reads the workflow files a push of a repo granted `workflows`
-# changes, against a mirror of it (git-mirror.mjs). No Docker CLI: the runner has it.
-RUN apk add --no-cache git
 WORKDIR /app
 COPY listener/*.mjs listener/
 # The modules every service shares (lib/), beside the listener's as in the repository.
 COPY lib/ lib/
 COPY --from=dashboard /dashboard/dist/ dashboard/dist/
-# GitHub's GraphQL schema, pinned (vendor/update-schema.mjs), which the gateway validates against.
-COPY --from=vendor /vendor/graphql.mjs listener/vendor/
-COPY listener/vendor/github.graphql listener/vendor/
 # The runner's constants the listener's sandbox specs use (runner/engine.mjs, runner/inbox.mjs),
-# and the runner service's client.
+# and the runner and github services' clients.
 COPY listener/runner/ listener/runner/
 COPY runner/client.mjs runner/
+COPY github/client.mjs github/
 COPY listener/agents/ listener/agents/
 COPY prompts/brainstorm.md prompts/idea.md prompts/bug.md prompts/discussion.md prompts/onboarding.md prompts/analyze.md prompts/research.md prompts/review.md prompts/
 # The onboarding prompt ends with the config's reference.

@@ -21,6 +21,13 @@ import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
+import { createAppHolder } from "../github/app.mjs";
+import { createGithubService } from "../github/service.mjs";
+import { signServiceToken } from "../lib/service-token.mjs";
+import { createGitHub } from "../listener/github.mjs";
+import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs";
+import { createPolicies } from "../listener/policies.mjs";
+import { policyClient } from "../listener/policy-client.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
@@ -308,7 +315,7 @@ async function fakeGitHub(files = {}) {
               ? "app-token"
               : body.includes("workflows")
                 ? "workflows-token"
-                : "repo-token",
+                : (files.repoToken ?? "repo-token"),
             expires_at,
           }),
         );
@@ -487,6 +494,54 @@ async function freePort() {
   }
 }
 
+// The github service (../github/), in this process: the App's key in its own folder, the
+// broker's key for the tokens, the policy service for the runs' writes and pushes, the test's
+// grants. `extra`: the listener's settings it reads too (GITHUB_URL…).
+async function startGithubService(dir, github, credentials, { key, policyService, extra }) {
+  const own = join(dir, "github-service");
+  mkdirSync(own, { recursive: true });
+  const { webhook_secret: _, client_secret: __, ...kept } = credentials;
+  writeFileSync(join(own, "app.json"), JSON.stringify(kept));
+  const config = loadConfig(
+    {
+      GITHUB_API: github.url,
+      DATA_DIR: own,
+      GRANTS_DIR: join(dir, "grants"),
+      ...(extra?.GITHUB_URL && { GITHUB_URL: extra.GITHUB_URL }),
+    },
+    undefined,
+    { service: "github" },
+  );
+  const app = createAppHolder({ dir: own, api: config.githubApi });
+  const keys = () => new Map([[key.kid, key.publicKey]]);
+  const policies = createPolicies({
+    config,
+    github: createGitHub(() => app.get()).github,
+    service: policyClient({
+      url: policyService,
+      header: async () => `Bearer ${signServiceToken({ sub: "github", aud: "policy" }, key)}`,
+    }),
+  });
+  const made = createGithubService({
+    config,
+    store: openStore("memory:"),
+    app,
+    broker: { keys, serviceKeys: keys, unknownKey: async () => {} },
+    bound: null,
+    policies,
+    // As github/server.mjs reads them.
+    grants: {
+      projects: (repo) => grantFor(loadGrants(config), config, repo).allowProjects,
+      workflows: async (repo) =>
+        (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflows === true,
+    },
+    mirrorDir: join(own, "mirrors"),
+  });
+  await new Promise((resolve) => made.server.listen(0, "127.0.0.1", resolve));
+  made.server.unref();
+  return { ...made, url: `http://127.0.0.1:${made.server.address().port}` };
+}
+
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
 describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, () => {
@@ -529,9 +584,10 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // The broker service, which signs the runs' tokens and the services' own: the listener (as
     // the orchestrator, edge and models) and the runner call it from loopback, each asking as
     // itself. Its public key goes in keys/.
+    const brokerKey = testKey();
     const brokerService = createBrokerService({
       store: openStore("memory:"),
-      key: testKey(),
+      key: brokerKey,
       callers: createCallers({ networks: "edge+orchestrator+models+runner=127.0.0.0/8" }),
       keysDir: join(dir, "keys"),
     }).server;
@@ -544,18 +600,24 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       keysDir: join(dir, "keys"),
       ...(opa && { opa }),
     });
-    writeFileSync(
-      join(dir, "app.json"),
-      JSON.stringify({
-        id: 5,
-        client_id: "Iv1.x",
-        client_secret: "cs",
-        slug: "deckhand-x",
-        bot_id: 77,
-        webhook_secret: SECRET,
-        pem: PEM,
-      }),
-    );
+    // The App's credentials, the key with them: a listener's from before the github service,
+    // which hands its key over at start; the github service holds the same App already.
+    const credentials = {
+      id: 5,
+      client_id: "Iv1.x",
+      client_secret: "cs",
+      slug: "deckhand-x",
+      bot_id: 77,
+      webhook_secret: SECRET,
+      pem: PEM,
+    };
+    writeFileSync(join(dir, "app.json"), JSON.stringify(credentials));
+    const more = typeof extra === "function" ? extra(dir, github) : extra;
+    const githubService = await startGithubService(dir, github, credentials, {
+      key: brokerKey,
+      policyService,
+      extra: more,
+    });
     // The models service, in process, with the agents' credentials of `settings` (below): the
     // listener asks it which it holds, and relays the sandboxes' agent calls to it.
     let modelsOut = "";
@@ -590,8 +652,9 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       EGRESS_PROXY: `http://127.0.0.1:${egress.address().port}`,
       GRANTS_DIR: join(dir, "grants"),
       POLICY_SERVICE_URL: policyService,
+      GITHUB_SERVICE_URL: githubService.url,
       MODELS_SERVICE_URL: `http://127.0.0.1:${modelsServer.address().port}`,
-      ...(typeof extra === "function" ? extra(dir, github) : extra),
+      ...more,
     };
     models = startModels(settings, {
       dir,
@@ -616,6 +679,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       listener.child.kill("SIGKILL");
       runner?.child.kill("SIGKILL");
       github.server.close();
+      githubService.server.closeAllConnections();
+      githubService.server.close();
       egress.close();
       brokerService.closeAllConnections();
       brokerService.close();
@@ -771,6 +836,19 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.equal(delivered, 202);
     // Stalled bodies are dropped after a while: readDelivery() in deliveries.test.mjs.
     for (const req of held) req.destroy();
+  });
+
+  test("the App's key: handed over to the github service by a listener that held it, then removed", async (t) => {
+    const { dir, listener } = await listen(t);
+    await listener.until("handed over to the github service, removed from app.json");
+    const kept = JSON.parse(readFileSync(join(dir, "app.json"), "utf8"));
+    assert.equal(kept.pem, undefined);
+    // What edge keeps: the webhook secret, the OAuth client's.
+    assert.equal(kept.webhook_secret, SECRET);
+    assert.equal(kept.client_secret, "cs");
+    const held = JSON.parse(readFileSync(join(dir, "github-service", "app.json"), "utf8"));
+    assert.equal(held.pem, PEM);
+    assert.equal(held.webhook_secret, undefined);
   });
 
   test("a delivery whose handling throws is logged, and the next one is still handled", async (t) => {
@@ -1616,14 +1694,18 @@ caches:
     const withCa = await run();
     assert.deepEqual(withCa.cached, ["registry.npmjs.org"]);
     assert.match(withCa.args, /^DECKHAND_CA=http:\/\/[^/]+\/run\/ca$/m);
-    // GitHub's hosts are relayed to the listener's GitHub gateway instead, never a tunnel.
-    assert.deepEqual(withCa.egress["github.com"], {
+    // GitHub's hosts are relayed to the github service's gateway instead, never a tunnel, the
+    // run's network vouched for there.
+    const { sandbox, ...github } = withCa.egress["github.com"];
+    assert.deepEqual(github, {
       allowed: true,
       private: true,
       cache: false,
       decrypt: true,
       relay: true,
+      service: "github",
     });
+    assert.match(sandbox, /^id-deckhand-org-repo-12-/);
     // A work run that isn't a fork's: every *.githubusercontent.com host relayed, as GitHub's CDN
     // answers for one another (egress.mjs githubContent()).
     assert.equal(withCa.egress["objects.githubusercontent.com"].relay, true);
@@ -2225,6 +2307,39 @@ mounts:
       added.map((r) => JSON.parse(r.body).variables.content),
       ["I_12", "I_12", "PR_50"],
     );
+  });
+
+  test("an installation token the github service used for a run: redacted from its log and reply by its fingerprint", async (t) => {
+    // Long enough to fingerprint, and of no GitHub token's shape: only its fingerprint finds it.
+    const used = "v1.installationtoken0123456789abcdef";
+    const ctx = await listen(t, { repoToken: used }, (dir) => {
+      writeFileSync(join(dir, "hold"), "");
+      return {};
+    });
+    await ctx.send(comment("alice"));
+    const egress = join(ctx.dir, "egress");
+    await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
+    // The run's call, relayed through the listener to the in-process github service, which mints
+    // the token and sends its fingerprint to the listener.
+    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const read = await fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+      headers: { authorization: `token ${secret}` },
+    });
+    assert.equal(read.status, 200);
+    assert.ok(ctx.github.requests.some((r) => r.auth === `token ${used}`));
+    // Its fingerprint reaches the listener as an event: given a moment.
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    writeFileSync(join(ctx.dir, "result"), `The token is ${used}.`);
+    writeFileSync(join(ctx.dir, "go"), "");
+    await ctx.listener.until("done (ok)");
+    const log = await onlyLog(ctx.dir);
+    assert.ok(!log.includes(used), "the token in the log");
+    assert.match(log, /The token is \[redacted\]\./);
+    const replies = ctx.github.requests.filter(
+      (r) => r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.ok(replies.length);
+    for (const reply of replies) assert.ok(!reply.body.includes(used), "the token in the reply");
   });
 
   test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {
@@ -5426,6 +5541,7 @@ mounts:
       "delivered",
       "branch",
       "lastPushAt",
+      "exitCode",
       "capabilities",
     ],
   ];
@@ -5558,7 +5674,7 @@ mounts:
     assert.equal(done.branch, "issue-12-after");
   });
 
-  test("the `workflows` grant: pushes are checked against a mirror in the data dir, until the grant goes", async (t) => {
+  test("the `workflows` grant: pushes are checked against a mirror in the github service's data dir, until the grant goes", async (t) => {
     const ctx = await listen(t, {}, (dir, github) => {
       writeFileSync(join(dir, "hold"), "");
       writeGrants(dir, ["workflows"]);
@@ -5580,7 +5696,8 @@ mounts:
       await pushProbe(brokerPort, secret, "refs/heads/issue-12-x", { carries: false }),
       /ng refs\/heads\/issue-12-x Deckhand: this push points refs\/heads\/issue-12-x at a{12}, which it doesn't carry and org\/repo doesn't have/,
     );
-    assert.ok(existsSync(join(dir, "git-mirrors", "org/repo.git")));
+    // The github service's, a cache of its own.
+    assert.ok(existsSync(join(dir, "github-service", "mirrors", "org/repo.git")));
     const fetched = github.requests.find((r) => r.path.startsWith("/org/repo.git/info/refs"));
     assert.match(fetched.path, /service=git-upload-pack/);
     assert.equal(

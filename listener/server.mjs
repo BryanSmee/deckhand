@@ -7,7 +7,9 @@
 // previous listener left. How a comment becomes a run, and which module does what:
 // ../docs/architecture.md. No dependencies: node:http, node:crypto. Sandboxes, images and
 // preview hooks are the runner service's (../runner/), the only one with the Docker socket.
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
@@ -17,13 +19,14 @@ import { createModelsService } from "./models-service.mjs";
 import { createBroker } from "./broker.mjs";
 import { createBrokerService, legacyKey } from "./broker-service.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
-import { clientAddress, createBrokerHttp, runAt, runFrom, sandboxAt } from "./broker-http.mjs";
-import { createGitGateway } from "./git-gateway.mjs";
-import { createForkChecks } from "./github-forks.mjs";
-import { createGithubGateway } from "./github-gateway.mjs";
-import { createGraphqlChecks, createValidator, lookupNodes } from "./github-graphql.mjs";
-import { createPullChecks } from "./github-pulls.mjs";
-import { createReadChecks, createWriteChecks } from "./github-writes.mjs";
+import {
+  clientAddress,
+  createBrokerHttp,
+  relayToGithub,
+  runAt,
+  sandboxAt,
+} from "./broker-http.mjs";
+import { createGithubClient } from "../github/client.mjs";
 import { createProjects } from "./projects.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { createComments } from "./comments.mjs";
@@ -39,12 +42,7 @@ import {
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
 import { nextEpoch, openStore } from "../lib/store.mjs";
-import {
-  checkAppSettings,
-  createGitHubApp,
-  loadCredentials,
-  saveCredentials,
-} from "./github-app.mjs";
+import { checkAppSettings, loadCredentials, saveCredentials } from "./github-app.mjs";
 import { hasLabel, pullEntry, taskKey } from "./events.mjs";
 import {
   createGitHub,
@@ -104,6 +102,9 @@ const EYES_WAIT_MS = 10_000;
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
 
+// How often the operator's credentials are looked at again, for their fingerprints.
+const FINGERPRINTS_MS = 30_000;
+
 // How often the runs the broker service has are compared with the listener's.
 const RECONCILE_MS = 60 * 60_000;
 // How often the preview hooks the runner runs are asked again, for /status and the dashboard.
@@ -119,14 +120,14 @@ function log(...args) {
 // its stream of their events. The key the listener signed tokens with before it moves out of
 // the data volume, but for its public part (legacyKey()).
 // Its calls carry the listener's service tokens, as the orchestrator: for the broker, the policy
-// service, the runner and the models service.
+// service, the runner, the models service and the github service.
 let brokerCaller;
 let models;
 try {
   brokerCaller = createBrokerCaller({
     url: brokerServiceUrl(env),
     service: "orchestrator",
-    audiences: ["broker", "policy", "runner", "models"],
+    audiences: ["broker", "policy", "runner", "models", "github"],
     podTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
     log,
   });
@@ -236,6 +237,45 @@ const runnerClient = createRunnerClient({
   log,
 });
 
+// The github service (../github/, #502), the only one with the GitHub App's key: every GitHub
+// call of the listener's goes there, as the orchestrator, with its epoch (GITHUB_SERVICE_URL).
+const githubService = createGithubClient({
+  urls: config.githubServiceUrl,
+  token: () => brokerCaller.header("github"),
+  epoch: () => epoch,
+  log,
+});
+
+// What the listener's broker tells the github service of each run (broker.mjs `gateway`), with
+// whom its writes may assign (the repo's `users` as last read, else ALLOWED_USERS) and the label
+// its questions wait under.
+function githubGateway() {
+  return {
+    async put(id, fields) {
+      let { sandbox } = fields;
+      // A run from before tokens, picked up by a listener that didn't keep its network: looked
+      // up, as the egress policy would (broker-http.mjs sandboxOfTask()).
+      if (!sandbox && fields.secretHash) {
+        const task = [...ctx.tasks.values()].find((t) => t.live?.id === id);
+        sandbox = task
+          ? await Promise.resolve(ctx.runner.sandboxIdOf?.(task.name, id)).catch(() => null)
+          : null;
+        if (task && sandbox) task.live.sandbox ??= sandbox;
+      }
+      // A run from before tokens: its secret's fingerprints, which its writes are redacted by.
+      const secret = [...ctx.tasks.values()].find((t) => t.live?.id === id)?.live.secret;
+      await githubService.runs.put(id, {
+        ...fields,
+        sandbox: sandbox ?? null,
+        ...(fields.secretHash && secret && { secretPrints: fingerprint([secret]) }),
+        users: ctx.usersOf?.(fields.repo) ?? config.users,
+        needsInputLabel: config.needsInputLabel,
+      });
+    },
+    end: (id) => githubService.persist(`the end of run ${id}`, () => githubService.runs.end(id)),
+  };
+}
+
 // Logs why a delivery is ignored: deliveries that do nothing are the usual question.
 function skip(reason) {
   log(`  ignored: ${reason}`);
@@ -281,15 +321,47 @@ storeSecrets = () => operatorSecrets(ctx);
 
 // --- GitHub ----------------------------------------------------------------------------
 
+// The App's credentials the listener keeps (app.json in its data volume): its names, its
+// webhook secret, its OAuth client's. Never its key, which the github service alone holds: its
+// calls go there (../github/client.mjs app()).
 function useApp(credentials) {
-  ctx.app = createGitHubApp({ credentials, api: config.githubApi, log });
+  ctx.app = githubService.app(credentials);
   // The App's own login: its pull requests are Claude's (events.mjs linkedIssue()).
   config.bot = ctx.app.identity().name;
 }
 
+// Kept by a listener from before the github service: handed over to it, then removed here. The
+// first GitHub calls at start wait for it a while (below).
+let handedOver = Promise.resolve();
 {
   const credentials = loadCredentials(config.dataDir);
-  if (credentials) useApp(credentials);
+  if (credentials) {
+    const { pem, ...kept } = credentials;
+    useApp(kept);
+    if (pem) {
+      let taken = false;
+      handedOver = githubService
+        .persist("handing over the App's key", async () => {
+          try {
+            await githubService.setup.handOver(credentials);
+            taken = true;
+          } catch (error) {
+            // Refused for good, another App's key there (409) or none in what it was sent (400):
+            // asking again changes nothing. Anything else (a service not up yet, its keys not
+            // read: 401, 503) is asked again.
+            if (error.status !== 409 && error.status !== 400) throw error;
+            console.error(
+              `The GitHub App's key: the github service refused it (${error.message}). It stays in /data/app.json until resolved by hand: remove the github service's app.json (its github-key volume) to take this App's, or this one's key from /data/app.json to keep the service's (docs/setup.md#the-github-service)`,
+            );
+          }
+        })
+        .then(() => {
+          if (!taken || !loadCredentials(config.dataDir)?.pem) return;
+          saveCredentials(config.dataDir, kept);
+          log("The GitHub App's key: handed over to the github service, removed from app.json");
+        });
+    }
+  }
 }
 
 // Events and permissions the App's settings miss (without `issues`, open questions get no
@@ -330,14 +402,11 @@ function publicUrl() {
 // The App's calls as the repo's installation, REST and GraphQL (github.mjs).
 const { github, graphql } = createGitHub(() => ctx.app);
 
-// The runner's calls, before anything waits on it: its tokens, a run's first ones, the repos'
-// tarballs (services-http.mjs).
+// The runner's calls, before anything waits on it: a run's first tokens (services-http.mjs).
 const services = createServicesHttp({
-  config,
   // The broker service's own keys: never the listener's from before it.
   keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
   bound: networkCallers(config.serviceNetworks),
-  github,
   pendingTokens,
   log,
 });
@@ -356,6 +425,9 @@ for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 const setup = createSetup({
   config,
   configured: () => ctx.app !== null,
+  // The github service converts the manifest's code, and keeps the App's key: the listener gets
+  // the rest.
+  convert: (code) => githubService.setup.convert(code),
   onConfigured: (credentials) => {
     saveCredentials(config.dataDir, credentials);
     useApp(credentials);
@@ -502,7 +574,7 @@ Object.assign(ctx, {
   onboarded,
   repoList,
   // Replies, reactions and the needs-input label.
-  ...createComments({ config, github, graphql, log }),
+  ...createComments({ config, github, graphql, shared: githubService.claim, log }),
   // Onboarding issues, and the run each starts.
   onboarding: createOnboarding({
     request: github,
@@ -524,6 +596,7 @@ Object.assign(ctx, {
     issuer: brokerService.issuer,
     keys: brokerService.keys,
     unknownKey: brokerService.unknownKey,
+    gateway: githubGateway(),
     sandboxOf: (ip) => sandboxAt(ctx, ip),
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),
@@ -535,118 +608,16 @@ Object.assign(ctx, {
   runner: runnerClient.runner,
 });
 
-// The sandboxes' only way to GitHub, on the broker's port: their calls, relayed by the egress
-// proxy, go on with a token for their run's repo that they never see, their writes redacted.
+// The sandboxes' only way to GitHub, the github service (../github/, #502): their calls that
+// still reach the listener (a proxy from before it, a sandbox's own) are relayed there, naming
+// the network (or pod) they came from.
 const lookup = (repo, path) => getJson(github, repo, path, [404, 410]);
-// Their pull requests' own writes (`gh pr create`, `edit`, `ready`): from their own branches.
-const pullChecks = createPullChecks({
-  lookup,
-  // A granted repo's workflows, in the merge a new or changed pull request runs them from.
-  checkWorkflows: (repo, branch, base) => ctx.gitGateway.checkBranch(repo, branch, base),
-  // The dashboard has the change at once, whether its delivery comes or not.
-  record: (repo, pr, readyAt) => {
-    const { key, pr: entry } = pullEntry(repo, pr, readyAt);
-    if (pulls.record(key, entry)) log(`${key}: pull request #${entry.number} ${entry.state}`);
-  },
-  log,
-});
-// The projects the operator grants a repo's runs (allow_projects), read again at each write
-// like the grants: one taken back applies to the next.
-const grantedProjects = (repo) => grantFor(loadGrants(config), config, repo).allowProjects;
-// Whether a repo's runs read projects, asked on each of their GitHub calls: kept a while per
-// repo rather than reading the grants folder each time (a broken one said once per while).
-const PROJECT_READS_MS = 30_000;
-const projectReads = new Map(); // repo → { at, reads }
-function readsProjects(repo) {
-  const known = projectReads.get(repo);
-  if (known && Date.now() - known.at < PROJECT_READS_MS) return known.reads;
-  let reads = false;
-  try {
-    reads = grantedProjects(repo).length > 0;
-  } catch (error) {
-    log(`GitHub gateway: ${repo}: its grants: ${error.message ?? error}`);
-  }
-  projectReads.set(repo, { at: Date.now(), reads });
-  return reads;
-}
-const writeChecks = createWriteChecks({
-  lookup,
-  bot: () => config.bot,
-  listenerReacted: (...args) => ctx.listenerReacted(...args),
-  // Whom a run may assign: the repo's `users` as last read (its run's start read them), else
-  // ALLOWED_USERS.
-  users: (repo) => ctx.usersOf(repo) ?? config.users,
-  needsInputLabel: () => config.needsInputLabel,
-  projects: grantedProjects,
-  policies,
-  pulls: pullChecks,
-  log,
-});
-// What a work run that isn't a fork's may fetch: nothing that brings a fork's code.
-const forkChecks = createForkChecks({
-  get: (repo, path, expected) => getJson(github, repo, path, expected),
-  log,
-});
-// Their GraphQL: parsed, validated (in a worker: a document can take a moment), and each
-// mutation held to the same checks, its node IDs looked up with the listener's token.
-const graphqlChecks = createGraphqlChecks({
-  validator: createValidator().check,
-  files: forkChecks.checkGraphql,
-  nodes: (repo, ids) => lookupNodes(github, repo, ids),
-  checkWrite: writeChecks.checkWrite,
-  budget: writeChecks.budget,
-  log,
-});
-ctx.githubGateway = createGithubGateway({
-  broker: ctx.broker,
-  app: () => ctx.app,
-  api: config.githubApi,
-  web: config.githubUrl,
-  forks: forkChecks,
-  clientOf: (req) => clientAddress(ctx, req),
-  runFrom: (ip) => runFrom(ctx, ip),
-  // The run's own tokens too, and its secret from before tokens, which the broker keeps by
-  // hash only.
-  secrets: (run) => [
-    ...ctx.broker.secretsOf(run.id),
-    ...[...ctx.tasks.values()]
-      .filter((t) => t.live?.secret && ctx.broker.runOf(t.live.id) === run)
-      .map((t) => t.live.secret),
-    ...operatorSecrets(ctx),
-  ],
-  // Their REST writes and GraphQL mutations: what the policies' `allow_github` allows and their
-  // `deny_github` doesn't refuse. Their targets are looked up with the listener's token.
-  checkWrite: writeChecks.check,
-  checkGraphql: graphqlChecks.check,
-  // Their reads of CI's results beyond Actions, and of the organization's projects: what the
-  // policies allow, once per run.
-  checkRead: createReadChecks({ policies }).checkRead,
-  // Their creates' and comments' answers: the issues each run created, for its links, and the
-  // comments it posted, which it may edit.
-  wroteWrite: writeChecks.answered,
-  readsProjects,
-  // A run's own issue's next pages, which GitHub's links name by its repository's id.
-  repoId: async (repo) => (await lookup(repo, `/repos/${repo}`))?.id ?? null,
-  log,
-});
-// Their pushes, on the broker's port: to the run's own branches only, never the default one,
-// and what the policies' `allow_push` allows and their `deny_push` doesn't refuse.
-ctx.gitGateway = createGitGateway({
-  broker: ctx.broker,
-  app: () => ctx.app,
-  policies,
-  // Asked on each push: a grant taken back applies to the next one. Through grantOf(), as every
-  // other grant: a repository whose grants file has errors has none (it throws: the gateway
-  // takes that for no).
-  allowWorkflows: async (repo) =>
-    (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflows === true,
-  // A work run that isn't a fork's pushes nothing that reaches a fork's objects.
-  forks: forkChecks,
-  githubUrl: config.githubUrl,
-  // Granted repos' copies, their pushed workflow files checked against them (git-mirror.mjs).
-  mirrorDir: join(config.dataDir, "git-mirrors"),
-  log,
-});
+ctx.githubService = githubService;
+// What a run did on GitHub (its reruns, for the CI step), read at its end.
+ctx.githubRunState = (id, options) => githubService.runs.state(id, options);
+ctx.githubGateway = { handle: (req, res) => relayToGithub(ctx, req, res) };
+ctx.gitGateway = ctx.githubGateway;
+
 // --- Tasks, runs and restarts --------------------------------------------------------------
 
 // A task with a run going or comments waiting for one, under any spelling of its repo.
@@ -977,6 +948,46 @@ const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
 // Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
 brokerService.consume({ shotsDir });
+// The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
+// writes by without holding them: the models service's sets, as it gave them (lib/redact.mjs,
+// #504), and lib/fingerprints.mjs's of any still in the listener's environment. Sent at start,
+// and again once they change (a plan's login refreshed).
+let printed = null;
+function sendFingerprints() {
+  const secrets = operatorSecrets(ctx).filter((s) => typeof s === "string" && s);
+  const sets = models.prints();
+  const digest = createHash("sha256")
+    .update(JSON.stringify([secrets, sets]))
+    .digest("hex");
+  if (digest === printed) return Promise.resolve();
+  return githubService
+    .fingerprints({ ...fingerprint(secrets), sets })
+    .then(() => (printed = digest));
+}
+githubService.persist("the operator's credentials' fingerprints", sendFingerprints);
+const printing = setInterval(
+  () => sendFingerprints().catch((error) => log(`GitHub service: fingerprints (${error.message})`)),
+  FINGERPRINTS_MS,
+);
+printing.unref();
+// The github service's: the pushes GitHub took (the run's record, restart.mjs watchPushes()),
+// the lines its gateways add to a run's log, the pull requests runs changed (the dashboard has
+// them at once, whether their delivery comes or not).
+githubService.consume({
+  pushed: async ({ run, branch, at }) => ctx.broker.runOf(run)?.pushed?.({ branch, at }),
+  note: async ({ run, message }) => ctx.broker.runOf(run)?.note?.(message),
+  // An installation token the gateway used for a run, by its fingerprint: what its log and reply
+  // are redacted of (runs.mjs hidden()), the token itself never leaving the service.
+  token: async ({ run, fingerprints }) => {
+    const found = ctx.broker.runOf(run);
+    if (found) (found.scrubs ??= []).push(fingerprintRedactor(fingerprints));
+  },
+  pull: async ({ key, pr }) => {
+    if (typeof key === "string" && pr && pulls.record(key, pr)) {
+      log(`${key}: pull request #${pr.number} ${pr.state}`);
+    }
+  },
+});
 // The models service's: the agents' calls it refused, each a line in its run's log.
 models.consume({ note: (event) => ctx.broker.runOf(event.run)?.note?.(event.message) });
 const relinking = setInterval(ctx.relink, RELINK_MS);
@@ -1014,6 +1025,8 @@ runEvents.start();
 runnerClient.previews.refresh();
 const previewing = setInterval(() => runnerClient.previews.refresh(), PREVIEWS_MS);
 previewing.unref();
+// The App's key at the github service first, should this listener be the one handing it over.
+await Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).unref())]);
 redeliveries.start();
 if (ctx.app) checkApp();
 // Pull requests that changed while the listener was down, or whose delivery was lost. After
@@ -1052,8 +1065,10 @@ process.on("SIGTERM", () => {
   clearInterval(previewing);
   clearInterval(relinking);
   clearInterval(reconciling);
+  clearInterval(printing);
   // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
   brokerService.stop();
+  githubService.stop();
   models.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).

@@ -1,9 +1,11 @@
-# What an operator runs: the listener, the runner, the broker service, the models service, the
-# policy service, the egress proxy, and the sandbox image runs start from. Each sandbox sits on an internal network of
+# What an operator runs: the listener, the runner, the broker service, the github service, the
+# models service, the policy service, the egress proxy, and the sandbox image runs start from.
+# Each sandbox sits on an internal network of
 # its own, which the runner creates and joins the listener and the egress proxy to: the proxy is
-# their only way out (see docs/security.md). The runner is the only one with the Docker socket, the
-# models service the only one with the agents' credentials; the broker's, the models service's
-# and the policy service's networks are internal, each shared with its callers alone.
+# their only way out (see docs/security.md). The runner is the only one with the Docker socket,
+# the github service the only one with the GitHub App's key, the models service the only one with
+# the agents' credentials; the broker's, the github service's, the models service's and the
+# policy service's networks are internal, each shared with its callers alone.
 #
 #   cp .env.example .env    # then set a Claude credential (and ALLOWED_USERS, or in config.yaml)
 #   cp -r server.example server   # your settings and grants, mounted below: keep it in git
@@ -39,21 +41,23 @@ services:
     # relays (GitHub's) wait for the next listener; those sent to it directly (agents' APIs,
     # pushes) are refused until then, #511 (docs/architecture.md#restarts).
     stop_grace_period: 5m
-    # Pushes of repositories granted `workflows` are saved in /tmp while checked (up to
-    # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
-    # (docs/security.md#github-actions-on-deckhands-branches).
-    # tmpfs:
-    #   - /tmp:size=4g
     ports:
       - "${PORT:-8080}:8080"
     # The broker service signs the runs' tokens: the listener asks it for them as runs start.
-    # Every policy decision goes to the policy service, and the listener asks the models service
-    # which agents' credentials it holds before it reads its settings: started first.
-    depends_on: [broker, policy, models]
-    # Its own way out (webhooks, GitHub), the broker's network of its own, over which it calls
-    # the broker as the orchestrator (and edge), the runner's, the policy service's and the models
-    # service's (docs/security.md#the-services-networks).
-    networks: [default, broker-orchestrator, runner, policy, models-orchestrator]
+    # Every policy decision goes to the policy service, every GitHub call to the github service,
+    # and the listener asks the models service which agents' credentials it holds before it reads
+    # its settings: started first.
+    depends_on: [broker, policy, github, models]
+    # Its own way out (webhooks), the broker's network of its own, over which it calls the broker
+    # as the orchestrator (and edge), the runner's, the github service's, the policy service's and
+    # the models service's (docs/security.md#the-services-networks).
+    networks:
+      - default
+      - broker-orchestrator
+      - runner
+      - github-orchestrator
+      - policy
+      - models-orchestrator
     # How the runner finds it, to join it to each run's network (its gateways and the agents'
     # endpoints, BROKER_URL below).
     labels:
@@ -172,6 +176,9 @@ services:
       BROKER_URL: http://listener:8081
       # The broker service, which signs the runs' tokens (#505).
       BROKER_SERVICE_URL: http://broker:8081
+      # The github service, the only one with the GitHub App's key (#502): every GitHub call of
+      # the listener's goes there.
+      GITHUB_SERVICE_URL: http://github:8080
       # The models service, which holds the agents' credentials (#504).
       MODELS_SERVICE_URL: http://models:8080
       # Their only way out: the egress service below (its deckhand.role label), joined the same
@@ -185,7 +192,8 @@ services:
       RUNNER_URL: http://runner:8080
       SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-10.231.250.48/28}
     volumes:
-      # The App's credentials (app.json), the runs' summaries, queue and brainstorm state.
+      # The App's credentials but its key (app.json: the webhook secret, the OAuth client's), the
+      # runs' summaries, queue and brainstorm state.
       - data:/data
       # One folder per run, served under /shots/. Sandboxes reach it through the broker (#393):
       # a volume of its own only as sandboxes from before #393 mount it.
@@ -215,7 +223,7 @@ services:
       # Who calls, by the network a call arrives on: each caller has one of its own to the
       # broker, whose subnet is fixed below (docs/security.md#service-tokens).
       # The listener is more than one service until #506: each asks as the one it is.
-      SERVICE_NETWORKS: edge+orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28}
+      SERVICE_NETWORKS: edge+orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
       # Where it publishes its public key, which the policy service and the runner mount read-only.
       SERVICE_KEYS_DIR: /service-keys
     volumes:
@@ -227,7 +235,7 @@ services:
       # Its public key (<kid>.pem), for the policy service and the runner to check service tokens with: nothing
       # secret, and a volume apart from its signing key's.
       - service-keys:/service-keys
-    networks: [broker-orchestrator, broker-proxy, broker-runner, broker-models]
+    networks: [broker-orchestrator, broker-proxy, broker-runner, broker-models, broker-github]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -247,9 +255,9 @@ services:
     # the preview hooks running end (cut past the grace period). Sandboxes keep running.
     stop_grace_period: 5m
     # The listener's, the models service's (the Antigravity login's refresh), its own to the
-    # broker service (its tokens, the runs' inboxes and files), and its own to the policy service
-    # (what the operator's policies grant a repository).
-    networks: [runner, runner-models, broker-runner, policy-runner]
+    # broker service (its tokens, the runs' inboxes and files), to the github service (the repos'
+    # tarballs), and to the policy service (what the operator's policies grant a repository).
+    networks: [runner, runner-models, broker-runner, github-runner, policy-runner]
     environment:
       # The settings the runner reads too, as the listener does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
@@ -292,9 +300,10 @@ services:
       EGRESS_PROXY: http://egress:3128
       # The broker service: its service tokens, the runs' inboxes and files.
       BROKER_SERVICE_URL: http://broker:8081
-      # The orchestrator's and the github service's endpoints for it: the listener's services
-      # port (a run's first tokens, the repos' tarballs).
+      # The orchestrator's endpoint for it: the listener's services port (a run's first tokens).
       ORCHESTRATOR_URL: http://listener:8083
+      # The github service: the repos' tarballs and blobs, for build contexts and preview hooks.
+      GITHUB_SERVICE_URL: http://github:8080
       # Its callers: the listener's services, on the network they share, and the models service.
       SERVICE_NETWORKS: edge+orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
       # The broker's public keys, which its callers' service tokens are checked with.
@@ -315,6 +324,56 @@ services:
       # Each mount root you grant, as on the listener: the runner resolves a sandbox's host
       # paths again (.., symlinks) before Docker mounts them, and refuses those it can't see.
       # - /nfs/work:/nfs/work:ro
+
+  # The only service with the GitHub App's key (#502, docs/services.md): the runs' GitHub and git
+  # gateways (the egress proxy sends their calls here), the listener's own GitHub calls, and the
+  # runner's tarballs. Its way out is GitHub's; each caller reaches it over a network of its own.
+  github:
+    build:
+      context: .
+      dockerfile: github/Dockerfile
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-github:${DECKHAND_VERSION:-latest}
+    restart: unless-stopped
+    # Stopping lets the calls in flight finish (pushes, clones, an Actions log): the proxy and the
+    # listener wait for the next copy meanwhile (docs/architecture.md#restarts).
+    stop_grace_period: 5m
+    depends_on: [broker, policy]
+    environment:
+      # GitHub's addresses, the repositories let through, and the grants folder (workflows,
+      # allow_projects), as the listener has them.
+      GITHUB_URL: ${GITHUB_URL:-}
+      GITHUB_API: ${GITHUB_API:-}
+      ALLOWED_REPOS: ${ALLOWED_REPOS:-}
+      GRANTS_DIR: ${GRANTS_DIR:-}
+      # Its keys and tokens, and the runs' writes' and pushes' decisions.
+      BROKER_SERVICE_URL: http://broker:8081
+      POLICY_SERVICE_URL: http://policy:8181
+      # Who calls, by the network a call arrives on (docs/security.md#service-tokens).
+      SERVICE_NETWORKS: edge+orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.144/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
+    volumes:
+      # The App's key (app.json, from /setup, or handed over by the listener that held it): this
+      # volume alone, never the store nor another service's.
+      - github-key:/app-key
+      # Its store (the runs' state, the idempotency keys) and the granted repos' git mirrors.
+      - github-data:/data
+      # Your configuration, read only, as the listener reads it: config.yaml and grants/.
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+    # Pushes of repositories granted `workflows` are saved in /tmp while checked (up to
+    # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
+    # (docs/security.md#github-actions-on-deckhands-branches).
+    # tmpfs:
+    #   - /tmp:size=4g
+    # Its way out on a network of its own: on `default` too, its name would resolve there for
+    # the listener and the proxy, whose calls would then arrive on no caller's network.
+    networks:
+      - github-out
+      - github-orchestrator
+      - github-proxy
+      - github-runner
+      - broker-github
+      - policy-github
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # The only service with the operator's agent credentials (#504, docs/services.md): the
   # sandboxes' agents call their APIs through it, by the egress proxy, with their run's token in
@@ -407,7 +466,9 @@ services:
     # Stopping lets the decisions in flight finish (2 s each at most): the listener waits for the
     # next copy meanwhile, up to 30 s, rather than refuse them (docs/architecture.md#restarts).
     stop_grace_period: 30s
-    networks: [policy, policy-runner]
+    # The listener's network to it, the github service's (the runs' writes and pushes) and the
+    # runner's (what the operator's policies grant a repository).
+    networks: [policy, policy-github, policy-runner]
     environment:
       # The operator's policies: GRANTS_DIR/policy/*.rego, below. Empty: /etc/deckhand/grants.
       GRANTS_DIR: ${GRANTS_DIR:-}
@@ -447,12 +508,14 @@ services:
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
       # and files (#505).
       BROKER_SERVICE_URL: http://broker:8081
+      # Where their GitHub calls and pushes go, the network they came from vouched for (#502).
+      GITHUB_SERVICE_URL: http://github:8080
       # Where their agents' API calls go (#504).
       MODELS_SERVICE_URL: http://models:8080
-    # Its way out (the hosts granted to runs, the listener), and its networks to the broker and
-    # the models service.
-    networks: [default, broker-proxy, models-proxy]
-    depends_on: [broker, models]
+    # Its way out (the hosts granted to runs, the listener), and its networks to the broker, the
+    # github service and the models service.
+    networks: [default, broker-proxy, github-proxy, models-proxy]
+    depends_on: [broker, github, models]
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
@@ -498,10 +561,9 @@ services:
     restart: "no"
     network_mode: none
 
-# One network per caller of the broker, internal (no way out), with a subnet the broker tells
-# its callers apart by (SERVICE_NETWORKS above): set BROKER_ORCHESTRATOR_SUBNET,
-# BROKER_PROXY_SUBNET, BROKER_RUNNER_SUBNET and BROKER_MODELS_SUBNET in .env if these clash with a
-# network of the host's.
+# One network per caller of the broker, of the models service and of the github service,
+# internal (no way out), with a subnet the service tells its callers apart by (SERVICE_NETWORKS
+# above): set the *_SUBNET variables in .env if these clash with a network of the host's.
 networks:
   default:
   broker-orchestrator:
@@ -545,8 +607,35 @@ networks:
         - subnet: ${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
   # The models service's way out (the agents' APIs), with nothing else on it.
   models-out:
-  # The listener and the policy service alone: internal, so the policy service has no way out.
+  # The github service's way to GitHub, alone.
+  github-out:
+  broker-github:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
+  # One network per caller of the github service, the same way: GITHUB_ORCHESTRATOR_SUBNET,
+  # GITHUB_PROXY_SUBNET and GITHUB_RUNNER_SUBNET in .env for others.
+  github-orchestrator:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28}
+  github-proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${GITHUB_PROXY_SUBNET:-10.231.250.144/28}
+  github-runner:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
+  # The listener and the policy service alone, the github service and the policy service alone:
+  # internal, so the policy service has no way out.
   policy:
+    internal: true
+  policy-github:
     internal: true
   # The runner and the policy service alone, the same.
   policy-runner:
@@ -571,6 +660,9 @@ volumes:
   egress-cache:
   broker-keys:
   broker-store:
+  # The GitHub App's key, the github service's alone; its store and git mirrors.
+  github-key:
+  github-data:
   models-keys:
   models-store:
   # The broker's public keys: the broker service writes them, the policy service, the runner and

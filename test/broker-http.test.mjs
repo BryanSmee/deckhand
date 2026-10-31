@@ -506,7 +506,7 @@ test("runPath: what the listener relays to the broker service, the sandbox's own
   }
 });
 
-test("egress: an agent's relayed host is the models service's, with its sandbox's network; GitHub's stays the gateway's", async (t) => {
+test("egress: an agent's relayed host is the models service's, GitHub's the github service's, each with its sandbox's network", async (t) => {
   const config = testConfig();
   config.brokerPort = 0;
   config.brokerUrl = "http://127.0.0.1:0";
@@ -551,5 +551,6 @@ test("egress: an agent's relayed host is the models service's, with its sandbox'
   const github = await ask("api.github.com");
   assert.equal(github.relay, true);
   assert.equal(github.models, undefined);
-  assert.equal(github.sandbox, undefined);
+  assert.equal(github.service, "github");
+  assert.equal(github.sandbox, "net-a");
 });
