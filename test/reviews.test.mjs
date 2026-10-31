@@ -5,7 +5,9 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ciState } from "../listener/ci.mjs";
-import { allowOnly, builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
+import { createPolicies } from "../listener/policies.mjs";
+import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   CI_NEXT,
@@ -25,7 +27,14 @@ import {
   reviewLoop,
   stepsGoing,
 } from "../listener/reviews.mjs";
-import { policyEngine, tempDir, testConfig, hasOpa } from "./helpers.mjs";
+import {
+  localService,
+  policyEngine,
+  policyEngineOf,
+  tempDir,
+  testConfig,
+  hasOpa,
+} from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
 
@@ -443,11 +452,14 @@ function reviewPolicies(t, operatorFile = null, repoFile = null) {
   const policies = createPolicies({
     config: {},
     github,
-    run: opaRunner(),
-    readBuiltIn: () =>
-      new Map([...allowOnly(), ["review.rego", builtInPolicies().get("review.rego")]]),
-    readOperator: () => new Map(operatorFile === null ? [] : [["review.rego", operatorFile]]),
-    tmp: tempDir(t),
+    service: localService(
+      policyEngineOf(t, {
+        opa: opaBinary(),
+        readBuiltIn: () =>
+          new Map([...allowOnly(), ["review.rego", builtInPolicies().get("review.rego")]]),
+        readOperator: () => new Map(operatorFile === null ? [] : [["review.rego", operatorFile]]),
+      }),
+    ),
   });
   return { github, policies };
 }

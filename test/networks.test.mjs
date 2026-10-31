@@ -18,9 +18,10 @@ import { parseYaml } from "../lib/yaml.mjs";
 const root = join(import.meta.dirname, "..");
 
 // compose.yaml's services → the services of lib/services.mjs each one runs. The listener runs
-// all of them but the proxy until they move out (#499): each one gets its own entry then.
+// the others until they move out (#499): each one gets its own entry then.
 const RUNS = {
-  listener: ["edge", "orchestrator", "runner", "broker", "github", "models", "policy"],
+  listener: ["edge", "orchestrator", "runner", "broker", "github", "models"],
+  policy: ["policy"],
   egress: ["proxy"],
 };
 

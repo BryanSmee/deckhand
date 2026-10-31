@@ -20,9 +20,11 @@ docker compose up -d
 docker compose logs listener
 ```
 
-Compose runs three images, published for each release (`DECKHAND_VERSION`, default
-`latest`): the listener's, the egress proxy's (the only way out of the sandboxes' internal
-networks, see [Security model](security.md)), and the base sandbox image runs start from
+Compose runs four images, published for each release (`DECKHAND_VERSION`, default
+`latest`): the listener's, the policy service's (which evaluates the
+[policies](security.md#policies), on an internal network shared with the listener alone), the
+egress proxy's (the only way out of the sandboxes' internal networks, see
+[Security model](security.md)), and the base sandbox image runs start from
 (the `sandbox` service only pulls it and exits); with the `engine` profile, the
 [container engine](#container-engine)'s two images too. A repository can bring its own image
 `FROM` that base: see [Per-repo config](repo-config.md). The listener publishes port 8080
@@ -967,7 +969,7 @@ overloaded, before its provider counts as failed.
 
 ### Advanced settings
 
-The listener and the egress proxy also read these. `compose.yaml` doesn't take them from
+The listener, the policy service and the egress proxy also read these. `compose.yaml` doesn't take them from
 `.env`: it sets some itself, to match the services and volumes it defines, and leaves the
 others to their defaults. To change one, set its key in `config.yaml` when it has one, or
 else set it in the service's `environment`, for example in a `compose.override.yaml`.
@@ -1003,6 +1005,10 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `EGRESS_PROXY`                                       | none                             | `http://egress:3128`                                  | the egress proxy, as sandboxes reach it; compose sets it                                                                                                                                                                                                                                                                                                                        |
 | `LISTENER_CONTAINER`                                 | none                             | the container's host name (its id)                    | the listener's container, which joins each run's network                                                                                                                                                                                                                                                                                                                        |
 | `EGRESS_CONTAINER`                                   | none                             | labelled `deckhand.role=egress`                       | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project                                                                                                                                                                                                                                                             |
+| `POLICY_SERVICE_URL`                                 | none                             | `http://policy:8181`                                  | the [policy service](services.md), which evaluates every policy decision, the config checks and the Policies tab; compose sets it. A decision waits up to 30 s for a service that refuses its connection (restarting), then refuses                                                                                                                                             |
+| `SERVICE_KEYS_DIR`                                   | none                             | none: not published; policy service: `/keys`          | where the listener writes the broker's public key (`<kid>.pem`) and the policy service reads it, to check the listener's service tokens offline (the `keys` volume); compose sets it                                                                                                                                                                                            |
+| `GRANTS_DIR` (policy service)                        | none                             | `/etc/deckhand/grants`                                | where the policy service reads your policies (`policy/*.rego`), found as the listener finds it: the environment's, else `config.yaml`'s `grants_dir`, else the default. Both must read the same files there: the listener reads its own and refuses every policy decision when the service's are others (none included), and logs why at start                                  |
+| `SERVICE_NETWORKS` (policy service)                  | none                             | none: not checked                                     | the subnet of each caller's network, `orchestrator=172.30.2.0/24,…`: a call is refused unless it arrives on its token's caller's network. Compose leaves it unset: the policy service's one network is the listener's                                                                                                                                                           |
 | `POLICY_URL` (egress proxy)                          | none                             | `http://listener:8081/egress`                         | where the proxy asks whether a sandbox may reach a host; compose sets it to `POLICY_PORT`'s `http://listener:8082/egress`, which keeps answering while the broker drains on a restart: set it so elsewhere too (Kubernetes: with 8082 on the `listener` Service)                                                                                                                |
 | `RELAY_URL` (egress proxy)                           | none                             | `POLICY_URL`'s host (port 8081 for 8082), `/relay`    | where the proxy hands the requests it relays to the listener (the [Antigravity CLI](#antigravity-cli)'s)                                                                                                                                                                                                                                                                        |
 | `BROKER_URL` (egress proxy)                          | none                             | `RELAY_URL`'s origin                                  | the broker, as sandboxes call it (the listener's `BROKER_URL`): the proxy forwards their plain HTTP to it, and waits for a listener restarting; it must be the listener's own (scheme, host and port), or the runs' calls to it are refused; compose sets it                                                                                                                    |
@@ -1010,7 +1016,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `EGRESS_CACHE_MAX` (egress proxy)                    | none                             | `10g`                                                 | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache                                                                                                                                                                                                                                                       |
 | `EGRESS_CACHE_ENTRY_MAX` (egress proxy)              | none                             | `1g`                                                  | the largest answer it keeps                                                                                                                                                                                                                                                                                                                                                     |
 | `DRAIN_SECONDS` (egress proxy)                       | none                             | `25`                                                  | how long a stopping proxy lets its open connections finish, then cuts them: short with one copy (compose), whose stop refuses new connections until the next one starts; `600`, an agent call's length, where a second copy takes them meanwhile (Kubernetes, [services.md](services.md#the-proxys-handover)); under its `stop_grace_period` or `terminationGracePeriodSeconds` |
-| `PORT` (in the containers)                           | none                             | `8080`, egress proxy: `3128`                          | port the listener and the proxy listen on; the `PORT` above only changes the published one                                                                                                                                                                                                                                                                                      |
+| `PORT` (in the containers)                           | none                             | `8080`, egress proxy: `3128`, policy service: `8181`  | port the listener and the proxy listen on; the `PORT` above only changes the published one                                                                                                                                                                                                                                                                                      |
 | `GITHUB_URL`, `GITHUB_API`                           | `github_url`, `github_api`       | `https://github.com`, `https://api.github.com`        | GitHub's web and API addresses, always allowed through the egress proxy                                                                                                                                                                                                                                                                                                         |
 | `CONFIG_FILE`                                        | none                             | `/etc/deckhand/config.yaml`                           | the settings file above; set on purpose, it has to exist                                                                                                                                                                                                                                                                                                                        |
 | `DECKHAND_VERSION` (in the image)                    | none                             | set when the image is built                           | the version the dashboard shows                                                                                                                                                                                                                                                                                                                                                 |
@@ -1049,6 +1055,14 @@ labels, delivers the comments that arrive meanwhile, and posts each run's final 
 even for a run that finished while no listener was there. Queued comments are then handled.
 A new base image rebuilds a repository's own image on its next run (see
 [Per-repo config](repo-config.md)); running sandboxes keep the image they started with.
+The policy service restarts in a few seconds and holds nothing: the decisions the listener
+asks meanwhile (a run's GitHub write, a merge) wait for it, up to 30 seconds, rather than being
+refused.
+
+**Updating to the policy service** (#501): it reads your server folder as the `node` user (uid
+1000), where the listener read it as root. Your grants folder and its `policy/` must be readable
+by that user (the usual `0644` files and `0755` folders are): otherwise every policy decision is
+refused, and the listener's log says why at start.
 
 ## Kubernetes runner
 
@@ -1101,6 +1115,15 @@ be allowed to reach them, and every run would be refused.
   The cluster's network plugin has to enforce NetworkPolicies (Calico, Cilium…): one that
   ignores them leaves the sandboxes unisolated, whatever the policy says.
 
+- **The policy service** (`deckhand-policy`'s image, [architecture.md](architecture.md#the-policy-service)):
+  a Deployment and a Service the listener's `POLICY_SERVICE_URL` names (`policy` on 8181), the
+  broker's public key in a volume the listener writes and the service mounts read-only
+  (`SERVICE_KEYS_DIR` on both), and the grants folder's `policy/` mounted read-only at
+  `GRANTS_DIR/policy/` in the service (the files themselves, at the same place as in the
+  listener's: it refuses every decision when the service reads other ones). It runs as a user, on a read-only filesystem with an `emptyDir` on
+  `/tmp`; a NetworkPolicy letting in the listener alone and letting nothing out keeps it as
+  closed as Compose's internal network. Its pods may be two, behind a readiness probe on
+  `/ready`, with `maxUnavailable: 0`: an update fails no decision.
 - **The agents**: see [Agents on Kubernetes](#agents-on-kubernetes).
 - **Grace periods**: `terminationGracePeriodSeconds: 300` on the listener's pod, and about 30 on
   the egress proxy's. On SIGTERM the listener lets the sandboxes' calls in flight finish for up

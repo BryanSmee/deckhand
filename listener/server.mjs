@@ -56,7 +56,8 @@ import { createImages } from "./images.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createLinkedBranches } from "./linked-branch.mjs";
-import { builtInPolicies, createPolicies } from "./policies.mjs";
+import { createPolicies } from "./policies.mjs";
+import { policyClient } from "./policy-client.mjs";
 import { createPreviews } from "./previews.mjs";
 import { createPulls } from "./pulls.mjs";
 import { createDecisions } from "./decisions.mjs";
@@ -70,7 +71,8 @@ import { createRestart } from "./restart.mjs";
 import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
-import { signingKey } from "../lib/tokens.mjs";
+import { issueServiceTokens, serviceTokens } from "../lib/service-token.mjs";
+import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createBackend } from "./runner/index.mjs";
@@ -312,14 +314,35 @@ const repoList = createRepoList({
 // Each repo's settings as last read: its runs' and comments', its `users` for the dashboard.
 const { repoSettings, ...repoReads } = createRepoSettings({ github, config, repoList });
 
-// Deckhand's, the operator's and the repos' policies (rules as code), evaluated by `opa` after
-// the built-in gates. The operator's are checked now, over Deckhand's, as the grants are: an
-// error refuses each decision a policy is asked for (fail closed), so it is said at once.
+// The broker's signing key, kept in the data volume, so that runs' tokens still check after a
+// restart. Its public key goes where the services that check tokens offline read it
+// (SERVICE_KEYS_DIR: the policy service's, #501).
+const tokenKey = signingKey(config.dataDir);
+if (config.serviceKeysDir) {
+  mkdirSync(config.serviceKeysDir, { recursive: true });
+  publishKey(config.serviceKeysDir, tokenKey);
+}
+// The listener's own service tokens, for the services it calls: the policy service, as the
+// orchestrator (lib/services.mjs). Its broker signs them until it moves out (#505).
+const serviceAuth = serviceTokens({
+  audiences: ["policy"],
+  request: async (audiences) => issueServiceTokens("orchestrator", audiences, tokenKey),
+  log,
+});
+serviceAuth.start().catch((error) => log(`Service tokens: ${error.message ?? error}`));
+
+// Deckhand's, the operator's and the repos' policies (rules as code), evaluated by the policy
+// service after the built-in gates (POLICY_SERVICE_URL, ../policy-service/). The operator's are
+// checked now, over Deckhand's, as the grants are: an error refuses each decision a policy is
+// asked for (fail closed), so it is said at once.
 const policies = createPolicies({
   config,
   github,
+  service: policyClient({
+    url: config.policyServiceUrl,
+    header: () => serviceAuth.header("policy"),
+  }),
   secrets: () => operatorSecrets(ctx),
-  readBuiltIn: () => builtInPolicies(),
   log,
 });
 policies.checkOperator().then(({ errors, warnings }) => {
@@ -389,7 +412,7 @@ Object.assign(ctx, {
   // restart; and the secrets of runs from before them. Both work from their own sandbox alone,
   // whether it calls the broker directly or through the egress proxy.
   broker: createBroker({
-    key: signingKey(config.dataDir),
+    key: tokenKey,
     sandboxOf: (ip) => sandboxAt(ctx, ip),
     sentFrom: (run, ip) => runAt(ctx, run, ip),
     clientOf: (req) => clientAddress(ctx, req),

@@ -1,7 +1,8 @@
 # Services (target)
 
-Where the listener is headed once it is split (#499, its parts #500 to #509). Today it is still one
-process, beside the egress proxy: [architecture.md](architecture.md) describes what runs now.
+Where the listener is headed once it is split (#499, its parts #500 to #509). Today the policy
+service is out (#501, [architecture.md](architecture.md#the-policy-service)), and the rest is still
+one process, beside the egress proxy: [architecture.md](architecture.md) describes what runs now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
 reaches holds neither the App's key, the operator's agent credentials nor the Docker socket, and
@@ -111,11 +112,23 @@ file backend on one node, Redis on several (#509).
 ### Draining
 
 Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
-accepting connections, finishes those in flight within its grace period, then exits. The proxy
-uses it so far; the listener keeps its own handler (`listener/server.mjs`), and each service uses
+accepting connections, finishes those in flight within its grace period, then exits. The proxy and
+the policy service use it so far (the policy service's `/ready` answers 503 from then on, for a
+readiness probe); the listener keeps its own handler (`listener/server.mjs`), and each service uses
 `drainOnSigterm()` as it moves out. With two
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.
+
+### The policy service
+
+The first service out of the listener (#501): long-lived `opa` servers behind a small HTTP service
+(`policy-service/`), with no network but its callers', no secret and no state. Its callers send
+a repository's policy files with each decision (it can't read GitHub); it reads the operator's
+from the grants folder, mounted read-only. Any copy answers any decision the same way, so two copies
+on Kubernetes are a Deployment with a readiness probe on `/ready` and `maxUnavailable: 0`: the new
+copy starts, the old one drains (25 s) with its decisions in flight
+(`test/policy-service.test.mjs`). With Docker Compose it is one copy, and the listener waits up
+to 30 s for a restarting one rather than refusing its decisions.
 
 ### The proxy's handover
 

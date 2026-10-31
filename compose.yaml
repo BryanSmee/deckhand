@@ -1,6 +1,7 @@
-# What an operator runs: the listener, the egress proxy, and the sandbox image runs start
-# from. Each sandbox sits on an internal network of its own, which the listener creates and
-# joins itself and the egress proxy to: the proxy is their only way out (see docs/security.md).
+# What an operator runs: the listener, the policy service, the egress proxy, and the sandbox
+# image runs start from. Each sandbox sits on an internal network of its own, which the listener
+# creates and joins itself and the egress proxy to: the proxy is their only way out (see
+# docs/security.md). The policy service is on an internal network shared with the listener alone.
 #
 #   cp .env.example .env    # then set a Claude credential (and ALLOWED_USERS, or in config.yaml)
 #   cp -r server.example server   # your settings and grants, mounted below: keep it in git
@@ -31,6 +32,11 @@ services:
       dockerfile: listener/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-listener:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
+    # Every policy decision goes to it: started first, so that the first ones don't wait.
+    depends_on: [policy]
+    # The default network: webhooks, GitHub, the agents' APIs. `policy`: the policy service's
+    # (docs/security.md#the-services-networks).
+    networks: [default, policy]
     # Stopping saves the queue and the runs' state (sandboxes keep running), and lets the
     # sandboxes' calls in flight finish (agents' streams, pushes). New ones the egress proxy
     # relays (GitHub's) wait for the next listener; those sent to it directly (agents' APIs,
@@ -177,8 +183,14 @@ services:
       # Their only way out: the egress service below (its deckhand.role label), joined the same
       # way.
       EGRESS_PROXY: http://egress:3128
+      # Where every policy decision is evaluated: the policy service below. The broker's public
+      # key goes to SERVICE_KEYS_DIR, which it reads to check the listener's service tokens.
+      POLICY_SERVICE_URL: http://policy:8181
+      SERVICE_KEYS_DIR: /keys
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      # The broker's public key, for the policy service (nothing secret).
+      - keys:/keys
       # The App's credentials (app.json), run logs, queue and brainstorm state.
       - data:/data
       # One folder per run, served under /shots/, and each run's inbox (comments for a running
@@ -198,6 +210,37 @@ services:
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro
+
+  # The policy service (docs/services.md): Deckhand's, the operator's and the repositories' Rego
+  # policies, evaluated by long-lived `opa` servers for the listener. No secret, no state, and no
+  # network but the listener's: an internal one, without a way out.
+  policy:
+    build:
+      context: .
+      dockerfile: policy-service/Dockerfile
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-policy:${DECKHAND_VERSION:-latest}
+    restart: unless-stopped
+    # Stopping lets the decisions in flight finish (2 s each at most): the listener waits for the
+    # next copy meanwhile, up to 30 s, rather than refuse them (docs/architecture.md#restarts).
+    stop_grace_period: 30s
+    networks: [policy]
+    environment:
+      # The operator's policies: GRANTS_DIR/policy/*.rego, below. Empty: /etc/deckhand/grants.
+      GRANTS_DIR: ${GRANTS_DIR:-}
+      # The broker's public keys, which the listener writes: the service tokens are checked
+      # with them, offline.
+      SERVICE_KEYS_DIR: /keys
+    volumes:
+      # Your configuration, as the listener has it, read only: the grants folder's policy/ is
+      # what it reads (docs/security.md#policies).
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+      - keys:/keys:ro
+    # Each policy set is staged in /tmp while its opa runs.
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # The sandboxes' egress proxy: asks the listener, for each connection, whether that
   # sandbox may reach that host.
@@ -262,8 +305,15 @@ services:
     restart: "no"
     network_mode: none
 
+networks:
+  # The listener and the policy service alone: internal, so the policy service has no way out.
+  policy:
+    internal: true
+
 volumes:
   data:
+  # The broker's public keys: the listener writes them, the policy service reads them.
+  keys:
   screenshots:
     name: ${SHOTS_VOLUME:-deckhand-screenshots}
   runs:

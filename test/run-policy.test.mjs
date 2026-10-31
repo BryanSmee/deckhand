@@ -3,7 +3,11 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { createPolicies, SHIPPED_RUN_SHA256 } from "../listener/policies.mjs";
+import { builtInPolicies } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   createRunPolicy,
@@ -18,7 +22,7 @@ import {
 import { createTaskModes } from "../listener/task-modes.mjs";
 import { createTasks } from "../listener/tasks.mjs";
 import { createWaits } from "../listener/waits.mjs";
-import { hasOpa, tempDir, testConfig } from "./helpers.mjs";
+import { hasOpa, localService, policyEngineOf, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig();
 const MODES = "modes:\n  plan:\n    instructions: .deckhand/plan.md\n    session: fresh\n";
@@ -266,10 +270,16 @@ function shipped(t, repo = {}) {
   const policies = createPolicies({
     config: {},
     github,
-    run: async (args) => (opa.push(args[0]), { code: 2, stdout: "", stderr: "no opa here" }),
-    readOperator: () => new Map(),
-    readBuiltIn: () => builtInPolicies(),
-    tmp: tempDir(t),
+    // The policy service, with Deckhand's files: asked for them, never to evaluate.
+    service: localService(
+      policyEngineOf(t, {
+        opa: {
+          run: async (args) => (opa.push(args[0]), { code: 2, stdout: "", stderr: "no opa here" }),
+          serve: async () => (opa.push("serve"), assert.fail("no opa server")),
+        },
+        readBuiltIn: () => builtInPolicies(),
+      }),
+    ),
   });
   return { policies, opa };
 }
@@ -337,10 +347,9 @@ function engine(t, repo = {}) {
   return createPolicies({
     config: {},
     github,
-    run: opaRunner(),
-    readOperator: () => new Map(),
-    readBuiltIn: () => builtInPolicies(),
-    tmp: tempDir(t),
+    service: localService(
+      policyEngineOf(t, { opa: opaBinary(), readBuiltIn: () => builtInPolicies() }),
+    ),
   });
 }
 
@@ -568,10 +577,12 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
       if (path.includes("/contents/.deckhand/policy")) lists.push(status);
       return new Response("{}", { status });
     },
-    run: async () => assert.fail("no opa"),
-    readOperator: () => new Map(),
-    readBuiltIn: () => builtInPolicies(),
-    tmp: tempDir(t),
+    service: localService(
+      policyEngineOf(t, {
+        opa: { run: async () => assert.fail("no opa"), serve: async () => assert.fail("no opa") },
+        readBuiltIn: () => builtInPolicies(),
+      }),
+    ),
     now: () => clock,
   });
   const replies = [];
@@ -600,10 +611,12 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
     policies: createPolicies({
       config: {},
       github: async () => new Response("{}", { status: 502 }),
-      run: async () => ({ code: 2, stdout: "", stderr: "x" }),
-      readOperator: () => new Map(),
-      readBuiltIn: () => builtInPolicies(),
-      tmp: tempDir(t),
+      service: localService(
+        policyEngineOf(t, {
+          opa: { run: async () => ({ code: 2, stdout: "", stderr: "x" }), serve: async () => {} },
+          readBuiltIn: () => builtInPolicies(),
+        }),
+      ),
     }),
     log: () => {},
     answer: async (item, text) => replies.push(text),
@@ -686,4 +699,9 @@ test("tasks.mjs: a refused comment whose /after issues are all done keeps the is
   await admit(first, "issue_comment", payload);
   assert.deepEqual(ctx.waits.get("Org/Repo#12").blockers, [9]);
   assert.equal(ctx.tasks.size, 0);
+});
+
+test("SHIPPED_RUN_SHA256 is policy/run.rego's: the listener decides as the run.rego it ships", () => {
+  const text = readFileSync(new URL("../policy/run.rego", import.meta.url), "utf8");
+  assert.equal(createHash("sha256").update(text).digest("hex"), SHIPPED_RUN_SHA256);
 });
