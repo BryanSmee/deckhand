@@ -487,11 +487,14 @@ export function pullRequest(config, event, p, now, skip = () => null) {
 // A redelivered `pull_request` delivery (redeliveries.mjs), with the pull request as GitHub
 // has it now (`current`): its payload is as old as the attempt that failed, maybe older than
 // deliveries handled since. An action the pull request no longer matches (ready since merged,
-// a draft since made ready) becomes `edited`: its current state is recorded, and nothing
-// turns ready, closes or starts a review from it.
+// a draft since made ready, a label put back since it came off or taken off since it was put
+// on) becomes `edited`: its current state is recorded, and nothing turns ready, closes, starts
+// a review or moves a run's questions from it. `replayed_updated_at`: the pull request's
+// `updated_at` in the payload, when the delivery happened, which `current` no longer says.
 export function replayedPull(payload, current) {
   const state = prState(current);
   const open = state === "ready" || state === "draft";
+  const labelled = () => hasLabel(current.labels, payload.label?.name);
   const still =
     {
       ready_for_review: state === "ready",
@@ -499,8 +502,26 @@ export function replayedPull(payload, current) {
       opened: open,
       reopened: open,
       closed: !open,
+      labeled: labelled(),
+      unlabeled: !labelled(),
     }[payload.action] ?? true;
-  return { ...payload, action: still ? payload.action : "edited", pull_request: current };
+  return {
+    ...payload,
+    action: still ? payload.action : "edited",
+    pull_request: current,
+    replayed_updated_at: payload.pull_request?.updated_at ?? null,
+  };
+}
+
+// Whether `labels` (an issue's or pull request's, as GitHub has them: names or { name }) hold
+// `name`. GitHub's label names are case-insensitive: a "Needs-Input" set by hand is the same
+// label.
+export function hasLabel(labels, name) {
+  if (!name) return false;
+  const wanted = name.toLowerCase();
+  return (labels ?? []).some(
+    (l) => (typeof l === "string" ? l : l?.name)?.toLowerCase() === wanted,
+  );
 }
 
 // A pull request as GitHub has it → { key, pr } for the dashboard (pulls.mjs record()): the

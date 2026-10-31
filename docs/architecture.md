@@ -160,7 +160,11 @@ aside in `dismissed.json` while that run is the task's last:
   pull request closed without merging sets aside only its own task's questions, not those of
   the issue it would have closed. A run that asks after the close (a comment on a closed issue
   starts one) still waits, and so does one that asked after a redelivered delivery's own time
-  (`closed_at`, `merged_at`, or `updated_at` for a label). An issue left open when its pull
+  (`closed_at`, `merged_at`, or `updated_at` for a label). A pull request's redelivery is
+  replayed as the pull request is now (`replayedPull()`): a label action it no longer matches
+  (the label put back since, or taken off) is an edit, which moves nothing, and its time is the
+  original payload's (`replayed_updated_at`). A label put back on a closed pull request takes
+  nothing back. An issue left open when its pull
   request merges keeps the label its run put, which then no longer holds the task; open
   questions in the issue's body still do.
 

@@ -4525,6 +4525,59 @@ mounts:
     assert.equal((await states())["org/repo#pr-6"], "needs-input");
   });
 
+  test("a pull request's unlabeled delivery redelivered after a newer run asked sets nothing aside", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+    // The person's `unlabeled` on #7 failed (503); a newer run on #7 asked since, and labelled
+    // it again: GitHub has #7 labelled now.
+    const deliveries = JSON.stringify([
+      { id: 0, guid: "g-un", delivered_at: at(30), status_code: 503, event: "pull_request" },
+    ]);
+    const now = { number: 7, state: "open", draft: false, merged: false, updated_at: at(0) };
+    now.labels = [{ name: "needs-input" }];
+    const { dir, listener, send } = await listen(
+      t,
+      { deliveries, "pull:7": JSON.stringify(now) },
+      (dir, github) => {
+        mkdirSync(join(dir, "logs"));
+        writeFileSync(
+          join(dir, "logs", "org-repo-pr-7-1000.log"),
+          [
+            {
+              type: "listener",
+              key: "org/repo#pr-7",
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+        return { GITHUB_URL: github.url };
+      },
+    );
+    await listener.until("Redelivered g-un (pull_request");
+    // GitHub sends it again, as it was then.
+    const then = {
+      action: "unlabeled",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      pull_request: { ...now, labels: [], updated_at: at(30) },
+      label: { name: "needs-input" },
+      sender: { login: "bob", type: "User" },
+    };
+    await send(then, "pull_request", "g-un");
+    await listener.until("Delivery pull_request unlabeled: redelivered, as org/repo#7 is now");
+    // Handled as the pull request is now, labelled: an edit, which sets nothing aside.
+    const handled = await listener.until(/Delivery: pull_request \w+ from bob/);
+    assert.match(handled, /Delivery: pull_request edited from bob/);
+    assert.doesNotMatch(listener.output(), /label removed, its last run's questions set aside/);
+    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /pr-7/);
+  });
+
   test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";

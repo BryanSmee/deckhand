@@ -418,6 +418,14 @@ test("a pull request's label taken off, or put back, comes as a pull_request del
   );
   const asking = delivery({ action: "labeled", sender: { login: BOT, type: "Bot" } });
   assert.equal(inputEvent(config, "pull_request", asking, BOT), null);
+  // Put back on a closed or merged pull request: its close still holds.
+  const shut = delivery({ action: "labeled" });
+  shut.pull_request = { ...shut.pull_request, state: "closed" };
+  assert.equal(inputEvent(config, "pull_request", shut, BOT), null);
+  // A redelivery (events.mjs replayedPull()): when it happened is the original payload's.
+  const replayed = delivery({ replayed_updated_at: "2026-10-30T09:00:00Z" });
+  const old = inputEvent(config, "pull_request", replayed, BOT).unlabelled.at;
+  assert.equal(old, Date.parse("2026-10-30T09:00:00Z"));
   // Another label, another action, another repo, no installation, or no label configured.
   assert.equal(inputEvent(config, "pull_request", delivery({ label: { name: "bug" } }), BOT), null);
   assert.equal(inputEvent(config, "pull_request", delivery({ action: "edited" }), BOT), null);

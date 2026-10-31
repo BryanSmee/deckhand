@@ -241,13 +241,19 @@ function pullLabel(config, p, name, bot) {
   if (!repoAllowed(config, repo) || !hasLabel([p.label], name)) return null;
   // The bot's own: a run starting or asking, a comment that may answer.
   if (isBot(p.sender, bot)) return null;
+  // Put back on a closed or merged pull request: its close set its questions aside, and still
+  // does, as for an issue (labelInput()).
+  if (action === "relabelled" && pull.state === "closed") return null;
+  // When: its `updated_at`, which a label changes; a redelivery's is the original payload's
+  // (events.mjs replayedPull()), older than a run since.
+  const at = Date.parse(p.replayed_updated_at ?? pull.updated_at) || null;
   return {
     repo,
     key: taskKey(repo, prId(pull.number)),
     number: pull.number,
     title: null,
     base: p.repository.default_branch,
-    [action]: { by: p.sender?.login ?? null, at: Date.parse(pull.updated_at) || null },
+    [action]: { by: p.sender?.login ?? null, at },
   };
 }
 
