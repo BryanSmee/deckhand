@@ -179,7 +179,6 @@ export function createHttp(ctx, { dashboardDir }) {
       pr: (key) => ctx.pulls.get(key),
       decisions: (key) => ctx.decisions?.get(key) ?? [],
       reviewed: (repo, number) => ctx.reviews?.entry(repo, number) ?? null,
-      closed: (key) => ctx.titles.closed(key),
     }).slice(0, 200);
     return { shown, queued };
   }
@@ -427,6 +426,18 @@ export function createHttp(ctx, { dashboardDir }) {
     );
   }
 
+  // An issue or pull request just closed or merged: the questions its task's last run asked
+  // (`keys`: the issue's or pull request's own task, and the one a pull request closes) no
+  // longer wait (dismissals.mjs). Set aside now, not derived from the closed state later: a
+  // comment on a closed issue starts a run, whose questions do wait.
+  function settleQuestions(keys) {
+    if (!ctx.dismissals) return;
+    for (const key of new Set(keys.filter(Boolean))) {
+      const aside = ctx.dismissals.setAsideOn(ctx.runs, key, null);
+      if (aside) log(`${aside}: closed, its last run's questions set aside`);
+    }
+  }
+
   // A verified delivery: onboarding, a pull request's state, a preview hook or a comment.
   function dispatch(event, payload) {
     const { app } = ctx;
@@ -458,6 +469,7 @@ export function createHttp(ctx, { dashboardDir }) {
     const closed = closedItem(config, event, payload, skip);
     if (closed) {
       ctx.titles.setClosed(closed.key, closedAs(closed.state));
+      if (closed.state !== "open") settleQuestions([closed.key, pr?.key]);
       admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
     }
     // Anything else about what comments wait for, or about the issue a pull request closes,

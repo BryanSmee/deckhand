@@ -186,11 +186,12 @@ export function replyQuestions(text) {
 // repo's `wait_for_answers` is on (http.mjs). `answered`: the label came off an open issue.
 // `reply`: a run's reply its ticked boxes may answer (tickedReply()). `ignoredTicks`: the
 // section is fully ticked by ticks that answer nothing, the bot's say (editedInput()); `ticked`:
-// the label comes off for its ticks. `unlabelled`: { pr, by }, the label taken off the issue or
-// pull request, which sets its task's last run's questions aside.
+// the label comes off for its ticks. `unlabelled`: { by }, the label taken off the issue or
+// pull request by someone other than the App's bot, which sets its task's last run's questions
+// aside.
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
-  if (event === "pull_request") return name ? pullUnlabelled(config, p, name) : null;
+  if (event === "pull_request") return name ? pullUnlabelled(config, p, name, bot) : null;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
   const repo = p.repository?.full_name;
   const issue = p.issue;
@@ -206,11 +207,12 @@ export function inputEvent(config, event, p, bot) {
   };
   const person = (u) =>
     !!u?.login && u.type !== "Bot" && config.users.includes(u.login.toLowerCase());
-  const ours = (u) => !!bot && u?.type === "Bot" && u.login?.toLowerCase() === bot.toLowerCase();
+  const ours = (u) => isBot(u, bot);
   const ctx = {
     p,
     issue,
     name,
+    bot,
     change,
     person,
     labelled: hasLabel(issue.labels, name),
@@ -224,25 +226,31 @@ export function inputEvent(config, event, p, bot) {
   return ISSUE_ACTIONS[p.action]?.(ctx) ?? null;
 }
 
-// The label taken off a pull request, by anyone: GitHub says so in a `pull_request` delivery,
-// never an `issues` one. Only the questions of the pull request's own task's run are set aside
-// (`unlabelled`, applyInput()): pull requests aren't in the list of issues waiting for input,
-// and nothing waits for their answers (waits.mjs).
-function pullUnlabelled(config, p, name) {
+// The label taken off a pull request by someone other than the App's bot: GitHub says so in a
+// `pull_request` delivery, never an `issues` one. Only the questions of the pull request's own
+// task's run are set aside (`unlabelled`, applyInput()): pull requests aren't in the list of
+// issues waiting for input, and nothing waits for their answers (waits.mjs).
+function pullUnlabelled(config, p, name, bot) {
   const repo = p.repository?.full_name;
   const pull = p.pull_request;
   // Fail closed: only the App's installations, on allowed repos.
   if (p.action !== "unlabeled" || !p.installation?.id || !repo || !pull?.number) return null;
   if (!repoAllowed(config, repo) || !hasLabel([p.label], name)) return null;
+  if (isBot(p.sender, bot)) return null;
   return {
     repo,
     key: taskKey(repo, prId(pull.number)),
     number: pull.number,
     title: null,
     base: p.repository.default_branch,
-    unlabelled: { pr: true, by: p.sender?.login ?? null },
+    unlabelled: { by: p.sender?.login ?? null },
   };
 }
+
+// The App's own bot: its removals of the label are the listener's (a run starting, a comment
+// taking it off), which answer none of a run's questions.
+const isBot = (u, bot) =>
+  !!bot && u?.type === "Bot" && u.login?.toLowerCase() === bot.toLowerCase();
 
 // An allowed user's comment on a labelled issue or pull request: it may answer the questions.
 function commentInput({ p, issue, change, person, labelled }) {
@@ -309,15 +317,18 @@ function editedInput({ p, issue, change, labelled, who, questions }) {
 }
 
 // Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels. Taken
-// off, the questions of the issue's task's last run no longer wait either (`unlabelled`:
-// { pr, by }, applyInput()); a pull request's label comes as a `pull_request` delivery
-// (pullUnlabelled()).
-function labelInput({ p, issue, name, change, questions }) {
+// off by someone other than the App's bot, the questions of the issue's task's last run no
+// longer wait either (`unlabelled`: { by }, applyInput()). The bot takes it off when a run
+// starts, or for a comment that may answer them (commentInput()), even one that starts
+// nothing: the run's questions still wait then. A pull request's label comes as a
+// `pull_request` delivery (pullUnlabelled()).
+function labelInput({ p, issue, name, change, questions, bot }) {
   if (!hasLabel([p.label], name)) return null;
   if (issue.state === "closed") return { ...change, track: false };
   if (p.action === "unlabeled") {
-    const unlabelled = { pr: false, by: p.sender?.login ?? null };
-    return { ...change, track: false, answered: true, unlabelled };
+    const by = p.sender?.login ?? null;
+    const unlabelled = !isBot(p.sender, bot) && { unlabelled: { by } };
+    return { ...change, track: false, answered: true, ...unlabelled };
   }
   return { ...change, track: true, questions: questions() };
 }
@@ -392,12 +403,10 @@ export async function applyInput(ctx, change) {
   const { ignoredTicks } = change;
   if (track !== undefined) ctx.inputs.set(key, track, asked, ignoredTicks);
   else if (asked !== undefined) ctx.inputs.update(key, asked, ignoredTicks);
-  // The label taken off: the questions of its task's last run, if it asked, are set aside, so
-  // the task no longer shows as waiting for input (board.mjs). A run starting takes it off too:
-  // that run is then the task's last, and still running, so nothing is set aside.
+  // The label taken off by a person: the questions of its task's last run, if it asked, are set
+  // aside, so the task no longer shows as waiting for input (board.mjs).
   if (change.unlabelled) {
-    const { pr, by: who } = change.unlabelled;
-    const aside = ctx.dismissals.setAsideOn(ctx.runs, repo, number, pr, who);
+    const aside = ctx.dismissals.setAsideOn(ctx.runs, key, change.unlabelled.by);
     if (aside) log(`${aside}: label removed, its last run's questions set aside`);
   }
   // Answered: a comment that waited for the answers starts (waits.mjs).

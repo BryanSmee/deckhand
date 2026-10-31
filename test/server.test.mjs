@@ -4473,6 +4473,71 @@ mounts:
     assert.deepEqual(now, done);
   });
 
+  test("at start: an issue closed while no listener heard it sets its run's questions aside, after GitHub's closed_at", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const files = {};
+    const { port, listener } = await listen(t, files, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      for (const n of [5, 8]) {
+        writeFileSync(
+          join(dir, "logs", `org-repo-${n}-1000.log`),
+          [
+            {
+              type: "listener",
+              key: `org/repo#${n}`,
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+      }
+      // Both known closed. #5 closed after its run asked; #8 before (a comment on a closed issue
+      // started its run), so its questions still wait.
+      writeFileSync(
+        join(dir, "closed.json"),
+        JSON.stringify({ "org/repo#5": "completed", "org/repo#8": "completed" }),
+      );
+      const closedAt = (ms) => ({
+        state: "closed",
+        state_reason: "completed",
+        closed_at: new Date(ms).toISOString(),
+      });
+      files["issue:5"] = JSON.stringify({
+        number: 5,
+        title: "Five",
+        ...closedAt(Date.now() + 60_000),
+      });
+      files["issue:8"] = JSON.stringify({
+        number: 8,
+        title: "Eight",
+        ...closedAt(Date.now() - 3_600_000),
+      });
+      return { GITHUB_URL: github.url };
+    });
+    await listener.until("Closed since their run asked: org/repo#5");
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const tasks = (await (await get("/api/state", session)).json()).tasks;
+    assert.deepEqual(Object.fromEntries(tasks.map((x) => [x.key, x.state])), {
+      "org/repo#5": "done",
+      "org/repo#8": "needs-input",
+    });
+  });
+
   test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {
     const { port, send, listener } = await listen(t, {}, (dir, github) => {
       mkdirSync(join(dir, "logs"));

@@ -342,8 +342,11 @@ test("the dashboard follows the label, added or removed by anyone, and closed is
   // What a comment waiting for the answers starts on (waits.mjs).
   assert.equal(label("unlabeled", "needs-input").answered, true);
   // A run's questions there are set aside too (applyInput()).
-  assert.deepEqual(label("unlabeled", "needs-input").unlabelled, { pr: false, by: "alice" });
+  assert.deepEqual(label("unlabeled", "needs-input").unlabelled, { by: "alice" });
   assert.equal(label("labeled", "needs-input").unlabelled, undefined);
+  // Unless the App's bot took it off: a run starting, or a comment that may start nothing.
+  const byBot = label("unlabeled", "needs-input", { sender: { login: BOT, type: "Bot" } });
+  assert.deepEqual([byBot.track, byBot.answered, byBot.unlabelled], [false, true, undefined]);
   const closed = issues("unlabeled", { label: { name: "needs-input" } });
   closed.issue.state = "closed";
   assert.equal(inputEvent(config, "issues", closed, BOT).answered, undefined);
@@ -397,8 +400,11 @@ test("a pull request's label taken off comes as a pull_request delivery: its run
     number: 9,
     title: null,
     base: "main",
-    unlabelled: { pr: true, by: "mallory" },
+    unlabelled: { by: "mallory" },
   });
+  // The App's bot taking it off: the listener's own doing, which answers nothing.
+  const bot = delivery({ sender: { login: BOT, type: "Bot" } });
+  assert.equal(inputEvent(config, "pull_request", bot, BOT), null);
   // Another label, another action, another repo, no installation, or no label configured.
   assert.equal(inputEvent(config, "pull_request", delivery({ label: { name: "bug" } }), BOT), null);
   assert.equal(inputEvent(config, "pull_request", delivery({ action: "labeled" }), BOT), null);
@@ -474,16 +480,16 @@ test("applyInput: the label and the list follow the change, by the repo's own us
   const aside = inputCtx();
   aside.ctx.runs = [{ id: "r2", key: "org/repo#3", status: "needs-input" }];
   aside.ctx.dismissals = {
-    setAsideOn: (runs, repo, number, pr, by) => {
-      aside.calls.push(["aside", runs.length, repo, number, pr, by]);
+    setAsideOn: (runs, key, by) => {
+      aside.calls.push(["aside", runs.length, key, by]);
       return "org/repo#3";
     },
   };
-  const unlabelled = { pr: false, by: "carol" };
+  const unlabelled = { by: "carol" };
   await applyInput(aside.ctx, { ...change, label: undefined, track: false, unlabelled });
   assert.deepEqual(
     aside.calls.filter(([what]) => what === "aside"),
-    [["aside", 1, "org/repo", 3, false, "carol"]],
+    [["aside", 1, "org/repo#3", "carol"]],
   );
 });
 

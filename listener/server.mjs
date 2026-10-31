@@ -75,7 +75,7 @@ import { createRunnerClient } from "../runner/client.mjs";
 import { createServicesHttp } from "./services-http.mjs";
 import { createRunEvents } from "./run-events.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
-import { createDismissals } from "./dismissals.mjs";
+import { closedTasks, createDismissals, setAsideClosed } from "./dismissals.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
@@ -366,7 +366,7 @@ const inputs = createInputs({
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
   dropped: (repo, number) => {
-    const aside = dismissals.setAsideOn(ctx.runs, repo, number, false, null);
+    const aside = dismissals.setAsideOn(ctx.runs, taskKey(repo, number), null);
     if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);
   },
 });
@@ -856,6 +856,23 @@ const spelled = await ctx.unifySpellings({
 for (const state of keyed) state.respell(spelled);
 // A run since a dismissal shows its task again: its entry is stale.
 dismissals.prune(ctx.runs);
+// Issues and pull requests that closed or merged after their run asked, while no listener heard
+// it: their questions set aside, as the `closed` delivery would have (http.mjs). GitHub says
+// when each closed; a run that asked after that still waits.
+if (ctx.app) {
+  setAsideClosed({
+    runs: ctx.runs,
+    dismissals,
+    tasks: closedTasks(ctx.runs, titles.closed, (key) => pulls.get(key)),
+    closedAt: async (repo, number) => {
+      const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404]);
+      return issue?.closed_at ? Date.parse(issue.closed_at) : null;
+    },
+    log,
+  })
+    .then((keys) => keys.length && log(`Closed since their run asked: ${keys.join(", ")}`))
+    .catch((error) => log(`Closed since their run asked: ${error.stack ?? error}`));
+}
 
 // Before any request is served: runs still going since the previous listener (their inboxes
 // and logs asked of the runner), then what it left queued (comments for those runs are

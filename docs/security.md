@@ -1630,6 +1630,14 @@ is the listener's own state (`dismissed.json`: the run, who dismissed it and whe
 the dashboard reads; nothing is posted on GitHub. Its Undo (`{ runId, undo: true }`) is open to
 any of the repo's users, whoever dismissed it, as the dismissal is.
 
+The same file holds the runs whose questions were set aside (`questions: true`), and those
+come from GitHub, not the dashboard: anyone who can take the needs-input label off an issue or
+pull request (the repo's triage permission, not `ALLOWED_USERS`) sets aside the questions of
+its task's last run, and a close or merge does too. That only changes what the dashboard shows
+(the task no longer waits for input); it starts, posts and allows nothing, and
+`wait_for_answers` still goes by the label itself. The dashboard's Undo takes one back as it
+does a dismissal.
+
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
 repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's
 `users`, a config without errors), and only for an inbox the repo's config names. Its text is
