@@ -18,8 +18,15 @@ jobs:
     runs-on: [self-hosted, Linux]
     strategy:
       fail-fast: false
+      # An image whose Dockerfile isn't in the commit builds nothing (#558): a service's is listed
+      # before its pull request adds it, which then changes no workflow, and the listener's stays
+      # until no release needs it.
       matrix:
         include:
+          - image: deckhand-edge
+            dockerfile: edge/Dockerfile
+          - image: deckhand-orchestrator
+            dockerfile: orchestrator/Dockerfile
           - image: deckhand-listener
             dockerfile: listener/Dockerfile
           - image: deckhand-broker
@@ -42,16 +49,31 @@ jobs:
             dockerfile: engine/podman/Dockerfile
     steps:
       - uses: actions/checkout@v4
-      - run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
-      - if: github.ref_type == 'tag' || runner.arch != 'X64'
+      - id: dockerfile
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          IMAGE: ${{ matrix.image }}
+        run: |
+          if [ -f "$DOCKERFILE" ]; then
+            echo "found=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$DOCKERFILE isn't in this commit: $IMAGE isn't built"
+          fi
+      - if: steps.dockerfile.outputs.found == 'true'
+        run: echo "DOCKER_CONFIG=$RUNNER_TEMP/docker-config" >> "$GITHUB_ENV"
+      - if: steps.dockerfile.outputs.found == 'true' && (github.ref_type == 'tag' || runner.arch != 'X64')
         uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - if: steps.dockerfile.outputs.found == 'true'
+        uses: docker/setup-buildx-action@v3
+      - if: steps.dockerfile.outputs.found == 'true'
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - id: meta
+      - if: steps.dockerfile.outputs.found == 'true'
+        id: meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
@@ -61,7 +83,8 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=edge,branch=main
       # The version the dashboard shows: the release's, or edge-<short sha> to tell commits apart.
-      - id: version
+      - if: steps.dockerfile.outputs.found == 'true'
+        id: version
         env:
           RELEASE: ${{ steps.meta.outputs.version }}
         run: |
@@ -70,7 +93,8 @@ jobs:
           else
             echo "version=edge-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
           fi
-      - uses: docker/build-push-action@v6
+      - if: steps.dockerfile.outputs.found == 'true'
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
