@@ -626,20 +626,31 @@ test("waits.mjs reserve(): a blocker done while a new comment is decided starts 
   const item = itemOf({ trigger: "work", text: "After #7.", comment: { id: 1 } });
   await waits.hold(item, [7]);
   // Replaced: #7 done meanwhile starts nothing, and the wait goes.
-  waits.reserve("Org/Repo#12");
+  let held = waits.reserve("Org/Repo#12");
   await waits.closed("Org/Repo", 7, "done");
   assert.deepEqual(resumed, []);
-  await waits.release("Org/Repo#12", true, "a new comment replaces it");
+  await waits.release("Org/Repo#12", true, "a new comment replaces it", held);
   assert.equal(waits.get("Org/Repo#12"), undefined);
   assert.deepEqual(resumed, []);
   // Refused: what came meanwhile is replayed, the waiting comment starts.
   await waits.hold(item, [7]);
-  waits.reserve("Org/Repo#12");
+  held = waits.reserve("Org/Repo#12");
   await waits.closed("Org/Repo", 7, "done");
   assert.deepEqual(resumed, []);
-  await waits.release("Org/Repo#12", false);
+  await waits.release("Org/Repo#12", false, null, held);
   assert.deepEqual(resumed, ["After #7."]);
   assert.match(replies.at(-1), /^#7 is done: starting\./);
+  // An "/after #9" posted while a comment is decided: a newer wait, which that comment's
+  // run doesn't drop. Neither does one with no wait held.
+  held = waits.reserve("Org/Repo#12");
+  assert.equal(held, null);
+  await waits.hold({ ...item, text: "After #9." }, [9]);
+  await waits.release("Org/Repo#12", true, "a new comment replaces it", held);
+  assert.deepEqual(waits.get("Org/Repo#12").blockers, [9]);
+  held = waits.reserve("Org/Repo#12");
+  await waits.hold({ ...item, text: "After #10." }, [10]);
+  await waits.release("Org/Repo#12", true, "a new comment replaces it", held);
+  assert.deepEqual(waits.get("Org/Repo#12").blockers, [10]);
 });
 
 test("tasks.mjs: a refused comment whose /after issues are all done keeps the issue's earlier wait", async (t) => {

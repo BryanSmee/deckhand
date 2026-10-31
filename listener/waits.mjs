@@ -51,8 +51,9 @@ export function createWaits({
   const waits = persistentMap(path, { mode: 0o600 });
   let timer = null;
   let checking = null;
-  // Task key → what happened to its wait while a new comment was being decided (reserve()):
-  // the closes and answers to replay if that comment doesn't run.
+  // Task key → { held, missed }: the wait held while a new comment was being decided
+  // (reserve()), and what happened to it meanwhile, the closes and answers to replay if that
+  // comment doesn't run.
   const reserved = new Map();
   // "org/repo#77" → recheck() not started yet, and the last one started or queued.
   const queued = new Map();
@@ -83,18 +84,19 @@ export function createWaits({
 
   // A comment with an "/after" line (item.after: events.mjs parseAfter()). Resolves to true when
   // it is handled here (it waits, or is refused), false when it should run now: every issue it
-  // names is done already, or "/after none" came with a trigger line. Then the task's wait
-  // stays: the caller drops it once the comment runs (tasks.mjs admit(): the policies may
-  // refuse it).
+  // names is done already, or "/after none" came with a trigger line. "/after none" drops the
+  // task's wait at once; with every issue done, the wait stays, the caller dropping it once the
+  // comment runs (tasks.mjs admit(): the policies may refuse it).
   async function request(item) {
     const key = keyOf(item);
     const { after } = item;
     const starts = item.trigger === "work" || !!item.modeLine;
     if (after.error) return answer(item, `${after.error} Nothing waits.`).then(() => true);
+    // Cancelled whatever happens to the comment's run (held back, refused by the policies).
     if (after.none) {
-      if (starts) return false;
       const wait = drop(key);
       if (wait) log(`${key}: no longer waits for ${waitsFor(wait)}`);
+      if (starts) return false;
       const text = wait ? `No longer waiting for ${waitsFor(wait)}.` : "Nothing waits here.";
       return answer(item, text).then(() => true);
     }
@@ -148,18 +150,22 @@ export function createWaits({
   }
 
   // A trigger comment's run is being decided (tasks.mjs, work.mjs: the policies may refuse it):
-  // its task's wait neither starts nor goes meanwhile. release() then drops it (`replaced`: the
-  // comment runs, `why` for the log) or replays what came meanwhile (refused: it still waits).
+  // its task's wait neither starts nor goes meanwhile. → the wait held (null: none), for
+  // release(), which then drops that wait only (`replaced`: the comment runs, `why` for the log;
+  // a newer one, an "/after" posted meanwhile, stays) or replays what came meanwhile (refused:
+  // it still waits).
   function reserve(key) {
-    if (waits.has(key) && !reserved.has(key)) reserved.set(key, []);
+    const held = waits.get(key) ?? null;
+    if (held && !reserved.has(key)) reserved.set(key, { held, missed: [] });
+    return held;
   }
 
-  async function release(key, replaced, why) {
-    const missed = reserved.get(key);
-    if (!missed) return replaced ? cancel(key, why) : null;
-    reserved.delete(key);
-    if (replaced) return cancel(key, why);
-    for (const replay of missed) await replay();
+  async function release(key, replaced, why, held) {
+    const entry = reserved.get(key);
+    const own = !!entry && entry.held === held;
+    if (own) reserved.delete(key);
+    if (replaced) return held && waits.get(key) === held ? cancel(key, why) : null;
+    if (own) for (const replay of entry.missed) await replay();
     return null;
   }
 
@@ -188,7 +194,7 @@ export function createWaits({
       if (waits.get(key) !== wait) continue;
       // A new comment is being decided: replayed if it doesn't run (release()).
       if (reserved.has(key)) {
-        reserved.get(key).push(() => closed(repo, number, state));
+        reserved.get(key).missed.push(() => closed(repo, number, state));
         continue;
       }
       const item = revive(wait.item);
@@ -237,7 +243,7 @@ export function createWaits({
     );
     const wait = key && waits.get(key);
     if (!wait?.answers) return;
-    if (reserved.has(key)) return void reserved.get(key).push(() => answered(repo, number));
+    if (reserved.has(key)) return void reserved.get(key).missed.push(() => answered(repo, number));
     const item = revive(wait.item);
     waits.delete(key);
     save();

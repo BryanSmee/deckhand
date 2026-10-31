@@ -412,19 +412,20 @@ export function createWorkApi({
   // accept() → its mode, null when it runs nothing. `key`: the task whose wait it replaces once
   // it runs, held meanwhile (waits.mjs reserve()), `why` for the log. Refused by the policies
   // (run-policy.mjs: `refused`, their reply posted), the App's comment `user` posted for it
-  // (item.comment) is edited to say nothing started, and the wait stays.
-  async function started(item, { key = null, why = null, user = null } = {}) {
-    if (key) waits.reserve(key);
+  // (item.comment) is edited to say nothing started, keeping what else it said (`also`: the
+  // answers typed in the drag's form, which nothing ran with), and the wait stays.
+  async function started(item, { key = null, why = null, user = null, also = "" } = {}) {
+    const held = key ? waits.reserve(key) : null;
     let mode = null;
     try {
       mode = await accept(item);
     } finally {
-      if (key) await waits.release(key, !!mode, why);
+      if (key) await waits.release(key, !!mode, why, held);
     }
     if (item.refused && user && item.comment?.id) {
       const wait = key ? waits.get(key) : null;
       const still = wait ? ` It still waits for ${waitsFor(wait)}.` : "";
-      const body = `Asked from the dashboard by @${user}: not started, the policies refuse it.${still}\n\n${MARKER}`;
+      const body = `Asked from the dashboard by @${user}: not started, the policies refuse it.${still}${also}\n\n${MARKER}`;
       const path = `/repos/${item.repo}/issues/comments/${item.comment.id}`;
       const res = await github(item.repo, "PATCH", path, { body }).catch((error) => {
         log(`Work area: editing comment ${item.comment.id}: ${error.message ?? error}`);
@@ -479,7 +480,7 @@ export function createWorkApi({
       `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
     // Its wait goes once it runs: refused by the policies (a 403, after their reply), it stays.
-    await queued(item, { key, why: `started from the dashboard by @${user}`, user });
+    await queued(item, { key, why: `started from the dashboard by @${user}`, user, also });
     return `#${number} started.`;
   }
 

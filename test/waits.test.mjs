@@ -250,12 +250,9 @@ test("/after again replaces the list; /after none and a new trigger cancel", asy
   assert.equal(w.waits.list().length, 0);
   assert.equal(await w.waits.request(item({ none: true }, { trigger: null })), true);
   assert.equal(w.replies.at(-1)[1], "Nothing waits here.");
-  // With a trigger line: it runs now, and its caller drops the wait once it does (tasks.mjs
-  // admit(): the policies may refuse it, and then it stays).
+  // With a trigger line: cancelled whatever happens to the run, and it runs now.
   await w.waits.request(item({ numbers: [77] }));
   assert.equal(await w.waits.request(item({ none: true })), false);
-  assert.equal(w.waits.list().length, 1);
-  await w.waits.release("org/repo#78", true, "a new comment replaces it");
   assert.equal(w.waits.list().length, 0);
   // A trigger comment without "/after" (tasks.mjs admit()).
   await w.waits.request(item({ numbers: [77] }));

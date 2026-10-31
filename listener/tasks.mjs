@@ -120,12 +120,12 @@ export function createTasks(ctx) {
     const key = taskKey(item.repo, item.id);
     // With "/after", only one that runs now (waits.mjs request() said false), the wait left.
     const replaces = item.trigger === "work" || !!item.modeLine;
-    if (replaces) ctx.waits.reserve(key);
+    const held = replaces ? ctx.waits.reserve(key) : null;
     let mode = null;
     try {
       mode = await accept(item);
     } finally {
-      if (replaces) await ctx.waits.release(key, !!mode, "a new comment replaces it");
+      if (replaces) await ctx.waits.release(key, !!mode, "a new comment replaces it", held);
     }
   }
 

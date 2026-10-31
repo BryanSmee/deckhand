@@ -1633,6 +1633,27 @@ test("start or queue an issue with open questions: refused until they are answer
   assert.deepEqual([w.comments, w.accepted, w.labels], [[], [], []]);
 });
 
+test("answers sent with a start the policies refuse: kept in the App's edited comment", async () => {
+  const w = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "issue") } });
+  w.refusing = "No `work` run: the policies refuse it: `not today`.";
+  const res = await answer(w, {
+    number: 5,
+    answers: [{ options: [0] }, { text: "Home" }],
+    then: { action: "start" },
+  });
+  assert.equal(res.status, 403);
+  const [[, posted]] = w.comments;
+  const [[, edited]] = w.edits;
+  assert.match(
+    edited,
+    /^Asked from the dashboard by @alice: not started, the policies refuse it\./,
+  );
+  // What the form said is still there: the answers, as posted.
+  const answers = posted.slice(posted.indexOf("\n\n") + 2);
+  assert.ok(answers.length > 0);
+  assert.ok(edited.includes(answers), `${edited}\n---\n${answers}`);
+});
+
 test("wait_for_answers off: an issue with open questions starts and queues without them", async () => {
   const w = setup({
     settings: { waitForAnswers: false },
