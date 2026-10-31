@@ -107,8 +107,8 @@ export function recordingFetch(answer) {
 // text) on `ref`, the operator's `operator` (likewise, over Deckhand's allow.rego): each layer
 // allows, its deny rule says `messages(input, rule, names)` (names: that layer's files), or it
 // fails as `failure` says; `listFails()`, a status GitHub answers the repo's policy folder with
-// instead (null: none). `evals`: the inputs it was asked about, with their `rule`; `layers`,
-// each one's file names.
+// instead (null: none). `evals`: the inputs it was asked about (one `opa` each), with their
+// `rule`; `layers`, each one's file names, both layers'.
 export function policyEngine(
   t,
   {
@@ -140,14 +140,20 @@ export function policyEngine(
     run: async (args, { input, cwd }) => {
       if (args[0] === "capabilities") return { code: 0, stdout: '{"builtins":[]}' };
       if (args[0] === "check") return { code: 0, stdout: "" };
-      // The query asks `allow_<decision>` and `deny_<decision>`: allowed, with `messages`, of
-      // one layer's files (their names: the operator's or the repo's).
-      const rule = `deny_${/data\.deckhand\.deny_(\w+)/.exec(args.at(-1))[1]}`;
-      const names = readdirSync(join(cwd, "policy")).sort();
+      // The query asks each staged layer's `allow_<decision>` and `deny_<decision>`: each
+      // allows, with `messages` of its files (their names: the operator's or the repo's).
+      const rule = `deny_${/\.deny_(\w+)\]/.exec(args.at(-1))[1]}`;
+      const staged = readdirSync(join(cwd, "policy"));
+      const names = (layer) => readdirSync(join(cwd, "policy", layer)).sort();
       evals.push({ ...JSON.parse(input), rule });
-      layers.push(names);
+      layers.push(staged.flatMap(names).sort());
       if (failure) return failure;
-      const value = { allow: [true], deny: [messages(JSON.parse(input), rule, names)] };
+      const value = Object.fromEntries(
+        staged.map((layer) => [
+          layer,
+          { allow: [true], deny: [messages(JSON.parse(input), rule, names(layer))] },
+        ]),
+      );
       return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
     },
     readOperator: () => new Map(Object.entries(operator)),

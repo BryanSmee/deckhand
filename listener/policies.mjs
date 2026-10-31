@@ -7,8 +7,8 @@
 // requests (reviewers.mjs), and `github` for a run's GitHub writes (github-writes.mjs). A
 // decision is allowed when an allow rule matches and no deny rule does: a deny always wins.
 //
-// Two layers, each evaluated by an `opa` process of its own, so that neither's files can define
-// or break the other's rules: the operator's, Deckhand's own defaults (BUILT_IN_DIR, in the
+// Two layers, evaluated by one `opa` process, each in a namespace of its own so that neither's
+// files can define or break the other's rules (namespaced()): the operator's, Deckhand's own defaults (BUILT_IN_DIR, in the
 // image: issue #448) under GRANTS_DIR/policy/*.rego, read again at each decision like the grants,
 // a file with the same name replacing a default; then a repo's, .deckhand/policy/*.rego on its
 // default branch, like its .deckhand.yaml. The operator's allow rules are the ceiling. The repo's
@@ -368,15 +368,40 @@ function opaErrors(stdout, stderr) {
     if (Array.isArray(errors) && errors.length) {
       const list = errors.slice(0, MAX_ERRORS).map((e) => ({
         file: e.location?.file?.replace(/^.*\//, "") || null,
+        // The layer whose folder the file was staged in (staged()), when opa placed it.
+        layer: /(?:^|\/)repo\/[^/]+$/.test(e.location?.file ?? "")
+          ? "repo"
+          : /(?:^|\/)operator\/[^/]+$/.test(e.location?.file ?? "")
+            ? "operator"
+            : null,
         row: Number.isInteger(e.location?.row) ? e.location.row : null,
-        message: String(e.message ?? e.code ?? "error"),
+        // A repo's packages as its files name them, not namespaced().
+        message: String(e.message ?? e.code ?? "error").replaceAll(`${REPO_NS}.`, ""),
       }));
       const text = list.slice(0, 3).map(located).join("; ");
       return { text, list, cancelled: errors.some((e) => e.code === "eval_cancel_error") };
     }
   }
   const text = (stderr || stdout || "opa failed").trim().split("\n")[0];
-  return { text, list: [{ file: null, row: null, message: text }], cancelled: false };
+  return { text, list: [{ file: null, layer: null, row: null, message: text }], cancelled: false };
+}
+
+// Where a repo's packages go in the one `opa` both layers share: under this, which no package
+// of the operator's or Deckhand's is.
+export const REPO_NS = "deckhand_repository";
+
+// A repo file's `text` with its package moved under REPO_NS, so that it can neither define nor
+// replace a rule of the operator's packages, whatever it declares: Rego's first statement is
+// the package (after comments), and every rule a module defines is in it. Its `data.`
+// references go there too, so that a repo's libraries still resolve; one written otherwise
+// (`data["lib"]`) only reads the operator's, which widens nothing. null: no package where the
+// parser reads it (a `package` keyword on a line of its own, a byte-order mark), refused rather
+// than guessed.
+export function namespaced(text) {
+  const head = /^((?:[ \t\r\n]|#[^\n]*(?:\n|$))*)package([ \t]+)(?=[A-Za-z_])/.exec(text);
+  if (!head) return null;
+  const rest = text.slice(head[0].length).replace(/\bdata\./g, `data.${REPO_NS}.`);
+  return `${head[1]}package${head[2]}${REPO_NS}.${rest}`;
 }
 
 // An error of opaErrors()'s list as one line: `file:row: message`.
@@ -485,12 +510,22 @@ export function createPolicies({
     return capabilities;
   }
 
-  // `files` and the capabilities in a temp dir for `use(dir)`, removed after.
-  async function staged(files, use) {
+  // `layers` ({ operator, repo }, each name → text, either absent) and the capabilities in a
+  // temp dir for `use(dir)`, removed after: each layer in a folder of its own under
+  // OPERATOR_DIR (opa's errors say which: opaErrors()), the repo's namespaced(). A repo file
+  // that can't be throws, as a policy that doesn't compile.
+  async function staged(layers, use) {
     const dir = await mkdtemp(join(tmp, "deckhand-policy-"));
     try {
-      await mkdir(join(dir, OPERATOR_DIR));
-      for (const [name, text] of files) await writeFile(join(dir, OPERATOR_DIR, name), text);
+      for (const [layer, files] of Object.entries(layers)) {
+        if (!files) continue;
+        await mkdir(join(dir, OPERATOR_DIR, layer), { recursive: true });
+        for (const [name, text] of files) {
+          const staged = layer === "repo" ? namespaced(text) : text;
+          if (staged === null) throw new Error(unplacedPackage(name));
+          await writeFile(join(dir, OPERATOR_DIR, layer, name), staged);
+        }
+      }
       await writeFile(join(dir, "capabilities.json"), await capabilitiesFile());
       return await use(dir);
     } finally {
@@ -498,17 +533,32 @@ export function createPolicies({
     }
   }
 
-  // One layer's `files` on `input` → { allow, denies, error }: `allow`, whether
-  // `allow_<decision>` is true (null when `allow` isn't asked); `denies`, `deny_<decision>`'s
-  // strings, as the rule gave them; `error`, why the layer couldn't be evaluated (then nothing
-  // else), as a failure() says it.
-  async function evaluateLayer(decision, files, input, { allow = true } = {}) {
-    const rule = (name) => `[x | x := data.deckhand.${name}_${decision}]`;
-    const query = `{${allow ? `"allow": ${rule("allow")}, ` : ""}"deny": ${rule("deny")}}`;
-    const failed = (what) => ({ allow: allow ? false : null, denies: [], error: what });
+  // What a repo file that namespaced() refuses is told.
+  const unplacedPackage = (name) =>
+    `${name} must start with \`package …\` (after comments only), on one line`;
+
+  // `layers` ({ operator, repo }: name → text, either absent: not asked) on `input`, by one
+  // `opa` → { operator, repo, error, errorLayer }: each asked layer's { allow, denies }:
+  // `allow`, whether its `allow_<decision>` is true (null when not asked: the repo's, unless
+  // `repoAllow`); `denies`, its `deny_<decision>`'s strings, as the rule gave them. `error`: why
+  // they couldn't be evaluated, as a failure() says it, then nothing else; `errorLayer`, the
+  // layer opa placed it in, null when it didn't.
+  async function evaluateLayers(decision, layers, input, { repoAllow = false } = {}) {
+    const rule = (pkg, name) => `[x | x := data.${pkg}.${name}_${decision}]`;
+    const asks = {
+      ...(layers.operator && { operator: { pkg: "deckhand", allow: true } }),
+      ...(layers.repo && { repo: { pkg: `${REPO_NS}.deckhand`, allow: repoAllow } }),
+    };
+    const query = `{${Object.entries(asks)
+      .map(
+        ([layer, { pkg, allow }]) =>
+          `"${layer}": {${allow ? `"allow": ${rule(pkg, "allow")}, ` : ""}"deny": ${rule(pkg, "deny")}}`,
+      )
+      .join(", ")}}`;
+    const failed = (what, errorLayer = null) => ({ error: what, errorLayer });
     let res;
     try {
-      res = await staged(files, (cwd) =>
+      res = await staged(layers, (cwd) =>
         run(
           [
             "eval",
@@ -523,13 +573,13 @@ export function createPolicies({
         ),
       );
     } catch (error) {
-      return failed(error.message ?? String(error));
+      return failed(error.message ?? String(error), layers.repo ? "repo" : null);
     }
     const late = `the \`${decision}\` rules took more than ${TIMEOUT_MS / 1000} s`;
     if (res.timedOut) return failed(late);
     if (res.code !== 0) {
-      const { text, cancelled } = opaErrors(res.stdout, res.stderr);
-      return failed(cancelled ? late : text);
+      const { text, list, cancelled } = opaErrors(res.stdout, res.stderr);
+      return failed(cancelled ? late : text, cancelled ? null : list[0].layer);
     }
     let value;
     try {
@@ -537,29 +587,32 @@ export function createPolicies({
     } catch {
       // Said below.
     }
-    // Each rule's value, in a list: empty when no file defines it, or it is undefined.
-    const listed = (v) => Array.isArray(v) && v.length <= 1;
-    if (!listed(value?.deny) || (allow && !listed(value.allow))) {
-      return failed("opa's answer can't be read");
+    const said = { error: null, errorLayer: null };
+    for (const [layer, { allow }] of Object.entries(asks)) {
+      const got = value?.[layer];
+      // Each rule's value, in a list: empty when no file defines it, or it is undefined.
+      const listed = (v) => Array.isArray(v) && v.length <= 1;
+      if (!listed(got?.deny) || (allow && !listed(got.allow))) {
+        return failed("opa's answer can't be read");
+      }
+      const [allowed = false] = got.allow ?? [];
+      const [denies = []] = got.deny;
+      if (allow && typeof allowed !== "boolean") {
+        return failed(`\`allow_${decision}\` must be true or false`, layer);
+      }
+      if (!Array.isArray(denies) || denies.some((m) => typeof m !== "string")) {
+        return failed(`\`deny_${decision}\` must be a set of strings`, layer);
+      }
+      said[layer] = { allow: allow ? allowed : null, denies };
     }
-    const [allowed = false] = value.allow ?? [];
-    const [denies = []] = value.deny;
-    if (allow && typeof allowed !== "boolean") {
-      return failed(`\`allow_${decision}\` must be true or false`);
-    }
-    if (!Array.isArray(denies) || denies.some((m) => typeof m !== "string")) {
-      return failed(`\`deny_${decision}\` must be a set of strings`);
-    }
-    return { allow: allow ? allowed : null, denies, error: null };
+    return said;
   }
 
   // The deny messages of the operator's layer `files` on `input` (allow_* left out), capped and
   // redacted; a failure is one "policy error: …" message. For the tests of a policy's text.
   async function evaluate(rule, files, input) {
-    const { denies, error } = await evaluateLayer(decisionOf(rule), files, input, {
-      allow: false,
-    });
-    return error ? failure(error) : messages(denies);
+    const said = await evaluateLayers(decisionOf(rule), { operator: files }, input);
+    return said.error ? failure(said.error) : messages(said.operator.denies);
   }
 
   // At most MAX_MESSAGES, each shown().
@@ -580,9 +633,10 @@ export function createPolicies({
   const failure = (what) => [line(`policy error: ${what}`)];
 
   // Why `rule` (`deny_merge`, `merge`…: its decision) refuses on `repo` (its policies on `ref`,
-  // its default branch): the messages, or [] when it is allowed. `input()` builds the input,
-  // called only when a policy applies (it may read GitHub). Fail closed: an error reading the
-  // policies is a refusal too.
+  // its default branch): the messages, or [] when it is allowed. `input()` builds the input
+  // (it may read GitHub): not for a decision only built-in modes make when Deckhand's files
+  // alone allow it, otherwise always, as whether the run is in the repo's own mode is the
+  // input's. Fail closed: an error reading the policies is a refusal too.
   async function deny(rule, repo, ref, input) {
     return (await decide(rule, repo, ref, input)).messages;
   }
@@ -644,25 +698,43 @@ export function createPolicies({
     const custom = !BUILT_IN_ONLY.has(decision) && doc.custom_mode === true;
     const defining = (files, name) =>
       [...files].filter(([, text]) => rulesOf(text).includes(name)).map(([n]) => n);
-    const layer = async (name, files, { allow, skip = false }) => ({
+    // Deckhand's files alone, allowing whatever the input: no need to ask them. One `opa` for
+    // the rest, both layers in it when both have files.
+    const skip = onlyBuiltInAllowing(decision, layers.operator);
+    const asking = {
+      ...(!skip && layers.operator.size && { operator: layers.operator }),
+      ...(layers.repo.size && { repo: layers.repo }),
+    };
+    const got = Object.keys(asking).length
+      ? await evaluateLayers(decision, asking, doc, { repoAllow: custom })
+      : { error: null };
+    // A layer as listed: what opa said of it, or what it says without opa (skipped: allowing;
+    // no files: allowing nothing, its allow asked or not).
+    const layer = (name, files, allow) => ({
       layer: name,
-      ...(skip
-        ? { allow: allow ? true : null, denies: [], error: null }
-        : files.size
-          ? await evaluateLayer(decision, files, doc, { allow })
-          : { allow: allow ? false : null, denies: [], error: null }),
+      ...(got.error
+        ? {
+            allow: allow ? false : null,
+            denies: [],
+            // The layer opa placed the error in, else every one it was asked about.
+            error: (got.errorLayer ?? name) === name && asking[name] ? got.error : null,
+          }
+        : (got[name] ?? {
+            allow: allow ? (name === "operator" && skip) || false : null,
+            denies: [],
+          })),
+      ...(!got.error && { error: null }),
       allowFiles: allow ? defining(files, `allow_${decision}`) : [],
       denyFiles: defining(files, `deny_${decision}`),
     });
-    const skip = onlyBuiltInAllowing(decision, layers.operator);
-    const said = await Promise.all([
-      layer("operator", layers.operator, { allow: true, skip }),
-      ...(layers.repo.size || custom ? [layer("repo", layers.repo, { allow: custom })] : []),
-    ]);
+    const said = [
+      layer("operator", layers.operator, true),
+      ...(layers.repo.size || custom ? [layer("repo", layers.repo, custom)] : []),
+    ];
     const asked = !skip || layers.repo.size > 0 || custom;
-    const broken = said.find((l) => l.error);
-    if (broken) {
-      const messages = failure(broken.error);
+    if (got.error && !said.some((l) => l.error)) said[0].error = got.error;
+    if (got.error) {
+      const messages = failure(got.error);
       log(`${repo}: ${decision} refused: ${messages[0]}`);
       return { asked, messages, input: doc, layers: said.map(shownLayer) };
     }
@@ -720,26 +792,42 @@ export function createPolicies({
         } else if (layer === "repo" && rule.startsWith("allow_")) {
           const decision = decisionOf(rule);
           if (BUILT_IN_ONLY.has(decision)) {
-            errors.push(
-              placed(
+            // Ignored, it refuses nothing: an error the onboarding check says, flagged for the
+            // dashboard, which doesn't take it for a refusal.
+            errors.push({
+              ...placed(
                 name,
                 lineOf(text, rule),
                 `\`${rule}\` is ignored: a repository's allow rules count only for its own modes, and only the operator's allow the ${decision}`,
               ),
-            );
+              ignored: true,
+            });
           }
         }
       }
     }
+    // A repo file whose package namespaced() can't move: said at its first line, the others
+    // checked without it.
+    const staging = new Map(files);
+    if (layer === "repo") {
+      for (const [name, text] of files) {
+        if (namespaced(text) !== null) continue;
+        errors.push({
+          ...placed(name, 1, unplacedPackage(name)),
+          text: failure(unplacedPackage(name))[0],
+        });
+        staging.delete(name);
+      }
+    }
     const unplaced = (text, message = text) => ({ layer, file: null, row: null, message, text });
     try {
-      const res = await staged(files, (cwd) =>
+      const res = await staged({ [layer]: staging }, (cwd) =>
         run(["check", "--format=json", "--capabilities=capabilities.json", OPERATOR_DIR], { cwd }),
       );
       if (res.timedOut) errors.push(unplaced(`the policies' check took too long`));
       else if (res.code !== 0) {
         for (const e of opaErrors(res.stdout, res.stderr).list) {
-          errors.push({ layer, ...e, message: line(e.message), text: failure(located(e))[0] });
+          errors.push({ ...e, layer, message: line(e.message), text: failure(located(e))[0] });
         }
       }
     } catch (error) {

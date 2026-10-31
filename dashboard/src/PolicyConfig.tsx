@@ -33,9 +33,14 @@ const errorsOf = (errors: PolicyError[], f: PolicyFile) => errors.filter((e) => 
 const unplaced = (files: PolicyFile[], errors: PolicyError[]) =>
   errors.some((e) => !files.some((f) => isOf(e, f)));
 
+// The errors that refuse every decision: not a repo's allow rule that is only ignored
+// (`ignored`), which refuses nothing.
+export const refusing = (errors: PolicyError[]) => errors.filter((e) => !e.ignored);
+
 // What the header's badge says while the check fails: how many files don't compile, or that
 // the policies can't be checked at all. Null when they compile.
-export function policyTrouble({ files, errors }: Policies): string | null {
+export function policyTrouble({ files, errors: all }: Policies): string | null {
+  const errors = refusing(all);
   if (!errors.length) return null;
   const bad = files.filter((f) => errorsOf(errors, f).length).length;
   if (!bad) return "Policy error";
@@ -144,11 +149,15 @@ function failing(files: PolicyFile[], errors: PolicyError[]): string {
 }
 
 export function PolicyConfig({ config }: { config: RepoConfig }) {
-  const { files, errors, warnings } = config.policies;
+  const { files, errors: all, warnings } = config.policies;
+  // The check's errors that refuse, and those that only say a rule is ignored: said with the
+  // warnings, marked on their line.
+  const errors = refusing(all);
+  const ignored = all.filter((e) => e.ignored);
   // The source folds opened or closed by hand, over each one's default: open with an error.
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   useEffect(() => setOpened({}), [config.repo.repo]);
-  const isOpen = (f: PolicyFile) => opened[keyOf(f)] ?? errorsOf(errors, f).length > 0;
+  const isOpen = (f: PolicyFile) => opened[keyOf(f)] ?? errorsOf(all, f).length > 0;
   const toggle = (f: PolicyFile) => (open: boolean) =>
     setOpened((o) => (o[keyOf(f)] === open ? o : { ...o, [keyOf(f)]: open }));
   // A link to an error's line opens its file, then shows the line.
@@ -177,10 +186,15 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
   return (
     <div class={styles.page}>
       {errors.length > 0 && <Banner files={files} errors={errors} goLine={goLine} />}
-      {warnings.length > 0 && (
+      {warnings.length + ignored.length > 0 && (
         <section class={styles.warnings} aria-label="Policy warnings">
           <Warning size={16} />
           <ul>
+            {ignored.map((e) => (
+              <li key={e.text}>
+                <b>Ignored</b> · {e.text}
+              </li>
+            ))}
             {warnings.map((w) => (
               <li key={w}>
                 <b>Warning</b> · {w}
@@ -243,13 +257,13 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
             </ul>
             {[...rows]
               // The files with an error first: they start open.
-              .sort((a, b) => +!errorsOf(errors, a).length - +!errorsOf(errors, b).length)
+              .sort((a, b) => +!errorsOf(all, a).length - +!errorsOf(all, b).length)
               .map((f) => (
                 <Source
                   key={keyOf(f)}
                   file={f}
                   by={replacedBy(files, f)}
-                  errors={errorsOf(errors, f)}
+                  errors={errorsOf(all, f)}
                   open={isOpen(f)}
                   onToggle={toggle(f)}
                 />

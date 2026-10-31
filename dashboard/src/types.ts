@@ -640,15 +640,19 @@ export interface PolicyFile {
 // folder that can't be read). `text`: the whole error on one line.
 export interface PolicyError {
   layer?: "operator" | "repo" | null;
+  // A repo's allow rule for a decision none of its modes makes: an error of its config check,
+  // which refuses nothing, being ignored.
+  ignored?: boolean;
   file: string | null;
   row: number | null;
   message: string;
   text: string;
 }
 
-// `errors`: the config check's (compile errors, a repo's ignored allow rule, a folder that can't
-// be read): every decision a policy is asked for refuses until they are fixed. `warnings`: rules
-// nobody evaluates, a repo file named as one it no longer replaces.
+// `errors`: the config check's (compile errors, a folder that can't be read): every decision a
+// policy is asked for refuses until they are fixed, but a repo's ignored allow rule (`ignored`),
+// which refuses nothing. `warnings`: rules nobody evaluates, a repo file named as one it no
+// longer replaces.
 export interface Policies {
   files: PolicyFile[];
   errors: PolicyError[];

@@ -969,8 +969,9 @@ deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
 
 **The files**: every `*.rego` file of `.deckhand/policy/` on the default branch (not its
 subfolders), in package `deckhand`; a file in another package is a library its layer's files
-can import. **Two layers, each evaluated by an `opa` of its own** (neither can define, read or
-break the other's rules):
+can import. **Two layers**, evaluated by one `opa`, the repository's packages moved under
+`deckhand_repository` (its `data.` references too): neither can define the other's rules. A
+repository's file must start with `package …`, after comments only:
 
 - **The operator's**: [Deckhand's defaults](#the-default-policies), in the listener's image,
   under the operator's grants folder `policy/` ([security model](security.md#policies)), where
@@ -982,9 +983,8 @@ break the other's rules):
   error). Its file named as one of Deckhand's or the operator's replaces nothing (a warning).
 
 When only Deckhand's files apply, allowing the decision and none defining its deny rule, no
-`opa` runs (and the task's page keeps nothing). A repository's files cost a second `opa`, run
-beside the first; its folder is listed once, then again after a push to its default branch (or
-10 minutes).
+`opa` runs (and the task's page keeps nothing). The repository's folder is listed once, then
+again after a push to its default branch (or 10 minutes).
 
 <!-- modes.rego: test/linked-branch.test.mjs evaluates this block with the real opa -->
 

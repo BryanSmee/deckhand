@@ -324,6 +324,41 @@ test("policies that compile: no banner, each decision active or without rules, w
   expect(document.querySelectorAll("details[open]")).toHaveLength(0);
 });
 
+test("a repo's ignored allow rule: said and marked on its line, but nothing is refused", async () => {
+  const text =
+    "merge.rego:3: `allow_merge` is ignored: a repository's allow rules count only for its own modes, and only the operator's allow the merge";
+  policies = {
+    files: [
+      allowFile,
+      makePolicyFile({
+        name: "merge.rego",
+        rules: ["allow_merge"],
+        text: "package deckhand\n\nallow_merge := true\n",
+      }),
+    ],
+    errors: [
+      { layer: "repo", file: "merge.rego", row: 3, message: text.slice(14), text, ignored: true },
+    ],
+    warnings: [],
+  };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(screen.queryByText(/doesn't compile|Policy error/)).toBeNull();
+  const tabs = screen.getByRole("navigation", { name: "Repository settings" });
+  expect(within(tabs).getByRole("link", { name: "Policies" })).toBeTruthy();
+  const merge = card("Auto-merge");
+  expect(within(merge).queryByText("Refused")).toBeNull();
+  expect(merge.textContent).toContain("ignored, no mode of the repo's makes it");
+  expect(screen.getByLabelText("Policy warnings").textContent).toContain(`Ignored · ${text}`);
+  const [, row] = rows();
+  expect(within(row).getByText("Yes")).toBeTruthy();
+  // Its line is marked, its source open.
+  const file = source(".deckhand/policy/merge.rego");
+  expect(file.open).toBe(true);
+  expect(within(file).getByText(/^`allow_merge` is ignored/)).toBeTruthy();
+});
+
 test("an error placed in no file: the check's, every file's state unknown", async () => {
   const text = "policy error: the policies' check took too long";
   policies = { ...POLICIES, errors: [{ file: null, row: null, message: text, text }] };

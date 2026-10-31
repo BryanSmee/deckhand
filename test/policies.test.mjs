@@ -9,6 +9,8 @@ import {
   builtInPolicies,
   createPolicies,
   DECISIONS,
+  namespaced,
+  REPO_NS,
   RULES,
   rulesOf,
   unallowed,
@@ -83,21 +85,40 @@ function fakeOpa({
   checked = () => ({ code: 0, stdout: "" }),
 } = {}) {
   const calls = [];
-  const staged = (cwd) =>
+  // Each staged layer's files (policy/operator/, policy/repo/), name → text as written (the
+  // repo's namespaced(): `raw`, as the repo wrote them).
+  const staged = (cwd, raw) =>
     Object.fromEntries(
-      readdirSync(join(cwd, "policy")).map((n) => [
-        n,
-        readFileSync(join(cwd, "policy", n), "utf8"),
+      readdirSync(join(cwd, "policy")).map((layer) => [
+        layer,
+        Object.fromEntries(
+          readdirSync(join(cwd, "policy", layer)).map((n) => {
+            const text = readFileSync(join(cwd, "policy", layer, n), "utf8");
+            return [n, raw ? text.replaceAll("deckhand_repository.", "") : text];
+          }),
+        ),
       ]),
     );
   const run = async (args, { input, cwd } = {}) => {
     calls.push({ args, input, cwd });
     if (args[0] === "capabilities") return { code: 0, stdout: JSON.stringify(CAPABILITIES) };
     const caps = JSON.parse(readFileSync(join(cwd, "capabilities.json"), "utf8"));
-    const files = staged(cwd);
-    Object.assign(calls.at(-1), { capabilities: caps, files });
-    if (args[0] === "eval") return answer(files, JSON.parse(input));
-    return checked(files);
+    const layers = staged(cwd, true);
+    const files = Object.assign({}, ...Object.values(layers));
+    Object.assign(calls.at(-1), { capabilities: caps, files, layers, written: staged(cwd) });
+    if (args[0] !== "eval") return checked(files);
+    // One process for the layers: each answers as its own, a failure for them all.
+    const value = {};
+    for (const [layer, own] of Object.entries(layers)) {
+      const res = answer(own, JSON.parse(input), layer);
+      if (res.code !== 0 || res.timedOut) return res;
+      try {
+        value[layer] = JSON.parse(res.stdout).result?.[0]?.expressions?.[0]?.value;
+      } catch {
+        return res;
+      }
+    }
+    return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
   };
   return { run, calls, evals: () => calls.filter((c) => c.args[0] === "eval") };
 }
@@ -174,6 +195,24 @@ test("rulesOf: the allow_* and deny_* rules of package deckhand", () => {
     ["deny_merge", "allow_merge", "deny_review"],
   );
   assert.deepEqual(rulesOf('package lib\ndeny_merge contains "x" if true\n'), []);
+});
+
+test("namespaced: a repo file's package, and its data references, under REPO_NS", () => {
+  assert.equal(
+    namespaced("# a policy\n\npackage deckhand\n\nimport data.lib\nx if data.lib.y\n"),
+    "# a policy\n\npackage deckhand_repository.deckhand\n\nimport data.deckhand_repository.lib\nx if data.deckhand_repository.lib.y\n",
+  );
+  assert.equal(namespaced("package lib.util\n"), "package deckhand_repository.lib.util\n");
+  // Nowhere else than first: refused rather than guessed.
+  for (const odd of [
+    "x := 1\npackage deckhand\n",
+    "package\ndeckhand\n",
+    "\uFEFFpackage a\n",
+    "",
+  ]) {
+    assert.equal(namespaced(odd), null, JSON.stringify(odd));
+  }
+  assert.equal(REPO_NS, "deckhand_repository");
 });
 
 test("unallowed: what no allow rule matched, said from the input", () => {
@@ -257,22 +296,27 @@ test("deny: Deckhand's files under the operator's by name, the repo's a layer of
     opa,
     builtIn: { ...ALLOWING, "gh-a.rego": GH, "gh-b.rego": GH, "gh-c.rego": GH },
     operator: { "gh-b.rego": "operator b" },
-    repoFiles: { "gh-c.rego": "repo c" },
+    repoFiles: { "gh-c.rego": "package deckhand # repo c" },
   });
   const denied = await policies.deny("deny_github", "org/repo", "main", input);
   assert.deepEqual(denied.sort(), [
     'gh-a.rego: package deckhand deny_github contains "x" if true',
     "gh-b.rego: operator b",
+    "gh-c.rego: package deckhand # repo c",
     'gh-c.rego: package deckhand deny_github contains "x" if true',
-    "gh-c.rego: repo c",
   ]);
-  // Two opa processes: neither layer's files see the other's.
+  // One opa process, each layer in a folder of its own, the repo's package moved under its
+  // namespace: neither layer's files can define the other's rules.
+  const [call, ...more] = opa.evals();
+  assert.equal(more.length, 0);
   assert.deepEqual(
-    opa
-      .evals()
-      .map((c) => Object.keys(c.files).sort())
-      .sort(),
-    [[ALLOW, "gh-a.rego", "gh-b.rego", "gh-c.rego"], ["gh-c.rego"]],
+    Object.fromEntries(Object.entries(call.layers).map(([l, f]) => [l, Object.keys(f).sort()])),
+    { operator: [ALLOW, "gh-a.rego", "gh-b.rego", "gh-c.rego"], repo: ["gh-c.rego"] },
+  );
+  assert.equal(call.written.repo["gh-c.rego"], "package deckhand_repository.deckhand # repo c");
+  assert.equal(
+    call.args.at(-1),
+    '{"operator": {"allow": [x | x := data.deckhand.allow_github], "deny": [x | x := data.deckhand.deny_github]}, "repo": {"deny": [x | x := data.deckhand_repository.deckhand.deny_github]}}',
   );
   // Read once: they are the image's.
   let reads = 0;
@@ -452,15 +496,28 @@ test("deny: the operator's and the repo's layers, each on its own, a deny of eit
   const { policies } = setup(t, {
     opa,
     operator: { "a.rego": "operator a", "b.rego": "operator b" },
-    repoFiles: { "a.rego": "repo a", "c.rego": "repo c" },
+    repoFiles: { "a.rego": "package repo_a", "c.rego": "package repo_c" },
   });
   const denied = await policies.deny("deny_merge", "org/repo", "main", input);
   assert.deepEqual(denied.sort(), [
     "a.rego: operator a",
-    "a.rego: repo a",
+    "a.rego: package repo_a",
     "b.rego: operator b",
-    "c.rego: repo c",
+    "c.rego: package repo_c",
   ]);
+  // A repo file without a package where the parser reads it: refused, as one that doesn't
+  // compile, never staged as it is.
+  for (const text of ["repo a", "package\ndeckhand\n", "\uFEFFpackage deckhand\n"]) {
+    const odd = setup(t, { opa, repoFiles: { "a.rego": text } });
+    assert.deepEqual(await odd.policies.deny("deny_merge", "org/repo", "main", input), [
+      "policy error: a.rego must start with `package …` (after comments only), on one line",
+    ]);
+    const { errors } = await odd.policies.describe("org/repo", "main");
+    assert.deepEqual(
+      errors.map((e) => [e.layer, e.file, e.row]),
+      [["repo", "a.rego", 1]],
+    );
+  }
   // The operator's alone apply to a repo without policies.
   const bare = setup(t, { opa, operator: { "b.rego": "operator b" } });
   assert.deepEqual(await bare.policies.deny("deny_merge", "org/repo", "main", input), [
@@ -481,7 +538,10 @@ test("deny: the rule's messages, its input on stdin, a restricted opa", async (t
   assert.ok(call.args.some((a) => a.startsWith("--timeout=")));
   // The repo's layer: its deny rule, not its allow, a merge being no mode of its own. Deckhand's
   // allow.rego alone needs no opa.
-  assert.equal(call.args.at(-1), '{"deny": [x | x := data.deckhand.deny_merge]}');
+  assert.equal(
+    call.args.at(-1),
+    '{"repo": {"deny": [x | x := data.deckhand_repository.deckhand.deny_merge]}}',
+  );
   assert.equal(opa.evals().length, 1);
   assert.ok(!call.capabilities.builtins.some((b) => b.name === "http.send"));
   // The staged files are gone after.
@@ -1287,7 +1347,11 @@ deny_github contains "deploy runs don't comment" if input.mode == "deploy"
       },
       repo: {
         "lib.rego": "package lib\n\ntrusted := true\n",
-        "own.rego": "package deckhand\n\nallow_github := true\n",
+        // Its own library, where its own data.lib is.
+        "own.rego": "package deckhand\n\nimport data.lib\n\nallow_github if lib.trusted\n",
+        // A package naming the operator's, or the namespace itself, stays under it.
+        "deckhand.rego": "# Not the operator's.\npackage deckhand.x\n\ny := 1\n",
+        "ns.rego": "package deckhand_repository.deckhand\n\nallow_github := true\n",
       },
     });
     assert.deepEqual(await sneaky.policies.deny("deny_github", "org/repo", "main", write("work")), [
@@ -1297,6 +1361,28 @@ deny_github contains "deploy runs don't comment" if input.mode == "deploy"
       await sneaky.policies.deny("deny_github", "org/repo", "main", write("brainstorm")),
       [],
     );
+    // Its own mode: both layers in one opa, the repo's allow read from its own library.
+    assert.deepEqual(
+      await sneaky.policies.deny("deny_github", "org/repo", "main", write("plan", true)),
+      ["no rule allows `comment` on `own_pr` for a `plan` run"],
+    );
+    const ownLib = layered(t, {
+      repo: {
+        "lib.rego": "package lib\n\ntrusted := true\n",
+        "own.rego": "package deckhand\n\nimport data.lib\n\nallow_github if lib.trusted\n",
+      },
+    });
+    assert.deepEqual(
+      await ownLib.policies.deny("deny_github", "org/repo", "main", write("plan", true)),
+      [],
+    );
+    // Its compile error is placed in its file, without the namespace.
+    const bad = layered(t, {
+      repo: { "x.rego": "package deckhand\n\nallow_github if data.nope.z(1)\n" },
+    });
+    const [error] = await bad.policies.deny("deny_github", "org/repo", "main", write("plan", true));
+    assert.match(error, /^policy error: x\.rego:3: /);
+    assert.doesNotMatch(error, /deckhand_repository/);
     // A repo's allow rule for a built-in-only decision: a config check error.
     const merging = layered(t, {
       repo: { "merge.rego": "package deckhand\n\nallow_merge := true\n" },

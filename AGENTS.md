@@ -112,8 +112,8 @@ docs/         setup, per-repo config reference, security model, architecture
 - **Policies: a decision is allowed when an allow rule matches and no deny rule does** (a deny
   always wins; no allow, refused; a policy error, refused: `listener/policies.mjs`). The
   operator's layer (Deckhand's `policy/` under the grants folder's `policy/`, by file name) has
-  the allow rules that are the ceiling. A repo's `.deckhand/policy/` is a layer of its own, in
-  an `opa` process of its own: it can only narrow that ceiling (its deny rules apply to every
+  the allow rules that are the ceiling. A repo's `.deckhand/policy/` is a layer of its own, its
+  packages moved under `deckhand_repository` (`namespaced()`): it can only narrow that ceiling (its deny rules apply to every
   run), except for its own modes, which need its allow rules and the operator's. What would widen them is a
   request the operator's grants folder must grant: `mounts` only under a granted root. Hosts
   are the grants folder's only (`default.yaml`, `<owner>/<repo>.yaml`): a repo can't add

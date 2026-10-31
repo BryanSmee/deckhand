@@ -729,7 +729,7 @@ test("deny_fix: a policy error refuses the rebase run too", async (t) => {
     files: { "fix.rego": "package deckhand" },
     failure: {
       code: 0,
-      stdout: JSON.stringify({ result: [{ expressions: [{ value: { deny: [3] } }] }] }),
+      stdout: JSON.stringify({ result: [{ expressions: [{ value: { repo: { deny: [3] } } }] }] }),
     },
   });
   const w = setup({ policies: policy.engine });

@@ -1803,7 +1803,8 @@ GraphQL mutation's field), under its mode's built-in ceiling:
 a deny always wins, and with no allow rule matching it is refused, so an empty or replaced file
 refuses rather than opens, and a new decision starts closed.
 
-They come in **two layers, each evaluated by an `opa` process of its own**:
+They come in **two layers**, evaluated by one `opa` process per decision (as before allow
+rules: a built-in mode pays nothing extra), each in a namespace of its own:
 
 - **The operator's**: Deckhand ships its own in the listener's image
   ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows each
@@ -1819,9 +1820,13 @@ They come in **two layers, each evaluated by an `opa` process of its own**:
   Deckhand's, replaces nothing.
 
 - **A repository can only narrow your ceiling, except for its own modes within it**: its
-  policies run after every built-in gate and in an `opa` of their own, so they can neither
-  define nor read your rules or your libraries, nor break them (a helper or a package of the
-  same name is its own). The grants (`allow_auto_merge` and the rest: settings of yours, not
+  policies run after every built-in gate, and their packages are moved under
+  `deckhand_repository` before `opa` reads them (a module's rules are all in its package, the
+  first statement of its file, after comments; a file whose package isn't there is refused),
+  so they can't define or replace a rule of yours or of your libraries (a helper or a package
+  of the same name is its own). Their `data.` references are moved along, so their own
+  libraries resolve; one written otherwise only reads yours. A compile error in either layer
+  refuses the decision, as any policy error. The grants (`allow_auto_merge` and the rest: settings of yours, not
   rules) and the built-in gates stay what they are, so any repository may have policies, with
   no grant: they never drop one of your refusals, a gate's or a mode's ceiling (a light
   repository mode still writes nothing). If a rule must hold for every repository whatever it
@@ -1834,8 +1839,7 @@ They come in **two layers, each evaluated by an `opa` process of its own**:
   `.deckhand/` is among the files Deckhand trusts, so a pull request that changes a policy is
   never merged by itself.
 - **They run in the listener, isolated**: the pinned `opa` binary of the listener's image
-  (version and sha256 in `listener/Dockerfile`), one process per layer and decision (a
-  repository without policy files costs none of its own), with an empty
+  (version and sha256 in `listener/Dockerfile`), one process per decision, with an empty
   environment, a 2-second limit, and a capabilities file without `opa.runtime` (the
   environment), `http.send`, `net.*` (the network, DNS included), `json.match_schema` and
   `json.verify_schema` (a schema's `$ref` reads a local `file://` path, `allow_net` or not) and

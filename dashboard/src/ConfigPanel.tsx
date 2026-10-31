@@ -11,7 +11,7 @@ import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
 import { ago, plural, type Tone } from "./format";
 import { copyText } from "./logExport";
-import { PolicyConfig, policyTrouble } from "./PolicyConfig";
+import { PolicyConfig, policyTrouble, refusing } from "./PolicyConfig";
 import { RepoBadge } from "./RepoBadge";
 import { type ConfigTab, formatRoute } from "./route";
 import type { Grant, MountRow, Repo, RepoConfig, SettingRow, Source } from "./types";
@@ -216,10 +216,10 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
               aria-current={t.id === tab ? "page" : undefined}
             >
               {t.label}
-              {t.id === "policies" && !!config?.policies.errors.length && (
+              {t.id === "policies" && !!config && refusing(config.policies.errors).length > 0 && (
                 <>
                   {" "}
-                  <Count n={config.policies.errors.length} class={styles.errCount} />
+                  <Count n={refusing(config.policies.errors).length} class={styles.errCount} />
                 </>
               )}
             </a>

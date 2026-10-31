@@ -121,7 +121,8 @@ of its own: its files no longer replace yours or Deckhand's by name (one that di
 default, now only adds its deny rules: move the broadening to your grants folder), and its own
 `modes:` get nothing until it allows them (`allow_github`, `allow_link_branch`,
 `allow_request_review`). Rewrite the policies of repositories with their own modes in the same
-release; their onboarding check and Policies tab say what no longer applies.
+release; their onboarding check and Policies tab say what no longer applies, as they do a
+repository file that doesn't start with its `package` line (after comments only), now refused.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still

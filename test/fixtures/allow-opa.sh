@@ -5,6 +5,6 @@
 case "$1" in
   capabilities) echo '{"builtins":[]}' ;;
   check) exit 0 ;;
-  eval) echo '{"result":[{"expressions":[{"value":{"allow":[true],"deny":[[]]}}]}]}' ;;
+  eval) echo '{"result":[{"expressions":[{"value":{"operator":{"allow":[true],"deny":[[]]},"repo":{"allow":[true],"deny":[[]]}}}]}]}' ;;
   *) exit 2 ;;
 esac

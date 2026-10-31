@@ -1143,7 +1143,10 @@ test("deny_fix: a policy error starts no fix run, the comment says so", async (t
   const broken = policyEngine(t, {
     ref: "trunk",
     files: { "bad.rego": "package deckhand" },
-    failure: { code: 0, stdout: '{"result":[{"expressions":[{"value":{"deny":[[1]]}}]}]}' },
+    failure: {
+      code: 0,
+      stdout: '{"result":[{"expressions":[{"value":{"repo":{"deny":[[1]]}}}]}]}',
+    },
   });
   const s = setup(t, { yaml: FIX_ONLY, policies: broken.engine });
   assert.equal(await s.reviews.fix(s.run, s.posted(HIGH)), null);
