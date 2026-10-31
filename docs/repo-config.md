@@ -1049,7 +1049,9 @@ going on in the issue's current mode), `sender` (a login), `target` (where the c
 (`draft`, `base`, `head`; else `null`). Deckhand's `run.rego` allows every mode on issues, all
 but `brainstorm`, `stop` and `onboarding` elsewhere unless the comment `continues` (the onboarding
 pull request's comments go on in onboarding). With Deckhand's files alone and no repository
-file, the listener decides as `run.rego` would, without `opa` or a GitHub call.
+file, the listener decides as `run.rego` would, without `opa` or reading the comment's issue:
+it only lists the repository's policy folder (kept 10 minutes, and kept when GitHub can't list
+it again).
 
 ### The merge input
 

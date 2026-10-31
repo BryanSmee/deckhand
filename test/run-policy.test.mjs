@@ -496,3 +496,107 @@ test("tasks.mjs accept(): a follow-up waits for the comment before it while the 
     ],
   );
 });
+
+// createTasks() with the policies saying `messages` to every run: the ctx, and the waits cancelled.
+function refusingTasks(messages) {
+  const cancelled = [];
+  const asked = [];
+  const ctx = {
+    config: testConfig({ DEBOUNCE_MS: "0" }),
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    issueModes: new Map(),
+    brainstorms: { get: () => null, end: () => {} },
+    runs: [],
+    running: 0,
+    run: () => {},
+    titles: { set: () => {} },
+    received: () => {},
+    reply: async () => {},
+    answer: async () => {},
+    runner: { hasSession: async () => false },
+    repoSettings: async () => ({ settings, errors: [] }),
+    waits: { cancel: (key) => cancelled.push(key), request: async () => false },
+    policies: { decide: async (rule) => (asked.push(rule), { applied: false, messages }) },
+    github: async () => Response.json({ labels: [], user: { login: "bob" } }),
+  };
+  return { ctx, cancelled, asked, ...createTasks(ctx) };
+}
+
+test("tasks.mjs: a refused trigger comment keeps the issue's wait; a refused waiting comment isn't started", async () => {
+  const payload = (body) => ({
+    action: "created",
+    installation: { id: 7 },
+    repository: { full_name: "Org/Repo", default_branch: "main" },
+    issue: { number: 12, title: "Twelve" },
+    comment: { id: 99, body, user: { login: "alice", type: "User" } },
+    sender: { login: "alice" },
+  });
+  const first = { repo: "Org/Repo", base: "main", trigger: "work", replyTo: 12, kind: "issue" };
+  const refused = refusingTasks(["not today"]);
+  await refused.admit(first, "issue_comment", payload("Deckhand\nShip it."));
+  assert.deepEqual(
+    [refused.asked, refused.cancelled, refused.ctx.tasks.size],
+    [["deny_run"], [], 0],
+  );
+  const allowed = refusingTasks([]);
+  await allowed.admit(first, "issue_comment", payload("Deckhand\nShip it."));
+  assert.deepEqual(allowed.cancelled, ["Org/Repo#12"]);
+  clearTimeout(allowed.ctx.tasks.get("Org/Repo#12").timer);
+  // A comment that waited (/after): refused, resume() says it didn't start (waits.mjs then
+  // settles it as stopped, and says nothing of a start).
+  const waited = itemOf({ trigger: "work", text: "Ship it.", eyes: true });
+  assert.equal(await refused.resume(waited), false);
+  const started = await allowed.resume(itemOf({ trigger: "work", text: "Ship it.", eyes: true }));
+  assert.equal(started, true);
+});
+
+test("Deckhand's defaults alone: GitHub failing to list the repo's policies again keeps its last listing", async (t) => {
+  let clock = 0;
+  let status = 404;
+  const lists = [];
+  const policies = createPolicies({
+    config: {},
+    github: async (repo, method, path) => {
+      if (path.includes("/contents/.deckhand/policy")) lists.push(status);
+      return new Response("{}", { status });
+    },
+    run: async () => assert.fail("no opa"),
+    readOperator: () => new Map(),
+    readBuiltIn: () => builtInPolicies(),
+    tmp: tempDir(t),
+    now: () => clock,
+  });
+  const replies = [];
+  const allowed = createRunPolicy({
+    policies,
+    log: () => {},
+    answer: async (item, text) => replies.push(text),
+  });
+  const work = () => itemOf({ trigger: "work" });
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+  // Past the listing's 10 minutes, GitHub fails: the last listing (none) holds.
+  clock = 11 * 60_000;
+  status = 502;
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), true);
+  assert.deepEqual(lists, [404, 502]);
+  assert.deepEqual(replies, []);
+  // Other decisions don't take a stale listing: they fail closed.
+  await assert.rejects(policies.policiesFor("Org/Repo", "main"), /502/);
+  // A listener that never listed it refuses, saying to post the comment again.
+  const fresh = createRunPolicy({
+    policies: createPolicies({
+      config: {},
+      github: async () => new Response("{}", { status: 502 }),
+      run: async () => ({ code: 2, stdout: "", stderr: "x" }),
+      readOperator: () => new Map(),
+      readBuiltIn: () => builtInPolicies(),
+      tmp: tempDir(t),
+    }),
+    log: () => {},
+    answer: async (item, text) => replies.push(text),
+  });
+  assert.equal(await fresh(work(), "work", "Org/Repo#12"), false);
+  assert.match(replies[0], /policy error: the policies can't be read .*Post the comment again/);
+});

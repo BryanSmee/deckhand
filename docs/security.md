@@ -1867,8 +1867,10 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
   request or discussion it is on) refuses it too, so a broken policy or `opa` stops every run
   people start in that repository (every repository, for yours): the listener's own runs
   (reviews, fix runs) aren't asked. With Deckhand's files alone and no repository file, the
-  listener decides as `run.rego` would, from the comment alone: no `opa`, no GitHub call,
-  nothing to fail. For `merge`, the pull request then waits for
+  listener decides as `run.rego` would, from the comment alone: no `opa`, no read of its issue.
+  It only lists the repository's policy folder, as every decision does, and when GitHub can't
+  list it, it keeps the last listing (a push forgets it): only a listener that never listed it
+  since its start, or since a push, refuses then. For `merge`, the pull request then waits for
   a human, as with any refusal; for `review`, the review is skipped (the log says why); for
   `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
   sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says

@@ -192,6 +192,8 @@ function setup({
     accept: async (item) => {
       w.accepted.push(item);
       if (w.refusing) item.refused = w.refusing;
+      // Its mode, as tasks.mjs accept() says it: none when refused.
+      return w.refusing ? null : (item.modeLine ?? "work");
     },
     boardKeys: () => new Set(board),
     liveKeys: () => new Set(live),
@@ -818,6 +820,52 @@ test("start refused by the policies (allow_run, deny_run): their reply is the an
   const res = await post(w, { action: "start", number: 5 });
   assert.equal(res.status, 403);
   assert.equal(res.body.error ?? res.body.message, w.refusing);
+});
+
+test("refused by the policies: every dashboard action that starts a run answers 403, waits kept", async () => {
+  const refusing = "No `work` run: the policies refuse it: `not today`.";
+  const refused = async (w, res) => {
+    assert.equal(res.status, 403, JSON.stringify(res.body));
+    assert.equal(res.body.error ?? res.body.message, refusing);
+    assert.equal(w.accepted.length, 1);
+  };
+  // Start: the issue's wait stays, the run didn't replace it.
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") } });
+  await post(w, { action: "queue", number: 5, after: 7 });
+  w.refusing = refusing;
+  await refused(w, await post(w, { action: "start", number: 5 }));
+  assert.deepEqual(w.waits.get("org/app#5").blockers, [7]);
+  // Stop.
+  const stopping = setup({
+    issues: { 5: open("Five") },
+    tasks: { "org/app#5": { state: "brainstorm" } },
+  });
+  stopping.refusing = refusing;
+  await refused(stopping, await post(stopping, { action: "stop", number: 5 }));
+  // Rerun.
+  const again = setup({ issues: { 5: open("Five") }, ...failed("org/app#5", { status: "error" }) });
+  again.refusing = refusing;
+  await refused(again, await rerun(again, { runId: "run-5" }));
+  // Inbox.
+  const entry = setup({ settings: INBOX, issues: { 12: open("Ideas"), 13: open("Bugs") } });
+  entry.refusing = refusing;
+  await refused(entry, await sendInbox(entry, { kind: "idea", text: "Dark mode" }));
+  // A run's questions answered.
+  const asked = setup({ issues: { 5: open("Five") }, tasks: { "org/app#5": asking(5, "run") } });
+  asked.refusing = refusing;
+  await refused(asked, await answer(asked, { number: 5, answers: [{ options: [0] }, {}] }));
+  // Review.
+  const reviewing = reviewSetup();
+  reviewing.refusing = refusing;
+  await refused(reviewing, await review(reviewing, { number: 8, action: "review" }));
+  // Analyze: the issue made for it is closed, no analysis to keep.
+  const analysis = setup({ history: HISTORY });
+  analysis.refusing = refusing;
+  await refused(
+    analysis,
+    await analyze(analysis, { count: 1, kinds: ["work"], outcomes: ["error"] }),
+  );
+  assert.ok(analysis.calls.includes("PATCH /repos/org/app/issues/901"), analysis.calls.join("\n"));
 });
 
 test("start in another mode: a /mode line's", async () => {

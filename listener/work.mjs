@@ -445,7 +445,6 @@ export function createWorkApi({
       if (queued) return queued;
       // Done already: it starts now, as "/after" would.
     }
-    waits.cancel(key, `started from the dashboard by @${user}`);
     const why = action === "queue" ? `: #${after} is done already` : "";
     const was = wait && action === "start" ? ` It no longer waits for ${waitsFor(wait)}.` : "";
     item.comment = await comment(
@@ -453,7 +452,9 @@ export function createWorkApi({
       number,
       `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
+    // Its wait goes once it runs: refused by the policies (a 403, after their reply), it stays.
     await queued(item);
+    waits.cancel(key, `started from the dashboard by @${user}`);
     return `#${number} started.`;
   }
 
@@ -561,13 +562,15 @@ export function createWorkApi({
       await waits.hold(item, blockers);
       return;
     }
-    waits.cancel(key, `started from the dashboard by @${user} as part of #${number}`);
     item.comment = await comment(
       repo,
       n,
       `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
     );
-    await accept(item);
+    // Refused by the policies (their reply says why), its wait stays.
+    if (await accept(item)) {
+      waits.cancel(key, `started from the dashboard by @${user} as part of #${number}`);
+    }
   }
 
   // What each issue of `repo` waits for already (waits.mjs), by number.

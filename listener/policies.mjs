@@ -503,25 +503,35 @@ export function createPolicies({
   // The defaults under the operator's: name → text.
   const defaults = () => new Map([...ownDefaults(), ...readOperator()]);
 
-  async function listing(repo, ref, cached) {
+  // `stale`: when GitHub can't list it, the last listing of `ref`, however old (a push forgot
+  // it: forget()), rather than a failure; run-policy.mjs's, so that a GitHub hiccup doesn't
+  // refuse the comments of a repo that had no policy.
+  async function listing(repo, ref, cached, stale = false) {
     const key = repo.toLowerCase();
     const kept = listings.get(key);
     if (cached && kept?.ref === ref && now() - kept.at < LISTING_MS) return kept.listed;
-    const listed = await getJson(
-      github,
-      repo,
-      `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`,
-      [404],
-    );
+    let listed;
+    try {
+      listed = await getJson(
+        github,
+        repo,
+        `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`,
+        [404],
+      );
+    } catch (error) {
+      if (!stale || kept?.ref !== ref) throw error;
+      log(`${repo}: listing its policies: ${error.message ?? error}; the last listing kept`);
+      return kept.listed;
+    }
     if (cached) listings.set(key, { ref, at: now(), listed });
     return listed;
   }
 
   // A repo's policy files on `ref`, [{ name, url, text }]: its listing (`cached`: the default
   // branch's, kept until it moves), then the files not seen yet.
-  async function repoFiles(repo, ref, cached) {
+  async function repoFiles(repo, ref, cached, stale = false) {
     const files = [];
-    const listed = await listing(repo, ref, cached);
+    const listed = await listing(repo, ref, cached, stale);
     if (!Array.isArray(listed)) return files;
     for (const entry of listed) {
       if (entry.type !== "file" || !FILE.test(entry.name)) continue;
@@ -536,14 +546,15 @@ export function createPolicies({
   }
 
   // A repo's policies on `ref`, name → text.
-  async function repoPolicies(repo, ref, { cached = false } = {}) {
-    return new Map((await repoFiles(repo, ref, cached)).map((f) => [f.name, f.text]));
+  async function repoPolicies(repo, ref, { cached = false, stale = false } = {}) {
+    return new Map((await repoFiles(repo, ref, cached, stale)).map((f) => [f.name, f.text]));
   }
 
   // The layers a decision on `repo` evaluates, each name → text: `operator`, Deckhand's policies
   // and the operator's over them by file name; `repo`, the repo's on `ref`. Empty: none.
-  async function policiesFor(repo, ref) {
-    return { operator: defaults(), repo: await repoPolicies(repo, ref, { cached: true }) };
+  // `stale`: listing()'s.
+  async function policiesFor(repo, ref, { stale = false } = {}) {
+    return { operator: defaults(), repo: await repoPolicies(repo, ref, { cached: true, stale }) };
   }
 
   // Whether the operator's layer `files` is Deckhand's own policies only, none of them defining

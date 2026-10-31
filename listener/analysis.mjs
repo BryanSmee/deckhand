@@ -385,8 +385,15 @@ export async function startAnalysis(
     analysis: { runs: runs.map((r) => r.id), count, kinds, outcomes, private: isPrivate },
   });
   await accept(item);
-  // The policies refused it (run-policy.mjs), saying so on the issue: the form's answer too.
-  if (item.refused) refuse(403, item.refused);
+  // The policies refused it (run-policy.mjs), saying so on the issue: the form's answer too, and
+  // the issue made for it closed, no analysis to keep.
+  if (item.refused) {
+    await github(repo, "PATCH", `/repos/${repo}/issues/${issue.number}`, {
+      state: "closed",
+      state_reason: "not_planned",
+    }).catch((error) => log(`${repo}#${issue.number}: closing it: ${error.message ?? error}`));
+    refuse(403, item.refused);
+  }
   return {
     message: `Analysis of ${runs.length} run${runs.length === 1 ? "" : "s"} started on #${issue.number}.`,
     url: issue.html_url,

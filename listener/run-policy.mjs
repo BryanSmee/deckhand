@@ -89,7 +89,8 @@ const ISSUE_ONLY = new Set(["brainstorm", "stop", "onboarding"]);
 
 // What Deckhand's policy/run.rego, alone and with no repo file, says of `item` in `mode`: the
 // refusals, as opa's evaluation would give them (test/run-policy.test.mjs compares both). It
-// reads only the item: no GitHub call, no `opa`, nothing that can fail.
+// reads only the item: no `opa`, no read of the issue or pull request (createRunPolicy() lists
+// the repo's policy folder first, to know it has none).
 export function defaultRun(item, mode) {
   const doc = { mode, target: targetOf(item) };
   // A repo's own mode needs the repo's allow, which a repo without files can't give.
@@ -127,7 +128,9 @@ export function createRunPolicy(ctx, now = Date.now) {
     const target = targetOf(item);
     let layers = null;
     try {
-      layers = await ctx.policies.policiesFor(item.repo, ref);
+      // Its last listing when GitHub can't give one now: a repo without policies stays decided
+      // here, a GitHub hiccup refusing nothing.
+      layers = await ctx.policies.policiesFor(item.repo, ref, { stale: true });
     } catch {
       // decide() below says it, failing closed.
     }
