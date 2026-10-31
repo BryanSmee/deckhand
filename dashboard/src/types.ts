@@ -47,6 +47,8 @@ export interface Run {
   // `review.ci_fix`); null otherwise.
   round?: number | null;
   rounds?: number | null;
+  // Started by the listener from the issue's auto-pickup label; absent otherwise.
+  autoPickup?: boolean;
   // What ran it (listener/agents/): "claude", "codex" or "antigravity"; "claude" also for runs
   // from before agents had names.
   // Sent, not shown (nor are provider, credential, fallback, picked and phase: `auth` says
@@ -199,6 +201,9 @@ export interface Task {
   // order, and doesn't move.
   position?: number;
   startsFirst?: boolean;
+  // Picked by the listener from its auto-pickup label (listener/auto-pickup.mjs): queued so, or
+  // its last run was.
+  autoPickup?: boolean;
   // Its issue or pull request closed: as completed (merged), not planned (closed without
   // merging), or null while open or not known yet (listener/titles.mjs).
   closed: Closed;
@@ -418,6 +423,9 @@ export interface State {
   running: number;
   queued: number;
   maxParallel: number;
+  // AUTO_PICKUP_SLOTS, within maxParallel, and how many auto-picked runs hold them now; absent
+  // while it is off (or from a listener from before it).
+  autoPickup?: { slots: number; running: number };
   previews?: Preview[];
   // Each repo's inbox issues and discussions category, for the repos whose config the
   // listener has read: New request offers those it has (listener/work.mjs

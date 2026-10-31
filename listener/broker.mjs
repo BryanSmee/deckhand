@@ -4,8 +4,8 @@
 // the broker's public keys: the GitHub gateway (github-gateway.mjs), where the egress proxy
 // relays the sandbox's GitHub calls, swaps it for a token limited to the run's repo, which the
 // sandbox never sees; the git gateway (git-gateway.mjs) lets it push the branches it names. The
-// agents' API endpoints (upstream.mjs) take another token, for their own audience, in place of
-// the operator's credential.
+// models service's agent endpoints (../models/) take another token, for their own audience, in
+// place of the operator's credential.
 //
 // A token only works from its own sandbox: its `sandbox` claim is the ID of the run's network
 // (Docker) or of its pod (Kubernetes), and each call's is the runner's answer for its source
@@ -98,18 +98,16 @@ export function createBroker({
   random = () => randomBytes(32).toString("hex"),
 }) {
   // id → { id, repo, push, mode, branches, sandbox, issued, provider, credential, note,
-  // pushed, apiStatus, apiReset, apiError, tokens }: `id`, the run's (its tokens' `jti`),
+  // pushed, tokens }: `id`, the run's (its tokens' `jti`),
   // `sandbox`, the network or pod its tokens are bound to (issue()), `agentToken` and `issued`,
   // its agent's token and its run tokens still valid ({ token, exp, at }), the newest last
-  // (secretsOf()), `provider`, where the listener sends its agent's API
-  // calls (anthropic.mjs; null: nowhere, no credential), `credential`, the one of the
-  // provider's it names (`key` for `claude@anthropic:key`; null: the default one), `note`, a
-  // line in its log (provide()), `pushed`, what the git gateway calls when GitHub took a push
-  // of the run's (watchPushes()), `apiStatus`, the last status that provider answered,
-  // `apiReset`, when a plan's limit it hit resets (anthropic.mjs), and `apiError`, why the last
-  // call the listener refused or the provider failed did (upstream.mjs): what an error reply
-  // adds. `tokens`: the installation tokens the GitHub gateway used for it, which its output
-  // must not publish (runs.mjs).
+  // (secretsOf()), `provider`, where the models service sends its agent's API calls
+  // (../models/anthropic.mjs; null: nowhere, no credential), `credential`, the one of the
+  // provider's it names (`key` for `claude@anthropic:key`; null: the default one), both
+  // claimed by its tokens, `note`, a line in its log (provide()), `pushed`, what the git
+  // gateway calls when GitHub took a push of the run's (watchPushes()). `tokens`: the
+  // installation tokens the GitHub gateway used for it, which its output must not publish
+  // (runs.mjs).
   const runs = new Map();
   // hash(secret) → the same entry, for a run from before tokens (register()'s `secret`).
   const secrets = new Map();
@@ -176,9 +174,6 @@ export function createBroker({
       agentToken,
       provider: null,
       credential: null,
-      apiStatus: null,
-      apiReset: null,
-      apiError: null,
       tokens: new Set(),
     };
     if (Array.isArray(caps)) withCaps(run, caps);
@@ -197,8 +192,9 @@ export function createBroker({
     return runs.get(handle) ?? secrets.get(hash(handle));
   }
 
-  // The provider of the run's agent (agents/), once its settings are read. `note(message)`:
-  // a line in the run's log, for the API calls the listener refused it (upstream.mjs).
+  // The provider of the run's agent (agents/), once its settings are read: before issue(), its
+  // tokens claim it. `note(message)`: a line in the run's log, for the calls the GitHub gateway
+  // or the models service refused it (models-service.mjs consume()).
   // `credential`: the provider's credential the run's entry names, if any (`claude@anthropic:key`).
   function provide(handle, provider, note = null, credential = null) {
     const run = runOf(handle);
@@ -259,6 +255,10 @@ export function createBroker({
       sandbox: run.sandbox,
       shots: run.shots ?? null,
       caps: run.caps,
+      // Its agent's provider and credential (provide()), which its agent token claims: the
+      // models service gives its calls that one alone (../models/runs.mjs).
+      provider: run.provider,
+      credential: run.credential,
     };
   }
 

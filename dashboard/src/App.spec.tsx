@@ -63,6 +63,19 @@ test("the tasks with their titles, the repos in the sidebar, and the first live 
   expect(screen.getByText("1 queued")).toBeTruthy();
 });
 
+test("with slots for auto-pickup: the run count says how many auto-picked runs hold them, and the list marks those tasks", () => {
+  history.replaceState(null, "", "#/tasks");
+  const picked = makeTask({ number: 90, title: "Picked by its label", autoPickup: true });
+  const withAuto = makeState({ running: 3, maxParallel: 4, autoPickup: { slots: 1, running: 1 } }, [
+    picked,
+  ]);
+  render(<Dashboard state={withAuto} error={null} />);
+  expect(screen.getByText("2 + 1 auto of 4 running")).toBeTruthy();
+  expect(screen.getByText("1 queued · 1 slot for auto-pickup")).toBeTruthy();
+  const row = screen.getByRole("button", { name: /Picked by its label/ });
+  expect(within(row).getByText("Auto-pickup")).toBeTruthy();
+});
+
 test("a done task whose pull request is ready shows the ready tone, in the list and open", () => {
   history.replaceState(null, "", `#/?task=${encodeURIComponent("acme/api#131")}`);
   render(<Dashboard state={state} error={null} />);

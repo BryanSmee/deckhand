@@ -57,6 +57,18 @@ export { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER };
 // Where the operator's credentials' fingerprints are kept, and how often a copy reads them.
 const FINGERPRINTS_KEY = "fingerprints";
 const FINGERPRINTS_MS = 10_000;
+// The most sets of the models service's fingerprints kept (one per copy of it, and those it gave
+// before a login's refresh, for a while: listener/models-service.mjs).
+const MAX_SETS = 16;
+
+// The models service's fingerprints (lib/redact.mjs fingerprints()'s, #504), as the orchestrator
+// relays them: redact() takes them among the secrets. Anything else is dropped.
+function printSets(sets) {
+  if (!Array.isArray(sets)) return [];
+  return sets
+    .filter((s) => typeof s?.salt === "string" && Array.isArray(s.values))
+    .slice(-MAX_SETS);
+}
 
 const SANDBOX = ["proxy", "orchestrator"];
 const READERS = ["edge", "orchestrator"];
@@ -288,8 +300,9 @@ export function createGithubService({
     runFrom: (sandbox) => runs.bySandbox(sandbox),
     // The run's tokens are the broker's, redacted by their shape (lib/redact.mjs), and the one
     // the call carries; the operator's credentials, which this service doesn't hold, by the
-    // fingerprints the orchestrator sends (docs/security.md, The GitHub gateway).
-    secrets: () => [],
+    // fingerprints the orchestrator sends (docs/security.md, The GitHub gateway): the models
+    // service's sets here, the others through scrub().
+    secrets: () => sets,
     scrub: (run) => (text) => run.scrubSecret(redactor(text)),
     checkWrite: writeChecks.check,
     checkGraphql: graphqlChecks.check,
@@ -316,12 +329,15 @@ export function createGithubService({
   // The operator's credentials' fingerprints, as the orchestrator last sent them (PUT
   // /fingerprints), read again from the store every FINGERPRINTS_MS: both copies redact by them.
   let redactor = (text) => text;
+  let sets = [];
   let readAt = -Infinity;
   async function fingerprints() {
     if (now() - readAt < FINGERPRINTS_MS) return;
     readAt = now();
     try {
-      redactor = fingerprintRedactor(await store.get(FINGERPRINTS_KEY));
+      const kept = await store.get(FINGERPRINTS_KEY);
+      redactor = fingerprintRedactor(kept);
+      sets = printSets(kept?.sets);
     } catch (error) {
       log(`GitHub service: the operator's credentials' fingerprints (${error.message})`);
     }
@@ -593,13 +609,20 @@ export function createGithubService({
       return sendJson(res, { state: await runs.end(id) });
     }
     if (path === "/fingerprints") {
-      const { salt, prints } = (await readJsonBody(req, 16 * 1024 * 1024)) ?? {};
+      const body = (await readJsonBody(req, 16 * 1024 * 1024)) ?? {};
+      const { salt, prints } = body;
       if (typeof salt !== "string" || !Array.isArray(prints) || prints.length > MAX_PRINTS) {
         throw new Refused(400, "salt, prints?");
       }
-      const kept = { salt, prints: prints.filter((p) => typeof p === "string") };
+      if (body.sets !== undefined && !Array.isArray(body.sets)) throw new Refused(400, "sets?");
+      const kept = {
+        salt,
+        prints: prints.filter((p) => typeof p === "string"),
+        sets: printSets(body.sets),
+      };
       await store.set(FINGERPRINTS_KEY, kept);
       redactor = fingerprintRedactor(kept);
+      sets = kept.sets;
       readAt = now();
       return res.writeHead(204).end();
     }

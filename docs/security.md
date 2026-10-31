@@ -261,10 +261,11 @@ A sandbox holds no credential of the operator's and no GitHub token: it holds **
 (`lib/tokens.mjs`), JWTs the **broker service** (`broker/`, a container of its own, #505)
 signs with an **Ed25519** key that no other service holds. Every service checks their
 signature **offline**, with the broker's public keys alone (`GET /keys`): the
-[GitHub gateway](#the-github-gateway), the git gateway and the agents' API endpoints
-(`listener/upstream.mjs`, through `listener/broker.mjs`) never ask the broker whether a token
-is genuine. The listener also checks that its run is one it still has going, which costs
-nothing there. No HMAC: a service that can check a token can't mint one, so the listener, which
+[GitHub gateway](#the-github-gateway) and the git gateway (through `listener/broker.mjs`), and the
+models service's agent endpoints (`models/upstream.mjs`, through `models/runs.mjs`) never ask the
+broker whether a token is genuine. The listener also checks that its run is one it still has
+going, which costs nothing there; the models service asks the broker whether the run still goes
+(`GET /runs/:id`, every 30 s at most per run). No HMAC: a service that can check a token can't mint one, so the listener, which
 the internet reaches, signs nothing (#492). The checks are strict and hand-written on
 `node:crypto`:
 
@@ -293,8 +294,9 @@ run's first tokens), and no service would take it for another service.
 
 **Claims.** Only what doesn't change during the run, nothing secret: the sandbox may read them,
 to know what it may do. `jti` (the run's id), `repo`, `mode`, `issue`, `fork`, `branches` (what
-it may push), `sandbox` (below), `caps` (its [capabilities](#capabilities), as its start
-decided them) and `ver`, the claims' format
+it may push), `sandbox` (below), `agent` (the provider of the run's agent and the credential of
+its the run names, which the models service gives its calls alone: #504), `caps` (its
+[capabilities](#capabilities), as its start decided them) and `ver`, the claims' format
 (a sandbox outlives a listener update; an unknown version is refused). What changes during a
 run (the issues it created, the comments it posted, the reactions it added, the workflow runs it
 reran) stays with the [github service](#the-github-service), in its store, by the run's id.
@@ -361,8 +363,8 @@ prints the file, so the gh wrapper, git's credential helper, `deckhand-files` an
 `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, the Antigravity CLI's token file)
 is read once, when the agent starts, and can't be renewed under it. So the agent gets a token
 of its own, for `deckhand:agents`, with the same claims and binding, lasting at most 7 days:
-what ends it is the run's end, as its network goes with it. It opens the operator's credential
-for that run's agent's calls alone ([What the API endpoints forward](#what-the-api-endpoints-forward)),
+what ends it is the run's end, as its network goes with it. It opens the operator's credential,
+at the models service, for that run's agent's calls alone ([What the API endpoints forward](#what-the-api-endpoints-forward)),
 and nothing at the gateways.
 
 **The broker unreachable.** Running sandboxes keep working until their token expires, then
@@ -656,12 +658,12 @@ from a sandbox, every service is reached through the proxy, which vouches for th
 (`X-Deckhand-Client`), never directly. Two services share a network only when one calls the
 other, and a service is on no network it doesn't call or isn't called over, but its way out
 when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted hosts).
-`test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's
-`SERVICE_NETWORKS` names each caller's own network, and checks which containers the runner
-joins to a run's network. The broker service and the github service are on none of them (#505,
-#502). Until the agents' endpoints move out of the listener (#504), the listener joins the runs'
-networks too, for the endpoints sandboxes call directly (the agents' APIs; pushes, which it
-relays to the github service when a proxy from before it sends them there).
+`test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's, the
+runner's, the models service's and the github service's `SERVICE_NETWORKS` name each caller's own
+network, and checks which containers the runner joins to a run's network. The broker, the github
+service and the models service are on none of them (#505, #502, #504). The listener still joins
+the runs' networks, for the pushes a proxy from before the github service sends it directly,
+which it relays there.
 
 **The broker's table** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
 the stream and the screenshots it copies; a run's first tokens, which it asks for when the runner
@@ -669,11 +671,25 @@ asks it (their claims are the orchestrator's, never the runner's); the runner th
 and files it copies there; the proxy the sandboxes' calls about their own run. The listener holds
 the orchestrator until it moves out (#506) and calls as it; the runner's endpoints still take the
 orchestrator too (a listener from before the runner service copies the inboxes during an
-update), and so do the sandboxes' (for the calls it relays). Edge, models and the other services
-get their own service tokens there and nothing else.
+update), and so do the sandboxes' (for the calls it relays). The models service asks it whether
+a run still goes, and its agent's provider (`GET /runs/:id`). Edge and the other services get
+their own service tokens there and nothing else.
+
+**The models service's table** (`models/http.mjs` `ROUTES`): the proxy the sandboxes' agent calls
+(`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with the network it vouches they came
+from; the orchestrator the same (a proxy from before the service sends them to the listener,
+which relays them), which credentials it holds (names), their fingerprints, a run's API state
+and the `models` stream. It is on networks of its own with each: `models-proxy`,
+`models-orchestrator`, internal, with fixed subnets it tells them by (`SERVICE_NETWORKS`); and on
+`broker-models` and `runner-models` to the services it calls, and its way out to the agents'
+APIs, `models-out`, with nothing else on it ([The models service](#the-models-service)). Not
+`default`, where its callers are: Docker's DNS answers a name with its address on a network that
+isn't internal first, and a call arriving there names no caller. The networks test checks that a
+service and each of its callers share only the network `SERVICE_NETWORKS` names.
 
 The runner is on one network, `runner`, internal and shared with the listener alone, with a
-fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)).
+fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)),
+and on `runner-models`, the models service's, for the Antigravity login's refresh.
 The policy service (#501), with Docker Compose, is on three others, internal (no way out):
 `policy`, shared with the listener alone, `policy-github`, shared with the github service alone
 (the runs' writes and pushes), and `policy-runner`, shared with the runner alone, which asks
@@ -933,7 +949,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   capability, over REST, and GitHub's refusal of those fields explained, over GraphQL.
   `discussions` stays required: only discussion runs read them (`read:discussions`), and their
   token fails without it, as before. The answer streams back as it comes, with the agents' endpoints' limits
-  (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
+  (`lib/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
   calls in flight per run.
 - **A work run that isn't a fork's gets nothing that would bring a fork's code**: a fork's
   repository, a fork's pull request's head, a commit that isn't its repository's, by git, the
@@ -970,6 +986,62 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   A sandbox can reach GitHub around the gateway through its engine, but only anonymously,
   or with a credential it got elsewhere, which any other allowed host would take too.
 
+### The models service
+
+The operator's agent credentials (Claude, OpenAI and Google keys, a gateway's token, the plans'
+logins) are in one service only, the **models service** (`models/`, #504): its environment, and
+the plans' files in its credentials folder, mounted read only. Not in the listener, the runner,
+the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`).
+
+- **Who calls it.** The egress proxy, with the sandboxes' agent calls, and the listener as the
+  orchestrator, each over a network of its own that only the two of them are on; every call
+  carries the caller's [service token](#service-tokens), checked against one table of what each
+  caller may do (`models/http.mjs` `ROUTES`): the proxy reaches the agents' endpoints alone; the
+  orchestrator also learns which credentials it holds (names only), their fingerprints, a run's
+  API state and its stream. It calls the broker (its tokens, whether a run goes) and the runner
+  (the Antigravity login's refresh), and the agents' APIs: its only way out.
+- **A run's agent token, checked offline.** A sandbox's call arrives with its run's agent token
+  (moved by the proxy into `x-deckhand-run-token`, its own service token in `Authorization`)
+  and the network (or pod) the proxy vouches it came from (`x-deckhand-sandbox`, from the
+  listener's egress policy, as for the broker). The service checks the token with the broker's
+  public keys, for the agents' audience, from that network only, for a run the broker says still
+  goes (asked every 30 s at most, its last answer kept 10 minutes while it is away), and reads
+  its **`agent` claim**: the provider, and the credential of its, the listener chose for the run
+  (`claude@anthropic:key`). A Claude Code run's token gets no OpenAI key, nor the plan when it
+  names the key; a token from before that claim gets the provider the broker's record of its run
+  names (`models/runs.mjs`).
+- **Sandboxes outlive the update.** Their agents keep the base URL they started with, the
+  broker's host (`<broker>/anthropic`, …): the egress proxy sends those paths to the models
+  service, and the hosts it relays for the Antigravity CLI on a plan too (the egress policy says
+  `models: true`). A proxy from before it still sends them to the listener, which relays them
+  on, streaming, vouching for the sandbox as the proxy would (`listener/models-service.mjs`
+  `relay()`). A run from before run tokens, whose sandbox holds a secret instead, gets no agent
+  call any more.
+- **The plans' logins, in its store, sealed.** A refreshed login (the ChatGPT plan's, the
+  Google AI plan's) is kept in the service's store, encrypted with AES-256-GCM under a key only
+  its containers hold (`models.key`, in a volume or Secret of its own, the same for every copy: a
+  login sealed with another key is refused, never written over: `models/logins.mjs`):
+  the store may be Redis, which every service reads (#509). The operator's file is where a login
+  starts, never written: the store's login is used until the file's content changes (a new
+  sign-in). Their refresh tokens are single-use, so one copy refreshes at a time, holding a
+  lease in the store, and the others wait for its result; a refused refresh is saved too, so no
+  copy spends the login again until the file is replaced.
+- **What the listener learns.** Which credentials are set, by name (its settings need them:
+  which agents may run, `FALLBACKS`), and their **fingerprints** for redaction (`GET
+/fingerprints`: a salt, each value's length and salted SHA-256, and the salted SHA-256 of
+  each of its 16-character parts at fixed offsets, with a 32-bit rolling hash of each part that
+  picks the few windows of a run's output worth hashing), never a value. The salt comes from the
+  models service's key: every copy, and every restart, gives the same set. It reads them before it
+  restores any run, and every minute after. It redacts a credential that shows whole in a run's
+  output (whatever `.`, `/`, `=` are next to it), and a run of characters that holds one of its
+  parts, whole: any part of a credential 31 characters long or more (a value cut off in an error
+  message, #242), glued to other characters or not. A shorter part may get through, where the
+  run's own tokens are redacted from 16 characters: the hashes of every 16-character window of a
+  credential would give it back one character at a time; those of fixed parts only give back the
+  few unknown characters of a part that is mostly known (`sk-ant-api03-` and 3 more), and the
+  rest has too many. The credentials never enter a sandbox: this only catches a mistake bringing
+  one back.
+
 ### The Claude credential
 
 Your `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` outlives everything else a sandbox
@@ -978,46 +1050,51 @@ could hold, and works for anyone: **no sandbox gets it**. Runs read text anyone 
 credential in the sandbox's environment could be read by Claude's tools or the repo's setup
 and end up in a public comment.
 
-- A sandbox's Claude Code calls the listener instead of Anthropic (`ANTHROPIC_BASE_URL` set
-  to `<broker>/anthropic`, `listener/anthropic.mjs`), with the run's agent token in the variable
+- A sandbox's Claude Code calls the models service instead of Anthropic (`ANTHROPIC_BASE_URL`
+  set to `<broker>/anthropic`, which the egress proxy sends there: `models/anthropic.mjs`), with
+  the run's agent token in the variable
   your credential would be in, so it keeps its mode (an OAuth token or a gateway's
   `ANTHROPIC_AUTH_TOKEN` as `Authorization: Bearer`, an API key as `x-api-key`; when you set
   several, `ANTHROPIC_AUTH_TOKEN` wins, then the API key, as in Claude Code).
-- The listener refuses an agent token that isn't a live run's, or comes from another sandbox, replaces it with your credential in
-  the same header and forwards the call to Anthropic (or to the listener's own
-  `ANTHROPIC_BASE_URL`, a gateway such as OpenRouter), streaming the answer back. Only the
+- The models service refuses an agent token that isn't a live run's, or comes from another
+  sandbox, or is another agent's, replaces it with your credential in the header it takes and
+  forwards the call to Anthropic (or to the operator's `ANTHROPIC_BASE_URL`, a gateway such as
+  OpenRouter), streaming the answer back. Only the
   operator sets that address: a repository can't, since it would send its code and your
   credential elsewhere. A sandbox never reaches the gateway itself, so it needs no host.
 - So a run's agent token can call the API with your credential while the run lasts, and nothing
   after: what a run copied out of its sandbox can't.
-- The listener redacts your credential and the run's tokens from the sandbox's output
-  before writing the run's log (what the dashboard shows) and from its reply before posting
-  it, as `[redacted]`. The value, or any part of it 16 characters long or more (a value cut off
-  in an error message); a value shorter than that isn't redacted (it would be no credential,
-  and would redact ordinary words), and an encoded or split one gets through, which is why
-  the credential isn't there to begin with. A JWT's header and the `.eyJ` that starts its payload don't count
+- The listener redacts the run's tokens from the sandbox's output before writing the run's log
+  (what the dashboard shows) and from its reply before posting it, as `[redacted]`: the value,
+  or any part of it 16 characters long or more (a value cut off in an error message); a value
+  shorter than that isn't redacted (it would be no credential, and would redact ordinary words),
+  and an encoded or split one gets through. Your credential, which it doesn't hold, it redacts by
+  its fingerprints, whole or a part of 31 characters or more (see
+  [The models service](#the-models-service)): which is why the credential isn't there to begin
+  with. A JWT's header and the `.eyJ` that starts its payload don't count
   towards those 16 characters: every token its issuer signs shares them, so other JWTs in a
   reply stay readable.
-- When the listener can't use an operator's login (a refresh that failed, a file it can't
+- When the models service can't use an operator's login (a refresh that failed, a file it can't
   read), the sandbox's call and the run's reply get a fixed text per kind ("the operator's
   login for Google can't be refreshed right now", "can't be used", or "was refused, and must
-  be signed in again", each followed by "see the listener's log"), never the error itself,
-  which could quote the credential file. The details go to the listener's log, redacted.
+  be signed in again", each followed by "see the models service's log"), never the error
+  itself, which could quote the credential file. The details go to its log, redacted.
 
-Codex's `OPENAI_API_KEY` is kept out the same way (`listener/openai.mjs`): a sandbox's Codex
+Codex's `OPENAI_API_KEY` is kept out the same way (`models/openai.mjs`): a sandbox's Codex
 has `<broker>/openai` as its provider's base URL and the run's agent token as its key, sent as
-`Authorization: Bearer`; the listener checks it, puts your key in its place and forwards the
+`Authorization: Bearer`; the models service checks it, puts your key in its place and forwards the
 call to OpenAI (or the operator's `OPENAI_BASE_URL`), under its base path only: a path with
 `//host`, a scheme or `..` is refused, so the key can't be sent elsewhere, and only Codex's own
 calls go (see [What the API endpoints forward](#what-the-api-endpoints-forward)). Both agents'
 credentials are redacted
 from every run's log and reply, whichever agent ran.
 
-A ChatGPT plan's login (`CODEX_AUTH_FILE`, `listener/chatgpt.mjs`) takes the key's place the
+A ChatGPT plan's login (`CODEX_AUTH_FILE`, `models/chatgpt.mjs`) takes the key's place the
 same way, with more reason: its refresh token is account-wide, single-use and rotated on every
-refresh, so copies in several sandboxes would also spend each other's. The listener holds the
-only copy: it refreshes the access token at `auth.openai.com` (one refresh at a time, for all
-runs), writes the rotated tokens back to the file (`0600`) before using them, and sends the
+refresh, so copies in several sandboxes would also spend each other's. The models service holds
+the only copy: it refreshes the access token at `auth.openai.com` (one refresh at a time, for
+all runs and every copy of the service), keeps the rotated tokens sealed in its store before
+using them (the file is never written), and sends the
 sandboxes' calls to ChatGPT's Codex backend (`chatgpt.com/backend-api/codex`) with the access
 token and the account's `ChatGPT-Account-ID`, headers a sandbox can't set itself. A sandbox
 gets the run's agent token as its key, as with an API key, and nothing of the login. The tokens are
@@ -1029,24 +1106,24 @@ ChatGPT login, Codex calls `chatgpt.com/backend-api/codex/responses` with
 as with a key (`store: false`, streamed), and refreshes at
 `auth.openai.com/oauth/token` 5 minutes before the access token expires. A custom provider
 (the sandbox's `deckhand` one) sends those requests with the run's agent token instead, so the
-listener only has to swap the headers and the base URL; Codex in the sandbox never knows it
+models service only has to swap the headers and the base URL; Codex in the sandbox never knows it
 runs on a plan. Codex's own "external tokens" mode (`chatgptAuthTokens`) only exists in its
 app server, not `codex exec`, and would still put the access token in the sandbox. Check it
 again when you change `CODEX_VERSION`.
 
 ### The Antigravity CLI's login
 
-The Antigravity CLI's `GEMINI_API_KEY` is kept out the same way (`listener/google.mjs`): a
+The Antigravity CLI's `GEMINI_API_KEY` is kept out the same way (`models/google.mjs`): a
 sandbox's `agy` has `<broker>/google` as `GOOGLE_GEMINI_BASE_URL`, `modelProvider: "gemini"`
 in its settings, and the run's agent token as `GEMINI_API_KEY`, sent as `x-goog-api-key`; the
-listener checks it against the broker, puts your key in its place and forwards the call to
+models service checks it, puts your key in its place and forwards the call to
 Google (or the operator's `GEMINI_BASE_URL`), for the model calls `agy` makes under `/v1/` and
 `/v1beta/` only (see [What the API endpoints forward](#what-the-api-endpoints-forward)).
 
-A Google AI plan's login (`AGY_AUTH_FILE`, `listener/antigravity-login.mjs`) is the token file
+A Google AI plan's login (`AGY_AUTH_FILE`, `models/antigravity-login.mjs`) is the token file
 `agy` writes when you sign in: an access token for about an hour, and a refresh token that
 stands for the Google account. Neither enters a sandbox. On a plan, `agy` has no base URL to
-point at the listener, and its calls go to Google directly, so it is kept out another way:
+point at the models service, and its calls go to Google directly, so it is kept out another way:
 
 - **The sandbox's token file holds the run's agent token** as its access token, with an expiry in
   2099 and a placeholder refresh token (`sandbox/agents/antigravity.sh`): `agy` sends the token
@@ -1055,13 +1132,13 @@ point at the listener, and its calls go to Google directly, so it is kept out an
   only (the broker's run says which agent it is), the egress policy marks
   `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` as relayed: the proxy ends the
   sandbox's TLS with Deckhand's CA (see [HTTPS and Deckhand's CA](#https-and-deckhands-ca)),
-  cache on or off, and sends each request to the listener (`RELAY_URL`,
-  `<broker>/relay/<host>/<path>`) instead of the host, never as a tunnel. A path that could
+  cache on or off, and sends each request to the models service
+  (`<MODELS_SERVICE_URL>/relay/<host>/<path>`; a proxy from before it, to the listener's
+  `RELAY_URL`, which relays it on) instead of the host, never as a tunnel. A path that could
   leave `/relay/<host>/` once parsed (`..`, `%2e`, `\`, or not starting with `/`) gets a
-  `400` and never reaches the listener, whose other endpoints (`/egress`) trust the proxy's
-  address. The listener
-  (`listener/google.mjs`) checks the agent token in `Authorization: Bearer`, and that it
-  comes from its own sandbox (the address the proxy names),
+  `400` and never reaches either. The models service
+  (`models/google.mjs`) checks the agent token, and that it comes from its own sandbox (the
+  network the proxy vouches for),
   refuses any other agent's run, puts the plan's access token in its place and sends the call
   on, streaming the answer back. Only the paths `agy` calls go through
   (`daily-cloudcode-pa.googleapis.com/v1internal:*`, `www.googleapis.com/oauth2/v2/userinfo`):
@@ -1071,14 +1148,16 @@ point at the listener, and its calls go to Google directly, so it is kept out an
   account's avatar (`lh3.googleusercontent.com`, a public image address) stay a tunnel, as
   every other host: `agy`'s eligibility check fetches the avatar the userinfo call names and
   stops if it can't (#224). Even if `agy` sent its token there, that token is the run's agent token,
-  which works nowhere but the listener.
-- **The refresh is `agy`'s own**: the listener doesn't reimplement Google's OAuth with a client
-  secret taken from the binary. When the access token is within 5 minutes of its expiry (or
-  Google refused it), the listener runs `agy models` in a short container of the sandbox image
-  (no capabilities, as `node`), on a volume of its own (`<AGY_VOLUME>-login`), outside the runs'
-  networks, with the file's expiry set in the past; it reads back the file `agy` wrote and
-  writes it to `AGY_AUTH_FILE` (`0600`). One refresh at a time, for all runs. The login's tokens
-  are redacted from runs' output like the other credentials.
+  which works nowhere but the models service.
+- **The refresh is `agy`'s own**: the models service doesn't reimplement Google's OAuth with a
+  client secret taken from the binary. When the access token is within 5 minutes of its expiry
+  (or Google refused it), it has the runner run `agy models` (the runner's
+  `POST /logins/antigravity/refresh`, which only the models service may call: it never holds the
+  Docker socket) in a short container of the sandbox image (no capabilities, as `node`), on a
+  volume of its own (`<AGY_VOLUME>-login`), outside the runs' networks, with the login's expiry
+  set in the past; it reads back the file `agy` wrote and keeps it sealed in its store. One
+  refresh at a time, for all runs and every copy of the service. The login's tokens are redacted
+  from runs' output like the other credentials.
 
 What this changes: the proxy reads those two hosts' requests and answers for these runs, as it
 does a cached host's, and the run's agent token, which it sees, is worth what it is elsewhere: this
@@ -1087,9 +1166,10 @@ hosts, through the same proxy. Check the hosts and paths again when you change `
 
 `OPENROUTER_API_KEY`, for runs that fall back to Claude Code through OpenRouter
 (`claude@openrouter` in `FALLBACKS`), is kept out the same way: such a run's Claude Code gets
-the run's agent token as `ANTHROPIC_AUTH_TOKEN`, and the listener's Anthropic endpoint, which the
-broker tells which provider the run is on, sends the call to `OPENROUTER_BASE_URL` with your
-key. A sandbox can't pick its provider: only the listener sets it, from `FALLBACKS`. The key is
+the run's agent token as `ANTHROPIC_AUTH_TOKEN`, and the models service's Anthropic endpoint,
+which the token's `agent` claim tells which provider the run is on, sends the call to
+`OPENROUTER_BASE_URL` with your key. A sandbox can't pick its provider: only the listener sets
+it, from `FALLBACKS`, and the broker signs it into the run's tokens. The key is
 redacted like the others.
 
 ### What the API endpoints forward
@@ -1110,18 +1190,20 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 - Anything else answers `404` in the provider's error shape, never reaching the provider, and
   is a line in the run's log ("Deckhand refused the agent's call …"), redacted like the
   sandbox's output: an agent version that needs another path shows up there. Each call is
-  noted once, and the first 20 only, then one line saying the rest aren't: the listener's own
-  lines are written even past `RUN_LOG_MAX_MB` (see [Output](#output)), so a sandbox looping
+  noted once (by each copy of the models service), and the first 20 only, then one line saying
+  the rest aren't, which the service streams to the listener (its `models` stream): the
+  listener's own lines are written even past `RUN_LOG_MAX_MB` (see [Output](#output)), so a sandbox looping
   on refused calls can't grow its log without end. When a new `CLAUDE_CODE_VERSION`,
   `CODEX_VERSION` or `AGY_VERSION` needs another path, add it to the endpoint's list (`ROUTES`, `GEMINI_ROUTES`,
   `RELAYED_PATHS`).
 - Each endpoint serves its agent's runs only, from the provider the listener gave the run
-  (`broker.provide()`): a Claude Code run's token gets no OpenAI key, and a run without a
-  provider gets no credential at all. A run a restarted listener picks up whose saved record
-  names no provider gets its agent's default one.
-- A run has at most 16 calls in flight through all the endpoints together: the next one
-  answers `429` (agents retry those) until one ends. A call that gets no byte either way for 10
-  minutes is cut off: a stalled provider doesn't hold the listener, which every run shares.
+  (`broker.provide()`, claimed by its tokens): a Claude Code run's token gets no OpenAI key,
+  and a run without a provider gets no credential at all. A run a restarted listener picks up
+  whose saved record names no provider gets its agent's default one.
+- A run has at most 16 calls in flight through all the endpoints of a copy of the models
+  service together (32 with two copies): the next one answers `429` (agents retry those) until
+  one ends. A call that gets no byte either way for 10 minutes is cut off: a stalled provider
+  doesn't hold the service, which every run shares.
 - So a provider's `401` on one of these paths, the only ones a run reaches, is what marks a
   plan's token for a refresh: a sandbox can't force refreshes through some other path.
 
@@ -1689,6 +1771,37 @@ GitHub may send a delivery again (by hand from the App's settings, or after a ti
 side): the listener remembers the last 500 delivery ids (`X-GitHub-Delivery`) and handles
 each once. A restart forgets them.
 
+### Auto-pickup
+
+With `AUTO_PICKUP_SLOTS` set and a repository's `auto_pickup: true`, a label starts a run
+with no comment: the listener picks the open issues labelled `AUTO_PICKUP_LABEL` by itself
+(`listener/auto-pickup.mjs`, [setup.md](setup.md#auto-pickup)). The label stands for an
+allowed user's trigger comment, so the listener checks what it would check of one, and what
+it couldn't see of a label:
+
+- the run is the work of whoever last added the label (the issue's `labeled` events): they
+  must be in `ALLOWED_USERS` and the repository's `users`, read from its default branch right
+  before the start, and not a bot. Anyone with triage access can add a label: one added by
+  someone else starts nothing. When the label's last event the issue lists took it off (a
+  picked run's), the labelling that put it back isn't listed yet: nothing starts until it is,
+  rather than as the earlier labeller's;
+- the label vouches for the issue as it was when it went on. A title changed (a `renamed`
+  event) or a description edited (GraphQL's `userContentEdits`) after it, or in the same
+  second, by anyone but an allowed user, holds the issue: on a public repository, an
+  outsider's issue rewritten once labelled would otherwise run as the labeller's. Every edit
+  since the label counts, not only the last one (an allowed user's typo fix doesn't vouch for
+  an outsider's rewrite before it). The issue's own last edit (`lastEditedAt`, `editor`) is
+  checked too, and a history longer than the 100 edits read holds the issue when the edits
+  not read may be since the label: GitHub doesn't document the order it lists them in, so
+  either end of the history may be the one left out. Edits by the App's own bot count as
+  anyone's (what a run writes may come from any comment): the label has to be added again;
+- the run's policies see it as `trigger: "auto-pickup"` with the labeller as `sender`, and a
+  `deny_run` rule can refuse it;
+- the label comes off before the run is queued, so a run that fails or is refused isn't
+  started again and again: a person adds it back. The App never adds it itself: its own
+  `labeled` event would make it the labeller, which nothing starts for. An issue held by its
+  labelling keeps the label, and the App's comment says why, once per labelling.
+
 ## The dashboard
 
 Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose tool output
@@ -1733,7 +1846,6 @@ holding secrets are the owner's only (`0600`):
 | `store/state.json`       | the store's keys: the queued comments, with their authors                                                                                 |
 | `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes                                                                             |
 | `waits.json`             | comments waiting for other issues (`/after`), with their authors                                                                          |
-| `credentials/`           | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)                                                                             |
 
 The runs' signing key is the broker service's alone, in its own volume (`broker-keys`), with
 its store (`broker-store`: the live runs, the hashes of their tokens, their inbox and files):
@@ -1741,10 +1853,12 @@ neither is the listener's. The App's key is the github service's alone, in its o
 (`github-key`), with its store and git mirrors (`github-data`: the runs' state, the listener's
 reactions, the idempotency keys and their answers).
 
-`credentials/` is a folder on the host, mounted read-write (`./credentials` by default): its
+The agents' credentials are the models service's alone: its environment, and the credentials
+folder, a folder on the host mounted read only there (`./credentials` by default) whose
 `codex-auth.json` and `agy-auth.json` (or the files `CODEX_AUTH_FILE` and `AGY_AUTH_FILE` point
-at) are account-wide logins the listener rewrites at each refresh. Keep it out of git and
-readable by root alone, like `.env`.
+at) are account-wide logins. Keep it out of git and readable by root alone, like `.env`. The
+refreshed logins are in the models service's store (`models-store`), sealed with the key in its
+own volume (`models-keys`): whoever reads both has the plans.
 
 Run logs, which the runner keeps in its own volume ([The runner's data](#the-runners-data)),
 have the operator's credentials, the run's tokens and its GitHub tokens redacted (see
@@ -2422,10 +2536,10 @@ holds to any host, so it holds almost nothing:
   internal host next to the open internet would be a way out for what it serves.
 - **Its volumes are its own**: whatever a page gets it to write there (hooks, settings) never
   runs in a run that has a token or the code.
-- **The agent's credential** works as for any run: the run's agent token reaches the listener's
-  broker port only, on the run's network, and dies with the run.
+- **The agent's credential** works as for any run: the run's agent token reaches the models
+  service only, through the proxy, from the run's network, and dies with the run.
 - **Search** (Claude Code's `WebSearch`, Codex's `web_search`) runs on the provider's side,
-  in the API call through the listener, in every run: it returns results and snippets, not
+  in the API call through the models service, in every run: it returns results and snippets, not
   pages. Reading the pages, docs and PDFs themselves takes a research run.
 
 ## Network
@@ -2488,8 +2602,8 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   never by an address it kept: Docker may give the address to another sandbox, which must not
   get the finished run's hosts.
 - The proxy forwards plain HTTP to the listener's broker (`BROKER_URL`'s origin: the agents'
-  APIs, pushes, the run's files) once the policy, asked about the broker (`broker=1`), allows
-  it: only for a running sandbox or its engine, never a build or an install's own pod, nor
+  APIs, which go on to the models service, pushes, the run's files) once the policy, asked about
+  the broker (`broker=1`), allows it: only for a running sandbox or its engine, never a build or an install's own pod, nor
   anyone else. It names the sandbox it came from (`x-deckhand-client`, replaced whatever the
   sandbox sent), as for a relayed call: the broker turns that address into the ID of the network
   (or pod) it is on, which the run's token is bound to, and believes the header from the
@@ -2678,7 +2792,7 @@ instructions and the dashboard's repository panel all name these files.
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
 credential in `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `ANTHROPIC_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN`, Claude Code sends its API calls to the listener (`ANTHROPIC_BASE_URL`,
+`ANTHROPIC_AUTH_TOKEN`, Claude Code sends its API calls to the broker's host (`ANTHROPIC_BASE_URL`, which the proxy sends to the models service,
 see [The Claude credential](#the-claude-credential)) and nothing else but WebFetch's domain
 check to `api.anthropic.com`:
 

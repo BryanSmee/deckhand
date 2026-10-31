@@ -264,13 +264,14 @@ export function WorkQueue({
   const queuedRows: Row[] = line.map((t) => {
     const mode = t.mode && t.mode !== "work" ? t.mode : null;
     const first = t.startsFirst ? "starts first" : null;
+    const auto = t.autoPickup ? "auto-pickup" : null;
     const can = !blocked && !moving && reorderable(t);
     return {
       key: t.key,
       number: t.number!,
       title: t.title,
       href: taskUrl(t),
-      meta: [`${ordinal(t.position!)} in line`, mode, first].filter(Boolean).join(" · "),
+      meta: [`${ordinal(t.position!)} in line`, mode, first, auto].filter(Boolean).join(" · "),
       queued: true,
       drag: can
         ? (e: DragEvent) => {

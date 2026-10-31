@@ -32,7 +32,7 @@ import {
 } from "./runlog.mjs";
 import { logSent } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
-import { noLongerAllowed } from "./tasks.mjs";
+import { noLongerAllowed, pickedTask } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
 // A run cancelled before its sandbox started (cancel()): finish() ends it as cancelled.
@@ -621,12 +621,16 @@ export function createRuns(ctx) {
     if (live?.cancelled) return "running";
     if (!task.pending.length) return null;
     // Waiting for a slot or their pause, or for a run that is ending: dropped, their 👀 off.
+    // An auto-picked one frees its reserved slot: the next labelled issue, without waiting for
+    // the next sweep.
+    const picked = !task.running && pickedTask(task);
     clearTimeout(task.timer);
     task.ready = false;
     for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
     ctx.saveQueue?.();
     ctx.order?.drop(key);
     log(`${key}: queued comments dropped by ${by}`);
+    if (picked) ctx.autoPickup?.soon();
     return "queued";
   }
 
@@ -737,7 +741,11 @@ export function createRuns(ctx) {
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       removeEmptyShots(live);
       const status = outcome(live.result);
-      const { apiStatus, apiReset } = ctx.broker.runOf(live.id) ?? {};
+      // What its agent's calls last got, from the models service (#504), for an error's
+      // fallback and reply.
+      const api = status === "error" && !live.replied ? await ctx.models.apiOf(live.id) : {};
+      const { apiStatus, apiReset } = api;
+      live.apiError = api.apiError ?? null;
       const fallback =
         status === "error" && !live.replied
           ? nextFallback(config, record, live.result, apiStatus, { apiReset, now: Date.now() })
@@ -790,8 +798,8 @@ export function createRuns(ctx) {
     });
     const footer = replyFooter(live.record, result, hint, live.later);
     const check = status !== "error" && mode === "work" ? await configCheck(task) : null;
-    const apiError = ctx.broker.runOf(live.id)?.apiError;
-    const why = apiError ? `Its last failed API call, through the listener: ${apiError}.\n\n` : "";
+    const apiError = live.apiError;
+    const why = apiError ? `Its last failed API call, through Deckhand: ${apiError}.\n\n` : "";
     const text =
       status !== "error"
         ? `${result.text}\n\n${check ? `${check}\n\n` : ""}${footer}`
@@ -948,6 +956,10 @@ export function createRuns(ctx) {
     // Comments the run could not take go out together, after the usual pause.
     if (task.pending.length) ctx.startLater(task);
     ctx.schedule();
+    // A slot is free: the next labelled issue, without waiting for the next sweep. Any run's
+    // end, not only an auto-picked one's: its repo's own max_parallel may have held a labelled
+    // issue back. soon() batches them, and does nothing without reserved slots.
+    ctx.autoPickup?.soon();
   }
 
   // A work run on an onboarding issue proposes a config for merging: what the listener makes of

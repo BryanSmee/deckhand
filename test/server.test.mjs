@@ -30,6 +30,19 @@ import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs"
 import { createPolicies } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
+import { createBrokerCaller } from "../lib/broker-client.mjs";
+import { networkCallers } from "../lib/service-token.mjs";
+import { keyFolder } from "../lib/tokens.mjs";
+import { AGENT_SECRETS } from "../listener/agents/index.mjs";
+import { createBrokerService as createBrokerClient } from "../listener/broker-service.mjs";
+import {
+  ConfigError,
+  loadConfig,
+  readConfigFile,
+  withCredentialFiles,
+} from "../listener/config.mjs";
+import { loginSeal } from "../models/logins.mjs";
+import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -273,6 +286,16 @@ async function fakeGitHub(files = {}) {
         const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
         return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
+      // The repo's open pull requests, every page (auto-pickup.mjs): none unless the test sets
+      // them.
+      if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&page=")) {
+        return res.end(req.url.endsWith("page=1") ? (files.openPulls ?? "[]") : "[]");
+      }
+      // An issue's events, as a JSON list, when the test sets them.
+      const events = /^\/repos\/org\/repo\/issues\/(\d+)\/events\?/.exec(req.url);
+      if (req.method === "GET" && events && files[`events:${events[1]}`]) {
+        return res.end(req.url.endsWith("page=1") ? files[`events:${events[1]}`] : "[]");
+      }
       // A branch's open pull requests (the git gateway, for a repo granted `workflows`).
       if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
         return res.end("[]");
@@ -408,6 +431,49 @@ function start(env, { script = "listener/server.mjs", also = () => "" } = {}) {
       child.on("exit", (code) => (clearInterval(timer), reject(new Error(`exit ${code}: ${out}`))));
     });
   return { child, until, output: all, own: () => out };
+}
+
+// The models service of a test's listener (../models/server.mjs): its settings, the agents'
+// credentials among them, as the listener's; its service tokens from the broker service, its
+// login refreshes at the runner. Settings it can't start with: an answer of which credentials it
+// holds alone, so that the listener says what is wrong with its own. → { handle, stop }.
+function startModels(settings, { dir, runnerUrl, log }) {
+  const env = withCredentialFiles(settings);
+  const names = { names: credentialNames(env) };
+  const alone = {
+    handle: (req, res) => res.writeHead(200).end(JSON.stringify(names)),
+    stop: () => {},
+  };
+  let config;
+  try {
+    config = loadConfig(env, readConfigFile(env), { service: "models" });
+  } catch (error) {
+    if (error instanceof ConfigError) return alone;
+    throw error;
+  }
+  const caller = createBrokerCaller({
+    url: settings.BROKER_SERVICE_URL,
+    service: "models",
+    audiences: ["broker", "runner"],
+  });
+  const broker = createBrokerClient({ caller });
+  broker.start().catch(() => {});
+  const runner = runnerOf({ urls: runnerUrl, caller });
+  const models = createModels({
+    env,
+    config,
+    store: openStore("memory:"),
+    seal: loginSeal(Buffer.alloc(32, 1)),
+    keys: keyFolder(join(dir, "keys")),
+    broker,
+    caller,
+    refresh: runner.refreshLogin,
+    bound: networkCallers("proxy+orchestrator=127.0.0.0/8"),
+    log,
+  });
+  models.ready();
+  const handle = models.server.listeners("request")[0];
+  return { handle: (req, res) => handle(req, res), stop: () => broker.stop() };
 }
 
 // A port nothing listens on now: the runner's and the broker's, which each needs of the other's
@@ -553,6 +619,15 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       policyService,
       extra: more,
     });
+    // The models service, in process, with the agents' credentials of `settings` (below): the
+    // listener asks it which it holds, and relays the sandboxes' agent calls to it.
+    let modelsOut = "";
+    let models = null;
+    const modelsServer = createServer((req, res) =>
+      models ? models.handle(req, res) : res.writeHead(503).end(),
+    );
+    await new Promise((resolve) => modelsServer.listen(0, "127.0.0.1", resolve));
+    modelsServer.unref();
     // Port 0: the OS picks free ports, which the listener logs. The runner's and the broker's
     // are picked first: the runner calls the one, the sandboxes it starts the other.
     const runnerPort = await freePort();
@@ -579,19 +654,28 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       GRANTS_DIR: join(dir, "grants"),
       POLICY_SERVICE_URL: policyService,
       GITHUB_SERVICE_URL: githubService.url,
+      MODELS_SERVICE_URL: `http://127.0.0.1:${modelsServer.address().port}`,
       ...more,
     };
+    models = startModels(settings, {
+      dir,
+      runnerUrl: settings.RUNNER_URL,
+      log: (line) => (modelsOut += `${line}\n`),
+    });
+    // The listener holds none of them (the models service does): those in `settings` go there.
+    const listenerEnv = (env) =>
+      Object.fromEntries(Object.entries(env).filter(([name]) => !AGENT_SECRETS.includes(name)));
     // The runner: the same settings (those it reads), its own port and store, the broker
     // service's keys, the listener's services port as its orchestrator and github service.
     // Started once the listener's is known.
     let runner = null;
     let runnerSettings = null;
-    const runnerOut = () => runner?.own() ?? "";
+    const runnerOut = () => (runner?.own() ?? "") + modelsOut;
     const startRunner = (more = {}) => {
       runner = start({ ...runnerSettings, ...more }, { script: "runner/server.mjs" });
       return runner.until(/Deckhand runner \(\w+\) on :\d+/);
     };
-    let listener = start(settings, { also: runnerOut });
+    let listener = start(listenerEnv(settings), { also: runnerOut });
     t.after(() => {
       listener.child.kill("SIGKILL");
       runner?.child.kill("SIGKILL");
@@ -601,6 +685,9 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       egress.close();
       brokerService.closeAllConnections();
       brokerService.close();
+      models?.stop();
+      modelsServer.closeAllConnections();
+      modelsServer.close();
       stopSandboxes(dir);
     });
     const servicesPort = Number(
@@ -644,7 +731,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       const { child } = old;
       const exited = new Promise((resolve) => child.on("exit", resolve));
       const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
-      listener = start({ ...settings, ...more }, { also: runnerOut });
+      listener = start(listenerEnv({ ...settings, ...more }), { also: runnerOut });
       await ports(listener);
       return { code, output: old.output() };
     };
@@ -1074,7 +1161,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     assert.match(
       JSON.parse(failed.body).body,
-      /> invalid model selection [^\n]*\n\nIts last failed API call, through the listener: the operator's login for Google can't be refreshed right now: see the listener's log\./,
+      /> invalid model selection [^\n]*\n\nIts last failed API call, through Deckhand: the operator's login for Google can't be refreshed right now: see the models service's log\./,
     );
     rmSync(join(dir, "agy-no-models"));
 
@@ -4333,6 +4420,53 @@ mounts:
       r.path.startsWith("/repos/org/repo/issues?state=open&sort=created"),
     );
     assert.equal(reads.length, 1);
+  });
+
+  test("auto-pickup: an opted-in repo's labelled issue starts by itself, for whoever added the label", async (t) => {
+    const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
+    const labelled = {
+      number: 12,
+      title: "Left in the backlog",
+      state: "open",
+      created_at: "2026-01-01T00:00:00Z",
+      labels: [{ name: "auto-pickup" }],
+      issue_dependencies_summary: { total_blocked_by: 0 },
+    };
+    const { github, listener } = await listen(
+      t,
+      {
+        ".deckhand.yaml": "auto_pickup: true\n",
+        installed: JSON.stringify({ repositories: [{ ...repo, default_branch: "trunk" }] }),
+        backlog: JSON.stringify([labelled]),
+        "events:12": JSON.stringify([
+          {
+            event: "labeled",
+            label: { name: "auto-pickup" },
+            actor: { login: "bob", type: "User" },
+          },
+        ]),
+        // Its description never edited since.
+        "graphql:userContentEdits": JSON.stringify({
+          data: {
+            repository: {
+              issue: { userContentEdits: { pageInfo: { hasPreviousPage: false }, nodes: [] } },
+            },
+          },
+        }),
+      },
+      { MAX_PARALLEL: "2", AUTO_PICKUP_SLOTS: "1" },
+    );
+    // The App's comment, then the label off, then the run, as the dashboard's start queues it.
+    const removed = await github.waitFor(
+      (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/12/labels/auto-pickup",
+    );
+    const posted = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.ok(github.requests.indexOf(posted) < github.requests.indexOf(removed));
+    assert.match(JSON.parse(posted.body).body, /^Picked automatically: .* added by @bob/);
+    await listener.until("org/repo#12: queued (work, issue 12, reply on #12)");
+    await listener.until("Auto-pickup: org/repo#12: started (label added by bob)");
   });
 
   test("Work area plan: a parent's sub-issues start or wait from their links, the parent last", async (t) => {

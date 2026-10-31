@@ -106,8 +106,8 @@ RUN install -d -o node -g node /workspace && install -d /opt/claude-code
 RUN ln -s /usr/local/share/deckhand-agents/codex/install /usr/local/bin/deckhand-install-codex
 RUN install -d -o node -g node /home/node/.codex && install -d /opt/codex
 
-# The Antigravity CLI's: its installer, and the refresh of the listener's plan login, which runs
-# in a container of its own (../listener/antigravity-login.mjs). Its home (/home/node/.gemini,
+# The Antigravity CLI's: its installer, and the refresh of the models service's plan login, which
+# runs in a container of its own (../models/antigravity-login.mjs). Its home (/home/node/.gemini,
 # the issue's session volume, or the login's own) gets its token file, settings, MCP servers
 # and hooks from agents/antigravity.sh on every start; a new volume mounted there takes the
 # owner of this folder, node. /opt/antigravity: root's, like /opt/claude-code.

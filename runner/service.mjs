@@ -110,7 +110,7 @@ function named(value, what) {
   return value;
 }
 
-// The Antigravity login's refresh (../listener/antigravity-login.mjs, the models service's, #504):
+// The Antigravity login's refresh (../models/antigravity-login.mjs, the models service's, #504):
 // `agy models` in a short container of its own on the login's volume, the token file in on
 // stdin (its expiry in the past, so that `agy` refreshes it) and the one `agy` left out. Outside
 // the runs' networks (INSTALL_NETWORK, as the installs): no repo or agent input runs here. Only

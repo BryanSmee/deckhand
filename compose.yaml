@@ -1,9 +1,11 @@
 # What an operator runs: the listener, the runner, the broker service, the github service, the
-# policy service, the egress proxy, and the sandbox image runs start from. Each sandbox sits on an internal network of
+# models service, the policy service, the egress proxy, and the sandbox image runs start from.
+# Each sandbox sits on an internal network of
 # its own, which the runner creates and joins the listener and the egress proxy to: the proxy is
 # their only way out (see docs/security.md). The runner is the only one with the Docker socket,
-# the github service the only one with the GitHub App's key; the broker's, the github service's
-# and the policy service's networks are internal, each shared with its callers alone.
+# the github service the only one with the GitHub App's key, the models service the only one with
+# the agents' credentials; the broker's, the github service's, the models service's and the
+# policy service's networks are internal, each shared with its callers alone.
 #
 #   cp .env.example .env    # then set a Claude credential (and ALLOWED_USERS, or in config.yaml)
 #   cp -r server.example server   # your settings and grants, mounted below: keep it in git
@@ -42,13 +44,15 @@ services:
     ports:
       - "${PORT:-8080}:8080"
     # The broker service signs the runs' tokens: the listener asks it for them as runs start.
-    # Every policy decision goes to the policy service, every GitHub call to the github service:
-    # started first, so that the first ones don't wait.
-    depends_on: [broker, policy, github]
-    # Its own way out (webhooks, the agents' APIs), the broker's network of its own, over which it
-    # calls the broker as the orchestrator (and edge and models), the runner's, the github
-    # service's and the policy service's (docs/security.md#the-services-networks).
-    networks: [default, broker-orchestrator, runner, github-orchestrator, policy]
+    # Every policy decision goes to the policy service, every GitHub call to the github service,
+    # and the listener asks the models service which agents' credentials it holds before it reads
+    # its settings: started first.
+    depends_on: [broker, policy, github, models]
+    # Its own way out (webhooks), the broker's network of its own, over which it calls the broker
+    # as the orchestrator (and edge), the runner's, the github service's, the policy service's and
+    # the models service's (docs/security.md#the-services-networks).
+    networks:
+      [default, broker-orchestrator, runner, github-orchestrator, policy, models-orchestrator]
     # How the runner finds it, to join it to each run's network (its gateways and the agents'
     # endpoints, BROKER_URL below).
     labels:
@@ -64,47 +68,26 @@ services:
       # Optional: only these repos (owner/repo, comma-separated), among those where the App
       # is installed. Empty: all of them.
       ALLOWED_REPOS: ${ALLOWED_REPOS:-}
-      # Claude Code's credential: one of the three (ANTHROPIC_AUTH_TOKEN for a gateway such
-      # as OpenRouter). Never in the file, and never in a sandbox: the listener adds it to the
-      # sandboxes' API calls.
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
-      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
-      # Optional: where those calls go (an API gateway, say). Default: api.anthropic.com.
-      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      # The agents' credentials are the models service's (below): the listener asks it which
+      # it holds, never for their values.
       # Optional, with a gateway: its names for opus, sonnet and haiku.
       ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
       ANTHROPIC_DEFAULT_SONNET_MODEL: ${ANTHROPIC_DEFAULT_SONNET_MODEL:-}
       ANTHROPIC_DEFAULT_HAIKU_MODEL: ${ANTHROPIC_DEFAULT_HAIKU_MODEL:-}
       # Optional: Claude Code's own --fallback-model, when the run's model is overloaded.
       CLAUDE_FALLBACK_MODEL: ${CLAUDE_FALLBACK_MODEL:-}
-      # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
-      # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan), which the listener alone
-      # holds and refreshes: codex-auth.json in the credentials folder below, or this file.
-      CODEX_AUTH_FILE: ${CODEX_AUTH_FILE:-}
-      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       # Optional: the models best, balanced and fast stand for with Codex.
       CODEX_BEST_MODEL: ${CODEX_BEST_MODEL:-}
       CODEX_BALANCED_MODEL: ${CODEX_BALANCED_MODEL:-}
       CODEX_FAST_MODEL: ${CODEX_FAST_MODEL:-}
-      # The Antigravity CLI's Gemini API key (docs/setup.md#antigravity-cli), kept out of
-      # sandboxes the same way.
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      # Or a Google AI plan's login (docs/setup.md#with-a-google-ai-plan), which the listener
-      # alone holds and refreshes: agy-auth.json in the credentials folder below, or this file.
-      AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
-      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-}
       # Optional: the models best, balanced and fast stand for with the Antigravity CLI.
       AGY_BEST_MODEL: ${AGY_BEST_MODEL:-}
       AGY_BALANCED_MODEL: ${AGY_BALANCED_MODEL:-}
       AGY_FAST_MODEL: ${AGY_FAST_MODEL:-}
-      # OpenRouter's key, for claude@openrouter in FALLBACKS (docs/setup.md#fallbacks), and
-      # where a run goes when its provider fails (or fallbacks in config.yaml).
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      # Where a run goes when its provider fails (or fallbacks in config.yaml,
+      # docs/setup.md#fallbacks).
       FALLBACKS: ${FALLBACKS:-}
-      # Optional: OpenRouter's address, and its names for opus, sonnet and haiku.
-      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      # Optional: OpenRouter's names for opus, sonnet and haiku.
       OPENROUTER_OPUS_MODEL: ${OPENROUTER_OPUS_MODEL:-}
       OPENROUTER_SONNET_MODEL: ${OPENROUTER_SONNET_MODEL:-}
       OPENROUTER_HAIKU_MODEL: ${OPENROUTER_HAIKU_MODEL:-}
@@ -127,6 +110,10 @@ services:
       BRAINSTORM_MODEL: ${BRAINSTORM_MODEL:-}
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-}
+      # Slots within MAX_PARALLEL for the issues labelled AUTO_PICKUP_LABEL (auto-pickup), which
+      # the listener starts by itself in the repos that opt in. Empty: 0, off.
+      AUTO_PICKUP_SLOTS: ${AUTO_PICKUP_SLOTS:-}
+      AUTO_PICKUP_LABEL: ${AUTO_PICKUP_LABEL:-}
       # What every sandbox may reach and its limits: grants/default.yaml, below.
       # A container engine for repos granted `docker`: sysbox, podman or auto. Empty: none.
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
@@ -187,6 +174,8 @@ services:
       # The github service, the only one with the GitHub App's key (#502): every GitHub call of
       # the listener's goes there.
       GITHUB_SERVICE_URL: http://github:8080
+      # The models service, which holds the agents' credentials (#504).
+      MODELS_SERVICE_URL: http://models:8080
       # Their only way out: the egress service below (its deckhand.role label), joined the same
       # way.
       EGRESS_PROXY: http://egress:3128
@@ -209,10 +198,6 @@ services:
       # what you grant each repo (hosts, preview hook, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
-      # The plans' logins the listener refreshes and writes back (codex-auth.json,
-      # agy-auth.json), one folder on the host, git-ignored, read-write: you put them there
-      # when you sign in (docs/setup.md#the-credentials-folder).
-      - ${DECKHAND_CREDENTIALS_DIR:-./credentials}:/data/credentials
       # Each mount root you grant, at the same path and read-only: the listener resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro
@@ -233,7 +218,7 @@ services:
       # Who calls, by the network a call arrives on: each caller has one of its own to the
       # broker, whose subnet is fixed below (docs/security.md#service-tokens).
       # The listener is more than one service until #506: each asks as the one it is.
-      SERVICE_NETWORKS: edge+orchestrator+models=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.112/28}
+      SERVICE_NETWORKS: edge+orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
       # Where it publishes its public key, which the policy service and the runner mount read-only.
       SERVICE_KEYS_DIR: /service-keys
     volumes:
@@ -245,7 +230,7 @@ services:
       # Its public key (<kid>.pem), for the policy service and the runner to check service tokens with: nothing
       # secret, and a volume apart from its signing key's.
       - service-keys:/service-keys
-    networks: [broker-orchestrator, broker-proxy, broker-runner, broker-github]
+    networks: [broker-orchestrator, broker-proxy, broker-runner, broker-models, broker-github]
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -264,10 +249,10 @@ services:
     # runner), lets its other calls finish (an image's build), then releases its lease, and lets
     # the preview hooks running end (cut past the grace period). Sandboxes keep running.
     stop_grace_period: 5m
-    # The listener's, its own to the broker service (its tokens, the runs' inboxes and files), and
-    # to the github service (the repos' tarballs), and to the policy service (what the operator's
-    # policies grant a repository).
-    networks: [runner, broker-runner, github-runner, policy-runner]
+    # The listener's, the models service's (the Antigravity login's refresh), its own to the
+    # broker service (its tokens, the runs' inboxes and files), to the github service (the repos'
+    # tarballs), and to the policy service (what the operator's policies grant a repository).
+    networks: [runner, runner-models, broker-runner, github-runner, policy-runner]
     environment:
       # The settings the runner reads too, as the listener does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
@@ -314,8 +299,8 @@ services:
       ORCHESTRATOR_URL: http://listener:8083
       # The github service: the repos' tarballs and blobs, for build contexts and preview hooks.
       GITHUB_SERVICE_URL: http://github:8080
-      # Its callers, the listener's services, on the network they share.
-      SERVICE_NETWORKS: edge+orchestrator+models=${RUNNER_SUBNET:-10.231.250.48/28}
+      # Its callers: the listener's services, on the network they share, and the models service.
+      SERVICE_NETWORKS: edge+orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
       # The broker's public keys, which its callers' service tokens are checked with.
       SERVICE_KEYS_DIR: /service-keys
     volumes:
@@ -359,7 +344,7 @@ services:
       BROKER_SERVICE_URL: http://broker:8081
       POLICY_SERVICE_URL: http://policy:8181
       # Who calls, by the network a call arrives on (docs/security.md#service-tokens).
-      SERVICE_NETWORKS: edge+orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.64/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.80/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.96/28}
+      SERVICE_NETWORKS: edge+orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.144/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
     volumes:
       # The App's key (app.json, from /setup, or handed over by the listener that held it): this
       # volume alone, never the store nor another service's.
@@ -382,6 +367,84 @@ services:
       - github-runner
       - broker-github
       - policy-github
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The only service with the operator's agent credentials (#504, docs/services.md): the
+  # sandboxes' agents call their APIs through it, by the egress proxy, with their run's token in
+  # place of the credential. The plans' logins it refreshes are kept sealed in its store, with a
+  # key of its own. Its way out is the agents' APIs; its other networks are internal, each its
+  # callers' (the proxy, the listener) or its callees' (the broker, the runner).
+  models:
+    build:
+      context: .
+      dockerfile: models/Dockerfile
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-models:${DECKHAND_VERSION:-latest}
+    restart: unless-stopped
+    # Stopping lets the agents' calls in flight finish: one streams for up to 10 minutes
+    # (DRAIN_SECONDS, 600). New ones wait for the next copy meanwhile, 5 minutes at most at the
+    # proxy (docs/services.md, Upgrades without downtime).
+    stop_grace_period: 630s
+    depends_on: [broker]
+    # Its way out to the agents' APIs is a network of its own, not `default`: its callers are on
+    # `default` too, and Docker's DNS would answer `models` with its address there, where it can't
+    # tell them apart (SERVICE_NETWORKS).
+    networks: [models-out, models-proxy, models-orchestrator, broker-models, runner-models]
+    environment:
+      # Claude Code's credential: one of the three (ANTHROPIC_AUTH_TOKEN for a gateway such
+      # as OpenRouter). Never in a file, and never in a sandbox, nor in the listener: this
+      # service adds it to the sandboxes' API calls.
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_AUTH_TOKEN: ${ANTHROPIC_AUTH_TOKEN:-}
+      # Optional: where those calls go (an API gateway, say). Default: api.anthropic.com.
+      ANTHROPIC_BASE_URL: ${ANTHROPIC_BASE_URL:-}
+      # Codex's OpenAI API key (docs/setup.md#codex), kept out of sandboxes the same way.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      # Or a ChatGPT plan's login (docs/setup.md#with-a-chatgpt-plan), which this service alone
+      # holds and refreshes: codex-auth.json in the credentials folder below, or this file.
+      CODEX_AUTH_FILE: ${CODEX_AUTH_FILE:-}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      # The Antigravity CLI's Gemini API key (docs/setup.md#antigravity-cli), kept out of
+      # sandboxes the same way.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      # Or a Google AI plan's login (docs/setup.md#with-a-google-ai-plan), which this service
+      # alone holds and refreshes: agy-auth.json in the credentials folder below, or this file.
+      AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
+      GEMINI_BASE_URL: ${GEMINI_BASE_URL:-}
+      # OpenRouter's key and address, for claude@openrouter in FALLBACKS
+      # (docs/setup.md#fallbacks), which it checks as the listener does.
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
+      FALLBACKS: ${FALLBACKS:-}
+      SANDBOX_AGENT: ${SANDBOX_AGENT:-}
+      BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}
+      RUNNER: ${RUNNER:-}
+      # Wiring, environment only. Who calls, by the network a call arrives on: the egress proxy
+      # (the agents' calls) and the listener (as the orchestrator), each over a network of its
+      # own, whose subnet is fixed below.
+      SERVICE_NETWORKS: proxy=${MODELS_PROXY_SUBNET:-10.231.250.80/28},orchestrator=${MODELS_ORCHESTRATOR_SUBNET:-10.231.250.96/28}
+      # The broker service: its service tokens, whether a run still goes; its public keys,
+      # which its callers' service tokens are checked with.
+      BROKER_SERVICE_URL: http://broker:8081
+      SERVICE_KEYS_DIR: /service-keys
+      # The runner, which runs the Antigravity login's refresh (`agy models`).
+      RUNNER_URL: http://runner:8080
+    volumes:
+      # The key the plans' logins are sealed with in its store (models.key, made on first
+      # start): this volume alone, never the store nor another service's.
+      - models-keys:/keys
+      # Its store: the plans' refreshed logins (sealed), the runs' API state, its stream.
+      - models-store:/data/store
+      # The plans' logins (codex-auth.json, agy-auth.json), one folder on the host, git-ignored,
+      # read only: you put them there when you sign in (docs/setup.md#the-credentials-folder).
+      # The refreshed ones go in the store.
+      - ${DECKHAND_CREDENTIALS_DIR:-./credentials}:/data/credentials:ro
+      # Your configuration, read only, as the listener reads it: config.yaml's base URLs.
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+      # The broker's public keys (nothing secret).
+      - service-keys:/service-keys:ro
+    read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
@@ -442,10 +505,12 @@ services:
       BROKER_SERVICE_URL: http://broker:8081
       # Where their GitHub calls and pushes go, the network they came from vouched for (#502).
       GITHUB_SERVICE_URL: http://github:8080
-    # Its way out (the hosts granted to runs, the listener), and its networks to the broker and
-    # the github service.
-    networks: [default, broker-proxy, github-proxy]
-    depends_on: [broker, github]
+      # Where their agents' API calls go (#504).
+      MODELS_SERVICE_URL: http://models:8080
+    # Its way out (the hosts granted to runs, the listener), and its networks to the broker, the
+    # github service and the models service.
+    networks: [default, broker-proxy, github-proxy, models-proxy]
+    depends_on: [broker, github, models]
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
@@ -491,9 +556,9 @@ services:
     restart: "no"
     network_mode: none
 
-# One network per caller of the broker and of the github service, internal (no way out), with a
-# subnet the service tells its callers apart by (SERVICE_NETWORKS above): set the *_SUBNET
-# variables in .env if these clash with a network of the host's.
+# One network per caller of the broker, of the models service and of the github service,
+# internal (no way out), with a subnet the service tells its callers apart by (SERVICE_NETWORKS
+# above): set the *_SUBNET variables in .env if these clash with a network of the host's.
 networks:
   default:
   broker-orchestrator:
@@ -511,28 +576,56 @@ networks:
     ipam:
       config:
         - subnet: ${BROKER_RUNNER_SUBNET:-10.231.250.32/28}
+  broker-models:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BROKER_MODELS_SUBNET:-10.231.250.64/28}
+  # One network per caller of the models service, the same way (its SERVICE_NETWORKS):
+  # MODELS_PROXY_SUBNET and MODELS_ORCHESTRATOR_SUBNET in .env for others.
+  models-proxy:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${MODELS_PROXY_SUBNET:-10.231.250.80/28}
+  models-orchestrator:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${MODELS_ORCHESTRATOR_SUBNET:-10.231.250.96/28}
+  # The models service's to the runner (the Antigravity login's refresh): RUNNER_MODELS_SUBNET
+  # in .env for another one.
+  runner-models:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
+  # The models service's way out (the agents' APIs), with nothing else on it.
+  models-out:
   # The github service's way to GitHub, alone.
   github-out:
   broker-github:
     internal: true
     ipam:
       config:
-        - subnet: ${BROKER_GITHUB_SUBNET:-10.231.250.112/28}
+        - subnet: ${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
+  # One network per caller of the github service, the same way: GITHUB_ORCHESTRATOR_SUBNET,
+  # GITHUB_PROXY_SUBNET and GITHUB_RUNNER_SUBNET in .env for others.
   github-orchestrator:
     internal: true
     ipam:
       config:
-        - subnet: ${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.64/28}
+        - subnet: ${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28}
   github-proxy:
     internal: true
     ipam:
       config:
-        - subnet: ${GITHUB_PROXY_SUBNET:-10.231.250.80/28}
+        - subnet: ${GITHUB_PROXY_SUBNET:-10.231.250.144/28}
   github-runner:
     internal: true
     ipam:
       config:
-        - subnet: ${GITHUB_RUNNER_SUBNET:-10.231.250.96/28}
+        - subnet: ${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
   # The listener and the policy service alone, the github service and the policy service alone:
   # internal, so the policy service has no way out.
   policy:
@@ -565,7 +658,9 @@ volumes:
   # The GitHub App's key, the github service's alone; its store and git mirrors.
   github-key:
   github-data:
-  # The broker's public keys: the broker service writes them, the policy service and the runner
-  # read them. Not
+  models-keys:
+  models-store:
+  # The broker's public keys: the broker service writes them, the policy service, the runner and
+  # the models service read them. Not
   # the listener's `keys` of before the broker service, which root wrote.
   service-keys:

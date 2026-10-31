@@ -189,6 +189,39 @@ test("a CI fix run that is over: the reviews get its outcome and the reruns it m
   ]);
 });
 
+test("any run's end asks for the next pick at once: an auto-picked one's slot, or its repo's", async (t) => {
+  for (const autoPickup of [true, false]) {
+    const { ctx, runner, task, following } = setup(t, { mode: "work" });
+    let asked = 0;
+    ctx.autoPickup = { soon: () => asked++ };
+    task.live.light = false;
+    if (autoPickup) task.live.record.autoPickup = true;
+    runner.out(result("Done."));
+    await runner.kill();
+    await following;
+    assert.equal(asked, 1);
+  }
+});
+
+test("a queued auto-picked task cancelled frees its reserved slot: the next pick at once", async (t) => {
+  const { ctx, runs, runner, following } = setup(t, { mode: "work" });
+  let asked = 0;
+  ctx.autoPickup = { soon: () => asked++ };
+  const queued = (id, item) => {
+    const task = { repo: "org/repo", id, kind: "issue", number: Number(id), pending: [item] };
+    Object.assign(task, { running: false, ready: true, timer: null, live: null, next: {} });
+    ctx.tasks.set(`org/repo#${id}`, task);
+  };
+  queued("13", { mode: "work", replyTo: 13, autoPickup: true });
+  queued("14", { mode: "work", replyTo: 14 });
+  assert.equal(runs.cancel("org/repo#14", "alice"), "queued");
+  assert.equal(asked, 0);
+  assert.equal(runs.cancel("org/repo#13", "alice"), "queued");
+  assert.equal(asked, 1);
+  await runner.kill();
+  await following;
+});
+
 test("output after the answer postpones its stop", async (t) => {
   const { runner, answers, following } = setup(t, { graceMs: 80 });
   runner.out(result("A first answer."));

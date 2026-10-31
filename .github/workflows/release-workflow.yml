@@ -30,6 +30,8 @@ jobs:
             dockerfile: runner/Dockerfile
           - image: deckhand-egress
             dockerfile: proxy/Dockerfile
+          - image: deckhand-models
+            dockerfile: models/Dockerfile
           - image: deckhand-policy
             dockerfile: policy-service/Dockerfile
           - image: deckhand-sandbox

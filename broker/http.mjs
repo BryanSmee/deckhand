@@ -12,6 +12,7 @@
 //   /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
 //   first tokens (POST /runs/:id/tokens), with the claims it decided;
 //   the runner's: a run's inbox and files (POST /runs/:id/inbox, PUT /runs/:id/files/:name);
+//   the models service's: whether a run still goes, and its agent's provider (GET /runs/:id);
 //   the sandboxes', through the egress proxy (#511), which vouches for the network or pod they
 //   came from (`x-deckhand-sandbox`, as the listener's egress policy told it) and passes their
 //   run token on in `x-deckhand-run-token`: renewal (POST /run/token), the inbox (GET
@@ -41,6 +42,9 @@ const SANDBOX = ["proxy", "orchestrator"];
 
 export const ROUTES = {
   "GET /runs": ["orchestrator"],
+  // Whether a run still goes, and its agent's provider: what the models service checks an agent
+  // token against (#504).
+  "GET /runs/:id": ["models"],
   "PUT /runs/:id": ["orchestrator"],
   "DELETE /runs/:id": ["orchestrator"],
   // A run's first tokens take every claim from the caller (repo, mode, branches): the
@@ -167,6 +171,12 @@ export function createBrokerHandler({
     const id = /^\/runs\/([^/]+)/.exec(path)?.[1];
     const run = id && decoded(id);
     if (req.method === "GET" && path === "/runs") return sendJson(res, { runs: await runs.list() });
+    if (req.method === "GET" && run && path === `/runs/${id}`) {
+      const record = await runs.get(run);
+      if (!record) return sendJson(res, { message: "unknown or finished run" }, 404);
+      const { provider = null, credential = null, sandbox = null } = record;
+      return sendJson(res, { provider, credential, sandbox });
+    }
     if (req.method === "PUT" && run && path === `/runs/${id}`) {
       const body = await readJsonBody(req, BODY_MAX);
       await runs.put(run, runFields(body), body?.issued);

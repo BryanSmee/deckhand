@@ -36,6 +36,7 @@ async function setup(
     decrypt = true,
     relayUrl = null,
     githubService = null,
+    modelsService = null,
     wait = {},
     held = null, // a promise the policy's answers wait for (a listener slow to answer)
   } = {},
@@ -44,7 +45,7 @@ async function setup(
   // Each request's headers, as the host got them.
   const heard = [];
   const contexts = {};
-  for (const host of ["cached.test", "other.test"]) {
+  for (const host of ["cached.test", "other.test", "agent.test"]) {
     contexts[host] = createSecureContext(await publicCa.certFor(host));
   }
   const upstream = createHttpsServer(
@@ -67,9 +68,11 @@ async function setup(
       asked.push(host);
       await held;
       const cache = host === "cached.test";
-      // GitHub's, to the github service, with the run's network the listener vouches for.
+      // GitHub's, to the github service, with the run's network the listener vouches for;
+      // agent.test: an agent's relayed host, whose calls are the models service's.
       const github = host === "github.test";
-      const relay = host === "relayed.test" || github;
+      const models = host === "agent.test";
+      const relay = host === "relayed.test" || github || models;
       return {
         allowed: true,
         private: true,
@@ -77,11 +80,13 @@ async function setup(
         decrypt: (cache && decrypt) || relay,
         relay,
         ...(github && { service: "github", sandbox: "net-1" }),
+        ...(models && { models: true, sandbox: "net-agy" }),
       };
     },
     // A relayed host is never resolved: its requests go to the listener.
     lookup: async (host) => {
-      if (host === "relayed.test" || host === "github.test") throw new Error(`${host} resolved`);
+      if (["relayed.test", "github.test", "agent.test"].includes(host))
+        throw new Error(`${host} resolved`);
       return [{ address: "127.0.0.1", family: 4 }];
     },
     blocked: () => false,
@@ -90,6 +95,7 @@ async function setup(
     upstreamCa,
     relayUrl,
     githubService,
+    modelsService,
     wait,
   });
   const proxyPort = await listening(proxy);
@@ -785,4 +791,38 @@ test("a CA made again while the proxy runs: the next run's certificate, and new 
     new X509Certificate(again.cert).checkIssued(new X509Certificate(authority.certificate())),
     true,
   );
+});
+
+test("an agent's relayed host goes to the models service, with the proxy's token and the network it vouches for", async (t) => {
+  const listener = [];
+  const { url: listenerUrl } = await serve(t, (req, res) => (listener.push(req.url), res.end()));
+  const heard = [];
+  const { url: modelsUrl } = await serve(t, (req, res) => {
+    heard.push({ url: req.url, headers: req.headers });
+    req.resume();
+    req.on("end", () => res.end("data: from models\n\n"));
+  });
+  const { get, authority } = await setup(t, {
+    relayUrl: `${listenerUrl}/relay`,
+    modelsService: { url: modelsUrl, header: async () => "Bearer proxy-service-token" },
+  });
+  const answer = await get("agent.test", "/v1internal:loadCodeAssist", authority.certificate(), {
+    authorization: "Bearer the-agent-token",
+    // Whatever the sandbox says of its network or token is replaced.
+    "x-deckhand-sandbox": "net-other",
+    "x-deckhand-run-token": "forged",
+  });
+  assert.equal(answer.status, 200);
+  assert.equal(answer.body, "data: from models\n\n");
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0].url, "/relay/agent.test/v1internal:loadCodeAssist");
+  assert.equal(heard[0].headers.authorization, "Bearer proxy-service-token");
+  assert.equal(heard[0].headers["x-deckhand-run-token"], "the-agent-token");
+  assert.equal(heard[0].headers["x-deckhand-sandbox"], "net-agy");
+  // Nothing went to the listener.
+  assert.deepEqual(listener, []);
+  // A path that climbs out of /relay/<host>/ never reaches it.
+  const out = await get("agent.test", "/%2e%2e/credentials", authority.certificate());
+  assert.equal(out.status, 400);
+  assert.equal(heard.length, 1);
 });

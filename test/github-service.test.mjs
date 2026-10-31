@@ -16,6 +16,7 @@ import { createGithubClient } from "../github/client.mjs";
 import { createRuns, SLOT_MS, STREAM } from "../github/runs.mjs";
 import { createGithubService, GITHUB_STATUS, mutates } from "../github/service.mjs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
+import { fingerprints } from "../lib/redact.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { allowingPolicies, localBroker, serve, tempDir, testKey } from "./helpers.mjs";
 
@@ -591,6 +592,35 @@ test("the operator's credentials, redacted from a run's writes by their fingerpr
   const { body } = JSON.parse(github.calls.at(-1).body);
   assert.equal(body.includes("operatorkey"), false);
   assert.equal(body, "the key is [redacted], in a word:[redacted].");
+});
+
+// The agents' credentials are the models service's (#504): the orchestrator relays its sets of
+// fingerprints as they are, which the gateway redacts by too.
+test("the models service's fingerprints, relayed by the orchestrator, redact a run's writes too", async (t) => {
+  const { a, b, run, relayed, call, github, store } = await setup(t, {
+    answer: (req) => (req.method === "POST" ? [201, { id: 1 }] : null),
+  });
+  const key = "sk-ant-oat01-modelsheldtokenmodelsheld0123456789";
+  const sent = await call(a, "orchestrator", "PUT", "/fingerprints", {
+    body: { ...fingerprint([]), sets: [fingerprints([key]), { salt: 1 }, "x"] },
+  });
+  assert.equal(sent.status, 204);
+  const kept = await store.get("fingerprints");
+  assert.equal(JSON.stringify(kept).includes(key.slice(0, 16)), false);
+  assert.equal(kept.sets.length, 1, "what isn't a set is dropped");
+  // Through the other copy, which reads them from the store.
+  const r = await run("r1");
+  const wrote = await relayed(b, r, "POST", "/repos/org/repo/issues/12/comments", {
+    body: `the token is ${key}.`,
+  });
+  assert.equal(wrote.status, 201);
+  assert.equal(JSON.parse(github.calls.at(-1).body).body, "the token is [redacted].");
+  // Not a list: refused, what was kept stays.
+  const bad = await call(a, "orchestrator", "PUT", "/fingerprints", {
+    body: { ...fingerprint([]), sets: {} },
+  });
+  assert.equal(bad.status, 400);
+  assert.equal((await store.get("fingerprints")).sets.length, 1);
 });
 
 test("fingerprints: a whole secret found wherever it is; never one of its parts, which would give it away", () => {

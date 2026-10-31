@@ -2,10 +2,10 @@
 
 Where the listener is headed once it is split (#499, its parts #500 to #509). Today the policy
 service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505), the
-runner (#503, [architecture.md](architecture.md#the-runner-service)) and the github service (#502,
-[architecture.md](architecture.md#the-github-service)) are out, beside the egress proxy; the
-rest is still one process, the listener: [architecture.md](architecture.md) describes what runs
-now.
+runner (#503, [architecture.md](architecture.md#the-runner-service)), the github service (#502,
+[architecture.md](architecture.md#the-github-service)) and the models service (#504,
+[The models service](#the-models-service)) are out, beside the egress proxy; the rest is still
+one process, the listener: [architecture.md](architecture.md) describes what runs now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
 reaches holds neither the App's key, the operator's agent credentials nor the Docker socket, and
@@ -47,6 +47,7 @@ flowchart LR
   edge -. run logs .-> runner
   orch --> github
   orch --> policy
+  orch --> models
   runner -. starts .-> sandbox
   sandbox --> proxy
   proxy --> github
@@ -68,7 +69,7 @@ flowchart LR
 | runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator (and the egress policy, which stays with it), models (the plan logins' refresh only), edge (the run's log, for the dashboard)                             |
 | broker       | the tokens' signing key                   | live runs, run files                    | orchestrator (a run's first tokens, for the runner), runner (the runs' inboxes and files), proxy (sandboxes), every service that calls another (its own service token) |
 | github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts and previews)                                                                                |
-| models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                                                                                  |
+| models       | the operator's agent credentials          | plan logins (sealed), runs' API state   | proxy (the agents' calls), orchestrator (which credentials it holds, their fingerprints, a run's API state, its stream)                                                |
 | policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker, runner (the operator's grants for a repository)                                                                                          |
 | proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                                                                                              |
 
@@ -127,14 +128,43 @@ file backend on one node, Redis on several (#509).
 
 Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
 accepting connections, finishes those in flight within its grace period, then exits. The proxy,
-the policy service, the broker (30 s, over an inbox's long poll) and the github service (280 s:
-pushes, clones) use it so far (the policy
-service's and the broker's `/ready` answer 503 from then on, for a readiness probe); the runner
+the policy service, the broker (30 s, over an inbox's long poll), the github service (280 s:
+pushes, clones) and the models service (10 minutes, an agent call's length) use it so far (their
+`/ready` answers 503 from then on, for a readiness probe); the runner
 drains its own way (its output streams first, then its lease, `runner/service.mjs` `stop()`); the
 listener keeps its own handler (`listener/server.mjs`), and each service uses
 `drainOnSigterm()` as it moves out. With two
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.
+
+### The models service
+
+Out of the listener with the operator's agent credentials (#504, `models/`): the agents' API
+endpoints (`models/upstream.mjs`, `anthropic.mjs`, `openai.mjs`, `google.mjs`) and the plans'
+logins (`chatgpt.mjs`, `antigravity-login.mjs`). The egress proxy sends the sandboxes' agent
+calls there, with their agent token and the network it vouches they came from; the service
+checks the token offline with the broker's keys, its `agent` claim (a run of one agent never
+gets another's credentials) and that the run still goes, at the broker. The listener learns
+which credentials it holds by name, at start (its settings need them), and their fingerprints,
+for redaction (security.md, The models service).
+
+**Two copies, both active**, on one store: either takes any call. The plans' refresh tokens are
+single-use, so a refresh is a lease in the store: one copy refreshes, the other waits for its
+result, which is kept sealed with a key only the service holds (`models/logins.mjs`). A run's
+API state (its provider's last status, a plan's reset, its last failure) is in the store too,
+by the run's id, for the orchestrator's reply and fallbacks at the run's end (`GET
+/runs/:id/api`); the calls refused a run go on the `models` stream, a line each in its log. A
+run has 16 calls in flight at most per copy.
+
+**A rolling update with a long drain**: an agent call streams for up to 10 minutes, so a copy
+that stops refuses new calls (`/ready` 503, no new connection) and lets those in flight finish
+within 10 minutes (`DRAIN_SECONDS=600`): no turn is cut (`test/models.test.mjs`). On Kubernetes,
+a Deployment with two replicas, `maxUnavailable: 0`, a readiness probe on `/ready` and
+`terminationGracePeriodSeconds` of 630. With Docker Compose, one copy (above).
+
+**Sandboxes outlive the update**: their agents keep the base URL they started with (the
+broker's host), which the new proxy sends on to the models service; a proxy from before it sends
+them to the listener, which relays them there, streaming (`listener/models-service.mjs`).
 
 ### The policy service
 
@@ -199,7 +229,7 @@ gap stays (above). The Compose test server keeps it.
   passes its changes to those that need them as store streams, acknowledged once handled, so a
   handover loses none. The broker streams run starts, ends and progress; edge, verified events; the
   orchestrator, task updates for the dashboard; the runner, run events (started, ended, exit code;
-  logs go to the store's blobs); models, the plans' usage for edge.
+  logs go to the store's blobs); models, the agents' calls it refused each run, for its log.
 - **Secrets never go in the store** but encrypted by their own service, with a key only it
   holds: the plan logins the models service refreshes, for example (#504). The App's key, the
   signing key and the agents' credentials stay in their service's own secret or volume, never in

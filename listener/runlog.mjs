@@ -270,6 +270,9 @@ export function newRecord(
     // A review fix run's round, of how many the repo's `review.fix` allows (reviews.mjs).
     round,
     rounds,
+    // Started by the listener from the issue's auto-pickup label (auto-pickup.mjs): it holds
+    // one of AUTO_PICKUP_SLOTS. Only on those runs.
+    ...(items.some((i) => i.autoPickup) && { autoPickup: true }),
     // What it was asked to act on, kept in its log's first line: a run that fails can run
     // again with it, after a restart too (the dashboard's Rerun, work.mjs).
     items: items.map(({ id, kind, number, trigger, modeLine, text }) => ({

@@ -11,10 +11,13 @@ import {
   entryName,
   entryOf,
 } from "./agents/index.mjs";
-import { credentialName } from "./anthropic.mjs";
 import { hostProblem } from "./egress.mjs";
-import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
-import { OPENAI_CREDENTIALS } from "./openai.mjs";
+import {
+  credentialName,
+  GEMINI_URL,
+  GOOGLE_CREDENTIALS,
+  OPENAI_CREDENTIALS,
+} from "./agents/credentials.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
 import { urlProblem } from "../lib/service-client.mjs";
@@ -135,8 +138,8 @@ export const SETTINGS = {
   OPENAI_BASE_URL: { default: "https://api.openai.com/v1", parse: apiUrl },
   // What best, balanced and fast mean to Codex, when not its built-in models.
   ...tierSettings("CODEX", TIERS),
-  // The Antigravity CLI's, with a Gemini API key or a Google AI plan's login that the listener
-  // holds (agents/antigravity.mjs, google.mjs, antigravity-login.mjs), and what best, balanced
+  // The Antigravity CLI's, with a Gemini API key or a Google AI plan's login that the models
+  // service holds (agents/antigravity.mjs, ../models/google.mjs, ../models/antigravity-login.mjs), and what best, balanced
   // and fast mean to it.
   AGY_VERSION: { default: AGY_DEFAULT_VERSION },
   // Its tarballs' sha256 by architecture, "x64:<hex>,arm64:<hex>" (one will do): the default
@@ -159,6 +162,11 @@ export const SETTINGS = {
   SANDBOX_FAST_MODE: { default: false, parse: fastModeSetting },
   BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
+  // Slots within MAX_PARALLEL kept for the open issues labelled AUTO_PICKUP_LABEL, which the
+  // listener starts by itself, oldest first, in the repos whose `auto_pickup` opts in
+  // (auto-pickup.mjs). 0: off.
+  AUTO_PICKUP_SLOTS: { default: 0, parse: whole("a whole number of sandboxes (0: off)") },
+  AUTO_PICKUP_LABEL: { default: "auto-pickup" },
   // Where sandboxes run (runner/index.mjs): the host's Docker, or pods of a Kubernetes cluster.
   RUNNER: { default: "docker", parse: runnerSetting },
   // The Kubernetes runner's (runner/kubernetes.mjs): its namespace, which holds the listener's
@@ -276,9 +284,9 @@ export function readConfigFile(env, read) {
   });
 }
 
-// The plans' logins the listener holds and refreshes, at their fixed names in the credentials
-// folder (compose.yaml mounts DECKHAND_CREDENTIALS_DIR there, read-write): one present turns
-// that login on. Its variable, when set, wins.
+// The plans' logins the models service holds and refreshes, at their fixed names in its
+// credentials folder (compose.yaml mounts DECKHAND_CREDENTIALS_DIR there, read only): one present
+// turns that login on. Its variable, when set, wins.
 export const CREDENTIAL_FILES = {
   CODEX_AUTH_FILE: "codex-auth.json",
   AGY_AUTH_FILE: "agy-auth.json",
@@ -293,6 +301,29 @@ export function withCredentialFiles(env, exists = existsSync) {
     if (!env[name] && exists(join(dir, file))) found[name] = join(dir, file);
   }
   return Object.keys(found).length ? { ...env, ...found } : env;
+}
+
+// The broker service's URL (BROKER_SERVICE_URL) and the models service's (MODELS_SERVICE_URL,
+// its copies comma-separated): wiring, environment only, which the listener needs before its
+// settings, to learn which agents' credentials the models service holds.
+export const brokerServiceUrl = (env) =>
+  serviceUrls(env.BROKER_SERVICE_URL || "http://broker:8081", "BROKER_SERVICE_URL").replace(
+    /\/$/,
+    "",
+  );
+export const modelsServiceUrl = (env) =>
+  serviceUrls(env.MODELS_SERVICE_URL || "http://models:8080", "MODELS_SERVICE_URL");
+
+// What the listener's settings read of the agents' credentials (#504): `env` without any of
+// their values, and with each of `names` (those the models service holds) set to a placeholder.
+// Which agents and fallbacks may run, and which credential runs take, are decided from it as
+// before; the values stay in the models service.
+export const HELD = "(held by the models service)";
+export function withModelCredentials(env, names) {
+  const out = { ...env };
+  for (const name of AGENT_SECRETS) delete out[name];
+  for (const name of names) if (AGENT_SECRETS.includes(name)) out[name] = HELD;
+  return out;
 }
 
 // The listener's ports, each its own (0: one the OS picks, in the tests). POLICY_PORT came
@@ -321,8 +352,9 @@ function serviceUrls(value, name) {
 
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
 // `service`: "runner" for the runner service's (../runner/server.mjs), "github" for the github
-// service's (../github/server.mjs), which start no run of their own: ALLOWED_USERS is the
-// listener's to require, and SERVICE_NETWORKS theirs to read.
+// service's (../github/server.mjs), "models" for the models service's (../models/server.mjs),
+// which start no run of their own: ALLOWED_USERS and the agents' credentials are the listener's
+// to require, and SERVICE_NETWORKS theirs to read.
 export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
   const listener = service === "listener";
   const settings = listener ? SETTINGS : RUNNER_SETTINGS;
@@ -330,6 +362,7 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
   requiredSettings(env, from, { users: listener });
   const s = readSettings(env, from, settings);
   registryCredentials(s);
+  pickupSlots(s);
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   const policyPort = wholeNumber(env.POLICY_PORT, 8082, "POLICY_PORT", "a port");
@@ -361,7 +394,9 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
     // The broker service (../broker/, #505), which signs the runs' tokens: where the listener
     // asks for them, and for its own service tokens. On Kubernetes, the pod's token projected
     // for it, which proves who calls.
-    brokerServiceUrl: (env.BROKER_SERVICE_URL || "http://broker:8081").replace(/\/$/, ""),
+    brokerServiceUrl: brokerServiceUrl(env),
+    // The models service (../models/, #504), which alone holds the agents' credentials.
+    modelsServiceUrl: modelsServiceUrl(env),
     serviceAccountTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
     // The github service (../github/, #502), the only one with the GitHub App's key: the
     // listener's GitHub calls go there, and its own relays of sandboxes' calls.
@@ -371,8 +406,8 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
     ),
     // The policy service, which evaluates every policy decision (../policy-service/, #501).
     policyServiceUrl: (env.POLICY_SERVICE_URL || "http://policy:8181").replace(/\/$/, ""),
-    // Which variable holds the operator's Claude credential (anthropic.mjs): the value stays
-    // in the environment, read by the listener's Anthropic endpoint only.
+    // Which variable holds the operator's Claude credential (agents/credentials.mjs): the value
+    // is the models service's alone (../models/anthropic.mjs).
     claudeCredential: credentialName(env),
     // The credentials entries can name (`claude@anthropic:key`) that the operator set, and the
     // one runs take without a name (null: another, a gateway's token).
@@ -382,12 +417,13 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
     claudeFallbackModel: s.CLAUDE_FALLBACK_MODEL,
     openrouterUrl: s.OPENROUTER_BASE_URL,
     openrouterAliases: aliasesFrom(s, "OPENROUTER", CLAUDE_TIERS),
-    // Without a key, a ChatGPT plan's login, which the listener holds and refreshes (chatgpt.mjs).
+    // Without a key, a ChatGPT plan's login, which the models service holds and refreshes
+    // (../models/chatgpt.mjs).
     openaiCredential: OPENAI_CREDENTIALS.find((name) => env[name]) ?? null,
     openaiUrl: s.OPENAI_BASE_URL,
     codexModels: aliasesFrom(s, "CODEX", TIERS),
     // The Antigravity CLI's: a Gemini API key, else a Google AI plan's login, which the
-    // listener holds and refreshes (antigravity-login.mjs).
+    // models service holds and refreshes (../models/antigravity-login.mjs).
     agyCredential: GOOGLE_CREDENTIALS.find((name) => env[name]) ?? null,
     geminiUrl: s.GEMINI_BASE_URL,
     agyModels: aliasesFrom(s, "AGY", TIERS),
@@ -436,7 +472,8 @@ function sandboxConfig(env, s) {
     agyVolume: s.AGY_VOLUME,
     agyVersion: s.AGY_VERSION,
     agySha256: s.AGY_SHA256,
-    // Where the listener refreshes the plan's login with `agy` itself (antigravity-login.mjs).
+    // Where the runner refreshes the plan's login with `agy` itself, for the models service
+    // (../models/antigravity-login.mjs).
     agyLoginVolume: `${s.AGY_VOLUME}-login`,
     runner: s.RUNNER,
     kubernetes: {
@@ -454,6 +491,8 @@ function sandboxConfig(env, s) {
       agentSize: s.KUBERNETES_AGENT_SIZE,
     },
     maxParallel: s.MAX_PARALLEL,
+    autoPickupSlots: s.AUTO_PICKUP_SLOTS,
+    autoPickupLabel: s.AUTO_PICKUP_LABEL,
     subnets: s.SANDBOX_SUBNETS,
     // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
     limits: DEFAULT_LIMITS,
@@ -481,6 +520,16 @@ function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(
       "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/setup.md, Repo images on Kubernetes)",
+    );
+  }
+}
+
+// The reserved slots leave at least one to the runs people start: all of them reserved, a
+// trigger comment would wait for every labelled issue to be picked first.
+function pickupSlots(s) {
+  if (s.AUTO_PICKUP_SLOTS && s.AUTO_PICKUP_SLOTS >= s.MAX_PARALLEL) {
+    throw new ConfigError(
+      `AUTO_PICKUP_SLOTS (${s.AUTO_PICKUP_SLOTS}) must be below MAX_PARALLEL (${s.MAX_PARALLEL}): the reserved slots come out of it`,
     );
   }
 }
@@ -718,8 +767,8 @@ function agentSetting(text, { label, env, known = false }) {
   return agent;
 }
 
-// The runner's: an agent's credential is the listener's to require, as the runner never holds
-// it (config.yaml, which both read, may pick one).
+// The runner's and the models service's: an agent's credential is the listener's to require
+// (config.yaml, which they all read, may pick one).
 const knownAgent = (text, { label }) => agentSetting(text, { label, env: {}, known: true });
 const RUNNER_SETTINGS = {
   ...SETTINGS,

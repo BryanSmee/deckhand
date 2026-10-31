@@ -1,6 +1,6 @@
 // Claude Code, the agent behind the seam (index.mjs): what Deckhand needs to install it, run
 // it and read it. Its sandbox half is ../../sandbox/agents/claude.sh.
-import { CREDENTIALS, NAMED } from "../anthropic.mjs";
+import { CREDENTIALS, NAMED } from "./credentials.mjs";
 import { cutOutput, EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers (`/model best`) → Claude Code's aliases, which the operator can point

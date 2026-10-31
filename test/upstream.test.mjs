@@ -1,16 +1,11 @@
-// What every API endpoint shares (upstream.mjs): a cap on each run's calls in flight, a
+// What every API endpoint of the models service shares (models/upstream.mjs, lib/upstream.mjs): a cap on each run's calls in flight, a
 // provider that stops sending cut off, and refused calls noted a bounded number of times.
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import {
-  baseOf,
-  createApiProxy,
-  forward,
-  MAX_IN_FLIGHT,
-  MAX_NOTED,
-} from "../listener/upstream.mjs";
+import { baseOf, createApiProxy, MAX_IN_FLIGHT, MAX_NOTED } from "../models/upstream.mjs";
+import { forward } from "../lib/upstream.mjs";
 import { sandboxAt, serve } from "./helpers.mjs";
 
 // A provider that answers each call's headers and a first event, then holds the rest until
@@ -58,7 +53,7 @@ async function proxyTo(t, upstream, options = {}) {
   const broker = createBroker({ sentFrom: sandboxAt() });
   const logs = [];
   const proxy = createApiProxy({
-    broker,
+    runs: broker,
     pathRe: /^\/api\/([a-z]+)$/,
     routes: [["POST", /^call$/]],
     errorShape: {
