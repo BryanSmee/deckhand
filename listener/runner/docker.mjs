@@ -7,7 +7,9 @@
 //   list()               this deployment's sandboxes, running or exited: [{ name, run, running }];
 //                        throws when Docker can't tell (rather than "none")
 //   state(name)          "running", "exited"… or null when there is no such sandbox
-//   follow(name, opts)   its output, line by line, until it exits; `skip` what was already read
+//   follow(name, opts)   its output, line by line, until it exits; `skip` what was already read,
+//                        `signal` ends it early
+//   exitCode(name)       its exit code once it exited, or null
 //   send(run, text, agent)  a message for the agent (a comment that arrived mid-run)
 //   close(run)           no more messages: the agent exits once it has answered (or is
 //                        stopped if it stays silent after that, runs.mjs linger())
@@ -41,6 +43,7 @@ import { spawn as nodeSpawn } from "node:child_process";
 import { agentFor } from "../agents/index.mjs";
 import {
   checked,
+  containerLabels,
   envArgs,
   hardeningArgs,
   labelArgs,
@@ -59,6 +62,24 @@ import { createEngines } from "./volumes.mjs";
 export { CLOSE } from "./inbox.mjs";
 export { LINE_CUT, MAX_LINE, unstamped } from "./lines.mjs";
 export { aliasOf } from "./networks.mjs";
+
+// The docker CLI's environment for a sandbox's start: the runner's own, with the sandbox's
+// values (`-e NAME` reads them from it), but never one that changes what the CLI or its loader
+// does (the runner's own, or none): the spec's names are checked too (runner/spec-check.mjs).
+const OWN = /^(LD_|DOCKER_|BUILDKIT_|BUILDX_|KUBE|GCONV_|MALLOC_|SSL_CERT_|GODEBUG$|GOTRACEBACK$)/;
+const OWN_NAMES = ["PATH", "HOME", "SHELL", "ENV", "BASH_ENV", "IFS", "TMPDIR", "NODE_OPTIONS"];
+// Whether `name` is one of those: the one list, which the runner's spec check refuses too
+// (../../runner/spec-check.mjs).
+export const cliName = (name) => OWN.test(name) || OWN_NAMES.includes(name);
+export function cliEnv(values, own = process.env) {
+  const env = { ...own, ...values };
+  for (const name of Object.keys(env)) {
+    if (!cliName(name)) continue;
+    if (name in own) env[name] = own[name];
+    else delete env[name];
+  }
+  return env;
+}
 
 // How long a cancelled run's sandbox has between SIGTERM and SIGKILL.
 const KILL_GRACE_S = 10;
@@ -111,21 +132,27 @@ export function createDockerRunner({
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
   // folder (DECKHAND_CA, where the sandbox fetches it); `digest`: a run analysis's digest of
-  // past runs (analysis.mjs), there too (TASK_DIGEST). → { engine: { backend, volume, cached } }
-  // when it has one.
+  // past runs (analysis.mjs), there too (TASK_DIGEST). `recheck()`: checks the spec again (the
+  // runner's spec-check.mjs) right before `docker run`, after the waits for the tokens and the
+  // engine, so that a host path swapped for a symlink meanwhile isn't mounted; throws to refuse.
+  // → { engine: { backend, volume, cached } } when it has one.
   async function start(spec) {
     const { run, name, image, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
+    const { recheck = () => {} } = spec;
     const args = sandboxArgs(spec);
     await inbox.write(run, ca, digest);
+    // Its own last: a spec's labels never make a sandbox another deployment's or another run's.
     const all = {
+      ...labels,
       "deckhand.owner": config.prefix,
       "deckhand.run": run,
-      ...labels,
     };
     starting.add(run);
     let started = null;
+    // Whether this start made its network: one it didn't (its name taken) isn't its to remove.
+    let made = false;
     try {
-      await networks.create(run);
+      await networks.create(run, { onCreated: () => (made = true) });
       // The run's tokens, bound to its network's ID (../sandbox-spec.mjs tokenEnv()). Unset
       // values stay unset in the sandbox, as with `-e NAME` and no NAME.
       const bound = tokens ? await tokens(await networks.idOf(run)) : {};
@@ -140,9 +167,10 @@ export function createDockerRunner({
         ...(started ? engineEnv(started.backend) : {}),
         ...inbox.env(config.brokerUrl, ca, digest),
       };
+      await recheck();
       checked(
         await docker(runArgs({ run, name, image, labels: all, env, engineVars, args }), {
-          env: { ...process.env, ...env },
+          env: cliEnv(env),
         }),
         "the sandbox didn't start",
       );
@@ -150,7 +178,7 @@ export function createDockerRunner({
       networks.forget();
     } catch (error) {
       if (engine) await engines.remove(name, run);
-      await networks.remove(run);
+      if (made) await networks.remove(run);
       throw error;
     } finally {
       starting.delete(run);
@@ -212,11 +240,17 @@ export function createDockerRunner({
   // handler gets the line and when Docker says it was written (ms; null without a stamp):
   // Docker's time, so a line read again after a restart keeps its own. `onCaughtUp()`: once,
   // when both streams are past the lines skipped (at once with none), before the next line.
-  function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {} }) {
+  // `signal`: the caller is gone (the runner service's, ../../runner/service.mjs), `docker logs` ends.
+  function follow(
+    name,
+    { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {}, signal },
+  ) {
     return new Promise((resolve) => {
       const child = spawn("docker", ["logs", "--follow", "--timestamps", name], {
         stdio: ["ignore", "pipe", "pipe"],
       });
+      if (signal?.aborted) child.kill();
+      signal?.addEventListener("abort", () => child.kill(), { once: true });
       // Whole lines, by bytes (lines.mjs): a character split between two chunks isn't
       // mangled. A handler that throws (its log's disk full, say) loses that line, not the
       // listener.
@@ -253,6 +287,12 @@ export function createDockerRunner({
     });
   }
 
+  // Its exit code once it exited, or null (running, gone): the runner's run events.
+  async function exitCode(name) {
+    const { code, out } = await docker(["inspect", "--format", "{{.State.ExitCode}}", name]);
+    return code === 0 && /^-?\d+$/.test(out) ? Number(out) : null;
+  }
+
   async function wait(name) {
     await docker(["wait", name]);
   }
@@ -262,22 +302,17 @@ export function createDockerRunner({
   }
 
   // Without `run` (a leftover sandbox), its network is the one its label names.
+  // Only a sandbox of this deployment's (its labels) and that run's: never a container of the
+  // host's that has the name. Its engine and network check theirs too.
   async function remove(name, run) {
-    const net = run ?? (await runOf(name));
-    await docker(["rm", "--force", name]);
+    const labels = await containerLabels(docker, name);
+    const ours = labels?.owner === config.prefix && labels.run && (!run || labels.run === run);
+    if (labels && !ours) log(`Not removing ${name}: not a sandbox of this deployment's`);
+    const net = run ?? (ours ? labels.run : null);
+    if (ours) await docker(["rm", "--force", name]);
     await engines.remove(name, net);
     if (net) await networks.remove(net);
     if (run) inbox.remove(run);
-  }
-
-  async function runOf(name) {
-    const { code, out } = await docker([
-      "inspect",
-      "--format",
-      '{{index .Config.Labels "deckhand.run"}}',
-      name,
-    ]);
-    return code === 0 && out ? out : null;
   }
 
   // The agent's session volume (its `session`), kept by the issue's runs.
@@ -289,6 +324,7 @@ export function createDockerRunner({
     start,
     list,
     state,
+    exitCode,
     follow,
     send: inbox.send,
     close: inbox.close,

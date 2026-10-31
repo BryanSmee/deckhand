@@ -1,5 +1,5 @@
 // The Antigravity CLI's plan login, held by the listener: refreshed by `agy` itself in a short
-// container (a fake docker here), once for concurrent calls, re-read when replaced, and a
+// container the runner starts (a fake docker here), once for concurrent calls, re-read when replaced, and a
 // refused refresh says to sign in again. And its endpoint (google.mjs): the run's secret in,
 // the plan's access token out, on the paths `agy` calls only.
 import assert from "node:assert/strict";
@@ -8,6 +8,7 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { createAntigravityLogin } from "../listener/antigravity-login.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
+import { loginRefresh } from "../runner/service.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { createGoogleRelay } from "../listener/google.mjs";
 import { sandboxAt, serve, tempDir } from "./helpers.mjs";
@@ -44,8 +45,13 @@ function fakeDocker(answer, gate = Promise.resolve()) {
   return { docker, calls };
 }
 
-// The Docker runner's jobs, on the fake.
-const onDocker = (docker) => createDockerJobs({ config, docker });
+// The runner's refresh (runner/service.mjs), with the Docker runner's jobs, on the fake.
+const onDocker = (docker, install = async () => {}) =>
+  loginRefresh({
+    config,
+    images: { installAgent: install },
+    jobs: createDockerJobs({ config, docker }),
+  });
 
 const refreshed = (json) => ({
   code: 0,
@@ -59,7 +65,7 @@ const refreshed = (json) => ({
 test("a token far from its expiry is used as it is: no container", async (t) => {
   const file = loginFile(t, tokenFile("ya29.current", "2026-10-17T12:30:00Z"));
   const { docker, calls } = fakeDocker(refreshed);
-  const login = createAntigravityLogin({ file, config, jobs: onDocker(docker), now: () => NOW });
+  const login = createAntigravityLogin({ file, config, refresh: onDocker(docker), now: () => NOW });
   assert.deepEqual(await login.headers(), { authorization: "Bearer ya29.current" });
   assert.equal(calls.length, 0);
   assert.deepEqual(login.secrets(), ["ya29.current", "1//refresh"]);
@@ -75,8 +81,7 @@ test("near its expiry: one refresh by `agy models` for concurrent calls, written
   const login = createAntigravityLogin({
     file,
     config,
-    jobs: onDocker(docker),
-    install: async () => installs++,
+    refresh: onDocker(docker, async () => installs++),
     now: () => NOW,
     log: (line) => logs.push(line),
   });
@@ -121,7 +126,7 @@ test("near its expiry: one refresh by `agy models` for concurrent calls, written
 test("a token Google refused is refreshed on the next call, once", async (t) => {
   const file = loginFile(t, tokenFile("ya29.current", "2026-10-17T12:30:00Z"));
   const { docker, calls } = fakeDocker(refreshed);
-  const login = createAntigravityLogin({ file, config, jobs: onDocker(docker), now: () => NOW });
+  const login = createAntigravityLogin({ file, config, refresh: onDocker(docker), now: () => NOW });
   await login.headers();
   login.refused("Bearer someone-else");
   await login.headers();
@@ -139,8 +144,7 @@ test("a file the listener can't rewrite: refused before any refresh container", 
   const login = createAntigravityLogin({
     file,
     config,
-    jobs: onDocker(docker),
-    install: async () => installs++,
+    refresh: onDocker(docker, async () => installs++),
     now: () => NOW,
   });
   await assert.rejects(login.headers(), (error) => {
@@ -173,7 +177,7 @@ test("a refused refresh says to sign in again, until the file is replaced", asyn
     err: failedRefresh('oauth2: "invalid_grant" "Token has been expired or revoked."'),
   });
   const { docker, calls } = fakeDocker(spent);
-  const login = createAntigravityLogin({ file, config, jobs: onDocker(docker), now: () => NOW });
+  const login = createAntigravityLogin({ file, config, refresh: onDocker(docker), now: () => NOW });
   await assert.rejects(login.headers(), (error) => {
     assert.match(error.message, /can't be refreshed \(W1017 [^]*oauth2: "invalid_grant"/);
     assert.match(error.message, /sign in with `agy` again for AGY_AUTH_FILE/);
@@ -199,7 +203,7 @@ test("a refresh that failed otherwise is retried by the next call", async (t) =>
     err: "docker: Error response from daemon: no such image",
   });
   const { docker, calls } = fakeDocker((json) => answer(json));
-  const login = createAntigravityLogin({ file, config, jobs: onDocker(docker), now: () => NOW });
+  const login = createAntigravityLogin({ file, config, refresh: onDocker(docker), now: () => NOW });
   await assert.rejects(login.headers(), (error) => {
     assert.match(error.message, /can't be refreshed \(docker: Error response from daemon/);
     assert.doesNotMatch(error.message, /sign in/);
@@ -228,7 +232,7 @@ test("a refresh that fails with nothing on stderr: no part of the token file in 
   const file = loginFile(t, tokenFile("ya29.old-access-token-0123456789", "2026-10-17T11:00:00Z"));
   // An older refresh script printed the file whatever happened: never quoted, even so (#242).
   const { docker } = fakeDocker((json) => ({ code: 1, out: JSON.stringify(json), err: "" }));
-  const login = createAntigravityLogin({ file, config, jobs: onDocker(docker), now: () => NOW });
+  const login = createAntigravityLogin({ file, config, refresh: onDocker(docker), now: () => NOW });
   await assert.rejects(login.headers(), (error) => {
     assert.equal(
       error.message,
@@ -244,7 +248,7 @@ test("a file without a login is refused, naming it", async (t) => {
     const login = createAntigravityLogin({
       file,
       config,
-      jobs: onDocker(fakeDocker(refreshed).docker),
+      refresh: onDocker(fakeDocker(refreshed).docker),
     });
     await assert.rejects(login.headers(), (error) => {
       assert.equal(
@@ -552,11 +556,13 @@ test("with GEMINI_API_KEY: only agy's calls go on, not files, cached contents or
 test("a runner without short containers refuses the refresh, naming itself: nothing installed", async (t) => {
   const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
   let installs = 0;
+  // The runner has none (Kubernetes): no refresh, so nothing to install for one.
+  const refresh = loginRefresh({ config, images: { installAgent: () => installs++ }, jobs: {} });
+  assert.equal(refresh, null);
   const login = createAntigravityLogin({
     file,
     config: { ...config, runner: "other" },
-    jobs: null,
-    install: async () => installs++,
+    refresh,
     now: () => NOW,
   });
   await assert.rejects(login.headers(), /the other runner runs no login refresh/);

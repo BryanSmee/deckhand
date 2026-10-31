@@ -59,6 +59,34 @@ export async function volumeExists(docker, name) {
 }
 
 // A volume that may be missing.
+// A container's labels Deckhand reads (its owner, its run, the run it is the engine of), or
+// null when there is none: what the runner checks before it removes one.
+export async function containerLabels(docker, name) {
+  const { code, out } = await docker([
+    "inspect",
+    "--format",
+    '{{index .Config.Labels "deckhand.owner"}}|{{index .Config.Labels "deckhand.run"}}|{{index .Config.Labels "deckhand.engine"}}',
+    name,
+  ]);
+  if (code !== 0) return null;
+  const [owner = "", run = "", engine = ""] = out.split("|");
+  return { owner, run, engine };
+}
+
+// A volume's: its owner and the run whose engine it is, or null when there is none.
+export async function volumeLabels(docker, name) {
+  const { code, out } = await docker([
+    "volume",
+    "inspect",
+    "--format",
+    '{{index .Labels "deckhand.owner"}}|{{index .Labels "deckhand.engine"}}',
+    name,
+  ]);
+  if (code !== 0) return null;
+  const [owner = "", engine = ""] = out.split("|");
+  return { owner, engine };
+}
+
 export async function removeVolume(docker, name) {
   if (await volumeExists(docker, name)) await docker(["volume", "rm", name]);
 }

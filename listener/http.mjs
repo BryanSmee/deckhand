@@ -277,10 +277,16 @@ export function createHttp(ctx, { dashboardDir }) {
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
     const visible = () => ctx.auth.user(req) === user && sees(user, run.repo ?? repoOf(run.key));
+    // The log is the runner's: read from it as edge (../runner/client.mjs readLog()).
     if (run && visible())
-      return stream(req, res, run, visible, 1000, (error) =>
-        log(`${match[1]}: its log stream failed: ${error.stack ?? error}`),
-      );
+      return stream(req, res, run, {
+        read: async (offset) => {
+          await ctx.logMoved?.(run.id);
+          return ctx.runLogs.read(run.id, { offset });
+        },
+        allowed: visible,
+        onError: (error) => log(`${match[1]}: its log stream failed: ${error.stack ?? error}`),
+      });
     res.statusCode = 404;
     res.end();
   }

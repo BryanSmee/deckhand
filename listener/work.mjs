@@ -1017,7 +1017,7 @@ export function createWorkApi({
       { empty: true },
     );
     await checkedRepo(repo, user);
-    send(res, 200, { ...analysis.preview(repo, selection), max: MAX_RUNS });
+    send(res, 200, { ...(await analysis.preview(repo, selection)), max: MAX_RUNS });
   }
 
   async function answers(req, res, user, repo) {

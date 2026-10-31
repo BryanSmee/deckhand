@@ -116,7 +116,7 @@ test("runDigest on a public repo: no listener notes, setup output or failed outp
   assert.match(text, /> Done: the pull request is ready\./);
 });
 
-test("research runs are never offered nor selected, nor in a digest asked for by id", () => {
+test("research runs are never offered nor selected, nor in a digest asked for by id", async () => {
   const runs = [
     run("r1", { taskMode: "research", kind: "research", status: "ok" }),
     run("r0", { taskMode: null, kind: "research", status: "ok" }),
@@ -129,8 +129,8 @@ test("research runs are never offered nor selected, nor in a digest asked for by
     ["w1"],
   );
   const analysis = createAnalysis({ runs: () => runs, partOf: (r) => `part of ${r.id}` });
-  assert.deepEqual(analysis.preview("org/app", sel).runs, ["w1"]);
-  const digest = analysis.digest("org/app", ["r1", "r0", "w1"], sel);
+  assert.deepEqual((await analysis.preview("org/app", sel)).runs, ["w1"]);
+  const digest = await analysis.digest("org/app", ["r1", "r0", "w1"], sel);
   assert.deepEqual(digest.included, ["w1"]);
   assert.doesNotMatch(digest.text, /part of r/);
 });
@@ -199,11 +199,11 @@ test("checkSelection: a count up to the maximum, kinds and outcomes", () => {
   });
 });
 
-test("buildDigest: redacted, newest first, capped: older runs left out and said", () => {
+test("buildDigest: redacted, newest first, capped: older runs left out and said", async () => {
   const secret = "sk-ant-0123456789abcdefghij";
   const parts = { a: `part a ${secret}`, b: "part b ".repeat(100), c: "part c", d: null };
   const runs = ["a", "d", "b", "c"].map((id) => run(id));
-  const all = buildDigest(runs, { partOf: (r) => parts[r.id], secrets: [secret] });
+  const all = await buildDigest(runs, { partOf: (r) => parts[r.id], secrets: [secret] });
   assert.deepEqual(all.included, ["a", "b", "c"]);
   // A run whose log is gone is left out, and said.
   assert.deepEqual(all.left, ["d"]);
@@ -212,7 +212,7 @@ test("buildDigest: redacted, newest first, capped: older runs left out and said"
   assert.equal(all.bytes, Buffer.byteLength(all.text));
   assert.ok(all.text.indexOf("part a") < all.text.indexOf("part b"));
   // Under a cap that takes a and not b: b and the older c are left out.
-  const capped = buildDigest(runs, {
+  const capped = await buildDigest(runs, {
     partOf: (r) => parts[r.id],
     secrets: [secret],
     max: 100,
@@ -229,37 +229,35 @@ test("buildDigest: redacted, newest first, capped: older runs left out and said"
   assert.equal(tokens(400), 100);
 });
 
-test("createAnalysis: previews and digests from the logs, one repo's runs only", (t) => {
-  const dir = tempDir(t, "deckhand-analysis-");
+test("createAnalysis: previews and digests from the logs, one repo's runs only", async () => {
   const secret = "ghs_0123456789abcdefghijklmnop";
   const runs = [
-    run("mine-2", { status: "error", logPath: join(dir, "mine-2.log") }),
-    run("theirs-1", {
-      repo: "org/other",
-      key: "org/other#3",
-      status: "error",
-      logPath: join(dir, "theirs-1.log"),
-    }),
-    run("mine-1", { status: "error", logPath: join(dir, "mine-1.log") }),
+    run("mine-2", { status: "error" }),
+    run("theirs-1", { repo: "org/other", key: "org/other#3", status: "error" }),
+    run("mine-1", { status: "error" }),
   ];
-  writeFileSync(runs[0].logPath, [...LOG, output(`token ${secret}`, true)].join("\n"));
-  writeFileSync(runs[1].logPath, [...LOG, output("OTHER REPO SECRET STUFF", true)].join("\n"));
-  writeFileSync(runs[2].logPath, LOG.join("\n"));
+  // The runner's logs, by run (runner/client.mjs logs.text()).
+  const logs = {
+    "mine-2": [...LOG, output(`token ${secret}`, true)].join("\n"),
+    "theirs-1": [...LOG, output("OTHER REPO SECRET STUFF", true)].join("\n"),
+    "mine-1": LOG.join("\n"),
+  };
+  const readLog = async (id) => logs[id] ?? null;
   let reads = 0;
   const analysis = createAnalysis({
     runs: () => runs,
     secrets: () => [secret],
-    partOf: (r, options) => (reads++, logPart(r, options)),
+    partOf: (r, options) => (reads++, logPart(r, options, readLog)),
   });
   const selection = { count: 10, kinds: ["work"], outcomes: ["error"] };
-  const preview = analysis.preview("org/app", selection);
+  const preview = await analysis.preview("org/app", selection);
   assert.deepEqual(preview.runs, ["mine-2", "mine-1"]);
   assert.equal(preview.included, 2);
   assert.equal(preview.left, 0);
   assert.equal(preview.tokens, Math.ceil(preview.bytes / 4));
   assert.deepEqual(preview.kinds, ["work"]);
   // The other repo's run, even asked for by id, never goes in.
-  const digest = analysis.digest("org/app", ["mine-2", "theirs-1", "mine-1"], selection);
+  const digest = await analysis.digest("org/app", ["mine-2", "theirs-1", "mine-1"], selection);
   assert.deepEqual(digest.included, ["mine-2", "mine-1"]);
   assert.doesNotMatch(digest.text, /OTHER REPO|theirs-1/);
   assert.ok(!digest.text.includes(secret));
@@ -267,13 +265,15 @@ test("createAnalysis: previews and digests from the logs, one repo's runs only",
   // Each run's part is read once.
   assert.equal(reads, 2);
   // A public repo's digest is another part, kept on its own.
-  const open = analysis.digest("org/app", ["mine-2"], selection, { isPublic: true });
+  const open = await analysis.digest("org/app", ["mine-2"], selection, { isPublic: true });
   assert.doesNotMatch(open.text, /token \[redacted\]|Listener notes/);
   assert.equal(reads, 3);
-  analysis.digest("org/app", ["mine-2"], selection);
+  await analysis.digest("org/app", ["mine-2"], selection);
   assert.equal(reads, 3);
+  // A log the runner no longer has: left out.
+  assert.equal(await logPart(run("gone"), {}, readLog), null);
   // Nothing selected: the preview says so, with the kinds there are.
-  const none = analysis.preview("org/app", { count: 10, kinds: [], outcomes: [] });
+  const none = await analysis.preview("org/app", { count: 10, kinds: [], outcomes: [] });
   assert.deepEqual([none.runs, none.included], [[], 0]);
   assert.deepEqual(none.kinds, ["work"]);
 });

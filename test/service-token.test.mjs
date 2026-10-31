@@ -211,10 +211,15 @@ test("the network check is turned off only by saying so", () => {
 });
 
 test("SERVICE_NETWORKS: service=subnet, nothing else", () => {
-  assert.equal(bound("172.30.2.200"), "orchestrator");
-  assert.equal(bound("172.30.3.1"), null);
-  assert.equal(bound(undefined), null);
-  assert.equal(networkCallers("")("172.30.1.1"), null);
+  assert.deepEqual(bound("172.30.2.200"), ["orchestrator"]);
+  assert.deepEqual(bound("172.30.3.1"), []);
+  assert.deepEqual(bound(undefined), []);
+  assert.deepEqual(networkCallers("")("172.30.1.1"), []);
+  // Services that share a container share its network.
+  const shared = networkCallers("edge+orchestrator=172.30.3.0/24,runner=172.30.4.0/24");
+  assert.deepEqual(shared("172.30.3.9"), ["edge", "orchestrator"]);
+  assert.deepEqual(shared("172.30.4.9"), ["runner"]);
+  assert.throws(() => networkCallers("edge+sandbox=10.0.0.0/24"), /expected service=subnet/);
   assert.throws(() => networkCallers("sandbox=10.0.0.0/24"), /expected service=subnet/);
   assert.throws(() => networkCallers("edge=10.0.0.1/24"), /expected service=subnet/);
   assert.throws(() => networkCallers("edge"), /expected service=subnet/);

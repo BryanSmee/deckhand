@@ -356,6 +356,9 @@ export function createBrokerService({
   return {
     issuer,
     keys: () => new Map([...legacyKeys, ...keys]),
+    // The broker's alone, for the service tokens it signs (services-http.mjs): never the
+    // listener's from before it, which only run tokens it signed are checked with.
+    serviceKeys: () => keys,
     unknownKey,
     async start() {
       caller.start();

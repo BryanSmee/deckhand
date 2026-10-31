@@ -20,8 +20,9 @@ const root = join(import.meta.dirname, "..");
 // compose.yaml's services → the services of lib/services.mjs each one runs. The listener runs
 // those that haven't moved out yet (#499): each one gets its own entry then.
 const RUNS = {
-  listener: ["edge", "orchestrator", "runner", "github", "models"],
+  listener: ["edge", "orchestrator", "github", "models"],
   broker: ["broker"],
+  runner: ["runner"],
   policy: ["policy"],
   egress: ["proxy"],
 };
@@ -125,11 +126,57 @@ test("compose.yaml: the broker's SERVICE_NETWORKS names each caller's own networ
       .filter(([name, service]) => name !== "broker" && networksOf(service).includes(net))
       .map(([name]) => name);
     assert.equal(on.length, 1, `${net}: ${on.join(", ")}`);
-    assert.ok(RUNS[on[0]].includes(caller), `${net} is ${on[0]}'s, not ${caller}'s`);
+    // "edge+orchestrator=…": the services one container still is (lib/service-token.mjs).
+    for (const one of caller.split("+")) {
+      assert.ok(RUNS[on[0]].includes(one), `${net} is ${on[0]}'s, not ${one}'s`);
+    }
     assert.equal(compose.networks[net].internal, true, `${net}: no way out`);
   }
   // Every network of the broker's is a caller's: no other service reaches it.
   assert.equal(Object.keys(callers).length, brokerNets.length);
+});
+
+// The Docker socket is root on the host: only the runner holds it (#503), and the runner holds
+// none of the listener's secrets (the App's key is in the listener's data volume, the agents'
+// credentials in its environment).
+test("compose.yaml: only the runner mounts the Docker socket, and it gets no credential", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const socket = Object.entries(compose.services)
+    .filter(([, s]) => (s.volumes ?? []).some((v) => String(v).includes("docker.sock")))
+    .map(([name]) => name);
+  assert.deepEqual(socket, ["runner"]);
+  const { runner, listener } = compose.services;
+  assert.ok(!runner.volumes.some((v) => /^data:|credentials/.test(String(v))));
+  // KUBERNETES_REGISTRY_SECRET names a Secret of the cluster, it holds none.
+  const secrets = Object.keys(listener.environment).filter(
+    (name) => /TOKEN|KEY|SECRET|AUTH_FILE/.test(name) && !name.startsWith("KUBERNETES_"),
+  );
+  assert.ok(secrets.includes("CLAUDE_CODE_OAUTH_TOKEN"));
+  for (const name of secrets) assert.ok(!(name in runner.environment), `${name} on the runner`);
+});
+
+// The runner checks again what the listener decided (the grants, the names it gives Docker
+// objects, the agents' volumes): given other values, it refuses every run, or checks against
+// other grants than the listener built the spec from.
+test("compose.yaml: the runner gets every setting its checks read, as the listener has it", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const { runner, listener } = compose.services;
+  for (const name of [
+    "GRANTS_DIR",
+    "NAME_PREFIX",
+    "RUNNER",
+    "INSTALL_NETWORK",
+    "CLAUDE_CODE_VOLUME",
+    "CODEX_VOLUME",
+    "AGY_VOLUME",
+  ]) {
+    assert.ok(name in listener.environment, `${name}: not the listener's`);
+    assert.equal(runner.environment[name], listener.environment[name], `${name} on the runner`);
+  }
+  // The same configuration folder, for what config.yaml and grants/ say.
+  const server = (s) => s.volumes.find((v) => String(v).includes(":/etc/deckhand"));
+  assert.ok(server(listener));
+  assert.equal(server(runner), server(listener));
 });
 
 test("the check fails on a network that joins too much", () => {

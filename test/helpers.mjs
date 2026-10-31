@@ -3,10 +3,19 @@
 // (everything under test/ matches its patterns), where it finds no test.
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { gitBlob } from "../listener/images.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { createRuns, runFields } from "../broker/runs.mjs";
@@ -15,6 +24,8 @@ import { openStore } from "../lib/store.mjs";
 import { keyFolder, keyId } from "../lib/tokens.mjs";
 import { allowOnly, createEngine } from "../policy-service/engine.mjs";
 import { createPolicyService, ROUTES } from "../policy-service/service.mjs";
+import { openLog } from "../listener/runlog.mjs";
+import { overlaps } from "../lib/subnets.mjs";
 
 // Whether the real `opa` is on the PATH (the listener's image has it): the tests that evaluate
 // Deckhand's policies as written skip without it, the fakes cover the listener's side. Asked
@@ -369,4 +380,272 @@ export function policyEngine(
     service: localService(engine),
   });
   return { engine: policies, evals, layers };
+}
+
+// The Dockerfile's blob, as the runner's caller reads it and sends it (runner/client.mjs
+// imageFor()): `readFile(repo, path, ref)` → { sha } or null.
+// A repo's files for a build, as checkout() gives them: its Dockerfile, at the paths the tests
+// name, says `seed`, so that its blob, which images.mjs checks against the tag's, is
+// contextBlob(seed).
+const dockerfileOf = (seed) => `FROM deckhand-sandbox\n# ${seed}\n`;
+export const contextBlob = (seed) => gitBlob(Buffer.from(dockerfileOf(seed)));
+export function buildContext(t, seed) {
+  const dir = tempDir(t, "deckhand-ctx-");
+  for (const path of ["Dockerfile", "docker/Dockerfile"]) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), dockerfileOf(seed));
+  }
+  return dir;
+}
+
+export function withBlobs(images, readFile) {
+  return {
+    ...images,
+    imageFor: async (asked) =>
+      images.imageFor({
+        ...asked,
+        blob: asked.dockerfile
+          ? ((await readFile(asked.repo, asked.dockerfile, asked.ref))?.sha ?? null)
+          : null,
+      }),
+  };
+}
+
+// The runner's run logs (runner/client.mjs logs), as files in `dir` (<run>.log): what the
+// listener writes a run's log through, and reads it back by.
+export function fileLogs(dir) {
+  const path = (id) => join(dir, `${id}.log`);
+  return {
+    open(id) {
+      const file = openLog(path(id));
+      return {
+        write: (text) => file.write(text),
+        get size() {
+          return file.size;
+        },
+        ready: Promise.resolve(),
+        flushed: async () => true,
+      };
+    },
+    read: async (id, { offset = 0 } = {}) => {
+      const data = existsSync(path(id)) ? readFileSync(path(id)).subarray(offset) : Buffer.alloc(0);
+      return { size: offset + data.length, data };
+    },
+    text: async (id) => (existsSync(path(id)) ? readFileSync(path(id), "utf8") : null),
+    remove: async (id) => {
+      const had = existsSync(path(id));
+      rmSync(path(id), { force: true });
+      return had;
+    },
+    upload: async () => {},
+  };
+}
+
+// A Docker CLI that keeps networks and containers in memory (runner.test.mjs, the runner
+// service's tests), for listener/runner/docker.mjs's `docker`: `nets` maps a network to its containers,
+// `containers` a container to its run label and state. `answers`: canned answers by
+// subcommand (or a function of the arguments giving one, or nothing), over the fake's own.
+// `runtimes`: the host's Docker's (`docker info`). `volumes` maps a volume to its labels.
+// `subnets` maps a network to its subnet; `taken`: subnets Docker refuses as overlapping
+// though no network it lists has them (another project's, created meanwhile).
+export function fakeDocker({
+  answers = {},
+  routeOut = false,
+  runtimes = ["runc"],
+  taken = [],
+} = {}) {
+  const nets = new Map();
+  const netLabels = new Map();
+  const subnets = new Map();
+  const internal = new Set();
+  const volumes = new Map();
+  const containers = new Map([
+    ["me", { project: "deckhand", ip: "10.0.0.1" }],
+    ["egress-id", { project: "deckhand", ip: "10.0.0.3", role: "egress" }],
+  ]);
+  const ok = (out = "") => ({ code: 0, out, err: "" });
+  const missing = { code: 1, out: "", err: "No such object" };
+  const networksOf = (name) =>
+    Object.fromEntries(
+      [...nets]
+        .filter(([, on]) => on.has(name))
+        .map(([n]) => [n, { IPAddress: containers.get(name).ip }]),
+    );
+  const docker = async (args) => {
+    const key = ["network", "volume"].includes(args[0]) ? `${args[0]} ${args[1]}` : args[0];
+    const answer = typeof answers[key] === "function" ? answers[key](args) : answers[key];
+    if (answer) return answer;
+    const last = args.at(-1);
+    switch (key) {
+      case "network create":
+        if (nets.has(last)) return { code: 1, out: "", err: "already exists" };
+        if (args.includes("--subnet")) {
+          const subnet = args[args.indexOf("--subnet") + 1];
+          if ([...subnets.values(), ...taken].some((s) => overlaps(s, subnet))) {
+            return { code: 1, out: "", err: "Pool overlaps with other one on this address space" };
+          }
+          subnets.set(last, subnet);
+        }
+        nets.set(last, new Set());
+        netLabels.set(
+          last,
+          Object.fromEntries(
+            args.filter((a, i) => args[i - 1] === "--label").map((l) => l.split("=")),
+          ),
+        );
+        if (args.includes("--internal") && !routeOut) internal.add(last);
+        return ok();
+      case "network inspect":
+        if (args.join(" ").includes("IPAM")) {
+          return ok(
+            args
+              .slice(4)
+              .filter((n) => nets.has(n))
+              .map((n) => (subnets.has(n) ? `${subnets.get(n)} ` : ""))
+              .join("\n"),
+          );
+        }
+        if (args.join(" ").includes("IPv4Address")) {
+          // Each run network's ID and its containers' addresses (networks.mjs locate()).
+          return ok(
+            args
+              .slice(4)
+              .filter((n) => nets.has(n))
+              .map((n) => {
+                const ips = [...nets.get(n)].map((c) => ` ${c}|${containers.get(c).ip}/24|`);
+                return `id-${n}${ips.join("")}`;
+              })
+              .join("\n"),
+          );
+        }
+        if (!nets.has(last)) return missing;
+        if (args[3] === "{{.Id}}") return ok(`id-${last}`);
+        if (args[3].includes(".Labels")) {
+          const labels = netLabels.get(last) ?? {};
+          return ok(`${labels["deckhand.owner"] ?? ""}|${labels["deckhand.run"] ?? ""}`);
+        }
+        return args.join(" ").includes("Containers")
+          ? ok([...nets.get(last)].map((c) => `${c} `).join(""))
+          : ok(String(internal.has(last)));
+      case "network connect":
+        if (!nets.has(args.at(-2))) return missing;
+        if (nets.get(args.at(-2)).has(last))
+          return { code: 1, out: "", err: "endpoint already exists" };
+        nets.get(args.at(-2)).add(last);
+        return ok();
+      case "network disconnect":
+        nets.get(args.at(-2))?.delete(last);
+        return ok();
+      case "network rm":
+        if (nets.get(last)?.size) return { code: 1, out: "", err: "has active endpoints" };
+        nets.delete(last);
+        subnets.delete(last);
+        return ok();
+      case "network ls":
+        if (args.includes("--quiet")) return ok([...nets.keys()].join("\n"));
+        return ok([...nets.keys()].filter((n) => n.startsWith("dh-")).join("\n"));
+      case "run": {
+        const name = args[args.indexOf("--name") + 1];
+        if (containers.has(name)) return { code: 125, out: "", err: "name already in use" };
+        const label = (key) => args.find((a) => a.startsWith(`${key}=`))?.slice(key.length + 1);
+        const net = args[args.indexOf("--network") + 1];
+        const volume = args.find((a) => a.startsWith("type=volume,src="))?.split(/[=,]/)[3];
+        const engine = label("deckhand.engine");
+        const ip = engine ? "10.1.0.3" : "10.1.0.2";
+        containers.set(name, {
+          owner: label("deckhand.owner"),
+          run: label("deckhand.run"),
+          engine,
+          volume,
+          running: true,
+          ip,
+        });
+        nets.get(net)?.add(name);
+        return ok();
+      }
+      case "stop":
+        if (!containers.has(last)) return missing;
+        containers.get(last).running = false;
+        return ok();
+      case "rm":
+        for (const on of nets.values()) on.delete(last);
+        containers.delete(last);
+        return ok();
+      case "info":
+        return ok(JSON.stringify(Object.fromEntries(runtimes.map((r) => [r, {}]))));
+      case "volume create":
+        if (!volumes.has(last)) {
+          const labels = args.filter((a, i) => args[i - 1] === "--label");
+          volumes.set(last, Object.fromEntries(labels.map((l) => l.split("="))));
+        }
+        return ok(last);
+      case "volume inspect":
+        if (!volumes.has(last)) return missing;
+        if (args.includes("--format")) {
+          const labels = volumes.get(last);
+          return ok(`${labels["deckhand.owner"] ?? ""}|${labels["deckhand.engine"] ?? ""}`);
+        }
+        return ok("[]");
+      case "volume rm":
+        if ([...containers.values()].some((c) => c.volume === last)) {
+          return { code: 1, out: "", err: "volume is in use" };
+        }
+        return volumes.delete(last) ? ok() : missing;
+      case "volume ls":
+        return ok(
+          [...volumes]
+            .filter(([, l]) => l["deckhand.engine"])
+            .map(([v, l]) => `${v}\t${l["deckhand.engine"]}`)
+            .join("\n"),
+        );
+      case "ps":
+        if (args.join(" ").includes("label=deckhand.engine")) {
+          return ok(
+            [...containers]
+              .filter(([, c]) => c.engine)
+              .map(([n, c]) => `${n}\t${c.engine}`)
+              .join("\n"),
+          );
+        }
+        if (args.some((a) => a.startsWith("volume="))) {
+          const volume = args.find((a) => a.startsWith("volume=")).slice("volume=".length);
+          return ok(
+            [...containers]
+              .filter(([, c]) => c.volume === volume)
+              .map(([n]) => n)
+              .join("\n"),
+          );
+        }
+        const role = /label=deckhand\.role=(\w+)/.exec(args.join(" "))?.[1];
+        if (role) {
+          return ok(
+            [...containers]
+              .filter(([, c]) => c.role === role)
+              .map(([n]) => n)
+              .join("\n"),
+          );
+        }
+        return ok(
+          [...containers]
+            .filter(([, c]) => c.run)
+            .map(([n, c]) => `${n}\t${c.run}\t${c.running ? "running" : "exited"}`)
+            .join("\n"),
+        );
+      case "inspect": {
+        const c = containers.get(last);
+        if (!c) return missing;
+        const format = args[2];
+        if (format.includes("deckhand.owner")) {
+          return ok(`${c.owner ?? ""}|${c.run ?? ""}|${c.engine ?? ""}`);
+        }
+        if (format.includes("compose.project")) return ok(c.project ?? "");
+        if (format.includes("deckhand.run")) return ok(c.run ?? "");
+        if (format.includes("State")) return ok(c.running ? "running" : "exited");
+        return ok(JSON.stringify(networksOf(last)));
+      }
+      default:
+        return ok();
+    }
+  };
+  return { docker, nets, netLabels, subnets, internal, containers, volumes };
 }

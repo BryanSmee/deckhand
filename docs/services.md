@@ -1,9 +1,10 @@
 # Services (target)
 
 Where the listener is headed once it is split (#499, its parts #500 to #509). Today the policy
-service (#501, [architecture.md](architecture.md#the-policy-service)) and the broker (#505) are
-out, beside the egress proxy; the rest is still one process, the listener:
-[architecture.md](architecture.md) describes what runs now.
+service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505) and the
+runner (#503, [architecture.md](architecture.md#the-runner-service)) are out, beside the egress
+proxy; the rest is still one process, the listener: [architecture.md](architecture.md) describes
+what runs now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
 reaches holds neither the App's key, the operator's agent credentials nor the Docker socket, and
@@ -40,6 +41,7 @@ flowchart LR
   orch --> runner
   orch --> broker
   runner --> broker
+  runner -. a run's first tokens .-> orch
   runner -. tarballs .-> github
   edge -. run logs .-> runner
   orch --> github
@@ -57,27 +59,29 @@ flowchart LR
   models -. refresh .-> runner
 ```
 
-| Service      | Holds                                     | Owns (its own store)                    | Reached by                                                                                                              |
-| ------------ | ----------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| edge         | webhook secret, session key, OAuth client | sessions                                | the internet, browsers                                                                                                  |
-| orchestrator | nothing secret                            | queue, waits, tasks, history, decisions | edge                                                                                                                    |
-| runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator, models (the plan logins' refresh only), edge (the run's log, for the dashboard)                           |
-| broker       | the tokens' signing key                   | live runs, run files                    | orchestrator, runner (a run's first token), proxy (sandboxes), every service that calls another (its own service token) |
-| github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts and previews)                                 |
-| models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                                   |
-| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                                            |
-| proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                                               |
+| Service      | Holds                                     | Owns (its own store)                    | Reached by                                                                                                                                                             |
+| ------------ | ----------------------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| edge         | webhook secret, session key, OAuth client | sessions                                | the internet, browsers                                                                                                                                                 |
+| orchestrator | nothing secret                            | queue, waits, tasks, history, decisions | edge, runner (a run's first tokens, once its sandbox's network exists)                                                                                                 |
+| runner       | Docker socket or Kubernetes API           | containers, networks, run logs          | orchestrator (and the egress policy, which stays with it), models (the plan logins' refresh only), edge (the run's log, for the dashboard)                             |
+| broker       | the tokens' signing key                   | live runs, run files                    | orchestrator (a run's first tokens, for the runner), runner (the runs' inboxes and files), proxy (sandboxes), every service that calls another (its own service token) |
+| github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts and previews)                                                                                |
+| models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                                                                                  |
+| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                                                                                           |
+| proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                                                                                              |
 
 The broker also serves the endpoints a sandbox calls about its own run: its token's renewal, its
 inbox and files (`broker/`, #505). A run's progress and its questions still come from its
 log, which the runner follows: nothing for a sandbox to call yet. The egress policy stays with
-the listener until the runner moves out (#503): it answers by the address a connection comes
-from, which only the runner can tell, and gives the proxy the network it vouches for to the
-broker. Every service that calls another also calls it for its own service token (#500), which the
+the listener, as the orchestrator's: it answers by the address a connection comes from, which it
+asks the runner, and gives the proxy the network it vouches for to the broker. A run's first
+tokens are the orchestrator's to have the broker sign, with the claims it decided: the runner asks
+it for them once the sandbox's network (or pod) exists, and never chooses what they allow. Every service that calls another also calls it for its own service token (#500), which the
 diagram leaves out; the policy service calls none, and checks the tokens it gets offline. The dotted
 arrows are narrow: the runner fetches a repository's tarball from the github service for build
 contexts and preview hooks (the App's key stays there), edge reads a run's log from the runner for
-the dashboard's live view, and models has the runner start the plan logins' refresh.
+the dashboard's live view, models has the runner start the plan logins' refresh, and the runner copies each run's inbox and
+files to the broker as they change (`listener/runner/inbox.mjs` `mirror`).
 
 ## Upgrades without downtime
 
@@ -119,8 +123,9 @@ file backend on one node, Redis on several (#509).
 Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
 accepting connections, finishes those in flight within its grace period, then exits. The proxy,
 the policy service and the broker (30 s, over an inbox's long poll) use it so far (the policy
-service's and the broker's `/ready` answer 503 from then on, for a readiness probe); the listener
-keeps its own handler (`listener/server.mjs`), and each service uses
+service's and the broker's `/ready` answer 503 from then on, for a readiness probe); the runner
+drains its own way (its output streams first, then its lease, `runner/service.mjs` `stop()`); the
+listener keeps its own handler (`listener/server.mjs`), and each service uses
 `drainOnSigterm()` as it moves out. With two
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.

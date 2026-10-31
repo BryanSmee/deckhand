@@ -6,16 +6,17 @@
 // for the next start.
 //
 // The refresh is `agy`'s own: the listener doesn't reimplement Google's OAuth with a client
-// secret taken from the binary. When the access token is within 5 minutes of its expiry, a short
-// container runs `agy models` on the login's own volume (../sandbox/agents/antigravity/refresh),
-// with the file's expiry set in the past so that `agy` refreshes it, and hands the file back.
+// secret taken from the binary. When the access token is within 5 minutes of its expiry, the
+// runner service runs `agy models` in a short container on the login's own volume
+// (../sandbox/agents/antigravity/refresh, ../runner/service.mjs loginRefresh()), with the file's
+// expiry set in the past so that `agy` refreshes it, and hands the file back: this module never
+// holds the Docker socket.
 //
 // The file: {"auth_method": "consumer", "token": {access_token, token_type, refresh_token,
 // expiry}}, `expiry` an RFC 3339 time (checked against agy 1.4.0).
 import { constants } from "node:fs";
 import { access, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { SANDBOX_USER } from "./sandbox-spec.mjs";
 
 const EARLY_MS = 5 * 60_000;
 // What makes `agy` refresh: an expiry that has passed (not Go's zero time, which never expires).
@@ -55,9 +56,10 @@ function parseLogin(text, file) {
 
 export function createAntigravityLogin({
   file, // AGY_AUTH_FILE
-  config, // image, agyVolume, agyVersion, agyLoginVolume, installNetwork
-  jobs, // the runner's short containers (runner/jobs.mjs)
-  install = async () => {}, // the Antigravity CLI in its volume (images.installAgent())
+  config, // runner
+  // (input) → { code, out, err }: the refresh's container, `input` on its stdin (the runner's
+  // POST /logins/antigravity/refresh, ../runner/client.mjs refreshLogin()); null: none
+  refresh: runRefresh = null,
   now = Date.now,
   log = () => {},
 }) {
@@ -95,24 +97,11 @@ export function createAntigravityLogin({
     return !Number.isFinite(expiry) || expiry - EARLY_MS <= now();
   }
 
-  // `agy models` in a container of its own: the file in, the file `agy` left out. Outside the
-  // runs' networks (INSTALL_NETWORK, as the installs): no repo or agent input runs here.
+  // `agy models` in a container of the runner's: the file in, the file `agy` left out.
   async function refresh(json) {
-    if (!jobs?.run) throw new Error(`the ${config.runner} runner runs no login refresh`);
-    await install();
+    if (!runRefresh) throw new Error(`the ${config.runner} runner runs no login refresh`);
     const forced = { ...json, token: { ...json.token, expiry: EXPIRED } };
-    const result = await jobs.run({
-      image: config.image,
-      network: "install",
-      user: SANDBOX_USER,
-      env: { AGY_VERSION: config.agyVersion },
-      volumes: [
-        { name: config.agyVolume, path: "/opt/antigravity", readOnly: true },
-        { name: config.agyLoginVolume, path: "/home/node/.gemini" },
-      ],
-      entrypoint: "deckhand-antigravity-refresh",
-      input: JSON.stringify(forced),
-    });
+    const result = await runRefresh(JSON.stringify(forced));
     let next = null;
     try {
       next = parseLogin(result.out, file);

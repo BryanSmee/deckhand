@@ -1,0 +1,561 @@
+// The runner service as its callers see it (#503): the same interfaces the listener had from the
+// backends in process (../listener/runner/docker.mjs's runner, ../listener/images.mjs's images,
+// ../listener/previews.mjs's queue), over its API (service.mjs), plus the runs' logs and events
+// it keeps. Each part calls as the service it is for, with that service's token: the
+// orchestrator drives runs (with its fencing epoch) and asks where addresses are, for the
+// listener's broker port and egress policy (without it); edge reads logs; models has the
+// Antigravity login refreshed. While the listener is all of them, it holds the three tokens.
+//
+// The runner away (updating, handing over to its other copy) is waited for, not taken for a
+// failure: lib/service-client.mjs tries again. The broker port's questions wait less, and fall
+// back on the runner's last answer: a sandbox's calls go on while the runner updates.
+import { randomBytes } from "node:crypto";
+import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { serviceClient } from "../lib/service-client.mjs";
+
+// What the orchestrator waits for the runner, for the calls a run's life needs: an update of
+// the runner, a slow pull of its image. A run doesn't fail for it.
+const RUN_WAIT_MS = 30 * 60_000;
+// The listener's broker port's, which a sandbox's call waits on.
+const BROKER_WAIT_MS = 10_000;
+// A log append's most, and the parts a log is sent in when it moves (upload()).
+const APPEND_MAX = 4 * 1024 * 1024;
+// After a failed append, the next try.
+const APPEND_RETRY_MS = 5000;
+
+const path = (...parts) => parts.map((p) => encodeURIComponent(p)).join("/");
+
+async function failure(res, what) {
+  const text = await res.text().catch(() => "");
+  let message = text;
+  try {
+    message = JSON.parse(text).message ?? text;
+  } catch {
+    // As it came.
+  }
+  const error = new Error(`${what}: ${res.status} ${String(message).slice(0, 500)}`);
+  error.status = res.status;
+  return error;
+}
+
+// Lines of NDJSON as they come, each parsed, to `each`. Resolves once the body ends: whether
+// it ended as it should is the caller's to tell (its last line).
+async function ndjson(res, each) {
+  let rest = "";
+  const decoder = new TextDecoder();
+  for await (const chunk of res.body ?? []) {
+    const lines = (rest + decoder.decode(chunk, { stream: true })).split("\n");
+    rest = lines.pop();
+    for (const line of lines) if (line) each(JSON.parse(line));
+  }
+  if (rest) each(JSON.parse(rest));
+}
+
+// `token(service)`: the Authorization header the caller has for the runner as that service;
+// `epoch()`: the orchestrator's fencing epoch; `pendingTokens`: run → tokens(sandbox), the first tokens
+// of the runs being started, which the orchestrator gives the runner when it asks (its broker
+// service signs them, ../listener/services-http.mjs).
+export function createRunnerClient({
+  urls,
+  token,
+  epoch,
+  pendingTokens = new Map(),
+  fetch = globalThis.fetch,
+  log = () => {},
+  now = Date.now,
+  sleep,
+  runWaitMs = RUN_WAIT_MS,
+  brokerWaitMs = BROKER_WAIT_MS,
+}) {
+  const as = (service, extra = {}) =>
+    serviceClient({
+      service: "runner",
+      urls,
+      token: () => token(service),
+      fetch,
+      log,
+      now,
+      ...(sleep && { sleep }),
+      ...extra,
+    });
+  const orchestrator = as("orchestrator", { epoch, waitMs: runWaitMs });
+  const edge = as("edge");
+  // The egress policy's lookups (runner/service.mjs UNFENCED): as the orchestrator, without its
+  // epoch, so a listener draining still answers them.
+  const broker = as("orchestrator", { waitMs: brokerWaitMs });
+  const models = as("models");
+
+  // --- Sandboxes ----------------------------------------------------------------------------
+
+  async function start(spec) {
+    const { tokens, ...sent } = spec;
+    if (tokens) pendingTokens.set(spec.run, tokens);
+    try {
+      const { existing, ...started } = await orchestrator.json("POST", "/sandboxes", {
+        body: sent,
+      });
+      if (existing) log(`${spec.name}: started already, by the runner's other copy`);
+      return started;
+    } catch (error) {
+      // Why the sandbox didn't start (Docker's, its network's, its spec's): what the run's
+      // reply says.
+      if ([403, 500].includes(error.status) && error.reason) throw new Error(error.reason);
+      throw error;
+    } finally {
+      if (pendingTokens.get(spec.run) === tokens) pendingTokens.delete(spec.run);
+    }
+  }
+
+  const list = () => orchestrator.json("GET", "/sandboxes");
+  const state = async (name) => (await orchestrator.json("GET", `/sandboxes/${path(name)}`)).state;
+
+  // Its output, line by line, until it exits or the stream ends (the runner updating): the
+  // caller follows again with what it read as `skip` (../listener/runs.mjs follow()), as when
+  // `docker logs` ends. Never throws: a runner away is said, and comes back.
+  async function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {} }) {
+    try {
+      const res = await orchestrator.request(
+        "GET",
+        `/sandboxes/${path(name)}/output?out=${skip.out}&err=${skip.err}`,
+      );
+      if (!res.ok) throw await failure(res, "its output");
+      await ndjson(res, ({ s, line, at, caughtUp }) => {
+        try {
+          if (caughtUp) onCaughtUp();
+          else (s === "err" ? onErr : onOut)(line, at ?? null);
+        } catch (error) {
+          log(`The output of ${name}: ${error.stack ?? error}`);
+        }
+      });
+    } catch (error) {
+      log(`The output of ${name}: ${error.message ?? error}`);
+    }
+  }
+
+  // Messages and the close of a run's inbox, in the order they are asked, each until the
+  // runner takes it. A message keyed, so that one sent again is delivered once.
+  const chains = new Map(); // run → its last call
+  function inOrder(run, call) {
+    const done = (chains.get(run) ?? Promise.resolve()).then(call).catch((error) => {
+      log(`The inbox of ${run}: ${error.message ?? error}`);
+    });
+    chains.set(run, done);
+    done.then(() => chains.get(run) === done && chains.delete(run));
+    return done;
+  }
+
+  function send(run, text, agent) {
+    const id = randomBytes(12).toString("hex");
+    return inOrder(run, () =>
+      orchestrator.json("POST", `/runs/${path(run)}/messages`, {
+        body: { text, agent: agent?.name, id },
+      }),
+    );
+  }
+
+  const close = (run) => inOrder(run, () => orchestrator.json("POST", `/runs/${path(run)}/close`));
+  const closed = async (run) => {
+    await chains.get(run);
+    return (await orchestrator.json("GET", `/runs/${path(run)}/closed`)).closed;
+  };
+
+  // Until it exits: asked every second rather than one call held open (a drain would wait on
+  // it).
+  async function wait(name) {
+    while ((await state(name)) === "running") await (sleep ?? delay)(1000);
+  }
+
+  const kill = (name) => orchestrator.json("POST", `/sandboxes/${path(name)}/kill`);
+  const remove = async (name, run) => {
+    await orchestrator.json(
+      "DELETE",
+      `/sandboxes/${path(name)}${run ? `?run=${encodeURIComponent(run)}` : ""}`,
+    );
+    // Its network is gone: an address the broker kept for it may be another run's now.
+    known.clear();
+  };
+  const hasSession = async (name, agent) =>
+    (
+      await orchestrator.json(
+        "GET",
+        `/sessions/${path(name)}${agent ? `?agent=${encodeURIComponent(agent.name)}` : ""}`,
+      )
+    ).exists;
+  const relink = () => orchestrator.json("POST", "/relink");
+
+  // --- The broker's questions ----------------------------------------------------------------
+
+  // The last answers, for while the runner doesn't answer: a sandbox's address names the same
+  // network until its run is removed (remove() forgets them), the proxy's addresses change only
+  // when it is recreated.
+  const known = new Map(); // ip → { sandbox, name }
+  let proxy = [];
+
+  async function locate(ip) {
+    try {
+      const { at } = await broker.json("GET", `/addresses/${path(ip)}`);
+      if (at) known.set(ip, at);
+      else known.delete(ip);
+      return at;
+    } catch (error) {
+      if (!known.has(ip)) log(`Where ${ip} is: ${error.message}`);
+      return known.get(ip) ?? null;
+    }
+  }
+
+  // Asked on each of the broker's calls: kept a second, as the runner keeps them longer.
+  let proxyAt = -Infinity;
+  async function proxyAddresses({ fresh = false } = {}) {
+    if (!fresh && now() - proxyAt < 1000) return proxy;
+    try {
+      ({ addresses: proxy } = await broker.json(
+        "GET",
+        `/proxy-addresses${fresh ? "?fresh=1" : ""}`,
+      ));
+      proxyAt = now();
+    } catch (error) {
+      log(`The egress proxy's addresses: ${error.message}`);
+    }
+    return proxy;
+  }
+
+  const sandboxIdOf = async (name, run) => {
+    try {
+      const query = run ? `?run=${encodeURIComponent(run)}` : "";
+      return (await broker.json("GET", `/sandboxes/${path(name)}/network${query}`)).id;
+    } catch {
+      return null;
+    }
+  };
+
+  // null: the runner couldn't tell (the egress policy then allows what both may reach).
+  const installing = async (name) => {
+    try {
+      return (await broker.json("GET", `/sandboxes/${path(name)}/installing`)).installing;
+    } catch {
+      return null;
+    }
+  };
+
+  // The inbox's whole lines after byte `from`, waiting up to `timeout` ms (the sandbox's long
+  // poll, ../listener/run-files.mjs), or null without an inbox.
+  async function poll(run, from, { timeout = 25_000, signal } = {}) {
+    const res = await broker.request(
+      "GET",
+      `/runs/${path(run)}/inbox?from=${from}&timeout=${timeout}`,
+      { signal },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw await failure(res, "its inbox");
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  async function file(run, name) {
+    const res = await broker.request("GET", `/runs/${path(run)}/files/${path(name)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw await failure(res, `its ${name}`);
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  async function egressFor(ip, host) {
+    try {
+      const query = `ip=${encodeURIComponent(ip)}&host=${encodeURIComponent(host)}`;
+      return (await broker.json("GET", `/egress?${query}`)).answer ?? null;
+    } catch (error) {
+      log(`Egress for ${ip}: ${error.message}`);
+      return null;
+    }
+  }
+
+  // --- Images, agents, caches ----------------------------------------------------------------
+
+  let about = null; // GET /info, once it answered
+  async function info() {
+    about ??= await orchestrator.json("GET", "/info");
+    return about;
+  }
+
+  // A build's or an install's NDJSON: its output to `output`, a tag being built to `onBuild`,
+  // then its value, or its error thrown. A stream cut before its end (the runner updating) is
+  // asked again: the next copy finds the image built, or builds it.
+  async function streamed(what, url, body, { output = () => {}, onBuild = () => {} } = {}) {
+    for (let tries = 1; ; tries++) {
+      const res = await orchestrator.request("POST", url, { body });
+      if (!res.ok) throw await failure(res, what);
+      let end = null;
+      try {
+        await ndjson(res, (line) => {
+          if (line.type === "output") output(Buffer.from(line.data, "base64"));
+          else if (line.type === "building") onBuild(line.tag);
+          else end = line;
+        });
+      } catch (error) {
+        log(`${what}: ${error.message}`);
+      }
+      if (end?.type === "done") return end.value;
+      if (end?.type === "error") throw new Error(end.message);
+      if (tries >= 3) throw new Error(`${what}: the runner's answer was cut, ${tries} times`);
+      log(`${what}: the runner's answer was cut, asking again`);
+    }
+  }
+
+  // What it is built from (the Dockerfile's blob, the ref, the hosts) the runner decides, from
+  // the grants and the github service (../runner/hooks.mjs buildPlan()): this asks.
+  const imageFor = ({ repo, ref, branch = false, dockerfile, onBuild, output, access }) =>
+    streamed(
+      `the image of ${repo}`,
+      "/images",
+      { repo, ref, branch, dockerfile, access },
+      { output, onBuild },
+    );
+
+  const installAgent = (agent, output) =>
+    streamed(`installing ${agent.displayName}`, `/agents/${path(agent.name)}/install`, undefined, {
+      output,
+    });
+
+  const caches = async (repo, paths, image) =>
+    (await orchestrator.json("POST", "/caches", { body: { repo, paths, image } })).caches;
+
+  // --- Preview hooks -------------------------------------------------------------------------
+
+  let hooks = []; // GET /previews, as last read: /status and the dashboard read it at once
+  async function refreshPreviews() {
+    try {
+      hooks = await orchestrator.json("GET", "/previews", { waitMs: brokerWaitMs });
+    } catch (error) {
+      log(`The preview hooks: ${error.message}`);
+    }
+    return hooks;
+  }
+
+  // Queued in the runner, which runs it and logs its exit: one may last minutes. Keyed: one
+  // sent again after its answer was lost runs once (a hook runs as root on the host).
+  async function runPreview(job) {
+    const id = randomBytes(12).toString("hex");
+    await orchestrator.json("POST", "/previews", { body: { ...job, id } });
+    await refreshPreviews();
+    return null;
+  }
+
+  // --- Logs ----------------------------------------------------------------------------------
+
+  // { size, data } from `offset`, waiting up to `wait` ms for more.
+  async function readLog(id, { offset = 0, length, wait = 0, caller = edge, signal } = {}) {
+    const query = `offset=${offset}${length ? `&length=${length}` : ""}${wait ? `&wait=${wait}` : ""}`;
+    const res = await caller.request("GET", `/logs/${path(id)}?${query}`, { signal });
+    if (!res.ok) throw await failure(res, `the log of ${id}`);
+    return {
+      size: Number(res.headers.get("x-log-size")),
+      data: Buffer.from(await res.arrayBuffer()),
+    };
+  }
+
+  // A run's whole log, as text (a digest of it, a summary of a run that has none).
+  async function logText(id) {
+    const parts = [];
+    for (let offset = 0; ; ) {
+      const { size, data } = await readLog(id, { offset, caller: orchestrator });
+      parts.push(data);
+      offset += data.length;
+      if (!data.length || offset >= size) break;
+    }
+    return Buffer.concat(parts).toString("utf8");
+  }
+
+  // `data` at `at`, once: → the log's size after it, or { conflict: size } when the runner's
+  // log is another size (an append lost, a log removed meanwhile), which the writer goes on
+  // from. Any other refusal (a stale epoch: another listener writes now) is an error.
+  async function append(id, at, data) {
+    const res = await orchestrator.request("POST", `/logs/${path(id)}?at=${at}`, {
+      body: data,
+      headers: { "content-type": "application/octet-stream" },
+    });
+    if (res.ok) return (await res.json()).size;
+    if (res.status === 409) {
+      const text = await res.text();
+      let size;
+      try {
+        ({ size } = JSON.parse(text));
+      } catch {
+        // Said below.
+      }
+      if (Number.isSafeInteger(size)) return { conflict: size };
+      const error = new Error(`the log of ${id}: 409 ${text.slice(0, 300)}`);
+      error.status = 409;
+      throw error;
+    }
+    throw await failure(res, `the log of ${id}`);
+  }
+
+  // What the orchestrator writes a run's log through (../listener/runlog.mjs openLog()'s
+  // shape): write() at once, in order, sent as it can be; `size` what it holds, the writes
+  // not sent yet counted. `size: null`: a log written before (a run picked up after a
+  // restart), its size asked first (ready), once `after` is done (its move to the runner,
+  // runlog.mjs moveLogs()). flushed(): once what was written is sent, or its try failed.
+  function openRemote(id, { size = 0, after = null } = {}) {
+    let sent = size ?? 0; // what the runner holds
+    let queued = [];
+    let pending = 0;
+    let flushing = null;
+    // A chunk whose answer was lost: sent again alone, so that the runner, which may have
+    // taken it, recognises it (the same offset, the same length).
+    let retrying = null;
+    const ready =
+      size === null
+        ? Promise.resolve(after)
+            .catch(() => {})
+            .then(() => readLog(id, { offset: 0, length: 1, caller: orchestrator }))
+            .then((found) => (sent = found.size))
+            .catch((error) => log(`The log of ${id}: ${error.message}`))
+        : Promise.resolve();
+
+    function next() {
+      if (retrying) return retrying;
+      const chunks = [];
+      let bytes = 0;
+      while (queued.length && bytes + queued[0].length <= APPEND_MAX) {
+        bytes += queued[0].length;
+        chunks.push(queued.shift());
+      }
+      if (!chunks.length) chunks.push(queued.shift()); // one write over the most: alone
+      return Buffer.concat(chunks);
+    }
+
+    async function flush() {
+      await ready;
+      while (retrying || queued.length) {
+        const data = next();
+        retrying = null;
+        try {
+          const after = await append(id, sent, data);
+          if (typeof after !== "number") {
+            // Taken already (its answer lost), or the runner's log is another size.
+            if (after.conflict !== sent + data.length) {
+              log(
+                `The log of ${id}: ${after.conflict} bytes at the runner, ${sent} here: going on from its end`,
+              );
+              sent = after.conflict;
+              retrying = data;
+              continue;
+            }
+          }
+          sent = typeof after === "number" ? after : after.conflict;
+          pending -= data.length;
+        } catch (error) {
+          // Kept, and tried again: the run's log loses nothing for a runner away a while.
+          retrying = data;
+          log(`The log of ${id}: ${error.message}, trying again`);
+          await (sleep ?? delay)(APPEND_RETRY_MS);
+          return false;
+        }
+      }
+      return true;
+    }
+
+    function kick() {
+      flushing ??= flush().finally(() => {
+        flushing = null;
+        if (retrying || queued.length) kick();
+      });
+      return flushing;
+    }
+
+    return {
+      write(text) {
+        const data = Buffer.isBuffer(text) ? text : Buffer.from(String(text));
+        queued.push(data);
+        pending += data.length;
+        kick();
+      },
+      get size() {
+        return sent + pending;
+      },
+      ready,
+      // Whether all of it is at the runner: none sent but in flight still counts.
+      flushed: () => (flushing ?? Promise.resolve(true)).then(() => pending === 0),
+    };
+  }
+
+  // A log written before the runner kept them (a file of the listener's): sent in parts, from
+  // where the runner's copy ends, should a previous try have sent some of it. A runner's copy
+  // longer than the file is no try's to fix: LOG_LONGER.
+  const longer = (id, file) =>
+    Object.assign(new Error(`the runner's log of ${id} is longer than ${file}`), {
+      code: "LOG_LONGER",
+    });
+  async function upload(id, file) {
+    const total = statSync(file).size;
+    let at = (await readLog(id, { offset: 0, length: 1, caller: orchestrator })).size;
+    if (at > total) throw longer(id, file);
+    const fd = openSync(file, "r");
+    try {
+      while (at < total) {
+        const data = Buffer.alloc(Math.min(APPEND_MAX, total - at));
+        const n = readSync(fd, data, 0, data.length, at);
+        const after = await append(id, at, data.subarray(0, n));
+        const now = typeof after === "number" ? after : after.conflict;
+        if (now > total) throw longer(id, file);
+        at = now;
+      }
+    } finally {
+      closeSync(fd);
+    }
+  }
+
+  const removeLog = async (id) => (await orchestrator.json("DELETE", `/logs/${path(id)}`)).removed;
+
+  // --- Run events, the Antigravity login -----------------------------------------------------
+
+  const events = {
+    read: () => orchestrator.json("GET", "/events"),
+    ack: (ids) => orchestrator.json("POST", "/events/ack", { body: { ids } }),
+  };
+
+  // `agy models` on the login's volume (../listener/antigravity-login.mjs): { code, out, err }.
+  // Once: its refresh token is spent by the first.
+  const refreshLogin = (input) =>
+    models.json("POST", "/logins/antigravity/refresh", { body: { input }, once: true });
+
+  return {
+    runner: {
+      start,
+      list,
+      state,
+      follow,
+      send,
+      close,
+      closed,
+      poll,
+      file,
+      wait,
+      kill,
+      remove,
+      hasSession,
+      relink,
+      proxyAddresses,
+      locate,
+      sandboxIdOf,
+      installing,
+    },
+    images: {
+      imageFor,
+      installAgent,
+      caches,
+      info,
+      egressFor,
+    },
+    previews: {
+      run: runPreview,
+      status: () => hooks,
+      refresh: refreshPreviews,
+      runs: async () => (await info()).previews,
+    },
+    logs: { open: openRemote, read: readLog, text: logText, upload, remove: removeLog },
+    events,
+    refreshLogin,
+    info,
+  };
+}
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));

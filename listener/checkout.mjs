@@ -1,14 +1,17 @@
 // A repo's files at one ref, without git: GitHub's tarball, unpacked into a new temporary
-// folder (its top folder stripped). Build contexts and preview hooks start from it.
+// folder (its top folder stripped). Build contexts and preview hooks start from it, in the
+// runner service (../runner/), which downloads it through the github service: it holds no
+// GitHub token (#503).
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 
-// `request`: the App's (github-app.mjs). Resolves with the folder; the caller removes it.
-export async function checkout(request, repo, ref, { tmp = tmpdir() } = {}) {
-  const res = await request(repo, "GET", `/repos/${repo}/tarball/${encodeURIComponent(ref)}`);
+// `download(repo, ref)`: the tarball, as fetch()'s Response (the github service's, the runner's
+// tarballs() in ../runner/server.mjs). Resolves with the folder; the caller removes it.
+export async function checkout(download, repo, ref, { tmp = tmpdir() } = {}) {
+  const res = await download(repo, ref);
   if (!res.ok) throw new Error(`downloading ${repo} at ${ref}: ${res.status}`);
   const dir = mkdtempSync(join(tmp, "deckhand-checkout-"));
   try {
