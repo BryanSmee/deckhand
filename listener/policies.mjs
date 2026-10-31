@@ -396,11 +396,12 @@ export const REPO_NS = "deckhand_repository";
 // references go there too, so that a repo's libraries still resolve: `data` as a term only, never
 // in a string, a raw string or a comment, nor after a dot or a word (`"db/data.sql"`,
 // `input.x.data.id` stay as they are). One written otherwise (`data["lib"]`) only reads the
-// operator's, which widens nothing. null: no package where the parser reads it (a `package`
-// keyword on a line of its own, a byte-order mark), refused rather than guessed.
+// operator's, which widens nothing. null, refused rather than guessed (namespaceRefusal() says
+// why): no package where the parser reads it (a `package` keyword on a line of its own, a
+// byte-order mark), or a template string (`$"…{expr}…"`), whose expressions this doesn't read.
 export function namespaced(text) {
   const head = /^((?:[ \t\r\n]|#[^\n]*(?:\n|$))*)package([ \t]+)(?=[A-Za-z_])/.exec(text);
-  if (!head) return null;
+  if (!head || templated(text.slice(head[0].length))) return null;
   const rest = text
     .slice(head[0].length)
     .replace(DATA_TERMS, (m) => (m === "data." ? `data.${REPO_NS}.` : m));
@@ -408,8 +409,40 @@ export function namespaced(text) {
 }
 
 // What namespaced() skips (strings with their escapes, raw strings, comments) or rewrites (a
-// `data.` that no dot or word character comes before), in the order Rego's lexer reads them.
-const DATA_TERMS = /"(?:[^"\\\n]|\\.)*"|`[^`]*`|#[^\n]*|(?<![\w.])data\./g;
+// `data.` that no dot or word character comes before), in the order Rego's lexer reads them; a
+// template string's start (`$"`, `` $` ``) stops it, as templated() says.
+const DATA_TERMS = /"(?:[^"\\\n]|\\.)*"|`[^`]*`|#[^\n]*|\$["`]|(?<![\w.])data\./g;
+
+// Whether `text` (a repo file's, after its package) has a template string outside strings and
+// comments: the first one ends the scan, so a string inside its `{…}` can't put it out of step.
+function templated(text) {
+  return templateAt(text) !== null;
+}
+
+// Where `text`'s first template string starts, outside strings and comments: its index, or null.
+function templateAt(text) {
+  for (const m of text.matchAll(DATA_TERMS)) if (m[0] === '$"' || m[0] === "$`") return m.index;
+  return null;
+}
+
+// Why namespaced() refuses repo file `name` (`text`): what its config check and its decisions
+// say. null when it doesn't.
+// `row`: the line it is about (the template string's, else the first).
+export function namespaceRefusal(name, text) {
+  if (namespaced(text) !== null) return null;
+  const head = /^((?:[ \t\r\n]|#[^\n]*(?:\n|$))*)package([ \t]+)(?=[A-Za-z_])/.exec(text);
+  if (!head) {
+    return {
+      row: 1,
+      message: `${name} must start with \`package …\` (after comments only), on one line`,
+    };
+  }
+  const at = head[0].length + templateAt(text.slice(head[0].length));
+  return {
+    row: text.slice(0, at).split("\n").length,
+    message: `${name}: a repository's policies can't use template strings (\`$"…{…}"\`): use sprintf()`,
+  };
+}
 
 // An error of opaErrors()'s list as one line: `file:row: message`.
 const located = ({ file, row, message }) => `${file ? `${file}:${row ?? "?"}: ` : ""}${message}`;
@@ -530,7 +563,8 @@ export function createPolicies({
         for (const [name, text] of files) {
           const staged = layer === "repo" ? namespaced(text) : text;
           if (staged === null) {
-            throw Object.assign(new Error(unplacedPackage(name)), { layer: "repo" });
+            const { message } = namespaceRefusal(name, text);
+            throw Object.assign(new Error(message), { layer: "repo" });
           }
           await writeFile(join(dir, OPERATOR_DIR, layer, name), staged);
         }
@@ -541,10 +575,6 @@ export function createPolicies({
       await rm(dir, { recursive: true, force: true });
     }
   }
-
-  // What a repo file that namespaced() refuses is told.
-  const unplacedPackage = (name) =>
-    `${name} must start with \`package …\` (after comments only), on one line`;
 
   // `layers` ({ operator, repo }: name → text, either absent: not asked) on `input`, by one
   // `opa` → { operator, repo, error, errorLayer }: each asked layer's { allow, denies }:
@@ -817,16 +847,13 @@ export function createPolicies({
         }
       }
     }
-    // A repo file whose package namespaced() can't move: said at its first line, the others
-    // checked without it.
+    // A repo file namespaced() refuses: said at its line, the others checked without it.
     const staging = new Map(files);
     if (layer === "repo") {
       for (const [name, text] of files) {
-        if (namespaced(text) !== null) continue;
-        errors.push({
-          ...placed(name, 1, unplacedPackage(name)),
-          text: failure(unplacedPackage(name))[0],
-        });
+        const why = namespaceRefusal(name, text);
+        if (!why) continue;
+        errors.push({ ...placed(name, why.row, why.message), text: failure(why.message)[0] });
         staging.delete(name);
       }
     }

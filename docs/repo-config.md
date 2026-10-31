@@ -971,7 +971,8 @@ deny_merge contains "labelled do-not-merge" if "do-not-merge" in input.pr.labels
 subfolders), in package `deckhand`; a file in another package is a library its layer's files
 can import. **Two layers**, evaluated by one `opa`, the repository's packages moved under
 `deckhand_repository` (its `data.` references too): neither can define the other's rules. A
-repository's file must start with `package …`, after comments only:
+repository's file must start with `package …`, after comments only, and use `sprintf()`, not
+template strings (`$"…"`):
 
 - **The operator's**: [Deckhand's defaults](#the-default-policies), in the listener's image,
   under the operator's grants folder `policy/` ([security model](security.md#policies)), where

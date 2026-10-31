@@ -10,6 +10,7 @@ import {
   createPolicies,
   DECISIONS,
   namespaced,
+  namespaceRefusal,
   REPO_NS,
   RULES,
   rulesOf,
@@ -228,6 +229,26 @@ test("namespaced: a repo file's package, and its data references, under REPO_NS"
   ]) {
     assert.equal(namespaced(odd), null, JSON.stringify(odd));
   }
+  // A template string's expressions aren't read: refused, at its line, rather than guessed.
+  for (const text of [
+    'package deckhand\n\nx := $"{data.lib.dir}/schema.sql"\n',
+    "package deckhand\n\nx := $`{data.lib.dir}`\n",
+    'package deckhand\n\ny := $"{"a"} data.z"\n',
+  ]) {
+    assert.equal(namespaced(text), null, text);
+    assert.deepEqual(namespaceRefusal("t.rego", text), {
+      row: 3,
+      message:
+        "t.rego: a repository's policies can't use template strings (`$\"…{…}\"`): use sprintf()",
+    });
+  }
+  // But `$` in a string or a comment is no template.
+  const priced = 'package deckhand\n\nx := "costs $\"5\"" # $"no"\ny := data.k\n';
+  assert.equal(
+    namespaced(priced),
+    'package deckhand_repository.deckhand\n\nx := "costs $\"5\"" # $"no"\ny := data.deckhand_repository.k\n',
+  );
+  assert.equal(namespaceRefusal("p.rego", priced), null);
   assert.equal(REPO_NS, "deckhand_repository");
 });
 
@@ -1459,6 +1480,32 @@ deny_github contains "deploy runs don't comment" if input.mode == "deploy"
     const migration = () => ({ decision: "merge", pr: { files: [{ path: "db/data.sql" }] } });
     assert.deepEqual(await dataSql.policies.deny("deny_merge", "org/repo", "main", migration), [
       "db/data.sql waits for a human",
+    ]);
+    // A template string reading its own library: refused (fail closed), at the check and at
+    // each decision; the same rule with sprintf() refuses the merge.
+    const lib = 'package lib\n\ndir := "db"\n';
+    const rule = (path) =>
+      `package deckhand\n\ndeny_merge contains "the schema waits for a human" if {\n  some f in input.pr.files\n  f.path == ${path}\n}\n`;
+    const schema = () => ({ decision: "merge", pr: { files: [{ path: "db/schema.sql" }] } });
+    const templated = layered(t, {
+      repo: { "lib.rego": lib, "schema.rego": rule('$"{data.lib.dir}/schema.sql"') },
+    });
+    assert.deepEqual(await templated.policies.deny("deny_merge", "org/repo", "main", schema), [
+      "policy error: schema.rego: a repository's policies can't use template strings (`$\"…{…}\"`): use sprintf()",
+    ]);
+    assert.deepEqual(
+      (await templated.policies.describe("org/repo", "main")).errors.map((e) => [
+        e.layer,
+        e.file,
+        e.row,
+      ]),
+      [["repo", "schema.rego", 5]],
+    );
+    const formatted = layered(t, {
+      repo: { "lib.rego": lib, "schema.rego": rule('sprintf("%s/schema.sql", [data.lib.dir])') },
+    });
+    assert.deepEqual(await formatted.policies.deny("deny_merge", "org/repo", "main", schema), [
+      "the schema waits for a human",
     ]);
     // Its compile error is placed in its file, without the namespace.
     const bad = layered(t, {

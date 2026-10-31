@@ -1822,7 +1822,8 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
 - **A repository can only narrow your ceiling, except for its own modes within it**: its
   policies run after every built-in gate, and their packages are moved under
   `deckhand_repository` before `opa` reads them (a module's rules are all in its package, the
-  first statement of its file, after comments; a file whose package isn't there is refused),
+  first statement of its file, after comments; a file whose package isn't there, or with a
+  template string, whose expressions aren't read, is refused),
   so they can't define or replace a rule of yours or of your libraries (a helper or a package
   of the same name is its own). Their `data.` references are moved along, so their own
   libraries resolve; one written otherwise only reads yours. A compile error in either layer

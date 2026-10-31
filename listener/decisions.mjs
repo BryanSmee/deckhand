@@ -23,8 +23,9 @@ export function createDecisions({ path, dryRunPath, now = Date.now, secrets = ()
   const decisions = persistentMap(path);
   const dryRuns = persistentMap(dryRunPath);
 
-  // `entry`: { decision, rule, denied, messages, pr, gates, input }, the newest first. Its
-  // input redacted and capped (keptInput()); the older ones lose theirs past MAX_INPUTS.
+  // `entry`: { decision, rule, denied, messages, pr, gates, layers, input }, the newest first
+  // (`layers`: what each policy layer said, policies.mjs evaluated()). Its input redacted and
+  // capped (keptInput()); the older ones lose theirs past MAX_INPUTS.
   function record(key, entry) {
     forgetOld();
     const before = decisions.get(key) ?? [];
