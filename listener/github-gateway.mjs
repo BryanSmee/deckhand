@@ -12,11 +12,11 @@
 // - a review's reads of its thread (comments, reviews, review comments) are refused: it reads
 //   only what allowed users wrote, from TASK_DIGEST (reviews.mjs);
 // - every REST write is checked (github-writes.mjs): classified, its target's kind resolved from
-//   GitHub, then held to its mode's ceiling and the policies' `deny_github`; every GraphQL call
+//   GitHub, then held to the policies' `allow_github` and `deny_github`; every GraphQL call
 //   is parsed and validated, and each of its mutations checked the same way (github-graphql.mjs),
 //   and what goes on is the document as parsed, printed again;
 // - a read of CI's results beyond Actions (check runs, statuses: CHECK_READS, or a GraphQL call
-//   selecting them) is held to `deny_github` as `read_checks`, once per run;
+//   selecting them) is held to the policies as `read_checks`, once per run;
 // - a work run that isn't a fork's gets nothing that would bring a fork's code (github-forks.mjs):
 //   a fork's repository, a fork's pull request's head, a commit that isn't its repository's,
 //   in a fetch, an archive, the API, a page or a file of GitHub's file hosts (FILES:
@@ -26,10 +26,11 @@
 // - every write's body is redacted (the run's tokens, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
-// - the call goes on with a token minted for the run's repo: a write that passed its checks gets
-//   its mode's permissions (modes.mjs permissionsFor()), and what a pull request's own write
-//   needs besides (github-pulls.mjs: `gh pr create`, `edit`, `ready`), anything else the same
-//   that only read (github-app.mjs readsOf()), so nothing unchecked can write; the answer
+// - the call goes on with a token minted for the run's repo, which only reads (github-app.mjs
+//   readsOf(): its mode's reads, modes.mjs permissionsFor()), so nothing unchecked can write: a
+//   write that passed its checks gets one with only the write permission it needs besides
+//   (github-writes.mjs writePermissions(): `issues: write` for an issue's, `pull_requests:
+//   write` for `gh pr create` or `edit`, `contents: write` for `ready`…); the answer
 //   streams back (upstream.mjs forward()), an Actions log's from where GitHub redirects
 //   (ACTIONS_LOGS).
 //
@@ -40,8 +41,7 @@ import { NO_TOKEN, PROJECT_READ, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
-import { classify } from "./github-writes.mjs";
-import { ceilingOf } from "./modes.mjs";
+import { classify, writePermissions } from "./github-writes.mjs";
 import { redact } from "../lib/redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
 import { sendJson } from "../lib/http.mjs";
@@ -108,16 +108,8 @@ export const NEEDS = [
 ];
 // Whether a REST path reads CI's results beyond Actions (CHECK_READS).
 export const readsChecks = (path) => CHECK_READS.some(({ path: re }) => re.test(path));
-// Whether a run's mode's ceiling holds `project` on any kind (modes.mjs ceilingOf()): its token
-// may then read projects, in a repo granted one.
-function addsItems(run) {
-  return Object.values(ceilingOf(run.mode, !run.push)).some((actions) =>
-    actions.includes("project"),
-  );
-}
-
 // What a call needs of the optional permissions: its path's (NEEDS) when the path is `repo`'s,
-// read, and what a checked write needs beyond its mode's (`permissions`), at their levels.
+// read, and what a checked write needs (`permissions`), at their levels.
 export function needed(path, permissions = {}, repo = "") {
   const wanted = { ...permissions };
   for (const { permission, path: re } of NEEDS) {
@@ -311,8 +303,8 @@ export function createGithubGateway({
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
   // (run, action) → null when the run may make that kind of read, else { status, message }
-  // (github-writes.mjs createReadChecks(): `read_checks`, once per run). None: every such read
-  // is refused.
+  // (github-writes.mjs createReadChecks(): `read_checks`, `read_projects`, once per run). None:
+  // every such read is refused.
   checkRead = async () => ({ status: 403, message: "no read of CI's checks is checked here" }),
   // (run, body) → a GraphQL call's { body, write, creates, comments, reacts, unreacts,
   // permissions, pulls, reads, readPaths } as it goes on, or { refused } (github-graphql.mjs
@@ -536,7 +528,7 @@ export function createGithubGateway({
       }
       // A write whose answer may say which issue it created: read as it goes on. `writing`:
       // whether it passed a write's checks, so its token may write; `permissions`, what it needs
-      // beyond its mode's.
+      // to (writePermissions()).
       let watched = null;
       let writing = false;
       let permissions = {};
@@ -613,7 +605,7 @@ export function createGithubGateway({
         if (asked.rerun) watched.rerun = slot = asked.rerun;
         // A POST that writes nothing (rendering markdown) passes, with a token that only reads.
         writing = !refused && !classified?.read;
-        permissions = classified?.permissions ?? {};
+        permissions = writePermissions(classified);
       }
       // The write's own permissions: its path's were checked above.
       if (!refused && writing) refused = await unaccepted(github, run, needed("", permissions));
@@ -819,7 +811,7 @@ export function createGithubGateway({
   }
 
   // `watched`: a write whose answer goes to wroteWrite(); `writing`: for one that passed its
-  // checks, whose token may write, the permissions it needs beyond its mode's; else false.
+  // checks, whose token may write, the permissions it needs to; else false.
   // `advertised`: the repository whose refs the answer advertises to the run's git, remembered
   // (github-forks.mjs); `inflated`: whether `body` is the request's own, inflated.
   async function proxied(
@@ -836,15 +828,18 @@ export function createGithubGateway({
     let token;
     let extra = run.extra;
     try {
-      // Only a run whose ceiling may add an item reads the organization's projects: a review,
-      // an inbox entry or a discussion reads outsiders' text, and nothing narrows the read to
-      // the granted projects.
-      if (addsItems(run) && (await readsProjects(run.repo))) extra = { ...extra, ...PROJECT_READ };
+      // Only a run the policies let read them (`read_projects`: Deckhand's defaults, the modes
+      // that add items) reads the organization's projects: a review, an inbox entry or a
+      // discussion reads outsiders' text, and nothing narrows the read to the granted projects.
+      if ((await readsProjects(run.repo)) && !(await checkRead(run, "read_projects"))) {
+        extra = { ...extra, ...PROJECT_READ };
+      }
     } catch (error) {
       // Its token reads no project: what needs one fails at GitHub, the rest goes on.
       log(`GitHub gateway: ${run.repo}: its grants: ${error.message ?? error}`);
     }
-    const permissions = writing ? { ...extra, ...writing } : readsOf(extra);
+    // Its reads, and a checked write's own permission: never another write.
+    const permissions = writing ? { ...readsOf(extra), ...writing } : readsOf(extra);
     try {
       ({ token } = await github.repoToken(run.repo, permissions));
     } catch (error) {

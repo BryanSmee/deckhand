@@ -24,9 +24,7 @@ const blob = (name: string) => `https://github.com/acme/app/blob/main/.deckhand/
 // Deckhand's allow.rego, as the image ships it.
 const ALLOW_ALL = [
   "package deckhand",
-  ...["merge", "review", "fix", "link_branch", "request_review", "github"].map(
-    (d) => `\nallow_${d} := true`,
-  ),
+  ...["merge", "review", "fix", "link_branch", "request_review"].map((d) => `\nallow_${d} := true`),
 ].join("\n");
 const allowFile = makePolicyFile({
   name: "allow.rego",
@@ -244,12 +242,18 @@ test("no allow rule of the operator's: the decision is never allowed", async () 
 });
 
 test("Deckhand's default files: under the operator's, which replace them by name; the repo's apart", async () => {
-  const gh = 'package deckhand\n\ndeny_github contains "x" if input.custom_mode\n';
+  const gh =
+    'package deckhand\n\nallow_github if input.mode == "work"\n\ndeny_github contains "x" if input.custom_mode\n';
   const drop = "package deckhand\n";
   policies = {
     files: [
       allowFile,
-      makePolicyFile({ name: "github.rego", source: "deckhand", rules: ["deny_github"], text: gh }),
+      makePolicyFile({
+        name: "mode-work.rego",
+        source: "deckhand",
+        rules: ["allow_github", "deny_github"],
+        text: gh,
+      }),
       makePolicyFile({
         name: "gh-a.rego",
         source: "deckhand",
@@ -273,7 +277,7 @@ test("Deckhand's default files: under the operator's, which replace them by name
   await screen.findByRole("list", { name: "Policy files" });
   expect(rows().map((r) => r.querySelector("[class*=path]")!.textContent)).toEqual([
     "deckhand/policy/allow.rego",
-    "deckhand/policy/github.rego",
+    "deckhand/policy/mode-work.rego",
     "grants/policy/gh-a.rego",
     "deckhand/policy/gh-a.rego",
     "grants/policy/gh-b.rego",
@@ -311,7 +315,13 @@ test("Deckhand's default files: under the operator's, which replace them by name
   // What deny_github reads of the run, and where its input is documented.
   const input = screen.getByRole("link", { name: "The GitHub input" });
   expect(input.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-github-input$/);
-  expect(input.closest("p")!.textContent).toMatch(/read_checks, no target or change/);
+  expect(input.closest("p")!.textContent).toMatch(
+    /read_checks, read_projects, no target or change/,
+  );
+  // And what deny_push reads.
+  const push = screen.getByRole("link", { name: "The push input" });
+  expect(push.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-push-input$/);
+  expect(push.closest("p")!.textContent).toMatch(/^allow_push and deny_push read each branch/);
   expect(input.closest("p")!.textContent).toMatch(/custom_mode.*light.*reason/);
   expect(source("deckhand/policy/gh-a.rego").textContent).toContain(
     "replaced by the operator's: not evaluated",

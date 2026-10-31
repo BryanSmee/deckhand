@@ -1,13 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import {
-  DISCUSSION_PERMISSIONS,
-  LIGHT_PERMISSIONS,
-  NO_TOKEN,
-  READ_ONLY_PERMISSIONS,
-  SANDBOX_PERMISSIONS,
-} from "../listener/github-app.mjs";
+import { DISCUSSION_PERMISSIONS, NO_TOKEN, SANDBOX_PERMISSIONS } from "../listener/github-app.mjs";
 import { isFresh, isLight, kindOf, permissionsFor, RESERVED_MODES } from "../listener/modes.mjs";
 import {
   compactTables,
@@ -72,32 +66,23 @@ test("modes: light, fresh and the dashboard's kind, built-in or the repo's own",
   assert.equal(kindOf("research", "issue"), "research");
 });
 
-test("modes: discussions may write them, onboarding and light repo modes only read", () => {
-  assert.equal(permissionsFor("discussion", true), DISCUSSION_PERMISSIONS);
-  assert.equal(permissionsFor("onboarding", true), READ_ONLY_PERMISSIONS);
-  assert.equal(permissionsFor("audit", true), READ_ONLY_PERMISSIONS);
-  // A review only reads, whatever its repo says: the listener posts the review.
-  assert.equal(permissionsFor("review"), READ_ONLY_PERMISSIONS);
-  assert.equal(permissionsFor("review", false), READ_ONLY_PERMISSIONS);
+test("modes: every token only reads, discussions' reads them, research gets none", () => {
+  assert.equal(permissionsFor("discussion"), DISCUSSION_PERMISSIONS);
+  assert.deepEqual(DISCUSSION_PERMISSIONS, { discussions: "read" });
+  // The others read what the sandbox's token reads: what a run writes is the policies'.
+  for (const mode of ["work", "brainstorm", "stop", "idea", "bug", "onboarding", "analyze"]) {
+    assert.equal(permissionsFor(mode), undefined, mode);
+  }
+  for (const mode of ["review", "audit", "triage"]) assert.equal(permissionsFor(mode), undefined);
   assert.equal(isLight({ settings: {} }, "review"), true);
   assert.equal(isFresh({ settings: {} }, "review"), true);
-  // An analysis reports: it files nothing itself.
-  assert.equal(permissionsFor("analyze", true), READ_ONLY_PERMISSIONS);
-  // Brainstorms and inbox entries comment and create issues, never touch a pull request.
-  for (const mode of ["brainstorm", "stop", "idea", "bug"]) {
-    assert.equal(permissionsFor(mode, true), LIGHT_PERMISSIONS, mode);
-  }
-  assert.equal(DISCUSSION_PERMISSIONS.pull_requests, "read");
   // Research reads the open web: no token at all, not even one that reads.
-  assert.equal(permissionsFor("research", true), NO_TOKEN);
-  assert.equal(permissionsFor("work", false), undefined);
-  assert.equal(permissionsFor("triage", false), undefined);
-  // Workflows: the git gateway's push token only (allow_workflows), never a sandbox's.
-  assert.equal(SANDBOX_PERMISSIONS.workflows, undefined);
+  assert.equal(permissionsFor("research"), NO_TOKEN);
+  // Nothing a sandbox's token writes, workflows least of all: the git gateway's push token only
+  // (allow_workflows).
+  assert.ok(Object.values(SANDBOX_PERMISSIONS).every((level) => level === "read"));
   for (const mode of [...RESERVED_MODES, "audit"]) {
-    for (const light of [true, false]) {
-      assert.equal(permissionsFor(mode, light)?.workflows, undefined, mode);
-    }
+    assert.equal(permissionsFor(mode)?.workflows, undefined, mode);
   }
 });
 

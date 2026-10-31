@@ -16,9 +16,12 @@ import { StatusBadge } from "./ui/Status";
 import styles from "./PolicyConfig.module.css";
 
 const COMMAND = "Deckhand /mode policy";
-// What deny_github reads, field by field.
+// What allow_github and deny_github read, field by field.
 const GITHUB_INPUT =
   "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-github-input";
+// What deny_push reads.
+const PUSH_INPUT =
+  "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-push-input";
 // What deny_run reads.
 const RUN_INPUT =
   "https://github.com/BryanSmee/deckhand/blob/main/docs/repo-config.md#the-run-input";
@@ -141,9 +144,20 @@ const DECISIONS: {
     decision: "github",
     name: "GitHub writes and checks",
     denies:
-      "A denial refuses a run's write to GitHub (REST or GraphQL), or its reads of CI's checks (read_checks, as gh pr checks and gh pr view make); gh prints the messages to the agent.",
+      "A denial refuses a run's write to GitHub (REST or GraphQL), or its reads of CI's checks (read_checks, as gh pr checks and gh pr view make) and of projects (read_projects); gh prints the messages to the agent.",
     refused: (until) =>
       `Every run's write to GitHub, and every read of CI's checks, is refused ${until}.`,
+    allows: () =>
+      "Its allow rules decide what each mode writes: Deckhand's mode-<mode>.rego, one file per mode.",
+  },
+  {
+    decision: "push",
+    name: "Pushes",
+    denies:
+      "A denial refuses a run's push of a branch (the whole push): git prints the messages for each ref.",
+    refused: (until) => `Every run's push is refused ${until}.`,
+    allows: () =>
+      "Its allow rules decide which modes push: Deckhand's mode-work.rego, work runs and the repo's modes that aren't light.",
   },
 ];
 
@@ -235,14 +249,23 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         which need the operator's allow too.
       </p>
       <p class={styles.model}>
-        <code>deny_github</code> reads the write (<code>action</code>, <code>target</code>,{" "}
-        <code>change</code>), or a read of CI's checks (<code>action</code> <code>read_checks</code>
-        , no <code>target</code> or <code>change</code>), and the run: its <code>mode</code>,{" "}
+        <code>allow_github</code> and <code>deny_github</code> read the write (<code>action</code>,{" "}
+        <code>target</code>, <code>change</code>), or a read of CI's checks or of projects (
+        <code>action</code> <code>read_checks</code>, <code>read_projects</code>, no{" "}
+        <code>target</code> or <code>change</code>), and the run: its <code>mode</code>,{" "}
         <code>custom_mode</code> (one of the repo's <code>modes:</code>), <code>light</code> and{" "}
         <code>reason</code> (<code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or
         null).{" "}
         <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
           The GitHub input
+        </a>
+      </p>
+      <p class={styles.model}>
+        <code>allow_push</code> and <code>deny_push</code> read each branch a run pushes, after the
+        git gateway's own checks: the run's fields, the <code>branch</code>, whether the push{" "}
+        <code>created</code> or <code>deleted</code> it, and the <code>default_branch</code>.{" "}
+        <a href={PUSH_INPUT} target="_blank" rel="noreferrer">
+          The push input
         </a>
       </p>
       <p class={styles.model}>

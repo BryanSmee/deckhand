@@ -7,6 +7,7 @@
 // policy says: each capability's dependencies, and the risky combinations. One function,
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
 // config page shows it for each mode (repos.mjs). Format: ../docs/repo-config.md#capabilities.
+import { NO_TOKEN, readsOf } from "./github-app.mjs";
 import { BUILT_IN, customMode, isLight, MODES, OPEN, permissionsFor } from "./modes.mjs";
 import { ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
@@ -274,12 +275,12 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
   // The reads aren't the token's yet (#497): one refused while the run has `pull`, and so its
   // mode's token, is still read when that token has it.
   if (used.includes("pull") && mode !== null) {
-    const token = permissionsFor(mode, isLight({ settings }, mode));
+    const extra = permissionsFor(mode);
+    const token = extra === NO_TOKEN ? {} : readsOf(extra);
     for (const c of capabilities) {
       const permission = READ_PERMISSIONS[c.name];
       if (!permission || c.used || !["denied", "not-allowed"].includes(c.status)) continue;
-      // undefined: the installation's own permissions, all of them.
-      if (token !== undefined && !token?.[permission]) continue;
+      if (!token[permission]) continue;
       warnings.push(
         `\`${c.name}\` isn't given, but the run's token still reads it until #497: its mode's permissions decide the token`,
       );

@@ -45,6 +45,13 @@ that file asks for, so none can:
   `gh-pages` or `release/*`, tags, signed and compressed pushes. The refusal shows in git's
   output as `[remote rejected] … (Deckhand: …)`.
 
+  Past these checks, each branch a push updates is a `push` decision of the
+  [policies](#policies) (`allow_push`, `deny_push`: [the push input](repo-config.md#the-push-input)):
+  one refused refuses the whole push. Deckhand's default, `policy/mode-work.rego`, allows work
+  runs' pushes and those of a repository's own modes that aren't light (which need the
+  repository's `allow_push` too); without policies, every push is refused. A policy can only
+  narrow the checks above: no rule reaches another task's branch or the default one.
+
 - **One branch is created outside the git gateway**: a work run's own, by the listener, as
   the run starts, so its issue's Development sidebar links it (`listener/linked-branch.mjs`,
   GitHub's `createLinkedBranch`, which creates the branch it links: GitHub links no existing
@@ -65,18 +72,19 @@ that file asks for, so none can:
   `updatePullRequest`, `markPullRequestReadyForReview`, `convertPullRequestToDraft`,
   `updatePullRequestBranch`, or REST's `POST` and `PATCH` of `…/pulls` and `PUT
 …/pulls/<n>/update-branch`) go through the [GitHub gateway](#the-github-gateway) as any write, with
-  every `gh` flag the ceiling holds, and only a work run's ceiling holds them, for its own
-  pull requests and new ones. Then `listener/github-pulls.mjs` checks that a new pull
+  every `gh` flag the policies allow: Deckhand's default (`policy/mode-work.rego`) allows them to
+  work runs only, for their own pull requests and new ones. Before the policies, whatever they
+  say, `listener/github-pulls.mjs` checks that a new pull
   request's head is a branch of the repository the run may push (above), never
   `owner:branch`, another repository's head (`head_repo`, `headRepositoryId`) or an issue
   turned into one (`issue`), and that an existing one's head is too before it is edited,
-  readied, drafted or has its branch updated, over any endpoint (`…/issues/<n>` included, which the run's own
-  `issues: write` would reach), or its token writes more than the run's own (a run on a
+  readied, drafted or has its branch updated, over any endpoint (`…/issues/<n>` included, whose
+  write token has `issues: write`), or its token writes more than an issue's (a run on a
   fork's pull request may still comment on it and label it, not rewrite its author's title
   and description): another task's pull request is refused, and so is opening one from another branch.
   A pull request that conflicts with its base (`mergeable_state: dirty`) is refused ready
   with a 409 until the run rebases it. Only then does that one call get the token it needs
-  besides the mode's: `pull_requests: write` to open or edit one, `contents: write` to ready
+  ([a token per write](#tokens)): `pull_requests: write` to open or edit one, `contents: write` to ready
   or draft one or update its branch (GitHub asks an App's token for it), which the sandbox never sees, and which
   carries only the document the gateway checked. Only the head is checked: a run may open
   its pull request into any base branch, which it reaches only when a maintainer merges
@@ -92,9 +100,9 @@ that file asks for, so none can:
   same merge check as readying the pull request does ([below](#github-actions-on-deckhands-branches)),
   since the pull request's workflows then run from that merge with a base that may have
   changed since the last push. GitHub refuses an update with conflicts, which the run rebases
-  locally as before. Deckhand's default policy for it, `policy/gh-update-branch.rego` (shipped
-  in the policy service's image), refuses nothing: work runs update their branch, and a repository's
-  own modes once its `.deckhand/policy/` allows them (`allow_github`).
+  locally as before. Deckhand's default policy for it, `policy/mode-work.rego` (shipped in the
+  policy service's image), allows it to work runs, and to a repository's own modes once its
+  `.deckhand/policy/` allows them (`allow_github`).
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
@@ -387,18 +395,31 @@ gateway, which adds the token. In this document, "a sandbox's token" or "a run's
 that token: what the gateway sends GitHub for the run's calls, never something the sandbox
 can read.
 
-- It is an installation token minted for the run's repository only, with its mode's
-  permissions (`listener/modes.mjs` `permissionsFor()`): it reads the code, can't push
-  (pushes go through the git gateway, with the run token), and can write issues (and
-  discussions, for discussion runs) there. Onboarding, run analyses, reviews and a repo's
-  light modes only read issues.
-- **No sandbox token writes pull requests** (`pull_requests: read`, work runs included), so
-  no sandbox can review one: `pull_requests: write` would let a run approve any pull request
-  of its repository as the App, its own included, or replace a review mode's request for
-  changes (GitHub counts a reviewer's latest review). The gateway adds it to a work run's
-  checked writes to its own pull requests alone, opening or editing one, or replying to or
-  resolving one of its review threads, whose document is the one it checked ([The default branch](#the-default-branch)): reviews and merges are in
-  no ceiling. Comments on a pull request take `issues: write`.
+- It is an installation token minted for the run's repository only, and **it only reads**:
+  the code, issues, pull requests, CI's results (`listener/github-app.mjs`
+  `SANDBOX_PERMISSIONS`), and what its mode reads besides (`listener/modes.mjs`
+  `permissionsFor()`: a discussion run's discussions; a research run gets none). It can't
+  push (pushes go through the git gateway, with the run token). The organization's projects
+  only for a run the policies allow `read_projects`, in a repository granted one
+  ([Projects](repo-config.md#projects)).
+- **A token per write.** Each write the gateway checked and the policies allowed gets a token
+  of its own, minted for that call, with the run's reads and only the write permission it
+  needs (`listener/github-writes.mjs` `writePermissions()`): `issues: write` for an issue's (a
+  comment, a label, a link, a reaction, an assignee, a milestone, a label it creates, a
+  comment it edits), `pull_requests: write` to open or edit a pull request or answer one of
+  its review threads (and `issues: write` too when it sets labels, assignees or a
+  milestone), `contents: write` to ready or draft one or update its branch, `actions: write`
+  for a rerun, `organization_projects: write` for a project's item. Anything else the run
+  sends gets the read-only token, so nothing unchecked can write.
+- **No sandbox token writes pull requests** outside those checked writes, so no sandbox can
+  review one: `pull_requests: write` would let a run approve any pull request of its
+  repository as the App, its own included, or replace a review mode's request for changes
+  (GitHub counts a reviewer's latest review). The gateway gives it to a work run's checked
+  writes to its own pull requests alone, opening or editing one, or replying to or resolving
+  one of its review threads, whose document is the one it checked
+  ([The default branch](#the-default-branch)): reviews are refused whatever the policies say,
+  and no default rule allows a merge (whose token, writing issues only, would fail at GitHub
+  anyway). Comments on a pull request take `issues: write`.
 - Tokens are cached per repository and permission set, renewed 10 minutes before their
   end, and shared by that repository's runs with the same permissions. GitHub makes them
   valid for an hour, which the listener can't shorten, but none leaves the listener, so none
@@ -651,7 +672,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   the listener's own included (the same bot writes them), is refused before any look-up. A sub-issue link's child, named by its id, must be one the run created or
   one already under its issue, and moving an issue from
   another parent (`replace_parent` with any value but `false`) is refused: a link could
-  otherwise take any issue under the run's, where its ceiling lets it edit. A "blocked by"
+  otherwise take any issue under the run's, where its policies would let it edit. A "blocked by"
   link is a `link` on the blocked issue, and its blocker must be an issue the run created,
   one under its issue, or an open issue of its repository: never a pull request or another
   repository's issue. It orders work (`plans.mjs`), and leaves only a timeline event (and its
@@ -661,48 +682,60 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   `resolve`, and opening it again (`unresolveReviewThread`) an `unresolve`, all on the thread's
   pull request: the thread is looked up on GitHub by its first comment, must be on that pull
   request, and its first comment's author (and whether it is the App's bot) goes to the
-  policies. Their default (`policy/gh-review-threads.rego`: never resolving a person's thread;
-  a repository's own modes only once it allows them) ships in the policy service's image like Deckhand's other default policies. A new review,
-  or a review comment that answers no thread, stays in no ceiling. A
+  policies. Their default (`policy/mode-work.rego`: work runs only, never resolving a person's
+  thread; a repository's own modes only once it allows them) ships in the policy service's
+  image like Deckhand's other default policies. A new review, or a review comment that answers
+  no thread, is refused whatever the policies say. A
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
-  - a write it can't classify, one outside the run's repository, and one above the **mode's
-    ceiling** (`listener/modes.mjs` `ceilingOf()`, built in: [the table](repo-config.md#the-github-input))
-    are refused before any policy runs. A work run writes its own issue, its pull requests
-    (readying, drafting them and updating their branch with a merge too: [The default branch](#the-default-branch)), its issue's
-    sub-issues and the issues it created (their labels too, but for `NEEDS_INPUT_LABEL`, which
-    its label writes neither add nor remove there: taking it off answers their questions; an
-    edit dropping their questions section still does), replies to, resolves and unresolves its pull
-    requests' review threads, and creates labels, issues, and
-    pull requests from its own branches, and edits and deletes the comments it posted (the
-    default policy, `policy/gh-own-comments.rego`, refuses deleting them), and reruns the failed
-    GitHub Actions jobs of its own pull request's head (below), nothing else: not other issues and pull requests, though its token could. It reacts on its issues and pull requests and the
-    comments there (a comment's issue or pull request, read from GitHub, is the target), a
-    brainstorm on its own issue and its comments, and removes only the reactions GitHub said
-    it added and hasn't removed since (saved with the run like the issues it created, its 100
-    newest): the App's bot also adds the listener's reactions, which a run never removes, on
-    any comment, even where the run's same reaction came first (GitHub keeps one per user and
-    content): the listener notes each one before it asks GitHub (`reactions.json`, issue #458). It
-    may assign and set the milestone of those it writes, a brainstorm only the milestone of
-    the issues it files; an assignee it adds must be one of the repository's allowed users or
-    the App's bot, never Copilot, whatever the policies say: an assignment notifies them
-    (Deckhand's default policy, `policy/gh-assign-milestone.rego`, refuses assigning). No ceiling holds closing, merging, reviews, deleting anything else,
-    the repository's contents or settings; onboarding, analyses, reviews and a repository's
-    light modes write nothing. Only a grant could widen a ceiling, and none does yet;
+  - a write it can't classify and one outside the run's repository are refused before any
+    policy runs, and so are the **built-in checks** that hold whatever a policy says: a link's
+    child and blocker (above), a reaction removed only if the run added it, an assignee, a
+    project, a pull request's branch ([The default branch](#the-default-branch)), a rerun
+    (below), `NEEDS_INPUT_LABEL` (which a run's label writes neither add nor remove on the
+    issues it created: taking it off answers their questions; an edit dropping their
+    questions section still does). An assignee it adds must be one of the repository's allowed
+    users or the App's bot, never Copilot: an assignment notifies them. A reaction's target is
+    the comment's issue or pull request, read from GitHub; a run removes only the reactions
+    GitHub said it added and hasn't removed since (saved with the run like the issues it
+    created, its 100 newest): the App's bot also adds the listener's reactions, which a run
+    never removes, on any comment, even where the run's same reaction came first (GitHub keeps
+    one per user and content): the listener notes each one before it asks GitHub
+    (`reactions.json`, issue #458). Whatever a policy says, no run writes the repository's
+    contents (pushes go through the git gateway) or settings, reviews, or a comment it didn't
+    post;
   - an item added to a project (v2) (`addProjectV2ItemById`, issue #454) is a `project` on
-    its content: a work run's issue, pull requests, sub-issues and the issues it created, a
-    brainstorm's created issues. A project is outside every repository, so per-repo config
+    its content. A project is outside every repository, so per-repo config
     can't name one: its project, looked up from its node ID with the listener's token, must
     be one the operator's grants list for the repository (`allow_projects`), or it is refused
     before any policy, which can't reach another. Only that write's token gets
-    `organization_projects: write`; a granted repository's runs whose ceiling holds `project`
-    read the organization's projects, never a review, an inbox entry, a discussion or an
+    `organization_projects: write`. In a granted repository, only the runs the policies allow
+    `read_projects` (a read, once per run: Deckhand's defaults give it to work runs,
+    brainstorms and a repository's modes that aren't light) read the organization's projects,
+    never a review, an inbox entry, a discussion or an
     analysis, which read outsiders' text (the App can't narrow its token to one project: their titles, fields and the
     items it can see, which GitHub redacts for repositories the token doesn't cover). Setting
     an item's fields, removing or archiving it, and the project's settings, fields and views
-    are in no ceiling: the listener moves the repository's issues itself, from its
+    are refused: the listener moves the repository's issues itself, from its
     `projects:` ([Projects](repo-config.md#projects)), on granted projects only;
-  - then the policies' **`allow_github` and `deny_github`** ([Policies](#policies)), which can
-    only narrow it: the operator's allow, the repository's too for its own modes, and no deny.
+  - then the policies' **`allow_github` and `deny_github`** ([Policies](#policies)): the write
+    goes on when an allow rule of the operator's matches it (the repository's too for its own
+    modes) and no deny rule does. No rule, no write; no policies, every write refused.
+    Deckhand's defaults hold what each mode writes, one file per mode
+    ([the default policies](repo-config.md#the-default-policies), [the table](repo-config.md#the-github-input)):
+    a work run (`policy/mode-work.rego`) writes its own issue, its pull requests (readying,
+    drafting them and updating their branch with a merge too), its issue's sub-issues and the
+    issues it created (their labels, reactions, projects and milestones too), replies to,
+    resolves and unresolves its pull requests' review threads, creates labels, issues, and pull
+    requests from its own branches, edits the comments it posted, and reruns the failed GitHub
+    Actions jobs of its own pull request's head (below), nothing else: not other issues and
+    pull requests. Its deny rules refuse deleting a comment, resolving a person's thread,
+    assigning anyone and a rerun past a first. A brainstorm (`mode-brainstorm.rego`) edits and
+    reacts on its own issue, files issues and labels, orders and files its follow-ups (a
+    "blocked by" link, a project, a milestone), and never comments: the listener posts its
+    reply. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label
+    and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,
+    analyses, reviews, research and a repository's light modes write nothing. No default rule
+    allows closing, merging, locking or a label's settings.
 
   A **rerun** (`POST …/actions/runs/<id>/rerun-failed-jobs`, `…/actions/jobs/<id>/rerun`,
   issue #451; never a whole run's `…/rerun`, cancelling, dispatching, approving a fork's run
@@ -712,17 +745,16 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   them up and takes the pull request whose head commit that run tested as its target: a run
   that failed (`failure`, `timed_out`, `cancelled`), of a push or a pull request of a branch
   of the repository (not a fork's), whose head commit is still that of an open pull request
-  of that branch. That pull request must be the run's own (`own_pr`), held to the ceiling as
-  any target (only work runs and a repository's modes that aren't light have `rerun`), and its
-  branch one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
+  of that branch. That pull request is held to the policies as any target (Deckhand's default
+  allows `rerun` on the run's own, `own_pr`, to work runs and a repository's modes that aren't
+  light), and its branch must be one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
   head commit (`MAX_RERUNS`: a rerun takes a slot once its checks pass, with no await between
   the count and the slot, so calls made at once can't pass it; the slot is saved with the run
   before the call goes out, so a listener restarted meanwhile still counts it, and is freed when GitHub
   refuses it or it never goes out, and counted from GitHub's answer (or from none at all: a
   call whose answer was lost may have gone out, so it counts, fail closed), with the run and commit its check
   resolved, never looked up again, and saved with the run across a restart), and Deckhand's
-  default policy narrows it to a first rerun of each workflow run, in work runs and the
-  repository's own modes it allows ([repository config](repo-config.md#reruns)). Its token gets `actions: write` for that
+  default policy (`policy/mode-work.rego`) denies all but a first rerun of each workflow run ([repository config](repo-config.md#reruns)). Its token gets `actions: write` for that
   one call; the sandbox's own only reads Actions.
 
   A refusal (a look-up GitHub fails: `502`, fail closed) answers in GitHub's error shape
@@ -754,7 +786,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   their variables (resolved as GitHub resolves them), are looked up with the listener's
   token to a repository, a kind and a number, so the call's own claims say nothing; a node
   outside the run's repository is refused like a missing one, before its type is named; each
-  field is then a write as above, held to the ceiling and `deny_github` with the same input,
+  field is then a write as above, held to the built-in checks, `allow_github` and
+  `deny_github` with the same input,
   and one refusal refuses the call. What goes on is the document as the gateway parsed it,
   printed again (`print()`), never the call's bytes: GitHub runs exactly what was checked.
   That document is redacted again: a secret spelled with GraphQL's own escapes (`\u0064`)
@@ -772,21 +805,21 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   check's name, state, conclusion, links, timestamps, and the title, summary and annotations
   its App wrote; nothing it couldn't already learn by reading the code and running the tests,
   but for what an external service chose to publish there. Neither permission writes: the
-  routes that create or rerun a check are writes no ceiling holds. Each such read is first
-  held to `deny_github`, with `action: "read_checks"` and no target
-  ([The GitHub input](repo-config.md#the-github-input)), once per run, the answer kept: its
+  routes that create or rerun a check are writes Deckhand doesn't classify, so refused. Each
+  such read is first held to `allow_github` and `deny_github`, with `action: "read_checks"`
+  and no target ([Reading CI's checks](repo-config.md#reading-cis-checks); Deckhand's
+  `policy/gh-checks.rego` allows it in every mode), once per run, the answer kept: its
   input depends on the run only, and `gh pr checks --watch` polls. A refusal refuses the
   call, `gh pr view` without `--json` included. It hides the checks, not whether CI passes:
   a pull request's `mergeStateStatus` (`UNSTABLE`) and search's `status:success|failure|pending`
   qualifier stay readable, as any pull request's state and any search. Without the permissions, the REST reads are
   refused, naming them; a GraphQL read goes on with a token that lacks them, and GitHub's
   refusal of those fields comes back as Deckhand's message (`explained()`).
-- **On to GitHub** with a token for the run's repository: its mode's permissions only for a
-  write that passed these checks (and a pull request's own write's: `pull_requests` or
-  `contents`, [The default branch](#the-default-branch); a rerun's `actions: write`), the same permissions read-only for
-  everything else
-  (`listener/github-app.mjs` `readsOf()`), so a brainstorm's or an inbox entry's
-  `issues: write` reaches only what its ceiling and the policies allowed (`token …` for the
+- **On to GitHub** with a token for the run's repository: the run's reads, and only for a
+  write that passed these checks the one write permission it needs
+  (`listener/github-writes.mjs` `writePermissions()`, [Tokens](#tokens)), read-only for
+  everything else (`listener/github-app.mjs` `readsOf()`), so no write reaches GitHub
+  unchecked (`token …` for the
   API, Basic with `x-access-token` for git, as GitHub expects an App's), the sandbox's `Authorization` and
   cookies dropped. An optional permission its installation hasn't accepted
   (`OPTIONAL_PERMISSIONS`, [setup](setup.md#when-the-app-needs-a-new-permission)) is left
@@ -1012,7 +1045,7 @@ whose old name is the same.
 
 Light runs (brainstorms, onboarding, inbox entries, discussions, the repo's light modes) read
 and comment (brainstorms, inbox entries and discussions also create issues); work runs push.
-The git gateway refuses light runs, and their ceilings hold no pull request write but a brainstorm's comment. They never share a writable volume: what a light run could
+The git gateway refuses light runs, and Deckhand's default policies allow them no pull request write. They never share a writable volume: what a light run could
 leave in a clone or a session (git hooks, Claude's hooks and settings, code) would otherwise
 run in the issue's next work run, with its token. So light runs get their own `-light-` clone and
 session, no cache volumes (they run no setup), and granted host paths read-only. A work run
@@ -1694,7 +1727,7 @@ text is posted as the App's, ending "From the dashboard by @alice". Reading a th
 for a discussion in that category only. The thread shows a post as a dashboard user's only when
 the App wrote it and its line carries a tag that checks: an HMAC of the user and the text, with
 a key derived from the App's webhook secret, which no run holds. Anyone else writing the same
-line is shown as themself; a run (which posts as the App, `discussions: write`) writing it, or
+line is shown as themself; a run (whose writes are the App's) writing it, or
 copying a tag under other text, is shown as the App. Deckhand's answers are the App's posts
 that end with the marker. Posts from before the tags show as the App's.
 
@@ -1962,8 +1995,9 @@ run, a CI fix run or a conflict's rebase run; `link_branch`, the branch the list
 work run's issue ([The default branch](#the-default-branch)); `request_review`, the reviewers
 the listener requests on Deckhand's ready pull request (`review.request`, allowed users only,
 never a team, and never at a run's request); `github`, a run's write to GitHub (REST, or a
-GraphQL mutation's field), under its mode's built-in ceiling:
-[The GitHub gateway](#the-github-gateway). Each has two rules: `allow_<decision>` and
+GraphQL mutation's field), and its reads of CI's checks and of projects, after the gateway's
+built-in checks: [The GitHub gateway](#the-github-gateway); `push`, each branch a run's push
+updates, after the git gateway's: [The default branch](#the-default-branch). Each has two rules: `allow_<decision>` and
 `deny_<decision>`; what a run gets as it starts has two of its own ([Capabilities](#capabilities)). **A decision is allowed when an allow rule matches and no deny rule does**:
 a deny always wins, and with no allow rule matching it is refused, so an empty or replaced file
 refuses rather than opens, and a new decision starts closed.
@@ -1973,11 +2007,13 @@ query of one `opa` (as before allow rules: a built-in mode pays nothing extra), 
 namespace of its own:
 
 - **The operator's**: Deckhand ships its own in the policy service's image
-  ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows each
-  decision but `run`, `run.rego`, which allows each mode where it makes sense (brainstorms and
-  onboarding on issues only), `github.rego`, a `gh-<feature>.rego` per `gh` feature,
-  `review.rego`, and a `mode-<mode>.rego` per mode for its capabilities), which hold without any
-  setup. Yours are the `*.rego` files of `policy/` in the grants folder, which the policy service
+  ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows the
+  listener's own decisions (`merge`, `review`, `fix`, `link_branch`, `request_review`),
+  `run.rego`, which allows each mode where it makes sense (brainstorms and onboarding on issues
+  only), a `mode-<mode>.rego` per mode for what its runs get, write and push
+  (`allow_capabilities`, `allow_github`, `allow_push`), a `gh-<feature>.rego` for a feature
+  that isn't a mode's (`gh-checks.rego`, `gh-linked-branch.rego`, `gh-reviewers.rego`), and
+  `review.rego`), which hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, which the policy service
   mounts read-only and reads again at each decision: one with the same name as Deckhand's
   replaces it, others add to them. **Their allow rules are the ceiling** of every repository: a
   caller sends a repository's files, never yours. The listener reads your folder too and sends,
@@ -1992,7 +2028,7 @@ namespace of its own:
   `review` and `fix`, a config check error). A file of its with the name of one of yours, or of
   Deckhand's, replaces nothing.
 
-- **A repository can only narrow your ceiling, except for its own modes within it**: its
+- **A repository can only narrow what you allow, except for its own modes within it**: its
   policies run after every built-in gate, and their packages are moved under
   `deckhand_repository` before `opa` reads them (a module's rules are all in its package, the
   first statement of its file, after comments; a file whose package isn't there, or with a
@@ -2003,8 +2039,8 @@ namespace of its own:
   `opa` holds one repository's files at most). A compile error in either layer
   refuses the decision, as any policy error. The grants (`allow_auto_merge` and the rest: settings of yours, not
   rules) and the built-in gates stay what they are, so any repository may have policies, with
-  no grant: they never drop one of your refusals, a gate's or a mode's ceiling (a light
-  repository mode still writes nothing). If a rule must hold for every repository whatever it
+  no grant: they never drop one of your refusals or a gate's, nor widen what your allow rules
+  give (a light repository mode still writes nothing with Deckhand's defaults). If a rule must hold for every repository whatever it
   says, it belongs in your policies, a grant or a built-in gate. One default stands where a
   gate was: `review.rego` skips other bots' pull requests, which the review's allowlist
   (people only) used to stop. Replacing it in your grants folder is how you have those
@@ -2062,9 +2098,10 @@ namespace of its own:
   `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
   sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says
   why); for `github`, the run's write is refused, so a broken policy stops every run's writes
-  in that repository. Deckhand's own `github.rego` defines `deny_github` everywhere, so every
-  run's GitHub write asks the policy service: a policy service that can't be reached stops the
-  runs' writes in every repository. The listener waits up to 30 seconds for one that refuses
+  in that repository; for `push`, the whole push is refused. Every run's GitHub write and push
+  asks the policy service (no allow rule, no write: Deckhand's `mode-<mode>.rego` files hold
+  them), so a policy service that can't be reached stops the runs' writes and pushes in every
+  repository. The listener waits up to 30 seconds for one that refuses
   its connection or is draining (an update, a restart), then refuses; so does an `opa` that
   doesn't start (its temp folder unwritable, say). A refusal only
   ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
@@ -2173,15 +2210,16 @@ is a risky combination's name anywhere but your allow rules.
 
 Deckhand's defaults (`policy/mode-<mode>.rego`) give each built-in mode what its traits gave
 before capabilities: work runs (a maintainer's, fix and conflict runs) everything but
-`internet` (their token is the installation's own, Discussions included); brainstorms, inbox entries, discussions (with
+`internet`; brainstorms, inbox entries, discussions (with
 `read:discussions`), onboarding, analyses and reviews `pull`, `image:repo` and the reads, and so
 neither `push`, `setup` nor an engine; research `internet` alone. A review or a brainstorm on a
 pull request no longer runs on its branch's image, which needs `push`. `mode-work.rego` also
 gives the repository's own modes work's, as your ceiling: they get what their repository's
 policies allow within it. Until those allow it something, its runs are refused with a reply
-naming the rule to add: started, they would answer without the code their mode expects. The
-mode's traits still decide the token of a run with `pull`, its writes' ceiling and its volumes
-until #496–#498 move them.
+naming the rule to add: started, they would answer without the code their mode expects. What
+a run writes to GitHub and where it pushes are the same files' (`allow_github`, `allow_push`:
+[The GitHub gateway](#the-github-gateway)); the mode's traits still decide what a run with
+`pull` has its token read and its volumes until #497–#498 move them.
 
 ## Research runs
 

@@ -1,8 +1,10 @@
 // What a run may write to GitHub (issue #405): each REST write the GitHub gateway relays
 // (github-gateway.mjs) is classified from its method, path and body into actions on a target,
 // the target's kind is resolved from GitHub (never from the request), and the write goes on only
-// when its mode's ceiling (modes.mjs ceilingOf()) holds each action on that kind and the
-// policies' `deny_github` (policies.mjs) refuses nothing. A write it can't classify is refused.
+// when the policies allow it (policies.mjs): an `allow_github` rule matches it and no
+// `deny_github` rule refuses it. Deckhand's defaults allow each mode what it writes, in its own
+// file (../policy/mode-<mode>.rego: what the modes' built-in ceilings were). A write it can't
+// classify is refused, and so is every write when no policy is there to decide.
 // GraphQL's mutations are classified by github-graphql.mjs (#406), each into the same shape,
 // and held to the same checks (checkWrite()). A pull request's own writes (opening, editing,
 // readying, drafting one, updating its branch) are then held to github-pulls.mjs's checks too.
@@ -14,24 +16,25 @@
 // `other_issue`, `pr`, `new_issue` (an issue it creates), `new_pr` (a pull request it opens),
 // `label` (a label of the repo it creates), `created_comment` (an issue's or pull request's
 // comment this run posted: GitHub answered the run's own comment with it, as `gh issue
-// comment` sends: answered(); issue #455), and `comment`, `review` for writes no ceiling
-// allows anyway. The App's bot writes every run's comments and the listener's own (its live
-// progress, its replies): a comment by the bot isn't the run's for that, and one the run
-// didn't post is refused before any look-up.
+// comment` sends: answered(); issue #455), and `comment`, `review` for a review's writes and its
+// comments', refused before any policy (ID_TARGETS). The App's bot writes every run's comments
+// and the listener's own (its live progress, its replies): a comment by the bot isn't the run's
+// for that, and one the run didn't post is refused before any look-up.
 //
 // A sub-issue link names two issues: its target is the parent, in the path, and the child, by
 // its id in the body, must be one the run created or one already under the run's issue (a
 // REST issue can't be looked up by its id: the run's issue's sub-issues and the issues it
 // created carry theirs). Moving an issue from another parent (`replace_parent`, any value
-// but false) is in no ceiling: a link would otherwise take any issue under the run's.
+// but false) is refused, whatever the policies say: a link would otherwise take any issue under
+// the run's.
 // A "blocked by" link (issue #437) is a `link` too: its target is the blocked issue, in the
 // path, and its blocker, by its id (the body's `issue_id`, or the path's when removed), one the
 // run created, one under its issue, or any open issue of its repository (resolveBlocker()).
 // A rerun of a GitHub Actions run's failed jobs (issue #451) names the workflow run, or one of
 // its jobs: its target is the pull request whose head that run tested, looked up from GitHub
-// (resolveRerun()), and only a failed run of the head of one of its own (`own_pr`), on a push
-// or a pull request of its branch, is rerun, at most MAX_RERUNS times per head commit and run of
-// Deckhand's.
+// (resolveRerun()), and only a failed run of the head of one of them (its kind, `own_pr` for
+// the run's own, is the policies' to hold), on a push or a pull request of its branch, is
+// rerun, at most MAX_RERUNS times per head commit and run of Deckhand's.
 // A reaction (issue #458) on a comment has the comment's issue or pull request for its target,
 // looked up on GitHub (resolveReacted()), the comment in `target.comment` (its id, as a
 // `created_comment`'s), `comment_author` and `comment_deckhand`. The App's
@@ -47,12 +50,12 @@
 // for the repository (`allow_projects`), whatever the policies say.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
 import { branchAllowed } from "./broker.mjs";
+import { ISSUES_WRITE } from "./github-app.mjs";
 import { CONTENTS_WRITE, createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
-import { BUILT_IN, ceilingOf, issueLabelOf } from "./modes.mjs";
+import { BUILT_IN } from "./modes.mjs";
 
-// What a rerun's token needs beyond its mode's: GitHub reruns a job with `actions: write`, an
-// optional permission of the App's (github-app.mjs OPTIONAL_PERMISSIONS), which the sandbox's
-// own token never has.
+// What a rerun's token needs: GitHub reruns a job with `actions: write`, an optional permission
+// of the App's (github-app.mjs OPTIONAL_PERMISSIONS), which the sandbox's own token never has.
 export const ACTIONS_WRITE = { actions: "write" };
 // How many reruns one run of Deckhand's makes on one head commit (its workflow runs' failed jobs,
 // or single jobs), whatever the policies allow: GitHub's own `run_attempt` counts every rerun of
@@ -63,9 +66,30 @@ export const RERUN_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
 // The events whose runs test a branch's head: a push to it, its pull request.
 export const RERUN_EVENTS = new Set(["push", "pull_request"]);
 
-// Actions on another target than an issue or pull request by number: no ceiling holds them,
-// so they are refused before any look-up.
+// Actions on another target than an issue or pull request by number (a review comment by its id,
+// a review): Deckhand can't tell whose they are, so they are refused before any look-up,
+// whatever the policies say.
 const ID_TARGETS = new Set(["comment", "review"]);
+
+// The actions that set an issue's or a pull request's labels, assignees or milestone: GitHub
+// takes them with `issues: write`, whatever the endpoint.
+const ISSUE_FIELDS = new Set(["label", "assign", "milestone"]);
+
+// What a write's token needs to write, besides the run's reads (github-gateway.mjs): its route's
+// own permissions (`permissions`: a pull request's, a rerun's, a project's), else `issues:
+// write`, the endpoint being an issue's (its comments, labels, reactions, links), and that too
+// when it sets labels, assignees or a milestone. Nothing for a POST that writes nothing.
+export function writePermissions(write) {
+  if (!write || write.read) return {};
+  const own = write.permissions;
+  const issues = !own || write.actions.some((a) => ISSUE_FIELDS.has(a));
+  return { ...(issues && ISSUES_WRITE), ...own };
+}
+
+// The permissions a call's several writes need, merged (a GraphQL call's: github-graphql.mjs).
+export function permissionsOf(writes) {
+  return Object.assign({}, ...writes.map(writePermissions));
+}
 
 // The label names of a body's `labels` (strings, or objects with a name), or of the body itself
 // when it is the list (PUT …/labels takes either).
@@ -176,8 +200,8 @@ function assignees(m, body, as) {
 // [method, path under the repo (case-insensitive), (match, body, method) → { actions, target,
 // change, pull, thread, permissions }]: `pull`, a pull request's own write's head, base and
 // draft, or its branch update's expected head and method (github-pulls.mjs), `thread`, a review
-// thread's comment it answers, `permissions`, what its token needs beyond its mode's
-// (PULL_WRITE, CONTENTS_WRITE, ACTIONS_WRITE).
+// thread's comment it answers, `permissions`, what its token needs to write when it isn't
+// `issues: write` (PULL_WRITE, CONTENTS_WRITE, ACTIONS_WRITE: writePermissions()).
 // `number`: an issue's or pull request's; `body`: the write's JSON.
 const ROUTES = [
   [
@@ -405,7 +429,7 @@ const ROUTES = [
       permissions: PULL_WRITE,
     }),
   ],
-  // Reviews, their comments (but replies, above) and their requests: in no ceiling.
+  // Reviews, their comments (but replies, above) and their requests: refused (ID_TARGETS).
   [
     /^(?:POST|PUT|PATCH|DELETE)$/,
     /^pulls\/\d+\/(?:reviews|comments|requested_reviewers)(?:\/.*)?$/i,
@@ -469,18 +493,6 @@ export function classify(method, path, body) {
     };
   }
   return null;
-}
-
-// The actions of `actions` that `ceiling` doesn't hold on `kind`.
-export function aboveCeiling(ceiling, kind, actions) {
-  const allowed = ceiling[kind] ?? [];
-  return actions.filter((a) => !allowed.includes(a));
-}
-
-// Whether `ceiling` holds every action of `actions` on some kind: a write none of whose kinds
-// could pass is refused before GitHub is asked what its target is.
-function anyKindHolds(ceiling, actions) {
-  return Object.values(ceiling).some((allowed) => actions.every((a) => allowed.includes(a)));
 }
 
 // The issues a run created that a link's child is looked for among: a run files a few.
@@ -684,7 +696,7 @@ export function createWriteChecks({
   // `conclusion`, the job's for a job, and `job` { id, name }, else null) or { refused }: a run
   // that failed, of a push or a pull request of a branch of the repo, whose head commit is
   // still that of an open pull request of that branch. Whether the pull request is the run's
-  // own is its kind's, held to the ceiling as any target's.
+  // own is its kind's, held to the policies as any target's.
   async function resolveRerun(run, repo, { run_id, job_id }, get) {
     let job = null;
     if (job_id !== undefined) {
@@ -916,11 +928,9 @@ export function createWriteChecks({
     if (write.repo !== run.repo) {
       return refusal(403, "a run writes only to its own repository");
     }
-    const ceiling = ceilingOf(run.mode, !run.push);
-    const mode = run.mode ?? "this";
-    const what = write.actions.join(", ");
-    if (!anyKindHolds(ceiling, write.actions) || ID_TARGETS.has(write.target.kind)) {
-      return refusal(403, `a ${mode} run can't ${what} here (its ceiling)`);
+    if (!policies) return refusal(403, "no policy decides this run's writes");
+    if (ID_TARGETS.has(write.target.kind)) {
+      return refusal(403, `a run can't ${write.actions.join(", ")} here`);
     }
     if (write.child?.replace_parent) {
       return refusal(403, "a run can't move an issue from another parent (replace_parent)");
@@ -986,11 +996,6 @@ export function createWriteChecks({
     } else {
       target = { number: null, labels: [], author: null, ...target };
     }
-    const above = aboveCeiling(ceiling, target.kind, write.actions);
-    if (above.length) {
-      const on = target.number === null ? target.kind : `${target.kind} #${target.number}`;
-      return refusal(403, `a ${mode} run can't ${above.join(", ")} on ${on} (its ceiling)`);
-    }
     if (write.thread) {
       let thread;
       try {
@@ -1003,12 +1008,6 @@ export function createWriteChecks({
       }
       if (!thread) return refusal(404, `#${target.number} has no such review thread`);
       target = { ...target, thread };
-    }
-    // An inbox run's issues carry its label (prompts/idea.md, bug.md): in its ceiling too.
-    const label = issueLabelOf(run.mode);
-    const labelled = write.change.labels_added.some((l) => l.toLowerCase() === label);
-    if (label && target.kind === "new_issue" && !labelled) {
-      return refusal(403, `${mode} runs' issues carry the ${label} label (their ceiling)`);
     }
     const change = { ...write.change };
     // A run removes only the reactions it added (answered()): never the listener's on the
@@ -1060,10 +1059,7 @@ export function createWriteChecks({
         return refusal(502, "the sub-issue can't be looked up on GitHub");
       }
       if (!LINKABLE.has(sub.kind)) {
-        return refusal(
-          403,
-          "a run links only issues it created, or those already under its issue (its ceiling)",
-        );
+        return refusal(403, "a run links only issues it created, or those already under its issue");
       }
       change.sub_issue = sub;
     }
@@ -1181,9 +1177,9 @@ export function createWriteChecks({
     };
   }
 
-  // The policies' `deny_github` on a write within the ceiling: null, or its refusal.
+  // The policies' `allow_github` and `deny_github` on a write that passed the built-in checks:
+  // null, or their refusal.
   async function deny(run, write, target, change) {
-    if (!policies) return null;
     const input = {
       repo: run.repo,
       mode: run.mode,
@@ -1196,21 +1192,25 @@ export function createWriteChecks({
     };
     const messages = await policies.deny("deny_github", run.repo, run.base || "main", () => input);
     if (!messages.length) return null;
-    return refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`);
+    return refusal(403, `the policies refuse it: ${messages.join("; ")}`);
   }
 
   return { check, checkWrite, answered };
 }
 
-// The reads `deny_github` sees (github-gateway.mjs checkRead()): `read_checks`, CI's results
-// beyond Actions. Its input doesn't depend on the call, only on the run: asked once per run and
+// The reads the policies' `allow_github` and `deny_github` see (github-gateway.mjs
+// checkRead()): `read_checks`, CI's results beyond Actions, and `read_projects`, the
+// organization's projects (v2) a run's token reads in a repo granted one, before it adds an item
+// (Deckhand's defaults: work runs and brainstorms). Its input doesn't depend on the call, only on
+// the run: asked once per run and
 // action, and a definite answer kept, so that `gh pr checks --watch` doesn't start an `opa` per
 // poll. A failed evaluation (policies.mjs's "policy error: …": GitHub not listing the policies,
 // `opa` timing out) refuses this read only: the next one asks again, as each write does.
 export function createReadChecks({ policies = null }) {
   const decided = new WeakMap();
   function checkRead(run, action) {
-    if (!policies) return null;
+    // Fail closed, as writes do.
+    if (!policies) return Promise.resolve(refusal(403, "no policy decides this run's reads"));
     const answers = decided.get(run) ?? new Map();
     decided.set(run, answers);
     if (!answers.has(action)) {
@@ -1237,7 +1237,7 @@ export function createReadChecks({ policies = null }) {
     const messages = await policies.deny("deny_github", run.repo, run.base || "main", () => input);
     if (!messages.length) return null;
     return {
-      ...refusal(403, `the policies refuse it (deny_github): ${messages.join("; ")}`),
+      ...refusal(403, `the policies refuse it: ${messages.join("; ")}`),
       failed: messages.some((m) => m.startsWith("policy error:")),
     };
   }

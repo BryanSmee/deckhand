@@ -103,31 +103,32 @@ export async function checkAppSettings(asApp, log, { githubUrl, credentials = {}
   return { missing, permissions, app };
 }
 
-// A sandbox gets less than the App: no deployments, nothing outside its repo, and its code
-// read-only. It pushes through the listener's git gateway (git-gateway.mjs), which refuses
-// the default branch: GitHub can't be asked to (rulesets aren't enforced on free private
-// repos), and a token that writes contents could also push or merge into it directly.
-// Pull requests read-only too: `pull_requests: write` would let it approve any pull request of
-// its repo as the App, or replace the review mode's verdict (GitHub counts a reviewer's latest
-// review). Its own pull requests' writes get a token that writes them, from the GitHub gateway,
-// once checked (github-pulls.mjs): the sandbox never holds it, and it carries only that write.
+// A sandbox's token reads less than the App: no deployments, nothing outside its repo, and
+// nothing it writes. Each write the GitHub gateway checked and the policies allowed gets a token
+// of its own (github-gateway.mjs), with these reads and only the write permission it needs
+// (github-writes.mjs writePermissions()): `issues: write` for an issue's or a comment's,
+// `pull_requests: write` to open or edit a pull request, `contents: write` to ready, draft or
+// update the branch of one, `actions: write` for a rerun, `organization_projects: write` for an
+// item. The sandbox never holds it. It pushes through the listener's git gateway
+// (git-gateway.mjs), which refuses the default branch: GitHub can't be asked to (rulesets
+// aren't enforced on free private repos), and a token that writes contents could also push or
+// merge into it directly. Pull requests are never written but by those checked writes:
+// `pull_requests: write` would let it approve any pull request of its repo as the App, or
+// replace the review mode's verdict (GitHub counts a reviewer's latest review).
 export const SANDBOX_PERMISSIONS = {
   contents: "read",
-  issues: "write",
+  issues: "read",
   pull_requests: "read",
   metadata: "read",
   actions: "read",
   checks: "read",
   statuses: "read",
 };
-// Built-in light runs (brainstorms, inbox entries, discussions) comment and create issues, and
-// never touch a pull request: they can't push either (the broker's `push`), and their
-// ceilings hold no pull request's write but a brainstorm's comment.
-// Their `issues: write`, like every token's writes, only reaches a write the GitHub gateway
-// checked against their ceiling and policies: anything else gets readsOf() below.
-export const LIGHT_PERMISSIONS = { pull_requests: "read" };
+// What a write on an issue, a pull request's conversation, a comment, a reaction or a label
+// needs (github-writes.mjs writePermissions()).
+export const ISSUES_WRITE = { issues: "write" };
 // Added for discussion runs only: an App created before discussions keeps working elsewhere.
-export const DISCUSSION_PERMISSIONS = { ...LIGHT_PERMISSIONS, discussions: "write" };
+export const DISCUSSION_PERMISSIONS = { discussions: "read" };
 // A research run (modes.mjs) gets no token at all: the broker refuses it one (broker.mjs).
 export const NO_TOKEN = false;
 // The git gateway's own token for a push it lets through: never handed to a sandbox.
@@ -135,17 +136,10 @@ export const PUSH_PERMISSIONS = { contents: "write" };
 // Its token for a push of a repo granted `allow_workflows` (grants.mjs): GitHub refuses any
 // push that adds or changes a file under .github/workflows/ without it.
 export const WORKFLOW_PUSH_PERMISSIONS = { ...PUSH_PERMISSIONS, workflows: "write" };
-// A repo's light modes (its config's `modes:`) only comment, and the listener posts their
-// reply: their token can read the code, issues and pull requests, not push or write.
-export const READ_ONLY_PERMISSIONS = {
-  contents: "read",
-  issues: "read",
-  pull_requests: "read",
-};
 
 // What a run's token gets for anything but a write the GitHub gateway checked and let through
-// (github-gateway.mjs): its permissions (`extra`, over SANDBOX_PERMISSIONS), each only read. A
-// light run's `issues: write` then only ever reaches the writes its ceiling and policies allow.
+// (github-gateway.mjs): its permissions (`extra`, over SANDBOX_PERMISSIONS), each only read,
+// whatever they say.
 export function readsOf(extra = {}) {
   const levels = { ...SANDBOX_PERMISSIONS, ...extra };
   return Object.fromEntries(

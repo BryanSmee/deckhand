@@ -716,7 +716,7 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   assert.match(text, /- `github` \(sample: a work run's comment on its pull request\): allowed\n/);
   assert.match(
     text,
-    /- `github` \(sample: a brainstorm's comment on it\): \*\*refused\*\*: `not on pull requests`\n {2}- operator: `allow_github` allows \(`allow\.rego`\); `deny_github` denies \(1\)/,
+    /- `github` \(sample: a brainstorm's comment on it\): \*\*refused\*\*: `not on pull requests`\n {2}- operator: `allow_github` allows \(no file defines it\); `deny_github` denies \(1\)/,
   );
   assert.match(text, /The sample lines .* are not decisions on this pull request/);
   // run on sample comments: a trigger comment on it, and /mode brainstorm there.
@@ -727,6 +727,8 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   assert.match(text, /- `run` \(sample: `\/mode brainstorm` on it\): allowed\n/);
   // link_branch on the branch its work run would have had linked.
   assert.match(text, /- `link_branch` \(sample: a work run's branch linked to #12\): allowed\n/);
+  // push on its branch, by the work run of the issue it closes.
+  assert.match(text, /- `push` \(sample: a work run's push to its branch\): allowed\n/);
   assert.match(text, /<details><summary>The input/);
   const [json, samples] = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) =>
     JSON.parse(m[1]),
@@ -742,6 +744,7 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
       ["a work run's comment on its pull request", 1, "work", "own_pr"],
       ["a brainstorm's comment on it", 1, "brainstorm", "pr"],
       ["a work run's read of CI's checks", 1, "work", undefined],
+      ["a work run's push to its branch", 1, "work", undefined],
     ],
   );
   // The issue the pull request closes, and who asked.
@@ -778,6 +781,7 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
       ["deny_github", undefined, false],
       ["deny_github", undefined, false],
       ["deny_github", undefined, false],
+      ["deny_push", undefined, false],
     ],
   );
   // The reviewers as when it turns ready, by the run that opened it, as the listener would ask.
@@ -792,7 +796,13 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
       ["work", "comment", "own_pr", 5],
       ["brainstorm", "comment", "pr", 5],
       ["work", "read_checks", undefined, undefined],
+      ["work", "push", undefined, undefined],
     ],
+  );
+  // The push: the branch its work run would push, the default branch never pushed.
+  assert.deepEqual(
+    [operator[10].issue, operator[10].created, operator[10].deleted],
+    [12, false, false],
   );
   // A rule written for writes would refuse the read too: the dry run shows it.
   assert.match(text, /- `github` \(sample: a work run's read of CI's checks\): allowed\n/);
@@ -859,7 +869,7 @@ test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's
   });
   const light = githubSamples("Org/Repo", pr, { ask: { light: true } });
   assert.deepEqual(traits(light)[2], ["ask", true, true, null]);
-  assert.match(light[2].what, /mode ask \(light: its ceiling refuses it before any policy\)$/);
+  assert.match(light[2].what, /mode ask \(light: Deckhand's default policies allow it no write\)$/);
   assert.deepEqual(own[2].input.target, {
     kind: "own_pr",
     number: 5,

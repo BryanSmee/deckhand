@@ -13,15 +13,16 @@
 //   graphql-js resolves as GitHub will) are looked up with the listener's token, to a repo, a
 //   kind and a number, never read from the call;
 // - each field is then a write as a REST one is (github-writes.mjs classify()'s shape), held to
-//   the mode's ceiling and `deny_github` (checkWrite()): one refusal refuses the whole call;
+//   the policies' `allow_github` and `deny_github` (checkWrite()): one refusal refuses the whole
+//   call;
 // - what goes on to GitHub is the document as parsed here, printed again (print()), with its
 //   variables and operation name, never the call's own bytes: GitHub runs what was checked.
 import { readFileSync } from "node:fs";
 import { Worker } from "node:worker_threads";
 import { REACTION_ENUM } from "./comments.mjs";
 import { PROJECT_WRITE } from "./github-app.mjs";
-import { CONTENTS_WRITE, permissionsOf, PULL_WRITE, pullOf } from "./github-pulls.mjs";
-import { labelNames, reactionSubject } from "./github-writes.mjs";
+import { CONTENTS_WRITE, PULL_WRITE, pullOf } from "./github-pulls.mjs";
+import { labelNames, permissionsOf, reactionSubject } from "./github-writes.mjs";
 import {
   buildSchema,
   getArgumentValues,
@@ -66,7 +67,7 @@ const ISSUE_OR_PR = ["Issue", "PullRequest"];
 // A review thread: its target is its pull request, the thread its first comment (writeOf()).
 const THREAD = ["PullRequestReviewThread"];
 // Comments: a reaction on an issue's or pull request's (REACTABLE_COMMENTS) is held to theirs,
-// on the others no ceiling holds, refused as REST refuses them (a run edits the ones it posted
+// on the others refused as REST refuses them (a run edits the ones it posted
 // with updateIssueComment, and deleteIssueComment, not through these). Those of a
 // repository (RepositoryNode, which NODES reads); a discussion's comment has none, and is
 // refused as outside it.
@@ -104,7 +105,7 @@ function updated(input) {
 // - target: the input field that holds what it writes to, and the types it may be (`repo`: a
 //   Repository, for a create, whose target is then `kind`);
 // - fields: the input fields it may set besides that one and `clientMutationId` (any other set
-//   is refused: a field GitHub adds may do what no ceiling knows);
+//   is refused: a field GitHub adds may do what no check knows);
 // - empty: input fields gh always sends, as null or [] when it sets nothing, dropped then (issue
 //   #422): on a create, an empty one sets nothing;
 // - actions(input): what it does, as github-writes.mjs names actions;
@@ -121,11 +122,13 @@ function updated(input) {
 // - project: the project (v2) field of an item it adds, which must be a granted one
 //   (github-writes.mjs);
 // - pull(input): a pull request's own write's head, base and draft (github-pulls.mjs);
-// - permissions: what its token needs beyond its mode's (github-writes.mjs classify()'s).
-// The pull request ones are in a work run's ceiling, for its own pull requests only: opened,
+// - permissions: what its token needs to write when it isn't `issues: write` (github-writes.mjs
+//   writePermissions()).
+// Deckhand's default policies allow the pull request ones to a work run, for its own pull
+// requests only (../policy/mode-work.rego): opened,
 // edited (`gh pr create` sets its labels and milestone with `updatePullRequest`), readied,
 // drafted and its branch updated, and its review threads replied to, resolved and unresolved.
-// Reviews and merges are in none.
+// Reviews and merges aren't mutations a run may send.
 export const MUTATIONS = {
   createIssue: {
     target: "repositoryId",
@@ -147,7 +150,7 @@ export const MUTATIONS = {
     milestone: "milestoneId",
   },
   // A label of the run's repository, as `gh label create` makes it over REST. Not
-  // updateLabel or deleteLabel: a label's settings are in no ceiling.
+  // updateLabel or deleteLabel: a label's settings aren't a run's.
   createLabel: {
     target: "repositoryId",
     repo: true,
@@ -349,8 +352,8 @@ export const MUTATIONS = {
     pull: () => ({}),
     permissions: CONTENTS_WRITE,
   },
-  // Not `pullRequestReviewId`: the reply would go into a pending review, and reviews are in no
-  // ceiling.
+  // Not `pullRequestReviewId`: the reply would go into a pending review, and a run sends no
+  // review.
   addPullRequestReviewThreadReply: {
     target: "pullRequestReviewThreadId",
     types: THREAD,
@@ -941,7 +944,7 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     }
     target = { reacted: { id, type: REACTABLE_COMMENTS[node.__typename] } };
   } else if (spec.comments && COMMENTS.has(node.__typename)) {
-    // No ceiling holds them: refused before any look-up (github-writes.mjs ID_TARGETS).
+    // Refused before any look-up (github-writes.mjs ID_TARGETS).
     target = { kind: "comment" };
   } else {
     return { refused: refusal(403, `${name} on a ${node.__typename} isn't something it checks`) };
@@ -1047,7 +1050,7 @@ export function writeOf({ name, spec, input }, nodes, repo) {
     if (sub.refused) return sub;
     write.child = {
       ...sub,
-      // Moving it from another parent: in no ceiling (github-writes.mjs). Any value but false,
+      // Moving it from another parent: refused (github-writes.mjs). Any value but false,
       // null too, as REST's child() reads it: fail closed.
       replace_parent: "replaceParent" in input && input.replaceParent !== false,
     };
@@ -1082,8 +1085,8 @@ export function createGraphqlChecks({
   // writes (its token then may), the response keys of its `createIssue` fields, whose answers
   // name the issues it created, and of its `addComment` ones, the comments it posted, the new
   // reactions it adds and those it removes ({ key, subject, content }) (github-writes.mjs
-  // answered()), what its token needs beyond its mode's, the pull requests it changes
-  // (github-pulls.mjs permissionsOf(), pullOf()), and the optional permissions its reads need,
+  // answered()), what its token needs to write (github-writes.mjs permissionsOf()), the pull
+  // requests it changes (github-pulls.mjs pullOf()), and the optional permissions its reads need,
   // with where they are in the answer (checkSelections()).
   async function check(run, body) {
     const call = readCall(body);

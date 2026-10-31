@@ -17,7 +17,8 @@ import {
   redactBody,
   secretOf,
 } from "../listener/github-gateway.mjs";
-import { sandboxAt, serve } from "./helpers.mjs";
+import { createReadChecks } from "../listener/github-writes.mjs";
+import { defaultPolicies, hasOpa, sandboxAt, serve } from "./helpers.mjs";
 
 const TOKEN = "repo-token-0123456789abcdef";
 const OPERATOR = "operator-key-0123456789abcdef";
@@ -508,7 +509,7 @@ test("a REST write goes on only when its check passes; GraphQL and git don't go 
     checkWrite: async (run, write) => {
       checked.push({ ...write, body: write.body.toString() });
       return write.path.endsWith("/comments")
-        ? { status: 403, message: "the policies refuse it (deny_github): not here" }
+        ? { status: 403, message: "the policies refuse it: not here" }
         : null;
     },
   });
@@ -521,10 +522,10 @@ test("a REST write goes on only when its check passes; GraphQL and git don't go 
   assert.equal(refused.status, 403);
   // GitHub's error shape: what gh prints.
   assert.deepEqual(await refused.json(), {
-    message: "Deckhand: the policies refuse it (deny_github): not here",
+    message: "Deckhand: the policies refuse it: not here",
   });
   assert.deepEqual(notes, [
-    "Deckhand refused the run's GitHub write POST /api/v3/repos/org/repo/issues/2/comments: the policies refuse it (deny_github): not here",
+    "Deckhand refused the run's GitHub write POST /api/v3/repos/org/repo/issues/2/comments: the policies refuse it: not here",
   ]);
   assert.match(gw.logged.join("\n"), /refused POST .*issues\/2\/comments for org\/repo/);
   const ok = await gw.call("/api/v3/repos/org/repo/issues/1", {
@@ -700,7 +701,9 @@ test("GraphQL goes on as its check printed it, with a token that writes only for
         return { refused: { status: 403, message: "Deckhand doesn't let a run send deleteIssue" } };
       }
       const write = body.includes("mutation");
-      return { body: Buffer.from(`{"query":"printed ${write}"}`), write, creates: [] };
+      // An addComment's: github-graphql.mjs permissionsOf().
+      const permissions = write ? { issues: "write" } : {};
+      return { body: Buffer.from(`{"query":"printed ${write}"}`), write, creates: [], permissions };
     },
   });
   const extra = { issues: "write" };
@@ -720,10 +723,11 @@ test("GraphQL goes on as its check printed it, with a token that writes only for
     gw.calls.map((c) => c.body.toString()),
     ['{"query":"printed false"}', '{"query":"printed true"}'],
   );
-  // The read with a token that only reads, the checked mutation with its mode's.
+  // The read with a token that only reads, the checked mutation with its reads and its own
+  // write.
   assert.deepEqual(
     gw.minted.map(([, perms]) => perms),
-    [readsOf(extra), extra],
+    [readsOf(extra), { ...readsOf(extra), issues: "write" }],
   );
   assert.equal(readsOf(extra).issues, "read");
   // GraphQL is a POST: a GET's query would go on unchecked.
@@ -846,7 +850,7 @@ test("a POST that writes nothing (rendering markdown) goes on with a token that 
   assert.equal((await post("/api/v3/repos/org/repo/issues/1/comments")).status, 200);
   assert.deepEqual(
     gw.minted.map(([, perms]) => perms),
-    [readsOf(extra), extra],
+    [readsOf(extra), { ...readsOf(extra), issues: "write" }],
   );
 });
 
@@ -880,15 +884,16 @@ test("a pull request's own write goes on with the token it needs, its answer to 
   // A reply in a review thread: the same token, and nothing for the dashboard.
   const reply = "/api/v3/repos/org/repo/pulls/7/comments/40/replies";
   assert.equal((await post(reply, '{"body": "Fixed."}')).status, 200);
+  // Each its reads and its own write only (github-writes.mjs writePermissions()).
   assert.deepEqual(
     gw.minted.map(([, perms]) => perms),
     [
-      { contents: "write" },
+      { ...readsOf(), contents: "write" },
       readsOf(),
-      { pull_requests: "write" },
-      { contents: "write" },
-      {},
-      { pull_requests: "write" },
+      { ...readsOf(), pull_requests: "write" },
+      { ...readsOf(), contents: "write" },
+      { ...readsOf(), issues: "write" },
+      { ...readsOf(), pull_requests: "write" },
     ],
   );
   assert.deepEqual(wrote, [
@@ -902,7 +907,10 @@ test("a pull request's own write goes on with the token it needs, its answer to 
 
 test("a repo granted a project: its runs' tokens read projects, and a project write writes them", async (t) => {
   let granted = true;
+  // The policies' `read_projects` (github-writes.mjs createReadChecks()): allowed here.
+  const reads = [];
   const gw = await gateway(t, {
+    checkRead: async (run, action) => (reads.push([run.mode, action]), null),
     readsProjects: (repo) => {
       assert.equal(repo, "org/repo");
       if (granted === null) throw new Error("broken grants");
@@ -932,31 +940,48 @@ test("a repo granted a project: its runs' tokens read projects, and a project wr
     gw.minted.map(([, perms]) => perms),
     [
       readsOf({ organization_projects: "read" }),
-      { organization_projects: "write" },
+      { ...readsOf({ organization_projects: "read" }), organization_projects: "write" },
       readsOf(),
       readsOf(),
     ],
   );
   assert.match(gw.logged.at(-1), /org\/repo: its grants: broken grants/);
-  // Only a run whose ceiling may add an item reads them: not a review, an inbox entry or a
-  // discussion, which read outsiders' text; a brainstorm does (the issues it files).
-  granted = true;
-  for (const [mode, reads] of [
-    ["review", false],
-    ["idea", false],
-    ["discussion", false],
-    ["analyze", false],
-    ["brainstorm", true],
-  ]) {
-    const light = gw.register({ pull_requests: "read" }, { mode, issue: 1 });
-    await gw.call("/api/graphql", {
-      secret: light.secret,
-      method: "POST",
-      body: '{"query": "{ viewer { login } }"}',
-    });
-    assert.equal(gw.minted.at(-1)[1].organization_projects, reads ? "read" : undefined, mode);
-  }
+  // Asked only where a project is granted.
+  assert.deepEqual(reads, [
+    ["work", "read_projects"],
+    ["work", "read_projects"],
+  ]);
 });
+
+test(
+  "Deckhand's policies: a work run's and a brainstorm's tokens read a granted project, not a review's, an inbox entry's or a discussion's",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    // Not the others, which read outsiders' text: nothing narrows the read to the granted
+    // projects.
+    const { checkRead } = createReadChecks({ policies: defaultPolicies(t) });
+    const gw = await gateway(t, { readsProjects: () => true, checkRead });
+    for (const [mode, reads] of [
+      ["work", true],
+      ["review", false],
+      ["idea", false],
+      ["discussion", false],
+      ["analyze", false],
+      ["brainstorm", true],
+    ]) {
+      const light = gw.register(
+        { pull_requests: "read" },
+        { mode, issue: 1, push: mode === "work" },
+      );
+      await gw.call("/api/graphql", {
+        secret: light.secret,
+        method: "POST",
+        body: '{"query": "{ viewer { login } }"}',
+      });
+      assert.equal(gw.minted.at(-1)[1].organization_projects, reads ? "read" : undefined, mode);
+    }
+  },
+);
 
 test("an Actions log's redirect is followed by the gateway, without credentials; others go back", async (t) => {
   const stored = [];
@@ -1088,7 +1113,7 @@ test("a checked rerun gets actions: write for that call only, refused without it
   // Refused before it went out: its slot freed all the same.
   assert.equal(released, 1);
   assert.equal((await rerun()).status, 200);
-  assert.deepEqual(gw.minted.at(-1), ["org/repo", { actions: "write" }]);
+  assert.deepEqual(gw.minted.at(-1), ["org/repo", { ...readsOf(), actions: "write" }]);
   assert.deepEqual(
     wrote.map(([rerun, status]) => [rerun.run_id, rerun.sha, status]),
     [[100, "aaa", 200]],
@@ -1241,7 +1266,7 @@ test("reading CI's checks and statuses is held to checkRead, REST and GraphQL al
   const gw = await gateway(t, {
     checkRead: async (run, action) => {
       asked.push([run.mode, action]);
-      return refuse ? { status: 403, message: "the policies refuse it (deny_github): no" } : null;
+      return refuse ? { status: 403, message: "the policies refuse it: no" } : null;
     },
     checkGraphql: async (run, body) => ({
       body,
@@ -1276,7 +1301,7 @@ test("reading CI's checks and statuses is held to checkRead, REST and GraphQL al
   for (const res of [await gw.call(reads[0], { secret }), await graphql("{ statusCheckRollup }")]) {
     assert.equal(res.status, 403);
     assert.deepEqual(await res.json(), {
-      message: "Deckhand: the policies refuse it (deny_github): no",
+      message: "Deckhand: the policies refuse it: no",
     });
   }
   assert.match(notes.at(-1), /refused the run's GitHub call POST \/api\/graphql: the policies/);

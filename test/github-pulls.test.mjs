@@ -5,8 +5,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
-import { createPullChecks, permissionsOf, pullOf } from "../listener/github-pulls.mjs";
-import { classify, createWriteChecks } from "../listener/github-writes.mjs";
+import { createPullChecks, pullOf } from "../listener/github-pulls.mjs";
+import { classify, createWriteChecks, permissionsOf } from "../listener/github-writes.mjs";
+import { allowingPolicies, defaultPolicies, hasOpa } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 const call = (query, input) => json({ query, variables: { input } });
@@ -82,7 +83,9 @@ const run = (mode = "work", issue = 1) => ({
 });
 
 // The checks, REST's and GraphQL's, with what the workflow check was asked and what was recorded.
-function checks({ why = null } = {}) {
+// `policies`: allowing every write, for the built-in checks, or Deckhand's own (defaultPolicies())
+// for what each mode may write.
+function checks({ why = null, policies = allowingPolicies } = {}) {
   const { lookup, calls } = fakeLookup();
   const checked = [];
   const recorded = [];
@@ -96,7 +99,7 @@ function checks({ why = null } = {}) {
     record: (r, pr, readyAt) => recorded.push([r, pr.number, readyAt]),
     now: () => 1000,
   });
-  const writes = createWriteChecks({ needsInputLabel: () => null, lookup, pulls });
+  const writes = createWriteChecks({ needsInputLabel: () => null, lookup, pulls, policies });
   const graphql = createGraphqlChecks({
     nodes: async (_repo, ids) => ids.map((id) => NODES[id] ?? null),
     checkWrite: writes.checkWrite,
@@ -132,54 +135,59 @@ const CREATE = {
   draft: true,
 };
 
-test("gh pr create, edit, ready and ready --undo: a work run's own pull request, every flag the ceiling holds", async () => {
-  const { graphql, checked } = checks();
-  const work = run();
-  const cases = [
-    [GH_CREATE, CREATE, { pull_requests: "write" }, [{ number: null, head: "issue-1-x" }]],
-    // --label and --milestone after a create: both in the ceiling (issue #453).
-    [
-      GH_CREATE_METADATA,
-      { pullRequestId: "PR_7", labelIds: ["L_bug"], milestoneId: "M_1" },
-      { pull_requests: "write" },
-    ],
-    [
-      GH_UPDATE,
-      { pullRequestId: "PR_7", title: "Final", body: "Closes #1", baseRefName: "release" },
-      { pull_requests: "write" },
-    ],
-    [GH_LABEL, { labelableId: "PR_7", labelIds: ["L_bug"] }, {}, []],
-    [GH_READY, { pullRequestId: "PR_7" }, { contents: "write" }],
-    [GH_DRAFT, { pullRequestId: "PR_7" }, { contents: "write" }],
-  ];
-  for (const [query, input, permissions, pulls] of cases) {
-    const out = await graphql(work, call(query, input));
-    assert.equal(out.refused, undefined, `${query}: ${out.refused?.message}`);
-    assert.equal(out.write, true);
-    assert.deepEqual(out.permissions, permissions, query);
-    const want = pulls ?? [{ number: 7, head: null }];
-    assert.deepEqual(
-      out.pulls.map(({ number, head }) => ({ number, head })),
-      want,
-      query,
+test(
+  "gh pr create, edit, ready and ready --undo: a work run's own pull request, every flag Deckhand's policies allow",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const { graphql, checked } = checks({ policies: defaultPolicies(t) });
+    const work = run();
+    const cases = [
+      [GH_CREATE, CREATE, { pull_requests: "write" }, [{ number: null, head: "issue-1-x" }]],
+      // --label and --milestone after a create: both allowed (issue #453), which GitHub sets
+      // with `issues: write`.
+      [
+        GH_CREATE_METADATA,
+        { pullRequestId: "PR_7", labelIds: ["L_bug"], milestoneId: "M_1" },
+        { issues: "write", pull_requests: "write" },
+      ],
+      [
+        GH_UPDATE,
+        { pullRequestId: "PR_7", title: "Final", body: "Closes #1", baseRefName: "release" },
+        { pull_requests: "write" },
+      ],
+      [GH_LABEL, { labelableId: "PR_7", labelIds: ["L_bug"] }, { issues: "write" }, []],
+      [GH_READY, { pullRequestId: "PR_7" }, { contents: "write" }],
+      [GH_DRAFT, { pullRequestId: "PR_7" }, { contents: "write" }],
+    ];
+    for (const [query, input, permissions, pulls] of cases) {
+      const out = await graphql(work, call(query, input));
+      assert.equal(out.refused, undefined, `${query}: ${out.refused?.message}`);
+      assert.equal(out.write, true);
+      assert.deepEqual(out.permissions, permissions, query);
+      const want = pulls ?? [{ number: 7, head: null }];
+      assert.deepEqual(
+        out.pulls.map(({ number, head }) => ({ number, head })),
+        want,
+        query,
+      );
+    }
+    // Each of them checked its workflows, the label's too, merged with the base it will have.
+    assert.deepEqual(checked, [
+      ["org/repo", "issue-1-x", "main"],
+      ["org/repo", "issue-1-x", "main"],
+      ["org/repo", "issue-1-x", "release"],
+      ["org/repo", "issue-1-x", "main"],
+      ["org/repo", "issue-1-x", "main"],
+      ["org/repo", "issue-1-x", "main"],
+    ]);
+    // Not on a pull request that isn't the run's.
+    const milestone = await graphql(
+      work,
+      call(GH_CREATE_METADATA, { pullRequestId: "PR_8", milestoneId: "M_1" }),
     );
-  }
-  // Each of them checked its workflows, the label's too, merged with the base it will have.
-  assert.deepEqual(checked, [
-    ["org/repo", "issue-1-x", "main"],
-    ["org/repo", "issue-1-x", "main"],
-    ["org/repo", "issue-1-x", "release"],
-    ["org/repo", "issue-1-x", "main"],
-    ["org/repo", "issue-1-x", "main"],
-    ["org/repo", "issue-1-x", "main"],
-  ]);
-  // Not on a pull request that isn't the run's.
-  const milestone = await graphql(
-    work,
-    call(GH_CREATE_METADATA, { pullRequestId: "PR_8", milestoneId: "M_1" }),
-  );
-  assert.match(milestone.refused.message, /can't milestone on pr #8/);
-});
+    assert.match(milestone.refused.message, /no rule allows `milestone` on `pr` for a `work` run/);
+  },
+);
 
 test("REST's creates and edits: the same checks, with a token that writes pull requests", async () => {
   const { rest, checked } = checks();
@@ -197,7 +205,8 @@ test("REST's creates and edits: the same checks, with a token that writes pull r
   assert.deepEqual(pullOf(written), { key: null, number: null, head: "issue-1-x", ready: true });
   // An issue's path on a pull request edits it as the issue: its token's issues are enough.
   assert.equal(classify("PATCH", "repos/org/repo/issues/7", json({ title: "T" })).pull, undefined);
-  assert.deepEqual(permissionsOf([written, { permissions: { contents: "write" } }, {}]), {
+  const ready = classify("PUT", "repos/org/repo/pulls/7/update-branch", json({}));
+  assert.deepEqual(permissionsOf([written, ready, null]), {
     pull_requests: "write",
     contents: "write",
   });
@@ -233,8 +242,6 @@ test("refused: another branch, a fork's head, a create that names more than its 
       }),
       /without its head_repo/,
     ],
-    [rest(work, "PATCH", "repos/org/repo/pulls/8", { title: "T" }), /can't edit on pr #8/],
-    [rest(work, "PATCH", "repos/org/repo/pulls/9", { title: "T" }), /can't edit on pr #9/],
     [
       graphql(work, call(GH_CREATE, { ...CREATE, headRefName: "issue-2-y" })),
       /issue-2-y is not this run's branch/,
@@ -242,12 +249,6 @@ test("refused: another branch, a fork's head, a create that names more than its 
     [
       graphql(work, call(GH_CREATE, { ...CREATE, headRepositoryId: "R_repo" })),
       /set createPullRequest's headRepositoryId/,
-    ],
-    [graphql(work, call(GH_READY, { pullRequestId: "PR_8" })), /can't ready on pr #8/],
-    [graphql(work, call(GH_DRAFT, { pullRequestId: "PR_8" })), /can't draft on pr #8/],
-    [
-      graphql(work, call(GH_UPDATE, { pullRequestId: "PR_8", title: "mine now" })),
-      /can't edit on pr #8/,
     ],
   ];
   for (const [pending, why] of refused) {
@@ -279,44 +280,95 @@ test("refused: another branch, a fork's head, a create that names more than its 
   assert.equal(await rest(run(), "PATCH", "repos/org/repo/issues/7", { title: "T" }), null);
 });
 
-test("outside work runs, and reviews, approvals and merges from any run: refused", async () => {
-  const { rest, graphql } = checks();
-  for (const mode of ["brainstorm", "stop", "idea", "bug", "discussion", "review", "onboarding"]) {
-    const light = run(mode);
-    assert.match(
-      (await graphql(light, call(GH_READY, { pullRequestId: "PR_7" }))).refused.message,
-      /ceiling/,
-      mode,
-    );
-    assert.match((await graphql(light, call(GH_CREATE, CREATE))).refused.message, /ceiling/, mode);
-    assert.match(
-      (await rest(light, "PATCH", "repos/org/repo/pulls/7", { title: "T" })).message,
-      /ceiling/,
-      mode,
-    );
-  }
-  const work = run();
-  for (const [method, path, body] of [
-    ["POST", "repos/org/repo/pulls/7/reviews", { event: "APPROVE" }],
-    ["POST", "repos/org/repo/pulls/7/reviews/1/events", { event: "APPROVE" }],
-    ["POST", "repos/org/repo/pulls/7/requested_reviewers", { reviewers: ["a"] }],
-    ["PUT", "repos/org/repo/pulls/7/merge", {}],
-  ]) {
-    assert.match((await rest(work, method, path, body)).message, /can't (review|merge) here/, path);
-  }
-  for (const name of [
-    "addPullRequestReview",
-    "submitPullRequestReview",
-    "mergePullRequest",
-    "enablePullRequestAutoMerge",
-    "requestReviews",
-    "dismissPullRequestReview",
-  ]) {
-    const query = `mutation { ${name}(input: {pullRequestId: "PR_7"}) { clientMutationId } }`;
-    const out = await graphql(work, json({ query }));
-    assert.ok(out.refused, name);
-  }
-});
+test(
+  "Deckhand's policies: another's pull request, outside work runs, and reviews, approvals and merges from any run: refused",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const { rest, graphql } = checks({ policies: defaultPolicies(t) });
+    const work = run();
+    // Another task's pull request, or a fork's: not the run's own, which no rule allows.
+    for (const [pending, why] of [
+      [
+        rest(work, "PATCH", "repos/org/repo/pulls/8", { title: "T" }),
+        /`edit` on `pr` for a `work`/,
+      ],
+      [
+        rest(work, "PATCH", "repos/org/repo/pulls/9", { title: "T" }),
+        /`edit` on `pr` for a `work`/,
+      ],
+      [graphql(work, call(GH_READY, { pullRequestId: "PR_8" })), /`ready` on `pr` for a `work`/],
+      [graphql(work, call(GH_DRAFT, { pullRequestId: "PR_8" })), /`draft` on `pr` for a `work`/],
+      [
+        graphql(work, call(GH_UPDATE, { pullRequestId: "PR_8", title: "mine now" })),
+        /`edit` on `pr` for a `work`/,
+      ],
+      [
+        graphql(work, call(GH_UPDATE_BRANCH, { pullRequestId: "PR_8", expectedHeadOid: HEAD })),
+        /`update_branch` on `pr` for a `work` run/,
+      ],
+      [
+        rest(work, "PUT", "repos/org/repo/pulls/8/update-branch", { expected_head_sha: HEAD }),
+        /`update_branch` on `pr` for a `work` run/,
+      ],
+    ]) {
+      const out = await pending;
+      const got = out?.refused ?? out;
+      assert.match(got?.message ?? "", why);
+      assert.equal(got.status, 403);
+    }
+    for (const mode of [
+      "brainstorm",
+      "stop",
+      "idea",
+      "bug",
+      "discussion",
+      "review",
+      "onboarding",
+    ]) {
+      const light = run(mode);
+      assert.match(
+        (await graphql(light, call(GH_READY, { pullRequestId: "PR_7" }))).refused.message,
+        /no rule allows/,
+        mode,
+      );
+      // A create: a branch it may push first, which a run without one has none of.
+      assert.match(
+        (await graphql(light, call(GH_CREATE, CREATE))).refused.message,
+        /no rule allows|issue-1-x is not this run's branch/,
+        mode,
+      );
+      assert.match(
+        (await rest(light, "PATCH", "repos/org/repo/pulls/7", { title: "T" })).message,
+        /no rule allows/,
+        mode,
+      );
+      const update = call(GH_UPDATE_BRANCH, { pullRequestId: "PR_7", expectedHeadOid: HEAD });
+      assert.match((await graphql(light, update)).refused.message, /no rule allows/, mode);
+    }
+    for (const [method, path, body] of [
+      ["POST", "repos/org/repo/pulls/7/reviews", { event: "APPROVE" }],
+      ["POST", "repos/org/repo/pulls/7/reviews/1/events", { event: "APPROVE" }],
+      ["POST", "repos/org/repo/pulls/7/requested_reviewers", { reviewers: ["a"] }],
+      ["PUT", "repos/org/repo/pulls/7/merge", {}],
+    ]) {
+      // Reviews are refused before any policy (ID_TARGETS); a merge, by no rule allowing it.
+      const why = /can't review here|no rule allows `merge` on `own_pr`/;
+      assert.match((await rest(work, method, path, body)).message, why, path);
+    }
+    for (const name of [
+      "addPullRequestReview",
+      "submitPullRequestReview",
+      "mergePullRequest",
+      "enablePullRequestAutoMerge",
+      "requestReviews",
+      "dismissPullRequestReview",
+    ]) {
+      const query = `mutation { ${name}(input: {pullRequestId: "PR_7"}) { clientMutationId } }`;
+      const out = await graphql(work, json({ query }));
+      assert.ok(out.refused, name);
+    }
+  },
+);
 
 test("ready with conflicts isn't ready; back to draft is fine", async () => {
   const { graphql, checked } = checks();
@@ -361,12 +413,12 @@ test("gh pr update-branch: a merge into the run's own pull request's branch, fro
     ["org/repo", "issue-1-x", "main"],
     ["org/repo", "issue-1-x", "main"],
   ]);
-  // A comment on it still gets no more than the mode's token.
+  // A comment on it gets a token that writes issues only.
   const comment = classify("POST", "repos/org/repo/issues/7/comments", json({ body: "x" }));
-  assert.deepEqual(permissionsOf([comment]), {});
+  assert.deepEqual(permissionsOf([comment]), { issues: "write" });
 });
 
-test("gh pr update-branch refused: a rebase, no expected head, another field, another branch, a fork's head, a light run", async () => {
+test("gh pr update-branch refused: a rebase, no expected head, another field, a fork's head", async () => {
   const { rest, graphql, checked } = checks();
   const work = run();
   const update = (r, input) => graphql(r, call(GH_UPDATE_BRANCH, input));
@@ -399,25 +451,12 @@ test("gh pr update-branch refused: a rebase, no expected head, another field, an
       403,
       /without its merge_method/,
     ],
-    // Another task's pull request: not the run's own, so not in its ceiling.
-    [
-      update(work, { pullRequestId: "PR_8", expectedHeadOid: HEAD }),
-      403,
-      /can't update_branch on pr #8/,
-    ],
-    [
-      rest(work, "PUT", "repos/org/repo/pulls/8/update-branch", { expected_head_sha: HEAD }),
-      403,
-      /can't update_branch on pr #8/,
-    ],
     // The fork's pull request the run was started on: its head isn't the run's to write.
     [
       update(run("work", 9), { pullRequestId: "PR_9", expectedHeadOid: HEAD }),
       403,
       /#9's branch, issue-1-x, is not this run's/,
     ],
-    [update(run("brainstorm"), { pullRequestId: "PR_7", expectedHeadOid: HEAD }), 403, /ceiling/],
-    [update(run("review"), { pullRequestId: "PR_7", expectedHeadOid: HEAD }), 403, /ceiling/],
   ];
   for (const [pending, status, why] of refused) {
     const out = await pending;
