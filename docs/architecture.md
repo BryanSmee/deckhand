@@ -62,8 +62,7 @@ closes and the agent exits: its last result is the reply, posted once its sandbo
 foreground: an agent that ends its turn with background work left gives an early result, and
 may go on with a turn per background task, or never exit. As a safety net, a result with the
 inbox closed marks the run `answered` (saved state) and starts a 2-minute timer
-(`runs.mjs` `linger()`, `ANSWER_GRACE_MS`); any output restarts it, and a listener that
-restarts starts it again. If the sandbox is still running, silent, when it fires, the listener
+(`runs.mjs` `linger()`, `ANSWER_GRACE_MS`); any output restarts it. Its deadline is saved (`graceUntil`): a listener that restarts gives it its whole grace while its follow skips the output read before, then keeps to that deadline, with at least 10 s to read what the sandbox wrote while no listener was there (Restarts). If the sandbox is still running, silent, when it fires, the listener
 writes an `ended` line to the run's log ("Stopped at … after its answer" on the dashboard),
 stops the sandbox and ends the run as usual, with its last result as the reply.
 
@@ -262,7 +261,7 @@ decides which queued task starts next (issue #413). `tasks.mjs` `queueOrder()` s
 waiting for a slot: light runs (brainstorms, the repo's light modes) first, then those the
 maintainer placed, in the order `order.json` keeps (`order.mjs`, by lowercase task key,
 respelled at start with the rest), then the others by when their first pending comment was
-queued (`queuedAt`, kept in `queue.json` through a restart). `schedule()` hands the ready ones
+queued (`queuedAt`, kept with the queue through a restart). `schedule()` hands the ready ones
 to `startable()` in that order, which still skips a task whose repo is at its cap and starts the
 next. `POST /api/repos/<owner>/<repo>/order { key, before?: key, after?: key, first?: true }`
 (`work.mjs` `reorder`, the repo's users, a queued task of the repo that isn't light; `before` and
@@ -271,8 +270,8 @@ moved, so moving one past tasks nobody placed keeps them where they were. Move d
 `after`: the task goes right after the next of its repo's (another repo's tasks between them
 come up before it), not to the end of the line. A key leaves the order when its run starts or
 its queued comments are dropped (`runs.mjs`); `schedule()` drops any other key of a task with no
-comments left or a run going, and so does the start, after `loadQueue()` (`queue.json` is only
-written when the listener stops, so a crash loses the comments but not their keys). `api/state`
+comments left or a run going, and so does the start, after `loadQueue()` (the comments it
+dropped, their author no longer allowed, leave their keys behind). `api/state`
 gives each queued task its `position` (1 next to start, among the tasks of every repo the user
 sees: the places don't tell of the others) and `startsFirst` for a light one; the board's Queued
 tab and the graph's badges show it, and reorder from there. A move shows at once: the dashboard
@@ -717,12 +716,53 @@ again; the dashboard's list reads it from the log's `cancelled` line. A cancelle
 
 ## Restarts
 
-The listener can restart at any time (an update is `docker compose pull && up -d`).
-Sandboxes run detached, through the runner (`runner/docker.mjs`): on SIGTERM the listener
-starts no more runs and saves the comments still waiting for one to `queue.json`; each run's
-state is in `logs/<run>.live.json` all along. The next listener reads both, finds the
-sandboxes by their labels, follows their output from where the previous one stopped, and
-posts each reply once. A recreated container isn't on the networks the old one was joined
+The listener can restart at any time (an update is `docker compose pull && up -d`), or stop
+without warning (a crash, an OOM kill). Sandboxes run detached, through the runner
+(`runner/docker.mjs`), and what drives the listener's decisions is saved as it changes, never
+only on SIGTERM (#508), so that a listener killed at any moment leaves the next one the same as
+one that stopped:
+
+- **the queue**: the comments waiting for a run, in the store (`lib/store.mjs`, its file
+  backend in `store/` in the data volume, key `queue`), written whole whenever it changes
+  (`restart.mjs` `saveQueue()`: a comment accepted, taken by a run or a running session,
+  dropped, cancelled, put back by a run's end), with each task's `next` (`/model`, `/effort`
+  for its next run) and the 👀 each comment got (saved once GitHub answers, the comment itself
+  at once; on SIGTERM, those on their way are waited for, 10 s at most). Each comment has a `queueId` (one saved before them gets one as it comes back), and is loaded once whatever holds it. Its strings go there without the operator's secrets, GitHub tokens or private keys (`lib/store.mjs` `storable()`, from the same rules the store refuses a write by): a comment holding one by mistake is saved without it, and the whole queue still is. A run's end whose queue write fails puts its task's queue in `logs/<run>.queued.json` (the owner's only), read with the queue at the next start and removed after the next write that succeeds, and its own state goes: the next listener doesn't take the run for one still going. Only when that file can't be written either is the run's state kept, until such a write;
+- **the runs**: each run's state in `logs/<run>.live.json` (`saveLive()`), at its start, a
+  comment delivered, a phase, a result, a push, its reply; and, within a second
+  (`saveLiveSoon()`), the lines of its output read so far. It holds the run's tokens, which go
+  in the store only encrypted by their service (the broker's, #505): they stay in its file;
+- **the timers, as deadlines**: a task's pause before its run (or before the comments go to
+  its running session) is `dueAt`, saved with the queue; a run's silent-end grace
+  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (re-armed once the follow has skipped the lines read before, its whole grace until then: the runner's `onCaughtUp()`, unless a new line pushed it back first; one that passed while no listener was there gets 10 s more for what the sandbox wrote meanwhile, which pushes it back); a brainstorm's idle time was
+  already `deadline` (`brainstorms.json`). The `setTimeout`s stay, and are re-armed from the
+  deadline at start: what was left of it, or at once when it passed (a deadline saved by a
+  listener from before them, none: the pause starts again). The waits' checks
+  (`WAITS_CHECK_MINUTES`) run at every start anyway, and the reviews' waits for CI or a merge
+  keep when they began (`reviews.json`), from which their next tick decides;
+- **the rest** (waits, open questions' inputs, the run order, reviews in progress, decisions,
+  pull requests, titles…): in their JSON files, each written as it changes
+  (`lib/files.mjs` `persistentMap()`), until each service takes its own into the store (#499).
+
+A comment moves from the queue to a run's state in that order: the run's state is written, then
+the queue without it (`restart.mjs` `take()`, for a run's start and a running session's
+comments: until a write of the run's state that has it succeeds, every write of the queue,
+another task's or a 👀's, still has it, once); and back the other way at a run's end, or a restored run whose sandbox never
+started (the queue with the comments put back, then the run's state removed, `runs.mjs`
+`teardown()`). A listener killed between the two writes finds the comment in both, and leaves
+it to the run (`loadQueue()`, by `queueId`): never in neither. A run's start takes its task's
+`next` and saves the queue without it, so a restart mid-run doesn't hand it to the next run too.
+
+Restoring is one path (`restart.mjs`), the same at a start after a stop, after a crash, and for
+a copy taking over from another (#506): `unifySpellings()`, `restoreRuns()` (the runs' states:
+their tokens work again, comments find them), `loadQueue()` (the tasks rebuilt from the store,
+their deadlines re-armed), then `reattach()`. On SIGTERM the listener starts no more runs and
+only waits for the writes under way. A `queue.json`, which listeners from before #508 wrote on
+SIGTERM, is read once and moved to the store (removed after the first write of it that succeeds).
+
+The next listener finds the sandboxes by their labels, follows their output from where the
+previous one stopped (a listener killed within a second of reading some lines reads them again,
+and its log has them twice), and posts each reply once. A recreated container isn't on the networks the old one was joined
 to: the new listener joins itself and the egress proxy to the running sandboxes' networks
 first (`runner.relink()`), and again every minute, for a proxy recreated on its own; the
 networks, container engines and engine volumes of runs that are gone are removed then. Queued comments whose author or repository is no longer allowed are
@@ -1060,7 +1100,7 @@ tests fake it.
 | `access.mjs`                                                      | What a run may reach from the operator's grants: hosts, mounts (checked twice), limits, the egress cache, an engine.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
 | `sandbox-spec.mjs`                                                | What a run starts, described for any runner: image, environment, user, limits, capabilities and volumes (`kind`: agent, session, cache, mount), no backend options. Pure.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `footer.mjs`                                                      | The line under each reply: agent, provider, model, effort, speed, duration, the next step. Pure.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `restart.mjs`                                                     | `queue.json` and `logs/<run>.live.json`: what a listener leaves to the next one, and picking it up.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `restart.mjs`                                                     | The queue (in the store) and `logs/<run>.live.json`, saved as they change: what a listener leaves to the next one, and picking it up.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `brainstorms.mjs`                                                 | Each issue's brainstorm (`brainstorms.json`) and repo mode (`modes.json`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `comments.mjs`                                                    | Replies (comments, discussion threads), reactions (the listener's, noted in `reactions.json`: a run never removes them), labels (`hasLabel`, `ensureLabel`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `questions.mjs`, `inputs.mjs`                                     | Open questions → the needs-input label (`applyInput()`), parsed questions; the issues waiting for input.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |

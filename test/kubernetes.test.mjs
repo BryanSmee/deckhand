@@ -700,11 +700,15 @@ test("follow: the agent's lines and the rest apart, from one log, past what was 
   await runner.start(spec());
   const out = [];
   const err = [];
+  let caught = null;
   await runner.follow("dh-org-repo-12-abc", {
     skip: { out: 1, err: 1 },
     onOut: (line, at) => out.push([line, at]),
     onErr: (line) => err.push(line),
+    // Past the skipped lines of both, before the next.
+    onCaughtUp: () => (caught = [out.length, err.length]),
   });
+  assert.deepEqual(caught, [0, 0]);
   assert.deepEqual(out, [
     ['{"type":"assistant"}', Date.parse("2026-10-30T10:00:04.123Z")],
     ['{"type":"result"}', Date.parse("2026-10-30T10:00:05.123Z")],
@@ -735,11 +739,15 @@ test("follow: a line over MAX_LINE is cut; a handler that throws loses its line 
 test("follow: a log shorter than what was read (rotated by the kubelet) is logged", async (t) => {
   const { runner, logged } = setup(t, { logs: { "dh-org-repo-12-abc": ["\x1eone\n"] } });
   await runner.start(spec());
+  let caught = false;
   await runner.follow("dh-org-repo-12-abc", {
     skip: { out: 40, err: 2 },
     onOut: () => {},
     onErr: () => {},
+    // Never past them: the run keeps its whole grace (runs.mjs follow()).
+    onCaughtUp: () => (caught = true),
   });
+  assert.equal(caught, false);
   assert.ok(
     logged.some((l) => /has 1 lines, fewer than the 42 already read.*containerLogMaxSize/.test(l)),
   );
