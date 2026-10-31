@@ -402,7 +402,8 @@ Focus on the error handling.
 
 - **With the trigger line**, it starts that mode. Without one, on an issue that already has
   a session, it **switches**: the new mode goes on in the same session, so it starts from
-  the conversation so far, as long as both modes are light or neither is. A light run has
+  the conversation so far, as long as both get the same volumes (light or not, and what their
+  [capabilities](security.md#capabilities) give). A light run has
   a clone and session of its own, apart from work's: `/mode work` after a light audit starts
   from the issue and its comments, where the audit posted what it found.
 - **A comment with neither** goes on in the issue's current mode. The trigger line alone,
@@ -1032,7 +1033,8 @@ repository's). Seven decisions:
 | `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before the listener requests them on Deckhand's ready pull request, and again after a fix pushed to it.                                            | Requests nobody at that head commit: the listener's log says why, nothing is posted.                                                                                                                                                                                                                                                                                                                                                                            |
 | `deny_github`         | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [its mode's ceiling](#the-github-input).                                           | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                                                                                                                                         |
 
-Each has its allow rule (`allow_merge`…). Another `allow_*` or `deny_*` rule is reported by the
+Each has its allow rule (`allow_merge`…), and [capabilities](#capabilities) two of their own.
+Another `allow_*` or `deny_*` rule is reported by the
 config check, as probably misspelled. The grants' `allow_*` keys (`allow_auto_merge`…) are
 settings, not rules.
 
@@ -1046,6 +1048,25 @@ policies and reports their errors.
 network or the service's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
 `json.verify_schema`) and `trace`: a file that calls one doesn't compile, and refuses every
 decision of its layer. A policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
+
+### Capabilities
+
+What a run's sandbox gets (`pull`, `push`, `setup`, `docker`, `internet`, `read:issues`…: the
+[catalogue](security.md#capabilities)), decided as it starts by `allow_capabilities` (names) and
+`deny_capabilities` (`{"capability": …, "reason": …}`) on `repo` (`name`, `private`), `mode`,
+`custom_mode`, `issue`, `reason`, `fork`, `trigger` (as the run input's) and `command` (the
+comment's first line: `work`, `stop`…); used if its key (`setup`, `dockerfile`,
+`docker`, `preview`) asks for it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give built-in modes what they
+always had (but a pull request's branch image, which needs `push`); the repository's `modes:` only what its `.deckhand/policy/` allows too (nothing: refused):
+
+```rego
+package deckhand
+
+allow_capabilities contains c if {
+  input.mode == "audit"
+  some c in {"pull", "read:issues", "read:pulls"}
+}
+```
 
 <!-- onboarding: skip (listener/prompts.mjs leaves the inputs out of the onboarding prompt) -->
 

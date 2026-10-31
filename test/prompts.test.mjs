@@ -764,3 +764,64 @@ test("prompts: a review's verdict rule says what its tolerance lets through", ()
   );
   assert.doesNotMatch(medium, /<blocking>|<tolerated>/);
 });
+
+test("prompts: a work run follows its capabilities: no push, no branch talk; no pull, no clone or gh", () => {
+  const work = { mode: "work", settings, grant, branches: [] };
+  const read = ["pull", "read:issues", "read:pulls"];
+  const noPush = promptFor(issue, { ...work, capabilities: read });
+  assert.match(noPush, /^Read GitHub issue #12 of org\/repo with `gh issue view 12 --comments`\./);
+  assert.match(
+    noPush,
+    /You can't push, create a branch or open a pull request: this run doesn't have the `push` capability/,
+  );
+  assert.match(noPush, /describe the changes in your final message/);
+  assert.doesNotMatch(noPush, /draft pull\s+request|issue-12-/);
+  // On a pull request: not "its branch is in a fork".
+  const pr13 = promptFor(pr, { ...work, capabilities: read });
+  assert.match(pr13, /`gh pr diff 13`/);
+  assert.doesNotMatch(pr13, /fork|gh pr checkout/);
+  // A repo's own mode that isn't light, the same, its instructions after.
+  const own = { name: "triage", light: false, instructions: "docs/triage.md" };
+  const mode = promptFor(issue, {
+    ...work,
+    mode: "triage",
+    own,
+    instructions: "Sort it.",
+    capabilities: read,
+  });
+  assert.match(mode, /You can't push/);
+  assert.match(mode, /The triage mode's instructions, from the repository:\n\nSort it\.$/);
+  // Without `pull`: no clone, no GitHub; the thread is its input.
+  const bare = promptFor(issue, { ...work, capabilities: [] });
+  assert.match(bare, /no clone of the\nrepository and no GitHub access/);
+  assert.match(bare, /\$TASK_DIGEST/);
+  assert.doesNotMatch(bare, /gh (issue|pr) /);
+  // With `push`, or decided before capabilities: as before.
+  const full = promptFor(issue, { ...work, capabilities: ["pull", "push"] });
+  assert.equal(full, promptFor(issue, work));
+  assert.match(full, /The sandbox has already checked out the issue's branch/);
+});
+
+test("prompts: any mode but an analysis or research, without `pull`: the thread, no clone or gh", () => {
+  const bare = (task, mode, more = {}) =>
+    promptFor(task, { mode, settings, grant, branches: [], capabilities: [], ...more });
+  const brainstorm = bare(issue, "brainstorm");
+  assert.match(brainstorm, /^Answer what GitHub issue #12 of org\/repo asks\./);
+  assert.match(brainstorm, /\$TASK_DIGEST/);
+  assert.doesNotMatch(brainstorm, /gh (issue|pr) view/);
+  // A review: what was asked comes with it (its first message is empty), on a pull request.
+  // A pull request's wording.
+  assert.match(bare(pr, "work"), /^Answer what pull request #13 of org\/repo asks\./);
+  // A review and a discussion without `pull` don't start (capabilities.mjs NEED_PULL): were
+  // one to, its own prompt, the review's format the listener parses included.
+  const review = { text: "Mind the tests.", pull: 13 };
+  assert.equal(bare(pr, "review", review), promptFor(pr, { mode: "review", ...review }));
+  // An inbox entry's entries too.
+  assert.match(bare(issue, "idea", { text: "A dark mode." }), /What was asked:\n\nA dark mode\.$/);
+  // An analysis and research read their own digest, as before.
+  assert.equal(
+    bare(issue, "analyze", { text: "" }),
+    promptFor(issue, { mode: "analyze", text: "" }),
+  );
+  assert.equal(bare(issue, "research"), promptFor(issue, { mode: "research" }));
+});

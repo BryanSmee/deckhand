@@ -6,8 +6,8 @@
 # (SANDBOX_SETUP), then runs the agent without permission prompts: the container is the
 # sandbox. With DOCKER_HOST (a run granted a container engine), the docker CLI goes through
 # the egress proxy and waits for the engine before the setup; every prompt ends with whether
-# the run has one. SANDBOX_LIGHT=1 (brainstorms, inbox entries, discussions) skips the branch and the
-# setup. SANDBOX_NO_CLONE=1 (research runs: the open internet, nothing from GitHub) skips the clone
+# the run has one. SANDBOX_LIGHT=1 (a run without `push`: brainstorms, inbox entries,
+# discussions) skips the branch, and SANDBOX_SETUP is only set with `setup`. SANDBOX_NO_CLONE=1 (research runs: the open internet, nothing from GitHub) skips the clone
 # and git's credential helper too: the agent starts in an empty /workspace. SANDBOX_FULL_CLONE=1
 # (a work run that isn't a fork's) clones whole, and makes a kept blobless clone whole.
 #
@@ -291,7 +291,7 @@ engine=$(engine_note)
 if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
   : # Nothing to fetch, set up or open.
 elif [ -n "${SANDBOX_LIGHT:-}" ]; then
-  # A light run reads the code and doesn't run it, so it answers quickly. Fresh
+  # A light run (no branch to push) reads the code, so it answers quickly. Fresh
   # origin/<base> to read, and the base branch itself (reset_clone() put it there).
   git fetch --quiet origin
   git merge --ff-only "origin/$BASE_BRANCH" > /dev/null 2>&1 || true
@@ -299,15 +299,16 @@ else
   # The task's branch and draft pull request first, so the run shows up on GitHub within
   # seconds (does nothing outside work runs on an issue).
   sandbox-draft-pr start
-  # The repo's own setup (its config's `setup`: dependencies, services…), on stderr so its
-  # output never reads as the agent's. A failure doesn't stop the run: the agent is told.
-  if [ -n "${SANDBOX_SETUP:-}" ]; then
-    echo "Setup: $SANDBOX_SETUP" >&2
-    if ! bash -c "$SANDBOX_SETUP" >&2; then
-      setup_failed="The repository's setup command failed before you started (its output is in
+fi
+# The repo's own setup (its config's `setup`, for a run with the `setup` capability:
+# dependencies, services…), on stderr so its output never reads as the agent's. A failure
+# doesn't stop the run: the agent is told.
+if [ -z "${SANDBOX_NO_CLONE:-}" ] && [ -n "${SANDBOX_SETUP:-}" ]; then
+  echo "Setup: $SANDBOX_SETUP" >&2
+  if ! bash -c "$SANDBOX_SETUP" >&2; then
+    setup_failed="The repository's setup command failed before you started (its output is in
 the run's log): $SANDBOX_SETUP
 Check what it should have prepared before relying on it."
-    fi
   fi
 fi
 

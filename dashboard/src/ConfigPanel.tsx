@@ -1,6 +1,6 @@
 // One repository's config (docs/design/dashboard-redesign.md › Pages › Settings › A repository's
 // config): where it was read, Read again and Edit on GitHub, its tabs (Config, Policies:
-// PolicyConfig.tsx); then what stops or worries its runs (each error with its key, its fix and a
+// PolicyConfig.tsx, Capabilities: Capabilities.tsx); then what stops or worries its runs (each error with its key, its fix and a
 // link to its line, the warnings, the auto-merge risk), or, when all is fine, a green banner and
 // the facts at a glance, with the details folded but for what the repo sets. Then what its runs
 // get, each value tagged with its source and filtered by it, the hosts, mounts, the operator's
@@ -9,6 +9,7 @@
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import { useRepoConfig } from "./api";
+import { Capabilities, capabilityTrouble } from "./Capabilities";
 import { ago, plural, type Tone } from "./format";
 import { copyText } from "./logExport";
 import { PolicyConfig, policyTrouble, refusing } from "./PolicyConfig";
@@ -134,6 +135,7 @@ interface Props {
 const TABS: { id: ConfigTab | undefined; label: string }[] = [
   { id: undefined, label: "Config" },
   { id: "policies", label: "Policies" },
+  { id: "capabilities", label: "Capabilities" },
 ];
 
 export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
@@ -144,7 +146,9 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
   useEffect(() => setOpened({}), [repo]);
   const toggle = (part: Part) => (open: boolean) => setOpened((o) => ({ ...o, [part]: open }));
   const repositories = formatRoute(ROUTE);
-  const trouble = config ? policyTrouble(config.policies) : null;
+  const trouble = config ? (policyTrouble(config.policies) ?? capabilityTrouble(config)) : null;
+  // The modes whose runs wouldn't start (capabilities that don't hold).
+  const stopped = config?.capabilities.modes.filter((m) => m.errors.length).length ?? 0;
   return (
     <div class={styles.panel}>
       <header class={styles.head}>
@@ -222,6 +226,12 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
                   <Count n={refusing(config.policies.errors).length} class={styles.errCount} />
                 </>
               )}
+              {t.id === "capabilities" && stopped > 0 && (
+                <>
+                  {" "}
+                  <Count n={stopped} class={styles.errCount} />
+                </>
+              )}
             </a>
           ))}
         </nav>
@@ -235,6 +245,8 @@ export function ConfigPanel({ repo, tab, row, onRow, onBack, now }: Props) {
       {config &&
         (tab === "policies" ? (
           <PolicyConfig config={config} />
+        ) : tab === "capabilities" ? (
+          <Capabilities config={config} />
         ) : (
           <Body config={config} opened={opened} toggle={toggle} setOpened={setOpened} />
         ))}

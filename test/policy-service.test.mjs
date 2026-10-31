@@ -3,7 +3,7 @@
 // decisions mean, and tries the forbidden builtins with the real opa through it.
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { drain } from "../lib/drain.mjs";
@@ -684,4 +684,160 @@ test("the listener refuses every decision while the service has operator policie
     );
   }
   assert.equal(opa.evals().length, 0);
+});
+
+test("the capabilities: each file's rules renamed apart as its set is staged, answered by file, one server for every question", async (t) => {
+  const operator = {
+    "b.rego": 'package deckhand\n\nallow_capabilities contains "push" if input.mode == "work"\n',
+    "a.rego": 'package deckhand\n\nallow_capabilities contains "pull"\n',
+    "size.rego": DENY,
+  };
+  const opa = fakeOpa({ capabilitiesFor: (doc) => (doc.mode === "work" ? ["pull"] : []) });
+  const engine = policyEngineOf(t, { opa, operator });
+  const listener = createPolicies({
+    config: {},
+    github: async () => new Response("{}", { status: 404 }),
+    service: localService(engine),
+  });
+  const { results, error } = await listener.capabilityRules("org/repo", "main", {
+    work: { mode: "work" },
+    review: { mode: "review" },
+  });
+  assert.equal(error, undefined);
+  // The fake's names, as the first file by name's: a.rego.
+  assert.deepEqual([...results.work.operator.allow], [["pull", ["a.rego"]]]);
+  assert.deepEqual([...results.review.operator.allow], []);
+  // Staged with each file's rules under a name of its own, by file name, and their union apart;
+  // the other files as they are.
+  const [served] = opa.calls.filter((c) => c.args[0] === "serve");
+  assert.match(served.written.operator["a.rego"], /^allow_capabilities__0 contains "pull"$/m);
+  assert.match(served.written.operator["b.rego"], /^allow_capabilities__1 contains "push"/m);
+  assert.equal(served.written.operator["size.rego"], DENY);
+  assert.equal(
+    readFileSync(join(served.cwd, "policy", "operator", "capabilities", "union.rego"), "utf8"),
+    "package deckhand\n\n" +
+      "allow_capabilities contains c if some c in allow_capabilities__0\n" +
+      "allow_capabilities contains c if some c in allow_capabilities__1\n",
+  );
+  // Both inputs in one query, which asks each file's rules by its index.
+  const [query] = opa.evals();
+  assert.deepEqual(Object.keys(JSON.parse(query.input)).sort(), ["review", "work"]);
+  assert.match(query.query, /allow_capabilities__1\]/);
+  // A decision on the same set: the same server.
+  assert.deepEqual(
+    (await evaluateOn(engine, { decision: "merge", input: { pr: { additions: 1 } } })).operator,
+    { allow: true, denies: [] },
+  );
+  assert.equal(opa.calls.filter((c) => c.args[0] === "serve").length, 1);
+});
+
+test("the capabilities: what the engine refuses, and a union's error said as the rules' own", async (t) => {
+  const engine = policyEngineOf(t, { opa: fakeOpa() });
+  const ask = (body) =>
+    engine.evaluateCapabilities({ operatorDigest: engine.operatorDigest(), ...body });
+  for (const inputs of [null, [], { run: "x" }, { run: [] }]) {
+    assert.match((await ask({ inputs })).error, /^inputs: expected an object/, String(inputs));
+  }
+  assert.deepEqual(await ask({ inputs: {} }), { results: {} });
+  const many = Object.fromEntries(Array.from({ length: 65 }, (_, i) => [`m${i}`, {}]));
+  assert.match((await ask({ inputs: many })).error, /at most 64/);
+  const other = await engine.evaluateCapabilities({ inputs: { run: {} }, operatorDigest: "x" });
+  assert.equal(other.mismatch, true);
+  // A rule that isn't a set breaks the union byFile() wrote: said as such, in its layer.
+  const { list } = opaErrors(
+    JSON.stringify({
+      errors: [
+        {
+          message: "rego_type_error: undefined ref",
+          location: { file: "/tmp/x/policy/repo/capabilities/union.rego", row: 3 },
+        },
+        {
+          message: "allow_capabilities__2: conflicting rules",
+          location: { file: "/tmp/x/policy/operator/caps.rego", row: 4 },
+        },
+        // The operator's union, in a temp folder whose path holds `/repo/`.
+        {
+          message: "rego_type_error: undefined ref",
+          location: { file: "/srv/repo/tmp/x/policy/operator/capabilities/union.rego", row: 2 },
+        },
+      ],
+    }),
+  );
+  assert.deepEqual(list, [
+    {
+      file: null,
+      layer: "repo",
+      row: null,
+      message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+    },
+    {
+      file: "caps.rego",
+      layer: "operator",
+      row: 4,
+      message: "allow_capabilities: conflicting rules",
+    },
+    {
+      file: null,
+      layer: "operator",
+      row: null,
+      message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+    },
+  ]);
+  assert.deepEqual(ROUTES["POST /capabilities"], ROUTES["POST /evaluate"]);
+});
+
+test("the capabilities of many modes: in parts the service takes, one answer", async (t) => {
+  const engine = policyEngineOf(t, { opa: fakeOpa({ capabilitiesFor: () => ["pull"] }) });
+  const local = localService(engine);
+  const sizes = [];
+  const service = {
+    ...local,
+    evaluateCapabilities: (body) => (
+      sizes.push(Object.keys(body.inputs).length),
+      local.evaluateCapabilities(body)
+    ),
+  };
+  const listener = createPolicies({
+    config: {},
+    github: async () => new Response("{}", { status: 404 }),
+    service,
+  });
+  const inputs = Object.fromEntries(
+    Array.from({ length: 70 }, (_, i) => [`m${i}`, { mode: "work" }]),
+  );
+  const { results, error } = await listener.capabilityRules("org/repo", "main", inputs);
+  assert.equal(error, undefined);
+  assert.deepEqual(sizes, [64, 6]);
+  assert.equal(Object.keys(results).length, 70);
+});
+
+test("the capabilities: a service whose operator layer isn't the one read is asked again once, as decisions are", async (t) => {
+  const engine = policyEngineOf(t, { opa: fakeOpa({ capabilitiesFor: () => ["pull"] }) });
+  const local = localService(engine);
+  const calls = [];
+  let mismatches = 1;
+  const service = {
+    ...local,
+    policies: () => (calls.push("policies"), local.policies()),
+    evaluateCapabilities: (body) => {
+      calls.push("capabilities");
+      // A copy of the service with other defaults, once (an update going on).
+      if (mismatches-- > 0) return { error: "other operator policies", mismatch: true };
+      return local.evaluateCapabilities(body);
+    },
+  };
+  const listener = createPolicies({
+    config: {},
+    github: async () => new Response("{}", { status: 404 }),
+    service,
+  });
+  const { results, error } = await listener.capabilityRules("org/repo", "main", { run: {} });
+  assert.equal(error, undefined);
+  assert.deepEqual([...results.run.operator.allow.keys()], ["pull"]);
+  // Deckhand's policies asked again between the two.
+  assert.deepEqual(calls, ["policies", "capabilities", "policies", "capabilities"]);
+  // Twice in a row: refused, the start says why.
+  mismatches = 2;
+  const refused = await listener.capabilityRules("org/repo", "main", { run: {} });
+  assert.match(refused.error, /^policy error: other operator policies/);
 });

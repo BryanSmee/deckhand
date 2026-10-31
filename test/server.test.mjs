@@ -1219,8 +1219,14 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       JSON.parse(readFileSync(join(dir, "broker-answer"), "utf8")).default_branch,
       "trunk",
     );
-    const relayed = github.requests.find((r) => r.method === "GET" && r.path === "/repos/org/repo");
-    assert.equal(relayed.auth, "token repo-token");
+    // (The listener read it too, as the installation: its visibility, for the run's capabilities.)
+    const relayed = github.requests.filter(
+      (r) => r.method === "GET" && r.path === "/repos/org/repo",
+    );
+    assert.deepEqual(
+      relayed.map((r) => r.auth),
+      ["Bearer app-token", "token repo-token"],
+    );
     // Its assignees: an allowed user goes on to GitHub, anyone else is refused at the gateway.
     assert.equal(readFileSync(join(dir, "assign-alice"), "utf8"), "200");
     assert.equal(readFileSync(join(dir, "assign-mallory"), "utf8"), "403");
@@ -2992,6 +2998,14 @@ modes:
     model: sonnet
     effort: high
 `;
+  // What the audit mode gets, as the repo's own modes need its allow rules (capabilities.mjs):
+  // a light run's; and that it runs.
+  const AUDIT_POLICY = `${AUDIT_RUNS}
+allow_capabilities contains "pull"
+allow_capabilities contains "image:repo"
+allow_capabilities contains "read:issues"
+allow_capabilities contains "read:pulls"
+`;
 
   test("review.on: a ready pull request gets one review run, posted as a GitHub review", async (t) => {
     const { dir, github, listener, send } = await listen(
@@ -3391,7 +3405,7 @@ modes:
         ".deckhand.yaml": MODES,
         ".deckhand/audit.md": "Read the diff and list the risks.",
         // Its own mode runs once it allows it (allow_run, run-policy.mjs).
-        "policy:modes.rego": AUDIT_RUNS,
+        "policy:modes.rego": AUDIT_POLICY,
       },
       (dir) => {
         writeGrant(dir, "hosts: [registry.npmjs.org, pypi.org]\n");
@@ -3519,7 +3533,9 @@ modes:
     // Nothing from GitHub: the gateway refused the sandbox's call, and no token was minted.
     assert.equal(readFileSync(join(dir, "broker-answer"), "utf8"), "");
     assert.equal(github.requests.filter((r) => r.body.includes("repositories")).length, 0);
-    assert.ok(!github.requests.some((r) => r.path === "/repos/org/repo"));
+    // The listener reads the repository's visibility once, for its capabilities' input; the
+    // sandbox's call adds none.
+    assert.equal(github.requests.filter((r) => r.path === "/repos/org/repo").length, 1);
     // No CA either: GitHub's hosts aren't relayed for it (below).
     assert.doesNotMatch(args, /DECKHAND_CA/);
     // Any public host, the operator's named ones no longer private.
@@ -3872,7 +3888,7 @@ mounts:
   test("a mode whose instructions file is missing: the reply says so", async (t) => {
     const { dir, github, send } = await listen(t, {
       ".deckhand.yaml": MODES,
-      "policy:modes.rego": AUDIT_RUNS,
+      "policy:modes.rego": AUDIT_POLICY,
     });
     await send(comment("alice", "Deckhand\n/mode audit"));
     const reply = await github.waitFor(

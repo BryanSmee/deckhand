@@ -1,27 +1,31 @@
-// Everything a run needs before its sandbox starts (runs.mjs start()): the branches it may
-// push, its mode's instructions, what it may reach (access.mjs), its image, agent and caches,
-// its screenshots' folder, the egress cache, and an analysis's digest or a research run's
-// thread. What fails stops the run with a reply (RunError).
+// Everything a run needs before its sandbox starts (runs.mjs start()): its capabilities
+// (capabilities.mjs), then what they give: the branches it may push, its mode's instructions,
+// what it may reach (access.mjs), its image, agent and caches, its screenshots' folder, the
+// egress cache, and an analysis's digest or a research run's thread. What fails stops the run
+// with a reply (RunError).
 import { randomBytes } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import {
+  bareAccess,
   cantRun,
   egressCache,
   engineFor,
   grantedAccess,
-  researchAccess,
+  grantsRefusal,
   RunError,
   runnerRefusal,
 } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
+import { capabilitiesInput, listed, outcomeOf } from "./capabilities.mjs";
 import { mandatoryHosts } from "./egress.mjs";
 import { headInRepo } from "./events.mjs";
 import { getJson, paginate } from "./github.mjs";
+import { grantCheck } from "./grants.mjs";
 import { imageRef } from "./images.mjs";
-import { OPEN } from "./modes.mjs";
 import { handoffMessage } from "./prompts.mjs";
 import { reviewThread } from "./reviews.mjs";
+import { personStarted, runTrigger } from "./run-policy.mjs";
 import { buildOutput, enterPhase } from "./runlog.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
@@ -36,26 +40,51 @@ export function createPreparation(ctx) {
   // The run's agent (agents/), by the name its record keeps across a restart.
   const agentOf = (task) => agentFor(task.live.record.agent);
 
-  // The branches it may push, the mode's instructions, what it may reach (access.mjs), its
-  // image and caches, its screenshots' folder and the egress cache.
-  async function prepareRun(task, items, { settings, own, handoff, message }, note) {
+  // Its capabilities (capabilities.mjs), then what they give: the branches it may push, the
+  // mode's instructions, what it may reach (access.mjs), its image and caches, its screenshots'
+  // folder and the egress cache. A run without `pull` gets nothing of the repo's
+  // (prepareBare()).
+  // `run`: runs.mjs begin()'s, whose reopen() makes its first message again when the session
+  // volume its capabilities give it isn't its mode's.
+  async function prepareRun(task, items, run, note) {
     const { live } = task;
-    if (OPEN.has(live.mode)) return prepareResearch(task, settings, { handoff, message }, note);
+    const { settings, own } = run;
     const agent = agentOf(task);
-    const { branches, fork, pulls } = await pushBranches(task, items);
+    const { pulls, unread } = await pullRequests(task, items);
+    // One that couldn't be looked up may be a fork's: counted as one.
+    const fork = !!unread || [...pulls.values()].some((pr) => !headInRepo(pr, task.repo));
+    const caps = await capabilitiesOf(task, items, settings, fork, note, unread);
+    // Its volume (sandbox-spec.mjs sessionOf()) depends on whether it is a fork's: known before
+    // reopen() looks in it. A run without `pull` isn't one (prepareBare()).
+    live.fork = caps.has("pull") && fork;
+    const { handoff, message } = { ...run, ...((await run.reopen?.(note)) ?? {}) };
+    // A run that pushes needs them all: its branches are their heads.
+    if (unread && caps.has("push")) throw unread;
+    if (!caps.has("pull"))
+      return prepareBare(task, caps, { settings, own, handoff, message }, note);
+    const branches = caps.has("push") ? pushBranches(task, pulls) : [];
     live.handoff = !!handoff;
     live.branches = branches;
-    // A fork's code may run in it: nothing it can leave for the repo's later runs, which
-    // trust what they find (prepareImage(), sandbox-spec.mjs).
+    // A fork's code may run in it: a clone of its own (sandbox-spec.mjs: `-fork`, a light run's
+    // too, so the issue's later light runs, which may get caches or an engine, never start in
+    // it), and nothing it can leave for the repo's later runs, which trust what they find
+    // (prepareImage(), access.mjs). The broker gets the same: it may read the fork's code,
+    // whatever it may push (github-forks.mjs restricted()), after a restart too.
     live.fork = fork;
     ctx.broker.allow(live.id, live.branches, fork);
     // A review's are optional (its `review` block); a repo's mode always has them.
     const instructions = own?.instructions ? await modeInstructions(task, own) : null;
     const access = grantedAccess(config, task, settings, { agent, note, log });
-    const engine = engineFor(config, task, settings, access, fork, note);
-    const refused = runnerRefusal(config, settings, access, engine);
+    // The open internet: any public host, private addresses only for those every run needs
+    // (access.mjs bareAccess() says why).
+    if (caps.has("internet")) Object.assign(access, openHosts(agent));
+    // Never where a fork's code may run, whether the run pushes or not.
+    const engine = caps.has("docker")
+      ? engineFor(config, task, settings, access, fork, note)
+      : null;
+    const refused = runnerRefusal(config, settings, access, engine, caps);
     if (refused) throw new RunError(`${cantRun(agent)}: ${refused}`);
-    const prepared = await prepareImage(task, items, settings, access, note, pulls);
+    const prepared = await prepareImage(task, items, settings, access, note, { pulls, caps, fork });
     live.shots = shotsFolder();
     live.record.shots = live.shots;
     live.hosts = access.hosts;
@@ -69,9 +98,10 @@ export function createPreparation(ctx) {
     // failed preparation leaves no branch behind. Created and linked now when the issue has
     // none, or its one branch already: the sandbox checks it out (TASK_BRANCH, draft-pr.sh).
     // Null: the sandbox names and creates it, unlinked.
-    live.linkedBranch = live.cancelled
-      ? null
-      : ((await ctx.linkedBranches?.link(task, note)) ?? null);
+    live.linkedBranch =
+      live.cancelled || !caps.has("push")
+        ? null
+        : ((await ctx.linkedBranches?.link(task, note)) ?? null);
     return {
       // Another agent takes over: the branches are part of what it is handed.
       message: handoff ? handoffMessage({ ...handoff, branches }) : message,
@@ -83,6 +113,80 @@ export function createPreparation(ctx) {
       digest,
     };
   }
+
+  // What the run gets (capabilities.mjs outcomeOf()), decided by the policies on its repo's
+  // default branch, with its config and the operator's grant: kept on its live state (saved
+  // with it) and in its tokens (broker.mjs grant()), and said in its log. A broken dependency,
+  // a risky combination the operator doesn't allow or a policy error stops it with a reply.
+  // `fork`: whether a fork's pull request's comments started it. → the names, a Set.
+  // `unread`: the error of a pull request that couldn't be looked up, which `fork` counts as a
+  // fork's: the run is refused with it when, not a fork's, it would push (a policy that denies
+  // forks `push` would otherwise turn a maintainer's run into a read-only one, unsaid).
+  async function capabilitiesOf(task, items, settings, fork, note, unread = null) {
+    const { live } = task;
+    const agent = agentOf(task);
+    const last = items.at(-1) ?? {};
+    const repo = { name: task.repo, private: await isPrivate(task.repo) };
+    const input = capabilitiesInput({
+      repo,
+      mode: live.mode,
+      issue: task.number,
+      reason: last.reason,
+      fork,
+      // As the run input says it (`deny_run`'s), the comment's command apart.
+      trigger: personStarted(last) ? runTrigger(last) : null,
+      command: last.trigger ?? null,
+    });
+    // Asked once with the run as a fork's and not, when it might not be one.
+    const inputs = { run: input, ...(unread && fork && { unforked: { ...input, fork: false } }) };
+    const said = ctx.policies
+      ? await ctx.policies.capabilityRules(task.repo, task.base, inputs)
+      : { error: "no policies to decide them" };
+    if (said.error) {
+      throw new RunError(
+        `${cantRun(agent)}: its capabilities couldn't be decided (${said.error}). The repository's config page on the dashboard shows the policies' errors.`,
+      );
+    }
+    // Grants that can't be read stop the run as they always did, before what they gate.
+    const check = grantCheck(config, task.repo, settings);
+    if (check.error) {
+      log(`${task.repo}: ${check.error.message}`);
+      throw new RunError(`${cantRun(agent)}: ${grantsRefusal(check)}.`);
+    }
+    const outcomeFor = (key) =>
+      outcomeOf({
+        rules: said.results[key],
+        custom: input.custom_mode,
+        settings,
+        grant: check.grant,
+        repo,
+        mode: live.mode,
+      });
+    if (inputs.unforked && outcomeFor("unforked").used.includes("push")) throw unread;
+    const outcome = outcomeFor("run");
+    for (const warning of outcome.warnings) note(`Capabilities: ${warning}`);
+    if (outcome.errors.length) {
+      throw new RunError(
+        `${cantRun(agent)}: the capabilities its policies give a \`${live.mode}\` run don't hold.\n\n${outcome.errors.map((e) => `- ${e}`).join("\n")}\n\nThe repository's config page on the dashboard shows what each mode gets, and the file that decided it (see Deckhand's docs/repo-config.md#capabilities).`,
+      );
+    }
+    live.capabilities = outcome.used;
+    ctx.broker.grant(live.id, outcome.used);
+    note(`Capabilities: ${listed(outcome.used)}`);
+    return new Set(outcome.used);
+  }
+
+  // Whether GitHub says `repo` is private: null when it can't say, which the risky combinations
+  // take for private.
+  async function isPrivate(repo) {
+    const info = await getJson(ctx.github, repo, `/repos/${repo}`).catch(() => null);
+    return typeof info?.private === "boolean" ? info.private : null;
+  }
+
+  // What a run with the open internet reaches: any public host, and private addresses only for
+  // the hosts every run needs (mandatoryHosts()): an internal host next to the open internet
+  // would be a way out for what it serves.
+  const openHosts = (agent) => ({ hosts: ["*"], trusted: mandatoryHosts(config, agent) });
 
   // A review's thread (reviews.mjs reviewThread()): only what allowed users and the App
   // wrote, redacted like any output. Not read: no review, rather than one on the whole thread.
@@ -101,16 +205,24 @@ export function createPreparation(ctx) {
     return redact(text, operatorSecrets(ctx));
   }
 
-  // A research run (modes.mjs OPEN): any public host, and nothing of the repo's (access.mjs
-  // researchAccess()): the base image, no branches, caches, engine, CA or screenshots. Its
-  // input is the issue's thread (threadDigest()): it has no token to read it with.
-  async function prepareResearch(task, settings, { handoff, message }, note) {
+  // A run without `pull` (a research run): nothing of the repo's (access.mjs bareAccess()):
+  // the base image, no branches, caches, engine, CA or screenshots, and any public host only
+  // with `internet`. Its input is the issue's thread (threadDigest()): it has no token to read
+  // it with.
+  async function prepareBare(task, caps, { settings, own, handoff, message }, note) {
     const { live } = task;
     const agent = agentOf(task);
     live.handoff = !!handoff;
     live.branches = [];
-    const access = researchAccess(config, task, { agent, log });
-    note("Research: any public host, without the repository's code, image or a GitHub token");
+    // The listener reads them: the sandbox has no clone to read them from.
+    const instructions = own?.instructions ? await modeInstructions(task, own) : null;
+    live.fork = false;
+    const access = bareAccess(config, task, { agent, log, internet: caps.has("internet") });
+    note(
+      caps.has("internet")
+        ? "Research: any public host, without the repository's code, image or a GitHub token"
+        : "Without the repository's code, image or a GitHub token",
+    );
     try {
       await ctx.images.installAgent(agent, (chunk) => live.logFile.write(chunk));
     } catch (error) {
@@ -128,13 +240,22 @@ export function createPreparation(ctx) {
     const { ca } = await egressCache(access.grant, ctx.egressCa, note, agent, config);
     return {
       message: handoff ? handoffMessage({ ...handoff, branches: [] }) : message,
-      instructions: null,
+      instructions,
       access,
       engine: null,
       prepared: { image: config.image, caches: [], settings },
       ca,
-      digest: await threadDigest(task, note),
+      digest: await bareDigest(task, settings, note),
     };
+  }
+
+  // A run without `pull`'s input: its issue's thread; an analysis's, its runs' digest (runs.mjs
+  // analysisDigest()). A review or a discussion without `pull` doesn't start (capabilities.mjs
+  // NEED_PULL); were one to, a review would read only what allowed users and Deckhand wrote.
+  async function bareDigest(task, settings, note) {
+    if (task.live.mode === "analyze") return undefined;
+    if (task.live.mode === "review") return reviewDigest(task, settings, note);
+    return threadDigest(task, note);
   }
 
   // The issue's (or pull request's) title, description and last comments, as a research run
@@ -226,10 +347,12 @@ export function createPreparation(ctx) {
     return file.text;
   }
 
-  // The run's image (built first if the repo's Dockerfile changed), its agent and the repo's
-  // cache volumes. While an image builds, the dashboard shows the run as "building image"
-  // (its `image` phase, board.mjs runState()).
-  async function prepareImage(task, items, settings, access, note, pulls) {
+  // The run's image (built first if the repo's Dockerfile changed: `image:repo`, or
+  // `image:branch` for its pull request's), its agent and the repo's cache volumes (`setup`).
+  // While an image builds, the dashboard shows the run as "building image" (its `image` phase,
+  // board.mjs runState()). `caps`: its capabilities; `fork`: whether a fork's pull request's
+  // comments started it.
+  async function prepareImage(task, items, settings, access, note, { pulls, caps, fork }) {
     const { grant } = access;
     const { logFile } = task.live;
     const { base } = task;
@@ -238,11 +361,12 @@ export function createPreparation(ctx) {
     const build = buildOutput(logFile);
     try {
       const source = await imageSource(task, items, settings, grant, pulls);
+      const own = caps.has(source.branch ? "image:branch" : "image:repo");
       const image = await ctx.images.imageFor({
         repo: task.repo,
         ref: source.ref,
         branch: source.branch,
-        dockerfile: settings.dockerfile,
+        dockerfile: own ? settings.dockerfile : null,
         onBuild: (tag) => {
           enterPhase(task.live, "image");
           note(
@@ -258,18 +382,16 @@ export function createPreparation(ctx) {
       if (image !== config.image)
         note(`Image ${image}${source.branch ? " (pull request branch)" : ""}`);
       await ctx.images.installAgent(agentOf(task), output);
-      // A light run runs no setup: no caches, which work runs trust. Nor a run whose comments
-      // came from a fork's pull request: its code would write into what every later run uses.
-      // What the runner keeps (the runner service's GET /info, ../runner/client.mjs).
+      // A run without `setup` runs none: no caches, which work runs trust. Nor a run whose
+      // comments came from a fork's pull request: its code would write into what every later
+      // run uses. What the runner keeps (the runner service's GET /info, ../runner/client.mjs).
       const { keepsCaches, noCaches } = (await ctx.images.info?.()) ?? ctx.images;
-      if (task.live.fork && !task.live.light && settings.caches?.length)
-        note("No caches: a pull request from a fork");
-      else if (!task.live.light && settings.caches?.length && keepsCaches === false)
+      const setup = caps.has("setup");
+      if (fork && setup && settings.caches?.length) note("No caches: a pull request from a fork");
+      else if (setup && settings.caches?.length && keepsCaches === false)
         note(`No caches: ${noCaches ?? `the ${config.runner} runner keeps none`}`);
       const caches =
-        task.live.light || task.live.fork
-          ? []
-          : await ctx.images.caches(task.repo, settings.caches, image);
+        !setup || fork ? [] : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, caches, settings };
     } catch (error) {
       // What a failed build printed last (flushing again writes nothing).
@@ -280,41 +402,50 @@ export function createPreparation(ctx) {
     }
   }
 
-  // The branches the run may push (git-gateway.mjs) and whose pull requests it may mark ready
-  // (github-pulls.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the title, which
-  // may change), and the head of each pull request its comments came from, a maintainer's
-  // included, but not a fork's. None for a run that can't push. `fork`: whether one of them
-  // is a fork's; `pulls`: number → the pull request, as GitHub has it, for imageSource().
-  async function pushBranches(task, items) {
+  // The pull requests its comments came from, but the task's own issue: { pulls: number → the
+  // pull request, as GitHub has it, for whether one is a fork's, the branches it may push
+  // (pushBranches()) and its image (imageSource()); unread: the RunError of the first that
+  // couldn't be looked up, which stops a run that pushes, or null }.
+  async function pullRequests(task, items) {
     const pulls = new Map();
-    if (!ctx.broker.runOf(task.live.id)?.push) return { branches: [], fork: false, pulls };
-    let fork = false;
-    const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
-    const numbers = new Set(items.map((i) => i.replyTo));
+    let unread = null;
+    const numbers = new Set(items.map((i) => i.replyTo).filter(Number.isInteger));
     if (task.kind !== "pr") numbers.delete(task.number);
     for (const number of numbers) {
-      let pr;
       try {
-        pr = await getJson(ctx.github, task.repo, `/repos/${task.repo}/pulls/${number}`);
+        pulls.set(
+          number,
+          await getJson(ctx.github, task.repo, `/repos/${task.repo}/pulls/${number}`),
+        );
       } catch (error) {
-        throw new RunError(
+        unread ??= new RunError(
           `${agentOf(task).displayName} couldn't start: pull request #${number} couldn't be looked up (${error.message ?? error}). Comment again to retry.`,
         );
       }
-      pulls.set(number, pr);
-      const ref = pr.head?.ref;
-      if (!headInRepo(pr, task.repo)) fork = true;
-      else if (ref && !branches.includes(ref)) branches.push(ref);
     }
-    return { branches, fork, pulls };
+    return { pulls, unread };
   }
 
-  // A comment on a pull request may run on the image of its own branch (imageRef()). `pulls`:
-  // those pushBranches() looked up already.
+  // The branches a run with `push` may push (git-gateway.mjs) and whose pull requests it may
+  // mark ready (github-pulls.mjs): an issue's own, issue-<n>-* (draft-pr.sh names it from the
+  // title, which may change), and the head of each pull request its comments came from
+  // (`pulls`, pullRequests()'s), a maintainer's included, but not a fork's.
+  function pushBranches(task, pulls) {
+    const branches = task.kind === "issue" ? [`issue-${task.number}-*`] : [];
+    for (const pr of pulls.values()) {
+      const ref = pr.head?.ref;
+      if (headInRepo(pr, task.repo) && ref && !branches.includes(ref)) branches.push(ref);
+    }
+    return branches;
+  }
+
+  // A comment on a pull request may run on the image of its own branch (imageRef()), with
+  // `image:branch`. `pulls`: those pullRequests() looked up already.
   async function imageSource(task, items, settings, grant, pulls = new Map()) {
     const { base } = task;
     const pr = items.at(-1).replyTo;
     if (
+      task.live.capabilities.includes("image:branch") &&
       grant.allowBranchDockerImages &&
       settings.dockerfile &&
       (task.kind === "pr" || pr !== task.number)

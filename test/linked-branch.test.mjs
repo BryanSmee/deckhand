@@ -22,6 +22,7 @@ const taskOf = (live = {}, task = {}) => ({
     key: "Org/Repo#12",
     mode: "work",
     light: false,
+    capabilities: ["pull", "push"],
     fork: false,
     id: "run-1",
     branches: ["issue-12-*"],
@@ -172,9 +173,10 @@ test("a repo's own mode on an issue that has a branch gets none, and no policy i
   );
 });
 
-test("no link for a light run, a fork's, a pull request, or a run that can't push its branch", async () => {
+test("no link for a run without push, a fork's, a pull request, or a run that can't push its branch", async () => {
   for (const task of [
-    taskOf({ light: true }),
+    taskOf({ light: true, capabilities: ["pull"] }),
+    taskOf({ capabilities: ["pull"] }),
     taskOf({ fork: true }),
     taskOf({ branches: [] }),
     taskOf({ branches: ["feat"] }),

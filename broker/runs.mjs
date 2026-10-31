@@ -66,9 +66,13 @@ function claimsOf(record) {
     fork: record.fork,
     branches: record.branches,
     sandbox: record.sandbox,
-    caps: [],
+    // What the run's start decided it gets (the listener's capabilities.mjs): names only.
+    caps: record.caps ?? [],
   };
 }
+
+// A capability's name, as the listener's catalogue spells them (`pull`, `image:repo`).
+const CAP = /^[a-z][a-z0-9:_-]{0,63}$/;
 
 // What the orchestrator says of a run (PUT /runs/:id, POST /runs/:id/tokens), checked: the
 // claims' fields and its screenshots' folder. Anything else is dropped.
@@ -82,6 +86,7 @@ export function runFields(body) {
     branches: Array.isArray(body?.branches) ? body.branches.filter((b) => text(b)) : [],
     sandbox: text(body?.sandbox),
     shots: text(body?.shots),
+    caps: Array.isArray(body?.caps) ? body.caps.filter((c) => CAP.test(c ?? "")).slice(0, 64) : [],
   };
 }
 

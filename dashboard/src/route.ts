@@ -7,7 +7,7 @@
 //   #/org/repo/board                     a repo's board: its work queue, and what waits for what
 //   #/settings/repositories              the repositories the App is installed on
 //   #/settings/repositories/org/repo     with one's config open
-//   #/settings/repositories/org/repo/policies   its Policies tab
+//   #/settings/repositories/org/repo/policies   its Policies tab (/capabilities: Capabilities)
 //   #/settings/preferences, #/settings/server   Settings' other tabs
 // Older addresses still parse, and the dashboard rewrites them to these (App.tsx useRoute()):
 // #/all, #/?task=… (All's tasks), #/repositories[/org/repo], #/graph/org/repo (the board),
@@ -19,7 +19,7 @@ export type Page = "tasks" | "board" | "settings";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
 export type Section = "preferences" | "server";
 // A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
-export type ConfigTab = "policies";
+export type ConfigTab = "policies" | "capabilities";
 
 export interface Route {
   repo: string | null; // null: All
@@ -48,7 +48,7 @@ export function parseRoute(hash: string): Route {
   const [path, query = ""] = h.slice(1).split("?", 2);
   // Settings: Repositories (#/settings alone too), Preferences or Server.
   const repos =
-    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies))?)?$/.exec(
+    /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities))?)?$/.exec(
       path,
     );
   if (repos) {

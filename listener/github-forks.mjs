@@ -371,9 +371,14 @@ function kept(ms, max, now) {
   };
 }
 
-// Whether `run`'s calls are checked: a work run (it has caches, mounts and maybe an engine, and
-// pushes) that isn't a fork's.
-export const restricted = (run) => run?.push === true && run.fork !== true;
+// Whether `run`'s calls are checked: one that isn't a fork's and gets what the repo's later runs
+// trust: a work run (`push`, from its mode), or the capabilities (capabilities.mjs) that leave
+// something behind: `push`, `setup` (caches) or `docker` (an engine).
+const TRUSTED = ["push", "setup", "docker"];
+export const restricted = (run) =>
+  !!run &&
+  run.fork !== true &&
+  (run.push === true || (run.caps ?? []).some((c) => TRUSTED.includes(c)));
 
 export function createForkChecks({
   // (repo, path, expected) → GitHub's JSON for a GET, with the App's token for `repo`, or null

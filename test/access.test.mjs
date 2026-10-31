@@ -4,11 +4,11 @@ import { mkdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from 
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  bareAccess,
   egressCache,
   engineFor,
   grantedAccess,
   recheckMounts,
-  researchAccess,
   researchRefusal,
   RunError,
   validateRun,
@@ -24,7 +24,13 @@ const codex = agentFor("codex");
 const task = (live = {}) => ({
   repo: "org/repo",
   base: "trunk",
-  live: { light: false, mode: "work", record: { model: "best" }, ...live },
+  live: {
+    light: false,
+    mode: "work",
+    capabilities: ["pull", "push"],
+    record: { model: "best" },
+    ...live,
+  },
 });
 
 // A grants folder holding org/repo.yaml, and the config reading it.
@@ -143,7 +149,9 @@ test("a run with a comment from a fork's pull request notes its read-write mount
   assert.deepEqual(notes({ fork: true }), [
     `Host mount ${dir}/nfs/api (read-only: a pull request from a fork)`,
   ]);
-  assert.deepEqual(notes({ light: true, fork: true }), [`Host mount ${dir}/nfs/api (read-only)`]);
+  assert.deepEqual(notes({ capabilities: ["pull"], fork: true }), [
+    `Host mount ${dir}/nfs/api (read-only)`,
+  ]);
 });
 
 test("validateRun: an /agent the operator doesn't have, config errors, a mode gone, another agent's model", () => {
@@ -189,10 +197,10 @@ test("engineFor: the repo's `docker` with its grant and the operator's SANDBOX_E
   assert.deepEqual(cached.limits, { cpus: 3 });
   assert.match(cached.cache, /^deckhand-engine-cache-org-repo-[0-9a-f]+$/);
   assert.equal(engine(config, {}, { docker: {} }, access).cache, null);
-  // None without the repo's `docker`, its grant, or for a light run.
+  // None without the repo's `docker` or its grant (a run without the `docker` capability doesn't
+  // ask: preparation.mjs).
   assert.equal(engine(config, {}, { docker: null }, access), null);
   assert.equal(engine(config, {}, docker, { ...access, grant: { allowDocker: false } }), null);
-  assert.equal(engine(config, { light: true }, docker, access), null);
   assert.deepEqual(notes, []);
   // Without SANDBOX_ENGINE, or for a fork's pull request: none, and the log says why.
   assert.equal(engine(testConfig(), {}, docker, access), null);
@@ -204,12 +212,12 @@ test("engineFor: the repo's `docker` with its grant and the operator's SANDBOX_E
 });
 
 test("research: refused without allow_research, naming the grant; a broken grant file too", (t) => {
-  const io = { agent: claude, log: () => {} };
-  const research = task({ light: true, mode: "research" });
+  const io = { agent: claude, log: () => {}, internet: true };
+  const research = task({ light: true, mode: "research", capabilities: ["internet"] });
   const without = granted(t, "hosts: [nas.lan.example]\n").config;
   assert.match(researchRefusal(without, "org/repo"), /`allow_research: true`/);
   assert.throws(
-    () => researchAccess(without, research, io),
+    () => bareAccess(without, research, io),
     (e) =>
       e instanceof RunError &&
       /^Claude can't run here: research runs need the operator's `allow_research: true` grant/.test(
@@ -222,6 +230,12 @@ test("research: refused without allow_research, naming the grant; a broken grant
   const dir = realpathSync(tempDir(t));
   writeFileSync(join(dir, "default.yaml"), "allow_research: true\n");
   assert.equal(researchRefusal(testConfig({ GRANTS_DIR: dir }), "org/repo"), null);
+  // Without `internet`, no grant is needed, but grants that can't be read still refuse.
+  assert.ok(bareAccess(without, research, { ...io, internet: false }));
+  assert.throws(
+    () => bareAccess(broken, research, { ...io, internet: false }),
+    /^Error: Claude can't run here: `org\/repo\.yaml` in the operator's grants folder has errors/,
+  );
 });
 
 test("research: any public host, private addresses for the mandatory hosts only, nothing else", (t) => {
@@ -229,8 +243,8 @@ test("research: any public host, private addresses for the mandatory hosts only,
     t,
     "allow_research: true\nhosts: [nas.lan.example]\ncached_hosts: [deb.debian.org]\nmounts: [/srv]\nlimits: { cpus: 3 }\n",
   );
-  const research = task({ light: true, mode: "research" });
-  const access = researchAccess(config, research, { agent: claude, log: () => {} });
+  const research = task({ light: true, mode: "research", capabilities: ["internet"] });
+  const access = bareAccess(config, research, { agent: claude, log: () => {}, internet: true });
   assert.deepEqual(access.hosts, ["*"]);
   assert.deepEqual(access.mounts, []);
   assert.deepEqual(access.grant.cachedHosts, []);
@@ -257,6 +271,11 @@ test("research: any public host, private addresses for the mandatory hosts only,
   assert.ok(!work.hosts.includes("*"));
   assert.ok(work.hosts.includes("nas.lan.example"));
   assert.equal(egressPolicy("example.org", work.hosts, work.trusted).allowed, false);
+  // A run with neither `pull` nor `internet`: the mandatory hosts alone.
+  const bare = bareAccess(config, research, { agent: claude, log: () => {}, internet: false });
+  assert.deepEqual(bare.hosts, bare.trusted);
+  assert.ok(!bare.hosts.includes("nas.lan.example"));
+  assert.ok(bare.hosts.includes("github.com"));
 });
 
 test("egressCache: an agent whose calls the proxy relays gets the CA, a research run's too; none on an API key", async () => {

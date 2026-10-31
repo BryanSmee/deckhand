@@ -226,6 +226,47 @@ function prPush(branches) {
     : `you can't push: its branch is in a fork, so describe the changes in your reply instead`;
 }
 
+// Why a run without the `push` capability can't push, as its prompt says it.
+const NO_PUSH =
+  "this run doesn't have the `push` capability (the repository's or the operator's policies decide it)";
+
+// A work run, or one of the repo's own modes that isn't light, without the `push` capability:
+// it reads and changes the clone, and its reply carries the changes.
+function noPushPrompt(task, rules = "") {
+  const n = task.number;
+  const read =
+    task.kind === "pr"
+      ? `Read pull request #${n} of ${task.repo} with \`gh pr view ${n} --comments\` and \`gh pr diff ${n}\`.`
+      : `Read GitHub issue #${n} of ${task.repo} with \`gh issue view ${n} --comments\`.`;
+  return `${read}
+You can't push, create a branch or open a pull request: ${NO_PUSH}. Do what is asked in the
+clone in /workspace and run the checks the repository's AGENTS.md and CLAUDE.md list, then
+describe the changes in your final message (a short diff where it helps), with anything left
+open.
+Don't post comments on GitHub yourself: your final message is posted for you as a reply.${rules}`;
+}
+
+// A run without the `pull` capability that its mode expected to have it: no clone and no GitHub
+// access, its input the issue's thread.
+// `rules`: its mode's own instructions, if any; `asked`: what was asked, for a mode whose first
+// message is empty (firstMessage()).
+function noCodePrompt(task, rules = "", asked = "") {
+  return `Answer what ${subjectOf(task)} of ${task.repo} asks. This run has no clone of the
+repository and no GitHub access: it doesn't have the \`pull\` capability (the repository's or
+the operator's policies decide it). Its thread (title, description and latest comments) is at
+\`$TASK_DIGEST\` (\`cat "$TASK_DIGEST"\`). Don't try to fetch the code or call \`gh\`: say in
+your final message what you couldn't do without them.
+Don't post comments on GitHub yourself: your final message is posted for you as a reply.${rules}${asked ? `\n\nWhat was asked:\n\n${asked}` : ""}`;
+}
+
+// "GitHub issue #12", "pull request #13", "discussion #4".
+const subjectOf = ({ kind, number }) =>
+  kind === "pr"
+    ? `pull request #${number}`
+    : kind === "discussion"
+      ? `discussion #${number}`
+      : `GitHub issue #${number}`;
+
 // The branches an issue's run may push: its own, and the pull requests' heads it was asked
 // from (preparation.mjs pushBranches()), named so it doesn't pick another one.
 function issueBranches(n, branches) {
@@ -325,7 +366,8 @@ ${instructions.trim()}`;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
 // repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches());
 // `pull`: the issue or pull request the reply goes to, the one a review reads; `allowed`: a
-// review's tolerance (reviews' tolerance()); `ciNote`: a review's CI note (reviewPrompt()).
+// review's tolerance (reviews' tolerance()); `ciNote`: a review's CI note (reviewPrompt());
+// `capabilities`: what its sandbox gets (capabilities.mjs), null when not known.
 export function promptFor(
   task,
   {
@@ -341,8 +383,22 @@ export function promptFor(
     pull,
     allowed,
     ciNote = null,
+    capabilities = null,
   },
 ) {
+  // A run without `pull` (capabilities.mjs) has no clone and no token: whatever its mode, its
+  // input is the thread (preparation.mjs prepareBare()), but an analysis's and research's, whose
+  // prompts already read their digest. Null: decided before capabilities, as its mode says.
+  const caps = capabilities && new Set(capabilities);
+  const ownRules =
+    own && instructions
+      ? `\n\nThe ${own.name} mode's instructions, from the repository:\n\n${instructions.trim()}`
+      : "";
+  // A review and a discussion without it don't start (capabilities.mjs NEED_PULL).
+  const ownInput = ["analyze", "research", "review", "discussion"];
+  if (caps && !caps.has("pull") && !ownInput.includes(mode)) {
+    return noCodePrompt(task, ownRules, INBOX.has(mode) ? text : "");
+  }
   if (mode === "brainstorm" || mode === "stop") return brainstormPrompt(task);
   if (INBOX.has(mode)) return inboxPrompt(task, mode, text);
   if (mode === "analyze") return analyzePrompt(task, text);
@@ -350,6 +406,8 @@ export function promptFor(
   if (mode === "review")
     return reviewPrompt(task, pull ?? task.number, instructions, text, allowed, ciNote);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
+  // Work and the repo's own modes that aren't light expect a branch: without `push`, told so.
+  if (caps && !caps.has("push") && !own?.light) return noPushPrompt(task, ownRules);
   if (own) return modePrompt(task, own, instructions, branches, grant);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches, grant);
 }

@@ -3,6 +3,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { CAPABILITIES } from "../listener/capabilities.mjs";
 import { GrantsError, grantsFrom } from "../listener/grants.mjs";
 import { APP_PERMISSIONS, createGitHubApp } from "../listener/github-app.mjs";
 import { createOnboardingStore } from "../listener/onboarding.mjs";
@@ -16,7 +17,7 @@ import {
   refreshFor,
   repoStatus,
 } from "../listener/repos.mjs";
-import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
+import { capabilityPolicies, recordingFetch, tempDir, testConfig } from "./helpers.mjs";
 
 const throwing = (error) => {
   throw error;
@@ -640,6 +641,92 @@ test("a repo's config: the policies that apply, with their text; none without an
   const none = apiSetup({ first: [info("org/app")], configured: ["org/app"] });
   const bare = (await call(none.api, "GET", "/api/repos/org/app/config")).body.policies;
   assert.deepEqual(bare, { files: [], errors: [], warnings: [] });
+});
+
+test("a repo's config: what each mode's runs get, the file that decided it, what stops them", async () => {
+  const fake = capabilityPolicies({
+    denies: ({ mode }) =>
+      mode === "work" ? [{ capability: "push", reason: "`work` runs only read here" }] : [],
+  });
+  const policies = {
+    describe: async () => ({ files: [], errors: [], warnings: [], policies: new Map() }),
+    capabilityRules: fake.capabilityRules,
+  };
+  const { api } = apiSetup({ first: [info("org/app")], configured: ["org/app"], policies });
+  const { capabilities } = (await call(api, "GET", "/api/repos/org/app/config")).body;
+  assert.equal(capabilities.error, null);
+  assert.deepEqual(
+    capabilities.catalogue.map((c) => c.name),
+    CAPABILITIES.map((c) => c.name),
+  );
+  assert.deepEqual(capabilities.catalogue[2], {
+    name: "setup",
+    what: "the repository's setup command, and its caches",
+    needs: ["pull"],
+    config: ["setup", "caches"],
+    grant: null,
+    enforcedBy: "the listener at start",
+  });
+  // Each built-in mode that runs, asked about a comment's run on an issue, not a fork's.
+  assert.deepEqual(fake.inputs[0], {
+    repo: { name: "org/app", private: true },
+    mode: "work",
+    custom_mode: false,
+    issue: null,
+    reason: null,
+    fork: false,
+    trigger: null,
+    command: null,
+  });
+  const work = capabilities.modes.find((m) => m.mode === "work");
+  assert.equal(work.custom, false);
+  assert.deepEqual(work.used, [
+    "pull",
+    "read:issues",
+    "read:pulls",
+    "read:discussions",
+    "read:actions",
+  ]);
+  // Written for GitHub replies, without their backquotes.
+  assert.deepEqual(
+    work.capabilities.find((c) => c.name === "push"),
+    {
+      name: "push",
+      status: "denied",
+      used: false,
+      files: [{ layer: "operator", file: "mode.rego" }],
+      reason: "work runs only read here",
+    },
+  );
+  assert.deepEqual(work.errors, []);
+  // Research only with its grant, which this repository hasn't.
+  assert.equal(
+    capabilities.modes.find((m) => m.mode === "research"),
+    undefined,
+  );
+  // A capability's name the repository's rules give that nobody knows: on the Config tab too.
+  const known = policies.capabilityRules;
+  policies.capabilityRules = async (repo, ref, inputs) => {
+    const said = await known(repo, ref, inputs);
+    for (const rules of Object.values(said.results)) {
+      rules.repo = { allow: new Map([["pul", ["typo.rego"]]]), deny: [] };
+    }
+    return said;
+  };
+  const config = (await call(api, "GET", "/api/repos/org/app/config")).body;
+  assert.deepEqual(
+    config.policies.warnings.filter((w) => w.includes("names pul,")),
+    [config.policies.warnings.find((w) => w.includes("names pul,"))],
+  );
+  assert.match(
+    config.policies.warnings.find((w) => w.includes("names pul,")),
+    /^allow_capabilities of the repository's policies/,
+  );
+  // Policies that can't be evaluated: said, no mode listed.
+  policies.capabilityRules = async () => ({ error: "policy error: `x` is unsafe" });
+  const failed = (await call(api, "GET", "/api/repos/org/app/config")).body.capabilities;
+  assert.deepEqual(failed.modes, []);
+  assert.equal(failed.error, "policy error: x is unsafe");
 });
 
 test("a grants folder with errors makes every configured repo invalid, not the others", async () => {

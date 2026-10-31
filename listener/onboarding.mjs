@@ -5,6 +5,7 @@
 import { ensureLabel } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import { issueItem, linkedIssue, headInRepo } from "./events.mjs";
+import { capabilityNameWarnings } from "./capabilities.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
@@ -218,6 +219,16 @@ export async function branchConfigReport(request, config, repo, number, policies
     const checked = await policies.checkRepo(repo, branch);
     errors.push(...checked.errors.map((e) => `\`${POLICY_DIR}/\`: ${e}`));
     warnings.push(...checked.warnings.map((w) => `\`${POLICY_DIR}/\`: ${w}`));
+    // A capability's name nobody knows (a misspelled deny denies nothing): only evaluating the
+    // rules says it, on the branch checked.
+    if (!checked.errors.length && policies.capabilityRules) {
+      const names = await capabilityNameWarnings({
+        repo: { name: repo, private: null },
+        settings,
+        decide: (inputs) => policies.capabilityRules(repo, branch, inputs),
+      });
+      warnings.push(...names.map((w) => `\`${POLICY_DIR}/\`: ${w}`));
+    }
   }
   if (!errors.length && !warnings.length) return `✅ ${where} checked: no errors or warnings.`;
   const lines = [...errors.map((e) => `- ❌ ${e}`), ...warnings.map((w) => `- ⚠️ ${w}`)];

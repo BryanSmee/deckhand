@@ -28,7 +28,15 @@ import { readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { FILE, layerDigest, operatorPolicies } from "../lib/policy-files.mjs";
+import {
+  BY_FILE_NAME,
+  byFile,
+  FILE,
+  layerDigest,
+  operatorPolicies,
+  UNION_DIR,
+  UNION_FILE,
+} from "../lib/policy-files.mjs";
 import { opaBinary } from "./opa.mjs";
 
 // Where they were first: the tests import them from here.
@@ -43,6 +51,9 @@ export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url)
 // enough that a loop in one doesn't hold a merge decision for long. The query is cut then, which
 // cancels it in opa.
 export const TIMEOUT_MS = 2000;
+
+// The inputs one capabilities() call evaluates: a run's one, or a config page's modes.
+export const MAX_INPUTS = 64;
 
 // The servers kept at once: each is one policy set, about 40 MB.
 export const MAX_SERVERS = 8;
@@ -173,18 +184,39 @@ export function opaErrors(stdout, stderr = "") {
         ? [{ code: parsed.code, message: parsed.message }]
         : null;
     if (Array.isArray(errors) && errors.length) {
-      const list = errors.slice(0, MAX_ERRORS).map((e) => ({
-        file: e.location?.file?.replace(/^.*\//, "") || null,
-        // The layer whose folder the file was staged in (stage()), when opa placed it.
-        layer: /(?:^|\/)repo\/[^/]+$/.test(e.location?.file ?? "")
-          ? "repo"
-          : /(?:^|\/)operator\/[^/]+$/.test(e.location?.file ?? "")
-            ? "operator"
-            : null,
-        row: Number.isInteger(e.location?.row) ? e.location.row : null,
-        // A repo's packages as its files name them, not namespaced().
-        message: String(e.message ?? e.code ?? "error").replaceAll(`${REPO_NS}.`, ""),
-      }));
+      const list = errors.slice(0, MAX_ERRORS).map((e) => {
+        const path = e.location?.file ?? "";
+        // The union byFile() wrote (stage()) only reads the files' rules: an error there is one
+        // of theirs that isn't a set.
+        const union = new RegExp(
+          `(?:^|/)${OPERATOR_DIR}/(operator|repo)/${UNION_DIR}/${UNION_FILE.replace(".", "\\.")}$`,
+        );
+        const inUnion = union.exec(path);
+        if (inUnion) {
+          return {
+            file: null,
+            // Its folder, not anything else of the path: the temp folder may hold `/repo/`.
+            layer: inUnion[1],
+            row: null,
+            message: "`allow_capabilities` and `deny_capabilities` must be sets (`contains` rules)",
+          };
+        }
+        return {
+          file: path.replace(/^.*\//, "") || null,
+          // The layer whose folder the file was staged in (stage()), when opa placed it.
+          layer: /(?:^|\/)repo\/[^/]+$/.test(path)
+            ? "repo"
+            : /(?:^|\/)operator\/[^/]+$/.test(path)
+              ? "operator"
+              : null,
+          row: Number.isInteger(e.location?.row) ? e.location.row : null,
+          // A repo's packages and the capabilities' rules as its files name them, not
+          // namespaced() or byFile().
+          message: String(e.message ?? e.code ?? "error")
+            .replaceAll(`${REPO_NS}.`, "")
+            .replace(BY_FILE_NAME, "$1"),
+        };
+      });
       const text = list.slice(0, 3).map(located).join("; ");
       return {
         text,
@@ -260,21 +292,30 @@ export function createEngine({
 
   // `layers` ({ operator, repo }, each name → text, either absent) and the capabilities in a new
   // temp folder → its path: each layer in a folder of its own under OPERATOR_DIR (opa's errors
-  // say which: opaErrors()), the repo's namespaced(). A repo file that can't be throws, its
-  // `layer` "repo", and nothing is left.
+  // say which: opaErrors()), the repo's namespaced(), each file's capabilities' rules renamed
+  // apart with their union beside them (byFile(): evaluateCapabilities() says which file gave
+  // what, every
+  // other rule sees them whole). A repo file that can't be throws, its `layer` "repo", and
+  // nothing is left.
   async function stage(layers) {
     const dir = await mkdtemp(join(tmp, "deckhand-policy-"));
     try {
       for (const [layer, files] of Object.entries(layers)) {
         if (!files) continue;
         await mkdir(join(dir, OPERATOR_DIR, layer), { recursive: true });
-        for (const [name, text] of files) {
+        const { texts, union } = byFile(files);
+        for (const [name, text] of texts) {
           const staged = layer === "repo" ? namespaced(text) : text;
           if (staged === null) {
-            const { message } = namespaceRefusal(name, text);
+            const { message } = namespaceRefusal(name, files.get(name));
             throw Object.assign(new Error(message), { layer: "repo" });
           }
           await writeFile(join(dir, OPERATOR_DIR, layer, name), staged);
+        }
+        if (union) {
+          await mkdir(join(dir, OPERATOR_DIR, layer, UNION_DIR));
+          const text = layer === "repo" ? namespaced(union) : union;
+          await writeFile(join(dir, OPERATOR_DIR, layer, UNION_DIR, UNION_FILE), text);
         }
       }
       await writeFile(join(dir, "capabilities.json"), await capabilitiesFile());
@@ -407,6 +448,31 @@ export function createEngine({
     }
   }
 
+  // What a decision's set is made of: the repository's files (`repo`, [[name, text]], null: none)
+  // and the operator's layer, which has to be the one the caller expects (`operatorDigest`,
+  // layerDigest() of the files it attributes the decision to) → { repoFiles, own } or { failed }.
+  function setOf({ repo, operatorDigest }) {
+    const failed = (error, errorLayer = null) => ({ failed: { error, errorLayer } });
+    let repoFiles;
+    try {
+      repoFiles = repo ? filesOf(repo, "repo") : new Map();
+    } catch (error) {
+      return failed(error.message, "repo");
+    }
+    const own = operatorFiles();
+    if (own.error) return failed(own.error);
+    if (typeof operatorDigest !== "string") {
+      return failed("no operatorDigest: the operator's policies the caller expects are required");
+    }
+    if (operatorDigest !== layerDigest(own.files)) {
+      const { failed: why } = failed(
+        `the policy service's operator policies (Deckhand's under ${grantsDir ?? "its grants folder"}/policy/) aren't the ones the listener read`,
+      );
+      return { failed: { ...why, mismatch: true } };
+    }
+    return { repoFiles, own };
+  }
+
   // `decision`'s rules on `input`: the operator's layer (`operator`: whether to ask its rules;
   // its files are loaded anyway) and the repository's `repo` ([[name, text]], null: none; its
   // allow rule asked with `repoAllow`) → { operator, repo, error, errorLayer }: each asked
@@ -430,25 +496,9 @@ export function createEngine({
     if (typeof decision !== "string" || !DECISION.test(decision)) {
       return failed(`no decision ${JSON.stringify(decision)}`);
     }
-    let repoFiles;
-    try {
-      repoFiles = repo ? filesOf(repo, "repo") : new Map();
-    } catch (error) {
-      return failed(error.message, "repo");
-    }
-    const own = operatorFiles();
-    if (own.error) return failed(own.error);
-    if (typeof operatorDigest !== "string") {
-      return failed("no operatorDigest: the operator's policies the caller expects are required");
-    }
-    if (operatorDigest !== layerDigest(own.files)) {
-      return {
-        ...failed(
-          `the policy service's operator policies (Deckhand's under ${grantsDir ?? "its grants folder"}/policy/) aren't the ones the listener read`,
-        ),
-        mismatch: true,
-      };
-    }
+    const sets = setOf({ repo, operatorDigest });
+    if (sets.failed) return sets.failed;
+    const { repoFiles, own } = sets;
     const asks = {
       ...(operator && { operator: { pkg: "deckhand", allow: true } }),
       ...(repoFiles.size && { repo: { pkg: `${REPO_NS}.deckhand`, allow: !!repoAllow } }),
@@ -505,6 +555,92 @@ export function createEngine({
       said[layer] = { allow: allow ? allowed : null, denies };
     }
     return said;
+  }
+
+  // The capabilities' rules (issue #495) on each of `inputs` (key → input document, MAX_INPUTS
+  // at most), in one query: the operator's layer (`operator`: whether to ask it) and the
+  // repository's `repo` ([[name, text]], null: none), `operatorDigest` as evaluate() takes it →
+  // { results: key → each asked layer's { all, files }: `all`, the whole rules' { allow, deny },
+  // each the rule's value in a list (empty when no file defines it); `files`, file name → the same
+  // of that file's own rules (byFile(), the files defining one) } or { error, errorLayer }. What
+  // the values mean, and their shape, are the caller's to check (listener/policies.mjs).
+  async function evaluateCapabilities({ inputs, repo = null, operator = true, operatorDigest }) {
+    const failed = (error, errorLayer = null) => ({ error, errorLayer });
+    if (
+      !inputs ||
+      typeof inputs !== "object" ||
+      Array.isArray(inputs) ||
+      Object.keys(inputs).length > MAX_INPUTS ||
+      Object.values(inputs).some((doc) => !doc || typeof doc !== "object" || Array.isArray(doc))
+    ) {
+      return failed(`inputs: expected an object of at most ${MAX_INPUTS} input documents`);
+    }
+    if (!Object.keys(inputs).length) return { results: {} };
+    const sets = setOf({ repo, operatorDigest });
+    if (sets.failed) return sets.failed;
+    const { repoFiles, own } = sets;
+    const asks = {
+      ...(operator && { operator: { pkg: "deckhand", files: own.files } }),
+      ...(repoFiles.size && { repo: { pkg: `${REPO_NS}.deckhand`, files: repoFiles } }),
+    };
+    if (!Object.keys(asks).length) return failed("nothing to ask");
+    // Each layer's files as stage() numbered them.
+    const names = Object.fromEntries(
+      Object.entries(asks).map(([layer, { files }]) => [layer, byFile(files).names]),
+    );
+    const rule = (pkg, name, i = null) =>
+      `[x | x := data.${pkg}.${name}${i === null ? "" : `__${i}`}]`;
+    const both = (pkg, i) =>
+      `{"allow": ${rule(pkg, "allow_capabilities", i)}, "deny": ${rule(pkg, "deny_capabilities", i)}}`;
+    // The whole rules decide; each file's say which file gave what.
+    const value = `{${Object.entries(asks)
+      .map(
+        ([layer, { pkg }]) =>
+          `"${layer}": {"all": ${both(pkg)}, "files": {${names[layer]
+            .map((_, i) => `"${i}": ${both(pkg, i)}`)
+            .join(", ")}}}`,
+      )
+      .join(", ")}}`;
+    const query = `result := {k: v | some k, doc in input; v := ${value} with input as doc}`;
+    const got = await acquire({
+      operator: own.files,
+      ...(repoFiles.size && { repo: repoFiles }),
+    });
+    if (got.failed) return got.failed;
+    let res;
+    try {
+      res = await got.server.query(query, inputs, { timeoutMs });
+    } catch (error) {
+      return failed(`opa didn't answer (${error.message ?? error})`);
+    } finally {
+      got.release();
+    }
+    const late = `the capabilities' rules took more than ${timeoutMs / 1000} s`;
+    if (res.timedOut) return failed(late);
+    if (res.status !== 200) {
+      const { text, list, cancelled } = opaErrors(res.body);
+      return failed(cancelled ? late : text, cancelled ? null : list[0].layer);
+    }
+    let answer;
+    try {
+      answer = JSON.parse(res.body).result?.[0]?.result;
+    } catch {
+      // Said below.
+    }
+    if (!answer || typeof answer !== "object") return failed("opa's answer can't be read");
+    const results = {};
+    for (const key of Object.keys(inputs)) {
+      results[key] = {};
+      for (const layer of Object.keys(asks)) {
+        const said = answer[key]?.[layer];
+        if (!said || typeof said !== "object") return failed("opa's answer can't be read");
+        results[key][layer] = {
+          all: said.all,
+          files: Object.fromEntries(names[layer].map((name, i) => [name, said.files?.[i]])),
+        };
+      }
+    }
+    return { results };
   }
 
   // The compile check of one layer: `layer` "operator" (its own files, or `files` when given:
@@ -600,5 +736,13 @@ export function createEngine({
     return own.error ? null : layerDigest(own.files);
   }
 
-  return { evaluate, compile, policies, operatorDigest, stop, servers: () => servers.size };
+  return {
+    evaluate,
+    evaluateCapabilities,
+    compile,
+    policies,
+    operatorDigest,
+    stop,
+    servers: () => servers.size,
+  };
 }

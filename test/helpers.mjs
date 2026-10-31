@@ -170,25 +170,33 @@ export const evalResult = (deny, allow = true) => ({
 // servers: each query asks `answer(files, input, layer, query)` for each layer it names (`files`:
 // that layer's staged policies, name → text, a repo's as it wrote them, before namespaced()),
 // which answers as `opa eval` would ({ code, stdout, stderr, timedOut }: evalResult()), and the
-// server answers as opa's does; `queried({ query, input, layers })` hears each query first.
+// server answers as opa's does; `queried({ query, input, layers })` hears each query first. A
+// capabilities query (engine.mjs evaluateCapabilities()) gets, for each input, what
+// `capabilitiesFor(doc)` names from the operator's layer (Deckhand's mode-*.rego by default) and
+// what a repo's unconditional rules name (`allow_capabilities contains "pull"`) from its, each
+// as the layer's first file's.
 // `calls`: each one, with the staged files; `evals()`: the queries.
 export function fakeOpa({
   answer = () => evalResult([]),
   queried = () => {},
   checked = () => ({ code: 0, stdout: "" }),
   capabilities = { builtins: [{ name: "count" }] },
+  capabilitiesFor = defaultCapabilities,
 } = {}) {
   const calls = [];
   // Each staged layer's files (policy/operator/, policy/repo/), name → text as written (the
-  // repo's namespaced(): `raw`, as the repo wrote them).
+  // repo's namespaced(): `raw`, as the repo wrote them). Not the capabilities' union, in a folder
+  // of its own (byFile()).
   const staged = (cwd, raw) =>
     Object.fromEntries(
       readdirSync(join(cwd, "policy")).map((layer) => [
         layer,
         Object.fromEntries(
-          readdirSync(join(cwd, "policy", layer)).map((n) => {
+          readdirSync(join(cwd, "policy", layer), { withFileTypes: true }).flatMap((entry) => {
+            if (!entry.isFile()) return [];
+            const n = entry.name;
             const text = readFileSync(join(cwd, "policy", layer, n), "utf8");
-            return [n, raw ? text.replaceAll("deckhand_repository.", "") : text];
+            return [[n, raw ? text.replaceAll("deckhand_repository.", "") : text]];
           }),
         ),
       ]),
@@ -221,6 +229,31 @@ export function fakeOpa({
     const exited = new Promise((resolve) => (done = resolve));
     return {
       query: async (query, input) => {
+        if (query.includes("allow_capabilities")) {
+          calls.push({ args: ["eval"], query, input: JSON.stringify(input), cwd: dir, written });
+          const asked = [...query.matchAll(/"(operator|repo)": \{"all"/g)].map((m) => m[1]);
+          const repo = Object.values(all.repo ?? {}).flatMap((text) =>
+            [...text.matchAll(/^allow_capabilities__\d+ contains "([^"]*)"$/gm)].map((m) => m[1]),
+          );
+          const rules = (names) => ({ allow: [names], deny: [[]] });
+          // The first file's, and none of the others' (as many as the query may name).
+          const files = (names) => ({
+            ...Object.fromEntries(Array.from({ length: 64 }, (_, i) => [i, rules([])])),
+            0: rules(names),
+          });
+          const value = Object.fromEntries(
+            Object.entries(input).map(([key, doc]) => [
+              key,
+              Object.fromEntries(
+                asked.map((layer) => {
+                  const names = layer === "repo" ? repo : [...capabilitiesFor(doc)];
+                  return [layer, { all: rules(names), files: files(names) }];
+                }),
+              ),
+            ]),
+          );
+          return { status: 200, body: JSON.stringify({ result: [{ result: value }] }) };
+        }
         const asked = [...query.matchAll(/"(operator|repo)": \{/g)].map((m) => m[1]);
         const layers = Object.fromEntries(asked.map((l) => [l, all[l] ?? {}]));
         calls.push({
@@ -266,6 +299,7 @@ export function localService(engine) {
   return {
     policies: async () => wire(engine.policies()),
     evaluate: async (body) => wire(await engine.evaluate(wire(body))),
+    evaluateCapabilities: async (body) => wire(await engine.evaluateCapabilities(wire(body))),
     compile: async (body) => wire(await engine.compile(wire(body))),
   };
 }
@@ -648,4 +682,61 @@ export function fakeDocker({
     }
   };
   return { docker, nets, netLabels, subnets, internal, containers, volumes };
+}
+
+// What Deckhand's default policies (policy/mode-*.rego) give each mode, as capabilities.test.mjs
+// checks with the real opa: a work run (and the operator's ceiling for a repo's own modes) all of
+// it, a research run the open internet, the others the code and its reads.
+const LIGHT_CAPABILITIES = ["pull", "image:repo", "read:issues", "read:pulls", "read:actions"];
+export const WORK_CAPABILITIES = [
+  "pull",
+  "push",
+  "setup",
+  "image:repo",
+  "image:branch",
+  "docker",
+  "preview",
+  "read:issues",
+  "read:pulls",
+  "read:discussions",
+  "read:actions",
+];
+export function defaultCapabilities({ mode, custom_mode }) {
+  if (mode === "work" || custom_mode) return WORK_CAPABILITIES;
+  if (mode === "research") return ["internet"];
+  if (mode === "discussion") return [...LIGHT_CAPABILITIES, "read:discussions"];
+  return LIGHT_CAPABILITIES;
+}
+
+// The policies' capabilityRules() (policies.mjs) without opa: each input gets what
+// `operator(input)` names from the operator's layer (file "mode.rego"), and a repo's own mode
+// what `repo(input)` names from the repo's ("repo.rego"), none by default. `denies(input)`:
+// [{ capability, reason }] of the operator's. `inputs`: what it was asked about.
+export function capabilityPolicies({
+  operator = defaultCapabilities,
+  repo = () => [],
+  denies = () => [],
+} = {}) {
+  const inputs = [];
+  const layer = (names, file, deny = []) => ({
+    allow: new Map(names.map((name) => [name, [file]])),
+    deny: deny.map((d) => ({ ...d, file })),
+  });
+  return {
+    inputs,
+    capabilityRules: async (_repo, _ref, asked) => {
+      inputs.push(...Object.values(asked));
+      return {
+        results: Object.fromEntries(
+          Object.entries(asked).map(([key, input]) => [
+            key,
+            {
+              operator: layer(operator(input), "mode.rego", denies(input)),
+              ...(input.custom_mode && { repo: layer(repo(input), "repo.rego") }),
+            },
+          ]),
+        ),
+      };
+    },
+  };
 }

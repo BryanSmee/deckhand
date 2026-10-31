@@ -69,8 +69,9 @@ export function grantedAccess(config, task, settings, { agent, note, log, fs }) 
   const { mounts, refused, notes } = check.mounts;
   if (refused.length) throw new RunError(refusedMounts(refused, agent.displayName));
   for (const text of notes) note(text);
-  // Read-only for a light run and a fork's (sandbox-spec.mjs).
-  const { light, fork } = task.live;
+  // Read-only for a run without `push` and a fork's (sandbox-spec.mjs).
+  const { fork } = task.live;
+  const light = !task.live.capabilities?.includes("push");
   for (const m of mounts) {
     const why = !m.readOnly && !light && fork ? ": a pull request from a fork" : "";
     note(`Host mount ${m.target}${m.readOnly || light || fork ? ` (read-only${why})` : ""}`);
@@ -87,38 +88,45 @@ export function grantedAccess(config, task, settings, { agent, note, log, fs }) 
 
 // Why a research run (modes.mjs OPEN) can't run in `repo`, or null: its grants have errors, or
 // don't set `allow_research`. Checked when `/mode research` is asked for (task-modes.mjs), and
-// again when the run starts (researchAccess()): the grant may be gone meanwhile.
+// again when a run with `internet` starts (capabilities.mjs, bareAccess()): the grant may be
+// gone meanwhile.
 export function researchRefusal(config, repo, check = grantCheck(config, repo, { mounts: [] })) {
-  if (check.error) {
-    const where = check.error.file
-      ? `\`${check.error.file}\` in the operator's grants folder has errors`
-      : "the operator's grants folder has errors";
-    return `${where} (see the listener's logs)`;
-  }
+  if (check.error) return grantsRefusal(check);
   if (!check.grant.allowResearch) {
     return "research runs need the operator's `allow_research: true` grant for this repository (in its file of the grants folder, or `default.yaml`; see Deckhand's docs/security.md)";
   }
   return null;
 }
 
-// What a research run may reach: any public host, and private addresses only for the hosts
-// every run needs (mandatoryHosts()), not the repo's granted ones: an internal host next to
-// the open internet would be a way out for what it serves. Nothing else of the repo's: no
-// mounts, no cached hosts (no CA), its limits only. Its config's requests (a preview hook, a
-// Dockerfile) don't matter: none of it runs.
-export function researchAccess(config, task, { agent, log }) {
+// What a run without `pull` (capabilities.mjs) may reach: with `internet` (a research run), any
+// public host, and private addresses only for the hosts every run needs (mandatoryHosts()),
+// not the repo's granted ones: an internal host next to the open internet would be a way out
+// for what it serves. Without, only those. Nothing else of the repo's: no mounts, no cached
+// hosts (no CA), its limits only. Its config's requests (a preview hook, a Dockerfile) don't
+// matter: none of it runs.
+export function bareAccess(config, task, { agent, log, internet }) {
   const check = grantCheck(config, task.repo, { mounts: [] });
   if (check.error) log(`${task.repo}: ${check.error.message}`);
-  const refused = researchRefusal(config, task.repo, check);
+  const refused = internet ? researchRefusal(config, task.repo, check) : grantsRefusal(check);
   if (refused) throw new RunError(`${cantRun(agent)}: ${refused}.`);
   const { grant } = check;
+  const trusted = mandatoryHosts(config, agent);
   return {
     grant: { ...grant, cachedHosts: [] },
-    hosts: ["*"],
-    trusted: mandatoryHosts(config, agent),
+    hosts: internet ? ["*"] : trusted,
+    trusted,
     mounts: [],
     limits: grant.limits,
   };
+}
+
+// Why grants that can't be read refuse a run (grantCheck()'s `check`), or null.
+export function grantsRefusal(check) {
+  if (!check.error) return null;
+  const where = check.error.file
+    ? `\`${check.error.file}\` in the operator's grants folder has errors`
+    : "the operator's grants folder has errors";
+  return `${where} (see the listener's logs)`;
 }
 
 // The egress proxy's CA certificate, which the sandbox trusts so that the proxy may decrypt
@@ -144,12 +152,12 @@ export async function egressCache(grant, egressCa, note, agent, config = {}, git
   return { ca: null, cached: [] };
 }
 
-// The container engine (runner/engine.mjs) a run gets, or null: only with the operator's
-// SANDBOX_ENGINE, the repo's `docker` and its grant (grantedAccess() stopped the run when
-// that is missing), for work runs whose comments came from no fork's pull request: a
-// fork's code never runs in one.
+// The container engine (runner/engine.mjs) a run with `docker` (capabilities.mjs) gets, or
+// null: only with the operator's SANDBOX_ENGINE, the repo's `docker` and its grant
+// (grantedAccess() stopped the run when that is missing), for runs whose comments came from no
+// fork's pull request: a fork's code never runs in one.
 export function engineFor(config, task, settings, { grant, limits }, fork, note) {
-  if (!settings.docker || !grant.allowDocker || task.live.light) return null;
+  if (!settings.docker || !grant.allowDocker) return null;
   if (!config.engine) {
     note("No container engine: the operator hasn't set SANDBOX_ENGINE");
     return null;
@@ -167,16 +175,19 @@ export function engineFor(config, task, settings, { grant, limits }, fork, note)
 // engine, builds no repo image without a registry to push it to, runs no preview hook and
 // mounts no host path (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
 // grantedAccess(). The engine only when the run would get one (`engine`, engineFor()'s): a
-// light run, a fork's, or one without SANDBOX_ENGINE goes without, as under Docker. A
+// run without `docker`, a fork's, or one without SANDBOX_ENGINE goes without, as under Docker.
+// `caps`: the run's capabilities (capabilities.mjs). A
 // preview hook stops every run, as the issue settled (#391): the hook itself runs on
 // webhooks, and previews.mjs skips it here.
-export function runnerRefusal(config, settings, { grant, mounts }, engine) {
+export function runnerRefusal(config, settings, { grant, mounts }, engine, caps = new Set()) {
   if ((config.runner ?? "docker") === "docker") return null;
   const asked = [
     engine && "a container engine (`docker`)",
-    // Its image needs a registry the nodes pull from (runner/kube-images.mjs).
+    // Its image needs a registry the nodes pull from (runner/kube-images.mjs): a run that
+    // builds none (without `image:repo`) needs none.
     settings.dockerfile &&
       grant.allowDockerfile &&
+      (caps.has("image:repo") || caps.has("image:branch")) &&
       !config.kubernetes?.registry &&
       `its own image (\`dockerfile\`) without a registry (\`KUBERNETES_REGISTRY\`)`,
     settings.preview && grant.allowPreview && "a preview hook (`preview`)",

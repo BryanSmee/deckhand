@@ -46,12 +46,14 @@ export function createLinkedBranches({ github, graphql, policies, runOf, decided
   async function link(task, note) {
     const { live, repo, number, base } = task;
     const pattern = `issue-${number}-*`;
-    // A run that pushes its issue's branch: not a light one, nor one where a fork's code runs.
-    if (task.kind !== "issue" || live.light || live.fork || !live.branches.includes(pattern)) {
+    // A run that pushes its issue's branch (the `push` capability), not one where a fork's code
+    // runs.
+    const push = !!live.capabilities?.includes("push");
+    if (task.kind !== "issue" || !push || live.fork || !live.branches.includes(pattern)) {
       return null;
     }
     const run = runOf(live.id);
-    if (!run?.push) return null;
+    if (!run?.push && !run?.caps?.includes("push")) return null;
     try {
       const existing = await getJson(
         github,

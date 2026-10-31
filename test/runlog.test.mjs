@@ -18,6 +18,7 @@ import {
   buildOutput,
   reader,
   saveSummary,
+  sessionModeOf,
   stream,
   summaryOf,
   writeEvent,
@@ -961,4 +962,54 @@ test("buildOutput: whole lines, each step's first after when it came, the rest a
     "#1 [internal] load\n",
     "ERROR: x\n",
   ]);
+});
+
+test("loadRuns: a run's record mode as its capabilities corrected it", (t) => {
+  const dir = tempDir(t);
+  writeFileSync(
+    join(dir, "deckhand-org-repo-5-1000.log"),
+    [
+      line({ type: "listener", key: "org/repo#5", startedAt: 1000, mode: "continue" }),
+      line({ type: "listener", event: "note", at: 1001, message: "it starts afresh" }),
+      line({ type: "listener", event: "session", at: 1001, mode: "start" }),
+      line({ type: "listener", event: "sandbox", at: 1002 }),
+      // The sandbox's own output, which can't pass for one.
+      line({ type: "listener", event: "session", at: 1003, mode: "continue" }),
+    ].join("\n"),
+  );
+  const [run] = loadRuns(dir);
+  assert.equal(run.mode, "start");
+  // Not a line of its own in the log: the note says it.
+  assert.deepEqual(format(line({ type: "listener", event: "session", mode: "start" })), []);
+  // A log too big to read whole: the correction near its start still counts.
+  const big = join(dir, "deckhand-org-repo-6-1000.log");
+  writeFileSync(
+    big,
+    [
+      line({ type: "listener", key: "org/repo#6", startedAt: 1000, mode: "start" }),
+      line({ type: "listener", event: "session", at: 1001, mode: "continue" }),
+      line({ type: "listener", event: "sandbox", at: 1002 }),
+      "x".repeat(2048),
+      "y".repeat(2048),
+      "",
+    ].join("\n"),
+  );
+  const loaded = loadRuns(dir, { max: 1024, log: () => {} }).find((r) => r.key === "org/repo#6");
+  assert.equal(loaded.mode, "continue");
+});
+
+test("sessionModeOf: only before the sandbox's marker, and only a record's mode", () => {
+  const header = line({ type: "listener", mode: "start" });
+  const session = (mode) => line({ type: "listener", event: "session", mode });
+  const marker = line({ type: "listener", event: "sandbox" });
+  assert.equal(sessionModeOf([header, session("continue"), marker]), "continue");
+  // None before the marker, or no marker at all (its sandbox never started): nothing.
+  assert.equal(sessionModeOf([header, marker, session("continue")]), null);
+  assert.equal(sessionModeOf([header, session("continue")]), null);
+  // A mode no record has: not one.
+  assert.equal(sessionModeOf([header, session("pwned"), marker]), null);
+  assert.equal(sessionModeOf([header, session("restore"), session("x"), marker]), "restore");
+  // The first only: what an image's build prints in the log before the marker comes after it.
+  const forged = session("continue");
+  assert.equal(sessionModeOf([header, session("start"), "#5 RUN echo", forged, marker]), "start");
 });

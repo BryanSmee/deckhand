@@ -4,6 +4,7 @@
 // task (with its `live`, runs.mjs), agent (agents/), bot (the App's git identity), publicUrl,
 // broker (broker.mjs, which signs the run's tokens: tokens()) }.
 import { proxyEnv } from "./egress.mjs";
+import { restricted } from "./github-forks.mjs";
 import { isFresh, OPEN, sessionName } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
 import { SCREENSHOT_DIR } from "./runner/inbox.mjs";
@@ -30,7 +31,7 @@ export function sandboxSpec(
   const { config, task, agent } = run;
   const { live } = task;
   const n = task.name;
-  const session = sessionName(n, live.light, live.mode);
+  const session = sessionOf(n, live);
   const install = agent.install(config);
   // Its network is its own (runner/).
   const volumes = [
@@ -50,7 +51,7 @@ export function sandboxSpec(
       },
     },
     // The issue's clone and agent session, kept between its runs: those of its light runs
-    // apart from those of its work (sessionName()).
+    // apart from those of its work, and from those of runs that trust them (sessionOf()).
     // A fork's run gets a clone of its own: what it checked out (the fork's commits, branches, a
     // stash) stays out of the issue's other work runs, which may not fetch it (github-forks.mjs).
     {
@@ -62,13 +63,13 @@ export function sandboxSpec(
     // The repo's caches (its config's `caches`), one volume per path, kept across its runs.
     ...caches.map(({ name, path }) => ({ kind: "cache", name, path })),
     // Host paths the operator grants the repo and its config asks for (access.mjs
-    // grantedAccess()), read-only for a light run and a fork's (preparation.mjs): a work run
-    // may trust what is there.
+    // grantedAccess()), read-only for a run without `push` and a fork's (preparation.mjs): a
+    // work run may trust what is there.
     ...mounts.map(({ source, target, readOnly }) => ({
       kind: "mount",
       name: source,
       path: target,
-      readOnly: readOnly || live.light || live.fork,
+      readOnly: readOnly || !capabilitiesOf(live).has("push") || live.fork,
     })),
   ];
   const env = sandboxEnv(run, prompt, message, settings, engine);
@@ -113,6 +114,50 @@ export async function tokenEnv({ config, task, agent, broker }, sandbox) {
   };
 }
 
+// The run's capabilities (capabilities.mjs), which preparation.mjs decided: none before.
+const capabilitiesOf = (live) => new Set(live.capabilities ?? []);
+
+// Whether the gateways check the run's fetches (github-forks.mjs restricted(), on what the broker
+// has: `push` from its mode, its capabilities, whether it is a fork's): it gets what the repo's
+// later runs trust, so it may not fetch a fork's code.
+const checked = (live) =>
+  restricted({ push: !live.light, fork: live.fork, caps: live.capabilities ?? [] });
+
+// The name its volumes start with. A light mode's runs and work runs never share one, as the
+// issue's sessions are theirs: a comment without a trigger line goes on with work's only
+// (task-modes.mjs, sessionNames()). Within each, apart:
+// - a run without `pull` (`-bare`: nothing of the repository's, not even an earlier run's clone
+//   or transcript);
+// - a run that doesn't stash from one that does (`push`, as for how it starts: SANDBOX_LIGHT,
+//   sandboxEnv()): its reset throws away what the other leaves uncommitted for its next run. A
+//   work run without `push` gets `-readonly`;
+// - a run the gateways check from one they don't (`-trusted`: it gets caches, an engine or a
+//   branch, so it never starts where a run that may fetch a fork's code left it).
+// Research runs have their own (sessionName()).
+export function sessionOf(name, live) {
+  if (OPEN.has(live.mode)) return sessionName(name, live.light, live.mode);
+  const caps = capabilitiesOf(live);
+  const own = live.light ? `${name}-light` : name;
+  if (live.capabilities && !caps.has("pull")) return `${own}-bare`;
+  const stashes = live.capabilities ? caps.has("push") : !live.light;
+  if (!live.light && stashes) return name;
+  // A light mode's run never has `push` (capabilities.mjs outcomeOf() drops it), so never
+  // stashes: the light runs' volumes are the ones that don't.
+  const base = live.light ? own : `${name}-readonly`;
+  return checked(live) ? `${base}-trusted` : base;
+}
+
+// Every name sessionOf() may give a run of the issue `name` that isn't a research run: a work
+// run's (`light` false) or a light one's (true), either when `light` is undefined; the two never
+// share one. Where a comment without a trigger line looks for a session to go on with, before
+// the run's capabilities are decided (task-modes.mjs).
+export function sessionNames(name, light) {
+  const work = [name, `${name}-readonly`, `${name}-readonly-trusted`, `${name}-bare`];
+  const lighter = [`${name}-light`, `${name}-light-trusted`, `${name}-light-bare`];
+  if (light === undefined) return [...work, ...lighter];
+  return light ? lighter : work;
+}
+
 // Values reach the container by name only: they never show in `ps`. The App's credentials
 // are not among them: they stay in the data volume. Nor is the agent's credential: the
 // agent's env gives it the agent token in its place, which comes with the run token once the
@@ -126,9 +171,11 @@ export function sandboxEnv(
 ) {
   const { live } = task;
   const mode = live.mode === "stop" ? "brainstorm" : live.mode;
-  const { light } = live;
-  // Research (modes.mjs OPEN): no clone, nothing of the repo's to run or read.
-  const open = OPEN.has(live.mode);
+  // Its capabilities: without `push`, no branch; without `pull`, no clone, nothing of the
+  // repo's to run or read (a research run).
+  const caps = capabilitiesOf(live);
+  const light = !caps.has("push");
+  const open = !caps.has("pull");
   const install = agent.install(config);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
@@ -160,14 +207,13 @@ export function sandboxEnv(
     // head and linked to the issue, or a work run's issue's one existing branch. draft-pr.sh
     // checks it out, and adds its first commit when it has nothing over the base.
     TASK_BRANCH: (!light && live.linkedBranch) || "",
-    // Reading and answering needs no project setup.
+    // No branch to open (`push`): it reads the clone's base branch.
     SANDBOX_LIGHT: light ? "1" : "",
     SANDBOX_NO_CLONE: open ? "1" : "",
-    // A work run that isn't a fork's clones whole: the GitHub gateway lets it fetch the
-    // repository's commits only, never a blob on its own, as a blobless clone does on demand
-    // (github-forks.mjs).
-    SANDBOX_FULL_CLONE: !light && !open && !live.fork ? "1" : "",
-    SANDBOX_SETUP: light ? "" : (settings.setup ?? ""),
+    // A run the gateways check clones whole: they let it fetch the repository's commits only,
+    // never a blob on its own, as a blobless clone does on demand (github-forks.mjs).
+    SANDBOX_FULL_CLONE: !open && checked(live) ? "1" : "",
+    SANDBOX_SETUP: caps.has("setup") ? (settings.setup ?? "") : "",
     // Read by the sandbox from its default branch (origin/BASE_BRANCH), like the config.
     SANDBOX_INSTRUCTIONS: open ? "" : (settings.instructions ?? ""),
     SANDBOX_MODEL: live.record.model,

@@ -284,7 +284,8 @@ run's first tokens), and no service would take it for another service.
 
 **Claims.** Only what doesn't change during the run, nothing secret: the sandbox may read them,
 to know what it may do. `jti` (the run's id), `repo`, `mode`, `issue`, `fork`, `branches` (what
-it may push), `sandbox` (below), `caps` (empty for now, #492) and `ver`, the claims' format
+it may push), `sandbox` (below), `caps` (its [capabilities](#capabilities), as its start
+decided them) and `ver`, the claims' format
 (a sandbox outlives a listener update; an unknown version is refused). What changes during a
 run (the issues it created, the reactions it added, its pushes, the installation tokens it
 got) stays with the listener, by the run's id.
@@ -1963,7 +1964,7 @@ the listener requests on Deckhand's ready pull request (`review.request`, allowe
 never a team, and never at a run's request); `github`, a run's write to GitHub (REST, or a
 GraphQL mutation's field), under its mode's built-in ceiling:
 [The GitHub gateway](#the-github-gateway). Each has two rules: `allow_<decision>` and
-`deny_<decision>`. **A decision is allowed when an allow rule matches and no deny rule does**:
+`deny_<decision>`; what a run gets as it starts has two of its own ([Capabilities](#capabilities)). **A decision is allowed when an allow rule matches and no deny rule does**:
 a deny always wins, and with no allow rule matching it is refused, so an empty or replaced file
 refuses rather than opens, and a new decision starts closed.
 
@@ -1974,16 +1975,16 @@ namespace of its own:
 - **The operator's**: Deckhand ships its own in the policy service's image
   ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows each
   decision but `run`, `run.rego`, which allows each mode where it makes sense (brainstorms and
-  onboarding on issues only), `github.rego`, a `gh-<feature>.rego` per `gh` feature, and
-  `review.rego`), which hold without any setup. Yours are the `*.rego` files of `policy/` in the
-  grants folder, which the policy service mounts read-only and reads again at each decision: one
-  with the same name as Deckhand's replaces it, others add to them. **Their allow rules are the
-  ceiling** of every repository: a caller sends a repository's files, never yours. The listener
-  reads your folder too and sends, with each decision, a digest of the operator's layer it
-  expects: the service refuses a decision whose digest isn't its own layer's, and the listener
-  refuses every decision while the service reads other files than its own (a grants folder it
-  doesn't mount, or mounts elsewhere, which it would read as none), so your rules are never
-  dropped unseen.
+  onboarding on issues only), `github.rego`, a `gh-<feature>.rego` per `gh` feature,
+  `review.rego`, and a `mode-<mode>.rego` per mode for its capabilities), which hold without any
+  setup. Yours are the `*.rego` files of `policy/` in the grants folder, which the policy service
+  mounts read-only and reads again at each decision: one with the same name as Deckhand's
+  replaces it, others add to them. **Their allow rules are the ceiling** of every repository: a
+  caller sends a repository's files, never yours. The listener reads your folder too and sends,
+  with each decision, a digest of the operator's layer it expects: the service refuses a decision
+  whose digest isn't its own layer's, and the listener refuses every decision while the service
+  reads other files than its own (a grants folder it doesn't mount, or mounts elsewhere, which it
+  would read as none), so your rules are never dropped unseen.
 - **A repository's**, in `.deckhand/policy/` on its default branch. Its deny rules apply to
   every run of the repository. Its allow rules count only for its own `modes:`, whose runs need
   your allow **and** its own: a repository mode does nothing until its repository allows it,
@@ -2077,6 +2078,102 @@ namespace of its own:
 - **A decision's input is kept redacted**: the newest 3 decisions of a task keep the input
   their rules saw in `decisions.json`, each string redacted like the messages, the whole cut to
   8 KB, for the task's page on the dashboard.
+
+## Capabilities
+
+What a run's sandbox gets is decided once, as it starts, by the policies
+([Per-repo config](repo-config.md#capabilities)): `allow_capabilities` gives names,
+`deny_capabilities` refuses them with a reason, in the two layers above (a deny always wins; a
+repository's allow rules count only for its own `modes:`, which need yours too). The outcome
+goes in the run's log, in its saved state and in its tokens' `caps` claim; the dashboard's
+Capabilities tab shows each mode's, with the file that decided each one.
+
+**The minimum**, which every run gets whatever the policies say: its sandbox (no capability, no
+privilege gain, as any container), the agent's API through the listener, the listener's
+endpoints for its own run (its token, progress, files, inbox) and its prompt with the text that
+triggered it. Nothing of the repository's: no clone, branch, image, setup, caches, mounts,
+engine, screenshots or GitHub token (a run without `pull` gets none, whatever its mode), volumes
+of its own (`<issue>-bare-…`, a light mode's `<issue>-light-bare-…`: no earlier run's clone or
+transcript), and only the hosts every run
+needs.
+
+| Capability                         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | Grant                        | Enforced by                                                                      |
+| ---------------------------------- | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------------- | -------------------------------------------------------------------------------- |
+| `pull`                             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                              | the listener at start; the GitHub gateway (no token without it)                  |
+| `push`                             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                              | the git gateway                                                                  |
+| `setup`                            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                              | the listener at start                                                            |
+| `image:repo`                       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `allow_dockerfile`           | the listener at start                                                            |
+| `image:branch`                     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `allow_branch_docker_images` | the listener at start (never a fork's)                                           |
+| `docker`                           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `allow_docker`               | the listener at start (never for a fork's pull request)                          |
+| `preview`                          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `allow_preview`              | not per run yet: the hook runs on pull request events                            |
+| `internet`                         | any public host (as [research runs](#research-runs))                   |                      |                             | `allow_research`             | the egress proxy                                                                 |
+| `read:issues`, `read:pulls`        | the repository's issues, pull requests                                 | `pull`               |                             |                              | not yet: the token follows the mode until #497 (then the GitHub gateway's token) |
+| `read:discussions`, `read:actions` | its discussions, its GitHub Actions runs and logs                      | `pull`               |                             |                              | not yet: the token follows the mode until #497 (then the GitHub gateway's token) |
+
+**Greedy**: a capability is used when the policies allow it, when a key of `.deckhand.yaml`
+asks for it if it has one, and when its grant gives it if one gates it. Allowed and asked for
+but not granted, it stops the run, as before capabilities (but `image:branch`: the run takes the
+repository's image). The grants keep gating what they gated.
+
+**Checked in code, whatever a policy says**, so that replacing a default file can't drop them;
+a run that fails them doesn't start, and its reply says why:
+
+- **Dependencies**: `setup`, `image:repo`, `push`, `docker` and the `read:*` need `pull`;
+  `image:branch` needs `push` and `image:repo` (a policy denying the repository's image denies
+  a branch's too). The reads need it until #497 gives them to the token on their
+  own: a run without `pull` gets no GitHub token at all. A deny narrows: what needs a capability
+  denied, not asked for or not granted isn't used either, with a warning (deny `push` to forks'
+  runs, and they keep their code and reads, without `image:branch`). A capability whose need no
+  allow rule gives refuses the run: the allow rules contradict themselves.
+- **Light modes don't push**: a light mode's run (Deckhand's or a repository's `light: true`)
+  doesn't get `push`, whatever the policies allow, nor what needs it, with a warning: its
+  token can't push or open a pull request until #496 and #498.
+- **Modes that need the code**: a review (its verdict decides fixes and merges) and a discussion
+  (read with its token) don't start without `pull`; a research run doesn't start with it, as
+  it has no token to clone with until #497.
+- **What later runs trust**: a run that isn't a fork's and gets `push`, `setup` (caches) or
+  `docker` (an engine), whatever its mode, is refused a fork's code at the gateways
+  (`github-forks.mjs restricted()`), as work runs always were, and clones whole (its blobs
+  can't be fetched one by one). A light run that is checked so has volumes apart from the
+  issue's other light runs (`-light-trusted`), which may fetch a fork's code. A run that doesn't
+  stash (no `push`: its reset throws away what is uncommitted) never shares a clone with one that
+  does: a work run whose `push` is denied, or a repository's mode given only `pull` and the
+  reads, gets `-readonly` (`-readonly-trusted` when the gateways check it). A light mode's runs
+  and the work runs never share a volume (`-light-bare` and `-bare` without `pull`), so a comment
+  without a trigger line, which goes on with work's session only, never goes on with a light
+  run's: it looks in every volume a work run may have had. A run that finds, once its
+  capabilities are decided, that its volume isn't its mode's starts or continues by what that
+  volume holds. A fork's run may
+  read it, `push` or not, and gets no caches or engine, and a clone of its own
+  (`-fork-workspace`, a light run's too): the issue's other runs never start where a fork's
+  code was fetched.
+- **A risky combination**: `pull` of a repository GitHub doesn't say is public, with
+  `internet`: its private code, untrusted content from any page and a way out, in one run.
+  Refused unless an allow rule of **yours** gives `pull+internet` (a repository's can't), and
+  said as a warning on its config page even then.
+
+**Fail closed**: policies that don't compile, time out, or give `allow_capabilities` anything
+but a set of strings or `deny_capabilities` anything but a set of `{"capability", "reason"}`
+objects refuse the run with a `policy error: …` reply. Each file's two rules are evaluated
+under a name of their own, and their union under theirs, as the policy service loads a set,
+so that the dashboard can say which file decided (`lib/policy-files.mjs byFile()`): a rule that
+reads `allow_capabilities` still sees the whole set. The whole rules decide, so a rule that isn't renamed (indented, or in a file whose
+`package` line has a comment) still counts, shown as from no file. A name the catalogue doesn't
+have is a warning, never a capability (a misspelled deny denies nothing): on the Capabilities
+tab and in a run's log, and for a repository's rules in its config check and Config tab too; so
+is a risky combination's name anywhere but your allow rules.
+
+Deckhand's defaults (`policy/mode-<mode>.rego`) give each built-in mode what its traits gave
+before capabilities: work runs (a maintainer's, fix and conflict runs) everything but
+`internet` (their token is the installation's own, Discussions included); brainstorms, inbox entries, discussions (with
+`read:discussions`), onboarding, analyses and reviews `pull`, `image:repo` and the reads, and so
+neither `push`, `setup` nor an engine; research `internet` alone. A review or a brainstorm on a
+pull request no longer runs on its branch's image, which needs `push`. `mode-work.rego` also
+gives the repository's own modes work's, as your ceiling: they get what their repository's
+policies allow within it. Until those allow it something, its runs are refused with a reply
+naming the rule to add: started, they would answer without the code their mode expects. The
+mode's traits still decide the token of a run with `pull`, its writes' ceiling and its volumes
+until #496–#498 move them.
 
 ## Research runs
 

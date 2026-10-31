@@ -9,15 +9,7 @@ import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
-import {
-  customMode,
-  entryRun,
-  isFresh,
-  isLight,
-  OPEN,
-  permissionsFor,
-  sessionName,
-} from "./modes.mjs";
+import { customMode, entryRun, isFresh, isLight, permissionsFor, sessionName } from "./modes.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -38,7 +30,7 @@ import {
   writeEvent,
 } from "./runlog.mjs";
 import { logSent } from "./restart.mjs";
-import { sandboxSpec } from "./sandbox-spec.mjs";
+import { sandboxSpec, sessionOf } from "./sandbox-spec.mjs";
 import { noLongerAllowed } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
 
@@ -185,6 +177,8 @@ export function createRuns(ctx) {
       uncached: null,
       // What it may push (pushBranches()), once it starts.
       branches: [],
+      // What its sandbox gets (capabilities.mjs), once its start decided it.
+      capabilities: null,
       created,
       reruns,
       shots: null,
@@ -289,7 +283,31 @@ export function createRuns(ctx) {
     record.mode =
       mode === "stop" ? "wrap-up" : restored ? "restore" : started ? "continue" : "start";
     const messages = openingMessages(mode, text, chosen, { restored, started, previous });
-    return { ...chosen, ...messages, settings, errors, warnings, own, text };
+    // Once its capabilities are decided (preparation.mjs), the volume the run mounts
+    // (sandbox-spec.mjs sessionOf()) may not be its mode's: looked at again there, and when that
+    // changes whether it continues, its record and its first message are made again → the new
+    // { message, handoff }, or null when nothing changed.
+    const reopen = async (note) => {
+      const now =
+        fresh || chosen.takeOver
+          ? started
+          : await ctx.runner.hasSession(sessionOf(task.name, task.live), agentOf(task));
+      const changed = reopenedMode({ mode, restored, started, now });
+      if (changed !== null) record.mode = changed;
+      // The log's first line already has the record: what the dashboard reads after a restart is
+      // this event's, the first of the log (runlog.mjs sessionModeOf()). Written for every run,
+      // before anything of the run's own (its image's build, its agent's install) goes in the
+      // log, so that no line of theirs can come first.
+      writeEvent(logFile, "session", { mode: record.mode });
+      if (changed === null) return null;
+      note?.(
+        now
+          ? "What this run gets gives it another session volume, which has a session: it continues there."
+          : "What this run gets gives it a session volume of its own, without the session it would have continued: it starts afresh.",
+      );
+      return openingMessages(mode, text, chosen, { restored, started: now, previous });
+    };
+    return { ...chosen, ...messages, settings, errors, warnings, own, text, reopen };
   }
 
   // The first line of every log: what the dashboard needs to list the run after a restart.
@@ -343,9 +361,10 @@ export function createRuns(ctx) {
       allowed,
       // A review the CI step queued before CI passed (reviews.mjs ciDecide()).
       ciNote: live.mode === "review" ? (items.findLast((i) => i.ciNote)?.ciNote ?? null) : null,
+      capabilities: live.capabilities,
     });
-    // A research run mounts nothing (researchAccess()).
-    if (!OPEN.has(live.mode)) recheckMounts(agent, settings, access);
+    // A run without `pull` mounts nothing (access.mjs bareAccess()).
+    if (live.capabilities?.includes("pull")) recheckMounts(agent, settings, access);
     const digest =
       parts.digest ??
       (live.mode === "analyze" ? await analysisDigest(task, items, note) : undefined);
@@ -357,6 +376,9 @@ export function createRuns(ctx) {
         message,
         { ...prepared, ...access, engine, ca, digest },
       );
+      // What the log has from here may be the sandbox's own: a `session` event counts only
+      // before this (runlog.mjs sessionModeOf()).
+      writeEvent(live.logFile, "sandbox");
       const started = await ctx.runner.start(spec);
       if (started?.engine) note(engineNote(started.engine, engine));
       // Cancelled while Docker started it: cancel()'s kill came too early to find it.
@@ -901,4 +923,14 @@ export function createRuns(ctx) {
   }
 
   return { run, follow, ending, dropRefused, cancel, teardown };
+}
+
+// A run's record mode once its capabilities are decided (runs.mjs begin()'s reopen()): null when
+// the volume they give it has a session as its mode's had (`started`, `now`: whether each has
+// one), else what begin() would have said from `now`: a wrap-up and a restored run stay so.
+export function reopenedMode({ mode, restored, started, now }) {
+  if (now === started) return null;
+  if (mode === "stop") return "wrap-up";
+  if (restored) return "restore";
+  return now ? "continue" : "start";
 }
