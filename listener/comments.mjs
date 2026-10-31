@@ -127,6 +127,9 @@ export function createComments({
   github,
   graphql,
   log,
+  // The github service's record of them (../github/client.mjs claim()), which its gateway reads:
+  // (repo, subject, content, held) → a promise. None: reactions.json alone (the tests').
+  shared = null,
   delays = RETRY_DELAYS,
   sleep = wait,
 }) {
@@ -134,17 +137,38 @@ export function createComments({
   // comment's 😕), by "repo subject content" (github-writes.mjs reactionSubject()), with when.
   // A run's reactions are the same bot's: GitHub keeps one per user and content, so where the
   // run's came first, the listener's POST answers with it, and the run never removes these
-  // (github-writes.mjs listenerReacted). Saved, so a restart keeps them.
+  // (github-writes.mjs listenerReacted). Kept by the github service, whose gateway reads them
+  // (`shared`); those a listener from before it saved in reactions.json go there at start.
   const claims = persistentMap(config.dataDir ? join(config.dataDir, "reactions.json") : null);
+  if (shared && claims.size) {
+    const all = [...claims.keys()];
+    Promise.all(all.map((key) => shared(...key.split(" "), true)))
+      .then(() => {
+        for (const key of all) claims.delete(key);
+        claims.save();
+        log(
+          `The listener's ${all.length} reaction(s) from reactions.json: the github service has them`,
+        );
+      })
+      .catch((error) => log(`The listener's reactions: not handed over (${error.message})`));
+  }
   const claimKey = (repo, comment, content) => {
     const reacted = { id: comment.id, type: comment.review ? "review" : "issue" };
     return `${String(repo).toLowerCase()} ${reactionSubject({ reacted })} ${content}`;
   };
   // Before GitHub is asked, so no run's removal slips in between; kept if the POST fails (a
   // run's same reaction then stays, fail closed). `held`: false once the listener took it off.
-  function claim(repo, comment, content, held = true) {
+  async function claim(repo, comment, content, held = true) {
     if (comment.discussion) return;
     const key = claimKey(repo, comment, content);
+    if (shared) {
+      try {
+        await shared(...key.split(" "), held);
+      } catch (error) {
+        log(`Noting the listener's reaction: ${error.message ?? error}`);
+      }
+      return;
+    }
     claims.delete(key);
     if (held) claims.set(key, Date.now());
     while (claims.size > MAX_CLAIMED) claims.delete(claims.keys().next().value);
@@ -162,7 +186,7 @@ export function createComments({
   // Reaction failures (already removed, 403, 404…) are logged and never break a run.
   async function react(repo, comment, content) {
     const kind = comment.review ? "pulls/comments" : "issues/comments";
-    claim(repo, comment, content);
+    await claim(repo, comment, content);
     try {
       if (comment.discussion) {
         // Removed by content rather than id (settle()): any truthy value will do.
@@ -210,7 +234,7 @@ export function createComments({
           null,
           [404],
         );
-        if (res?.ok || res?.status === 404) claim(repo, comment, "eyes", false);
+        if (res?.ok || res?.status === 404) await claim(repo, comment, "eyes", false);
       }
     } catch (error) {
       log(`Reaction on comment ${comment.id}: ${error}`);
@@ -243,12 +267,13 @@ export function createComments({
 
   // A comment on issue or pull request `number`: GitHub's response, or it throws (deliver()).
   // `full`: where the whole text can be read, should GitHub only take its start.
-  function reply(repo, number, text, { full } = {}) {
+  // `key`: its idempotency key, when asking again must not post it twice (a run's reply).
+  function reply(repo, number, text, { full, key } = {}) {
     const path = `/repos/${repo}/issues/${number}/comments`;
     const send = async (body) => {
       let res;
       try {
-        res = await github(repo, "POST", path, { body });
+        res = await github(repo, "POST", path, { body }, [], key ? { key } : undefined);
       } catch (error) {
         return { status: null, detail: error.message ?? String(error) };
       }
@@ -263,8 +288,10 @@ export function createComments({
   // the discussion, in the thread of the comment it answers (`target.comment`; GitHub threads
   // are one level deep, so a reply to a reply goes to the same thread). Throws when GitHub
   // doesn't take it (deliver()). `full`: as reply()'s.
-  async function answer(target, text, { full } = {}) {
-    if (target.kind !== "discussion") return reply(target.repo, target.replyTo, text, { full });
+  async function answer(target, text, { full, key } = {}) {
+    if (target.kind !== "discussion") {
+      return reply(target.repo, target.replyTo, text, { full, key });
+    }
     const c = target.comment;
     let thread = null;
     if (c?.discussion && c.node_id !== target.discussionId) {

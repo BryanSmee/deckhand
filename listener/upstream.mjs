@@ -161,7 +161,10 @@ export function forward(
         if (size <= maxTransform) return;
         passing = true;
         answered(answer.statusCode, answer.headers);
-        res.writeHead(answer.statusCode, forwarded(answer.headers, settle ? ["content-length"] : []));
+        res.writeHead(
+          answer.statusCode,
+          forwarded(answer.headers, settle ? ["content-length"] : []),
+        );
         for (const held of chunks) res.write(held);
       });
       answer.on("end", () => {

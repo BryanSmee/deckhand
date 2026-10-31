@@ -36,7 +36,12 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { createBrokerCaller, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import {
+  createBrokerCaller,
+  RUN_AUTH_HEADER,
+  RUN_TOKEN_HEADER,
+  SANDBOX_HEADER,
+} from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -64,7 +69,7 @@ export const CLIENT_HEADER = "x-deckhand-client";
 
 // What the broker service reads a sandbox's call by (lib/broker-client.mjs): whatever the client
 // sent in them is dropped.
-const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER];
+const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER];
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.
 export function target(authority) {
@@ -94,8 +99,10 @@ export function listenerPolicy(url, timeoutMs = 5000, wait = {}) {
         cache: answer.cache === true,
         decrypt: answer.decrypt === true,
         relay: answer.relay === true,
-        // For the broker's host: the network (or pod) of the run's sandbox.
+        // For the broker's host, and GitHub's: the network (or pod) of the run's sandbox.
         sandbox: typeof answer.sandbox === "string" && answer.sandbox ? answer.sandbox : null,
+        // A relayed host whose calls go to the github service (#502), not the listener.
+        service: answer.service === "github" ? "github" : null,
       };
     } catch {
       return { allowed: false };
@@ -201,6 +208,10 @@ export function createProxy({
   // The broker service, where the sandboxes' `/run/…` calls go: { url, header() → the proxy's
   // service token for it } (../lib/broker-client.mjs). None: to the listener, which relays them.
   brokerService = null,
+  // The github service (#502), where GitHub's relayed hosts and the pushes (`/git/…` on the
+  // broker's host) go: { url, header() → the proxy's service token for it }. None: to the
+  // listener, which relays them.
+  githubService = null,
   upstreamCa, // what verifies the hosts' certificates, and an https: relayUrl's; default: Node's trust store
   // How relayed requests wait for a listener restarting (wait.mjs): { limitMs, now, sleep }.
   wait = {},
@@ -217,6 +228,8 @@ export function createProxy({
       cache: cacheOk,
       decrypt,
       relay,
+      service,
+      sandbox,
     } = await policy(ip, host, { gone });
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
@@ -225,8 +238,11 @@ export function createProxy({
           "The operator adds it to `hosts` in their grants folder: grants/<owner>/<repo>.yaml for one repository, grants/default.yaml for all.",
       );
     }
-    // Relayed: its requests go to the listener, never to the host's address.
-    if (relay === true) return { address: null, cache: false, decrypt: true, relay: true };
+    // Relayed: its requests go to the listener (or the github service), never to the host's
+    // address.
+    if (relay === true) {
+      return { address: null, cache: false, decrypt: true, relay: true, service, sandbox };
+    }
     let addresses;
     try {
       addresses = isIP(host) ? [{ address: host }] : await lookup(host);
@@ -293,7 +309,7 @@ export function createProxy({
     // Never a tunnel: the sandbox's calls would reach the host with the run's token alone.
     if (decision.relay) {
       if (authority && relayUrl && certifiable(to.host)) {
-        return intercept(client, head, to, decision.address, req.socket.remoteAddress, true);
+        return intercept(client, head, to, decision.address, req.socket.remoteAddress, decision);
       }
       log(`refused ${to.host}: no CA or RELAY_URL to relay it`);
       return refuse(
@@ -330,7 +346,8 @@ export function createProxy({
   // that is verified (send()), or to the listener when `relay`. A client that doesn't start
   // with TLS, or a host the CA can't make a certificate for, gets the raw tunnel; never a
   // relayed host. `from`: the client's address, which a relayed request names.
-  async function intercept(client, head, to, address, from, relay = false) {
+  async function intercept(client, head, to, address, from, relayed = null) {
+    const relay = !!relayed;
     let context;
     try {
       context = await contextFor(to.host);
@@ -356,7 +373,16 @@ export function createProxy({
       log(`TLS with the client for ${to.host}: ${error.code ?? error.message}`);
       tls.destroy();
     });
-    tls.deckhand = { to, address, relay, from, busy: 0 };
+    tls.deckhand = {
+      to,
+      address,
+      relay,
+      from,
+      busy: 0,
+      // GitHub's: to the github service, with the network the policy vouched for.
+      github: relayed?.service === "github" && !!githubService,
+      sandbox: relayed?.sandbox ?? null,
+    };
     decrypted.add(tls);
     tls.on("close", () => decrypted.delete(tls));
     inside.emit("connection", tls);
@@ -384,7 +410,7 @@ export function createProxy({
   // Requests inside an intercepted tunnel: to its host, whatever their Host header says.
   const inside = drainable(
     createServer((req, res) => {
-      const { to, address, relay: toListener, from } = req.socket.deckhand;
+      const { to, address, relay: toListener, from, github, sandbox } = req.socket.deckhand;
       req.socket.deckhand.busy++;
       res.on("close", () => {
         req.socket.deckhand.busy--;
@@ -394,6 +420,7 @@ export function createProxy({
         res.writeHead(400, { "content-type": "text/plain" });
         return res.end("Deckhand's egress proxy: expected a path\n");
       }
+      if (github) return toGithub(req, res, to.host, from, sandbox).catch(() => res.destroy());
       if (toListener) return relayed(req, res, to.host, from).catch(() => res.destroy());
       const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
       const url = new URL(`https://${name}:${to.port}${req.url}`);
@@ -482,6 +509,13 @@ export function createProxy({
     // A run token's calls about its own run: to the broker service. A run's from before tokens
     // (a secret) still to the listener, which has its files.
     const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
+    // A push: to the github service, with the network (or pod) it came from.
+    if (githubService && /^\/git\//.test(to.pathname)) {
+      const url = new URL(githubService.url);
+      url.pathname = to.pathname;
+      url.search = to.search;
+      return toService(req, res, githubService, url, from, sandbox);
+    }
     if (brokerService && /^\/run\//.test(to.pathname) && JWT.test(token)) {
       const url = new URL(brokerService.url);
       url.pathname = to.pathname;
@@ -503,6 +537,37 @@ export function createProxy({
       });
     }
     return toListener(req, res, to, from);
+  }
+
+  // A relayed GitHub host's request, to the github service as /relay/<host><path>, as the
+  // listener's relayed() (the same checks of its path), its credential moved apart for the
+  // service's gateway, the proxy's own service token in its place.
+  async function toGithub(req, res, host, from, sandbox) {
+    const url = relayTarget(`${githubService.url}/relay`, host, req.url);
+    if (!url) {
+      res.writeHead(400, { "content-type": "text/plain" });
+      return res.end("Deckhand's egress proxy: not a path it relays\n");
+    }
+    return toService(req, res, githubService, url, from, sandbox);
+  }
+
+  // A sandbox's call on to the github service at `url`: its Authorization moved to
+  // RUN_AUTH_HEADER, the proxy's own in its place, the network (or pod) vouched for.
+  async function toService(req, res, service, url, from, sandbox) {
+    let authorization;
+    try {
+      authorization = await untilReached(() => service.header(), {
+        ...wait,
+        gone: () => req.socket.destroyed,
+      });
+    } catch {
+      return unreachable(res, "the github service");
+    }
+    return toListener(req, res, url, from, {
+      authorization,
+      [RUN_AUTH_HEADER]: req.headers.authorization ?? "",
+      [SANDBOX_HEADER]: sandbox ?? "",
+    });
   }
 
   // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
@@ -668,14 +733,22 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The broker service (#505), where their calls about their own run go, with the proxy's own
   // service token (asked for in the background: the proxy serves the rest meanwhile). Unset:
   // they go to the listener, which relays them.
+  const githubUrl = process.env.GITHUB_SERVICE_URL?.replace(/\/$/, "") || null;
   const brokerService = process.env.BROKER_SERVICE_URL
     ? createBrokerCaller({
         url: process.env.BROKER_SERVICE_URL,
+        audiences: githubUrl ? ["broker", "github"] : ["broker"],
         podTokenFile: process.env.SERVICE_ACCOUNT_TOKEN_FILE || null,
         log,
       })
     : null;
   brokerService?.start();
+  // The github service (#502): GitHub's relayed hosts and the pushes, with the proxy's token for
+  // it, from the broker. Unset: they go to the listener, which relays them.
+  const githubService =
+    githubUrl && brokerService
+      ? { url: githubUrl, header: () => brokerService.header("github") }
+      : null;
   const https = authority ? ", HTTPS too" : "";
   const proxy = createProxy({
     policy: listenerPolicy(url),
@@ -684,6 +757,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     relayUrl,
     brokerUrl,
     brokerService,
+    githubService,
     log,
   });
   proxy.listen(port, () =>

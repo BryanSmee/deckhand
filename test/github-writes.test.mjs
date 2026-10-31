@@ -2097,7 +2097,9 @@ test("reactions: never one the listener added, on any task's comment, though the
   const remove = (id) => write("DELETE", `repos/org/repo/issues/comments/21/reactions/${id}`);
   assert.equal(await check(work, remove(700)), null);
   // The listener takes the comment in for #2's task: GitHub answers its POST with the run's 👀.
-  listener.received({ repo: "Org/Repo", comment: { id: 21 } });
+  const item = { repo: "Org/Repo", comment: { id: 21 } };
+  listener.received(item);
+  await item.eyes;
   assert.deepEqual(posted, ["POST /repos/Org/Repo/issues/comments/21/reactions"]);
   assert.deepEqual(await check(work, remove(700)), {
     status: 403,
@@ -2107,7 +2109,9 @@ test("reactions: never one the listener added, on any task's comment, though the
   assert.equal(await check(work, remove(701)), null);
   // And one the listener has: never kept as the run's, though GitHub answered the run 201.
   const fresh = run("work");
-  listener.received({ repo: "org/repo", comment: { id: 13 } });
+  const other = { repo: "org/repo", comment: { id: 13 } };
+  listener.received(other);
+  await other.eyes;
   await answered(
     fresh,
     { ...add("eyes"), path: "/repos/org/repo/issues/comments/13/reactions" },

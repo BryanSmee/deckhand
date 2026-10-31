@@ -54,7 +54,11 @@ async function fakeGitHub(t, answer = () => null) {
 
 // A github service (one copy) on `store`, the App's key in its own folder, the broker's key
 // `key`. `bound`: its callers' networks (none: the network isn't checked).
-async function service(t, github, { store, key, bound = null, gatewayOptions, app = true } = {}) {
+async function service(
+  t,
+  github,
+  { store, key, bound = null, gatewayOptions, app = true, env = {} } = {},
+) {
   const dir = tempDir(t);
   if (app) {
     writeFileSync(
@@ -63,7 +67,7 @@ async function service(t, github, { store, key, bound = null, gatewayOptions, ap
     );
   }
   const config = loadConfig(
-    { GITHUB_API: `${github.url}/api/v3`, GITHUB_URL: github.url, DATA_DIR: dir },
+    { GITHUB_API: `${github.url}/api/v3`, GITHUB_URL: github.url, DATA_DIR: dir, ...env },
     undefined,
     { service: "github" },
   );
@@ -85,12 +89,12 @@ async function service(t, github, { store, key, bound = null, gatewayOptions, ap
 }
 
 // Two copies of the service on one store, the broker's key, and a fake GitHub.
-async function setup(t, { answer, gatewayOptions, bound } = {}) {
+async function setup(t, { answer, gatewayOptions, bound, env } = {}) {
   const github = await fakeGitHub(t, answer);
   const store = openStore("memory:");
   const key = testKey();
-  const a = await service(t, github, { store, key, gatewayOptions, bound });
-  const b = await service(t, github, { store, key, gatewayOptions, bound });
+  const a = await service(t, github, { store, key, gatewayOptions, bound, env });
+  const b = await service(t, github, { store, key, gatewayOptions, bound, env });
   const as = (sub) => `Bearer ${signServiceToken({ sub, aud: "github" }, key)}`;
   // A call to a copy as `sub`, with the orchestrator's epoch on its writes.
   const call = (copy, sub, method, path, { body, headers = {}, epoch = 10 } = {}) =>
@@ -418,6 +422,64 @@ test("the App: a listener's key handed over once, never another App's; a setup o
     body: JSON.stringify({ code: "abc" }),
   });
   assert.equal(manifest.status, 409);
+});
+
+test("tarballs: the runner's, of an allowed repo, streamed from GitHub; nothing else of it", async (t) => {
+  const asked = [];
+  const { a, call } = await setup(t, {
+    env: { ALLOWED_REPOS: "org/*" },
+    answer: (req) => {
+      asked.push(`${req.method} ${req.url}`);
+      if (req.url.includes("missing")) return [404, {}];
+      return [200, "tarball"];
+    },
+  });
+  const tarball = (path, sub = "runner") => call(a, sub, "GET", `/tarballs/${path}`);
+  const res = await tarball(`org/repo/${encodeURIComponent("feature/x")}`);
+  assert.equal(res.status, 200);
+  assert.equal(await res.text(), '"tarball"');
+  assert.deepEqual(asked, ["GET /api/v3/repos/org/repo/tarball/feature%2Fx"]);
+  assert.equal((await tarball("org/missing/main")).status, 404);
+  // Without a ref, the default branch's.
+  assert.equal((await tarball("org/repo")).status, 200);
+  assert.equal(asked.at(-1), "GET /api/v3/repos/org/repo/tarball");
+  // Names that would make the API path another one, decoded or not.
+  for (const path of [
+    `org/x${encodeURIComponent("/../../../user/repos?")}/HEAD`,
+    `org/..%2F..%2Fuser/main`,
+    `org/repo/${encodeURIComponent("../../user")}`,
+    `org/repo/${encodeURIComponent("main?x=1")}`,
+    `org/%E0%A4/main`,
+  ]) {
+    assert.equal((await tarball(path)).status, 400, path);
+  }
+  // Another owner's repo; edge.
+  assert.equal((await tarball("other/repo/main")).status, 403);
+  assert.equal((await tarball("org/repo/main", "edge")).status, 403);
+  assert.equal(asked.length, 3);
+});
+
+test("blobs: a file's blob id for the runner, at a ref or the default branch; plain paths only", async (t) => {
+  const asked = [];
+  const { a, call } = await setup(t, {
+    env: { ALLOWED_REPOS: "org/*" },
+    answer: (req) => {
+      asked.push(`${req.method} ${req.url}`);
+      if (req.url.includes("missing")) return [404, {}];
+      return [200, { type: "file", sha: "sha-1" }];
+    },
+  });
+  const blob = (query, sub = "runner") => call(a, sub, "GET", `/blobs/org/repo?${query}`);
+  assert.deepEqual(await (await blob("path=docker%2FDockerfile")).json(), { sha: "sha-1" });
+  assert.deepEqual(await (await blob("path=Dockerfile&ref=abc")).json(), { sha: "sha-1" });
+  assert.deepEqual(asked, [
+    "GET /api/v3/repos/org/repo/contents/docker/Dockerfile",
+    "GET /api/v3/repos/org/repo/contents/Dockerfile?ref=abc",
+  ]);
+  assert.equal((await blob("path=../x")).status, 400);
+  assert.equal((await blob("path=Dockerfile&ref=..")).status, 400);
+  assert.equal((await blob("path=missing")).status, 404);
+  assert.equal((await blob("path=Dockerfile", "edge")).status, 403);
 });
 
 test("mutates(): what edge may not send over GraphQL", () => {

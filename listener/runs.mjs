@@ -679,7 +679,11 @@ export function createRuns(ctx) {
   // (comments.mjs): finish() then ends the run as failed, `live.replied` still false.
   function post(task, text) {
     const { live } = task;
-    return ctx.answer(target(task, live.replyTo), hidden(live, text), { full: runLink(task) });
+    // Once per run (`live.replied`): asked again after a handover, it isn't posted twice.
+    return ctx.answer(target(task, live.replyTo), hidden(live, text), {
+      full: runLink(task),
+      key: `${live.id}:reply`,
+    });
   }
 
   // The run on the dashboard, where its whole answer is, should GitHub take only its start.
@@ -804,6 +808,11 @@ export function createRuns(ctx) {
   async function teardown(task) {
     const live = task.live;
     live.record.phase = null;
+    // What it did on GitHub, the github service's: its reruns, for the CI step (cleanUp()).
+    const state = await ctx.githubRunState?.(live.id).catch(() => null);
+    if (Array.isArray(state?.reruns)) live.reruns.splice(0, live.reruns.length, ...state.reruns);
+    if (Array.isArray(state?.created))
+      live.created.splice(0, live.created.length, ...state.created);
     // The broker service hears it first, so its tokens renew nowhere once its network goes; a
     // broker that doesn't answer soon is told again later (broker-service.mjs end()).
     const revoked = ctx.broker.revoke(live.id);

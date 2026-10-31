@@ -67,6 +67,44 @@ async function readForm(req) {
   return Object.fromEntries(new URLSearchParams((await readBody(req, 10000)).toString("utf8")));
 }
 
+// The manifest's code → the App's credentials, from GitHub: with its key, here. The listener
+// has the github service convert it instead (../github/app.mjs), which keeps the key.
+export function convertManifest({ config, fetch = globalThis.fetch, now = Date.now }) {
+  return async (code) => {
+    const res = await fetch(`${config.githubApi}/app-manifests/${code}/conversions`, {
+      method: "POST",
+      headers: GITHUB_HEADERS,
+    });
+    if (!res.ok) {
+      throw new Error(`GitHub refused the manifest code: ${res.status} ${await res.text()}`);
+    }
+    const app = await res.json();
+    // The bot's user id makes its commits link to it; GitHub shows them without it anyway.
+    let botId = null;
+    try {
+      const bot = await fetch(
+        `${config.githubApi}/users/${encodeURIComponent(`${app.slug}[bot]`)}`,
+        { headers: GITHUB_HEADERS },
+      );
+      if (bot.ok) botId = (await bot.json()).id;
+    } catch {
+      // Commits then use the bot's name alone.
+    }
+    return {
+      id: app.id,
+      slug: app.slug,
+      client_id: app.client_id,
+      client_secret: app.client_secret,
+      webhook_secret: app.webhook_secret,
+      pem: app.pem,
+      owner: app.owner?.login ?? null,
+      html_url: app.html_url,
+      bot_id: botId,
+      created_at: new Date(now()).toISOString(),
+    };
+  };
+}
+
 export function createSetup({
   config,
   fetch = globalThis.fetch,
@@ -74,6 +112,8 @@ export function createSetup({
   onConfigured, // (credentials) => stores and starts using them
   random = () => randomBytes(24).toString("hex"),
   now = Date.now,
+  // The manifest's code → the App's credentials (convertManifest()'s, or the github service's).
+  convert = convertManifest({ config, fetch, now }),
   log = () => {},
 }) {
   const token = random();
@@ -180,12 +220,11 @@ back here to install it.</p>
     if (!pending || pending.expiry < now() || !/^[\w-]+$/.test(code)) {
       return page(res, 400, "Setup expired", `<p>Start again from the setup link in the logs.</p>`);
     }
-    const res1 = await fetch(`${config.githubApi}/app-manifests/${code}/conversions`, {
-      method: "POST",
-      headers: GITHUB_HEADERS,
-    });
-    if (!res1.ok) {
-      log(`Setup: GitHub refused the manifest code: ${res1.status} ${await res1.text()}`);
+    let credentials;
+    try {
+      credentials = { ...(await convert(code)), public_url: pending.publicUrl };
+    } catch (error) {
+      log(`Setup: ${error.message}`);
       return page(
         res,
         502,
@@ -193,34 +232,9 @@ back here to install it.</p>
         `<p>Start again from the setup link in the logs.</p>`,
       );
     }
-    const app = await res1.json();
-    // The bot's user id makes its commits link to it; GitHub shows them without it anyway.
-    let botId = null;
-    try {
-      const bot = await fetch(
-        `${config.githubApi}/users/${encodeURIComponent(`${app.slug}[bot]`)}`,
-        { headers: GITHUB_HEADERS },
-      );
-      if (bot.ok) botId = (await bot.json()).id;
-    } catch {
-      // Commits then use the bot's name alone.
-    }
-    const credentials = {
-      id: app.id,
-      slug: app.slug,
-      client_id: app.client_id,
-      client_secret: app.client_secret,
-      webhook_secret: app.webhook_secret,
-      pem: app.pem,
-      owner: app.owner?.login ?? null,
-      html_url: app.html_url,
-      bot_id: botId,
-      public_url: pending.publicUrl,
-      created_at: new Date(now()).toISOString(),
-    };
     onConfigured(credentials);
-    log(`Setup: GitHub App ${app.slug} (id ${app.id}) stored`);
-    res.writeHead(302, { location: `${app.html_url}/installations/new` });
+    log(`Setup: GitHub App ${credentials.slug} (id ${credentials.id}) stored`);
+    res.writeHead(302, { location: `${credentials.html_url}/installations/new` });
     res.end();
   }
 
