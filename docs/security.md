@@ -1345,8 +1345,8 @@ repository change what is built.
 A comment reaches Claude when its author is in `ALLOWED_USERS` and the repository's own
 `users`, and those are checked again later, not only when it arrives:
 
-- a comment queued when the listener stops keeps its author in `queue.json`: the next
-  listener drops it (and takes its 👀 off) when its author or repository is no longer
+- a comment queued when the listener stops (or crashes) keeps its author in the queue, saved
+  in the store as it comes (`store/state.json`): the next listener drops it (and takes its 👀 off) when its author or repository is no longer
   allowed;
 - every queued comment is checked again against the repository's `users`, read from its
   default branch, when its run begins (or, for a run still going after a restart, before it
@@ -1407,7 +1407,7 @@ files holding secrets are the owner's only (`0600`):
 | `sessions.json`        | each login's session epoch                                        |
 | `run-token.key`        | signs the runs' tokens ([Run tokens](#run-tokens))                |
 | `logs/<run>.live.json` | a running run's state, with its agent token (gone once it's over) |
-| `queue.json`           | comments queued when the listener stopped, with their authors     |
+| `store/state.json`     | the store's keys: the queued comments, with their authors         |
 | `waits.json`           | comments waiting for other issues (`/after`), with their authors  |
 | `credentials/`         | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)     |
 

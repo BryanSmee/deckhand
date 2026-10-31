@@ -7,10 +7,11 @@ import { createBroker } from "../listener/broker.mjs";
 import { signingKey } from "../lib/tokens.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { createRestart } from "../listener/restart.mjs";
+import { createRestart, QUEUE_KEY } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { loadRuns } from "../listener/runlog.mjs";
+import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it.
@@ -230,6 +231,7 @@ function twoSpellings(t, { live, newest }) {
     runner: { closed: () => false },
     broker: createBroker({}),
     running: 0,
+    store: fileStore(),
   };
 }
 
@@ -237,7 +239,7 @@ async function restarted(ctx, options) {
   const restart = createRestart(ctx);
   const spelled = options && (await restart.unifySpellings(options));
   restart.restoreRuns();
-  restart.loadQueue();
+  await restart.loadQueue();
   return spelled;
 }
 
@@ -418,6 +420,7 @@ test("a restored run's record takes its log's phase: scheduled through a restart
 
 test("queued comments keep when they were queued through a restart: the run order of the unplaced", async (t) => {
   const dir = tempDir(t);
+  const store = fileStore({ dir: join(dir, "store") });
   const context = () => {
     const ctx = {
       config: { dataDir: dir, users: ["alice"], repos: ["org/repo"] },
@@ -429,6 +432,7 @@ test("queued comments keep when they were queued through a restart: the run orde
       running: 0,
       track: () => {},
       settle: async () => {},
+      store,
     };
     // Nothing starts: the test reads the queue as loaded.
     return Object.assign(ctx, createTasks(ctx), createRestart(ctx), { startLater: () => {} });
@@ -445,7 +449,7 @@ test("queued comments keep when they were queued through a restart: the run orde
   }
   await before.saveQueue();
   const after = context();
-  after.loadQueue();
+  await after.loadQueue();
   assert.deepEqual(
     after.tasks.get("org/repo#7").pending.map((i) => i.queuedAt),
     [300],
@@ -526,4 +530,169 @@ test("across a restart, a run's tokens still check, and a run from before them k
   assert.equal((await broker.check(secret, "10.9.1.5")).run.id, "old");
   assert.equal((await broker.check(secret, "10.9.0.5")).status, 403);
   assert.equal((await broker.renew(secret, "10.9.1.5")).status, 401);
+});
+
+// A listener's context for the queue's tests: its tasks (tasks.mjs) and restart.mjs on `store`,
+// with a pause of a minute (`debounceMs`). `startLater` records what is re-armed rather than
+// arming it, unless `real`.
+function queueContext(t, dir, store, { real = false } = {}) {
+  const ctx = {
+    config: { dataDir: dir, users: ["alice"], repos: ["org/repo"], debounceMs: 60_000 },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    running: 0,
+    track: () => {},
+    settle: async () => {},
+    received: () => {},
+    store,
+  };
+  Object.assign(ctx, createTasks(ctx), createRestart(ctx));
+  t.after(() => {
+    for (const task of ctx.tasks.values()) clearTimeout(task.timer);
+  });
+  if (real) return ctx;
+  ctx.armed = [];
+  ctx.startLater = (task, dueAt) => ctx.armed.push([task.id, dueAt]);
+  return ctx;
+}
+
+const queued = (id, extra = {}) => ({
+  repo: "org/repo",
+  id,
+  kind: "issue",
+  number: Number(id),
+  base: "main",
+  mode: "work",
+  author: "alice",
+  ...extra,
+});
+
+test("a queued comment is in the store with its pause's deadline as soon as it waits, no stop needed", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir: join(dir, "store") });
+  const before = queueContext(t, dir, store, { real: true });
+  const task = newTask({ repo: "org/repo", id: "7", kind: "issue", number: 7, base: "main" });
+  before.tasks.set("org/repo#7", task);
+  const item = queued("7", { queueId: "q-1", eyes: Promise.resolve(41) });
+  task.pending.push(item);
+  const at = Date.now();
+  before.startLater(task);
+  await before.saveQueue();
+  // Its 👀 was a promise when first written: written again once known.
+  await new Promise((resolve) => setImmediate(resolve));
+  await before.saveQueue();
+  const saved = (await fileStore({ dir: join(dir, "store") }).get(QUEUE_KEY))["org/repo#7"];
+  assert.equal(saved.pending[0].queueId, "q-1");
+  assert.equal(saved.pending[0].eyes, 41);
+  assert.ok(saved.dueAt >= at + 60_000 && saved.dueAt <= Date.now() + 60_000);
+
+  // The next listener (the same store, read again from its files): the same deadline re-armed.
+  const after = queueContext(t, dir, fileStore({ dir: join(dir, "store") }));
+  await after.loadQueue();
+  assert.deepEqual(after.armed, [["7", saved.dueAt]]);
+  assert.equal(await after.tasks.get("org/repo#7").pending[0].eyes, 41);
+});
+
+test("a deadline that passed while no listener ran: re-armed for now", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  await store.set(QUEUE_KEY, {
+    "org/repo#7": {
+      ...queued("7"),
+      pending: [queued("7", { queueId: "q-1" })],
+      next: {},
+      dueAt: Date.now() - 5000,
+    },
+  });
+  const ctx = queueContext(t, dir, store, { real: true });
+  const scheduled = [];
+  ctx.run = (task) => scheduled.push(task.id);
+  await ctx.loadQueue();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(scheduled, ["7"]);
+});
+
+test("a comment both in the queue and in a run's saved state is the run's alone", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const item = queued("1", { queueId: "q-1", comment: { id: 99 } });
+  writeFileSync(
+    join(dir, "r1.live.json"),
+    JSON.stringify({
+      task: { repo: "org/repo", id: "1", kind: "issue" },
+      id: "r1",
+      mode: "work",
+      light: false,
+      record: { id: "r1", key: "org/repo#1", agent: "claude" },
+      handled: [{ ...item, eyes: null }],
+      unanswered: [],
+    }),
+  );
+  // Killed after the run's state was written, before the queue was.
+  await store.set(QUEUE_KEY, {
+    "org/repo#1": { ...queued("1"), pending: [{ ...item, eyes: null }], next: {}, dueAt: 0 },
+  });
+  const ctx = queueContext(t, dir, store);
+  ctx.broker = createBroker({});
+  ctx.runner = { closed: () => false };
+  ctx.restoreRuns();
+  await ctx.loadQueue();
+  const task = ctx.tasks.get("org/repo#1");
+  assert.equal(task.live.handled.length, 1);
+  assert.deepEqual(task.pending, []);
+  assert.deepEqual(ctx.armed, []);
+  // And the store has it so.
+  assert.deepEqual(await store.get(QUEUE_KEY), {});
+});
+
+test("a queue.json a listener from before the store left: loaded once, then in the store", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  writeFileSync(
+    join(dir, "queue.json"),
+    JSON.stringify([{ ...queued("7"), pending: [{ ...queued("7"), eyes: 5 }], next: {} }]),
+  );
+  const ctx = queueContext(t, dir, store);
+  await ctx.loadQueue();
+  // Saved before deadlines were: its pause starts again.
+  assert.deepEqual(ctx.armed, [["7", undefined]]);
+  assert.throws(() => readFileSync(join(dir, "queue.json")), { code: "ENOENT" });
+  const saved = await store.get(QUEUE_KEY);
+  assert.deepEqual(Object.keys(saved), ["org/repo#7"]);
+  assert.equal(saved["org/repo#7"].pending[0].eyes, 5);
+});
+
+test("a run's output read is saved with it once a second, and nothing once it is over", async (t) => {
+  const dir = tempDir(t);
+  const ctx = queueContext(t, dir, fileStore());
+  ctx.broker = {};
+  const live = {
+    id: "r1",
+    key: "org/repo#1",
+    record: { id: "r1" },
+    lines: { out: 0, err: 0 },
+    handled: [],
+    unanswered: [],
+  };
+  const task = { ...newTask(queued("1")), live };
+  const path = join(dir, "r1.live.json");
+  for (let i = 1; i <= 3; i++) {
+    live.lines.out = i;
+    ctx.saveLiveSoon(task, 20);
+  }
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  await live.saving;
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).lines.out, 3);
+  // Its end (runs.mjs teardown()): a save still due writes nothing.
+  live.lines.out = 4;
+  ctx.saveLiveSoon(task, 20);
+  live.over = true;
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  ctx.saveLive(task);
+  await live.saving;
+  assert.equal(JSON.parse(readFileSync(path, "utf8")).lines.out, 3);
 });

@@ -55,7 +55,7 @@ export function createWaits({
   const queued = new Map();
   const latest = new Map();
 
-  // The comments' text and authors, as in queue.json: the owner's only (its file's mode).
+  // The comments' text and authors, as in the queue: the owner's only (its file's mode).
   const save = waits.save;
 
   const keyOf = (item) => taskKey(item.repo, item.id);

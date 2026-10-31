@@ -32,6 +32,7 @@ import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
 import { drain } from "../lib/drain.mjs";
+import { fileStore } from "../lib/store-file.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -163,8 +164,12 @@ const ctx = {
   runsById: new Map(),
   // Runs with a sandbox, for the parallel cap.
   running: 0,
-  // Set on SIGTERM: no run starts any more, what waits is saved for the next listener.
+  // Set on SIGTERM: no run starts any more, what waits is left to the next listener (saved
+  // already, as it changed).
   stopping: false,
+  // The listener's state through the store's interface (lib/store.mjs), in the data volume: the
+  // queue for now (restart.mjs), the rest as the services take it over (#499).
+  store: fileStore({ dir: join(config.dataDir, "store") }),
 };
 
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
@@ -816,11 +821,11 @@ if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 // Before any request is served: runs still going since the previous listener, then what it
 // left queued (comments for those runs are delivered to them).
 const restored = ctx.restoreRuns();
-ctx.loadQueue();
+await ctx.loadQueue();
 // A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
 ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
-// queue.json is only written when the listener stops: after a crash, the keys of comments it
-// lost stay in order.json, and would rank a new comment there as placed.
+// The keys of comments dropped as the queue came back (their author no longer allowed) stay in
+// order.json otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 ctx.reattach(restored).catch((error) => log(`Re-attaching: ${error.stack ?? error}`));
 const relinking = setInterval(ctx.relink, RELINK_MS);
@@ -849,8 +854,10 @@ if (ctx.app) {
 }
 
 // `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
-// after the stop grace period. Sandboxes go on: no run starts any more, what is queued is
-// saved with the 👀 ids, the runs' state is written, and the next listener carries on. The
+// after the stop grace period. Sandboxes go on: no run starts any more, and the next listener
+// carries on from what is saved as it changes (the queue with its deadlines and 👀 ids, the
+// runs' state): here, only the writes under way are waited for, and the lines of output read
+// in the last second. The
 // broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
 // listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
 // inbox polls) before it exits (lib/drain.mjs). The egress policy's port answers until then.
@@ -871,7 +878,12 @@ process.on("SIGTERM", () => {
   // Replies being posted and comments being admitted first, then what they leave.
   const saved = Promise.allSettled([...ctx.ending, ...http.admitting])
     .then(ctx.saveQueue)
+    .then(() => {
+      const queued = [...ctx.tasks.values()].filter((t) => t.pending.length).length;
+      log(`Stopping: ${queued} task(s) with queued comments left to the next listener`);
+    })
     .then(() => Promise.all([...ctx.tasks.values()].map((t) => t.live && ctx.saveLive(t))))
+    .then(() => ctx.store.close())
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
     // The dashboard's streams: its page reconnects to the next listener.
     .finally(() => web.closeAllConnections());

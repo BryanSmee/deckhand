@@ -110,7 +110,7 @@ export function createStatus(ctx) {
     promise.finally(() => inflight.delete(promise));
   }
 
-  // Queued comments don't count: they are saved (saveQueue()), running sandboxes go on without
+  // Queued comments don't count: they are saved as they come (saveQueue()), running sandboxes go on without
   // the listener (restoreRuns()), and brainstorms between replies are restored from
   // brainstorms.json and their volume. Nothing needs to drain before a restart. `sees(repo)`:
   // which repos' runs, hooks and queues are listed (a signed-in user's, http.mjs); `idle` is

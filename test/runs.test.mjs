@@ -233,17 +233,45 @@ test("a Stop before any answer: the short reply", async (t) => {
   assert.match(answers[0], /^Stopped by @bryansmee\.\n\n<sub>/);
 });
 
-test("a run that answered before a restart: its grace starts again when it is followed", async (t) => {
-  const { ctx, runner, task, following } = setup(t, { graceMs: 5000 });
+test("a run that answered before a restart: what was left of its grace, when it is followed", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 300 });
   runner.out(result("Answered before the restart."));
-  // The next listener's: the same saved state, a runner without the old timer.
+  const { graceUntil } = task.live;
+  assert.ok(graceUntil > Date.now());
+  // The next listener's: the same saved state, a runner without the old timer, and a grace of
+  // its own far longer. The deadline saved holds.
   ctx.stopping = true;
   runner.exited();
   await following;
   ctx.stopping = false;
+  const next = createRuns({ ...ctx, answerGraceMs: 60_000 });
+  await next.follow(task);
+  assert.equal(runner.kills, 1);
+  assert.ok(Date.now() >= graceUntil);
+  assert.ok(Date.now() < graceUntil + 5000);
+});
+
+test("a run that answered before a restart, saved before its grace's deadline was: all of it again", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 5000 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  delete task.live.graceUntil;
   const next = createRuns({ ...ctx, answerGraceMs: 30 });
   await next.follow(task);
   assert.equal(runner.kills, 1);
+});
+
+test("the lines a run's output adds are saved with it a second later at most", async (t) => {
+  const saves = [];
+  const { ctx, runner, task } = setup(t);
+  ctx.saveLiveSoon = (saved) => saves.push(saved.live.lines.out);
+  runner.out(JSON.stringify({ type: "assistant" }));
+  runner.out(JSON.stringify({ type: "assistant" }));
+  assert.deepEqual(saves, [1, 2]);
+  assert.equal(task.live.lines.out, 2);
 });
 
 test("the GitHub tokens the broker gave the run are redacted from its log and its reply", async (t) => {

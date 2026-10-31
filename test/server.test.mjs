@@ -2023,7 +2023,7 @@ mounts:
 
     const exited = new Promise((resolve) => listener.child.on("exit", resolve));
     listener.child.kill("SIGTERM");
-    await listener.until("Saved 0 task(s)");
+    await listener.until("0 task(s) with queued comments left to the next listener");
     // A new call is refused: the egress proxy waits for the next listener (proxy/wait.mjs).
     await assert.rejects(
       fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
@@ -2135,7 +2135,7 @@ mounts:
     // Meanwhile, the repo's users leave bob out.
     files[".deckhand.yaml"] = "users: [alice]\n";
     const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
-    assert.match(output, /Saved 1 task\(s\) with queued comments/);
+    assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
     await ctx.listener.until("a queued comment dropped: bob is no longer an allowed user");
     await new Promise((resolve) => setTimeout(resolve, 200));
     const [run] = readdirSync(join(dir, "runs"));
@@ -2166,15 +2166,23 @@ mounts:
     assert.equal(results.length, 1);
   });
 
-  test("comments queued when the listener stops run after it starts", async (t) => {
-    const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
+  test("a listener killed during a comment's pause: the next one runs it once, at its deadline", async (t) => {
+    const PAUSE_MS = 3000;
+    const ctx = await listen(t, {}, { DEBOUNCE_MS: String(PAUSE_MS) });
+    const sent = Date.now();
     await ctx.send(comment("alice"));
     await ctx.listener.until("queued (work");
     await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
-    const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
-    assert.match(output, /Saved 1 task\(s\) with queued comments/);
-    await ctx.listener.until("1 comment(s) queued before the restart");
+    // No SIGTERM: nothing is saved on the way out. The next one's own pause is a minute, and
+    // the comment's deadline still holds.
+    await ctx.restart({ signal: "SIGKILL", DEBOUNCE_MS: "60000" });
+    const line = await ctx.listener.until(
+      /1 comment\(s\) queued before the restart, due in \d+ ms/,
+    );
+    assert.ok(Number(line.match(/due in (\d+) ms/)[1]) <= PAUSE_MS);
     await ctx.listener.until("done (ok)");
+    assert.ok(Date.now() - sent >= PAUSE_MS);
+    assert.equal(prompts(ctx.dir).length, 1);
     assert.equal(replies(ctx.github).length, 1);
     // Its 👀 from before the restart is replaced by the outcome.
     await ctx.github.waitFor(
@@ -2193,7 +2201,7 @@ mounts:
     const exited = new Promise((resolve) => child.on("exit", resolve));
     child.kill("SIGTERM");
     await exited;
-    assert.equal(statSync(join(ctx.dir, "queue.json")).mode & 0o777, 0o600);
+    assert.equal(statSync(join(ctx.dir, "store", "state.json")).mode & 0o777, 0o600);
     await ctx.restart({ DEBOUNCE_MS: "0", ALLOWED_USERS: "bob" });
     await ctx.listener.until("dropped: alice is no longer an allowed user");
     // Its 👀 goes, and nothing runs.
@@ -2707,13 +2715,14 @@ mounts:
     const ctx = await listen(
       t,
       { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
-      { BRAINSTORM_DEBOUNCE_MS: "60000" },
+      // Their pause outlasts the restart, and its deadline holds after it.
+      { BRAINSTORM_DEBOUNCE_MS: "3000" },
     );
     await ctx.send(entry(99, "A dark mode"));
     await ctx.send(entry(100, "Keyboard shortcuts"));
     await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
     const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
-    assert.match(output, /Saved 1 task\(s\) with queued comments/);
+    assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
     await settled(ctx.github, [99, 100]);
     await until(() => prompts(ctx.dir).length === 2, "two runs");
     const [first, second] = prompts(ctx.dir);
@@ -4256,7 +4265,7 @@ mounts:
 
   test("Run order: a queued task moved first has position 1, in order.json", async (t) => {
     const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
-      // A key whose comments a crash lost (queue.json is only written at a stop): dropped at start.
+      // A key with no comment queued (dropped as the queue came back, say): dropped at start.
       writeFileSync(
         join(dir, "order.json"),
         JSON.stringify({ "org/repo#99": { key: "org/repo#99" } }),
