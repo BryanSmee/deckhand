@@ -120,7 +120,13 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
         tone="run"
         label="Running"
         count={state.running}
-        meta={`of ${plural(state.maxParallel, "slot")} · ${state.queued} queued`}
+        meta={[
+          `of ${plural(state.maxParallel, "slot")}`,
+          state.autoPickup && `${state.autoPickup.running} auto-picked`,
+          `${state.queued} queued`,
+        ]
+          .filter(Boolean)
+          .join(" · ")}
         chip="running"
         pulse={state.running > 0}
         onChip={onChip}

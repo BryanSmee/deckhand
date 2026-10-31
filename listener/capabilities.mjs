@@ -135,8 +135,8 @@ export const KNOWN = new Set([...NAMES, ...RISKY.map((r) => r.name)]);
 // the listener started it itself ("review-fix", "ci-fix", "conflict", "review"…), null for a
 // comment's; `fork`: whether a fork's pull request's comments started it; `trigger`: what a
 // person started it from, as the run input says it (run-policy.mjs runTrigger(): "comment",
-// "dashboard", "inbox", "discussion"), null for a run the listener starts itself; `command`:
-// its last comment's first line ("work", "stop", "review"…), null when none.
+// "dashboard", "auto-pickup", "inbox", "discussion"), null for a run the listener starts
+// itself; `command`: its last comment's first line ("work", "stop", "review"…), null when none.
 export function capabilitiesInput({
   repo,
   mode,

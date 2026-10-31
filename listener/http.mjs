@@ -29,6 +29,8 @@ import { previewHook } from "./previews.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
 import { refreshFor } from "./repos.mjs";
+import { labelAdded } from "./auto-pickup.mjs";
+import { pickedTask } from "./tasks.mjs";
 import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
@@ -172,6 +174,8 @@ export function createHttp(ctx, { dashboardDir }) {
         // A brainstorm, or another mode whose runs are apart from work's (modes.mjs `volumes`):
         // before any work run, whatever the order.
         ...(isApart(t.pending.at(-1).mode) && { startsFirst: true }),
+        // Picked from its auto-pickup label (auto-pickup.mjs), for one of the reserved slots.
+        ...(!t.running && pickedTask(t) && { autoPickup: true }),
       }));
     const shown = board({
       runs: mine(ctx.runs),
@@ -234,6 +238,14 @@ export function createHttp(ctx, { dashboardDir }) {
       running: ctx.running,
       queued: queued.length,
       maxParallel: config.maxParallel,
+      // AUTO_PICKUP_SLOTS, within maxParallel, and how many auto-picked runs hold them now;
+      // absent while it is off.
+      ...(config.autoPickupSlots && {
+        autoPickup: {
+          slots: config.autoPickupSlots,
+          running: [...tasks.values()].filter((t) => t.running && pickedTask(t)).length,
+        },
+      }),
       previews: ctx.previews.status().filter((h) => sees(user, h.repo)),
       // Each repo read so far: its inbox issues and discussions category (New request).
       inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => sees(user, repo))),
@@ -519,6 +531,8 @@ export function createHttp(ctx, { dashboardDir }) {
     // is read again now, for its next poll.
     if (event === "issues") {
       staleFor(event, payload, (repo) => ctx.workApi?.stale(repo));
+      // Except the auto-pickup label: the next sweep now, rather than within SWEEP_MS.
+      if (labelAdded(config, event, payload)) ctx.autoPickup?.soon();
       return;
     }
     // A pull request that turned ready, in a repo whose `review.on` asks for a review.

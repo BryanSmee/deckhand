@@ -556,6 +556,8 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `SANDBOX_FAST_MODE`                                                                               | `sandbox_fast_mode`                                                                               | off                                                                          | `allowed`: `/speed fast` turns on Claude Code's fast mode, which costs more (see [Fast mode](#fast-mode))                                                                                                                              |
 | `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                                         | minutes without a comment before a brainstorm shows as idle                                                                                                                                                                            |
 | `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                                          | sandboxes running at once (a repo's `max_parallel` within it)                                                                                                                                                                          |
+| `AUTO_PICKUP_SLOTS`                                                                               | `auto_pickup_slots`                                                                               | `0` (off)                                                                    | slots within `MAX_PARALLEL` for the issues the listener starts by itself (below MAX_PARALLEL; [Auto-pickup](#auto-pickup))                                                                                                             |
+| `AUTO_PICKUP_LABEL`                                                                               | `auto_pickup_label`                                                                               | `auto-pickup`                                                                | the label that asks for it                                                                                                                                                                                                             |
 | `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                                                  | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                                                                                                                     |
 | `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                                                                         | the container engine runs of repositories granted `docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine))                                                                                               |
 | `TRIGGER`                                                                                         | `trigger`                                                                                         | `Deckhand`                                                                   | first line of a comment that starts a run                                                                                                                                                                                              |
@@ -618,6 +620,39 @@ Antigravity CLI: `gemini-4-argon-high`, `gemini-4-argon-medium`, `gemini-3.8-fla
 models carry theirs in their name (`-low`, `-medium`, `-high`), so a name without one takes the
 run's (`xhigh` and `max`: `-high`). A run whose model belongs to another agent (`/model opus` on a Codex run)
 doesn't start: the reply says why.
+
+### Auto-pickup
+
+An issue nobody starts can wait for months. With `AUTO_PICKUP_SLOTS` above 0 (and below
+`MAX_PARALLEL`, which it comes out of), the listener starts the open issues labelled
+`AUTO_PICKUP_LABEL` (`auto-pickup`) by itself, oldest created first across the repositories
+whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config.md](repo-config.md#auto-pickup)),
+in `work` mode, as many at once as there are slots. It looks every 5 minutes, a few seconds
+after the label is added (an `issues` delivery), and as soon as a run ends or a queued
+auto-picked issue is cancelled.
+
+- **The slots.** Auto-picked runs never take more than `AUTO_PICKUP_SLOTS`. The other runs
+  (comments, the dashboard, reviews) borrow those slots while no auto-picked issue waits: with
+  `MAX_PARALLEL=3` and `AUTO_PICKUP_SLOTS=1`, three triggered runs may go at once. Once an
+  issue is picked, they keep to 2, and it starts as soon as a slot frees. A repository's
+  `max_parallel` counts auto-picked runs too: an issue of a repository at its own cap isn't
+  picked, and one picked before its repo filled up holds no slot while it waits for it.
+- **What is skipped.** An issue with something live on the dashboard (running, queued,
+  waiting, asking), the needs-input label (`NEEDS_INPUT_LABEL`), an open issue it is "blocked
+  by", or an open pull request of Deckhand's for it; the next one is picked instead.
+- **Who it runs for.** The person who last added the label, from the issue's events: they must
+  be in `ALLOWED_USERS` and the repository's `users`, or nothing starts (a label a bot added
+  either). The label vouches for the issue as it was then: a title or description changed
+  since by anyone but an allowed user (the App's bot included) holds it until the label is
+  added again ([security.md](security.md#auto-pickup)). The run is theirs for the policies
+  (`sender`, `trigger: "auto-pickup"`: a `deny_run` rule can refuse it,
+  [The run input](repo-config.md#the-run-input)).
+- **Once picked.** The App comments on the issue, then the label comes off and the run is
+  queued. A failed or stopped run isn't picked again: add the label back to retry. An issue
+  held by who added the label, or by an edit since, keeps it, and the App says why once.
+
+The dashboard marks auto-picked tasks ("Auto-pickup"), and its run count says how many hold
+the reserved slots ("2 + 1 auto of 3 running").
 
 ### Fast mode
 

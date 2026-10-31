@@ -295,6 +295,21 @@ export function createRepoList({
     return { users, waitForAnswers, inbox, at: known.at };
   }
 
+  // The repos whose config, as last read (CONFIG_MS, or a push to their default branch), opts
+  // in to auto-pickup: [{ repo, base }] (auto-pickup.mjs reads it again before a start). Those
+  // the operator's grants refuse start nothing anyway.
+  async function autoPickup() {
+    const infos = await repos();
+    const load = grantsOnce();
+    const found = [];
+    for (const info of infos) {
+      const known = await configState(info);
+      if (!known?.settings?.autoPickup || judged(info, known, load).invalid) continue;
+      found.push({ repo: info.full_name, base: known.base });
+    }
+    return found;
+  }
+
   // The names of the repos whose settings were read.
   const known = () => [...configs.values()].filter((k) => k.settings).map((k) => k.repo);
 
@@ -310,6 +325,7 @@ export function createRepoList({
     names,
     usersOf,
     known,
+    autoPickup,
     listedAt: () => listedAt,
     installations: () => installed,
   };

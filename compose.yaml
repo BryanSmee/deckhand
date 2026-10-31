@@ -131,6 +131,10 @@ services:
       BRAINSTORM_MODEL: ${BRAINSTORM_MODEL:-}
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-}
+      # Slots within MAX_PARALLEL for the issues labelled AUTO_PICKUP_LABEL (auto-pickup), which
+      # the listener starts by itself in the repos that opt in. Empty: 0, off.
+      AUTO_PICKUP_SLOTS: ${AUTO_PICKUP_SLOTS:-}
+      AUTO_PICKUP_LABEL: ${AUTO_PICKUP_LABEL:-}
       # What every sandbox may reach and its limits: grants/default.yaml, below.
       # A container engine for repos granted `docker`: sysbox, podman or auto. Empty: none.
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
