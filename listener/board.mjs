@@ -107,10 +107,11 @@ function dismissedOf(t, d) {
   return t.state === last.status ? { by: d.by, at: d.at } : null;
 }
 
-function questionsFor(t, last, input) {
+// `over`: the issue or pull request is closed or merged, so the run's questions no longer wait.
+function questionsFor(t, last, input, over) {
   if (t.state !== "needs-input") return null;
   // The run's are the latest: one starting takes the label off.
-  if (last?.status === "needs-input" && last.questions) {
+  if (!over && last?.status === "needs-input" && last.questions) {
     return { source: "run", runId: last.id, ...last.questions };
   }
   return input?.questions ? { source: "issue", ...input.questions } : null;
@@ -240,14 +241,17 @@ function settle(t, q, b, w, input, { over = false, aside = null } = {}) {
   // asked (a comment answering them starts a run instead). The label put back asks again.
   if (t.state === "needs-input" && (over || aside?.runId === last.id)) t.state = "done";
   // The label outlasts how the last run ended (a run starting takes it off), not a live one,
-  // and is what a wait whose issues are done still waits for (waits.mjs).
+  // and is what a wait whose issues are done still waits for (waits.mjs). Its pull request
+  // merged or closed, the label alone doesn't hold the task: the one its run put stays on the
+  // issue while the issue stays open. Open questions in the issue's body still do.
   const answers = t.state === "waiting" && w.answers;
-  if (input && (answers || ENDED.includes(t.state))) {
+  const ended = ENDED.includes(t.state);
+  if (input && (answers || ended) && !(over && ended && !input.questions)) {
     t.state = "needs-input";
     t.kind ??= "issue";
     t.since = Math.max(t.since, input.since ?? 0);
   }
-  const asked = questionsFor(t, last, input);
+  const asked = questionsFor(t, last, input, over);
   if (asked) t.questions = asked;
   if (b && b.status !== "stopped") {
     t.kind = "brainstorm";

@@ -25,7 +25,16 @@ export function createDismissals({ path, now = Date.now } = {}) {
     save();
   }
 
-  // Whether run `runId` of the task was dismissed, which Undo takes back.
+  // The questions of the last run of issue or pull request `number`'s task set aside, if it
+  // stopped to ask (askedOn()): the label came off there. Its task key, else null.
+  function setAsideOn(runs, repo, number, pr, by) {
+    const asked = askedOn(runs, repo, number, pr);
+    if (asked) setAside(asked.key, asked.runId, by);
+    return asked?.key ?? null;
+  }
+
+  // Whether run `runId` of the task was dismissed, which Undo takes back. A run's questions set
+  // aside are undone the same way: they wait again.
   function undo(key, runId) {
     if (dismissed.get(key)?.runId !== runId) return false;
     dismissed.delete(key);
@@ -50,6 +59,7 @@ export function createDismissals({ path, now = Date.now } = {}) {
   return {
     dismiss,
     setAside,
+    setAsideOn,
     undo,
     prune,
     // [{ key, runId, by, at }], as board() takes them.
@@ -59,21 +69,15 @@ export function createDismissals({ path, now = Date.now } = {}) {
   };
 }
 
-// The tasks whose last run stopped to ask on issue or pull request `number` of `repo` (`pr`:
-// a pull request): the task's own, or one whose run replied there (an issue's task replies on
-// its pull request). `runs`: newest first, as ctx.runs is. [{ key, runId }].
+// The task of issue or pull request `number` of `repo` (`pr`: a pull request) when its last run
+// stopped to ask: { key, runId }, else null. A run labels its own task's issue or pull request
+// (runs.mjs), even when it replied on another (an issue's task, on its pull request), so the
+// label taken off there is what sets its questions aside. `runs`: newest first, as ctx.runs is.
 export function askedOn(runs, repo, number, pr) {
-  const seen = new Set();
-  const found = [];
-  for (const r of runs) {
-    const id = taskId(r.key);
-    if (seen.has(id)) continue;
-    seen.add(id);
+  const kind = pr ? "pr" : "issue";
+  const last = runs.find((r) => {
     const target = parseKey(r.key);
-    if (r.status !== "needs-input" || !target || !sameRepo(target.repo, repo)) continue;
-    if (target.kind === "discussion") continue;
-    const own = target.number === number && (target.kind === "pr") === pr;
-    if (own || r.replyTo === number) found.push({ key: r.key, runId: r.id });
-  }
-  return found;
+    return target?.kind === kind && target.number === number && sameRepo(target.repo, repo);
+  });
+  return last?.status === "needs-input" ? { key: last.key, runId: last.id } : null;
 }

@@ -40,7 +40,7 @@ test("undo: only the run dismissed; respell: under the repo's one spelling", () 
   assert.deepEqual(d.list(), []);
 });
 
-test("setAside: a run's questions, once; askedOn: the tasks whose last run asked there", () => {
+test("setAside: a run's questions, once; askedOn: the task's own last run, if it asked", () => {
   const d = createDismissals({ now: () => 3 });
   d.setAside("org/app#1", "run-1", "alice");
   d.setAside("org/app#1", "run-1", "bob");
@@ -55,16 +55,26 @@ test("setAside: a run's questions, once; askedOn: the tasks whose last run asked
     r("c", "org/app#6", "running", 6),
     r("d", "org/app#6", "needs-input", 6),
     r("e", "Org/App#7", "needs-input", 7),
-    r("f", "org/app#discussion-9", "needs-input", 9),
-    r("g", "other/app#9", "needs-input", 9),
+    r("f", "org/app#discussion-8", "needs-input", 8),
+    r("g", "other/app#8", "needs-input", 8),
   ];
-  // Pull request #9: its own task, and #5's, whose run replied on it.
-  assert.deepEqual(askedOn(runs, "org/app", 9, true), [
-    { key: "org/app#5", runId: "a" },
-    { key: "org/app#pr-9", runId: "b" },
-  ]);
-  // Issue #5: its task; issue #6: a run going since, nothing.
-  assert.deepEqual(askedOn(runs, "org/app", 5, false), [{ key: "org/app#5", runId: "a" }]);
-  assert.deepEqual(askedOn(runs, "org/app", 6, false), []);
-  assert.deepEqual(askedOn(runs, "org/APP", 7, false), [{ key: "Org/App#7", runId: "e" }]);
+  // Pull request #9: its own task only. #5's run replied there, but labelled issue #5.
+  assert.deepEqual(askedOn(runs, "org/app", 9, true), { key: "org/app#pr-9", runId: "b" });
+  assert.equal(askedOn(runs, "org/app", 9, false), null);
+  assert.deepEqual(askedOn(runs, "org/app", 5, false), { key: "org/app#5", runId: "a" });
+  // A run going since: nothing to set aside.
+  assert.equal(askedOn(runs, "org/app", 6, false), null);
+  assert.deepEqual(askedOn(runs, "org/APP", 7, false), { key: "Org/App#7", runId: "e" });
+  // Neither a discussion nor another repo's issue.
+  assert.equal(askedOn(runs, "org/app", 8, false), null);
+  // setAsideOn(): the task's key, once set aside; null when nothing asked.
+  assert.equal(d.setAsideOn(runs, "org/app", 9, true, null), "org/app#pr-9");
+  assert.equal(d.setAsideOn(runs, "org/app", 6, false, null), null);
+  assert.deepEqual(
+    d.list().map((x) => [x.key, x.runId, x.questions]),
+    [
+      ["org/app#1", "run-1", true],
+      ["org/app#pr-9", "b", true],
+    ],
+  );
 });

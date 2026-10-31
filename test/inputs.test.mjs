@@ -60,7 +60,14 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
     return lists[repo];
   };
   const logs = [];
-  const inputs = createInputs({ path, listLabelled, now: () => 5, log: (l) => logs.push(l) });
+  const dropped = [];
+  const inputs = createInputs({
+    path,
+    listLabelled,
+    dropped: (repo, number) => dropped.push([repo, number]),
+    now: () => 5,
+    log: (l) => logs.push(l),
+  });
   inputs.set("org/repo#1", true);
   inputs.set("org/repo#4", true);
   inputs.set("org/down#7", true);
@@ -77,6 +84,8 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
     "org/repo#2": Date.parse("2026-10-15T12:00:00Z"),
   });
   assert.match(logs[0], /org\/down: 502/);
+  // #1's run, if it asked, has its questions set aside, as the delivery would have.
+  assert.deepEqual(dropped, [["org/repo", 1]]);
   // Its questions from the listing's body.
   const questions = Object.fromEntries(inputs.list().map((i) => [i.key, i.questions]));
   assert.deepEqual(questions["org/repo#2"], {

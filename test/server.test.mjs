@@ -4407,6 +4407,72 @@ mounts:
     assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
   });
 
+  test("api/state: a run's questions stop waiting once its issue closes or its pull request's label comes off", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    // What GitHub says of issue #5 when the dashboard looks its title up (titles.mjs).
+    const files = {};
+    const { port, send, listener } = await listen(t, files, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      for (const [id, key] of [
+        ["org-repo-5-1000", "org/repo#5"],
+        ["org-repo-pr-6-1000", "org/repo#pr-6"],
+      ]) {
+        writeFileSync(
+          join(dir, "logs", `${id}.log`),
+          [
+            { type: "listener", key, repo: "org/repo", taskMode: "work", startedAt: 1000 },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+      }
+      return { GITHUB_URL: github.url };
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const states = async () =>
+      Object.fromEntries(
+        (await (await get("/api/state", session)).json()).tasks.map((x) => [x.key, x.state]),
+      );
+    assert.deepEqual(await states(), {
+      "org/repo#5": "needs-input",
+      "org/repo#pr-6": "needs-input",
+    });
+    const repository = { full_name: "org/repo", default_branch: "main" };
+    const installation = { id: 7 };
+    const sender = { login: "bob", type: "User" };
+    // Issue #5 closed (titles.mjs), the label taken off pull request #6 (dismissals.mjs).
+    const closed = { number: 5, title: "An idea", state: "closed", state_reason: "completed" };
+    files["issue:5"] = JSON.stringify(closed);
+    await send({ action: "closed", installation, repository, sender, issue: closed }, "issues");
+    const pull = { number: 6, title: "A change", state: "open", labels: [] };
+    const label = { name: "needs-input" };
+    await send(
+      { action: "unlabeled", installation, repository, sender, pull_request: pull, label },
+      "pull_request",
+    );
+    await listener.until("org/repo#pr-6: label removed, its last run's questions set aside");
+    // The title lookup the first poll started may answer after the delivery: polled again.
+    const done = { "org/repo#5": "done", "org/repo#pr-6": "done" };
+    let now = await states();
+    for (let i = 0; i < 80 && JSON.stringify(now) !== JSON.stringify(done); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      now = await states();
+    }
+    assert.deepEqual(now, done);
+  });
+
   test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {
     const { port, send, listener } = await listen(t, {}, (dir, github) => {
       mkdirSync(join(dir, "logs"));

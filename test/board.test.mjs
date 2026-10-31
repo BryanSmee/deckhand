@@ -481,11 +481,20 @@ test("a run's questions no longer wait once closed, merged, or their label taken
       ask("acme/api#7"),
       ask("acme/api#7", 20),
       run("acme/api#8", 30, { status: "error" }),
+      ask("acme/api#9"),
+      ask("acme/api#10"),
+      ask("acme/api#11"),
     ],
     queued: [],
     brainstorms: [],
-    // The label put back since: it asks again.
-    inputs: [{ key: "acme/api#6", since: 50, questions: null }],
+    inputs: [
+      // The label put back since: it asks again.
+      { key: "acme/api#6", since: 50, questions: null },
+      // Its pull request merged, the issue still open: the label its run put holds nothing,
+      // open questions in its body do.
+      { key: "acme/api#10", since: 30, questions: null },
+      { key: "acme/api#11", since: 30, questions: { items: [], raw: "1. In the body?" } },
+    ],
     dismissals: [
       aside("Acme/API#3", "acme/api#3-30"),
       aside("acme/api#6", "acme/api#6-30"),
@@ -495,8 +504,14 @@ test("a run's questions no longer wait once closed, merged, or their label taken
       { key: "acme/api#5", runId: "acme/api#5-30", by: "alice", at: 40 },
       aside("acme/api#8", "acme/api#8-30"),
     ],
-    // #1's pull request merged, #4's issue closed.
-    pr: (key) => (key === "acme/api#1" ? { number: 9, state: "merged" } : null),
+    // #1's, #10's and #11's pull requests merged, #9's closed; #4's issue closed.
+    pr: (key) =>
+      ({
+        "acme/api#1": { number: 21, state: "merged" },
+        "acme/api#9": { number: 29, state: "closed" },
+        "acme/api#10": { number: 30, state: "merged" },
+        "acme/api#11": { number: 31, state: "merged" },
+      })[key] ?? null,
     closed: (key) => (key === "acme/api#4" ? "completed" : null),
   });
   const states = Object.fromEntries(tasks.map((t) => [t.key, t.state]));
@@ -509,8 +524,18 @@ test("a run's questions no longer wait once closed, merged, or their label taken
     "acme/api#6": "needs-input",
     "acme/api#7": "needs-input",
     "acme/api#8": "error",
+    "acme/api#9": "done",
+    "acme/api#10": "done",
+    "acme/api#11": "needs-input",
   });
   const of = (key) => tasks.find((t) => t.key === key);
+  // The body's questions, not the run's, which no longer wait.
+  assert.deepEqual(of("acme/api#11").questions, {
+    source: "issue",
+    items: [],
+    raw: "1. In the body?",
+  });
+  assert.equal(of("acme/api#10").questions, undefined);
   // No form for questions nobody waits on; the run keeps how it ended.
   assert.equal(of("acme/api#1").questions, undefined);
   assert.equal(of("acme/api#1").runs[0].status, "needs-input");

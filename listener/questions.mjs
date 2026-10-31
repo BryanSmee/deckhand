@@ -8,8 +8,7 @@
 // changes.
 import { hasLabel, labelFailed } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
-import { askedOn } from "./dismissals.mjs";
-import { MARKER, saysMore, taskKey } from "./events.mjs";
+import { MARKER, prId, saysMore, taskKey } from "./events.mjs";
 import { CONFIG_FILE, effectiveConfig } from "./repo-config.mjs";
 import { Refused } from "../lib/http.mjs";
 
@@ -175,7 +174,8 @@ export function replyQuestions(text) {
   return parseQuestions(section.join("\n"));
 }
 
-// An `issues` or `issue_comment` delivery → what it changes for the label, or null:
+// An `issues`, `issue_comment` or `pull_request` delivery → what it changes for the label, or
+// null:
 //   { repo, key, number, title, base, label, by, track, questions, comment, answered }
 // `label`: true to add it, false to take it off, undefined to leave it. `by`: the allowed
 // user whose action it is (checked again against the repo's own users), null for the App's
@@ -186,9 +186,11 @@ export function replyQuestions(text) {
 // repo's `wait_for_answers` is on (http.mjs). `answered`: the label came off an open issue.
 // `reply`: a run's reply its ticked boxes may answer (tickedReply()). `ignoredTicks`: the
 // section is fully ticked by ticks that answer nothing, the bot's say (editedInput()); `ticked`:
-// the label comes off for its ticks.
+// the label comes off for its ticks. `unlabelled`: { pr, by }, the label taken off the issue or
+// pull request, which sets its task's last run's questions aside.
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
+  if (event === "pull_request") return name ? pullUnlabelled(config, p, name) : null;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
   const repo = p.repository?.full_name;
   const issue = p.issue;
@@ -220,6 +222,26 @@ export function inputEvent(config, event, p, bot) {
   if (event === "issue_comment")
     return p.action === "edited" ? tickedReply(ctx) : commentInput(ctx);
   return ISSUE_ACTIONS[p.action]?.(ctx) ?? null;
+}
+
+// The label taken off a pull request, by anyone: GitHub says so in a `pull_request` delivery,
+// never an `issues` one. Only the questions of the pull request's own task's run are set aside
+// (`unlabelled`, applyInput()): pull requests aren't in the list of issues waiting for input,
+// and nothing waits for their answers (waits.mjs).
+function pullUnlabelled(config, p, name) {
+  const repo = p.repository?.full_name;
+  const pull = p.pull_request;
+  // Fail closed: only the App's installations, on allowed repos.
+  if (p.action !== "unlabeled" || !p.installation?.id || !repo || !pull?.number) return null;
+  if (!repoAllowed(config, repo) || !hasLabel([p.label], name)) return null;
+  return {
+    repo,
+    key: taskKey(repo, prId(pull.number)),
+    number: pull.number,
+    title: null,
+    base: p.repository.default_branch,
+    unlabelled: { pr: true, by: p.sender?.login ?? null },
+  };
 }
 
 // An allowed user's comment on a labelled issue or pull request: it may answer the questions.
@@ -287,13 +309,14 @@ function editedInput({ p, issue, change, labelled, who, questions }) {
 }
 
 // Whoever adds or removes it, by hand or not: the dashboard follows the issue's labels. Taken
-// off, the questions of a run that asked there no longer wait either (`unlabelled`: { pr, by },
-// applyInput()).
+// off, the questions of the issue's task's last run no longer wait either (`unlabelled`:
+// { pr, by }, applyInput()); a pull request's label comes as a `pull_request` delivery
+// (pullUnlabelled()).
 function labelInput({ p, issue, name, change, questions }) {
   if (!hasLabel([p.label], name)) return null;
   if (issue.state === "closed") return { ...change, track: false };
   if (p.action === "unlabeled") {
-    const unlabelled = { pr: !!issue.pull_request, by: p.sender?.login ?? null };
+    const unlabelled = { pr: false, by: p.sender?.login ?? null };
     return { ...change, track: false, answered: true, unlabelled };
   }
   return { ...change, track: true, questions: questions() };
@@ -369,15 +392,13 @@ export async function applyInput(ctx, change) {
   const { ignoredTicks } = change;
   if (track !== undefined) ctx.inputs.set(key, track, asked, ignoredTicks);
   else if (asked !== undefined) ctx.inputs.update(key, asked, ignoredTicks);
-  // The label taken off: a run's questions there are set aside, so its task no longer shows as
-  // waiting for input (board.mjs). A run starting takes it off too: that run is then the
-  // task's last, and still running, so nothing is set aside.
+  // The label taken off: the questions of its task's last run, if it asked, are set aside, so
+  // the task no longer shows as waiting for input (board.mjs). A run starting takes it off too:
+  // that run is then the task's last, and still running, so nothing is set aside.
   if (change.unlabelled) {
     const { pr, by: who } = change.unlabelled;
-    for (const asked of askedOn(ctx.runs, repo, number, pr)) {
-      ctx.dismissals.setAside(asked.key, asked.runId, who);
-      log(`${asked.key}: label removed, its last run's questions set aside`);
-    }
+    const aside = ctx.dismissals.setAsideOn(ctx.runs, repo, number, pr, who);
+    if (aside) log(`${aside}: label removed, its last run's questions set aside`);
   }
   // Answered: a comment that waited for the answers starts (waits.mjs).
   if (change.answered) await ctx.waits.answered(repo, number);

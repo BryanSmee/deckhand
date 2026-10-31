@@ -355,15 +355,21 @@ const pulls = createPulls({
   getPull: (repo, number) => fetchPull(github, repo, number),
 });
 
+// Failed runs dismissed from the dashboard, and runs whose questions were set aside (their
+// needs-input label taken off), while each is its task's last (dismissals.mjs).
+const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
+
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
+// One whose label came off meanwhile sets its run's questions aside, as the delivery would.
 const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
+  dropped: (repo, number) => {
+    const aside = dismissals.setAsideOn(ctx.runs, repo, number, false, null);
+    if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);
+  },
 });
-
-// Failed runs dismissed from the dashboard, while each is its task's last (dismissals.mjs).
-const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
 // The run order the maintainer set on the dashboard: which queued task starts next (order.mjs).
 const order = createOrder({ path: join(config.dataDir, "order.json") });
