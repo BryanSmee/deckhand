@@ -1,41 +1,15 @@
 // Anthropic endpoint: the operator's Claude credential never enters a sandbox, where Claude's
 // tools, the repo's setup and a fork's code could read it (and post it on a public issue).
 // A sandbox gets ANTHROPIC_BASE_URL=<broker>/anthropic and the run's agent token in the variable
-// the credential would be in (agents/claude.mjs env()), so Claude Code keeps its mode: an OAuth token
-// goes as `Authorization: Bearer`, with its beta, a gateway's token (ANTHROPIC_AUTH_TOKEN,
-// for OpenRouter say) as `Authorization: Bearer` too, an API key as `x-api-key`. Here the secret
-// is checked against the broker and swapped for the credential, in the same header, and the
-// request goes on to Anthropic; the answer streams back as it comes. The secret dies with the
-// run. Served on the broker's port, which only the runs' networks reach.
+// the credential would be in (../listener/agents/claude.mjs env()), so Claude Code keeps its
+// mode: an OAuth token goes as `Authorization: Bearer`, with its beta, a gateway's token
+// (ANTHROPIC_AUTH_TOKEN, for OpenRouter say) as `Authorization: Bearer` too, an API key as
+// `x-api-key`. The egress proxy sends those calls to the models service (http.mjs), where the
+// token is checked (runs.mjs) and swapped for the credential, in the header the credential
+// takes, and the request goes on to Anthropic; the answer streams back as it comes. The token
+// dies with the run.
+import { NAMED } from "../listener/agents/credentials.mjs";
 import { baseOf, createApiProxy } from "./upstream.mjs";
-
-// Which one runs take when several are set: a bearer token (a gateway's), then a plan's OAuth
-// token, already paid for, then an API key, billed per token. Not Claude Code's own order (the
-// key before the plan): a run gets one of them, and FALLBACKS can name the key
-// (`claude@anthropic:key`) for when the plan's limit is reached.
-export const CREDENTIALS = ["ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"];
-
-// The credentials an entry can name (`claude@anthropic:plan`), each with its variable and how
-// replies name it.
-export const NAMED = {
-  plan: { variable: "CLAUDE_CODE_OAUTH_TOKEN", label: "plan" },
-  key: { variable: "ANTHROPIC_API_KEY", label: "API key" },
-};
-
-// How the dashboard tells a run's credential (a run record's `auth`), by its variable: a
-// gateway's token, a plan's, or an API key, billed per token.
-export const AUTHS = {
-  ANTHROPIC_AUTH_TOKEN: "gateway",
-  ...Object.fromEntries(Object.entries(NAMED).map(([name, { variable }]) => [variable, name])),
-};
-
-// The variable that holds the operator's default credential, or null.
-export function credentialName(env) {
-  return CREDENTIALS.find((name) => env[name]) ?? null;
-}
-
-// How long a plan's usage limit lasts when its answer doesn't say: its window, 5 hours.
-export const PLAN_WINDOW_MS = 5 * 3600_000;
 
 // When a plan's limit resets, in ms, from its 429: the reset its rate limit headers give (in
 // seconds since the epoch), or null. Not Retry-After: a short rate limit Claude Code retries
@@ -72,13 +46,13 @@ const ERRORS = {
 };
 
 export function createAnthropicProxy({
-  broker, // broker.mjs: the run a token belongs to
+  runs, // runs.mjs: the run an agent token belongs to
   name, // credentialName(): which header the credential goes in
   credential, // its value
-  // The credentials a run can name (broker.mjs provide()): { plan, key } (NAMED) → value.
+  // The credentials a run can name (its token's `agent` claim): { plan, key } (NAMED) → value.
   named = {},
-  upstream = "https://api.anthropic.com", // the listener's ANTHROPIC_BASE_URL, if any
-  // Other providers (agents/claude.mjs), for runs the broker gives one: { openrouter: { name,
+  upstream = "https://api.anthropic.com", // ANTHROPIC_BASE_URL, if any
+  // Other providers (agents/claude.mjs), for runs that name one: { openrouter: { name,
   // credential, upstream } }.
   providers = {},
   log = () => {},
@@ -101,7 +75,7 @@ export function createAnthropicProxy({
   };
 
   return createApiProxy({
-    broker,
+    runs,
     pathRe: API_PATH,
     routes: ROUTES,
     errorShape: ERRORS,

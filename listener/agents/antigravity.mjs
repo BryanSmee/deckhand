@@ -8,7 +8,7 @@
 // (antigravity-login.mjs), `agy` has no base URL: the sandbox's token file holds the run's
 // agent token, and the proxy hands the hosts that carry it (`relayed`) to the listener (google.mjs),
 // which puts the plan's access token in its place. Security model: ../../docs/security.md.
-import { GOOGLE_CREDENTIALS } from "../google.mjs";
+import { GOOGLE_CREDENTIALS } from "./credentials.mjs";
 import { installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's tiers → the plan's models (`agy models` lists them, each with its effort as a

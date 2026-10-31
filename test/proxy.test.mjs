@@ -257,6 +257,7 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     cache: false,
     decrypt: false,
     relay: false,
+    models: false,
     sandbox: null,
   });
   assert.equal((await policy("10.0.0.5", "good.broker", { broker: true })).sandbox, "net-a");

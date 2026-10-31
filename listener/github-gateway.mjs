@@ -47,7 +47,7 @@ import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
 import { classify, writePermissions } from "./github-writes.mjs";
 import { redact } from "../lib/redact.mjs";
-import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
+import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstream.mjs";
 import { sendJson } from "../lib/http.mjs";
 
 // The largest write body read: GitHub's own limits for an issue or a comment are far below.

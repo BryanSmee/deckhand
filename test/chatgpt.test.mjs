@@ -1,10 +1,13 @@
-// A ChatGPT plan's login: the listener holds it, refreshes it once for every run, and writes
-// the rotated refresh token back.
+// A ChatGPT plan's login: the models service holds it, refreshes it once for every run and
+// every copy of the service, and keeps the rotated refresh token sealed in its store.
 import assert from "node:assert/strict";
-import { chmod, readFile, stat, utimes, writeFile } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { randomBytes } from "node:crypto";
+import { chmod, readFile, utimes, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { test } from "node:test";
-import { createChatgptLogin } from "../listener/chatgpt.mjs";
+import { openStore } from "../lib/store.mjs";
+import { createChatgptLogin } from "../models/chatgpt.mjs";
+import { loginSeal } from "../models/logins.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-16T12:00:00Z");
@@ -57,10 +60,12 @@ test("a fresh login's headers: its access token and account, no refresh", async 
   assert.deepEqual(login.secrets(), [access(60), "rt-1"]);
 });
 
-test("a token about to expire: refreshed once for concurrent runs, and written back", async (t) => {
+test("a token about to expire: refreshed once for concurrent runs, and kept sealed in the store", async (t) => {
   const file = await authFile(t, { access_token: access(4) });
   const server = tokenServer();
-  const login = createChatgptLogin({ file, fetch: server.fetch, now: () => NOW });
+  const store = openStore("memory:");
+  const seal = loginSeal(randomBytes(32));
+  const login = createChatgptLogin({ file, store, seal, fetch: server.fetch, now: () => NOW });
   const all = await Promise.all([1, 2, 3, 4, 5].map(() => login.headers()));
   // One refresh, with the one refresh token: a second would spend a rotated one.
   assert.equal(server.calls.length, 1);
@@ -71,15 +76,50 @@ test("a token about to expire: refreshed once for concurrent runs, and written b
   });
   assert.equal(server.calls[0].url, "https://auth.openai.com/oauth/token");
   for (const headers of all) assert.equal(headers.authorization, `Bearer ${access(60, 1)}`);
-  const saved = JSON.parse(await readFile(file, "utf8"));
+  // Kept sealed in the store, the file left as it was.
+  const raw = await store.get("login:chatgpt");
+  assert.ok(!raw.includes("rt-2") && !raw.includes(access(60, 1)));
+  const { login: saved } = JSON.parse(seal.open(raw));
   assert.equal(saved.tokens.refresh_token, "rt-2");
   assert.equal(saved.tokens.access_token, access(60, 1));
   assert.equal(saved.tokens.id_token, idToken);
   assert.equal(saved.last_refresh, new Date(NOW).toISOString());
-  assert.equal((await stat(file)).mode & 0o777, 0o600);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).tokens.refresh_token, "rt-1");
   // Fresh now: no more refreshes.
   await login.headers();
   assert.equal(server.calls.length, 1);
+  // A copy started anew on the same store takes the refreshed login, not the file's spent one.
+  const next = createChatgptLogin({ file, store, seal, fetch: server.fetch, now: () => NOW });
+  assert.equal((await next.headers()).authorization, `Bearer ${access(60, 1)}`);
+  assert.equal(server.calls.length, 1);
+});
+
+test("two copies of the service on one store: a single refresh, the other waits for it", async (t) => {
+  const file = await authFile(t, { access_token: access(4) });
+  const store = openStore("memory:");
+  const seal = loginSeal(randomBytes(32));
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push(JSON.parse(init.body));
+    await held;
+    return new Response(JSON.stringify({ access_token: access(60, 1), refresh_token: "rt-2" }));
+  };
+  const sleep = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const copies = ["a", "b"].map((holder) =>
+    createChatgptLogin({ file, store, seal, holder, fetch, sleep, now: () => NOW }),
+  );
+  const asked = copies.map((copy) => copy.headers());
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  // One holds the lease and refreshes; the other waits, with no refresh of its own.
+  assert.equal(calls.length, 1);
+  release();
+  for (const headers of await Promise.all(asked)) {
+    assert.equal(headers.authorization, `Bearer ${access(60, 1)}`);
+  }
+  assert.equal(calls.length, 1);
+  assert.equal(await store.lease("login:chatgpt:refresh"), null);
 });
 
 test("an access token the backend refused is refreshed before the next call", async (t) => {
@@ -103,7 +143,9 @@ test("a spent refresh token: a 401 for fallbacks, no retry until the file is rep
       ? new Response(JSON.stringify({ error: { code: "refresh_token_reused" } }), { status: 401 })
       : { access_token: access(60, n), refresh_token: "rt-new" },
   );
-  const login = createChatgptLogin({ file, fetch: server.fetch, now: () => NOW });
+  const store = openStore("memory:");
+  const seal = loginSeal(randomBytes(32));
+  const login = createChatgptLogin({ file, store, seal, fetch: server.fetch, now: () => NOW });
   for (let i = 0; i < 3; i++) {
     await assert.rejects(login.headers(), (error) => {
       assert.equal(error.status, 401);
@@ -112,6 +154,10 @@ test("a spent refresh token: a 401 for fallbacks, no retry until the file is rep
       return true;
     });
   }
+  assert.equal(server.calls.length, 1);
+  // Nor does another copy of the service on the same store.
+  const other = createChatgptLogin({ file, store, seal, fetch: server.fetch, now: () => NOW });
+  await assert.rejects(other.headers(), (error) => error.refused === true);
   assert.equal(server.calls.length, 1);
   // A new `codex login`, copied over the old one.
   spent = false;
@@ -133,8 +179,10 @@ test("auth.openai.com failing for a while: an error, and the next call tries aga
   await assert.rejects(login.headers(), (error) => error.status === undefined);
   down = false;
   assert.equal((await login.headers()).authorization, `Bearer ${access(60, 2)}`);
-  // No new refresh token in the answer: the old one stays.
-  assert.equal(JSON.parse(await readFile(file, "utf8")).tokens.refresh_token, "rt-1");
+  // No new refresh token in the answer: the old one stays, for the next refresh.
+  login.refused(`Bearer ${access(60, 2)}`);
+  await login.headers();
+  assert.equal(server.calls.at(-1).body.refresh_token, "rt-1");
 });
 
 test("an auth.json without a ChatGPT login, or none at all: an error", async (t) => {
@@ -178,25 +226,12 @@ test("a FedRAMP workspace gets its header; a token without expiry refreshes afte
   assert.equal(server.calls.length, 1);
 });
 
-test("a file the listener can't rewrite: refused before any refresh spends its token", async (t) => {
+test("a read-only file: used as it is, never written", async (t) => {
   const file = await authFile(t, { access_token: access(1) });
-  await chmod(dirname(file), 0o555);
+  await chmod(file, 0o444);
   const server = tokenServer();
   const login = createChatgptLogin({ file, fetch: server.fetch, now: () => NOW });
-  for (let i = 0; i < 2; i++) {
-    await assert.rejects(login.headers(), (error) => {
-      assert.match(
-        error.message,
-        /^CODEX_AUTH_FILE \(.+\) must be in a folder the listener can write to \(EACCES\)/,
-      );
-      assert.match(error.message, /\/data\/credentials/);
-      assert.equal(error.status, 401);
-      return true;
-    });
-  }
-  assert.equal(server.calls.length, 0);
-  // Writable again (a fixed mount): used at once.
-  await chmod(dirname(file), 0o755);
-  await login.headers();
+  assert.equal((await login.headers()).authorization, `Bearer ${access(60, 1)}`);
   assert.equal(server.calls.length, 1);
+  assert.equal(JSON.parse(await readFile(file, "utf8")).tokens.refresh_token, "rt-1");
 });

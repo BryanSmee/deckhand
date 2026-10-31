@@ -22,6 +22,20 @@ import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
+import { createBrokerCaller } from "../lib/broker-client.mjs";
+import { networkCallers } from "../lib/service-token.mjs";
+import { keyFolder } from "../lib/tokens.mjs";
+import { AGENT_SECRETS } from "../listener/agents/index.mjs";
+import { createBrokerService as createBrokerClient } from "../listener/broker-service.mjs";
+import {
+  ConfigError,
+  loadConfig,
+  readConfigFile,
+  withCredentialFiles,
+} from "../listener/config.mjs";
+import { loginSeal } from "../models/logins.mjs";
+import { createModels, credentialNames } from "../models/server.mjs";
+import { createRunnerClient } from "../runner/client.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -402,6 +416,53 @@ function start(env, { script = "listener/server.mjs", also = () => "" } = {}) {
   return { child, until, output: all, own: () => out };
 }
 
+// The models service of a test's listener (../models/server.mjs): its settings, the agents'
+// credentials among them, as the listener's; its service tokens from the broker service, its
+// login refreshes at the runner. Settings it can't start with: an answer of which credentials it
+// holds alone, so that the listener says what is wrong with its own. → { handle, stop }.
+function startModels(settings, { dir, runnerUrl, log }) {
+  const env = withCredentialFiles(settings);
+  const names = { names: credentialNames(env) };
+  const alone = {
+    handle: (req, res) => res.writeHead(200).end(JSON.stringify(names)),
+    stop: () => {},
+  };
+  let config;
+  try {
+    config = loadConfig(env, readConfigFile(env), { service: "models" });
+  } catch (error) {
+    if (error instanceof ConfigError) return alone;
+    throw error;
+  }
+  const caller = createBrokerCaller({
+    url: settings.BROKER_SERVICE_URL,
+    service: "models",
+    audiences: ["broker", "runner"],
+  });
+  const broker = createBrokerClient({ caller });
+  broker.start().catch(() => {});
+  const runner = createRunnerClient({
+    urls: runnerUrl,
+    token: (service) => caller.header(service),
+    epoch: () => null,
+  });
+  const models = createModels({
+    env,
+    config,
+    store: openStore("memory:"),
+    seal: loginSeal(Buffer.alloc(32, 1)),
+    keys: keyFolder(join(dir, "keys")),
+    broker,
+    caller,
+    refresh: runner.refreshLogin,
+    bound: networkCallers("proxy+orchestrator=127.0.0.0/8"),
+    log,
+  });
+  models.ready();
+  const handle = models.server.listeners("request")[0];
+  return { handle: (req, res) => handle(req, res), stop: () => broker.stop() };
+}
+
 // A port nothing listens on now: the runner's and the broker's, which each needs of the other's
 // before either has started. Below the range the OS picks ports 0 from (32768 and up), so that
 // another test's listener can't take it meanwhile.
@@ -490,6 +551,15 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         pem: PEM,
       }),
     );
+    // The models service, in process, with the agents' credentials of `settings` (below): the
+    // listener asks it which it holds, and relays the sandboxes' agent calls to it.
+    let modelsOut = "";
+    let models = null;
+    const modelsServer = createServer((req, res) =>
+      models ? models.handle(req, res) : res.writeHead(503).end(),
+    );
+    await new Promise((resolve) => modelsServer.listen(0, "127.0.0.1", resolve));
+    modelsServer.unref();
     // Port 0: the OS picks free ports, which the listener logs. The runner's and the broker's
     // are picked first: the runner calls the one, the sandboxes it starts the other.
     const runnerPort = await freePort();
@@ -515,19 +585,28 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       EGRESS_PROXY: `http://127.0.0.1:${egress.address().port}`,
       GRANTS_DIR: join(dir, "grants"),
       POLICY_SERVICE_URL: policyService,
+      MODELS_SERVICE_URL: `http://127.0.0.1:${modelsServer.address().port}`,
       ...(typeof extra === "function" ? extra(dir, github) : extra),
     };
+    models = startModels(settings, {
+      dir,
+      runnerUrl: settings.RUNNER_URL,
+      log: (line) => (modelsOut += `${line}\n`),
+    });
+    // The listener holds none of them (the models service does): those in `settings` go there.
+    const listenerEnv = (env) =>
+      Object.fromEntries(Object.entries(env).filter(([name]) => !AGENT_SECRETS.includes(name)));
     // The runner: the same settings (those it reads), its own port and store, the broker
     // service's keys, the listener's services port as its orchestrator and github service.
     // Started once the listener's is known.
     let runner = null;
     let runnerSettings = null;
-    const runnerOut = () => runner?.own() ?? "";
+    const runnerOut = () => (runner?.own() ?? "") + modelsOut;
     const startRunner = (more = {}) => {
       runner = start({ ...runnerSettings, ...more }, { script: "runner/server.mjs" });
       return runner.until(/Deckhand runner \(\w+\) on :\d+/);
     };
-    let listener = start(settings, { also: runnerOut });
+    let listener = start(listenerEnv(settings), { also: runnerOut });
     t.after(() => {
       listener.child.kill("SIGKILL");
       runner?.child.kill("SIGKILL");
@@ -535,6 +614,9 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       egress.close();
       brokerService.closeAllConnections();
       brokerService.close();
+      models?.stop();
+      modelsServer.closeAllConnections();
+      modelsServer.close();
       stopSandboxes(dir);
     });
     const servicesPort = Number(
@@ -578,7 +660,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       const { child } = old;
       const exited = new Promise((resolve) => child.on("exit", resolve));
       const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
-      listener = start({ ...settings, ...more }, { also: runnerOut });
+      listener = start(listenerEnv({ ...settings, ...more }), { also: runnerOut });
       await ports(listener);
       return { code, output: old.output() };
     };
@@ -995,7 +1077,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     assert.match(
       JSON.parse(failed.body).body,
-      /> invalid model selection [^\n]*\n\nIts last failed API call, through the listener: the operator's login for Google can't be refreshed right now: see the listener's log\./,
+      /> invalid model selection [^\n]*\n\nIts last failed API call, through Deckhand: the operator's login for Google can't be refreshed right now: see the models service's log\./,
     );
     rmSync(join(dir, "agy-no-models"));
 

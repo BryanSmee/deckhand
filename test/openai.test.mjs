@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { createOpenAiProxy } from "../listener/openai.mjs";
-import { credentialFailure } from "../listener/upstream.mjs";
+import { createOpenAiProxy } from "../models/openai.mjs";
+import { credentialFailure } from "../models/upstream.mjs";
 import { sandboxAt, serve } from "./helpers.mjs";
 
 // A run of Codex's, on its provider as runs.mjs registers it.
@@ -40,7 +40,7 @@ async function serveProxy(
 ) {
   const upstream = await fakeOpenAi(t);
   const broker = createBroker({ sentFrom });
-  const proxy = createOpenAiProxy({ broker, credential, upstream: `${upstream.url}${path}` });
+  const proxy = createOpenAiProxy({ runs: broker, credential, upstream: `${upstream.url}${path}` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
 }
@@ -190,7 +190,7 @@ test("a run's secret sent from another sandbox's address: 403, and OpenAI never 
     message: "Deckhand: this run's token only works from its own sandbox",
   });
   assert.equal(upstream.requests.length, 0);
-  assert.equal(broker.runOf(secret).apiError, null);
+  assert.equal(broker.runOf(secret).apiError, undefined);
 });
 
 test("without OPENAI_API_KEY, a live run gets an error rather than an empty header", async (t) => {
@@ -202,7 +202,11 @@ test("without OPENAI_API_KEY, a live run gets an error rather than an empty head
 
 test("OpenAI out of reach: a 502 in OpenAI's error shape", async (t) => {
   const broker = createBroker({ sentFrom: sandboxAt() });
-  const proxy = createOpenAiProxy({ broker, credential: "k", upstream: "http://127.0.0.1:1" });
+  const proxy = createOpenAiProxy({
+    runs: broker,
+    credential: "k",
+    upstream: "http://127.0.0.1:1",
+  });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const res = await ask(url, { authorization: `Bearer ${codexRun(broker)}` });
   assert.equal(res.status, 502);
@@ -214,7 +218,7 @@ async function servePlan(t, login) {
   const upstream = await fakeOpenAi(t);
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createOpenAiProxy({
-    broker,
+    runs: broker,
     credential: null,
     login,
     upstream: "http://127.0.0.1:1/v1",
@@ -261,7 +265,7 @@ test("a plan's login the backend refuses is marked, for a refresh before the nex
     res.end('{"error":{"message":"token expired"}}');
   });
   const broker = createBroker({ sentFrom: sandboxAt() });
-  const proxy = createOpenAiProxy({ broker, login, chatgptUrl: `${upstreamUrl}/codex` });
+  const proxy = createOpenAiProxy({ runs: broker, login, chatgptUrl: `${upstreamUrl}/codex` });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const secret = codexRun(broker);
   const res = await ask(url, { authorization: `Bearer ${secret}` });
@@ -286,7 +290,7 @@ test("a plan's login that can't be used: a 503, and its status for fallbacks", a
   assert.equal(res.status, 503);
   // A fixed text: the error's own message may quote a credential file (#242).
   const message =
-    "the operator's login for OpenAI was refused, and must be signed in again: see the listener's log";
+    "the operator's login for OpenAI was refused, and must be signed in again: see the models service's log";
   assert.equal((await res.json()).error.message, `Deckhand: ${message}`);
   assert.equal(broker.runOf(secret).apiError, message);
   assert.equal(broker.runOf(secret).apiStatus, 401);
@@ -298,15 +302,15 @@ test("what the sandbox is told of each kind of login failure, never the error it
     Object.assign(new Error("CODEX_AUTH_FILE (/x) must be in a folder…"), { status, refused });
   assert.equal(
     credentialFailure("OpenAI", error(401, true)),
-    "the operator's login for OpenAI was refused, and must be signed in again: see the listener's log",
+    "the operator's login for OpenAI was refused, and must be signed in again: see the models service's log",
   );
   // A folder it can't write, a file without a login: signing in again isn't the fix.
   assert.equal(
     credentialFailure("OpenAI", error(401, false)),
-    "the operator's login for OpenAI can't be used: see the listener's log",
+    "the operator's login for OpenAI can't be used: see the models service's log",
   );
   assert.equal(
     credentialFailure("OpenAI", new Error("fetch failed")),
-    "the operator's login for OpenAI can't be refreshed right now: see the listener's log",
+    "the operator's login for OpenAI can't be refreshed right now: see the models service's log",
   );
 });

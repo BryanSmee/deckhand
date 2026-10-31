@@ -1,9 +1,9 @@
 // The listener's port for sandboxes, on the runs' networks only (compose.yaml doesn't publish
 // it): the egress proxy's questions (may this sandbox reach this host?, on a port of their own
 // too, listenPolicy()), the GitHub gateway (github-gateway.mjs), which the proxy sends the
-// sandboxes' GitHub calls to, the git gateway (git-gateway.mjs) and the agents' API endpoints
-// (anthropic.mjs, openai.mjs, and google.mjs, which the proxy sends the Antigravity CLI's calls
-// to). The runs' tokens are the broker service's (../broker/, #505): their renewal and the
+// sandboxes' GitHub calls to, and the git gateway (git-gateway.mjs). The agents' API calls are
+// the models service's (../models/, #504): a proxy from before it still sends them here, and
+// they are relayed to it. The runs' tokens are the broker service's (../broker/, #505): their renewal and the
 // runs' files (inbox, CA, digest, screenshots) go there through the proxy; those that still
 // come here (a proxy from before the broker service, a sandbox from before #511) are relayed to
 // it (broker-service.mjs relay()), but a run's from before tokens, answered here from the
@@ -17,6 +17,7 @@ import { tunnelsGitHub } from "./github-app.mjs";
 import { taskKey } from "./events.mjs";
 import { engineName } from "./runner/engine.mjs";
 import { drainable } from "../lib/drain.mjs";
+import { agentTokenOf } from "./models-service.mjs";
 import { createRunFiles } from "./run-files.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { isToken } from "../lib/tokens.mjs";
@@ -25,12 +26,16 @@ import { pathOf } from "../lib/service-token.mjs";
 // Path prefix → the ctx service that handles it, and how its failures are logged. A failure
 // once the answer started cuts the connection when `destroy`: a half-sent stream (a push, an
 // API answer) must not look complete.
+// The agents' calls go on to the models service (#504), which holds their credentials: those
+// that still come here (a proxy from before it) are relayed to it (models-service.mjs relay()).
 const ROUTES = [
   { prefix: "/git/", service: "gitGateway", name: "Git gateway", destroy: true },
-  { prefix: "/anthropic/", service: "anthropic", name: "Anthropic", destroy: true },
-  { prefix: "/openai/", service: "openai", name: "OpenAI", destroy: true },
-  { prefix: "/google/", service: "google", name: "Google", destroy: true },
-  { prefix: "/relay/", service: "google", name: "Google", destroy: true },
+  ...["/anthropic/", "/openai/", "/google/", "/relay/"].map((prefix) => ({
+    prefix,
+    service: "modelsRelay",
+    name: "Models",
+    destroy: true,
+  })),
 ];
 
 // Temporary: remove once no sandbox from before #407 can still be running. Those sandboxes'
@@ -264,6 +269,11 @@ export function createBrokerHttp(ctx) {
           blocked: agent.blocked,
         })
       : { allowed: false, private: false, cache: false, decrypt: false, relay: false };
+    // An agent's relayed host (the Antigravity CLI's, with a plan's login): its calls go to the
+    // models service (#504), which the proxy vouches the sandbox's network (or pod) to.
+    if (answer.relay && matchHost(host, agent.relayed ?? []) === "exact" && live.sandbox) {
+      Object.assign(answer, { models: true, sandbox: live.sandbox });
+    }
     if (!answer.allowed)
       log(`Egress: refused ${host} for ${task ? taskKey(task.repo, task.id) : ip}`);
     sendJson(res, answer);
@@ -290,6 +300,21 @@ export function createBrokerHttp(ctx) {
     return runFiles.handle(req, res);
   }
 
+  // An agent's call that came here rather than to the models service (a proxy from before it):
+  // on to it as it streams, with its agent token and the network (or pod) it came from, as the
+  // proxy would vouch for it. A plain path only: the listener's service token goes with it.
+  const modelsRelay = {
+    async handle(req, res) {
+      try {
+        pathOf(req.url);
+      } catch {
+        return sendJson(res, { message: "not found" }, 404);
+      }
+      const sandbox = await sandboxAt(ctx, await clientAddress(ctx, req));
+      return ctx.models.relay(req, res, { sandbox, token: agentTokenOf(req), path: req.url });
+    },
+  };
+
   // A handler's failure: logged, a 500 when nothing was answered yet.
   const failed = (res, name, destroy) => (error) => {
     log(`${name}: ${error.stack ?? error}`);
@@ -303,7 +328,8 @@ export function createBrokerHttp(ctx) {
     }
     const route = routes.find((r) => (r.match ? r.match(req.url) : req.url.startsWith(r.prefix)));
     if (route) {
-      return ctx[route.service].handle(req, res).catch(failed(res, route.name, route.destroy));
+      const service = route.service === "modelsRelay" ? modelsRelay : ctx[route.service];
+      return service.handle(req, res).catch(failed(res, route.name, route.destroy));
     }
     if (req.url.startsWith("/run/")) {
       return runCall(req, res).catch(failed(res, "Run files", true));
