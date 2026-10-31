@@ -10,7 +10,7 @@
 // Whoever creates the App decides where webhooks come from, so the form needs the one-time
 // token the listener prints in its logs, and the whole flow closes once an App is stored.
 import { randomBytes } from "node:crypto";
-import { APP_EVENTS, APP_PERMISSIONS, GITHUB_HEADERS } from "./github-app.mjs";
+import { APP_EVENTS, APP_PERMISSIONS } from "./github-app.mjs";
 import { escape, page as html, same } from "./html.mjs";
 import { readBody } from "../lib/http.mjs";
 
@@ -69,13 +69,17 @@ async function readForm(req) {
 
 export function createSetup({
   config,
-  fetch = globalThis.fetch,
   configured, // () => true once an App is stored
   onConfigured, // (credentials) => stores and starts using them
   random = () => randomBytes(24).toString("hex"),
   now = Date.now,
+  // The manifest's code → the App's credentials but its key: the github service converts it
+  // (../github/app.mjs), and keeps the key. Required: the listener never asks GitHub itself,
+  // whose answer holds the key.
+  convert,
   log = () => {},
 }) {
+  if (typeof convert !== "function") throw new TypeError("createSetup: convert is required");
   const token = random();
   const states = new Map(); // state → { expiry, publicUrl }
 
@@ -176,51 +180,28 @@ back here to install it.</p>
     const state = url.searchParams.get("state") ?? "";
     const code = url.searchParams.get("code") ?? "";
     const pending = states.get(state);
-    states.delete(state);
     if (!pending || pending.expiry < now() || !/^[\w-]+$/.test(code)) {
+      states.delete(state);
       return page(res, 400, "Setup expired", `<p>Start again from the setup link in the logs.</p>`);
     }
-    const res1 = await fetch(`${config.githubApi}/app-manifests/${code}/conversions`, {
-      method: "POST",
-      headers: GITHUB_HEADERS,
-    });
-    if (!res1.ok) {
-      log(`Setup: GitHub refused the manifest code: ${res1.status} ${await res1.text()}`);
+    let credentials;
+    try {
+      credentials = { ...(await convert(code)), public_url: pending.publicUrl };
+    } catch (error) {
+      // Its state kept until it expires: the same page loaded again asks the github service
+      // again, which answers a code it converted already with what it kept (../github/app.mjs).
+      log(`Setup: ${error.message}`);
       return page(
         res,
         502,
         "GitHub refused",
-        `<p>Start again from the setup link in the logs.</p>`,
+        `<p>Load this page again, or start again from the setup link in the logs.</p>`,
       );
     }
-    const app = await res1.json();
-    // The bot's user id makes its commits link to it; GitHub shows them without it anyway.
-    let botId = null;
-    try {
-      const bot = await fetch(
-        `${config.githubApi}/users/${encodeURIComponent(`${app.slug}[bot]`)}`,
-        { headers: GITHUB_HEADERS },
-      );
-      if (bot.ok) botId = (await bot.json()).id;
-    } catch {
-      // Commits then use the bot's name alone.
-    }
-    const credentials = {
-      id: app.id,
-      slug: app.slug,
-      client_id: app.client_id,
-      client_secret: app.client_secret,
-      webhook_secret: app.webhook_secret,
-      pem: app.pem,
-      owner: app.owner?.login ?? null,
-      html_url: app.html_url,
-      bot_id: botId,
-      public_url: pending.publicUrl,
-      created_at: new Date(now()).toISOString(),
-    };
+    states.delete(state);
     onConfigured(credentials);
-    log(`Setup: GitHub App ${app.slug} (id ${app.id}) stored`);
-    res.writeHead(302, { location: `${app.html_url}/installations/new` });
+    log(`Setup: GitHub App ${credentials.slug} (id ${credentials.id}) stored`);
+    res.writeHead(302, { location: `${credentials.html_url}/installations/new` });
     res.end();
   }
 

@@ -52,6 +52,9 @@ export const NO_ISSUER = {
   end: async () => {},
 };
 
+// Where a broker without the github service tells its runs: nowhere.
+export const NO_GATEWAY = { put: async () => {}, end: async () => {} };
+
 // Whether `branch` (without refs/heads/) is one of `patterns`: the same name, or one that
 // starts with a pattern's text before its final "*" ("issue-12-*"). Case-sensitive, as git is.
 export function branchAllowed(patterns, branch) {
@@ -82,6 +85,10 @@ export function createBroker({
   // The broker service (broker-service.mjs createBrokerService()): { issue(id, fields) →
   // { token, agentToken }, put(id, fields), end(id) }.
   issuer = NO_ISSUER,
+  // The github service (../github/client.mjs runs), which serves the runs' GitHub and git
+  // calls: { put(id, fields), end(id) }, told each run with what its gateways check, once its
+  // sandbox is known, and its end. None: nowhere (the tests').
+  gateway = NO_GATEWAY,
   // () → kid → public key: what run tokens are checked with, the broker service's (and a key
   // of the listener's from before it, while its tokens may still be presented).
   keys = () => new Map(),
@@ -255,6 +262,29 @@ export function createBroker({
     };
   }
 
+  // What the github service is told of the run (../github/runs.mjs runFields()): what its
+  // gateways check its calls against, the network or pod its calls come from, and, for a run
+  // from before tokens, its secret's hash (never the secret). `created` and `reruns`: taken only
+  // when the service has none (a run restored from before it).
+  function gatewayFields(run) {
+    return {
+      repo: run.repo,
+      push: run.push,
+      mode: run.mode,
+      issue: run.issue,
+      base: run.base,
+      reason: run.reason,
+      branches: run.branches,
+      fork: run.fork,
+      caps: run.caps,
+      decided: run.decided,
+      sandbox: run.sandbox,
+      secretHash: run.secret ?? null,
+      created: run.created,
+      reruns: run.reruns,
+    };
+  }
+
   // A run token the sandbox was handed, in the run's list (secretsOf()), saved with the run's
   // state (changed()), so a restart still redacts it. The ones it renews come from the broker
   // service alone: redact() knows their shape.
@@ -283,6 +313,8 @@ export function createBroker({
     }
     run.agentToken = agentToken;
     keep(run, token, now());
+    // Before the sandbox starts: its first GitHub call finds its run there.
+    await gateway.put(run.id, gatewayFields(run));
     return { token, agentToken };
   }
 
@@ -291,7 +323,9 @@ export function createBroker({
   // listener signed them, too). A run from before tokens has nothing there.
   async function restore(handle, shots = null) {
     const run = runOf(handle);
-    if (!run || run.secret) return;
+    if (!run) return;
+    await gateway.put(run.id, gatewayFields(run));
+    if (run.secret) return;
     run.shots = shots;
     // The hashes of the tokens it handed the sandbox, for the broker's rule past their expiry
     // (only the newest renews), should it not have the run yet.
@@ -365,6 +399,7 @@ export function createBroker({
     if (!run) return Promise.resolve();
     runs.delete(run.id);
     if (run.secret) secrets.delete(run.secret);
+    gateway.end(run.id);
     return run.secret ? Promise.resolve() : issuer.end(run.id);
   }
 
@@ -382,6 +417,7 @@ export function createBroker({
     issuedOf,
     revoke,
     runOf,
+    gatewayFields: (handle) => (runOf(handle) ? gatewayFields(runOf(handle)) : null),
     sentBy,
     size: () => runs.size,
   };

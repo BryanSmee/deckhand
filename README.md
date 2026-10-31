@@ -71,8 +71,10 @@ GitHub ──webhook──▶ listener ──▶ runner ──docker──▶ sa
 ```
 
 - The **listener** (`listener/`) checks each webhook's signature, the allowlist and the
-  trigger line, queues the work and has the runner start one sandbox container per run. It
-  holds the App's private key; no sandbox gets it.
+  trigger line, queues the work and has the runner start one sandbox container per run.
+- The **github service** (`github/`) is the only one holding the App's private key: it makes
+  the listener's GitHub calls, and the sandboxes' through its GitHub and git gateways, with
+  tokens no sandbox gets.
 - The **runner** (`runner/`) is the only service with the Docker socket: it starts, follows
   and removes the sandboxes, builds repository images and keeps the runs' logs, for the
   listener alone, checking each sandbox against your grants again.

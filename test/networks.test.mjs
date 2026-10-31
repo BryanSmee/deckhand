@@ -21,8 +21,9 @@ const root = join(import.meta.dirname, "..");
 // compose.yaml's services → the services of lib/services.mjs each one runs. The listener runs
 // those that haven't moved out yet (#499): each one gets its own entry then.
 const RUNS = {
-  listener: ["edge", "orchestrator", "github"],
+  listener: ["edge", "orchestrator"],
   broker: ["broker"],
+  github: ["github"],
   models: ["models"],
   runner: ["runner"],
   policy: ["policy"],
@@ -49,8 +50,16 @@ function networksOf(service) {
   return Array.isArray(networks) ? networks : Object.keys(networks);
 }
 
+// Calls without a service token, so not in lib/services.mjs: the egress proxy asks the
+// orchestrator's egress policy about each connection (POLICY_URL), and hands it what it relays
+// there (RELAY_URL), which the listener tells apart by the caller's address.
+const UNTOKENED = [["proxy", "orchestrator"]];
+const untokened = (x, y) =>
+  UNTOKENED.some(([a, b]) => (a === x && b === y) || (a === y && b === x));
 const between = (a, b) =>
-  (RUNS[a] ?? []).some((x) => (RUNS[b] ?? []).some((y) => calls(x, y) || calls(y, x)));
+  (RUNS[a] ?? []).some((x) =>
+    (RUNS[b] ?? []).some((y) => calls(x, y) || calls(y, x) || untokened(x, y)),
+  );
 
 // What is wrong with a compose file's networks: [] when nothing.
 function problems(compose) {
@@ -108,10 +117,11 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   assert.deepEqual(runsNetworkPeers(compose.services), ["egress"]);
 });
 
-// The broker, the runner and the models service tell their callers apart by the network a call
-// arrives on (SERVICE_NETWORKS): each caller's subnet there has to be the one of a network it
-// shares with that service, and with no other, or another service's calls would count as its own.
-for (const callee of ["broker", "runner", "models"]) {
+// The broker, the runner, the models service and the github service tell their callers apart by
+// the network a call arrives on (SERVICE_NETWORKS): each caller's subnet there has to be the one
+// of a network it shares with that service, and with no other, or another service's calls would
+// count as its own.
+for (const callee of ["broker", "runner", "models", "github"]) {
   test(`compose.yaml: the ${callee}'s SERVICE_NETWORKS names each caller's own network to it`, () => {
     const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
     const subnet = (net) =>
@@ -152,6 +162,23 @@ for (const callee of ["broker", "runner", "models"]) {
     }
   });
 }
+
+// The GitHub App's key is the github service's alone (#502): its volume is mounted nowhere
+// else, and nothing else is told where GitHub's key or an installation token is.
+test("compose.yaml: only the github service holds the App's key", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const holders = Object.entries(compose.services)
+    .filter(([, s]) => (s.volumes ?? []).some((v) => String(v).startsWith("github-key:")))
+    .map(([name]) => name);
+  assert.deepEqual(holders, ["github"]);
+  // It gets none of the listener's other secrets.
+  const { github, listener } = compose.services;
+  const secrets = Object.keys(listener.environment).filter(
+    (name) => /TOKEN|KEY|SECRET|AUTH_FILE/.test(name) && !name.startsWith("KUBERNETES_"),
+  );
+  for (const name of secrets)
+    assert.ok(!(name in github.environment), `${name} on the github service`);
+});
 
 // The Docker socket is root on the host: only the runner holds it (#503), and the runner holds
 // none of the listener's secrets (the App's key is in the listener's data volume). The agents'
@@ -210,11 +237,12 @@ test("the check fails on a network that joins too much", () => {
       "cache: on default, which it doesn't call over",
     ],
   );
-  // The listener on a runs' network; the proxy on an internal network it calls nothing over.
+  // A service the proxy calls on a runs' network; the proxy on an internal network it calls
+  // nothing over.
   assert.deepEqual(
     problems({
       services: {
-        listener: { networks: ["runs", "outside"] },
+        github: { networks: ["runs", "outside"] },
         egress: { networks: ["runs", "lonely"] },
       },
       networks: {
@@ -224,7 +252,7 @@ test("the check fails on a network that joins too much", () => {
       },
     }),
     [
-      "listener: on the runs' network runs, which only the proxy may be on",
+      "github: on the runs' network runs, which only the proxy may be on",
       "egress: on lonely, which it doesn't call over",
     ],
   );

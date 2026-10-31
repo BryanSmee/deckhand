@@ -10,7 +10,6 @@ const conversion = {
   client_id: "Iv1.x",
   client_secret: "cs",
   webhook_secret: "whs",
-  pem: "-----BEGIN RSA PRIVATE KEY-----\n…",
   owner: { login: "alice" },
   html_url: "https://github.com/apps/deckhand-x",
 };
@@ -19,18 +18,16 @@ async function serveSetup(t, env = {}) {
   const config = testConfig(env);
   const stored = [];
   const calls = [];
-  const fetch = async (url, init) => {
-    calls.push({ url, method: init?.method ?? "GET" });
-    if (url.endsWith("/app-manifests/good/conversions")) {
-      return Response.json(conversion, { status: 201 });
-    }
-    if (url.includes("/users/deckhand-x%5Bbot%5D")) return Response.json({ id: 77 });
-    return new Response("bad code", { status: 404 });
+  // The github service's conversion (../github/app.mjs): the App's credentials but its key.
+  const convert = async (code) => {
+    calls.push(code);
+    if (code !== "good") throw new Error("GitHub refused the manifest code: 404");
+    return { ...conversion, owner: "alice", bot_id: 77 };
   };
   let n = 0;
   const setup = createSetup({
     config,
-    fetch,
+    convert,
     configured: () => stored.length > 0,
     onConfigured: (c) => stored.push(c),
     random: () => `rand${++n}`.padEnd(12, "0"),
@@ -116,7 +113,8 @@ test("from the form to stored credentials and the install page", async (t) => {
   );
   assert.equal(s.stored.length, 1);
   assert.equal(s.stored[0].webhook_secret, "whs");
-  assert.equal(s.stored[0].pem, conversion.pem);
+  // The key never reaches the listener: the github service keeps it.
+  assert.equal(s.stored[0].pem, undefined);
   assert.equal(s.stored[0].bot_id, 77);
   assert.equal(s.stored[0].public_url, "https://hooks.example.com");
 
@@ -156,4 +154,18 @@ test("a code GitHub refuses stores nothing", async (t) => {
   const state = new URL(/action="([^"]+)"/.exec(html)[1]).searchParams.get("state");
   assert.equal((await fetch(`${s.base}/setup/callback?code=bad&state=${state}`)).status, 502);
   assert.equal(s.stored.length, 0);
+  // Its state stays until it expires: the page loaded again asks again (the github service
+  // answers a code it converted with what it kept, should its first answer have been lost).
+  const again = await fetch(`${s.base}/setup/callback?code=good&state=${state}`, {
+    redirect: "manual",
+  });
+  assert.equal(again.status, 302);
+  assert.equal(s.stored.length, 1);
+});
+
+test("setup needs the github service's conversion: the listener never asks GitHub for the key", () => {
+  assert.throws(
+    () => createSetup({ config: testConfig(), configured: () => false, onConfigured: () => {} }),
+    /convert is required/,
+  );
 });

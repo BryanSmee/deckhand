@@ -61,11 +61,11 @@ try {
 
 const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`);
 
-// The orchestrator and the github service: the listener's services port, until they move out
-// (#506, #502): a run's first tokens (which the orchestrator has the broker service sign, with
-// the claims it decided), the repos' tarballs and blobs.
+// The orchestrator: the listener's services port, until it moves out (#506): a run's first
+// tokens (which the orchestrator has the broker service sign, with the claims it decided). The
+// github service (#502): the repos' tarballs and blobs.
 const orchestratorUrl = env.ORCHESTRATOR_URL || "http://listener:8083";
-const githubUrl = env.GITHUB_SERVICE_URL || orchestratorUrl;
+const githubUrl = env.GITHUB_SERVICE_URL || "http://github:8080";
 const orchestrator = serviceClient({
   service: "orchestrator",
   urls: orchestratorUrl,

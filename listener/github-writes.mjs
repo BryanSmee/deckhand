@@ -49,6 +49,7 @@
 // (github-graphql.mjs addProjectV2ItemById): its project must be one the operator's grants list
 // for the repository (`allow_projects`), whatever the policies say.
 // Format of the policies' input: ../docs/repo-config.md#the-github-input.
+import { randomUUID } from "node:crypto";
 import { branchAllowed } from "./broker.mjs";
 import { ISSUES_WRITE } from "./github-app.mjs";
 import { CONTENTS_WRITE, createPullChecks, PULL_WRITE } from "./github-pulls.mjs";
@@ -525,12 +526,14 @@ const MAX_HOPS = 5;
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
 // policies.mjs's, null without; `pulls`: github-pulls.mjs's checks (its workflow check and
-// record, none by default); `needsInputLabel()`: NEEDS_INPUT_LABEL, null when unset;
+// record, none by default); `needsInputLabel(run)`: NEEDS_INPUT_LABEL, null when unset (the
+// github service has it on the run, from the orchestrator);
 // `listenerReacted(repo, subject, content)`: whether the listener added that reaction
 // (comments.mjs), which a run never removes;
 // `projects(repo)`: the projects the operator's grants let its runs write, ["acme/3"] (grants.mjs
-// allowProjects), none by default; `users(repo)`: the logins a run may assign there
-// (ALLOWED_USERS, narrowed by the repo's `users`), in lower case: none by default; `log`: the
+// allowProjects), none by default; `users(repo, run)`: the logins a run may assign there
+// (ALLOWED_USERS, narrowed by the repo's `users`: the github service has them on the run), in
+// lower case: none by default; `log`: the
 // listener's; `now`: the clock (MAX_REFUSED_LOOKUPS' window).
 export function createWriteChecks({
   lookup,
@@ -794,11 +797,11 @@ export function createWriteChecks({
 
   // Whether a run may assign `login`: an assignment notifies them, so one of the repo's allowed
   // users or the App's bot, never Copilot, which would start working on it.
-  function assignable(repo, login) {
+  function assignable(run, login) {
     const name = login.toLowerCase();
     if (COPILOT.has(name)) return false;
     if (name === bot()?.toLowerCase()) return true;
-    return users(repo).includes(name);
+    return users(run.repo, run).includes(name);
   }
 
   // A write's milestone → { number, title } (GraphQL's comes looked up), null when it clears
@@ -823,7 +826,7 @@ export function createWriteChecks({
   // id }, at }`, the only ones it may remove: checkWrite()): a REST `201` (a `200` says the bot
   // had it already), or a GraphQL `addReaction` field the gateway found new (`reacts`:
   // github-graphql.mjs) that GitHub ran; until it removes them (`unreacts`).
-  function answered(run, call, status, answer) {
+  async function answered(run, call, status, answer) {
     const { method, path, body, graphql, at } = call;
     const { creates = [], comments = [], reacts = [], unreacts = [] } = call;
     pulls
@@ -837,8 +840,8 @@ export function createWriteChecks({
       // MAX_RERUNS and the CI step (reviews.mjs afterCiFix()), with the workflow run and head
       // commit its check resolved (check()), never asked again: a look-up failing then would
       // leave it uncounted. Settled before the gateway's answer is over, so before the run exits.
-      if (status === 201 || status === 0) call.rerun.settle?.(at);
-      call.rerun.release?.();
+      if (status === 201 || status === 0) await call.rerun.settle?.(at);
+      await call.rerun.release?.();
       return;
     }
     // A reaction removed is no longer the run's: the bot's same one, added again by the listener
@@ -846,7 +849,7 @@ export function createWriteChecks({
     if (!graphql && status === 204) {
       const write = classify(method, path, body);
       if (write?.repo === run.repo && write.actions[0] === "unreact") {
-        forget(run, [write.reaction]);
+        await forget(run, [write.reaction]);
       }
       return;
     }
@@ -859,6 +862,7 @@ export function createWriteChecks({
     let issues = [];
     let posted = [];
     let reactions = [];
+    let removed = [];
     if (graphql) {
       if (status !== 200) return;
       issues = creates.map((key) => json?.data?.[key]?.issue);
@@ -866,7 +870,7 @@ export function createWriteChecks({
       // A field GitHub didn't run answers null.
       const ran = ({ key }) => json?.data?.[key] != null;
       reactions = reacts.filter(ran).map(({ subject, content }) => ({ subject, content }));
-      forget(run, unreacts.filter(ran));
+      removed = unreacts.filter(ran);
     } else {
       const write = classify(method, path, body);
       if (status !== 201 || write?.repo !== run.repo) return;
@@ -880,44 +884,54 @@ export function createWriteChecks({
         reactions = [{ subject: write.reaction.subject, content: json.content, id: json.id }];
       }
     }
+    if (removed.length) await forget(run, removed);
     if (!Array.isArray(run.created)) return;
-    let added = false;
-    for (const issue of issues) {
-      const number = numberOf(issue, run.repo);
-      if (number === null || run.created.some((c) => c.number === number)) continue;
-      run.created.push({ number, at });
-      added = true;
-    }
-    for (const comment of posted) {
-      if (comment === null || postedBy(run, comment)) continue;
-      run.created.push({ comment, at });
-      added = true;
-    }
+    // The listener's same reaction, added meanwhile, isn't the run's: asked before the change,
+    // which may be tried again on the latest state.
+    const listeners = new Set();
     for (const reaction of reactions) {
-      // The listener's same reaction, added meanwhile, isn't the run's.
-      if (ownReaction(run, reaction)) continue;
-      if (listenerReacted(run.repo, reaction.subject, reaction.content)) continue;
-      run.created.push({ reaction, at });
-      added = true;
+      if (await listenerReacted(run.repo, reaction.subject, reaction.content)) {
+        listeners.add(reaction);
+      }
     }
-    // The oldest past MAX_REACTIONS go: the run can't take those off any more (fail closed).
-    const kept = run.created.filter((c) => c?.reaction);
-    if (kept.length > MAX_REACTIONS) {
-      const dropped = new Set(kept.slice(0, kept.length - MAX_REACTIONS));
-      run.created.splice(0, run.created.length, ...run.created.filter((c) => !dropped.has(c)));
-    }
-    if (added) run.changed?.();
+    await mutate(run, (state) => {
+      let added = false;
+      for (const issue of issues) {
+        const number = numberOf(issue, run.repo);
+        if (number === null || state.created.some((c) => c.number === number)) continue;
+        state.created.push({ number, at });
+        added = true;
+      }
+      for (const comment of posted) {
+        if (comment === null || postedBy(state, comment)) continue;
+        state.created.push({ comment, at });
+        added = true;
+      }
+      for (const reaction of reactions) {
+        if (ownReaction(state, reaction) || listeners.has(reaction)) continue;
+        state.created.push({ reaction, at });
+        added = true;
+      }
+      // The oldest past MAX_REACTIONS go: the run can't take those off any more (fail closed).
+      const kept = state.created.filter((c) => c?.reaction);
+      if (kept.length > MAX_REACTIONS) {
+        const dropped = new Set(kept.slice(0, kept.length - MAX_REACTIONS));
+        state.created = state.created.filter((c) => !dropped.has(c));
+      }
+      return added;
+    });
   }
 
   // Takes the reactions `removed` names (answered()'s: { subject, id } or { subject, content })
   // off the run's own.
-  function forget(run, removed) {
+  async function forget(run, removed) {
     if (!Array.isArray(run.created) || !removed.length) return;
-    const gone = new Set(removed.map((r) => ownReaction(run, r)).filter(Boolean));
-    if (!gone.size) return;
-    const left = run.created.filter((c) => !gone.has(c?.reaction));
-    run.created.splice(0, run.created.length, ...left);
-    run.changed?.();
+    await mutate(run, (state) => {
+      const gone = new Set(removed.map((r) => ownReaction(state, r)).filter(Boolean));
+      if (!gone.size) return false;
+      state.created = state.created.filter((c) => !gone.has(c?.reaction));
+      return true;
+    });
   }
 
   // A run's REST write → null when it may go on, else { status, message }: GitHub's status and
@@ -1098,7 +1112,7 @@ export function createWriteChecks({
       }
       // The listener's own on any comment, on any task's (its 👀, an outcome's): the same bot's
       // as one the run added there first, which GitHub keeps as one.
-      if (own && listenerReacted(run.repo, own.subject, own.content)) {
+      if (own && (await listenerReacted(run.repo, own.subject, own.content))) {
         return refusal(403, "a run doesn't take off a reaction the listener added there");
       }
       change.content = own?.content ?? write.reaction.content ?? null;
@@ -1112,7 +1126,7 @@ export function createWriteChecks({
     // The needs-input label stays the listener's on the issues a run labels besides its own:
     // taking it off answers their questions and starts what waited for them (questions.mjs
     // labelInput()), which only an allowed user does.
-    const waiting = needsInputLabel()?.toLowerCase();
+    const waiting = needsInputLabel(run)?.toLowerCase();
     if (waiting && OTHERS_LABELLED.has(target.kind)) {
       const has = (list) => list.some((l) => l.toLowerCase() === waiting);
       const removed = has(change.labels_removed) || change.labels_removed.includes("*");
@@ -1173,7 +1187,7 @@ export function createWriteChecks({
     }
     if (write.assignees) {
       const assignees = await assigneesOf(write, target, get);
-      const refused = assignees.added.find((login) => !assignable(run.repo, login));
+      const refused = assignees.added.find((login) => !assignable(run, login));
       if (refused !== undefined) {
         return refusal(
           403,
@@ -1220,10 +1234,8 @@ export function createWriteChecks({
     if (pulled) return pulled;
     const denied = await deny(run, write, target, change);
     if (denied || !rerun) return denied;
-    // Counted again with no await before the slot is taken: the run's calls in flight at once
-    // (another workflow run's rerun on the same commit) each passed the count above.
-    if (reruns(run, target.sha) >= MAX_RERUNS) return tooMany(run, target.sha);
-    write.rerun = reserve(run, target);
+    write.rerun = await reserve(run, target);
+    if (!write.rerun) return tooMany(run, target.sha);
     return null;
   }
 
@@ -1244,27 +1256,36 @@ export function createWriteChecks({
   // with the run before the call goes out, so a listener restarted meanwhile still counts it
   // (GitHub may have taken it). GitHub's answer settles it (`settle()`, answered()), or it is
   // taken out when GitHub refused it or it never went out (`release()`: the GitHub gateway calls
-  // it once the call is over, whatever happened; a settled one stays).
-  function reserve(run, target) {
-    if (!Array.isArray(run.reruns)) run.reruns = [];
-    const entry = { run_id: target.run_id, sha: target.sha, at: Date.now(), pending: true };
-    run.reruns.push(entry);
-    run.changed?.();
+  // it once the call is over, whatever happened; a settled one stays). Counted again as it is
+  // taken, on the latest state: the run's calls in flight at once (another workflow run's rerun
+  // on the same commit, through the other copy of the github service) each passed the count
+  // before. → the slot, or null when MAX_RERUNS were taken meanwhile.
+  async function reserve(run, target) {
+    const key = randomUUID();
+    const taken = await mutate(run, (state) => {
+      if (state.reruns.filter((r) => r.sha === target.sha).length >= MAX_RERUNS) return false;
+      const entry = { run_id: target.run_id, sha: target.sha, at: Date.now() };
+      state.reruns.push({ ...entry, pending: true, slot: key });
+      return true;
+    });
+    if (!taken) return null;
+    // The entry's own, while it is pending; nothing once settled or gone.
+    const change = (fn) =>
+      mutate(run, (state) => {
+        const i = state.reruns.findIndex((r) => r.pending && r.slot === key);
+        if (i < 0) return false;
+        fn(state, i);
+        return true;
+      });
     return {
-      run_id: entry.run_id,
-      sha: entry.sha,
-      settle: (at) => {
-        if (!entry.pending) return;
-        delete entry.pending;
-        entry.at = at ?? entry.at;
-        run.changed?.();
-      },
-      release: () => {
-        if (!entry.pending) return;
-        const i = run.reruns.indexOf(entry);
-        if (i >= 0) run.reruns.splice(i, 1);
-        run.changed?.();
-      },
+      run_id: target.run_id,
+      sha: target.sha,
+      settle: (at) =>
+        change((state, i) => {
+          const { pending: _, slot: __, ...entry } = state.reruns[i];
+          state.reruns[i] = { ...entry, at: at ?? entry.at };
+        }),
+      release: () => change((state, i) => state.reruns.splice(i, 1)),
     };
   }
 
@@ -1373,6 +1394,26 @@ function commentOf(node, repo) {
 function restCommentOf(comment, repo) {
   const m = /\/repos\/([^/]+\/[^/]+)\/issues\/comments\/(\d+)$/.exec(String(comment?.url ?? ""));
   return m && m[1].toLowerCase() === repo ? Number(m[2]) : null;
+}
+
+// Changes a run's `created` and `reruns` with `fn(state)` (its lists, which it may replace;
+// → whether it changed them), and returns what `fn` returned: on the run itself, or through
+// `run.update(fn)` where its state is shared (the github service's store, its copies:
+// ../github/runs.mjs), which applies `fn` to the latest state, again should another change come
+// first, then refreshes the run's lists.
+async function mutate(run, fn) {
+  if (run.update) return run.update(fn);
+  if (!Array.isArray(run.created)) run.created = [];
+  if (!Array.isArray(run.reruns)) run.reruns = [];
+  // In place: the run's lists are its live state's too (runs.mjs), which saves them.
+  const state = { created: [...run.created], reruns: [...run.reruns] };
+  const changed = fn(state);
+  if (changed) {
+    run.created.splice(0, run.created.length, ...state.created);
+    run.reruns.splice(0, run.reruns.length, ...state.reruns);
+    run.changed?.();
+  }
+  return changed;
 }
 
 // The issues a run created, of `run.created` (which holds the comments it posted and the

@@ -49,7 +49,8 @@ test("lanes: kept across a restart, under any spelling of the repo", (t) => {
   const again = createLanes({ path });
   assert.deepEqual(again.labels(["org/app#18", "ORG/APP#pr-19", "org/app#31"]), {
     "org/app#18": { name: "Webhooks", source: "user", at: again.get("org/app#18").namedAt },
-    "ORG/APP#pr-19": { name: "Webhooks", source: "user", at: again.get("org/app#18").namedAt },
+    // Its own time: the clock may tick between the two names.
+    "ORG/APP#pr-19": { name: "Webhooks", source: "user", at: again.get("org/app#pr-19").namedAt },
     // The parent in the asker's spelling: titles.mjs's key.
     "org/app#31": { name: "#30", source: "parent" },
   });

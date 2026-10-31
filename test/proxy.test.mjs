@@ -259,6 +259,7 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     relay: false,
     models: false,
     sandbox: null,
+    service: null,
   });
   assert.equal((await policy("10.0.0.5", "good.broker", { broker: true })).sandbox, "net-a");
   assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
@@ -269,4 +270,49 @@ test("the listener's policy: its answer, or refused when it can't answer", async
   assert.equal(asked[0], "/egress?ip=10.0.0.5&host=good.com");
   const down = listenerPolicy("http://127.0.0.1:1/egress", 500);
   assert.equal((await down("10.0.0.5", "good.com")).allowed, false);
+});
+
+test("a push to the broker's host goes to the github service, with the network the policy vouches for", async (t) => {
+  const heard = [];
+  const answer = (req, res) => (heard.push({ url: req.url, headers: req.headers }), res.end("ok"));
+  const listener = await serve(t, answer);
+  const github = await serve(t, answer);
+  const proxy = createProxy({
+    policy: async (ip, host, { broker } = {}) => ({ allowed: broker === true, sandbox: "net-1" }),
+    brokerUrl: listener.url,
+    githubService: { url: github.url, header: async () => "Bearer proxy-token" },
+  });
+  const proxyPort = await listening(proxy);
+  t.after(() => proxy.close());
+  const via = (path, headers = {}) =>
+    new Promise((resolve, reject) => {
+      const req = connect(proxyPort, "127.0.0.1", () =>
+        req.write(
+          `GET ${listener.url}${path} HTTP/1.1\r\nhost: ${new URL(listener.url).host}\r\n${Object.entries(
+            headers,
+          )
+            .map(([k, v]) => `${k}: ${v}\r\n`)
+            .join("")}connection: close\r\n\r\n`,
+        ),
+      );
+      let text = "";
+      req.on("data", (d) => (text += d));
+      req.on("end", () => resolve(text));
+      req.on("error", reject);
+    });
+  const basic = `Basic ${Buffer.from("x:run-token").toString("base64")}`;
+  const text = await via("/git/org/repo.git/info/refs?service=git-receive-pack", {
+    authorization: basic,
+    "x-deckhand-sandbox": "net-other",
+  });
+  assert.match(text, /^HTTP\/1\.1 200/);
+  const pushed = heard.at(-1);
+  assert.equal(pushed.url, "/git/org/repo.git/info/refs?service=git-receive-pack");
+  assert.equal(pushed.headers.host, new URL(github.url).host);
+  assert.equal(pushed.headers.authorization, "Bearer proxy-token");
+  assert.equal(pushed.headers["x-deckhand-run-authorization"], basic);
+  assert.equal(pushed.headers["x-deckhand-sandbox"], "net-1");
+  // The rest of the broker's host: the listener's, as before (the agents' endpoints).
+  await via("/anthropic/v1/messages");
+  assert.equal(heard.at(-1).headers.host, new URL(listener.url).host);
 });

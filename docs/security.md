@@ -20,9 +20,10 @@ that file asks for, so none can:
 - Sandbox tokens (what the [GitHub gateway](#the-github-gateway) adds to a sandbox's calls:
   no sandbox holds one) only **read** the code (`contents: read`). They can't push, write files
   through the API or merge a pull request, whatever the repo's settings.
-- Pushes go through the listener's **git gateway** (`listener/git-gateway.mjs`), on the
-  broker's port: the sandbox's git sends them there (`url.<broker>/git/.pushInsteadOf`),
-  with the run token. The gateway reads the ref updates at the start of the push (at most
+- Pushes go through the **git gateway** (`listener/git-gateway.mjs`, in the
+  [github service](#the-github-service)): the sandbox's git sends them to the broker's address
+  (`url.<broker>/git/.pushInsteadOf`), with the run token, and the egress proxy sends them on to
+  the github service. The gateway reads the ref updates at the start of the push (at most
   64 KiB of them, within 30 seconds; a refused push's pack is read and dropped for a minute
   at most, so git shows the refusal) and
   forwards it to GitHub with a token of its own only when every one is one of **the run's
@@ -213,13 +214,13 @@ run's branch was checked at its tip. Not checked:
   changed, runs a merge nobody checked. Limit environments' deployment branches (below) so that
   such a merge still can't read their secrets.
 
-The mirrors take a copy of each granted repository in the data volume; a mirror's first fetch
-clones the repository, and may take up to an hour. A push is saved in the listener's temporary
-directory while it is checked, one push per run at a time, up to GitHub's 2 GiB. That
-directory is the listener container's own writable layer, usually on the same host disk as the
-data volume: plan for the repositories' size plus up to 2 GiB per run in parallel, or give
-`/tmp` a size-limited `tmpfs` (commented out in `compose.yaml`) so a full one only refuses
-pushes.
+The mirrors take a copy of each granted repository in the github service's data volume
+(`github-data`); a mirror's first fetch clones the repository, and may take up to an hour. A
+push is saved in the github service's temporary directory while it is checked, one push per
+run at a time, up to GitHub's 2 GiB. That directory is the github service container's own
+writable layer, usually on the same host disk as its data volume: plan for the repositories'
+size plus up to 2 GiB per run in parallel, or give the github service's `/tmp` a size-limited
+`tmpfs` (commented out in `compose.yaml`) so a full one only refuses pushes.
 
 Where GitHub enforces them, an enforced ruleset on the default branch (a pull request with an
 approval, no bypass for the App or GitHub Actions) and environments with required reviewers or
@@ -297,8 +298,8 @@ it may push), `sandbox` (below), `agent` (the provider of the run's agent and th
 its the run names, which the models service gives its calls alone: #504), `caps` (its
 [capabilities](#capabilities), as its start decided them) and `ver`, the claims' format
 (a sandbox outlives a listener update; an unknown version is refused). What changes during a
-run (the issues it created, the reactions it added, its pushes, the installation tokens it
-got) stays with the listener, by the run's id.
+run (the issues it created, the comments it posted, the reactions it added, the workflow runs it
+reran) stays with the [github service](#the-github-service), in its store, by the run's id.
 
 **Bound to its sandbox.** `sandbox` is the ID of the run's own network (Docker) or of its pod
 (Kubernetes). Each service compares it with the ID of the network the call came from: the
@@ -453,17 +454,20 @@ can read.
   anyway). Comments on a pull request take `issues: write`.
 - Tokens are cached per repository and permission set, renewed 10 minutes before their
   end, and shared by that repository's runs with the same permissions. GitHub makes them
-  valid for an hour, which the listener can't shorten, but none leaves the listener, so none
+  valid for an hour, which Deckhand can't shorten, but none leaves the github service, so none
   outlives its run in a sandbox: once the run ends, its run token gets nothing. Uninstalling the
   App, or suspending its installation, revokes them at once.
 
-What a run prints doesn't publish one either way: the broker keeps the installation tokens
-the gateway used for each run, and the listener redacts them from the run's log (what the
-dashboard shows), the run analysis digest and its reply, as `[redacted]`, a defence in depth
-now that the sandbox never sees them. Anything shaped like a GitHub token (`ghs_`, `ghp_`,
+What a run prints doesn't publish one either way: the github service sends the listener the
+fingerprint of each installation token its gateway used for a run (a `token` event,
+`lib/fingerprints.mjs`: never the token), and the listener redacts what matches from the run's
+log (what the dashboard shows), the run analysis digest and its reply, as `[redacted]`, a
+defence in depth now that the sandbox never sees them. A fingerprint finds a whole token only:
+one cut short in the output, which the listener found down to 16 characters when it held the
+tokens itself, is left to the shape check. Anything shaped like a GitHub token (`ghs_`, `ghp_`,
 `gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted too,
-wherever it came from: a token a restarted listener no longer lists, or one the agent found
-elsewhere.
+wherever it came from: a token a restarted listener has no fingerprint of any more, or one the
+agent found elsewhere.
 
 ### The runner service
 
@@ -512,36 +516,96 @@ The hook's event comes from the orchestrator: the runner can't check the deliver
 repository, with its pull request or workflow run. A compromised listener can still start a run
 (it is the orchestrator until #506), but not one it names as root on the host.
 
-**Until the github service leaves the listener (#502)**, the listener also serves the runner's
-tarballs and blobs, which the runner can't tell from GitHub's. So a compromised listener can
-still reach root on the host through the two grants that run a repository's own files there:
-
-- `preview`: it serves a `.deckhand.yaml` whose hook is its own, which then runs as root
-  with the socket;
-- `dockerfile`: it serves a Dockerfile, or other files the build copies, of its own. The
-  runner builds only when the files hold the Dockerfile whose blob the tag names (`images.mjs`
-  `buildImage()`), so such an image never takes the real Dockerfile's tag once the blobs come
-  from GitHub itself; but the rest of the build context isn't in the tag, so after a compromise
-  remove the repository's images (`deckhand-repo-…`) for them to build again.
-
-Grant those two, until then, only to repositories whose hook or image you would let the
-listener's host run as root. The runner holds no GitHub credential: a
+The runner holds no GitHub credential either: a
 build's context and a preview hook start from the repository's tarball, which it gets from the
-github service (the listener's services port, `GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
+[github service](#the-github-service) (`GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
 blob id, `GET /blobs/…`, the runner's only routes there, for an allowed repository, its names,
-path and ref checked before they make an API path), and a run's first tokens come from the
+path and ref checked before they make an API path), never from the listener, which can't serve
+it files of its own any more (#502): a compromised listener can't make a preview hook or an
+image build run its own files as root on the host. A run's first tokens come from the
 orchestrator (`POST /runs/<run>/tokens`, only while that run starts), which has the broker sign
 them with its own claims: the runner can't choose what a run's tokens allow. Every orchestrator call carries its
 fencing epoch: an older one than the newest the runner saw is refused (`409`).
 
 On Docker, the runner and the listener share one internal network (`runner` in `compose.yaml`,
 `RUNNER_SUBNET`), which nothing else is on and which has no way out; the runner is on no other
-but `broker-runner`, below.
+but `broker-runner` and `github-runner`, below.
 Each tells its caller by the subnet a call arrives on (`SERVICE_NETWORKS`): the runner takes the
 listener's three services there (edge, the orchestrator, models), the listener's services port the
 runner alone. The runner has one more network, to the broker service alone (`broker-runner`): its
 own service tokens, the runs' inboxes and files it copies there. It checks its callers' tokens
 with the broker's public keys (the `service-keys` volume, read-only).
+
+### The github service
+
+The GitHub App's private key mints installation tokens for every repository the App is installed
+on: only the github service holds it (`github/`, #502, [architecture.md](architecture.md#the-github-service)),
+in its own volume (`github-key`, `APP_DIR`: `app.json`, owner-only; a Secret on Kubernetes), never
+in its store nor in another service's. The listener, which the internet reaches, keeps the App's
+names, its webhook secret and its OAuth client's (`app.json` in its data volume, edge's), never
+the key. Its installation tokens stay in the service: the runs' calls go on with a token minted
+for that call (below), the listener's own with one it never gets.
+
+What each caller may do (`github/service.mjs` `ROUTES`, checked with their service tokens first):
+
+| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| proxy        | the sandboxes' calls: the [GitHub gateway](#the-github-gateway) (`/relay/<host>/…`) and the git gateway (`/git/…`), the network (or pod) they came from vouched for (`X-Deckhand-Sandbox`), their own credential passed on apart (`X-Deckhand-Run-Authorization`)                                                                                                                        |
+| orchestrator | its own GitHub calls, reads and writes, as a repository's installation (`/as/<owner>/<repo>/<path>`), GraphQL, as the App (`/as-app/…`: reads, and one write, a delivery's redelivery: never a token minted, the webhook changed or an installation removed); the runs it starts and ends (`/runs/<id>`), its reactions, the events; /setup's conversion; the sandboxes' calls it relays |
+| edge         | reads only: `GET`s as a repository's installation, as the App or one installation (the repositories it lists), GraphQL without a mutation (or a subscription), the App's public parts                                                                                                                                                                                                    |
+| runner       | a repository's tarball and a file's blob id, nothing else of GitHub's                                                                                                                                                                                                                                                                                                                    |
+
+The listener holds edge and the orchestrator until #506, and calls as the orchestrator. Every
+orchestrator call that changes something carries its fencing epoch, refused when stale (`409`),
+so that a copy that lost its lease writes nothing; and a write may carry an idempotency key
+(`Idempotency-Key`: a run's reply has `<run>:reply`), which the service keeps a day with its
+answer, in its store: asked again, through either copy, it isn't made twice, its first answer
+given again. A write GitHub refused isn't kept: asked again, it is tried again.
+
+**What a run did** is in the service's store, so that both copies agree on it: the
+orchestrator tells the service of each run as its sandbox's network is known (`PUT /runs/<id>`:
+its repository, mode, issue, branches, capabilities, the network or pod its tokens are bound to,
+whom its writes may assign), and its end (`DELETE`). The issues it created, the comments it
+posted, the reactions it added and the workflow runs it reran are changed with compare-and-set
+(`github/runs.mjs` `update()`), a rerun counted against `MAX_RERUNS` on the latest state as its
+slot is taken; and each is kept before GitHub's answer ends for the sandbox (`settle`,
+`listener/upstream.mjs`), so that its next call sees it, whichever copy takes it. The listener's
+own reactions are noted there before GitHub is asked (`PUT /reactions`), as reactions.json noted
+them in the listener before. The limit of 16 calls in flight per run is a set of slots in the
+store, one per call, taken and given back with compare-and-set, renewed while its call goes on
+and lapsing a minute after a copy stops renewing it (a crash), what GitHub advertised to a run's git is shared too (a fetch's pack
+request may reach the other copy), and the pushes, a run's notes and the pull requests runs
+change reach the orchestrator as events it acknowledges. Each copy keeps its own installation
+tokens and git mirrors: caches only.
+
+**Its networks**, with Docker: one per caller, internal, each with a fixed subnet the service
+tells its callers by (`SERVICE_NETWORKS`: `github-orchestrator` for the listener,
+`github-proxy`, `github-runner`), its own to the broker (`broker-github`) and to the policy
+service (`policy-github`), and its way out to GitHub, `github-out`, which nothing else is on:
+on a network its callers are on too, its name would resolve there, and their calls would arrive
+on no caller's network.
+
+**The key's move.** A listener from before the service hands its key over at start (`PUT /app`,
+the orchestrator alone; the same App's only: another one's is refused), then removes it from
+its `app.json`. A new App's key never reaches the listener: /setup has the service convert the
+manifest's code (`POST /app/manifest`), which keeps the key and answers with the rest. GitHub
+converts a code once: the rest is kept beside the key for an hour (`setup.json`), so that a
+listener that didn't get the answer gets it by asking again with the same code (its /setup
+callback loaded again), and goes then. A refused handover (another App's key there) is said
+once in the listener's log, and the key stays in its `app.json` until the operator removes one
+of the two.
+
+**The operator's credentials** (the agents' keys, the plans' logins) are no service's but the
+listener's (the models service's, #504): the github service redacts them from the runs' writes
+without holding them, by their **fingerprints** (`lib/fingerprints.mjs`): the listener sends a
+salted SHA-256 of each whole credential, with its length and 12 bits of a rolling hash that
+finds the candidates quickly (only 12: that hash is linear, and the whole of it would spare
+someone reading the store most of the work of guessing a short credential whose start is known) (`PUT /fingerprints`, again when a login is refreshed), and the gateway
+redacts each part of a write of that length whose hashes match.
+Never a hash of one of its parts: parts that overlap would give a credential away a character at
+a time, from what is known of its shape. So a credential cut short in a write isn't found, where
+`redact()` would find it down to 16 characters: the cost of the service not holding it. A run
+from before tokens' secret goes there the same way.
 
 ### Service tokens
 
@@ -575,11 +639,11 @@ endpoints, which callers may call it, in **one table per service**, checked in c
 (`serviceGuard()`) before anything else:
 
 ```js
-// The github service's, for example: edge reads, only the orchestrator writes.
+// The github service's (github/service.mjs), in part: edge reads, only the orchestrator writes.
 {
-  "GET /repos/:owner/:repo/config": ["edge", "orchestrator"],
-  "POST /tokens": ["orchestrator"],
-  "GET /tarballs/*": ["runner"],
+  "GET /as/:owner/:repo/*": ["edge", "orchestrator"],
+  "POST /as/:owner/:repo/*": ["orchestrator"],
+  "GET /tarballs/:owner/:repo/:ref": ["runner"],
 }
 ```
 
@@ -595,10 +659,11 @@ from a sandbox, every service is reached through the proxy, which vouches for th
 other, and a service is on no network it doesn't call or isn't called over, but its way out
 when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted hosts).
 `test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's, the
-runner's and the models service's `SERVICE_NETWORKS` name each caller's own network, and checks
-which containers the runner joins to a run's network. The broker and the models service are on
-none of them (#505, #504). Until the gateways move out of the listener (#502), the listener
-joins the runs' networks too, for the endpoints sandboxes call directly (pushes).
+runner's, the models service's and the github service's `SERVICE_NETWORKS` name each caller's own
+network, and checks which containers the runner joins to a run's network. The broker, the github
+service and the models service are on none of them (#505, #502, #504). The listener still joins
+the runs' networks, for the pushes a proxy from before the github service sends it directly,
+which it relays there.
 
 **The broker's table** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
 the stream and the screenshots it copies; a run's first tokens, which it asks for when the runner
@@ -625,8 +690,9 @@ service and each of its callers share only the network `SERVICE_NETWORKS` names.
 The runner is on one network, `runner`, internal and shared with the listener alone, with a
 fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)),
 and on `runner-models`, the models service's, for the Antigravity login's refresh.
-The policy service (#501), with Docker Compose, is on two others, internal (no way out): `policy`,
-shared with the listener alone, and `policy-runner`, shared with the runner alone, which asks
+The policy service (#501), with Docker Compose, is on three others, internal (no way out):
+`policy`, shared with the listener alone, `policy-github`, shared with the github service alone
+(the runs' writes and pushes), and `policy-runner`, shared with the runner alone, which asks
 it [the grants](#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`
 or `/check`). Compose doesn't set its `SERVICE_NETWORKS`: its table still names what each
 caller may call. The listener's service tokens come
@@ -649,11 +715,13 @@ service, is refused (`401`, `403`), whatever the endpoint.
 
 ### The GitHub gateway
 
-`listener/github-gateway.mjs`, on the broker's port. The egress proxy relays GitHub's hosts
-(`GITHUB_API`'s and `GITHUB_URL`'s, `listener/egress.mjs` `githubHosts()`) to it, as it relays
-the Antigravity CLI's: it decrypts their HTTPS with [Deckhand's CA](#https-and-deckhands-ca),
-which every run that reaches GitHub trusts, and sends each request to the listener as
-`/relay/<host>/<path>` instead of the host. REST, GraphQL, clones and fetches all go there;
+`listener/github-gateway.mjs`, in the [github service](#the-github-service). The egress proxy
+relays GitHub's hosts (`GITHUB_API`'s and `GITHUB_URL`'s, `listener/egress.mjs` `githubHosts()`)
+to it, as it relays the Antigravity CLI's to the listener: it decrypts their HTTPS with
+[Deckhand's CA](#https-and-deckhands-ca), which every run that reaches GitHub trusts, and sends
+each request to the github service as `/relay/<host>/<path>` instead of the host
+(`GITHUB_SERVICE_URL`; a proxy without it, from before the service, sends them to the listener,
+which relays them there the same way). REST, GraphQL, clones and fetches all go there;
 tools keep talking to `api.github.com` and `github.com` unchanged. A sandbox has no other way
 to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to them is refused
 (but for the two exceptions without a token, below).
@@ -662,17 +730,20 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   `gh`, `Bearer`, or Basic with it as the password from git), checked as above. A call that
   carries none (git's first request, a download with `curl`) is the run's whose sandbox has
   its address; never its engine's, whose builds and containers don't get the token (from
-  there, such a call gets `401`). The proxy names that address in an `X-Deckhand-Client` header, replacing any
-  the client sent (and drops one from every request it doesn't relay), and the listener believes it only from the proxy's own addresses: a
-  sandbox that sets it itself is judged by its own address. A token that doesn't check, an
+  there, such a call gets `401`). The proxy names the network (or pod) of the sandbox the
+  listener's egress policy found at that address, in an `X-Deckhand-Sandbox` header, replacing
+  any the client sent (and drops one from every request it doesn't relay), with its own service
+  token: the github service believes it from the proxy alone (or the listener relaying, which
+  finds it the same way), and binds the run token to it. A token that doesn't check, an
   unknown or finished run's, or any other credential, gets `401`; another sandbox's `403`; a run
   without `pull` (a research run: `readsGitHub()`) `403`, whatever it sends.
 - **Pushes** to GitHub's web host (`git-receive-pack`) are refused: they go to the git
   gateway (`pushInsteadOf`), as before.
 - **Writes are redacted before GitHub gets them.** The body of every call but a read (`GET`,
   `HEAD`) and a fetch's pack request goes through the same redaction as the run's reply and
-  log: the run's tokens, the operator's credentials (by their fingerprints, `listener/secrets.mjs`
-  `operatorSecrets()`), the tokens used for the run and anything shaped like a GitHub token,
+  log: the run's tokens (the one the call carries, and any by their shape), the tokens used for
+  the run, anything shaped like a GitHub token, and the operator's credentials, which the github
+  service holds none of, by their fingerprints ([The github service](#the-github-service)),
   in each string of its JSON (so an escaped character can't split one), replaced in place so
   the rest of the body goes on as it was sent, then as text (a body that isn't JSON; one
   that isn't UTF-8, byte for byte). GraphQL is redacted that way too, its query and variables, inline literals
@@ -699,7 +770,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 - **Writes are checked** (`listener/github-writes.mjs`, issue #405): each REST one (anything
   but `GET` and `HEAD` under the API, but GraphQL's and rendering markdown) is classified from
   its method, path and body into actions on a target (`create`, `edit`, `comment`, `label`,
-  `link`, `close`…), and its target's kind is looked up on GitHub with the listener's own
+  `link`, `close`…), and its target's kind is looked up on GitHub with the github service's own
   token, never taken from the request: the run's issue, its pull request (by its number, or
   its head on a branch of the repository the run may push: `broker.mjs` `allow()`), a
   sub-issue of its issue (its parent on GitHub, in the same repository), an issue the run
@@ -811,7 +882,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   and the run's log notes it.
 
 - **GraphQL is parsed** (`listener/github-graphql.mjs`, issue #406), with graphql-js (the
-  listener's one runtime package, bundled into a file at image build) and validated against
+  github service's one runtime package, bundled into a file at image build) and validated against
   GitHub's public schema, pinned in the repository (`listener/vendor/github.graphql`,
   updated on purpose): a call that doesn't parse (or holds over 2,500 tokens or
   64 KiB, refused before validation, whose cost grows with the square of a document's repeated
@@ -1761,12 +1832,13 @@ of them, keep `/status` from it.
 
 ## The listener's data
 
-The data volume (`/data`) holds what the listener keeps; whoever reads it has the App. The
-files holding secrets are the owner's only (`0600`):
+The data volume (`/data`) holds what the listener keeps; whoever reads it can sign deliveries as
+GitHub and sign in users, but not act as the App (its key is the github service's). The files
+holding secrets are the owner's only (`0600`):
 
 | File                     | What                                                                                                                                      |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.json`               | the App's private key, client and webhook secrets                                                                                         |
+| `app.json`               | the App's client and webhook secrets (its key, from a listener before the github service, until handed over at start)                     |
 | `session.key`            | signs dashboard sessions                                                                                                                  |
 | `sessions.json`          | each login's session epoch                                                                                                                |
 | `run-token.pub`          | the public part of the key a listener from before the broker service signed the runs' tokens with, for 7 days ([Run tokens](#run-tokens)) |
@@ -1777,7 +1849,9 @@ files holding secrets are the owner's only (`0600`):
 
 The runs' signing key is the broker service's alone, in its own volume (`broker-keys`), with
 its store (`broker-store`: the live runs, the hashes of their tokens, their inbox and files):
-neither is the listener's.
+neither is the listener's. The App's key is the github service's alone, in its own volume
+(`github-key`), with its store and git mirrors (`github-data`: the runs' state, the listener's
+reactions, the idempotency keys and their answers).
 
 The agents' credentials are the models service's alone: its environment, and the credentials
 folder, a folder on the host mounted read only there (`./credentials` by default) whose

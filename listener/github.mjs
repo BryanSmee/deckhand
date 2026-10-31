@@ -6,15 +6,18 @@ import { issueOutcome } from "./events.mjs";
 import { closedAs } from "./titles.mjs";
 
 // The listener's `github` and `graphql`, as the repo's installation. `app()`: the GitHub App
-// (github-app.mjs), null until /setup has stored one.
+// (the github service's, ../github/client.mjs; github-app.mjs's in that service), null until
+// /setup has stored one.
 export function createGitHub(app) {
-  // `expected`: error statuses that are normal for this call, so not logged.
-  async function github(repo, method, path, body, expected = []) {
+  // `expected`: error statuses that are normal for this call, so not logged. `options.key`: a
+  // write's idempotency key, made once however often it is asked (the github service's).
+  async function github(repo, method, path, body, expected = [], options = undefined) {
     if (!app()) throw new Error("the GitHub App is not set up");
-    return app().request(repo, method, path, body, expected);
+    return app().request(repo, method, path, body, expected, ...(options ? [options] : []));
   }
   // Discussions are written to through GraphQL only. Its errors come with a 200: thrown there.
-  const query = (repo, text, variables) => graphql(github, repo, text, variables);
+  // `options.key`: a mutation's idempotency key, as a REST write's.
+  const query = (repo, text, variables, options) => graphql(github, repo, text, variables, options);
   return { github, graphql: query };
 }
 
@@ -56,8 +59,9 @@ export async function graphqlData(res, what = "GraphQL") {
 }
 
 // A GraphQL query or mutation as the repo's installation: its data, or it throws.
-export async function graphql(github, repo, query, variables) {
-  return graphqlData(await github(repo, "POST", "/graphql", { query, variables }));
+export async function graphql(github, repo, query, variables, options) {
+  const keyed = options ? [[], options] : [];
+  return graphqlData(await github(repo, "POST", "/graphql", { query, variables }, ...keyed));
 }
 
 // The first page of a list: the recent ones are enough there.

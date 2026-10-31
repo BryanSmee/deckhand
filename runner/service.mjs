@@ -23,7 +23,7 @@
 import { createServer } from "node:http";
 import { DRAIN_MS, drain, drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, send, sendJson } from "../lib/http.mjs";
-import { EPOCH_HEADER } from "../lib/service-client.mjs";
+import { createFence } from "../lib/fence.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
@@ -100,13 +100,6 @@ const START_TTL_MS = 7 * 24 * 60 * 60_000;
 const SENT_TTL_MS = 7 * 24 * 60 * 60_000;
 // The longest a broker's inbox poll and a log read may wait.
 const MAX_WAIT_MS = 30_000;
-
-// Fences: the newest orchestrator epoch seen, in the store, so both copies refuse the same.
-const EPOCH_KEY = "epoch/orchestrator";
-// How far ahead of this copy's clock an epoch may be: they are the orchestrator's clock until
-// #506 (lib/store.mjs nextEpoch()), so one further ahead is no clock's, and kept, it would refuse
-// every listener after it until its key were removed from the store by hand.
-const EPOCH_AHEAD_MS = 24 * 3600_000;
 
 // A sandbox's, a run's or a message's name, as Docker and the runs folder take them: never `.`
 // or `..` (a run's inbox folder is named after it), nor an option (`-…`).
@@ -214,24 +207,8 @@ export function createRunnerService({
   const streams = new Set();
   const starting = new Map(); // run → its start in flight on this copy
 
-  // A stale epoch refused; a newer one kept, compared-and-set so that two calls racing keep
-  // the higher.
-  async function fence(req) {
-    const epoch = Number(req.headers[EPOCH_HEADER]);
-    if (!Number.isSafeInteger(epoch) || epoch < 1) throw new Refused(400, "no fencing epoch");
-    if (epoch > now() + EPOCH_AHEAD_MS) {
-      throw new Refused(400, `epoch ${epoch}: further ahead of the runner's clock than a day`);
-    }
-    for (;;) {
-      const newest = (await store.get(EPOCH_KEY)) ?? 0;
-      if (epoch < newest) {
-        throw new Refused(409, `epoch ${epoch} is stale: ${newest} is the orchestrator's now`);
-      }
-      if (epoch === newest || (await store.compareAndSet(EPOCH_KEY, newest || null, epoch))) {
-        return;
-      }
-    }
-  }
+  // A stale epoch refused (lib/fence.mjs).
+  const fence = createFence({ store, service: "runner", now });
 
   // This deployment's sandbox of that name, as the backend lists them (by its own labels:
   // `deckhand.owner`, `deckhand.run`), or null: what the orchestrator may stop, follow or remove.

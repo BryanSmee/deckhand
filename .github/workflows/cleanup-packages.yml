@@ -23,6 +23,7 @@ jobs:
           - deckhand-egress
           - deckhand-engine
           - deckhand-engine-podman
+          - deckhand-github
           - deckhand-listener
           - deckhand-models
           - deckhand-policy

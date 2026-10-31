@@ -13,16 +13,16 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 
 ## Commands
 
-Node 26. The listener has one dependency, graphql-js, bundled into a file before it runs; the
-dashboard has build-time ones (see Conventions).
+Node 26. The GitHub gateway has one dependency, graphql-js, bundled into a file before it runs
+(the github service's image); the dashboard has build-time ones (see Conventions).
 
-| Task            | Command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tests           | `node --test --test-force-exit` (after `cd listener/vendor && npm ci && npm run build`, which bundles graphql-js; `--test-force-exit`: a file whose tests are done exits even if something it started is left open, #521)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Syntax check    | `node --check listener/server.mjs runner/server.mjs broker/server.mjs models/server.mjs`, `for f in sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/antigravity/install sandbox/agents/antigravity/refresh sandbox/agents/npm-install sandbox/agents/release-install sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do bash -n "$f"; done` (one at a time: `bash -n a b` reads `b` as an argument of `a`; it prints what fails), `node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged` |
-| Format          | `npx --yes prettier@3 --check .` (`--write` to fix; `npx --yes prettier@3 --write --ignore-unknown <files>` for just the files you changed)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
-| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Task            | Command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Tests           | `node --test --test-force-exit` (after `cd listener/vendor && npm ci && npm run build`, which bundles graphql-js; `--test-force-exit`: a file whose tests are done exits even if something it started is left open, #521)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Syntax check    | `node --check listener/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs`, `for f in sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/antigravity/install sandbox/agents/antigravity/refresh sandbox/agents/npm-install sandbox/agents/release-install sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do bash -n "$f"; done` (one at a time: `bash -n a b` reads `b` as an argument of `a`; it prints what fails), `node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged` |
+| Format          | `npx --yes prettier@3 --check .` (`--write` to fix; `npx --yes prettier@3 --write --ignore-unknown <files>` for just the files you changed)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 Run the first four before pushing (the dashboard's when it changed). CI runs them too, a job
 each, on every pull request and push to `main` (`.github/workflows/checks.yml`, GitHub-hosted
@@ -43,6 +43,7 @@ directory, not your clone, so send files with `tar` on stdin. With the engine:
 # other directories.
 docker build -t deckhand-listener -f listener/Dockerfile .
 docker build -t deckhand-runner -f runner/Dockerfile .
+docker build -t deckhand-github -f github/Dockerfile .
 # Start it: ALLOWED_USERS is all it needs to come up. Ports answer on engine, not localhost.
 docker run -d --name listener -p 8080:8080 -e ALLOWED_USERS=someone deckhand-listener
 curl engine:8080/health
@@ -66,8 +67,12 @@ lib/          what every service shares, copied into each image: yaml, settings,
               store-redis.mjs and its client resp.mjs)
 listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
               runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
-              agents/ (each agent's specifics: install, env, hosts, session, normalize(); the
+                agents/ (each agent's specifics: install, env, hosts, session, normalize(); the
               credentials' names, credentials.mjs)
+github/       the github service (#502): the only one with the GitHub App's key; server.mjs
+              (wiring), service.mjs (its API, who may call what), runs.mjs (the runs' state in its
+              store), app.mjs (the App's credentials), client.mjs (what the listener calls it
+              with); it runs listener/'s GitHub and git gateways (github-*.mjs, git-gateway.mjs)
 runner/       the runner service (#503): the only one with the Docker socket or the Kubernetes
               API; server.mjs (wiring), service.mjs (its API, who may call what), client.mjs
               (what the listener calls it with), logs.mjs, events.mjs, spec-check.mjs,
@@ -98,11 +103,12 @@ docs/         setup, per-repo config reference, security model, architecture
 
 - **No runtime dependencies.** The listener uses `node:http`, `node:crypto`, `node:fs` and the
   docker CLI only. Ask before adding a package.
-- **graphql-js is the listener's one exception** (`listener/vendor/`, issue #406): the GitHub
-  gateway must parse the runs' GraphQL to check their writes (`github-graphql.mjs`), and a
-  parser of its own would be the bigger risk. Pinned to an exact version (`package-lock.json`
-  too), and bundled with esbuild into one file, `listener/vendor/graphql.mjs` (not committed),
-  in the image's build stage: the released image has no `node_modules`. `graphql.entry.mjs`
+- **graphql-js is the one exception** (`listener/vendor/`, issue #406): the GitHub gateway must
+  parse the runs' GraphQL to check their writes (`github-graphql.mjs`), and a parser of its own
+  would be the bigger risk. Pinned to an exact version (`package-lock.json` too), and bundled
+  with esbuild into one file, `listener/vendor/graphql.mjs` (not committed), in the github
+  service's image's build stage (it runs the gateway, #502): the released image has no
+  `node_modules`. `graphql.entry.mjs`
   lists what the listener takes from it. GitHub's schema is pinned beside it
   (`github.graphql`): `npm run schema` there reads it again through `gh`, on purpose, and its
   diff is reviewed.
@@ -158,9 +164,10 @@ docs/         setup, per-repo config reference, security model, architecture
 - **No GitHub token in a sandbox:** it holds only a run token (and its agent's token), signed
   by the broker service, which alone holds the key, bound to its network or pod and dead with
   the run (`lib/tokens.mjs`,
-  docs/security.md, Run tokens). The egress proxy relays its GitHub calls to the listener's GitHub gateway
-  (`listener/github-gateway.mjs`), which adds a short-lived installation token for that run's
-  repo and redacts what it writes. That token only reads: a write the policies allowed
+  docs/security.md, Run tokens). The egress proxy relays its GitHub calls to the GitHub gateway
+  (`listener/github-gateway.mjs`) in the github service (`github/`, #502), the only one holding
+  the App's key, which adds a short-lived installation token for that run's repo and redacts
+  what it writes. That token only reads: a write the policies allowed
   (`allow_github`) gets one of its own with only the write permission it needs, and a push
   goes through the git gateway (`allow_push`). No allow rule, no write.
 - **No host mounts** unless the operator's config grants a root; requested paths are

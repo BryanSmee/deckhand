@@ -351,13 +351,15 @@ function serviceUrls(value, name) {
 }
 
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
-// `service`: "runner" for the runner service's (../runner/server.mjs), "models" for the models
-// service's (../models/server.mjs), which start no run of their own: ALLOWED_USERS and the
-// agents' credentials are the listener's to require.
+// `service`: "runner" for the runner service's (../runner/server.mjs), "github" for the github
+// service's (../github/server.mjs), "models" for the models service's (../models/server.mjs),
+// which start no run of their own: ALLOWED_USERS and the agents' credentials are the listener's
+// to require, and SERVICE_NETWORKS theirs to read.
 export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
-  const settings = service === "listener" ? SETTINGS : RUNNER_SETTINGS;
+  const listener = service === "listener";
+  const settings = listener ? SETTINGS : RUNNER_SETTINGS;
   const from = settingSource(env, file, settings);
-  requiredSettings(env, from, { users: service === "listener" });
+  requiredSettings(env, from, { users: listener });
   const s = readSettings(env, from, settings);
   registryCredentials(s);
   pickupSlots(s);
@@ -381,7 +383,7 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
     runnerUrl: serviceUrls(env.RUNNER_URL || "http://runner:8080", "RUNNER_URL"),
     // Which network each service calling the listener's services port is on
     // (lib/service-token.mjs networkCallers()); none: no service may call it.
-    serviceNetworks: serviceNetworks(env.SERVICE_NETWORKS),
+    serviceNetworks: service === "github" ? null : serviceNetworks(env.SERVICE_NETWORKS),
     // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
     brokerPort,
     // The egress proxy's questions (/egress), on a port of their own: open until the listener
@@ -396,6 +398,12 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
     // The models service (../models/, #504), which alone holds the agents' credentials.
     modelsServiceUrl: modelsServiceUrl(env),
     serviceAccountTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
+    // The github service (../github/, #502), the only one with the GitHub App's key: the
+    // listener's GitHub calls go there, and its own relays of sandboxes' calls.
+    githubServiceUrl: serviceUrls(
+      env.GITHUB_SERVICE_URL || "http://github:8080",
+      "GITHUB_SERVICE_URL",
+    ),
     // The policy service, which evaluates every policy decision (../policy-service/, #501).
     policyServiceUrl: (env.POLICY_SERVICE_URL || "http://policy:8181").replace(/\/$/, ""),
     // Which variable holds the operator's Claude credential (agents/credentials.mjs): the value

@@ -1572,7 +1572,7 @@ test(
   },
 );
 
-test("reactions over GraphQL: those GitHub ran are the run's, kept with its issues", () => {
+test("reactions over GraphQL: those GitHub ran are the run's, kept with its issues", async () => {
   const { answered } = createWriteChecks({
     needsInputLabel: () => null,
     lookup,
@@ -1585,12 +1585,12 @@ test("reactions over GraphQL: those GitHub ran are the run's, kept with its issu
   ];
   const sent = { method: "POST", path: "/graphql", graphql: true, reacts, at: 5 };
   // GitHub ran `a` only: `b` answers null, with an error beside.
-  answered(work, sent, 200, json({ data: { a: { reaction: {} }, b: null }, errors: [{}] }));
+  await answered(work, sent, 200, json({ data: { a: { reaction: {} }, b: null }, errors: [{}] }));
   assert.deepEqual(work.created, [{ reaction: { subject: "issue:1", content: "+1" }, at: 5 }]);
   // Again: kept once.
-  answered(work, sent, 200, json({ data: { a: { reaction: {} } } }));
+  await answered(work, sent, 200, json({ data: { a: { reaction: {} } } }));
   assert.equal(work.created.length, 1);
-  answered(work, sent, 502, json({ data: { b: {} } }));
+  await answered(work, sent, 502, json({ data: { b: {} } }));
   assert.equal(work.created.length, 1);
   // Removed: no longer its own, but where GitHub didn't run it.
   const unreacts = [
@@ -1599,7 +1599,7 @@ test("reactions over GraphQL: those GitHub ran are the run's, kept with its issu
   ];
   work.created.push({ reaction: { subject: "issue:1", content: "heart" }, at: 6 });
   const removing = { method: "POST", path: "/graphql", graphql: true, unreacts, at: 7 };
-  answered(work, removing, 200, json({ data: { c: { reaction: {} }, d: null } }));
+  await answered(work, removing, 200, json({ data: { c: { reaction: {} }, d: null } }));
   assert.deepEqual(work.created, [{ reaction: { subject: "issue:1", content: "heart" }, at: 6 }]);
 });
 

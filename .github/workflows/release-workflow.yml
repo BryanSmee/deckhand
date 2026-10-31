@@ -24,6 +24,8 @@ jobs:
             dockerfile: listener/Dockerfile
           - image: deckhand-broker
             dockerfile: broker/Dockerfile
+          - image: deckhand-github
+            dockerfile: github/Dockerfile
           - image: deckhand-runner
             dockerfile: runner/Dockerfile
           - image: deckhand-egress
