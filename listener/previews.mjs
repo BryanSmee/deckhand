@@ -175,7 +175,11 @@ export function createPreviews({
       return code;
     } finally {
       clearTimeout(timer);
-      logFile.end();
+      // Its whole output written before the hook is said done: its log is read from then on.
+      await new Promise((resolve) => {
+        logFile.once("error", resolve);
+        logFile.end(resolve);
+      });
       if (dir) rmSync(dir, { recursive: true, force: true });
       if (containers) await containers.remove(name);
     }
