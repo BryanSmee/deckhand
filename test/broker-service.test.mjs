@@ -200,6 +200,17 @@ test("each endpoint takes its callers only, from their own network", async (t) =
   );
   assert.equal((await edge("GET", "/runs")).status, 403);
   assert.equal((await edge("POST", "/run/token")).status, 403);
+  // The runner's token copies inboxes and files, never signs a run's tokens: their claims are
+  // the orchestrator's (#503).
+  const asRunner = await call(broker, "listener", "POST", "/service-tokens", {
+    body: { audiences: ["broker"], service: "runner" },
+  });
+  const runnerToken = asRunner.json.tokens.broker;
+  const minted = await call(broker, "listener", "POST", "/runs/run-a/tokens", {
+    body: { repo: "o/r", mode: "work", sandbox: "x" },
+    headers: { authorization: `Bearer ${runnerToken}`, "content-type": "application/json" },
+  });
+  assert.equal(minted.status, 403);
   assert.equal((await orchestrator("GET", "/runs")).status, 200);
   // A token replayed from another caller's network.
   const stolen = await tokenOf(broker, "proxy");

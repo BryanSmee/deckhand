@@ -464,7 +464,8 @@ them with its own claims: the runner can't choose what a run's tokens allow. Eve
 fencing epoch: an older one than the newest the runner saw is refused (`409`).
 
 On Docker, the runner and the listener share one internal network (`runner` in `compose.yaml`,
-`RUNNER_SUBNET`), which nothing else is on and which has no way out; the runner is on no other.
+`RUNNER_SUBNET`), which nothing else is on and which has no way out; the runner is on no other
+but `broker-runner`, below.
 Each tells its caller by the subnet a call arrives on (`SERVICE_NETWORKS`): the runner takes the
 listener's three services there (edge, the orchestrator, models), the listener's services port the
 runner alone. The runner has one more network, to the broker service alone (`broker-runner`): its

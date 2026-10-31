@@ -269,6 +269,9 @@ services:
     environment:
       # The settings the runner reads too, as the listener does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
+      # GRANTS_DIR: the listener's grants folder, which the runner checks every spec, build and
+      # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs).
+      GRANTS_DIR: ${GRANTS_DIR:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       RUNNER: ${RUNNER:-}
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}

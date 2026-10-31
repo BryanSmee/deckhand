@@ -155,6 +155,30 @@ test("compose.yaml: only the runner mounts the Docker socket, and it gets no cre
   for (const name of secrets) assert.ok(!(name in runner.environment), `${name} on the runner`);
 });
 
+// The runner checks again what the listener decided (the grants, the names it gives Docker
+// objects, the agents' volumes): given other values, it refuses every run, or checks against
+// other grants than the listener built the spec from.
+test("compose.yaml: the runner gets every setting its checks read, as the listener has it", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const { runner, listener } = compose.services;
+  for (const name of [
+    "GRANTS_DIR",
+    "NAME_PREFIX",
+    "RUNNER",
+    "INSTALL_NETWORK",
+    "CLAUDE_CODE_VOLUME",
+    "CODEX_VOLUME",
+    "AGY_VOLUME",
+  ]) {
+    assert.ok(name in listener.environment, `${name}: not the listener's`);
+    assert.equal(runner.environment[name], listener.environment[name], `${name} on the runner`);
+  }
+  // The same configuration folder, for what config.yaml and grants/ say.
+  const server = (s) => s.volumes.find((v) => String(v).includes(":/etc/deckhand"));
+  assert.ok(server(listener));
+  assert.equal(server(runner), server(listener));
+});
+
 test("the check fails on a network that joins too much", () => {
   // A service compose.yaml would add without saying what it runs.
   assert.deepEqual(
