@@ -1,7 +1,7 @@
 // runs.mjs's end of a run that answered with its inbox closed but whose sandbox goes on (#204):
 // a fake runner whose sandbox never exits by itself, and a grace period of a few ms.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createComments } from "../listener/comments.mjs";
@@ -23,10 +23,14 @@ function fakeRunner(fails = null) {
     onOut: null,
     exited: null,
     state: async () => (runner.running ? "running" : "exited"),
-    follow: (name, { onOut, onErr }) => {
+    // Past what was read before at once, unless `holding`: then when the test says (caughtUp()).
+    holding: false,
+    follow: (name, { onOut, onErr, onCaughtUp }) => {
       if (fails) return Promise.reject(fails);
       runner.onOut = onOut;
       runner.onErr = onErr;
+      runner.caughtUp = onCaughtUp;
+      if (!runner.holding) onCaughtUp?.();
       return new Promise((resolve) => (runner.exited = resolve));
     },
     kill: async () => {
@@ -249,6 +253,30 @@ test("a run that answered before a restart: what was left of its grace, when it 
   assert.equal(runner.kills, 1);
   assert.ok(Date.now() >= graceUntil);
   assert.ok(Date.now() < graceUntil + 5000);
+});
+
+test("a restored run's grace waits for the follow to skip what was read before", async (t) => {
+  const { ctx, runner, task, following } = setup(t, { graceMs: 30 });
+  runner.out(result("Answered before the restart."));
+  ctx.stopping = true;
+  runner.exited();
+  await following;
+  ctx.stopping = false;
+  // Its deadline long gone, and a log long to skip.
+  task.live.graceUntil = Date.now() - 60_000;
+  runner.holding = true;
+  const next = createRuns({ ...ctx, answerGraceMs: 1000, catchUpMs: 20 });
+  const followed = next.follow(task);
+  await sleep(150);
+  // Still skipping: its whole grace meanwhile.
+  assert.equal(runner.kills, 0);
+  // Past them, nothing new: the moment to read what came meanwhile, then stopped, well before
+  // its whole grace.
+  const at = Date.now();
+  runner.caughtUp();
+  await followed;
+  assert.equal(runner.kills, 1);
+  assert.ok(Date.now() - at < 500);
 });
 
 test("a run whose grace passed while no listener was there: what its sandbox wrote meanwhile is read before any stop", async (t) => {
@@ -519,4 +547,22 @@ test("an agent's line past RUN_LOG_MAX_MB starts no phase: the line isn't kept",
   runner.out(JSON.stringify({ type: "system", subtype: "init", model: "x".repeat(400) }));
   await following;
   assert.doesNotMatch(readFileSync(logPath, "utf8"), /"event":"phase"/);
+});
+
+test("a run's end whose queue couldn't be saved keeps its state for the next listener", async (t) => {
+  const { ctx, runs, task, logs } = setup(t);
+  const path = ctx.livePath("run");
+  writeFileSync(path, "{}");
+  ctx.saveQueue = async () => false;
+  const live = task.live;
+  await runs.teardown(task);
+  assert.equal(readFileSync(path, "utf8"), "{}");
+  assert.ok(logs.some((line) => /its state is kept/.test(line)));
+  // Saved: removed.
+  task.live = { ...live, over: false, saving: null };
+  task.running = true;
+  ctx.saveQueue = async () => true;
+  ctx.running = 1;
+  await runs.teardown(task);
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
 });

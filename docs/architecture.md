@@ -62,8 +62,7 @@ closes and the agent exits: its last result is the reply, posted once its sandbo
 foreground: an agent that ends its turn with background work left gives an early result, and
 may go on with a turn per background task, or never exit. As a safety net, a result with the
 inbox closed marks the run `answered` (saved state) and starts a 2-minute timer
-(`runs.mjs` `linger()`, `ANSWER_GRACE_MS`); any output restarts it, and a listener that
-restarts starts it again. If the sandbox is still running, silent, when it fires, the listener
+(`runs.mjs` `linger()`, `ANSWER_GRACE_MS`); any output restarts it. Its deadline is saved (`graceUntil`): a listener that restarts gives it its whole grace while its follow skips the output read before, then keeps to that deadline, with at least 10 s to read what the sandbox wrote while no listener was there (Restarts). If the sandbox is still running, silent, when it fires, the listener
 writes an `ended` line to the run's log ("Stopped at … after its answer" on the dashboard),
 stops the sandbox and ends the run as usual, with its last result as the reply.
 
@@ -728,16 +727,14 @@ one that stopped:
   (`restart.mjs` `saveQueue()`: a comment accepted, taken by a run or a running session,
   dropped, cancelled, put back by a run's end), with each task's `next` (`/model`, `/effort`
   for its next run) and the 👀 each comment got (saved once GitHub answers, the comment itself
-  at once). Each comment has a `queueId`;
+  at once; on SIGTERM, those on their way are waited for, 10 s at most). Each comment has a `queueId`. Its strings go there without the operator's secrets, GitHub tokens or private keys (`storable()`), which the store refuses: a comment holding one by mistake is saved without it, and the whole queue still is. A run's end keeps its state when the queue couldn't be written;
 - **the runs**: each run's state in `logs/<run>.live.json` (`saveLive()`), at its start, a
   comment delivered, a phase, a result, a push, its reply; and, within a second
   (`saveLiveSoon()`), the lines of its output read so far. It holds the run's tokens, which go
   in the store only encrypted by their service (the broker's, #505): they stay in its file;
 - **the timers, as deadlines**: a task's pause before its run (or before the comments go to
   its running session) is `dueAt`, saved with the queue; a run's silent-end grace
-  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (one that passed while no listener
-  was there gets 10 s for the follow to read what the sandbox wrote meanwhile, which pushes it
-  back); a brainstorm's idle time was
+  (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (re-armed once the follow has skipped the lines read before, its whole grace until then: the runner's `onCaughtUp()`; one that passed while no listener was there gets 10 s more for what the sandbox wrote meanwhile, which pushes it back); a brainstorm's idle time was
   already `deadline` (`brainstorms.json`). The `setTimeout`s stay, and are re-armed from the
   deadline at start: what was left of it, or at once when it passed (a deadline saved by a
   listener from before them, none: the pause starts again). The waits' checks

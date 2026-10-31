@@ -89,6 +89,9 @@ import { createWorkApi } from "./work.mjs";
 // How long the egress policy's answers in flight get once the broker drained: they are quick.
 const POLICY_DRAIN_MS = 5000;
 
+// How long a listener that stops waits for the 👀 still on their way, for the queue it leaves.
+const EYES_WAIT_MS = 10_000;
+
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
@@ -170,7 +173,12 @@ const ctx = {
   stopping: false,
   // The listener's state through the store's interface (lib/store.mjs), in the data volume: the
   // queue for now (restart.mjs), the rest as the services take it over (#499).
-  store: openStore(pathToFileURL(join(config.dataDir, "store")).href),
+  // The operator's secrets are refused in it (lib/store.mjs), and left out of what the queue
+  // writes there (restart.mjs storable()).
+  store: openStore(pathToFileURL(join(config.dataDir, "store")).href, {
+    secrets: () => operatorSecrets(ctx),
+  }),
+  storeSecrets: () => operatorSecrets(ctx),
 };
 
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
@@ -877,7 +885,9 @@ process.on("SIGTERM", () => {
     if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
   });
   // Replies being posted and comments being admitted first, then what they leave.
+  // The 👀 still on their way too, for a while (the drain's grace bounds it anyway).
   const saved = Promise.allSettled([...ctx.ending, ...http.admitting])
+    .then(() => ctx.eyesSaved(EYES_WAIT_MS))
     .then(ctx.saveQueue)
     .then(() => {
       const queued = [...ctx.tasks.values()].filter((t) => t.pending.length).length;

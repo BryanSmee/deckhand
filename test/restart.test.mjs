@@ -1,6 +1,6 @@
 // Runs a previous listener left behind (restart.mjs): what the broker knows of them again.
 import assert from "node:assert/strict";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
@@ -13,6 +13,7 @@ import { ambiguous, respellMap, respelled, spellings } from "../listener/spellin
 import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
+import { openStore } from "../lib/store.mjs";
 import { tempDir } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it.
@@ -888,4 +889,97 @@ test("a queue.json whose comments the store didn't take stays for the next start
   const ctx = queueContext(t, dir, store);
   await ctx.loadQueue();
   assert.ok(readFileSync(path, "utf8").includes('"id":"7"'));
+});
+
+test("a run's start: its comments in every write of the queue until its state has them, its next options out once taken", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const ctx = queueContext(t, dir, store, { real: true });
+  const writes = [];
+  const set = store.set;
+  store.set = (key, value, options) => {
+    if (key === QUEUE_KEY) {
+      const entry = value["org/repo#1"];
+      let live = null;
+      try {
+        const file = readdirSync(dir).find((f) => f.endsWith(".live.json"));
+        live = JSON.parse(readFileSync(join(dir, file), "utf8")).handled.map((i) => i.queueId);
+      } catch {
+        // Not written yet.
+      }
+      // Its run over (its comments answered, by its error here): what it took is done with.
+      const over = !task.live || !!task.live.over;
+      writes.push({
+        ids: entry?.pending.map((i) => i.queueId) ?? [],
+        next: entry?.next,
+        live,
+        over,
+      });
+    }
+    return set(key, value, options);
+  };
+  // What a run's start reads, up to its failure once it has taken `next` (its agent unknown).
+  Object.assign(ctx, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: {
+      register: () => {},
+      revoke: () => {},
+      runOf: () => null,
+      secretsOf: () => [],
+    },
+    runner: { state: async () => null, remove: async () => {} },
+    repoSettings: async () => ({ settings: null, errors: [], warnings: [] }),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(ctx, createRuns(ctx), { config: { ...ctx.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.next = { model: "x" };
+  ctx.tasks.set("org/repo#1", task);
+  let eyes;
+  const item = queued("1", { queueId: "q-1", replyTo: 1 });
+  item.eyes = new Promise((resolve) => (eyes = resolve));
+  task.pending.push(item);
+  ctx.tasks.set("org/repo#1", task);
+  const ran = ctx.run(task).catch(() => {});
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Its 👀 on its way: the run's state waits for it, the queue still has the comment.
+  assert.ok(writes.length > 0);
+  for (const w of writes) assert.ok(w.ids.includes("q-1"));
+  // Its next options out of the queue once its start took them, before its state is written.
+  assert.ok(writes.some((w) => w.next && !w.next.model));
+  eyes(5);
+  await ran;
+  // Never in neither while it runs.
+  const running = writes.filter((w) => !w.over);
+  assert.ok(running.length > 0);
+  for (const w of running) assert.ok(w.ids.includes("q-1") || w.live?.includes("q-1"));
+});
+
+test("a comment holding a token or a private key: the queue is saved without them, whole", async (t) => {
+  const dir = tempDir(t);
+  // The store as the listener opens it: a value holding a secret is refused.
+  const store = openStore("memory:", { secrets: () => ["operator-secret-0123456789"] });
+  const ctx = queueContext(t, dir, store, { real: true });
+  ctx.storeSecrets = () => ["operator-secret-0123456789"];
+  const token = `ghp_${"a".repeat(36)}`;
+  const key = "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----";
+  for (const [id, text] of [
+    ["1", `Deckhand, use ${token} and operator-secret-0123456789\n${key}\nthanks`],
+    ["2", "Deckhand"],
+  ]) {
+    const task = newTask(queued(id));
+    task.pending.push(queued(id, { queueId: `q-${id}`, text }));
+    ctx.tasks.set(`org/repo#${id}`, task);
+  }
+  assert.equal(await ctx.saveQueue(), true);
+  const saved = await store.get(QUEUE_KEY);
+  assert.equal(
+    saved["org/repo#1"].pending[0].text,
+    "Deckhand, use [redacted] and [redacted]\n[redacted]\nthanks",
+  );
+  assert.equal(saved["org/repo#2"].pending[0].text, "Deckhand");
+  // The listener's own copy keeps it, for its run.
+  assert.match(ctx.tasks.get("org/repo#1").pending[0].text, /ghp_a{36}/);
 });

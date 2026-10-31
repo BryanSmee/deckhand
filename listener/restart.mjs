@@ -13,6 +13,7 @@ import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { redact, REDACTED } from "../lib/redact.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
@@ -44,6 +45,23 @@ function plainWith({ eyes: _, comment, ...item }, eyes) {
 
 // How long the lines a run's output adds wait to be saved with its state (saveLiveSoon()).
 const LIVE_SAVE_MS = 1000;
+
+// A private key, to its end (or the text's).
+const PRIVATE_KEY =
+  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
+
+// `value` as the store takes it (lib/store.mjs withoutSecrets() refuses a write holding a
+// secret): each of its strings without `secrets`, GitHub tokens or private keys. A comment
+// holding one (pasted by mistake) is saved without it, rather than keep the whole queue from
+// being written; the listener's own copy keeps it, for the run it waits for.
+export function storable(value, secrets = []) {
+  if (typeof value === "string") return redact(value, secrets).replace(PRIVATE_KEY, REDACTED);
+  if (Array.isArray(value)) return value.map((v) => storable(v, secrets));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, storable(v, secrets)]));
+  }
+  return value;
+}
 
 // The store's key of the queue: every task's comments waiting for a run, as one value. The
 // store lists no keys, and the next listener needs them all.
@@ -145,7 +163,8 @@ export function createRestart(ctx) {
   function saveQueue() {
     waiting ??= saving.then(() => {
       waiting = null;
-      return ctx.store.set(QUEUE_KEY, queueState()).then(
+      const value = storable(queueState(), ctx.storeSecrets?.() ?? []);
+      return ctx.store.set(QUEUE_KEY, value).then(
         () => true,
         (error) => (log(`Saving the queue: ${error.stack ?? error}`), false),
       );
@@ -156,17 +175,32 @@ export function createRestart(ctx) {
 
   // A comment's 👀 is a promise until GitHub answers: saved without it meanwhile (not waited
   // for: the comment would be lost with a listener killed before), and saved again once known.
+  // The 👀 still on their way, each until the queue is saved with it (eyesSaved()).
+  const eyesComing = new Set();
   function eyesOf(item) {
     if (eyesKnown.has(item)) return eyesKnown.get(item);
     eyesKnown.set(item, null);
-    item.eyes
-      ?.catch(() => null)
+    if (!item.eyes) return null;
+    const coming = item.eyes
+      .catch(() => null)
       .then((eyes) => {
         if (!eyes) return;
         eyesKnown.set(item, eyes);
-        saveQueue();
-      });
+        return saveQueue();
+      })
+      .finally(() => eyesComing.delete(coming));
+    eyesComing.add(coming);
     return null;
+  }
+
+  // Once the 👀 on their way are in the queue's saved state, or after `ms`: a listener that stops
+  // leaves the next one their ids, which it takes off with the comments' outcome.
+  function eyesSaved(ms) {
+    let timer;
+    const timeout = new Promise((resolve) => (timer = setTimeout(resolve, ms)));
+    return Promise.race([Promise.allSettled([...eyesComing]), timeout]).finally(() =>
+      clearTimeout(timer),
+    );
   }
 
   // Comments a run or a running session is taking (take()): out of `pending`, not yet in the
@@ -498,6 +532,7 @@ export function createRestart(ctx) {
     saveQueue,
     loadQueue,
     take,
+    eyesSaved,
     livePath,
     saveLive,
     saveLiveSoon,

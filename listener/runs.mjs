@@ -50,8 +50,9 @@ class Cancelled extends Error {}
 // background work behind can go on, or never exit (#204).
 export const ANSWER_GRACE_MS = 2 * 60_000;
 
-// How long a restored run whose grace passed while no listener was there waits for its
-// sandbox's output from meanwhile before it is stopped (follow()).
+// How long a restored run whose grace passed while no listener was there waits, once the
+// follow has skipped what was read before, for its sandbox's output from meanwhile before it is
+// stopped (follow()).
 const CATCH_UP_MS = 10_000;
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
@@ -373,17 +374,24 @@ export function createRuns(ctx) {
   // Also how a restarted listener picks a run up: what it already read is skipped.
   async function follow(task) {
     const live = task.live;
-    // A run that answered before the listener restarted: what was left of its grace (saved
-    // before its deadline was: all of it). One that passed while no listener was there gets
-    // a moment for the follow to read what its sandbox wrote meanwhile, which pushes it back.
-    if (live.answered) {
-      const caughtUp = Date.now() + Math.min(graceMs, catchUpMs);
-      linger(task, live.graceUntil == null ? undefined : Math.max(live.graceUntil, caughtUp));
-    }
+    // A run that answered before the listener restarted: all of its grace while the follow
+    // skips what was read before (a log of up to RUN_LOG_MAX_MB), then what was left of it
+    // (`graceUntil`), and at least a moment for the follow to read what its sandbox wrote
+    // while no listener was there, which pushes it back. Saved before its deadline was: all
+    // of it.
+    let saved = live.answered ? (live.graceUntil ?? null) : null;
+    if (live.answered) linger(task);
+    const caughtUp = () => {
+      if (saved === null || !live.answered || task.live !== live) return;
+      const until = Math.max(saved, Date.now() + Math.min(graceMs, catchUpMs));
+      saved = null;
+      linger(task, until);
+    };
     try {
       for (;;) {
         await ctx.runner.follow(task.name, {
           skip: { ...live.lines },
+          onCaughtUp: caughtUp,
           onOut: (line, at) => output(task, line, at),
           // Setup output (clone, install) before the agent starts.
           onErr: (line) => {
@@ -775,8 +783,10 @@ export function createRuns(ctx) {
     await live.saving;
     // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
     // own state goes: a listener killed between the two finds them in both, and the run's win.
-    await ctx.saveQueue?.();
-    rmSync(ctx.livePath(live.id), { force: true });
+    // Kept when the queue couldn't be written: the next listener finds them there.
+    if ((await ctx.saveQueue?.()) === false) {
+      log(`${live.key}: its state is kept, the queue couldn't be saved with what it put back`);
+    } else rmSync(ctx.livePath(live.id), { force: true });
     task.live = null;
     task.running = false;
     ctx.running--;

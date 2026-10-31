@@ -209,8 +209,9 @@ export function createDockerRunner({
   // Only whole lines count: one cut short is read again, whole, by the next follow(). A line
   // over MAX_LINE is cut there and counts as one line, the same for the next follow(). Each
   // handler gets the line and when Docker says it was written (ms; null without a stamp):
-  // Docker's time, so a line read again after a restart keeps its own.
-  function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr }) {
+  // Docker's time, so a line read again after a restart keeps its own. `onCaughtUp()`: once,
+  // when both streams are past the lines skipped (at once with none), before the next line.
+  function follow(name, { skip = { out: 0, err: 0 }, onOut, onErr, onCaughtUp = () => {} }) {
     return new Promise((resolve) => {
       const child = spawn("docker", ["logs", "--follow", "--timestamps", name], {
         stdio: ["ignore", "pipe", "pipe"],
@@ -218,10 +219,22 @@ export function createDockerRunner({
       // Whole lines, by bytes (lines.mjs): a character split between two chunks isn't
       // mangled. A handler that throws (its log's disk full, say) loses that line, not the
       // listener.
+      let behind = 0;
+      const past = () => {
+        if (--behind) return;
+        try {
+          onCaughtUp();
+        } catch (error) {
+          log(`docker logs ${name}: ${error.stack ?? error}`);
+        }
+      };
       const lines = (stream, n, each) => {
         let seen = 0;
         const split = splitLines((line, at) => {
-          if (seen++ < n) return;
+          if (seen++ < n) {
+            if (seen === n) past();
+            return;
+          }
           try {
             each(line, at);
           } catch (error) {
@@ -230,8 +243,10 @@ export function createDockerRunner({
         });
         stream.on("data", (data) => split(Buffer.isBuffer(data) ? data : Buffer.from(data)));
       };
+      behind = 1 + (skip.out > 0) + (skip.err > 0);
       lines(child.stdout, skip.out, onOut);
       lines(child.stderr, skip.err, onErr);
+      past();
       child.on("error", (error) => log(`docker logs ${name}: ${error.message}`));
       child.on("close", resolve);
     });
