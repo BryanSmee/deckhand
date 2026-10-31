@@ -104,6 +104,33 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   assert.deepEqual(runsNetworkPeers(compose.services), ["egress"]);
 });
 
+// The broker tells its callers apart by the network a call arrives on (SERVICE_NETWORKS): each
+// caller's subnet there has to be the one of a network it shares with the broker, and with no
+// other service, or another service's calls would count as its own.
+test("compose.yaml: the broker's SERVICE_NETWORKS names each caller's own network to it", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const subnet = (net) =>
+    /^\$\{[A-Z_]+:-(.+)\}$/.exec(compose.networks[net]?.ipam?.config?.[0]?.subnet ?? "")?.[1];
+  const text = compose.services.broker.environment.SERVICE_NETWORKS.replace(
+    /\$\{[A-Z_]+:-([^}]+)\}/g,
+    "$1",
+  );
+  const callers = Object.fromEntries(text.split(",").map((part) => part.split("=")));
+  const brokerNets = networksOf(compose.services.broker);
+  for (const [caller, cidr] of Object.entries(callers)) {
+    const net = brokerNets.find((n) => subnet(n) === cidr);
+    assert.ok(net, `${caller}=${cidr}: no network of the broker's has that subnet`);
+    const on = Object.entries(compose.services)
+      .filter(([name, service]) => name !== "broker" && networksOf(service).includes(net))
+      .map(([name]) => name);
+    assert.equal(on.length, 1, `${net}: ${on.join(", ")}`);
+    assert.ok(RUNS[on[0]].includes(caller), `${net} is ${on[0]}'s, not ${caller}'s`);
+    assert.equal(compose.networks[net].internal, true, `${net}: no way out`);
+  }
+  // Every network of the broker's is a caller's: no other service reaches it.
+  assert.equal(Object.keys(callers).length, brokerNets.length);
+});
+
 test("the check fails on a network that joins too much", () => {
   // A service compose.yaml would add without saying what it runs.
   assert.deepEqual(

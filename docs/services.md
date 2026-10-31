@@ -1,7 +1,8 @@
 # Services (target)
 
-Where the listener is headed once it is split (#499, its parts #500 to #509). Today it is still one
-process, beside the egress proxy: [architecture.md](architecture.md) describes what runs now.
+Where the listener is headed once it is split (#499, its parts #500 to #509). So far the broker
+(#505) runs apart, beside the egress proxy; the rest is still one process, the listener:
+[architecture.md](architecture.md) describes what runs now.
 
 The split follows who holds which secret and who can reach what. The only service the internet
 reaches holds neither the App's key, the operator's agent credentials nor the Docker socket, and
@@ -66,8 +67,12 @@ flowchart LR
 | policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                                            |
 | proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                                               |
 
-The broker also serves the endpoints a sandbox calls about its own run: progress, needs-input, its
-files. Every service that calls another also calls it for its own service token (#500), which the
+The broker also serves the endpoints a sandbox calls about its own run: its token's renewal, its
+inbox and files (`broker/`, #505). A run's progress and its questions still come from its
+log, which the runner follows: nothing for a sandbox to call yet. The egress policy stays with
+the listener until the runner moves out (#503): it answers by the address a connection comes
+from, which only the runner can tell, and gives the proxy the network it vouches for to the
+broker. Every service that calls another also calls it for its own service token (#500), which the
 diagram leaves out; the policy service calls none, and checks the tokens it gets offline. The dotted
 arrows are narrow: the runner fetches a repository's tarball from the github service for build
 contexts and preview hooks (the App's key stays there), edge reads a run's log from the runner for
@@ -112,7 +117,7 @@ file backend on one node, Redis on several (#509).
 
 Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
 accepting connections, finishes those in flight within its grace period, then exits. The proxy
-uses it so far; the listener keeps its own handler (`listener/server.mjs`), and each service uses
+and the broker (30 s, over an inbox's long poll; `/ready` answers `503` meanwhile) use it so far; the listener keeps its own handler (`listener/server.mjs`), and each service uses
 `drainOnSigterm()` as it moves out. With two
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.

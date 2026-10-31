@@ -490,9 +490,13 @@ export function createProxy({
       const url = new URL(brokerService.url);
       url.pathname = to.pathname;
       url.search = to.search;
+      // Its own token first, from a broker that may be restarting too: waited for as the call is.
       let authorization;
       try {
-        authorization = await brokerService.header();
+        authorization = await untilReached(() => brokerService.header(), {
+          ...wait,
+          gone: () => req.socket.destroyed,
+        });
       } catch {
         return unreachable(res, "the broker");
       }

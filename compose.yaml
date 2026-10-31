@@ -256,6 +256,7 @@ services:
       BROKER_SERVICE_URL: http://broker:8081
     # Its way out (the hosts granted to runs, the listener), and its network to the broker.
     networks: [default, broker-proxy]
+    depends_on: [broker]
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume

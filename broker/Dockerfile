@@ -11,5 +11,7 @@ COPY lib/ lib/
 RUN mkdir /keys /data && chown node:node /keys /data && chmod 700 /keys
 USER node
 EXPOSE 8081
-HEALTHCHECK --interval=30s --timeout=5s CMD wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1
+# Node's fetch, which no HTTP_PROXY of the environment takes elsewhere.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \
+  CMD ["node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||8081)+'/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
 CMD ["node", "broker/server.mjs"]

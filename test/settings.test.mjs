@@ -1,4 +1,5 @@
-// Every environment variable the listener and the egress proxy read is in docs/setup.md: a
+// Every environment variable the listener, the egress proxy and the broker read is in
+// docs/setup.md: a
 // setting nobody can find is one nobody can change. Every setting config.yaml takes is in
 // compose.yaml too, which passes .env's value.
 import assert from "node:assert/strict";
@@ -19,7 +20,7 @@ function sources(dir) {
 // and proxy.mjs read them.
 function settingsRead() {
   const names = new Set(Object.keys(SETTINGS));
-  for (const source of [...sources("listener"), ...sources("proxy")]) {
+  for (const source of [...sources("listener"), ...sources("proxy"), ...sources("broker")]) {
     for (const [, name] of source.matchAll(/\b(?:env\.|setting\(")([A-Z][A-Z0-9_]*)/g))
       names.add(name);
   }
