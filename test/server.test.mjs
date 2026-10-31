@@ -601,10 +601,14 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     };
   }
 
+  // 127.0.0.1, not localhost: a runner whose localhost is ::1 would log another client address
+  // than the one awaited below, and the test would wait forever (GitHub's, #540).
+  const host = "127.0.0.1";
+
   // Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
   function headersOnly(port, headers) {
     return new Promise((resolve, reject) => {
-      const req = request({ port, method: "POST", path: "/webhook", headers }, (res) => {
+      const req = request({ host, port, method: "POST", path: "/webhook", headers }, (res) => {
         resolve(res.statusCode);
         res.resume();
         req.destroy();
@@ -630,7 +634,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // One client holds its share of the places, 4, with stalled bodies: its 5th is refused...
     const held = [];
     for (let i = 0; i < 4; i++) {
-      const req = request({ port, method: "POST", path: "/webhook", headers: signed });
+      const req = request({ host, port, method: "POST", path: "/webhook", headers: signed });
       req.on("error", () => {});
       req.write("{");
       held.push(req);
@@ -643,6 +647,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const delivered = await new Promise((resolve, reject) => {
       const req = request(
         {
+          host,
           port,
           method: "POST",
           path: "/webhook",

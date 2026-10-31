@@ -354,7 +354,7 @@ export function createRunnerClient({
   // A run's whole log, as text (a digest of it, a summary of a run that has none).
   async function logText(id) {
     const parts = [];
-    for (let offset = 0; ; ) {
+    for (let offset = 0; ;) {
       const { size, data } = await readLog(id, { offset, caller: orchestrator });
       parts.push(data);
       offset += data.length;
