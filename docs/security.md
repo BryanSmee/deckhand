@@ -1635,8 +1635,8 @@ come from GitHub, not the dashboard: anyone who can take the needs-input label o
 pull request (the repo's triage permission, not `ALLOWED_USERS`) sets aside the questions of
 its task's last run, and a close or merge does too. That only changes what the dashboard shows
 (the task no longer waits for input); it starts, posts and allows nothing, and
-`wait_for_answers` still goes by the label itself. The dashboard's Undo takes one back as it
-does a dismissal.
+`wait_for_answers` still goes by the label itself. The label put back asks again, and so does
+the dismiss API's `undo` for that run (the dashboard shows no Undo for these).
 
 An inbox entry sent from the dashboard (`POST /api/repos/<owner>/<repo>/inbox`) passes the
 repository's half of these checks (same origin, the user in `ALLOWED_USERS` and the repo's

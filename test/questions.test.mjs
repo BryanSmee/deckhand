@@ -384,7 +384,7 @@ test("an allowed user's comment on a labelled issue takes the label off; Deckhan
   assert.equal(pr.comment, undefined);
 });
 
-test("a pull request's label taken off comes as a pull_request delivery: its run's questions set aside", () => {
+test("a pull request's label taken off, or put back, comes as a pull_request delivery", () => {
   const delivery = (more = {}) => ({
     action: "unlabeled",
     installation: { id: 1 },
@@ -405,9 +405,14 @@ test("a pull request's label taken off comes as a pull_request delivery: its run
   // The App's bot taking it off: the listener's own doing, which answers nothing.
   const bot = delivery({ sender: { login: BOT, type: "Bot" } });
   assert.equal(inputEvent(config, "pull_request", bot, BOT), null);
+  // Put back by someone else: its questions ask again. By the bot (a run asking): nothing.
+  const back = inputEvent(config, "pull_request", delivery({ action: "labeled" }), BOT);
+  assert.deepEqual([back.relabelled, back.unlabelled], [{ by: "mallory" }, undefined]);
+  const asking = delivery({ action: "labeled", sender: { login: BOT, type: "Bot" } });
+  assert.equal(inputEvent(config, "pull_request", asking, BOT), null);
   // Another label, another action, another repo, no installation, or no label configured.
   assert.equal(inputEvent(config, "pull_request", delivery({ label: { name: "bug" } }), BOT), null);
-  assert.equal(inputEvent(config, "pull_request", delivery({ action: "labeled" }), BOT), null);
+  assert.equal(inputEvent(config, "pull_request", delivery({ action: "edited" }), BOT), null);
   const elsewhere = delivery({ repository: { full_name: "evil/repo" } });
   assert.equal(inputEvent(config, "pull_request", elsewhere, BOT), null);
   assert.equal(inputEvent(config, "pull_request", delivery({ installation: null }), BOT), null);
@@ -491,6 +496,12 @@ test("applyInput: the label and the list follow the change, by the repo's own us
     aside.calls.filter(([what]) => what === "aside"),
     [["aside", 1, "org/repo#3", "carol"]],
   );
+  // A pull request's label put back: they wait again.
+  aside.ctx.dismissals.restoreOn = (runs, key) => (aside.calls.push(["back", key]), key);
+  const pr = { repo: "org/repo", key: "org/repo#pr-9", number: 9, title: null, base: "main" };
+  await applyInput(aside.ctx, { ...pr, relabelled: { by: "carol" } });
+  assert.deepEqual(aside.calls.at(-2), ["back", "org/repo#pr-9"]);
+  assert.match(aside.calls.at(-1)[1], /org\/repo#pr-9: label put back/);
 });
 
 const ticked = (a, b) =>

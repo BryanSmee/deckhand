@@ -147,10 +147,14 @@ aside in `dismissed.json` while that run is the task's last:
 
 - someone other than the App's bot takes the label off the task's issue or pull request: an
   `issues` or `pull_request` `unlabeled` delivery, or, for an issue's label taken off while the
-  listener was down, the label's listing at start (it lists issues only: a pull request's task
-  keeps asking until its next run or its close). The bot's own removals don't count: a run starting, or a comment that takes
-  the label off and starts nothing, answers none of the questions. Putting the label back asks
-  again;
+  listener was down, the label's listing at start (every page of it; it lists issues only, so a
+  pull request's task keeps asking until its next run or its close). The listing takes an issue
+  missing from it for one whose label came off: renaming `NEEDS_INPUT_LABEL` sets aside the
+  questions of the runs that asked under the old name. The bot's own removals don't count: a
+  run starting, or a comment that takes the label off and starts nothing, answers none of the
+  questions. Putting the label back asks again: an issue's `inputs` entry newer than the
+  set-aside, or a pull request's `labeled` delivery from someone other than the bot, which
+  takes the entry back;
 - the issue or its pull request closes or merges: its `closed` delivery, or, for one the
   listener didn't hear, a check at start of GitHub's `closed_at` against when the run ended. A
   run that asks after the close (a comment on a closed issue starts one) still waits. An issue

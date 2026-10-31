@@ -34,6 +34,17 @@ export function createDismissals({ path, now = Date.now } = {}) {
     return asked?.key ?? null;
   }
 
+  // The questions of task `key`'s last run asking again: the label put back. Its key when
+  // they were set aside, else null.
+  function restoreOn(runs, key) {
+    const asked = askedOn(runs, key);
+    const entry = asked && dismissed.get(asked.key);
+    if (!entry?.questions || entry.runId !== asked.runId) return null;
+    dismissed.delete(asked.key);
+    save();
+    return asked.key;
+  }
+
   // Whether run `runId` of the task was dismissed, which Undo takes back. A run's questions set
   // aside are undone the same way: they wait again.
   function undo(key, runId) {
@@ -61,6 +72,7 @@ export function createDismissals({ path, now = Date.now } = {}) {
     dismiss,
     setAside,
     setAsideOn,
+    restoreOn,
     undo,
     prune,
     // Whether run `runId` is the task's entry, dismissed or set aside.

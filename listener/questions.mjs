@@ -188,10 +188,10 @@ export function replyQuestions(text) {
 // section is fully ticked by ticks that answer nothing, the bot's say (editedInput()); `ticked`:
 // the label comes off for its ticks. `unlabelled`: { by }, the label taken off the issue or
 // pull request by someone other than the App's bot, which sets its task's last run's questions
-// aside.
+// aside; `relabelled`: { by }, put back on a pull request, which makes them ask again.
 export function inputEvent(config, event, p, bot) {
   const name = config.needsInputLabel;
-  if (event === "pull_request") return name ? pullUnlabelled(config, p, name, bot) : null;
+  if (event === "pull_request") return name ? pullLabel(config, p, name, bot) : null;
   if (!name || (event !== "issues" && event !== "issue_comment")) return null;
   const repo = p.repository?.full_name;
   const issue = p.issue;
@@ -226,16 +226,19 @@ export function inputEvent(config, event, p, bot) {
   return ISSUE_ACTIONS[p.action]?.(ctx) ?? null;
 }
 
-// The label taken off a pull request by someone other than the App's bot: GitHub says so in a
-// `pull_request` delivery, never an `issues` one. Only the questions of the pull request's own
-// task's run are set aside (`unlabelled`, applyInput()): pull requests aren't in the list of
-// issues waiting for input, and nothing waits for their answers (waits.mjs).
-function pullUnlabelled(config, p, name, bot) {
+// The label taken off a pull request, or put back, by someone other than the App's bot: GitHub
+// says so in a `pull_request` delivery, never an `issues` one. Only the questions of the pull
+// request's own task's run are set aside (`unlabelled`, applyInput()), or ask again
+// (`relabelled`): pull requests aren't in the list of issues waiting for input, whose entry
+// does that for an issue (board.mjs), and nothing waits for their answers (waits.mjs).
+function pullLabel(config, p, name, bot) {
   const repo = p.repository?.full_name;
   const pull = p.pull_request;
+  const action = { unlabeled: "unlabelled", labeled: "relabelled" }[p.action];
   // Fail closed: only the App's installations, on allowed repos.
-  if (p.action !== "unlabeled" || !p.installation?.id || !repo || !pull?.number) return null;
+  if (!action || !p.installation?.id || !repo || !pull?.number) return null;
   if (!repoAllowed(config, repo) || !hasLabel([p.label], name)) return null;
+  // The bot's own: a run starting or asking, a comment that may answer.
   if (isBot(p.sender, bot)) return null;
   return {
     repo,
@@ -243,7 +246,7 @@ function pullUnlabelled(config, p, name, bot) {
     number: pull.number,
     title: null,
     base: p.repository.default_branch,
-    unlabelled: { by: p.sender?.login ?? null },
+    [action]: { by: p.sender?.login ?? null },
   };
 }
 
@@ -321,7 +324,7 @@ function editedInput({ p, issue, change, labelled, who, questions }) {
 // longer wait either (`unlabelled`: { by }, applyInput()). The bot takes it off when a run
 // starts, or for a comment that may answer them (commentInput()), even one that starts
 // nothing: the run's questions still wait then. A pull request's label comes as a
-// `pull_request` delivery (pullUnlabelled()).
+// `pull_request` delivery (pullLabel()).
 function labelInput({ p, issue, name, change, questions, bot }) {
   if (!hasLabel([p.label], name)) return null;
   if (issue.state === "closed") return { ...change, track: false };
@@ -408,6 +411,11 @@ export async function applyInput(ctx, change) {
   if (change.unlabelled) {
     const aside = ctx.dismissals.setAsideOn(ctx.runs, key, change.unlabelled.by);
     if (aside) log(`${aside}: label removed, its last run's questions set aside`);
+  }
+  // A pull request's label put back: its run's questions wait again.
+  if (change.relabelled) {
+    const back = ctx.dismissals.restoreOn(ctx.runs, key);
+    if (back) log(`${back}: label put back, its last run's questions wait again`);
   }
   // Answered: a comment that waited for the answers starts (waits.mjs).
   if (change.answered) await ctx.waits.answered(repo, number);

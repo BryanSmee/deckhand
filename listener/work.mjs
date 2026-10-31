@@ -146,7 +146,7 @@ export function checkAction(body) {
 // "running", "queued" or null. `analysis`: run digests (analysis.mjs createAnalysis()).
 // `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
 // `dismissals`: the failed runs dismissed from the dashboard, and the runs whose questions
-// were set aside, which Undo takes back too (dismissals.mjs).
+// were set aside, which the API's undo takes back too (dismissals.mjs).
 // `order`: the run order (order.mjs); `queueOrder()`: the tasks waiting for a slot, in the
 // order they start (tasks.mjs). `reviews`: the review loop (reviews.mjs createReviews()), for
 // the dashboard's Fix.

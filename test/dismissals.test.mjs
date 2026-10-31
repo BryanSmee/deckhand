@@ -78,6 +78,15 @@ test("setAside: a run's questions, once; askedOn: the task's last run, if it ask
       ["org/app#pr-9", "b", "carol"],
     ],
   );
+  // restoreOn(): the label put back takes the entry of its task's last run back, nothing else.
+  d.dismiss("org/app#5", "a", "alice");
+  assert.equal(d.restoreOn(runs, "org/app#5"), null);
+  assert.equal(d.restoreOn(runs, "org/app#6"), null);
+  assert.equal(d.restoreOn(runs, "org/app#pr-9"), "org/app#pr-9");
+  assert.deepEqual(
+    d.list().map((x) => x.key),
+    ["org/app#1", "org/app#5"],
+  );
 });
 
 test("closed since their run asked: set aside after GitHub's closed_at, not before", async () => {

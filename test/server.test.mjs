@@ -288,6 +288,11 @@ async function fakeGitHub(files = {}) {
       if (req.url.startsWith("/installation/repositories?")) {
         return res.end(files.installed ?? JSON.stringify({ repositories: [] }));
       }
+      // The repo's open issues with the needs-input label (inputs.mjs sync()), when the test
+      // sets them.
+      if (req.url.startsWith("/repos/org/repo/issues?labels=") && files.labelled) {
+        return res.end(files.labelled);
+      }
       // The repo's open issues (the backlog), as JSON, when the test sets them.
       if (req.url.startsWith("/repos/org/repo/issues?state=open&") && files.backlog) {
         return res.end(files.backlog);
@@ -4483,15 +4488,22 @@ mounts:
       "org/repo#pr-6": "done",
       "org/repo#9": "done",
     });
+    // The label put back on #6: its questions ask again.
+    await send(
+      { action: "labeled", installation, repository, sender, pull_request: pull, label },
+      "pull_request",
+    );
+    await listener.until("org/repo#pr-6: label put back, its last run's questions wait again");
+    assert.equal((await states())["org/repo#pr-6"], "needs-input");
   });
 
-  test("at start: an issue closed while no listener heard it sets its run's questions aside, after GitHub's closed_at", async (t) => {
+  test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const files = {};
     const { port, listener } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
-      for (const n of [5, 8]) {
+      for (const n of [5, 8, 11]) {
         writeFileSync(
           join(dir, "logs", `org-repo-${n}-1000.log`),
           [
@@ -4529,9 +4541,22 @@ mounts:
         title: "Eight",
         ...closedAt(Date.now() - 3_600_000),
       });
+      // #11 was labelled when the listener last heard of it; the label's listing no longer has
+      // it (inputs.mjs sync()).
+      writeFileSync(
+        join(dir, "inputs.json"),
+        JSON.stringify({ "org/repo#11": { since: 1000, questions: null } }),
+      );
+      files.installed = JSON.stringify({
+        repositories: [{ full_name: "org/repo", default_branch: "main" }],
+      });
+      files.labelled = "[]";
       return { GITHUB_URL: github.url };
     });
     await listener.until("Closed since their run asked: org/repo#5");
+    await listener.until(
+      "org/repo#11: label removed meanwhile, its last run's questions set aside",
+    );
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -4547,6 +4572,7 @@ mounts:
     assert.deepEqual(Object.fromEntries(tasks.map((x) => [x.key, x.state])), {
       "org/repo#5": "done",
       "org/repo#8": "needs-input",
+      "org/repo#11": "done",
     });
   });
 
