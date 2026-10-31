@@ -135,7 +135,12 @@ decision, `push`: [the push input](repo-config.md#the-push-input)) now need an a
 (`allow_github`, `allow_push`), which Deckhand's `policy/mode-<mode>.rego` files give each
 mode as its ceiling did, with the refusals of the old per-feature files
 ([the default policies](repo-config.md#the-default-policies)); `allow.rego` no longer allows
-`github`. Without policies, every write and push is refused. Deckhand no longer ships
+`github`. Without policies, every write and push is refused. **A `policy/allow.rego` of yours
+that kept `allow_github := true`** (as the note above said to) now allows every write of every
+mode, an inbox entry's or a review's included, with no ceiling left to cap it: remove that
+rule, and add no `allow_push := true`, unless you mean every mode to write or push all that
+the built-in checks don't refuse. The listener's log at start and each repository's
+Policies tab warn of such a rule. Deckhand no longer ships
 `github.rego` or the `gh-*.rego` files but `gh-checks.rego`, `gh-linked-branch.rego` and
 `gh-reviewers.rego`: a file of yours in the grants folder that replaced one of the others by
 name (to broaden a feature, say) now replaces nothing and only adds its rules beside the

@@ -842,6 +842,31 @@ test("check: a review.rego that replaces Deckhand's without a word on bots is wa
   assert.deepEqual((await repo.policies.describe("org/repo", "main")).warnings, [onboarding]);
 });
 
+test("check: an operator's allow_github or allow_push whatever the input is warned of", async (t) => {
+  const { policies } = setup(t);
+  const files = new Map([
+    // An allow.rego kept from before the modes' ceilings became allow rules.
+    ["allow.rego", "package deckhand\n\nallow_merge := true\n\nallow_github := true\n"],
+    ["push.rego", "package deckhand\n\nallow_push if true # every push\n"],
+    // Narrowed to a mode, or a condition: nothing to say.
+    [
+      "plan.rego",
+      'package deckhand\n\nallow_github if input.mode == "plan"\n\nallow_push if {\n  input.mode == "plan"\n}\n',
+    ],
+  ]);
+  const { warnings } = await policies.check(files);
+  assert.deepEqual(
+    warnings.map((w) => w.split(":")[0] + w.slice(w.indexOf("`"), w.indexOf("` ") + 1)),
+    ["allow.rego`allow_github`", "push.rego`allow_push`"],
+  );
+  assert.match(warnings[0], /allows every write to GitHub of every mode/);
+  assert.match(warnings[1], /allows every push of every mode/);
+  // A repo's counts only for its own modes, which need the operator's allow too.
+  assert.deepEqual((await policies.check(files, "repo")).warnings, []);
+  // Deckhand's own files have none.
+  assert.deepEqual((await policies.check(builtInPolicies())).warnings, []);
+});
+
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
   const opa = fakeOpa({
     checked: (files) =>

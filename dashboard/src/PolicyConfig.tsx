@@ -146,7 +146,7 @@ const DECISIONS: {
     denies:
       "A denial refuses a run's write to GitHub (REST or GraphQL), or its reads of CI's checks (read_checks, as gh pr checks and gh pr view make) and of projects (read_projects); gh prints the messages to the agent.",
     refused: (until) =>
-      `Every run's write to GitHub, and every read of CI's checks, is refused ${until}.`,
+      `Every run's write to GitHub, and every read of CI's checks and of projects, is refused ${until}.`,
     allows: () =>
       "Its allow rules decide what each mode writes: Deckhand's mode-<mode>.rego, one file per mode.",
   },

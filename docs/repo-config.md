@@ -1212,6 +1212,11 @@ tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
    rule matches it and no deny rule does. Deckhand's defaults allow each mode what it writes,
    one file per mode ([the default policies](#the-default-policies)); no rule, no write.
 
+A write's target is looked up on GitHub (with the listener's token, whose rate limit every run
+shares) before the policies are asked: once a run's refused writes have cost 100 look-ups, its
+next writes are refused (`429`) before any, so a run steered into writes no rule allows can't
+spend that limit.
+
 A sub-issue link (`POST`, `DELETE` or reordering `…/issues/<parent>/sub_issues`) names two
 issues: the parent, its target, and the child, by its id: the child must be an issue the run
 created, or one already under the run's issue, and moving an issue from another parent

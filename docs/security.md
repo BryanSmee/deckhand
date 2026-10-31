@@ -688,7 +688,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   no thread, is refused whatever the policies say. A
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify and one outside the run's repository are refused before any
-    policy runs, and so are the **built-in checks** that hold whatever a policy says: a link's
+    policy runs, and so is every write of a run whose refused writes already cost 100 look-ups
+    on GitHub (`MAX_REFUSED_LOOKUPS`: they share the listener's rate limit), and so are the **built-in checks** that hold whatever a policy says: a link's
     child and blocker (above), a reaction removed only if the run added it, an assignee, a
     project, a pull request's branch ([The default branch](#the-default-branch)), a rerun
     (below), `NEEDS_INPUT_LABEL` (which a run's label writes neither add nor remove on the

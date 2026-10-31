@@ -999,7 +999,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   const samples = results.filter((r) => r.sample);
   if (samples.length) {
     parts.push(
-      "The sample lines (`run`'s comments, `github`'s writes and read, `link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
+      "The sample lines (`run`'s comments, `github`'s writes and read, `link_branch`'s branch, `push`'s branch) are not decisions on this pull request: they aren't counted as denials.",
     );
   }
   parts.push(

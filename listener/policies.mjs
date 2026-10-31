@@ -206,6 +206,13 @@ export const MAX_MESSAGE_LENGTH = 200;
 // call that would see a service of another version, so they are asked again after this.
 export const DEFAULTS_MS = 30_000;
 
+// A run's writes or pushes allowed whatever the input (`allow_github := true`, as an operator's
+// allow.rego had before the modes' ceilings became allow rules): every mode would write all
+// that the built-in checks don't refuse, an inbox entry's or a review's included. The config
+// check warns of it.
+const UNCONDITIONAL =
+  /^allow_(github|push)\s*(?:(?::=|=)\s*true|if\s+true|if\s*\{\s*true\s*\})?\s*(?:#.*)?$/gm;
+
 // The line of `text` (1-based) where `rule` is first defined, null when none starts one.
 function lineOf(text, rule) {
   const at = text.split("\n").findIndex((l) => new RegExp(`^${rule}\\b`).test(l));
@@ -791,6 +798,13 @@ export function createPolicies({
       text: line(`${file}:${row ?? "?"}: ${message}`),
     });
     for (const [name, text] of files) {
+      if (layer === "operator") {
+        for (const [, decision] of text.matchAll(UNCONDITIONAL)) {
+          warnings.push(
+            `${name}: \`allow_${decision}\` allows every ${decision === "push" ? "push" : "write to GitHub"} of every mode, whatever it reads: no built-in ceiling caps it any more (issue #496). Remove it, or narrow it to the modes it is for (Deckhand's mode-<mode>.rego allow each mode its own)`,
+          );
+        }
+      }
       for (const rule of rulesOf(text)) {
         if (!RULES.includes(rule)) {
           warnings.push(

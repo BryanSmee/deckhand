@@ -43,7 +43,7 @@
 // A review thread's reply, resolution or reopening (issue #449) is a `reply`, a `resolve` or an
 // `unresolve` on its pull request: the thread, by its first comment's id, is looked up on
 // GitHub, must be on that pull request, and its first comment's author goes to the policies
-// (resolveThread(); their default: ../policy/gh-review-threads.rego). A new review, or a review
+// (resolveThread(); their default: ../policy/mode-work.rego). A new review, or a review
 // comment that answers no thread, stays `review`.
 // An item added to a project (v2) is a `project` on its content (issue #454), over GraphQL only
 // (github-graphql.mjs addProjectV2ItemById): its project must be one the operator's grants list
@@ -61,6 +61,12 @@ export const ACTIONS_WRITE = { actions: "write" };
 // or single jobs), whatever the policies allow: GitHub's own `run_attempt` counts every rerun of
 // a workflow run, the policies read it (`target.attempt`).
 export const MAX_RERUNS = 2;
+// How many look-ups on GitHub (with the listener's token, whose rate limit every run shares) a
+// run's writes may cost when the checks or the policies refuse them: each write's target is
+// looked up before the policies are asked, so a run that only reads, steered by what it read
+// into writes no rule allows, would otherwise spend them unbounded. Past it, its writes are
+// refused before any look-up. A run whose writes go on spends none of it.
+export const MAX_REFUSED_LOOKUPS = 100;
 // A workflow run's or job's conclusions a rerun is for.
 export const RERUN_CONCLUSIONS = new Set(["failure", "timed_out", "cancelled"]);
 // The events whose runs test a branch's head: a push to it, its pull request.
@@ -532,6 +538,8 @@ export function createWriteChecks({
   listenerReacted = () => false,
   log = () => {},
 }) {
+  // run → the look-ups on GitHub its refused writes cost (MAX_REFUSED_LOOKUPS).
+  const spent = new WeakMap();
   // Required, so a caller that forgets it fails here rather than leaving the label unguarded:
   // () => null where nothing waits for answers.
   if (typeof needsInputLabel !== "function") {
@@ -920,9 +928,27 @@ export function createWriteChecks({
   // same as check(). `memo`: a Map that keeps GitHub's answers across the writes of one call (a
   // GraphQL call's several fields), so the same target is looked up once.
   async function checkWrite(run, write, memo = new Map()) {
+    const used = spent.get(run) ?? 0;
+    if (used >= MAX_REFUSED_LOOKUPS) {
+      return refusal(
+        429,
+        `this run's refused writes cost ${used} look-ups on GitHub already: Deckhand checks no more of its writes`,
+      );
+    }
+    const counter = { looked: 0 };
+    const refused = await checked(run, write, memo, counter);
+    if (refused) spent.set(run, used + counter.looked);
+    return refused;
+  }
+
+  // checkWrite()'s work, each look-up it makes counted in `counter.looked`.
+  async function checked(run, write, memo, counter) {
     const get = (repo, path) => {
       const key = `${repo} ${path}`;
-      if (!memo.has(key)) memo.set(key, lookup(repo, path));
+      if (!memo.has(key)) {
+        counter.looked++;
+        memo.set(key, lookup(repo, path));
+      }
       return memo.get(key);
     };
     if (write.repo !== run.repo) {

@@ -11,6 +11,7 @@ import {
   classify,
   createReadChecks,
   createWriteChecks,
+  MAX_REFUSED_LOOKUPS,
   runTraits,
 } from "../listener/github-writes.mjs";
 import { createPolicies } from "../listener/policies.mjs";
@@ -1727,6 +1728,135 @@ test("a blocked-by link's blocker by its id is looked for among the repo's newes
   });
   assert.match((await farCheck(run("work"), w)).message, /an open issue of its repository/);
   assert.equal(far.calls.filter((c) => c.includes("state=open")).length, 10);
+});
+
+// Policies that allow every write, recording the target each one resolved to: what the
+// built-in checks let through, and the kind they resolved, whatever opa is on the PATH.
+function recordingPolicies() {
+  const seen = [];
+  return { seen, deny: async (rule, repo, ref, input) => (seen.push(input().target), []) };
+}
+
+test("the built-in checks hold whatever the policies allow: links, blockers, reactions, comments", async () => {
+  const { lookup } = fakeLookup(GITHUB);
+  const policies = recordingPolicies();
+  const { check, answered } = createWriteChecks({
+    policies,
+    needsInputLabel: () => null,
+    lookup,
+    bot: BOT,
+  });
+  const work = run("work");
+  const kindOf = async (w) => (
+    assert.equal(await check(work, w), null, w.path),
+    policies.seen.at(-1).kind
+  );
+  const refused = async (w, why, status = 403) => {
+    const got = await check(work, w);
+    assert.match(got?.message ?? "", why, `${w.method} ${w.path}`);
+    assert.equal(got.status, status, `${w.method} ${w.path}`);
+  };
+  // Never classified, another repository's, a review, a comment it didn't post, a review
+  // comment by its id, an issue that isn't there, an assignee who isn't allowed.
+  await refused(write("PUT", "repos/org/repo/contents/a", {}), /can't tell what this write does/);
+  await refused(
+    write("POST", "repos/other/repo/issues/1/comments", { body: "x" }),
+    /its own repository/,
+  );
+  await refused(
+    write("POST", "repos/org/repo/pulls/7/reviews", { event: "APPROVE" }),
+    /can't review here/,
+  );
+  await refused(
+    write("PATCH", "repos/org/repo/issues/comments/5", { body: "x" }),
+    /can edit only the comments it posted/,
+  );
+  await refused(
+    write("PATCH", "repos/org/repo/pulls/comments/5", { body: "x" }),
+    /can't edit here/,
+  );
+  await refused(
+    write("POST", "repos/org/repo/issues/99/comments", { body: "x" }),
+    /#99 isn't there/,
+    404,
+  );
+  await refused(
+    write("POST", "repos/org/repo/issues", { title: "x", assignees: ["a"] }),
+    /assigns only the repository's allowed users or its own bot, not @a/,
+  );
+  // A sub-issue link's child: one under its issue or one it created, never moved.
+  const link = (parent, body) => write("POST", `repos/org/repo/issues/${parent}/sub_issues`, body);
+  await refused(
+    link(1, { sub_issue_id: 9 }),
+    /links only issues it created, or those already under its issue/,
+  );
+  for (const replace_parent of [true, "true", 1, "1", "True", "yes", null, "false", 0]) {
+    await refused(
+      link(1, { sub_issue_id: 202, replace_parent }),
+      /can't move an issue from another parent/,
+    );
+  }
+  assert.equal(await check(work, link(1, { sub_issue_id: 202, replace_parent: false })), null);
+  answered(work, GRAPHQL_CREATE, 200, created(30));
+  answered(work, REST_CREATE, 201, restIssue(35));
+  for (const id of [900, 905]) assert.equal(await check(work, link(1, { sub_issue_id: id })), null);
+  assert.equal(
+    await kindOf(write("PATCH", "repos/org/repo/issues/30", { body: "x" })),
+    "created_issue",
+  );
+  // The bot's issue another run filed, an older one an answer named, a person's: not the run's.
+  await refused(link(1, { sub_issue_id: 904 }), /links only/);
+  answered(work, GRAPHQL_CREATE, 200, created(31));
+  answered(work, GRAPHQL_CREATE, 200, created(50));
+  for (const n of [34, 31, 50]) {
+    assert.equal(
+      await kindOf(write("PATCH", `repos/org/repo/issues/${n}`, { body: "x" })),
+      "other_issue",
+      `#${n}`,
+    );
+  }
+  // Another run's creations aren't this one's.
+  await assert.ok(await check(run("work"), link(1, { sub_issue_id: 900 })));
+  // A blocked-by link's blocker: one it created, one under its issue, an open issue of the repo.
+  const block = (n, id) =>
+    write("POST", `repos/org/repo/issues/${n}/dependencies/blocked_by`, { issue_id: id });
+  assert.equal(await check(work, block(2, 903)), null);
+  assert.equal(await check(work, block(35, 900)), null);
+  for (const id of [960, 908, 9]) await refused(block(2, id), /an open issue of its repository/);
+  // A reaction's comment: on GitHub, in its repository, by its own path.
+  const react = (path) => write("POST", `repos/org/repo/${path}/reactions`, { content: "+1" });
+  assert.equal(await kindOf(react("issues/comments/13")), "other_issue");
+  assert.equal(await kindOf(react("pulls/comments/17")), "own_pr");
+  for (const id of [14, 99])
+    await refused(react(`issues/comments/${id}`), new RegExp(`comment ${id} isn't there`), 404);
+  await refused(react("pulls/comments/11"), /comment 11 isn't there/, 404);
+});
+
+test("a run's refused writes cost GitHub look-ups up to MAX_REFUSED_LOOKUPS, then none", async () => {
+  const { lookup, calls } = fakeLookup(GITHUB);
+  // The policies refuse every write, as Deckhand's do a review's.
+  const policies = { deny: async () => ["no rule allows it"] };
+  const { check } = createWriteChecks({ policies, needsInputLabel: () => null, lookup });
+  const review = run("review");
+  const comment = (n) => write("POST", `repos/org/repo/issues/${n}/comments`, { body: "x" });
+  let refused = 0;
+  while ((await check(review, comment(3))).status === 403) refused++;
+  // #3 costs two look-ups (the issue, its parent): refused by the policies until the budget.
+  assert.equal(refused, MAX_REFUSED_LOOKUPS / 2);
+  const looked = calls.length;
+  const spent = await check(review, comment(1));
+  assert.equal(spent.status, 429);
+  assert.match(spent.message, /refused writes cost 100 look-ups on GitHub already/);
+  assert.equal(calls.length, looked);
+  // Another run has its own, and its writes that go on cost nothing of it.
+  const { check: some } = createWriteChecks({
+    policies: { deny: async (r, repo, ref, input) => (input().target.number === 3 ? ["no"] : []) },
+    needsInputLabel: () => null,
+    lookup,
+  });
+  const work = run("work");
+  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++) assert.equal(await some(work, comment(1)), null);
+  assert.equal((await some(work, comment(3))).status, 403);
 });
 
 // GitHub's answer to a run's REST reaction: 201 when it added it, 200 when it was there.
