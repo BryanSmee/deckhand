@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BUILT_IN, ceilingOf, entryRun, MODES, sessionName } from "../listener/modes.mjs";
+import { BUILT_IN, entryRun, MODES, sessionName } from "../listener/modes.mjs";
 import { modeNames, RESERVED_MODES } from "../listener/repo-config.mjs";
 
 test("built-in modes: one list, which the dashboard's copy follows", () => {
@@ -55,47 +55,54 @@ test("every built-in mode's prompt is in prompts/, and copied into the listener'
   }
 });
 
-test("work runs and the repo's other modes label their issues and create labels; a brainstorm only creates them", () => {
-  const { work, brainstorm } = Object.fromEntries(
-    ["work", "brainstorm"].map((m) => [m, MODES[m].ceiling]),
-  );
-  assert.deepEqual(work.label, brainstorm.label);
-  assert.deepEqual(work.label, ["create"]);
-  for (const kind of ["own_issue", "sub_issue", "created_issue"]) {
-    assert.ok(work[kind].includes("label"), kind);
-    assert.ok(!brainstorm[kind].includes("label"), kind);
+test("no mode holds a write ceiling or an issue label: the policies' per-mode files do", async () => {
+  const modes = await import("../listener/modes.mjs");
+  for (const name of ["ceilingOf", "issueLabelOf"]) assert.equal(modes[name], undefined, name);
+  for (const [name, mode] of Object.entries(MODES)) {
+    for (const trait of ["ceiling", "issueLabel"]) assert.ok(!(trait in mode), `${name}: ${trait}`);
+    // A token only reads: each write gets its own (github-writes.mjs writePermissions()).
+    for (const level of Object.values(mode.permissions || {})) assert.equal(level, "read", name);
   }
-  // Not another's issue, and never a label's settings.
-  assert.equal(work.other_issue, undefined);
-  assert.ok(!work.label.includes("edit") && !work.label.includes("delete"));
 });
+
+// The actions a mode's file allows: its `*_writes` sets, and those its other allow rules name.
+function allowedActions(text) {
+  const actions = new Set();
+  const writes = /^\w+_writes := \{([\s\S]*?)^\}/m.exec(text)?.[1] ?? "";
+  for (const [, set] of writes.matchAll(/\{([^{}]*)\}/g)) {
+    for (const [, a] of set.matchAll(/"([^"]+)"/g)) actions.add(a);
+  }
+  for (const [, rest] of text.matchAll(/input\.actions? (?:==|in) ([^\n]*)/g)) {
+    for (const [, a] of rest.matchAll(/"([^"]+)"/g)) actions.add(a);
+  }
+  return actions;
+}
 
 // It checks that the actions are named, not under which kind of target: the rows are prose
 // ("its pull requests: the same but `link`, and …"), which a parser would have to follow.
-test("docs/repo-config.md's ceiling table and `action` list name every action of every ceiling", () => {
+test("docs/repo-config.md's table names each mode's file and every action it allows", () => {
   const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
   const input = docs.slice(docs.indexOf("### The GitHub input"));
   const table = input.slice(
     input.indexOf("| Mode "),
     input.indexOf("\n\n", input.indexOf("| Mode ")),
   );
-  const rows = table.split("\n").map((line) => ({ line, first: line.split("|")[1] ?? "" }));
-  const actions = /^\| `action` .*$/m.exec(input)?.[0] ?? "";
-  const ceilings = Object.entries(MODES)
-    .filter(([, mode]) => mode.ceiling)
-    .map(([name, mode]) => [name, `\`${name}\``, mode.ceiling]);
-  // A repository's mode that isn't light writes as work runs do: its row says so.
-  ceilings.push([
-    "a non-light modes: entry",
-    "a `modes:` entry that isn't light",
-    ceilingOf("x", false),
-  ]);
-  for (const [name, cell, ceiling] of ceilings) {
-    const row = rows.find(({ first }) => first.includes(cell));
-    assert.ok(row, `the table has a row for ${name}`);
-    for (const action of new Set(Object.values(ceiling).flat())) {
-      assert.ok(row.line.includes(`\`${action}\``), `${name}'s row names ${action}`);
-      assert.ok(actions.includes(`\`${action}\``), `the action list names ${action}`);
+  const rows = table.split("\n");
+  const list = /^\| `action` .*$/m.exec(input)?.[0] ?? "";
+  const dir = new URL("../policy/", import.meta.url);
+  const files = readdirSync(dir).filter((f) => /^mode-.*\.rego$/.test(f));
+  let writing = 0;
+  for (const file of files) {
+    const text = readFileSync(new URL(file, dir), "utf8");
+    if (!/^allow_github\b/m.test(text)) continue;
+    writing++;
+    const row = rows.find((line) => line.includes(`${file}`));
+    assert.ok(row, `the table has a row for ${file}`);
+    for (const action of allowedActions(text)) {
+      if (action === "read_projects") continue;
+      assert.ok(row.includes(`\`${action}\``), `${file}'s row names ${action}`);
+      assert.ok(list.includes(`\`${action}\``), `the action list names ${action}`);
     }
   }
+  assert.ok(writing >= 4, "work, brainstorm, the inboxes and discussions write");
 });

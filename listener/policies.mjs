@@ -4,8 +4,9 @@
 // package `deckhand`: `allow_<decision>`, true when it allows, and `deny_<decision>`, a set of
 // strings, the reasons shown to the maintainer (or the run, for `deny_github`). Decisions: `run`
 // for a run a person starts (run-policy.mjs), `merge`, `review`, `fix`, `link_branch` for the branch the listener links to a work run's issue
-// (linked-branch.mjs), `request_review` for the reviewers it requests (reviewers.mjs), and
-// `github` for a run's GitHub writes (github-writes.mjs). A decision is allowed when an allow rule
+// (linked-branch.mjs), `request_review` for the reviewers it requests (reviewers.mjs), `github`
+// for a run's GitHub writes and some of its reads (github-writes.mjs), and `push` for each branch
+// a run pushes (git-gateway.mjs). A decision is allowed when an allow rule
 // matches and no deny rule does: a deny always wins. What a run gets as it starts has rules of
 // its own, sets of names (capabilityRules(), capabilities.mjs), which the service evaluates for
 // every mode at once and says the file that decided each of.
@@ -48,6 +49,7 @@ export const DECISIONS = [
   "link_branch",
   "request_review",
   "github",
+  "push",
 ];
 
 // The rules the listener evaluates: another `allow_*` or `deny_*` rule is a mistake the config
@@ -204,6 +206,13 @@ export const MAX_MESSAGE_LENGTH = 200;
 // call that would see a service of another version, so they are asked again after this.
 export const DEFAULTS_MS = 30_000;
 
+// A run's writes or pushes allowed whatever the input (`allow_github := true`, as an operator's
+// allow.rego had before the modes' ceilings became allow rules): every mode would write all
+// that the built-in checks don't refuse, an inbox entry's or a review's included. The config
+// check warns of it.
+const UNCONDITIONAL =
+  /^allow_(github|push)\s*(?:(?::=|=)\s*true|if\s+true|if\s*\{\s*true\s*\})?\s*(?:#.*)?$/gm;
+
 // The line of `text` (1-based) where `rule` is first defined, null when none starts one.
 function lineOf(text, rule) {
   const at = text.split("\n").findIndex((l) => new RegExp(`^${rule}\\b`).test(l));
@@ -227,6 +236,10 @@ export function unallowed(decision, doc, layer) {
     }
     case "link_branch":
       return `no ${rules} allows linking a branch for ${run(doc.mode)}`;
+    case "push": {
+      const to = doc.branch ? ` to \`${doc.branch}\`` : "";
+      return `no ${rules} allows ${run(doc.mode)}'s push${to}`;
+    }
     case "request_review":
       return `no ${rules} allows requesting reviewers for ${run(doc.mode)}'s pull request`;
     case "fix":
@@ -785,6 +798,13 @@ export function createPolicies({
       text: line(`${file}:${row ?? "?"}: ${message}`),
     });
     for (const [name, text] of files) {
+      if (layer === "operator") {
+        for (const [, decision] of text.matchAll(UNCONDITIONAL)) {
+          warnings.push(
+            `${name}: \`allow_${decision}\` allows every ${decision === "push" ? "push" : "write to GitHub"} of every mode, whatever it reads: no built-in ceiling caps it any more (issue #496). Remove it, or narrow it to the modes it is for (Deckhand's mode-<mode>.rego allow each mode its own)`,
+          );
+        }
+      }
       for (const rule of rulesOf(text)) {
         if (!RULES.includes(rule)) {
           warnings.push(

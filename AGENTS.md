@@ -147,7 +147,9 @@ docs/         setup, per-repo config reference, security model, architecture
   the run (`lib/tokens.mjs`,
   docs/security.md, Run tokens). The egress proxy relays its GitHub calls to the listener's GitHub gateway
   (`listener/github-gateway.mjs`), which adds a short-lived installation token for that run's
-  repo and redacts what it writes.
+  repo and redacts what it writes. That token only reads: a write the policies allowed
+  (`allow_github`) gets one of its own with only the write permission it needs, and a push
+  goes through the git gateway (`allow_push`). No allow rule, no write.
 - **No host mounts** unless the operator's config grants a root; requested paths are
   resolved (`..`, symlinks) before the check. Read-only unless the operator grants
   read-write.

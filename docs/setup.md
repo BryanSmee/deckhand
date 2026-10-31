@@ -111,11 +111,12 @@ installation ([below](#when-the-app-needs-a-new-permission)). Until then, where 
 has checks, a run's `gh pr checks`, and `gh pr view` without `--json` (it shows them), fail
 with a message naming the permissions; everything else works as before.
 
-Upgrading: runs' reads of checks are new to `deny_github` (`action: "read_checks"`, without a
-`target` or `change`). A policy of yours written for writes that refuses whatever isn't in a
-list (`not input.target.kind in {…}`) now refuses those reads too: guard it with
-`input.action != "read_checks"` ([Reading CI's checks](repo-config.md#reading-cis-checks)).
-`/mode policy` on a pull request shows whether one does.
+Upgrading: runs' reads of checks and projects are new to `allow_github` and `deny_github`
+(`action: "read_checks"` or `"read_projects"`, without a `target` or `change`). A deny rule of
+yours written for writes that refuses whatever isn't in a list (`not input.target.kind in {…}`)
+now refuses those reads too: guard it with `not input.action in {"read_checks",
+"read_projects"}` ([Reading CI's checks](repo-config.md#reading-cis-checks)). `/mode policy` on
+a pull request shows whether one does.
 
 Upgrading to allow rules ([Policies](repo-config.md#policies)): a decision is now allowed only
 when an `allow_*` rule matches, and Deckhand's `policy/allow.rego` allows each one, so nothing
@@ -127,6 +128,25 @@ default, now only adds its deny rules: move the broadening to your grants folder
 `allow_request_review`). Rewrite the policies of repositories with their own modes in the same
 release; their onboarding check and Policies tab say what no longer applies, as they do a
 repository file that doesn't start with its `package` line (after comments only), now refused.
+
+Upgrading to per-mode policies (issue #496): the modes' write ceilings built into the listener
+are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
+decision, `push`: [the push input](repo-config.md#the-push-input)) now need an allow rule
+(`allow_github`, `allow_push`), which Deckhand's `policy/mode-<mode>.rego` files give each
+mode as its ceiling did, with the refusals of the old per-feature files
+([the default policies](repo-config.md#the-default-policies)); `allow.rego` no longer allows
+`github`. Without policies, every write and push is refused. **A `policy/allow.rego` of yours
+that kept `allow_github := true`** (as the note above said to) now allows every write of every
+mode, an inbox entry's or a review's included, with no ceiling left to cap it: remove that
+rule, and add no `allow_push := true`, unless you mean every mode to write or push all that
+the built-in checks don't refuse. The listener's log at start and each repository's
+Policies tab warn of such a rule. Deckhand no longer ships
+`github.rego` or the `gh-*.rego` files but `gh-checks.rego`, `gh-linked-branch.rego` and
+`gh-reviewers.rego`: a file of yours in the grants folder that replaced one of the others by
+name (to broaden a feature, say) now replaces nothing and only adds its rules beside the
+`mode-<mode>.rego` files. To broaden a mode, replace its file instead (a copy of
+`mode-work.rego` without its rule on `assign`, say). A repository's own `modes:` that push need
+its `allow_push` too, as they need its `allow_github` to write.
 
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
@@ -1494,11 +1514,11 @@ No sandbox gets a GitHub token, an SSH key or the host's git configuration:
   hosts) to the listener's GitHub gateway (port 8081, on the runs' networks only, not
   published), which sends it on with an installation token limited to the run's repository,
   which the sandbox never sees, and redacts secrets from what it writes (see
-  [The GitHub gateway](security.md#the-github-gateway)). A work run's token writes issues,
-  and reads contents, pull requests, actions, checks, commit statuses and metadata: the listener opens and edits its
-  pull requests for it. Brainstorms and inbox runs get the same; discussion runs also write
-  discussions, and only those. Onboarding, run analyses, reviews and a repository's own
-  light modes only read. Installation tokens last an hour; the gateway renews them before
+  [The GitHub gateway](security.md#the-github-gateway)). A run's token only reads: contents,
+  issues, pull requests, actions, checks, commit statuses and metadata (discussion runs their
+  discussions too). Each write the gateway checked and the policies allowed gets a token of its
+  own, with only the write permission it needs (`issues: write` for a comment, `pull_requests:
+write` to open or edit a pull request…): see [Tokens](security.md#tokens). Installation tokens last an hour; the gateway renews them before
   that, so a run can go on for hours. Every run but a research one trusts the egress
   proxy's CA, which certifies GitHub's hosts for the relay.
 - Git fetches from GitHub over HTTPS through the GitHub gateway, and pushes through the listener's git

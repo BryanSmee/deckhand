@@ -9,7 +9,6 @@ import {
   DISCUSSION_PERMISSIONS,
   OPTIONAL_PERMISSIONS,
   PERMISSIONS_MS,
-  READ_ONLY_PERMISSIONS,
   REFRESH_MS,
   SANDBOX_PERMISSIONS,
   WORKFLOW_PUSH_PERMISSIONS,
@@ -99,20 +98,19 @@ test("a discussion run's token adds discussions, cached apart from the others", 
   const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
   assert.deepEqual(JSON.parse(mints[1].body).permissions, {
     ...SANDBOX_PERMISSIONS,
-    // A light run: it never writes pull requests.
-    pull_requests: "read",
-    discussions: "write",
+    discussions: "read",
   });
   assert.equal(SANDBOX_PERMISSIONS.discussions, undefined);
 });
 
-test("a light mode's read-only token is never a cached writing one, nor the reverse", async () => {
+test("a read-only token is never a cached writing one, nor the reverse", async () => {
   const { app, gh } = setup();
   // The same permission names at other levels: a cache keyed on names alone would mix them.
+  const reads = { contents: "read", issues: "read", pull_requests: "read" };
   await app.repoToken("org/repo", { contents: "write", issues: "write", pull_requests: "write" });
-  const { token } = await app.repoToken("org/repo", READ_ONLY_PERMISSIONS);
+  const { token } = await app.repoToken("org/repo", reads);
   assert.equal(token, "tok-2");
-  assert.equal((await app.repoToken("org/repo", READ_ONLY_PERMISSIONS)).token, "tok-2");
+  assert.equal((await app.repoToken("org/repo", reads)).token, "tok-2");
   const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
   assert.deepEqual(JSON.parse(mints[1].body).permissions, {
     ...SANDBOX_PERMISSIONS,
@@ -257,8 +255,11 @@ test("checkAppSettings: the permissions the App lacks, at a lower level or not a
   );
 });
 
+// An installation without one of the sandbox's required permissions (contents).
+const { contents: _, ...withoutContents } = SANDBOX_PERMISSIONS;
+
 test("a failing token fails every caller waiting on it, from one call to GitHub", async () => {
-  const { app, gh } = installedWith({ ...SANDBOX_PERMISSIONS, issues: "read" });
+  const { app, gh } = installedWith(withoutContents);
   const all = await Promise.allSettled([1, 2, 3, 4].map(() => app.repoToken("org/repo")));
   assert.ok(all.every((r) => r.status === "rejected" && r.reason.status === 422));
   assert.equal(gh.calls.filter((c) => c.path.endsWith("/access_tokens")).length, 1);
@@ -372,12 +373,12 @@ test("checks and statuses: optional, in the App's and the runs' permissions, eve
 });
 
 test("a required permission the installation lacks still fails the token", async () => {
-  const { app, gh } = installedWith({ ...SANDBOX_PERMISSIONS, issues: "read" });
+  const { app, gh } = installedWith(withoutContents);
   await assert.rejects(app.repoToken("org/repo"), { status: 422 });
   const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
-  assert.equal(JSON.parse(mint.body).permissions.issues, "write");
+  assert.equal(JSON.parse(mint.body).permissions.contents, "read");
   // Only optional ones are the gateway's to name.
-  assert.equal(await app.lacking("org/repo", { issues: "write" }), null);
+  assert.equal(await app.lacking("org/repo", { contents: "read" }), null);
 });
 
 test("an installation's permissions GitHub can't say: the token asks for everything", async () => {

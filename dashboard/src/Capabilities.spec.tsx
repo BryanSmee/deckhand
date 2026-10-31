@@ -106,7 +106,7 @@ test("modes whose runs wouldn't start, and a repo's own mode with a warning", as
           mode: "notes",
           custom: true,
           warnings: [
-            "push isn't used: notes is a light mode: its token can't push or open a pull request until #496 and #498",
+            "push isn't used: notes is a light mode: it has no branch to push or open a pull request from until #498",
           ],
         },
         ["pull", "read:issues"],

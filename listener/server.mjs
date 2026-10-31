@@ -555,6 +555,7 @@ const graphqlChecks = createGraphqlChecks({
   files: forkChecks.checkGraphql,
   nodes: (repo, ids) => lookupNodes(github, repo, ids),
   checkWrite: writeChecks.checkWrite,
+  budget: writeChecks.budget,
   log,
 });
 ctx.githubGateway = createGithubGateway({
@@ -574,11 +575,12 @@ ctx.githubGateway = createGithubGateway({
       .map((t) => t.live.secret),
     ...operatorSecrets(ctx),
   ],
-  // Their REST writes and GraphQL mutations: within their mode's ceiling, and what the
-  // policies' `deny_github` allows. Their targets are looked up with the listener's token.
+  // Their REST writes and GraphQL mutations: what the policies' `allow_github` allows and their
+  // `deny_github` doesn't refuse. Their targets are looked up with the listener's token.
   checkWrite: writeChecks.check,
   checkGraphql: graphqlChecks.check,
-  // Their reads of CI's results beyond Actions: what `deny_github` allows, once per run.
+  // Their reads of CI's results beyond Actions, and of the organization's projects: what the
+  // policies allow, once per run.
   checkRead: createReadChecks({ policies }).checkRead,
   // Their creates' and comments' answers: the issues each run created, for its links, and the
   // comments it posted, which it may edit.
@@ -586,10 +588,12 @@ ctx.githubGateway = createGithubGateway({
   readsProjects,
   log,
 });
-// Their pushes, on the broker's port: to the run's own branches only, never the default one.
+// Their pushes, on the broker's port: to the run's own branches only, never the default one,
+// and what the policies' `allow_push` allows and their `deny_push` doesn't refuse.
 ctx.gitGateway = createGitGateway({
   broker: ctx.broker,
   app: () => ctx.app,
+  policies,
   // Read on each push: a grant taken back applies to the next one.
   allowWorkflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
   // A work run that isn't a fork's pushes nothing that reaches a fork's objects.

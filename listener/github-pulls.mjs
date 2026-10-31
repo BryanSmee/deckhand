@@ -1,7 +1,7 @@
 // A run's pull request writes (issue #407): `gh pr create`, `gh pr edit`, `gh pr ready
 // [--undo]`, or the same over REST, are writes the GitHub gateway checks like any other
-// (github-writes.mjs, github-graphql.mjs): its mode's ceiling holds them for a work run's own
-// pull requests only (modes.mjs WORK_CEILING). Then, before the policies, here:
+// (github-writes.mjs, github-graphql.mjs): Deckhand's default policies allow them for a work
+// run's own pull requests only (../policy/mode-work.rego). Before the policies, here:
 //
 // - a pull request is opened from a branch of the run's repo it may push (broker.mjs allow()),
 //   never `owner:branch` nor another repository's head, and only with the fields GitHub's create
@@ -11,8 +11,8 @@
 //   a repo granted `allow_workflows`, its workflow files are checked in that merge first, as the
 //   git gateway checks a push (git-gateway.mjs checkBranch());
 // - one that is edited, readied or drafted, over any endpoint (`…/pulls/<n>`, `…/issues/<n>`,
-//   GraphQL), or whose token must write more than its mode's (`permissions`: pull requests for a
-//   create or an edit, contents for ready and draft), is from one of the run's branches, not
+//   GraphQL), or whose token must write more than an issue's (`permissions`: pull requests for
+//   a create or an edit, contents for ready and draft), is from one of the run's branches, not
 //   only the pull request it was triggered on: a fork's head isn't the run's to vouch for, nor
 //   its author's title and description the run's to rewrite. A comment or a label still is;
 // - one that conflicts with its base isn't made ready;
@@ -38,9 +38,9 @@ const UPDATE_FIELDS = new Set(["expected_head_sha", "update_method"]);
 // A commit's ID: SHA-1's, or SHA-256's.
 const OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
 
-// What a pull request's own write needs of its token beyond its mode's: GitHub opens and edits
-// one with `pull_requests: write`, and readies, drafts or updates the branch of one with
-// `contents: write` for an App's token.
+// What a pull request's own write needs of its token (github-writes.mjs writePermissions()):
+// GitHub opens and edits one with `pull_requests: write`, and readies, drafts or updates the
+// branch of one with `contents: write` for an App's token.
 export const PULL_WRITE = { pull_requests: "write" };
 export const CONTENTS_WRITE = { contents: "write" };
 
@@ -57,7 +57,7 @@ export function createPullChecks({
   now = Date.now,
   log = () => {},
 }) {
-  // A write within the ceiling (github-writes.mjs checkWrite()), its target resolved → null when
+  // A write (github-writes.mjs checkWrite()), its target resolved → null when
   // it may go on, else { status, message }. `get`: `lookup`, kept across the call's writes.
   async function check(run, write, target, get = lookup) {
     if (target.kind !== "new_pr" && target.kind !== "own_pr") return null;
@@ -218,9 +218,4 @@ function claimed(answer, repo) {
   const m = /\/([^/]+\/[^/]+)\/pull\/(\d+)$/.exec(String(pr?.url ?? ""));
   if (m && m[1].toLowerCase() === repo) return Number(m[2]);
   return Number.isSafeInteger(pr?.number) ? pr.number : null;
-}
-
-// The token permissions a classified write needs beyond its mode's, merged: a call's several.
-export function permissionsOf(writes) {
-  return Object.assign({}, ...writes.map((w) => w?.permissions ?? {}));
 }

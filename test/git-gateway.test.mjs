@@ -23,12 +23,21 @@ import {
   createGitGateway,
   MAX_COMMANDS,
   pushedBranch,
+  pushInput,
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
 import { createForkChecks } from "../listener/github-forks.mjs";
-import { localBroker, sandboxAt, serve, tempDir } from "./helpers.mjs";
+import {
+  allowingPolicies,
+  defaultPolicies,
+  hasOpa,
+  localBroker,
+  sandboxAt,
+  serve,
+  tempDir,
+} from "./helpers.mjs";
 
 const ZERO = "0".repeat(40);
 const A = "a".repeat(40);
@@ -287,6 +296,8 @@ async function setup(
     mintError = () => null,
     maxPush,
     now,
+    // policies.mjs's deny(): what decides each branch after the built-in checks. null: none.
+    policies = allowingPolicies,
   } = {},
 ) {
   const dir = tempDir(t, "gateway-");
@@ -340,6 +351,7 @@ async function setup(
     app: () => (app ? github : null),
     githubUrl,
     log: (line) => logs.push(line),
+    policies,
     allowWorkflows,
     forks: forks?.(),
     mirrorDir,
@@ -688,6 +700,134 @@ for (const [what, extra] of [
     assert.deepEqual(seen, []);
   });
 }
+
+test("a policy's refusal refuses the push, with its message; nothing reaches GitHub", async (t) => {
+  const asked = [];
+  const policies = {
+    deny: async (rule, repo, ref, input) => {
+      const read = input();
+      asked.push({ rule, repo, ref, input: read });
+      return read.branch === "issue-1-y" ? [] : ["pushes wait for the freeze to end"];
+    },
+  };
+  const { work, remote, seen, upstream } = await setup(t, {
+    register: (b) => {
+      const secret = b.register("org/repo", undefined, { push: true, mode: "work", issue: 1 });
+      b.allow(secret, ["issue-1-*"]);
+      return secret;
+    },
+    policies,
+  });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(
+    res.stderr,
+    /\[remote rejected\] .*\(Deckhand: the policies refuse it: pushes wait for the freeze to end\)/,
+  );
+  // Only git's look at the refs: the pack never reaches GitHub.
+  assert.equal(upstream("refs/"), "");
+  assert.ok(seen.every((s) => s.method === "GET"));
+  // One branch refused refuses the others of the same push.
+  asked.length = 0;
+  const both = await git(
+    work,
+    "push",
+    remote(),
+    "HEAD:refs/heads/issue-1-y",
+    "HEAD:refs/heads/issue-1-x",
+  );
+  assert.equal(both.ok, false);
+  assert.equal(upstream("refs/"), "");
+  assert.deepEqual(
+    asked.map((a) => a.input.branch),
+    ["issue-1-y", "issue-1-x"],
+  );
+  asked.splice(0, 1);
+  assert.deepEqual(asked, [
+    {
+      rule: "deny_push",
+      repo: "org/repo",
+      ref: "main",
+      input: {
+        repo: "org/repo",
+        mode: "work",
+        custom_mode: false,
+        light: false,
+        reason: null,
+        issue: 1,
+        action: "push",
+        branch: "issue-1-x",
+        ref: "refs/heads/issue-1-x",
+        created: true,
+        deleted: false,
+        default_branch: "main",
+      },
+    },
+  ]);
+});
+
+test("without policies, every push is refused", async (t) => {
+  const { work, remote, seen, upstream } = await setup(t, { policies: null });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
+  assert.equal(res.ok, false);
+  assert.match(res.stderr, /\(Deckhand: no policy decides this run's pushes\)/);
+  assert.equal(upstream("refs/"), "");
+  assert.ok(seen.every((s) => s.method === "GET"));
+});
+
+test("a push's input: the run, its branch, whether it creates or deletes it", () => {
+  const run = { repo: "org/repo", mode: "plan", push: true, issue: 4, reason: "ci" };
+  assert.deepEqual(pushInput(run, { ref: "refs/heads/issue-4-x", old: A, new: B }, "trunk"), {
+    repo: "org/repo",
+    mode: "plan",
+    custom_mode: true,
+    light: false,
+    reason: "ci",
+    issue: 4,
+    action: "push",
+    branch: "issue-4-x",
+    ref: "refs/heads/issue-4-x",
+    created: false,
+    deleted: false,
+    default_branch: "trunk",
+  });
+  // A new branch, a deleted one; a light run with no mode nor issue; a ref that isn't a branch.
+  assert.equal(pushInput(run, { ref: "refs/heads/x", old: ZERO, new: B }, "main").created, true);
+  assert.equal(pushInput(run, { ref: "refs/heads/x", old: A, new: ZERO }, "main").deleted, true);
+  const bare = pushInput({ repo: "org/repo" }, { ref: "refs/tags/v1", old: ZERO, new: A }, "main");
+  assert.equal(bare.mode, null);
+  assert.equal(bare.issue, null);
+  assert.equal(bare.light, true);
+  assert.equal(bare.custom_mode, false);
+  assert.equal(bare.branch, null);
+});
+
+test(
+  "Deckhand's default policies: work runs push, a light run doesn't, a repo's own mode with its allow",
+  {
+    skip: !hasOpa() && "no opa on the PATH",
+  },
+  async (t) => {
+    const update = { ref: "refs/heads/issue-1-x", old: ZERO, new: A };
+    const decide = (policies, run) =>
+      policies.deny("deny_push", "org/repo", "main", () =>
+        pushInput({ repo: "org/repo", issue: 1, ...run }, update, "main"),
+      );
+    const builtIn = defaultPolicies(t);
+    assert.deepEqual(await decide(builtIn, { mode: "work", push: true }), []);
+    assert.deepEqual(await decide(builtIn, { mode: "brainstorm", push: false }), [
+      "no rule allows a `brainstorm` run's push to `issue-1-x`",
+    ]);
+    // A repo's own mode: Deckhand's allow isn't enough, the repo's own allow rule is needed too.
+    assert.deepEqual(await decide(builtIn, { mode: "plan", push: true }), [
+      "no rule of .deckhand/policy/ allows a `plan` run's push to `issue-1-x`",
+    ]);
+    const repo = defaultPolicies(t, {
+      repo: { "modes.rego": 'package deckhand\n\nallow_push if input.mode == "plan"\n' },
+    });
+    assert.deepEqual(await decide(repo, { mode: "plan", push: true }), []);
+  },
+);
 
 test("a light run can't push even with a token that writes pull requests", async (t) => {
   const { work, remote, seen } = await setup(t, {
@@ -1171,7 +1311,13 @@ test("saved pushes a stopped listener left are swept, never a check's in progres
   const old = new Date(Date.now() - 3 * 3600_000);
   utimesSync(join(spoolDir, "push-old"), old, old);
   const broker = createBroker({ sentFrom: sandboxAt() });
-  const gateway = createGitGateway({ broker, app: () => null, mirrorDir: dir, spoolDir });
+  const gateway = createGitGateway({
+    broker,
+    app: () => null,
+    policies: allowingPolicies,
+    mirrorDir: dir,
+    spoolDir,
+  });
   // The sweep runs before any check: a branch check of an ungranted repo is a no-op that
   // doesn't wait for it, so wait for it here.
   assert.equal(await gateway.checkBranch("org/repo", "x", "main"), null);
