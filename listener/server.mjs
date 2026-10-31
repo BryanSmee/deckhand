@@ -285,17 +285,23 @@ function useApp(credentials) {
   config.bot = ctx.app.identity().name;
 }
 
+// Kept by a listener from before the github service: handed over to it, then removed here. The
+// first GitHub calls at start wait for it a while (below).
+let handedOver = Promise.resolve();
 {
   const credentials = loadCredentials(config.dataDir);
   if (credentials) {
     const { pem, ...kept } = credentials;
     useApp(kept);
-    // Kept by a listener from before the github service: handed over to it, then removed here.
     if (pem) {
-      githubService
-        .persist("handing over the App's key", () => githubService.setup.handOver(credentials))
+      let taken = false;
+      handedOver = githubService
+        .persist("handing over the App's key", async () => {
+          await githubService.setup.handOver(credentials);
+          taken = true;
+        })
         .then(() => {
-          if (!loadCredentials(config.dataDir)?.pem) return;
+          if (!taken || !loadCredentials(config.dataDir)?.pem) return;
           saveCredentials(config.dataDir, kept);
           log("The GitHub App's key: handed over to the github service, removed from app.json");
         });
@@ -971,6 +977,8 @@ runEvents.start();
 runnerClient.previews.refresh();
 const previewing = setInterval(() => runnerClient.previews.refresh(), PREVIEWS_MS);
 previewing.unref();
+// The App's key at the github service first, should this listener be the one handing it over.
+await Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).unref())]);
 redeliveries.start();
 if (ctx.app) checkApp();
 // Pull requests that changed while the listener was down, or whose delivery was lost. After
