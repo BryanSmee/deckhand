@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
+import { allowOnly, builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   askAfterRun,
@@ -307,13 +307,23 @@ test("requestInput: the pull request's input, its reviewers, when, and the run's
   assert.ok(!("fixes" in input) && !("checks" in input));
 });
 
-// Deckhand's policy/gh-reviewers.rego, with the real opa, on what each kind of run would get.
-function defaults(t, operator = new Map()) {
+// Deckhand's policy/gh-reviewers.rego, with the real opa, on what each kind of run would get;
+// `repo`: the repository's .deckhand/policy/allow.rego, if any.
+function defaults(t, operator = new Map(), repo = null) {
   return createPolicies({
     config: {},
-    github: async () => new Response("{}", { status: 404 }),
+    github: async (r, method, path) => {
+      if (repo && path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+        return Response.json([{ type: "file", name: "allow.rego", sha: "allow" }]);
+      }
+      if (repo && path === "/repos/org/repo/git/blobs/allow") {
+        return Response.json({ content: btoa(repo), encoding: "base64" });
+      }
+      return new Response("{}", { status: 404 });
+    },
     run: opaRunner(),
-    readBuiltIn: () => new Map([["gh-reviewers.rego", builtInPolicies().get("gh-reviewers.rego")]]),
+    readBuiltIn: () =>
+      new Map([...allowOnly(), ["gh-reviewers.rego", builtInPolicies().get("gh-reviewers.rego")]]),
     readOperator: () => operator,
     tmp: tempDir(t),
   });
@@ -342,14 +352,21 @@ test(
       }
     }
     assert.deepEqual(await asked(policies, "plan", { custom_mode: true }), [
-      "reviewers aren't requested on the pull requests of the repository's mode plan",
+      "no rule of .deckhand/policy/ allows requesting reviewers for a `plan` run's pull request",
     ]);
     assert.deepEqual(await asked(policies, "brainstorm"), [
       "reviewers are requested only on work runs' pull requests, not on a brainstorm run's",
     ]);
     assert.deepEqual(await asked(policies, null), ["the run whose pull request it is isn't known"]);
-    // Broadened: a file of the same name replaces it, the repository's modes then get theirs.
+    // The repository allows its modes theirs.
+    const allowing = 'package deckhand\n\nallow_request_review if input.mode == "plan"\n';
+    const own = defaults(t, new Map(), allowing);
+    assert.deepEqual(await asked(own, "plan", { custom_mode: true }), []);
+    // Its allow rule counts for its own modes only: a brainstorm's stays refused.
+    const everything = defaults(t, new Map(), "package deckhand\n\nallow_request_review := true\n");
+    assert.equal((await asked(everything, "brainstorm")).length, 1);
+    // Broadened: the operator's file of the same name replaces Deckhand's.
     const broad = defaults(t, new Map([["gh-reviewers.rego", "package deckhand\n"]]));
-    assert.deepEqual(await asked(broad, "plan", { custom_mode: true }), []);
+    assert.deepEqual(await asked(broad, "brainstorm"), []);
   },
 );

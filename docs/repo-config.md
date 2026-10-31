@@ -1369,24 +1369,23 @@ a failure links nothing and fails no run: the sandbox creates the branch itself,
 | `base`        | The base branch.                                                                                            |
 | `oid`         | The base branch's head commit, where the branch is created.                                                 |
 
-Deckhand's default, `gh-linked-branch.rego`, links work runs' branches only:
+Deckhand's default, `gh-linked-branch.rego`, links work runs' branches only among the built-in
+modes:
 
-| Work, fix, conflict | Brainstorm            | Research              | Repository modes                                   |
-| ------------------- | --------------------- | --------------------- | -------------------------------------------------- |
-| ✅ linked           | ❌ (no branch: light) | ❌ (no branch: light) | ❌ refused, broadened by a `gh-linked-branch.rego` |
+| Work, fix, conflict | Brainstorm            | Research              | Repository modes                                      |
+| ------------------- | --------------------- | --------------------- | ----------------------------------------------------- |
+| ✅ linked           | ❌ (no branch: light) | ❌ (no branch: light) | ❌ refused until the repository's `allow_link_branch` |
 
-A repository's own mode that a policy lets link one (its `.deckhand/policy/gh-linked-branch.rego`)
-also gets its branch checked out and its draft pull request opened by the sandbox, as a work
-run does, but only on the run that links it: the policies aren't asked about a branch that
-exists already, so a repository mode's later runs get none.
+A repository's own mode that its policies let link one (an `allow_link_branch` rule of its
+`.deckhand/policy/`) also gets its branch checked out and its draft pull request opened by the
+sandbox, as a work run does, but only on the run that links it: the policies aren't asked about
+a branch that exists already, so a repository mode's later runs get none.
 
 ```rego
-# .deckhand/policy/gh-linked-branch.rego: work runs and the repository's `plan` mode
+# .deckhand/policy/gh-linked-branch.rego: the repository's `plan` mode links its branch too
 package deckhand
 
-deny_link_branch contains "only work and plan runs link a branch" if {
-  not input.mode in {"work", "plan"}
-}
+allow_link_branch if input.mode == "plan"
 ```
 
 ### The default policies
@@ -1450,7 +1449,7 @@ stopped here instead:
 deny_review contains msg if {
   input.pr.author_type == "Bot"
   not input.pr.deckhand
-  msg := sprintf("%s is a bot: its pull requests aren't reviewed unless .deckhand/policy/review.rego lets them", [input.pr.author])
+  msg := sprintf("%s is a bot: its pull requests aren't reviewed unless the operator's policy/review.rego lets them", [input.pr.author])
 }
 ```
 
@@ -1494,8 +1493,8 @@ name `author_type` in a comment if bots' pull requests should be reviewed.
 # policy/github.rego
 # Deckhand's default policy for a run's GitHub writes (docs/repo-config.md#the-default-policies):
 # the modes' ceilings leave room for what a prompt may need one day, this narrows them to what
-# Deckhand's prompts ask for. A grants folder's policy/github.rego replaces it, and a
-# repository's .deckhand/policy/github.rego replaces both.
+# Deckhand's prompts ask for. A grants folder's policy/github.rego replaces it; a repository's
+# deny rules only add refusals.
 package deckhand
 
 # Brainstorms edit their own issue's description, and file and link their follow-ups: the
@@ -1675,7 +1674,7 @@ A same-name file replaces it (the operator's, then the repository's), never past
 the limit on assignees. To let work runs assign the issue's author:
 
 ```rego
-# .deckhand/policy/gh-assign-milestone.rego
+# grants folder: policy/gh-assign-milestone.rego
 package deckhand
 
 deny_github contains "a run assigns only the issue's author" if {

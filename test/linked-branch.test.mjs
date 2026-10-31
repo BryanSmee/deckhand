@@ -248,7 +248,7 @@ test("deny_link_branch: its input, a denial links nothing, the decision kept for
 
 // The real `opa`, when the PATH has it (the listener's image does).
 test(
-  "the real opa: gh-linked-branch.rego links work runs' branches only, and a repo broadens it",
+  "the real opa: gh-linked-branch.rego links work runs' branches only, and a repo's allow rule its own modes'",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const builtIn = builtInPolicies();
@@ -295,11 +295,23 @@ test(
       "onboarding runs don't link a branch to their issue",
     ]);
     assert.deepEqual(await deny("plan", true), [
-      "mode plan doesn't link a branch to its issue unless .deckhand/policy/gh-linked-branch.rego allows it",
+      "no rule of .deckhand/policy/ allows linking a branch for a `plan` run",
     ]);
-    // The repo's file of the same name replaces it.
+    // The repo's file of the same name replaces nothing.
     repo = { "gh-linked-branch.rego": "package deckhand\n" };
     policies.forget("org/repo");
+    assert.equal((await deny("plan", true)).length, 1);
+    // Its allow rule lets its mode link one: docs/repo-config.md's example.
+    const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
+    const [, example] =
+      /```rego\n# \.deckhand\/policy\/gh-linked-branch\.rego[^\n]*\n([\s\S]*?)```/.exec(docs);
+    repo = { "branches.rego": example };
+    policies.forget("org/repo");
     assert.deepEqual(await deny("plan", true), []);
+    assert.equal((await deny("deploy", true)).length, 1);
+    // But not a built-in mode's: Deckhand's deny still refuses it.
+    assert.deepEqual(await deny("onboarding", false), [
+      "onboarding runs don't link a branch to their issue",
+    ]);
   },
 );

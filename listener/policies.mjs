@@ -1,20 +1,27 @@
-// Rules as code (issue #292): Rego policies that can only add refusals after the listener's
-// built-in gates, evaluated by the pinned `opa` binary (listener/Dockerfile), one process per
-// decision. Three layers, by file name: Deckhand's own defaults (BUILT_IN_DIR, in the image:
-// issue #448), the operator's, GRANTS_DIR/policy/*.rego, read again at each decision like the
-// grants, and a repo's, .deckhand/policy/*.rego on its default branch, like its .deckhand.yaml.
-// A file with the same name as one of a layer below replaces it, any other name adds rules. Each decision is a set rule of package `deckhand` (`deny_merge`,
-// `deny_review`, `deny_fix`, `deny_link_branch` for the branch the listener links to a work
-// run's issue: linked-branch.mjs, `deny_request_review` for the reviewers the listener
-// requests: reviewers.mjs, and `deny_github` for a run's GitHub writes: github-writes.mjs),
-// whose strings are the reasons shown to the maintainer (or the run, for `deny_github`).
+// Rules as code (issues #292, #494): Rego policies that allow and refuse what the listener asks
+// them, after its built-in gates, evaluated by the pinned `opa` binary (listener/Dockerfile).
+// Each decision has two rules of package `deckhand`: `allow_<decision>`, true when it allows, and
+// `deny_<decision>`, a set of strings, the reasons shown to the maintainer (or the run, for
+// `deny_github`). Decisions: `merge`, `review`, `fix`, `link_branch` for the branch the listener
+// links to a work run's issue (linked-branch.mjs), `request_review` for the reviewers it
+// requests (reviewers.mjs), and `github` for a run's GitHub writes (github-writes.mjs). A
+// decision is allowed when an allow rule matches and no deny rule does: a deny always wins.
+//
+// Two layers, each evaluated by an `opa` process of its own, so that neither's files can define
+// or break the other's rules: the operator's, Deckhand's own defaults (BUILT_IN_DIR, in the
+// image: issue #448) under GRANTS_DIR/policy/*.rego, read again at each decision like the grants,
+// a file with the same name replacing a default; then a repo's, .deckhand/policy/*.rego on its
+// default branch, like its .deckhand.yaml. The operator's allow rules are the ceiling. The repo's
+// deny rules apply to every run; its allow rules count only for its own modes (`custom_mode`),
+// which need the operator's allow and its own.
 //
 // Isolation: the policies are code a repo's maintainers write, and the listener holds the
 // Docker socket and the App's key. `opa` runs with an empty environment, under a timeout, and
 // with a capabilities file without the builtins that read the environment, the network or
 // files (opa.runtime, http.send, net.*, the JSON schema ones) or trace. Fail closed: a policy that doesn't compile, times
-// out or returns anything but a set of strings denies, with that reason. Format:
-// ../docs/repo-config.md#policies; trust: ../docs/security.md#policies.
+// out or gives a rule anything but its type refuses, with that reason, and so does a decision
+// no allow rule matches. Format: ../docs/repo-config.md#policies; trust:
+// ../docs/security.md#policies.
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { accessSync, constants, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
@@ -27,20 +34,25 @@ import { redact } from "../lib/redact.mjs";
 // Where a repo's policies are, on its default branch, and the operator's, in GRANTS_DIR.
 export const POLICY_DIR = ".deckhand/policy";
 const OPERATOR_DIR = "policy";
-// Deckhand's own defaults (../policy/, copied into the image at the same relative path): one
-// file per `gh` feature (gh-<feature>.rego) and github.rego, which narrow the modes' ceilings to
-// what the prompts ask for. Without the operator's setup: they hold unless replaced.
+// Deckhand's own defaults (../policy/, copied into the image at the same relative path):
+// allow.rego, which allows each decision, one file per `gh` feature (gh-<feature>.rego) and
+// github.rego, which narrow the modes' ceilings to what the prompts ask for. Without the
+// operator's setup: they hold unless replaced.
 export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url));
 
-// The rules the listener evaluates: another `deny_*` rule is a mistake the config check says.
-export const RULES = [
-  "deny_merge",
-  "deny_review",
-  "deny_fix",
-  "deny_link_branch",
-  "deny_request_review",
-  "deny_github",
-];
+// The decisions the listener asks the policies about, each with its two rules.
+export const DECISIONS = ["merge", "review", "fix", "link_branch", "request_review", "github"];
+
+// The rules the listener evaluates: another `allow_*` or `deny_*` rule is a mistake the config
+// check says.
+export const RULES = DECISIONS.flatMap((d) => [`allow_${d}`, `deny_${d}`]);
+
+// The decisions only about built-in modes' runs (a review, its fix run, the merge): a repo's
+// allow rule for them would count for no run, and is a config check error.
+export const BUILT_IN_ONLY = new Set(["merge", "review", "fix"]);
+
+// `deny_merge`, `allow_merge` or `merge` → "merge".
+export const decisionOf = (rule) => rule.replace(/^(?:allow|deny)_/, "");
 
 // Deckhand's default for the reviews that start by themselves, which skips other bots' pull
 // requests: replacing it without a word about them gets a warning (botsReviewed()).
@@ -121,7 +133,8 @@ export const passed = (name) => ({ name, passed: true });
 // `rule` asked of `policies` (createPolicies()) about pull request `pr` ({ number }: an
 // issue's, for deny_link_branch) → { messages, unread }, as decide()'s. When a policy applied, the
 // decision is kept for the task's page: `keep(entry)` (decisions.mjs record()) with the
-// built-in `gates` that passed before ([{ name, passed }]) and the input the rules saw;
+// built-in `gates` that passed before ([{ name, passed }]), what each layer said and the input
+// the rules saw;
 // without `keepUnread`, not when GitHub couldn't be read: a caller that asks again at its next
 // check (conflicts.mjs) shows no refusal that holds nothing.
 // reviews.mjs, conflicts.mjs and linked-branch.mjs share it, so their entries stay alike.
@@ -133,15 +146,22 @@ export async function denyKept(
   input,
   { pr, gates = [], keep, log, keepUnread = true },
 ) {
-  const { applied, messages, input: saw, unread } = await policies.decide(rule, repo, ref, input);
+  const {
+    applied,
+    messages,
+    input: saw,
+    unread,
+    layers,
+  } = await policies.decide(rule, repo, ref, input);
   if (applied && (keepUnread || !unread)) {
     const entry = {
-      decision: rule.replace(/^deny_/, ""),
+      decision: decisionOf(rule),
       rule,
       denied: messages.length > 0,
       messages,
       pr: pr.number,
       gates,
+      ...(layers?.length && { layers }),
       ...(saw && { input: saw }),
     };
     try {
@@ -275,6 +295,12 @@ export function operatorPolicies(config, read = (path) => readFileSync(path, "ut
   return files;
 }
 
+// Deckhand's allow rules (policy/allow.rego): every decision allowed unless a deny rule says
+// otherwise, as before allow rules. Its name, and the map createPolicies() gets by default.
+export const ALLOW = "allow.rego";
+export const allowOnly = (dir = BUILT_IN_DIR) =>
+  new Map([[ALLOW, readFileSync(join(dir, ALLOW), "utf8")]]);
+
 // Deckhand's own policies: `dir`'s *.rego, name → text, read once by createPolicies(). No
 // folder: none. A file that can't be read throws, as the operator's.
 export function builtInPolicies(dir = BUILT_IN_DIR, read = (path) => readFileSync(path, "utf8")) {
@@ -290,11 +316,39 @@ export function builtInPolicies(dir = BUILT_IN_DIR, read = (path) => readFileSyn
   return files;
 }
 
-// The `deny_*` rules a file defines at the start of a line, in package `deckhand`: what the
-// config check compares with RULES. A rule written otherwise is only missed by the check.
-export function deniesOf(text) {
+// The `allow_*` and `deny_*` rules a file defines at the start of a line, in package
+// `deckhand`: what the config check compares with RULES, and the files the dashboard says
+// decided. A rule written otherwise is only missed by them.
+export function rulesOf(text) {
   if (!/^\s*package\s+deckhand\s*$/m.test(text)) return [];
-  return [...new Set([...text.matchAll(/^(deny_\w*)\b/gm)].map((m) => m[1]))];
+  return [...new Set([...text.matchAll(/^((?:allow|deny)_\w*)\b/gm)].map((m) => m[1]))];
+}
+
+// The line of `text` (1-based) where `rule` is first defined, null when none starts one.
+function lineOf(text, rule) {
+  const at = text.split("\n").findIndex((l) => new RegExp(`^${rule}\\b`).test(l));
+  return at < 0 ? null : at + 1;
+}
+
+// Why a layer allows nothing: no allow rule of its matched the input `doc`, said from what it
+// is about (`layer`: "operator" or "repo", whose rules are named).
+export function unallowed(decision, doc, layer) {
+  const rules = layer === "repo" ? `rule of ${POLICY_DIR}/` : "rule";
+  const run = (mode) => (mode ? `a \`${mode}\` run` : "a run Deckhand no longer knows");
+  switch (decision) {
+    case "github": {
+      const on = doc.target?.kind ? ` on \`${doc.target.kind}\`` : "";
+      return `no ${rules} allows \`${doc.action}\`${on} for ${run(doc.mode)}`;
+    }
+    case "link_branch":
+      return `no ${rules} allows linking a branch for ${run(doc.mode)}`;
+    case "request_review":
+      return `no ${rules} allows requesting reviewers for ${run(doc.mode)}'s pull request`;
+    case "fix":
+      return `no ${rules} allows a fix run${doc.reason ? ` (\`${doc.reason}\`)` : ""}`;
+    default:
+      return `no ${rules} allows the ${decision}`;
+  }
 }
 
 // How many of `opa`'s errors are kept: its own default for `check` (--max-errors).
@@ -337,16 +391,16 @@ const LISTING_MS = 10 * 60_000;
 
 // `github`: the App's calls; `run(args, { input, cwd })`: opaRunner()'s; `secrets()`: what
 // redaction hides of the messages (secrets.mjs); `readOperator()`: the operator's policies
-// (operatorPolicies()); `readBuiltIn()`: Deckhand's own (builtInPolicies(), none by default:
-// server.mjs passes them); `tmp`: where each decision's files go; `now`: the clock, for
-// listings.
+// (operatorPolicies()); `readBuiltIn()`: Deckhand's own (builtInPolicies(); by default its
+// allow.rego alone, which the tests' rules build on: server.mjs passes them all); `tmp`: where
+// each decision's files go; `now`: the clock, for listings.
 export function createPolicies({
   config,
   github,
   run = opaRunner(),
   secrets = () => [],
   readOperator = () => operatorPolicies(config),
-  readBuiltIn = () => new Map(),
+  readBuiltIn = () => allowOnly(),
   tmp = tmpdir(),
   log = () => {},
   now = Date.now,
@@ -402,19 +456,23 @@ export function createPolicies({
     return new Map((await repoFiles(repo, ref, cached)).map((f) => [f.name, f.text]));
   }
 
-  // Deckhand's policies, the operator's over them, then the repo's, by file name. Empty: nothing
-  // applies.
+  // The layers a decision on `repo` evaluates, each name → text: `operator`, Deckhand's policies
+  // and the operator's over them by file name; `repo`, the repo's on `ref`. Empty: none.
   async function policiesFor(repo, ref) {
-    return new Map([...defaults(), ...(await repoPolicies(repo, ref, { cached: true }))]);
+    return { operator: defaults(), repo: await repoPolicies(repo, ref, { cached: true }) };
   }
 
-  // Whether `files` hold only Deckhand's own policies, none of them defining `rule`: then
-  // nothing would deny it, and no policy is asked (no `opa` call, no decision kept), as when
-  // there is none. Deckhand's files are known: deniesOf() reads them right.
-  function onlyBuiltInWithout(rule, files) {
+  // Whether the operator's layer `files` is Deckhand's own policies only, none of them defining
+  // `deny_<decision>` and one allowing it whatever the input: then it allows, and no `opa` is
+  // asked (no decision kept, without a repo's files). Deckhand's files are known: rulesOf()
+  // reads them right.
+  function onlyBuiltInAllowing(decision, files) {
     const own = ownDefaults();
-    return [...files].every(
-      ([name, text]) => own.get(name) === text && !deniesOf(text).includes(rule),
+    const always = new RegExp(`^allow_${decision}\\s*:=\\s*true\\s*$`, "m");
+    return (
+      [...files].every(
+        ([name, text]) => own.get(name) === text && !rulesOf(text).includes(`deny_${decision}`),
+      ) && [...files.values()].some((text) => always.test(text))
     );
   }
 
@@ -440,9 +498,14 @@ export function createPolicies({
     }
   }
 
-  // `rule` of `files` on `input` → its messages, capped and redacted; a failure is one
-  // "policy error: …" message.
-  async function evaluate(rule, files, input) {
+  // One layer's `files` on `input` → { allow, denies, error }: `allow`, whether
+  // `allow_<decision>` is true (null when `allow` isn't asked); `denies`, `deny_<decision>`'s
+  // strings, as the rule gave them; `error`, why the layer couldn't be evaluated (then nothing
+  // else), as a failure() says it.
+  async function evaluateLayer(decision, files, input, { allow = true } = {}) {
+    const rule = (name) => `[x | x := data.deckhand.${name}_${decision}]`;
+    const query = `{${allow ? `"allow": ${rule("allow")}, ` : ""}"deny": ${rule("deny")}}`;
+    const failed = (what) => ({ allow: allow ? false : null, denies: [], error: what });
     let res;
     try {
       res = await staged(files, (cwd) =>
@@ -454,33 +517,49 @@ export function createPolicies({
             "--capabilities=capabilities.json",
             `--timeout=${TIMEOUT_MS}ms`,
             `--data=${OPERATOR_DIR}`,
-            `data.deckhand.${rule}`,
+            query,
           ],
           { input: JSON.stringify(input), cwd },
         ),
       );
     } catch (error) {
-      return failure(error.message ?? String(error));
+      return failed(error.message ?? String(error));
     }
-    const late = `\`${rule}\` took more than ${TIMEOUT_MS / 1000} s`;
-    if (res.timedOut) return failure(late);
+    const late = `the \`${decision}\` rules took more than ${TIMEOUT_MS / 1000} s`;
+    if (res.timedOut) return failed(late);
     if (res.code !== 0) {
       const { text, cancelled } = opaErrors(res.stdout, res.stderr);
-      return failure(cancelled ? late : text);
+      return failed(cancelled ? late : text);
     }
     let value;
     try {
-      const out = JSON.parse(res.stdout);
-      // Undefined: no file defines the rule, nothing denies.
-      if (!out.result?.length) return [];
-      value = out.result[0].expressions?.[0]?.value;
+      value = JSON.parse(res.stdout).result?.[0]?.expressions?.[0]?.value;
     } catch {
-      return failure("opa's answer can't be read");
+      // Said below.
     }
-    if (!Array.isArray(value) || value.some((m) => typeof m !== "string")) {
-      return failure(`\`${rule}\` must be a set of strings`);
+    // Each rule's value, in a list: empty when no file defines it, or it is undefined.
+    const listed = (v) => Array.isArray(v) && v.length <= 1;
+    if (!listed(value?.deny) || (allow && !listed(value.allow))) {
+      return failed("opa's answer can't be read");
     }
-    return messages(value);
+    const [allowed = false] = value.allow ?? [];
+    const [denies = []] = value.deny;
+    if (allow && typeof allowed !== "boolean") {
+      return failed(`\`allow_${decision}\` must be true or false`);
+    }
+    if (!Array.isArray(denies) || denies.some((m) => typeof m !== "string")) {
+      return failed(`\`deny_${decision}\` must be a set of strings`);
+    }
+    return { allow: allow ? allowed : null, denies, error: null };
+  }
+
+  // The deny messages of the operator's layer `files` on `input` (allow_* left out), capped and
+  // redacted; a failure is one "policy error: …" message. For the tests of a policy's text.
+  async function evaluate(rule, files, input) {
+    const { denies, error } = await evaluateLayer(decisionOf(rule), files, input, {
+      allow: false,
+    });
+    return error ? failure(error) : messages(denies);
   }
 
   // At most MAX_MESSAGES, each shown().
@@ -500,22 +579,23 @@ export function createPolicies({
   // "policy error: …": the single refusal a failure gives.
   const failure = (what) => [line(`policy error: ${what}`)];
 
-  // Why `rule` refuses on `repo` (its policies on `ref`, its default branch): the messages, or
-  // [] when nothing denies. `input()` builds the input, called only when a policy applies (it may
-  // read GitHub). Fail closed: an error reading the policies is a denial too.
+  // Why `rule` (`deny_merge`, `merge`…: its decision) refuses on `repo` (its policies on `ref`,
+  // its default branch): the messages, or [] when it is allowed. `input()` builds the input,
+  // called only when a policy applies (it may read GitHub). Fail closed: an error reading the
+  // policies is a refusal too.
   async function deny(rule, repo, ref, input) {
     return (await decide(rule, repo, ref, input)).messages;
   }
 
-  // deny()'s work → { applied, messages, input, unread }: `applied`, whether any policy was
-  // asked (none anywhere: false, and nothing for the task's page to show); `input`, the
-  // document the rules saw, when it could be built (decisions.mjs keeps it, redacted);
-  // `unread`, the refusal is the policies or the input that couldn't be read (GitHub, most
-  // likely), not a rule's.
+  // deny()'s work → { applied, messages, input, unread, layers }: `applied`, whether any policy
+  // was asked (Deckhand's allowing alone, and no repo file: false, and nothing for the task's
+  // page to show); `input`, the document the rules saw, when it could be built (decisions.mjs
+  // keeps it, redacted); `unread`, the refusal is the policies or the input that couldn't be read
+  // (GitHub, most likely), not a rule's; `layers`, what each layer said (evaluated()).
   async function decide(rule, repo, ref, input) {
-    let files;
+    let layers;
     try {
-      files = await policiesFor(repo, ref);
+      layers = await policiesFor(repo, ref);
     } catch (error) {
       log(`${repo}: reading its policies: ${error.message ?? error}`);
       return {
@@ -524,56 +604,134 @@ export function createPolicies({
         messages: failure(`the policies can't be read (${error.message ?? error})`),
       };
     }
-    if (!files.size || onlyBuiltInWithout(rule, files)) return { applied: false, messages: [] };
-    return { applied: true, ...(await evaluated(rule, repo, files, input)) };
+    const decision = decisionOf(rule);
+    // Only a repo's own mode would need its allow, which a built-in-only decision never is.
+    if (
+      !layers.repo.size &&
+      BUILT_IN_ONLY.has(decision) &&
+      onlyBuiltInAllowing(decision, layers.operator)
+    ) {
+      return { applied: false, messages: [] };
+    }
+    const result = await evaluated(rule, repo, layers, input);
+    return { applied: result.asked, ...result };
   }
 
-  // `rule` of `files` on the input `input()` builds, version added → its messages, logged.
-  async function denied(rule, repo, files, input) {
-    return (await evaluated(rule, repo, files, input)).messages;
-  }
-
-  // denied()'s work → { messages, input }: `input`, the document evaluated, absent when it
-  // couldn't be built.
-  async function evaluated(rule, repo, files, input) {
+  // `rule`'s decision on the layers `layers` ({ operator, repo }: name → text), on the input
+  // `input()` builds, version added → { messages, input, layers, asked, unread }: `layers`, each
+  // evaluated layer's { layer, allow, denies, allowFiles, denyFiles, error } (`allow` null when
+  // its allow rules aren't asked: a repo's, on a built-in mode's decision; the files, those that
+  // define each rule, which decided); `asked`, whether an `opa` was asked or a rule refused;
+  // `input`, absent when it couldn't be built. The repo's layer is listed when it has files or
+  // its allow is needed.
+  async function evaluated(rule, repo, layers, input) {
+    // One map: the operator's layer alone, as a test of its files gives it.
+    if (layers instanceof Map) layers = { operator: layers, repo: new Map() };
+    const decision = decisionOf(rule);
     let doc;
     try {
       doc = { version: INPUT_VERSION, ...(await input()) };
     } catch (error) {
-      log(`${repo}: the ${rule} input: ${error.message ?? error}`);
+      log(`${repo}: the ${decision} input: ${error.message ?? error}`);
       return {
+        asked: true,
         unread: true,
+        layers: [],
         messages: failure(`its input can't be built (${error.message ?? error})`),
       };
     }
-    const messages = await evaluate(rule, files, doc);
-    if (messages.length) log(`${repo}: ${rule} denies: ${messages.join(" | ")}`);
-    return { messages, input: doc };
+    // A run in one of the repo's own modes: its repo's allow is needed too.
+    const custom = !BUILT_IN_ONLY.has(decision) && doc.custom_mode === true;
+    const defining = (files, name) =>
+      [...files].filter(([, text]) => rulesOf(text).includes(name)).map(([n]) => n);
+    const layer = async (name, files, { allow, skip = false }) => ({
+      layer: name,
+      ...(skip
+        ? { allow: allow ? true : null, denies: [], error: null }
+        : files.size
+          ? await evaluateLayer(decision, files, doc, { allow })
+          : { allow: allow ? false : null, denies: [], error: null }),
+      allowFiles: allow ? defining(files, `allow_${decision}`) : [],
+      denyFiles: defining(files, `deny_${decision}`),
+    });
+    const skip = onlyBuiltInAllowing(decision, layers.operator);
+    const said = await Promise.all([
+      layer("operator", layers.operator, { allow: true, skip }),
+      ...(layers.repo.size || custom ? [layer("repo", layers.repo, { allow: custom })] : []),
+    ]);
+    const asked = !skip || layers.repo.size > 0 || custom;
+    const broken = said.find((l) => l.error);
+    if (broken) {
+      const messages = failure(broken.error);
+      log(`${repo}: ${decision} refused: ${messages[0]}`);
+      return { asked, messages, input: doc, layers: said.map(shownLayer) };
+    }
+    // A deny says why; without one, the layers no allow rule matched do.
+    const denies = said.flatMap((l) => l.denies);
+    const reasons = denies.length
+      ? denies
+      : said.filter((l) => l.allow === false).map((l) => unallowed(decision, doc, l.layer));
+    const shownMessages = messages(reasons);
+    if (shownMessages.length) log(`${repo}: ${decision} refused: ${shownMessages.join(" | ")}`);
+    return { asked, messages: shownMessages, input: doc, layers: said.map(shownLayer) };
   }
 
-  // The config check of `files` (name → text): compile errors and rules nobody evaluates, as
-  // { errors, warnings }. No files: nothing to say, and no `opa` call.
-  async function check(files) {
-    const { errors, warnings } = await compile(files);
+  // A layer's result as kept and shown: its messages capped and redacted, its error a line.
+  const shownLayer = ({ denies, error, ...rest }) => ({
+    ...rest,
+    denies: messages(denies),
+    error: error ? failure(error)[0] : null,
+  });
+
+  // `rule` on `layers` (describe()'s `policies`, or one map: the operator's layer alone), on the
+  // input `input()` builds → its messages, logged: a dry run's (reviews.mjs).
+  async function denied(rule, repo, layers, input) {
+    return (await evaluated(rule, repo, layers, input)).messages;
+  }
+
+  // The config check of one layer's `files` (name → text): compile errors and rules nobody
+  // evaluates, as { errors, warnings }. No files: nothing to say, and no `opa` call.
+  async function check(files, layer = "operator") {
+    const { errors, warnings } = await compile(files, layer);
     return { errors: errors.map((e) => e.text), warnings };
   }
 
-  // check()'s work, each error as { file, row, message, text }: file and row null when opa
-  // doesn't give them (a timeout, a folder it can't stage), `text` what check() says of it.
-  async function compile(files) {
+  // check()'s work, each error as { layer, file, row, message, text }: file and row null when
+  // opa doesn't give them (a timeout, a folder it can't stage), `text` what check() says of it.
+  // A repo's (`layer` "repo") allow rule for a built-in-only decision is an error: it would be
+  // ignored.
+  async function compile(files, layer = "operator") {
     const errors = [];
     const warnings = [];
     if (!files.size) return { errors, warnings };
+    const placed = (file, row, message) => ({
+      layer,
+      file,
+      row,
+      message: line(message),
+      text: line(`${file}:${row ?? "?"}: ${message}`),
+    });
     for (const [name, text] of files) {
-      for (const rule of deniesOf(text)) {
+      for (const rule of rulesOf(text)) {
         if (!RULES.includes(rule)) {
           warnings.push(
             `${name}: \`${rule}\` isn't a rule Deckhand evaluates (${RULES.map((r) => `\`${r}\``).join(", ")})`,
           );
+        } else if (layer === "repo" && rule.startsWith("allow_")) {
+          const decision = decisionOf(rule);
+          if (BUILT_IN_ONLY.has(decision)) {
+            errors.push(
+              placed(
+                name,
+                lineOf(text, rule),
+                `\`${rule}\` is ignored: a repository's allow rules count only for its own modes, and only the operator's allow the ${decision}`,
+              ),
+            );
+          }
         }
       }
     }
-    const unplaced = (text, message = text) => ({ file: null, row: null, message, text });
+    const unplaced = (text, message = text) => ({ layer, file: null, row: null, message, text });
     try {
       const res = await staged(files, (cwd) =>
         run(["check", "--format=json", "--capabilities=capabilities.json", OPERATOR_DIR], { cwd }),
@@ -581,7 +739,7 @@ export function createPolicies({
       if (res.timedOut) errors.push(unplaced(`the policies' check took too long`));
       else if (res.code !== 0) {
         for (const e of opaErrors(res.stdout, res.stderr).list) {
-          errors.push({ ...e, message: line(e.message), text: failure(located(e))[0] });
+          errors.push({ layer, ...e, message: line(e.message), text: failure(located(e))[0] });
         }
       }
     } catch (error) {
@@ -591,13 +749,12 @@ export function createPolicies({
     return { errors, warnings };
   }
 
-  // A review.rego that replaces Deckhand's and never names `author_type`: other bots' pull
-  // requests, which the default skips, are reviewed now, at the operator's cost. Said, as a
-  // file of that name written before the default (wip labels, docs only) drops it unseen. A
-  // file that names it, a comment saying so will do, decided. `text`: the file's, `source`
-  // the layer it is in ("operator", "repo"), which the warning names: only its owner changes
-  // it. → the warning, or null.
-  function botsReviewed(text, source) {
+  // A review.rego of the operator's that replaces Deckhand's and never names `author_type`:
+  // other bots' pull requests, which the default skips, are reviewed now, at the operator's cost.
+  // Said, as a file of that name written before the default (wip labels, docs only) drops it
+  // unseen. A file that names it, a comment saying so will do, decided. `text`: the file's.
+  // → the warning, or null.
+  function botsReviewed(text) {
     let own = null;
     try {
       own = ownDefaults().get(BOT_REVIEWS);
@@ -605,33 +762,35 @@ export function createPolicies({
       // Deckhand's can't be read: describe() says so.
     }
     if (text === undefined || !own || text === own || /\bauthor_type\b/.test(text)) return null;
-    const [file, where] =
-      source === "operator"
-        ? [`The grants folder's policy/${BOT_REVIEWS}`, "in every repository without its own"]
-        : [`${POLICY_DIR}/${BOT_REVIEWS}`, "here"];
-    return `${file} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves ${where}. To keep them skipped, copy the default's rule into it; to say they should be reviewed, name \`author_type\` in a comment there`;
+    return `The grants folder's policy/${BOT_REVIEWS} replaces Deckhand's default without a rule on \`input.pr.author_type\`: other bots' ready pull requests (Dependabot's, GitHub Actions') are reviewed by themselves in every repository. To keep them skipped, copy the default's rule into it; to say they should be reviewed, name \`author_type\` in a comment there`;
   }
 
-  // check()'s, with botsReviewed()'s warning about `layer` (name → text: the operator's or the
-  // repo's own files, `source`), whose review.rego is the active one.
-  async function checkWith(files, layer, source) {
-    const checked = await check(files);
-    const bots = botsReviewed(layer.get(BOT_REVIEWS), source);
-    return bots ? { ...checked, warnings: [...checked.warnings, bots] } : checked;
+  // A repo's files named as one of the operator's layer (`under`, name → text): it no longer
+  // replaces it (issue #494), a repo's files only add rules. → the warnings.
+  function shadowing(own, under) {
+    return [...own.keys()]
+      .filter((name) => under.has(name))
+      .map(
+        (name) =>
+          `${name} doesn't replace the operator's or Deckhand's file of that name: a repository's policies are evaluated on their own, their deny rules for every run and their allow rules for the repository's own modes only`,
+      );
   }
 
   // The operator's policies over Deckhand's, checked: errors to say at start. None: no `opa`
   // call.
   async function checkOperator() {
     try {
-      return await checkWith(defaults(), readOperator(), "operator");
+      const operator = readOperator();
+      const checked = await check(defaults());
+      const bots = botsReviewed(operator.get(BOT_REVIEWS));
+      return bots ? { ...checked, warnings: [...checked.warnings, bots] } : checked;
     } catch (error) {
       return { errors: [error.message ?? String(error)], warnings: [] };
     }
   }
 
-  // A repo's policies on `ref` (a branch), checked, the defaults included: what the onboarding
-  // pull request's reply says (onboarding.mjs branchConfigReport()).
+  // A repo's policies on `ref` (a branch), checked on their own, as they are evaluated: what
+  // the onboarding pull request's reply says (onboarding.mjs branchConfigReport()).
   async function checkRepo(repo, ref) {
     const own = await repoPolicies(repo, ref);
     if (!own.size) return { errors: [], warnings: [] };
@@ -641,51 +800,65 @@ export function createPolicies({
     } catch {
       // Said at start: the repo's own are what this check is about.
     }
-    // The operator's review.rego is said at start, and on the repo's Policies tab.
-    return checkWith(new Map([...under, ...own]), own, "repo");
+    const checked = await check(own, "repo");
+    return { ...checked, warnings: [...checked.warnings, ...shadowing(own, under)] };
   }
 
   // What applies on `repo` (its policies on `ref`, its default branch, read now), for the
   // dashboard's config panel and `/mode policy`: { files: [{ name, source, replaces, active,
-  // rules, url, text, truncated }], errors, warnings }, Deckhand's files first ("deckhand"),
-  // then the operator's, then the repo's. A file `replaces` one of a layer below with its name
-  // (that layer's source, the nearest; null for none), listed too, not `active`: deny() doesn't evaluate it. `text`: the file's, redacted and cut at
-  // MAX_TEXT (`truncated`). `errors`: compile()'s of the active files, and why the operator's
-  // can't be read (every decision refuses then). `policies`: name → text, what deny() would
-  // evaluate. No policy anywhere: no `opa` call.
+  // rules, url, text, truncated }], errors, warnings, policies }, Deckhand's files first
+  // ("deckhand"), then the operator's, then the repo's. In the operator's layer, a file
+  // `replaces` Deckhand's of its name ("deckhand"; null for none), listed too, not `active`:
+  // nothing evaluates it; a repo's file replaces nothing. `text`: the file's, redacted and cut at
+  // MAX_TEXT (`truncated`). `errors`: compile()'s of each layer's active files, and why the
+  // operator's can't be read (every decision refuses then). `policies`: { operator, repo }, each
+  // name → text, what decide() would evaluate. No policy anywhere: no `opa` call.
   async function describe(repo, ref) {
     const errors = [];
-    const layers = [];
-    const said = (text) => errors.push({ file: null, row: null, message: text, text });
+    const said = (text) => errors.push({ layer: null, file: null, row: null, message: text, text });
+    let deckhand = [];
+    let operator = [];
     try {
-      layers.push(entries("deckhand", ownDefaults()));
+      deckhand = entries("deckhand", ownDefaults());
     } catch (error) {
       said(`Deckhand's policies can't be read: ${error.message ?? error}`);
     }
     try {
-      layers.push(entries("operator", readOperator()));
+      operator = entries("operator", readOperator());
     } catch (error) {
       said(`the operator's policies can't be read: ${error.message ?? error}`);
     }
-    layers.push(
-      await repoFiles(repo, ref, false).then((own) => own.map((f) => ({ ...f, source: "repo" }))),
-    );
+    const own = (await repoFiles(repo, ref, false)).map((f) => ({ ...f, source: "repo" }));
     const has = (layer, name) => layer.some((f) => f.name === name);
-    const files = layers.flatMap((layer, i) =>
-      layer.map((f) => ({
+    const files = [
+      ...deckhand.map((f) => ({ ...f, replaces: null, active: !has(operator, f.name) })),
+      ...operator.map((f) => ({
         ...f,
-        replaces: layers.slice(0, i).findLast((below) => has(below, f.name))?.[0].source ?? null,
-        active: !layers.slice(i + 1).some((above) => has(above, f.name)),
+        replaces: has(deckhand, f.name) ? "deckhand" : null,
+        active: true,
       })),
-    );
-    const policies = new Map(files.filter((f) => f.active).map((f) => [f.name, f.text]));
-    const checked = await compile(policies);
-    const review = files.find((f) => f.active && f.name === BOT_REVIEWS);
-    const bots = review && botsReviewed(review.text, review.source);
+      ...own.map((f) => ({ ...f, replaces: null, active: true })),
+    ];
+    const texts = (list) => new Map(list.filter((f) => f.active).map((f) => [f.name, f.text]));
+    const policies = {
+      operator: texts(files.filter((f) => f.source !== "repo")),
+      repo: texts(files.filter((f) => f.source === "repo")),
+    };
+    const [up, down] = await Promise.all([
+      compile(policies.operator, "operator"),
+      compile(policies.repo, "repo"),
+    ]);
+    const review = operator.find((f) => f.name === BOT_REVIEWS);
+    const bots = review && botsReviewed(review.text);
     return {
-      files: files.map(({ text, ...f }) => ({ ...f, rules: deniesOf(text), ...shown(text) })),
-      errors: [...errors, ...checked.errors],
-      warnings: bots ? [...checked.warnings, bots] : checked.warnings,
+      files: files.map(({ text, ...f }) => ({ ...f, rules: rulesOf(text), ...shown(text) })),
+      errors: [...errors, ...up.errors, ...down.errors],
+      warnings: [
+        ...up.warnings,
+        ...down.warnings,
+        ...shadowing(policies.repo, policies.operator),
+        ...(bots ? [bots] : []),
+      ],
       policies,
     };
   }
@@ -712,6 +885,7 @@ export function createPolicies({
     deny,
     decide,
     denied,
+    evaluated,
     describe,
     evaluate,
     check,

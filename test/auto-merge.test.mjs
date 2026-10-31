@@ -6,6 +6,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { createPolicies } from "../listener/policies.mjs";
 import {
   createReviews,
   dryRunText,
@@ -598,7 +599,7 @@ test("decisions: each one a policy was asked for is kept for the task's page", a
   });
   const s = setup(t, { policies: policy.engine });
   await s.settle();
-  const { gates, input, ...decision } = s.decided[0];
+  const { gates, input, layers, ...decision } = s.decided[0];
   assert.equal(s.decided.length, 1);
   assert.deepEqual(decision, {
     repo: "org/repo",
@@ -608,6 +609,26 @@ test("decisions: each one a policy was asked for is kept for the task's page", a
     denied: true,
     messages: ["a human merges this one"],
   });
+  // What each layer said: Deckhand's allow.rego allows (no opa: it allows whatever the input),
+  // the repo's rule denies; its allow isn't asked, a merge is no mode of its own.
+  assert.deepEqual(layers, [
+    {
+      layer: "operator",
+      allow: true,
+      denies: [],
+      error: null,
+      allowFiles: ["allow.rego"],
+      denyFiles: [],
+    },
+    {
+      layer: "repo",
+      allow: null,
+      denies: ["a human merges this one"],
+      error: null,
+      allowFiles: [],
+      denyFiles: [],
+    },
+  ]);
   // A refused auto-merge lists the built-in gates that passed before the policies.
   assert.deepEqual(gates, [
     { name: "Severity ≤ low", passed: true },
@@ -640,14 +661,17 @@ test("decisions: each one a policy was asked for is kept for the task's page", a
   assert.deepEqual(none.decided, []);
 });
 
-test("/mode policy: every rule on the pull request now, nothing reviewed, fixed or merged", async (t) => {
+test("/mode policy: every decision on the pull request now, nothing reviewed, fixed or merged", async (t) => {
   const policy = policyEngine(t, {
     files: { "size.rego": 'package deckhand\ndeny_merge contains "x" if true\n' },
-    // Replaced by the repo's: not one of the files the dry run evaluates.
-    operator: { "size.rego": 'package deckhand\ndeny_review contains "y" if true\n' },
-    messages: (input, rule) => {
-      if (rule === "deny_merge") return ["a `human` merges this one"];
-      if (rule === "deny_github" && input.mode === "brainstorm") return ["not on pull requests"];
+    // The operator's, evaluated on its own, beside the repo's.
+    operator: { "own.rego": "package deckhand\n" },
+    messages: (input, rule, names) => {
+      if (rule === "deny_merge" && names.includes("size.rego"))
+        return ["a `human` merges this one"];
+      if (rule === "deny_github" && input.mode === "brainstorm" && names.includes("own.rego")) {
+        return ["not on pull requests"];
+      }
       return [];
     },
   });
@@ -666,27 +690,32 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     text,
     /^\*\*Policy dry run\*\* on #5 at sha-1: nothing was reviewed, fixed or merged\./,
   );
-  assert.match(text, /Policies: `size\.rego` \(repo, replaces the operator's\)\./);
-  assert.match(text, /- `deny_merge`: \*\*denies\*\*: `a 'human' merges this one`/);
-  assert.match(text, /- `deny_review`: allows \(no file defines it\)/);
-  assert.match(text, /- `deny_fix`: allows \(no file defines it\)/);
-  assert.match(text, /- `deny_request_review`: allows \(no file defines it\)\n/);
-  // deny_github on sample writes: a comment on the pull request by its work run, and by a
-  // brainstorm.
   assert.match(
     text,
-    /- `deny_github` \(sample: a work run's comment on its pull request\): allows \(no file defines it\)/,
+    /Policies: `allow\.rego` \(Deckhand's default\), `own\.rego` \(operator\), `size\.rego` \(repo\)\./,
   );
+  // Each decision, then what each layer said: the repo's allow isn't asked on a built-in mode's.
   assert.match(
     text,
-    /- `deny_github` \(sample: a brainstorm's comment on it\): \*\*denies\*\*: `not on pull requests`/,
+    /- `merge`: \*\*refused\*\*: `a 'human' merges this one`\n {2}- operator: `allow_merge` allows \(`allow\.rego`\); `deny_merge` denies nothing \(no file defines it\)\n {2}- repository: `allow_merge` not asked \(not one of its modes\); `deny_merge` denies \(1\) \(`size\.rego`\)\n/,
+  );
+  assert.match(text, /- `review`: allowed\n {2}- operator: `allow_review` allows/);
+  assert.match(text, /- `fix`: allowed\n/);
+  // The run that opened it is the repo's mode plan: the repo's allow is asked.
+  assert.match(
+    text,
+    /- `request_review`: allowed\n {2}- operator: [^\n]*\n {2}- repository: `allow_request_review` allows/,
+  );
+  // github on sample writes: a comment on the pull request by its work run, and by a
+  // brainstorm.
+  assert.match(text, /- `github` \(sample: a work run's comment on its pull request\): allowed\n/);
+  assert.match(
+    text,
+    /- `github` \(sample: a brainstorm's comment on it\): \*\*refused\*\*: `not on pull requests`\n {2}- operator: `allow_github` allows \(`allow\.rego`\); `deny_github` denies \(1\)/,
   );
   assert.match(text, /The sample lines .* are not decisions on this pull request/);
-  // deny_link_branch on the branch its work run would have had linked.
-  assert.match(
-    text,
-    /- `deny_link_branch` \(sample: a work run's branch linked to #12\): allows \(no file defines it\)/,
-  );
+  // link_branch on the branch its work run would have had linked.
+  assert.match(text, /- `link_branch` \(sample: a work run's branch linked to #12\): allowed\n/);
   assert.match(text, /<details><summary>The input/);
   const [json, samples] = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) =>
     JSON.parse(m[1]),
@@ -709,9 +738,13 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
   assert.equal(json.pr.additions, 12);
   assert.equal(json.review, null);
   assert.deepEqual(json.checks, [{ name: "CI", status: "completed", conclusion: "success" }]);
-  // Each rule got its own decision; review and fix without the merge's fields.
+  // Each decision got its own input, evaluated by each layer; review and fix without the
+  // merge's fields.
+  const repo = policy.evals.filter((e, i) => policy.layers[i].includes("size.rego"));
+  const operator = policy.evals.filter((e, i) => policy.layers[i].includes("own.rego"));
+  assert.deepEqual(repo, operator);
   assert.deepEqual(
-    policy.evals.map((e) => [e.rule, e.decision, "checks" in e]),
+    operator.map((e) => [e.rule, e.decision, "checks" in e]),
     [
       ["deny_merge", "merge", true],
       ["deny_review", "review", false],
@@ -724,13 +757,13 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     ],
   );
   // The reviewers as when it turns ready, by the run that opened it, as the listener would ask.
-  const request = policy.evals[4];
+  const request = operator[4];
   assert.deepEqual(
     [request.reviewers, request.when, request.mode, request.custom_mode, "fixes" in request],
     [["alice"], "ready", "plan", true, false],
   );
   assert.deepEqual(
-    policy.evals.slice(5).map((e) => [e.mode, e.action, e.target?.kind, e.target?.number]),
+    operator.slice(5).map((e) => [e.mode, e.action, e.target?.kind, e.target?.number]),
     [
       ["work", "comment", "own_pr", 5],
       ["brainstorm", "comment", "pr", 5],
@@ -738,18 +771,15 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     ],
   );
   // A rule written for writes would refuse the read too: the dry run shows it.
-  assert.match(
-    text,
-    /- `deny_github` \(sample: a work run's read of CI's checks\): allows \(no file defines it\)/,
-  );
+  assert.match(text, /- `github` \(sample: a work run's read of CI's checks\): allowed\n/);
   assert.equal(s.accepted.length + s.merges().length + s.replies.length + s.decided.length, 0);
-  // Nobody to request, or not Deckhand's ready pull request: its "allows" says the listener
+  // Nobody to request, or not Deckhand's ready pull request: its "allowed" says the listener
   // wouldn't ask.
   const none = setup(t, { policies: policy.engine });
   const nobody = await none.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
   assert.match(
     nobody.text,
-    /- `deny_request_review`: allows \(no file defines it\), but nobody would be requested: `review\.request` names no allowed user/,
+    /- `request_review`: allowed, but nobody would be requested: `review\.request` names no allowed user/,
   );
   const draft = setup(t, {
     policies: policy.engine,
@@ -762,7 +792,14 @@ test("/mode policy: every rule on the pull request now, nothing reviewed, fixed 
     /but nobody would be requested: not Deckhand's own ready pull request/,
   );
   // Without policies: said, no GitHub call for the pull request.
-  const empty = setup(t, { policies: policyEngine(t).engine });
+  const empty = setup(t, {
+    policies: createPolicies({
+      config: {},
+      github: async () => new Response("{}", { status: 404 }),
+      readBuiltIn: () => new Map(),
+      tmp: tempDir(t),
+    }),
+  });
   const said = await empty.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
   assert.match(said.text, /No policy applies here/);
   assert.equal(said.denials, 0);
@@ -816,18 +853,42 @@ test("dryRunText: the files replaced, the check's errors, a long input cut", () 
       { name: "github.rego", source: "deckhand", replaces: null, rules: ["deny_github"] },
       { name: "gh-x.rego", source: "operator", replaces: "deckhand", rules: [] },
       { name: "a.rego", source: "operator", replaces: null, rules: [] },
-      { name: "b.rego", source: "repo", replaces: "operator", rules: ["deny_merge"] },
-      { name: "gh-y.rego", source: "repo", replaces: "deckhand", rules: [] },
+      { name: "b.rego", source: "repo", replaces: null, rules: ["deny_merge"] },
     ],
     errors: ["policy error: b.rego:2: unexpected eof"],
     results: [
-      { rule: "deny_merge", defined: true, messages: ["policy error: b.rego:2: unexpected eof"] },
+      {
+        decision: "merge",
+        messages: ["policy error: b.rego:2: unexpected eof"],
+        layers: [
+          {
+            layer: "operator",
+            allow: true,
+            denies: [],
+            error: null,
+            allowFiles: ["allow.rego"],
+            denyFiles: [],
+          },
+          {
+            layer: "repo",
+            allow: null,
+            denies: [],
+            error: "policy error: b.rego:2: unexpected eof",
+            allowFiles: [],
+            denyFiles: ["b.rego"],
+          },
+        ],
+      },
     ],
     input: { pr: { title: "```".repeat(2) + "x".repeat(60_000) } },
   });
   assert.match(
     text,
-    /Policies: `github\.rego` \(Deckhand's default\), `gh-x\.rego` \(operator, replaces Deckhand's\), `a\.rego` \(operator\), `b\.rego` \(repo, replaces the operator's\), `gh-y\.rego` \(repo, replaces Deckhand's\)\./,
+    /Policies: `github\.rego` \(Deckhand's default\), `gh-x\.rego` \(operator, replaces Deckhand's\), `a\.rego` \(operator\), `b\.rego` \(repo\)\./,
+  );
+  assert.match(
+    text,
+    /- `merge`: \*\*refused\*\*: `policy error: b\.rego:2: unexpected eof`\n {2}- operator: `allow_merge` allows \(`allow\.rego`\); `deny_merge` denies nothing \(no file defines it\)\n {2}- repository: `policy error: b\.rego:2: unexpected eof`\n/,
   );
   assert.match(text, /The config check has errors:\n\n- `policy error: b\.rego:2: unexpected eof`/);
   // A fence longer than any backticks of the input, and the input cut under GitHub's limit.
@@ -1082,7 +1143,7 @@ test("deny_fix: a policy error starts no fix run, the comment says so", async (t
   const broken = policyEngine(t, {
     ref: "trunk",
     files: { "bad.rego": "package deckhand" },
-    failure: { code: 0, stdout: '{"result":[{"expressions":[{"value":[1]}]}]}' },
+    failure: { code: 0, stdout: '{"result":[{"expressions":[{"value":{"deny":[[1]]}}]}]}' },
   });
   const s = setup(t, { yaml: FIX_ONLY, policies: broken.engine });
   assert.equal(await s.reviews.fix(s.run, s.posted(HIGH)), null);

@@ -1,7 +1,7 @@
 # Deckhand's default policy for a run's GitHub writes (docs/repo-config.md#the-default-policies):
 # the modes' ceilings leave room for what a prompt may need one day, this narrows them to what
-# Deckhand's prompts ask for. A grants folder's policy/github.rego replaces it, and a
-# repository's .deckhand/policy/github.rego replaces both.
+# Deckhand's prompts ask for. A grants folder's policy/github.rego replaces it; a repository's
+# deny rules only add refusals.
 package deckhand
 
 # Brainstorms edit their own issue's description, and file and link their follow-ups: the

@@ -227,7 +227,12 @@ export function createReviewers({
       });
     };
     const rule = "deny_request_review";
-    const { applied, messages, input: saw } = await policies.decide(rule, repo, base, input);
+    const {
+      applied,
+      messages,
+      input: saw,
+      layers,
+    } = await policies.decide(rule, repo, base, input);
     if (applied) {
       const gates = [
         { name: "Deckhand's own pull request, ready", passed: true },
@@ -240,6 +245,7 @@ export function createReviewers({
         messages,
         pr: pr.number,
         gates,
+        ...(layers?.length && { layers }),
         ...(saw && { input: saw }),
       };
       try {

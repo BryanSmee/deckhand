@@ -2,7 +2,7 @@
 // their test, a config, a fake GitHub's fetch. `node --test` loads it as a file of its own too
 // (everything under test/ matches its patterns), where it finds no test.
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -104,9 +104,11 @@ export function recordingFetch(answer) {
 }
 
 // The policies' engine (policies.mjs) with a fake `opa` and org/repo's policy `files` (name →
-// text) on `ref`, the operator's `operator` (likewise): each rule says `messages(input, rule)`, or fails as `failure` says;
-// `listFails()`, a status GitHub answers the repo's policy folder with instead (null: none). `evals`:
-// the inputs it was asked about, with their `rule`.
+// text) on `ref`, the operator's `operator` (likewise, over Deckhand's allow.rego): each layer
+// allows, its deny rule says `messages(input, rule, names)` (names: that layer's files), or it
+// fails as `failure` says; `listFails()`, a status GitHub answers the repo's policy folder with
+// instead (null: none). `evals`: the inputs it was asked about, with their `rule`; `layers`,
+// each one's file names.
 export function policyEngine(
   t,
   {
@@ -119,6 +121,8 @@ export function policyEngine(
   } = {},
 ) {
   const evals = [];
+  // Each evaluation's files, by name, as `evals`.
+  const layers = [];
   const engine = createPolicies({
     config: {},
     github: async (repo, method, path) => {
@@ -133,17 +137,21 @@ export function policyEngine(
       }
       return new Response("{}", { status: 404 });
     },
-    run: async (args, { input }) => {
+    run: async (args, { input, cwd }) => {
       if (args[0] === "capabilities") return { code: 0, stdout: '{"builtins":[]}' };
       if (args[0] === "check") return { code: 0, stdout: "" };
-      const rule = args.at(-1).replace("data.deckhand.", "");
+      // The query asks `allow_<decision>` and `deny_<decision>`: allowed, with `messages`, of
+      // one layer's files (their names: the operator's or the repo's).
+      const rule = `deny_${/data\.deckhand\.deny_(\w+)/.exec(args.at(-1))[1]}`;
+      const names = readdirSync(join(cwd, "policy")).sort();
       evals.push({ ...JSON.parse(input), rule });
+      layers.push(names);
       if (failure) return failure;
-      const value = messages(JSON.parse(input), rule);
+      const value = { allow: [true], deny: [messages(JSON.parse(input), rule, names)] };
       return { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value }] }] }) };
     },
     readOperator: () => new Map(Object.entries(operator)),
     tmp: tempDir(t),
   });
-  return { engine, evals };
+  return { engine, evals, layers };
 }
