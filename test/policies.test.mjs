@@ -203,6 +203,22 @@ test("namespaced: a repo file's package, and its data references, under REPO_NS"
     "# a policy\n\npackage deckhand_repository.deckhand\n\nimport data.deckhand_repository.lib\nx if data.deckhand_repository.lib.y\n",
   );
   assert.equal(namespaced("package lib.util\n"), "package deckhand_repository.lib.util\n");
+  // Not in strings, raw strings or comments, nor after a dot or a word: those aren't references.
+  const kept = [
+    'deny_merge contains "no edits to data.json" if { f.path == "db/data.sql" }',
+    'x := "an \\" escape, then data.y"',
+    "w := `raw data.x`",
+    "y if input.target.data.id",
+    "z if metadata.k # see data.q",
+  ].join("\n");
+  assert.equal(
+    namespaced(`package deckhand\n${kept}\n`),
+    `package deckhand_repository.deckhand\n${kept}\n`,
+  );
+  assert.equal(
+    namespaced('package a\nv := "s"; u := data.k\n'),
+    'package deckhand_repository.a\nv := "s"; u := data.deckhand_repository.k\n',
+  );
   // Nowhere else than first: refused rather than guessed.
   for (const odd of [
     "x := 1\npackage deckhand\n",
@@ -716,6 +732,39 @@ test("deny: failures are capped and redacted like messages", async (t) => {
   assert.equal(denied.length, MAX_MESSAGE_LENGTH);
   const check = await policies.check(new Map([["a.rego", DENY]]));
   assert.ok(check.errors.every((e) => e.length <= MAX_MESSAGE_LENGTH && !e.includes(secret)));
+});
+
+test("decide: an opa that can't start is no layer's error, a repo file without its package the repo's", async (t) => {
+  const missing = {
+    run: async () => ({ code: -1, stdout: "", stderr: "spawn opa ENOENT" }),
+  };
+  const { policies } = setup(t, {
+    opa: missing,
+    operator: { "op.rego": DENY },
+    repoFiles: { "a.rego": DENY },
+  });
+  const said = await policies.decide("deny_merge", "org/repo", "main", input);
+  assert.match(said.messages[0], /spawn opa ENOENT/);
+  // Said on each layer it was asked about, not pinned on the repo's.
+  assert.deepEqual(
+    said.layers.map((l) => [l.layer, !!l.error]),
+    [
+      ["operator", true],
+      ["repo", true],
+    ],
+  );
+  const odd = setup(t, { operator: { "op.rego": DENY }, repoFiles: { "a.rego": "no package" } });
+  const refused = await odd.policies.decide("deny_merge", "org/repo", "main", input);
+  assert.deepEqual(
+    refused.layers.map((l) => [l.layer, l.error]),
+    [
+      ["operator", null],
+      [
+        "repo",
+        "policy error: a.rego must start with `package …` (after comments only), on one line",
+      ],
+    ],
+  );
 });
 
 test("deny: a policy file is fetched once per blob, the listing once per push", async (t) => {
@@ -1376,6 +1425,17 @@ deny_github contains "deploy runs don't comment" if input.mode == "deploy"
       await ownLib.policies.deny("deny_github", "org/repo", "main", write("plan", true)),
       [],
     );
+    // A repo's rule on a path holding `data.` still matches: its strings aren't rewritten.
+    const dataSql = layered(t, {
+      repo: {
+        "data.rego":
+          'package deckhand\n\ndeny_merge contains "db/data.sql waits for a human" if {\n  some f in input.pr.files\n  f.path == "db/data.sql"\n}\n',
+      },
+    });
+    const migration = () => ({ decision: "merge", pr: { files: [{ path: "db/data.sql" }] } });
+    assert.deepEqual(await dataSql.policies.deny("deny_merge", "org/repo", "main", migration), [
+      "db/data.sql waits for a human",
+    ]);
     // Its compile error is placed in its file, without the namespace.
     const bad = layered(t, {
       repo: { "x.rego": "package deckhand\n\nallow_github if data.nope.z(1)\n" },

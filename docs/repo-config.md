@@ -1641,7 +1641,7 @@ this holds without any setup: it refuses nothing, the ceiling decides. A reposit
 reactions altogether there:
 
 ```rego
-# .deckhand/policy/gh-reactions.rego
+# .deckhand/policy/reactions.rego
 package deckhand
 
 deny_github contains "this repository doesn't let runs react" if {

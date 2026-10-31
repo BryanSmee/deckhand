@@ -393,16 +393,23 @@ export const REPO_NS = "deckhand_repository";
 // A repo file's `text` with its package moved under REPO_NS, so that it can neither define nor
 // replace a rule of the operator's packages, whatever it declares: Rego's first statement is
 // the package (after comments), and every rule a module defines is in it. Its `data.`
-// references go there too, so that a repo's libraries still resolve; one written otherwise
-// (`data["lib"]`) only reads the operator's, which widens nothing. null: no package where the
-// parser reads it (a `package` keyword on a line of its own, a byte-order mark), refused rather
-// than guessed.
+// references go there too, so that a repo's libraries still resolve: `data` as a term only, never
+// in a string, a raw string or a comment, nor after a dot or a word (`"db/data.sql"`,
+// `input.x.data.id` stay as they are). One written otherwise (`data["lib"]`) only reads the
+// operator's, which widens nothing. null: no package where the parser reads it (a `package`
+// keyword on a line of its own, a byte-order mark), refused rather than guessed.
 export function namespaced(text) {
   const head = /^((?:[ \t\r\n]|#[^\n]*(?:\n|$))*)package([ \t]+)(?=[A-Za-z_])/.exec(text);
   if (!head) return null;
-  const rest = text.slice(head[0].length).replace(/\bdata\./g, `data.${REPO_NS}.`);
+  const rest = text
+    .slice(head[0].length)
+    .replace(DATA_TERMS, (m) => (m === "data." ? `data.${REPO_NS}.` : m));
   return `${head[1]}package${head[2]}${REPO_NS}.${rest}`;
 }
+
+// What namespaced() skips (strings with their escapes, raw strings, comments) or rewrites (a
+// `data.` that no dot or word character comes before), in the order Rego's lexer reads them.
+const DATA_TERMS = /"(?:[^"\\\n]|\\.)*"|`[^`]*`|#[^\n]*|(?<![\w.])data\./g;
 
 // An error of opaErrors()'s list as one line: `file:row: message`.
 const located = ({ file, row, message }) => `${file ? `${file}:${row ?? "?"}: ` : ""}${message}`;
@@ -522,7 +529,9 @@ export function createPolicies({
         await mkdir(join(dir, OPERATOR_DIR, layer), { recursive: true });
         for (const [name, text] of files) {
           const staged = layer === "repo" ? namespaced(text) : text;
-          if (staged === null) throw new Error(unplacedPackage(name));
+          if (staged === null) {
+            throw Object.assign(new Error(unplacedPackage(name)), { layer: "repo" });
+          }
           await writeFile(join(dir, OPERATOR_DIR, layer, name), staged);
         }
       }
@@ -573,7 +582,9 @@ export function createPolicies({
         ),
       );
     } catch (error) {
-      return failed(error.message ?? String(error), layers.repo ? "repo" : null);
+      // A repo file refused by namespaced() is the repo's; anything else (opa missing, its
+      // capabilities, a temp folder) is no layer's.
+      return failed(error.message ?? String(error), error.layer ?? null);
     }
     const late = `the \`${decision}\` rules took more than ${TIMEOUT_MS / 1000} s`;
     if (res.timedOut) return failed(late);
