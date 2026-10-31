@@ -286,7 +286,8 @@ function Banner({
   errors: PolicyError[];
   goLine: (f: PolicyFile, n: number) => void;
 }) {
-  const fileOf = (e: PolicyError) => files.find((f) => f.active && f.name === e.file) ?? null;
+  // The file of its layer: a repo's and Deckhand's may share a name.
+  const fileOf = (e: PolicyError) => files.find((f) => isOf(e, f)) ?? null;
   const at = (e: PolicyError) => `${e.file}${e.row !== null ? `:${e.row}` : ""}`;
   const refuses = "every decision a policy is asked for refuses";
   const [first] = errors;

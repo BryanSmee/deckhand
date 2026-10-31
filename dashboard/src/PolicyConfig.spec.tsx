@@ -359,6 +359,24 @@ test("a repo's ignored allow rule: said and marked on its line, but nothing is r
   expect(within(file).getByText(/^`allow_merge` is ignored/)).toBeTruthy();
 });
 
+test("the banner's line link: the file of the error's layer, when Deckhand's has its name", async () => {
+  const text = "policy error: review.rego:4: rego_parse_error: unexpected eof token";
+  policies = {
+    files: [
+      makePolicyFile({ name: "review.rego", source: "deckhand", rules: ["deny_review"] }),
+      makePolicyFile({ name: "review.rego", text: "package deckhand\n\n\ndeny_review contains\n" }),
+    ],
+    errors: [{ layer: "repo", file: "review.rego", row: 4, message: text.slice(31), text }],
+    warnings: [],
+  };
+  panel("policies");
+  const alert = await screen.findByRole("alert");
+  fireEvent.click(within(alert).getByRole("button", { name: "Line 4 ↓" }));
+  await waitFor(() => expect(scrolled).toHaveBeenCalledWith("policy-repo-review.rego-line-4"));
+  expect(source(".deckhand/policy/review.rego").open).toBe(true);
+  expect(source("deckhand/policy/review.rego").open).toBe(false);
+});
+
 test("an error placed in no file: the check's, every file's state unknown", async () => {
   const text = "policy error: the policies' check took too long";
   policies = { ...POLICIES, errors: [{ file: null, row: null, message: text, text }] };

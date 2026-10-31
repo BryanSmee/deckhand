@@ -942,6 +942,29 @@ test("decide: whether a policy was asked, with deny()'s messages", async (t) => 
   assert.match(said.messages[0], /^policy error: the policies can't be read/);
 });
 
+test("describe: a repo's allow rule for a built-in-only decision, an error flagged ignored", async (t) => {
+  const { policies } = setup(t, {
+    repoFiles: { "merge.rego": "package deckhand\n\nallow_merge := true\n" },
+  });
+  const { errors } = await policies.describe("org/repo", "main");
+  assert.deepEqual(errors, [
+    {
+      layer: "repo",
+      file: "merge.rego",
+      row: 3,
+      message:
+        "`allow_merge` is ignored: a repository's allow rules count only for its own modes, and only the operator's allow the merge",
+      text: "merge.rego:3: `allow_merge` is ignored: a repository's allow rules count only for its own modes, and only the operator's allow the merge",
+      ignored: true,
+    },
+  ]);
+  // The operator's own allow_merge is its ceiling, not ignored.
+  const operator = setup(t, {
+    operator: { "merge.rego": "package deckhand\n\nallow_merge := true\n" },
+  });
+  assert.deepEqual((await operator.policies.describe("org/repo", "main")).errors, []);
+});
+
 test("describe: each file with its source and rules, the check of them all", async (t) => {
   const opa = fakeOpa({
     checked: (files) =>
@@ -1387,8 +1410,9 @@ deny_github contains "deploy runs don't comment" if input.mode == "deploy"
       await closed.policies.deny("deny_github", "org/repo", "main", write("plan", true)),
       ["no rule allows `comment` on `own_pr` for a `plan` run"],
     );
-    // A repo can't reach the operator's rules: its files are another opa's, so a library of the
-    // operator's package or a helper of the same name changes nothing there.
+    // A repo can't reach the operator's rules: in the opa both layers share, its packages are
+    // moved under deckhand_repository (namespaced()), so a library of the operator's package or
+    // a helper of the same name changes nothing there.
     const sneaky = layered(t, {
       operator: {
         [ALLOW]: "package deckhand\n\nallow_github if data.lib.trusted\n",
