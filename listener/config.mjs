@@ -1,7 +1,7 @@
 // The operator's settings, from the environment and config.yaml. Names of images, volumes and
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import {
   AGENT_SECRETS,
@@ -17,18 +17,19 @@ import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
-import { PRIVATE_RANGES, parseCidr, privateRange } from "./subnets.mjs";
-import { isMap, parseYaml } from "./yaml.mjs";
+import { PRIVATE_RANGES, parseCidr, privateRange } from "../lib/subnets.mjs";
+import {
+  ConfigError,
+  fileTypes,
+  list,
+  NO_FILE,
+  parseSettingsFile,
+  readSettings,
+  readSettingsFile,
+  settingSource,
+} from "../lib/settings.mjs";
 
-export class ConfigError extends Error {}
-
-// "a, B,,c" → ["a", "b", "c"]: GitHub logins and repo names are case-insensitive.
-export function list(value) {
-  return (value ?? "")
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-}
+export { ConfigError, list };
 
 // Whether ALLOWED_REPOS lets `repo` ("Owner/Name") through: empty, it lets all of them.
 // "owner/*" lets every repo of that owner through, compared whole: not "ownerx/…".
@@ -94,12 +95,8 @@ const AGY_DEFAULT_SHA256 =
 const RUNNERS = ["docker", "kubernetes"];
 
 // The operator's settings, by environment variable (in lowercase, its config.yaml key), in the
-// order they are read: a default can use the ones before it. Each one has
-// - type: the YAML config.yaml takes (FILE_SETTINGS): scalar unless it says list or boolean;
-// - default: its value when unset, or a function of the values before it;
-// - parse: its text into its value, or a ConfigError naming it (`label`); none: the text;
-// - empty: an empty value means something (no label), so set in the environment, even empty,
-//   it wins.
+// order they are read: a default can use the ones before it. Each one has a type, a default, a
+// parser and maybe `empty`, as lib/settings.mjs reads them.
 // Each one is in docs/setup.md and compose.yaml (test/settings.test.mjs). Secrets and the
 // wiring compose.yaml sets to match its own services stay in the environment only.
 export const SETTINGS = {
@@ -192,7 +189,7 @@ export const SETTINGS = {
   // The container engine sidecar of runs whose repo is granted allow_docker
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
-  // Where the runs' networks take their subnets from (runner/docker.mjs, subnets.mjs).
+  // Where the runs' networks take their subnets from (runner/docker.mjs, lib/subnets.mjs).
   SANDBOX_SUBNET_SIZE: { default: 28, parse: subnetSize },
   SANDBOX_SUBNETS: { default: null, parse: sandboxSubnets },
   // An issue proposing a .deckhand.yaml when the App is installed on a repo without one
@@ -235,9 +232,7 @@ export const SETTINGS = {
 
 // What config.yaml may set, and the YAML it takes: each setting's environment variable, in
 // lowercase as the key.
-export const FILE_SETTINGS = Object.fromEntries(
-  Object.entries(SETTINGS).map(([name, { type }]) => [name, type ?? "scalar"]),
-);
+export const FILE_SETTINGS = fileTypes(SETTINGS);
 
 // Settings that moved to the grants folder (grants.mjs), and where: ignoring one would quietly
 // take hosts away or change every sandbox's limits.
@@ -251,95 +246,32 @@ const MOVED_TO_GRANTS = {
 // A sandbox's limits when the grants folder sets none.
 const DEFAULT_LIMITS = { cpus: "2", memory: "4g", pids: 2048 };
 
-const TYPE_FORMAT = {
-  list: "a list",
-  scalar: "a value (not a list or a mapping)",
-  boolean: "true or false",
-};
-
-// One value of config.yaml as the environment would hold it, or undefined when it has the
-// wrong type: loadConfig() then checks it as it checks the variable.
-function fileValue(value, type) {
-  const scalar = (v) => typeof v === "string" || typeof v === "number";
-  if (type === "list" && Array.isArray(value) && value.every(scalar)) return value.join(",");
-  if (type === "boolean" && typeof value === "boolean") return value ? "on" : "off";
-  if (scalar(value)) return String(value);
-}
-
 // config.yaml's text → { path, settings: { ALLOWED_USERS: "a,b", … } }. Fails closed: any
 // unknown key, wrong type or secret refuses to start, every one named.
 export function parseConfigFile(text, path) {
-  let raw;
-  try {
-    raw = parseYaml(text);
-  } catch (error) {
-    throw new ConfigError(`${path}: ${error.message}`);
+  return parseSettingsFile(text, path, { types: FILE_SETTINGS, refused });
+}
+
+// Why config.yaml may not hold `key`, or null.
+function refused(key, name) {
+  if (AGENT_SECRETS.includes(name))
+    return "a secret, keep it in the environment (.env), not in a file";
+  if (name === "GRANTS_FILE")
+    return "gone, one file per repository in grants_dir instead (docs/security.md)";
+  if (key === name.toLowerCase() && MOVED_TO_GRANTS[name]) {
+    return `gone, set ${MOVED_TO_GRANTS[name]} instead (docs/security.md)`;
   }
-  if (raw === null) return { path, settings: {} };
-  if (!isMap(raw))
-    throw new ConfigError(`${path}: expected settings (key: value) at the top level`);
-  const settings = {};
-  const errors = [];
-  for (const [key, value] of Object.entries(raw)) {
-    const name = key.toUpperCase();
-    const type = key === name.toLowerCase() ? FILE_SETTINGS[name] : undefined;
-    if (AGENT_SECRETS.includes(name)) {
-      errors.push(`${key}: a secret, keep it in the environment (.env), not in a file`);
-    } else if (name === "GRANTS_FILE") {
-      errors.push(`${key}: gone, one file per repository in grants_dir instead (docs/security.md)`);
-    } else if (key === name.toLowerCase() && MOVED_TO_GRANTS[name]) {
-      errors.push(`${key}: gone, set ${MOVED_TO_GRANTS[name]} instead (docs/security.md)`);
-    } else if (!type) {
-      errors.push(`${key}: unknown (secrets and compose.yaml's wiring are environment only)`);
-    } else if (value !== null) {
-      const text = fileValue(value, type);
-      if (text === undefined) errors.push(`${key}: expected ${TYPE_FORMAT[type]}`);
-      else settings[name] = text;
-    }
-  }
-  if (errors.length) throw new ConfigError(`${path}: ${errors.join("; ")}`);
-  return { path, settings };
+  return null;
 }
 
 // CONFIG_FILE, read once at start (a restart applies an edit). No file: no settings, unless
 // CONFIG_FILE names one, which then has to be there.
-export function readConfigFile(env, read = (path) => readFileSync(path, "utf8")) {
-  const path = env.CONFIG_FILE || "/etc/deckhand/config.yaml";
-  let text;
-  try {
-    text = read(path);
-  } catch (error) {
-    if (error.code === "ENOENT" && !env.CONFIG_FILE) return NO_FILE;
-    throw new ConfigError(`reading ${path}: ${error.message}`);
-  }
-  return parseConfigFile(text, path);
-}
-
-const NO_FILE = { path: null, settings: {} };
-
-// A set, non-empty environment variable, else config.yaml's key; and how an error names it.
-function settings(env, file) {
-  const fromEnv = (name) => env[name] != null && (env[name] !== "" || SETTINGS[name]?.empty);
-  const setting = (name) => (fromEnv(name) ? env[name] : file.settings[name]);
-  const label = (name) =>
-    fromEnv(name) || !(name in file.settings) ? name : `${file.path}: ${name.toLowerCase()}`;
-  return { setting, label };
-}
-
-// Every setting's value, in SETTINGS' order. Empty is unset, unless it means something.
-function readSettings(env, { setting, label }) {
-  const values = {};
-  for (const [name, { default: fallback, parse, empty }] of Object.entries(SETTINGS)) {
-    const text = setting(name);
-    if (text === undefined || (text === "" && !empty)) {
-      values[name] = typeof fallback === "function" ? fallback(values) : fallback;
-    } else {
-      values[name] = parse
-        ? parse(text, { label: label(name), env, values, labelOf: label })
-        : text;
-    }
-  }
-  return values;
+export function readConfigFile(env, read) {
+  return readSettingsFile(env, {
+    path: "/etc/deckhand/config.yaml",
+    parse: parseConfigFile,
+    ...(read && { read }),
+  });
 }
 
 // The plans' logins the listener holds and refreshes, at their fixed names in the credentials
@@ -377,9 +309,9 @@ function distinctPorts(ports) {
 
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
 export function loadConfig(env, file = NO_FILE) {
-  const from = settings(env, file);
+  const from = settingSource(env, file, SETTINGS);
   requiredSettings(env, from);
-  const s = readSettings(env, from);
+  const s = readSettings(env, from, SETTINGS);
   registryCredentials(s);
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
@@ -642,7 +574,7 @@ function subnetSize(text, { label }) {
   return size;
 }
 
-// SANDBOX_SUBNETS cut into blocks of SANDBOX_SUBNET_SIZE (subnets.mjs): { range, base, prefix,
+// SANDBOX_SUBNETS cut into blocks of SANDBOX_SUBNET_SIZE (lib/subnets.mjs): { range, base, prefix,
 // size }, or null (empty: Docker's own address pools).
 function sandboxSubnets(text, { label, values, labelOf }) {
   const size = values.SANDBOX_SUBNET_SIZE;

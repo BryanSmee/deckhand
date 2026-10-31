@@ -11,7 +11,7 @@ import {
   replyQuestions,
   stillAsks,
 } from "../listener/questions.mjs";
-import { Refused } from "../listener/web.mjs";
+import { Refused } from "../lib/http.mjs";
 import { testConfig } from "./helpers.mjs";
 
 // Real issue bodies: #77, #79, #130 and #134 (filed by an inbox run, questions pending), #67

@@ -33,14 +33,25 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { drain, drainable } from "../listener/drain.mjs";
+import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
 // Where they were first: the tests import them from here.
 export { blockedAddress, v6Bytes } from "./addresses.mjs";
 
-// How long a stopping proxy lets its open connections finish.
+// How long a stopping proxy lets its open connections finish (DRAIN_SECONDS): 25 s where it is
+// the only copy, which Docker Compose stops before it starts the next, so that sandboxes'
+// connections aren't refused long; as long as an agent call (10 minutes) where a second copy
+// takes the new ones meanwhile, a Kubernetes rolling update (docs/services.md, The proxy's
+// handover).
 const DRAIN_MS = 25_000;
+
+// DRAIN_SECONDS → milliseconds; DRAIN_MS when unset, an error when it isn't a whole number.
+export function drainMs(text) {
+  if (text === undefined || text === "") return DRAIN_MS;
+  if (!/^\d+$/.test(text)) throw new Error(`DRAIN_SECONDS: expected seconds, got ${text}`);
+  return Number(text) * 1000;
+}
 
 // The header that names, on a relayed request, the sandbox it came from: the listener binds a
 // run's token to its sandbox (../listener/broker-http.mjs, which believes it from
@@ -377,8 +388,13 @@ export function createProxy({
   const broker = brokerUrl ? new URL(brokerUrl).origin : null;
 
   // Plain HTTP: the request line holds the absolute URL. The CA's certificate, the
-  // listener's to hand to sandboxes, at /deckhand-ca.crt.
+  // listener's to hand to sandboxes, at /deckhand-ca.crt; /ready, for a readiness probe: 503
+  // once draining, on a connection kept alive from before (new ones aren't taken).
   async function forward(req, res) {
+    if (req.url === "/ready") {
+      res.writeHead(draining ? 503 : 200, { "content-type": "text/plain" });
+      return res.end(draining ? "draining\n" : "ready\n");
+    }
     if (req.url === "/deckhand-ca.crt") {
       // Made again when near its end: each run asks for it.
       const pem = authority
@@ -570,7 +586,7 @@ export function createProxy({
     tunnel(req, client, head).catch(() => client.destroy());
   });
   // On SIGTERM: no new connection, those open finish (tunnels, and requests in decrypted ones)
-  // → whether all did within the grace period (../listener/drain.mjs).
+  // → whether all did within the grace period (../lib/drain.mjs).
   server.drain = (options) => {
     draining = true;
     closeIdle();
@@ -620,15 +636,10 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   proxy.listen(port, () =>
     log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? `on${https}` : "off"}`),
   );
-  // `docker compose up` recreating it: new connections are refused until the next proxy
-  // starts, which is only once this one exited, and nothing in a sandbox tries them again. So
-  // the requests in flight get a short grace, and long-lived tunnels (a raw one is never known
-  // to be idle) are cut at its end, before compose's stop_grace_period (30 s).
-  process.on("SIGTERM", () => {
-    log("Stopping: open connections finish first");
-    proxy.drain({ graceMs: DRAIN_MS }).then((all) => {
-      if (!all) log("Stopping: connections still open at the end of the grace period, cut");
-      process.exit(0);
-    });
-  });
+  // On SIGTERM, the requests in flight get DRAIN_SECONDS, then what is still open (long-lived
+  // tunnels: a raw one is never known to be idle) is cut. Alone, a short grace, before compose's
+  // stop_grace_period (30 s): `docker compose up` starts the next proxy only once this one
+  // exited, and nothing in a sandbox tries a refused connection again. Beside a second copy,
+  // which takes the new connections, as long as an agent call.
+  drainOnSigterm([proxy], { graceMs: drainMs(process.env.DRAIN_SECONDS), log });
 }

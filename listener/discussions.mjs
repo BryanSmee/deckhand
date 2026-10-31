@@ -17,7 +17,8 @@ import { normalize, repoAllowed } from "./config.mjs";
 import { MARKER, discussionEntryItem, taskKey, unmarked } from "./events.mjs";
 import { same } from "./html.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
-import { apiRoute, readJsonBody, refuse, send } from "./web.mjs";
+import { readJsonBody, refuse, send } from "../lib/http.mjs";
+import { apiRoute } from "./web.mjs";
 
 // How long a thread is kept: the dashboard polls it while it is open.
 export const THREAD_MS = 15_000;

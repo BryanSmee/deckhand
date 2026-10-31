@@ -42,9 +42,9 @@ import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
 import { classify } from "./github-writes.mjs";
 import { ceilingOf } from "./modes.mjs";
-import { redact } from "./redact.mjs";
+import { redact } from "../lib/redact.mjs";
 import { baseOf, forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "./upstream.mjs";
-import { sendJson } from "./web.mjs";
+import { sendJson } from "../lib/http.mjs";
 
 // The largest write body read: GitHub's own limits for an issue or a comment are far below.
 export const MAX_WRITE = 16 * 1024 * 1024;

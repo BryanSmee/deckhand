@@ -6,7 +6,7 @@
 // (one entry whatever the spelling of its repo, spelling.mjs), in order: its keys are never
 // numbers, so JSON keeps them as they were set.
 import { respelled, taskId } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 export function createOrder({ path } = {}) {
   // taskId(key) → { key }: `key` as last spelled.

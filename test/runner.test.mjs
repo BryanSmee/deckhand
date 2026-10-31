@@ -16,7 +16,7 @@ import {
 } from "../listener/runner/docker.mjs";
 import { MAX_READ } from "../listener/runner/inbox.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { overlaps, parseCidr } from "../listener/subnets.mjs";
+import { overlaps, parseCidr } from "../lib/subnets.mjs";
 import { tempDir } from "./helpers.mjs";
 
 const SPEC = { user: SANDBOX_USER, limits: { cpus: "1", memory: "1g", pids: 256 } };

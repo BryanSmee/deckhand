@@ -3,7 +3,7 @@
 // any call, a push or a POST too. Once a request is sent on a connection, it never is again.
 
 // How long a call waits for the listener before the sandbox hears it is unreachable: as long as
-// the previous one may drain (DRAIN_MS, ../listener/drain.mjs) and the next one start, as with
+// the previous one may drain (DRAIN_MS, ../lib/drain.mjs) and the next one start, as with
 // one copy of each (compose) the next only starts once the previous one has exited.
 export const LISTENER_WAIT_MS = 300_000;
 

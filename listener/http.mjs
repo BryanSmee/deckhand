@@ -32,7 +32,8 @@ import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
 import { serveAsset } from "./static.mjs";
 import { closedAs } from "./titles.mjs";
-import { apiRoute, send, sendJson } from "./web.mjs";
+import { send, sendJson } from "../lib/http.mjs";
+import { apiRoute } from "./web.mjs";
 import { SHOT_NAME } from "./run-files.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no

@@ -31,7 +31,7 @@ import { checkout } from "./checkout.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
 import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
-import { drain } from "./drain.mjs";
+import { drain } from "../lib/drain.mjs";
 import {
   checkAppSettings,
   createGitHubApp,
@@ -68,7 +68,7 @@ import { createRestart } from "./restart.mjs";
 import { createReviewers, openerOf } from "./reviewers.mjs";
 import { createReviews, stepsGoing } from "./reviews.mjs";
 import { loadRuns } from "./runlog.mjs";
-import { signingKey } from "./run-token.mjs";
+import { signingKey } from "../lib/tokens.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createBackend } from "./runner/index.mjs";
@@ -853,7 +853,7 @@ if (ctx.app) {
 // saved with the 👀 ids, the runs' state is written, and the next listener carries on. The
 // broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
 // listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
-// inbox polls) before it exits (drain.mjs). The egress policy's port answers until then.
+// inbox polls) before it exits (lib/drain.mjs). The egress policy's port answers until then.
 process.on("SIGTERM", () => {
   ctx.stopping = true;
   ctx.conflicts.stop();

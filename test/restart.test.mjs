@@ -4,7 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { signingKey } from "../listener/run-token.mjs";
+import { signingKey } from "../lib/tokens.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { createRestart } from "../listener/restart.mjs";

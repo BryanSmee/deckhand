@@ -1,4 +1,4 @@
-// Run broker: each run's sandbox holds a run token (run-token.mjs) instead of any GitHub token,
+// Run broker: each run's sandbox holds a run token (lib/tokens.mjs) instead of any GitHub token,
 // a JWT the broker signs and renews, and every service checks offline, with the public key: the
 // GitHub gateway (github-gateway.mjs), where the egress proxy relays the sandbox's GitHub calls,
 // swaps it for a token limited to the run's repo, which the sandbox never sees; the git gateway
@@ -28,7 +28,7 @@ import {
   TOKEN_VERSION,
   TokenError,
   verifyToken,
-} from "./run-token.mjs";
+} from "../lib/tokens.mjs";
 
 // What a run's token or secret sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
@@ -104,7 +104,7 @@ export function createBroker({
   // address → the ID of the network (or pod) it is on, as the runner tells (runner/), or null:
   // what binds a token to its sandbox. None: every token is refused.
   sandboxOf = async () => null,
-  // { privateKey, publicKey, kid } (run-token.mjs signingKey()). `keys`: kid → public key, the
+  // { privateKey, publicKey, kid } (lib/tokens.mjs signingKey()). `keys`: kid → public key, the
   // ones tokens are checked with: the signing key's, and an older one's while keys rotate.
   key = ephemeralKey(),
   keys = new Map([[key.kid, key.publicKey]]),

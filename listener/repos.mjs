@@ -35,7 +35,8 @@ import {
 import { sameRepo } from "./events.mjs";
 import { effectiveView } from "./repo-view.mjs";
 import { paginate } from "./github.mjs";
-import { apiRoute, send } from "./web.mjs";
+import { send } from "../lib/http.mjs";
+import { apiRoute } from "./web.mjs";
 
 export const LIST_MS = 5 * 60000;
 export const CONFIG_MS = 30 * 60000;

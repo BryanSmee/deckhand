@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { MARKER } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { reactionSubject } from "./github-writes.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") and a cancelled run's comments only lose their 👀; a `/cancel` gets 👍.

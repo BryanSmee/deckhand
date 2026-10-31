@@ -108,6 +108,34 @@ higher fencing epoch that the github service, the runner and the broker check, e
 acknowledged once handled, and side effects carry idempotency keys (#506). The store is the
 file backend on one node, Redis on several (#509).
 
+### Draining
+
+Every service is to drain the same way on SIGTERM (`lib/drain.mjs` `drainOnSigterm()`): it stops
+accepting connections, finishes those in flight within its grace period, then exits. The proxy
+uses it so far; the listener keeps its own handler (`listener/server.mjs`), and each service uses
+`drainOnSigterm()` as it moves out. With two
+copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
+copy takes the connections the old one no longer accepts.
+
+### The proxy's handover
+
+The proxy runs as **one copy, and a second during an update**: no permanent second copy is
+needed.
+
+1. The new copy starts and joins every run's network under the same name (`egress`). It takes
+   the new connections once ready: it answers `GET /ready` (plain HTTP, the readiness probe's).
+2. The old one, out of rotation, takes no new connection and drains for as long as an agent
+   call lasts (`DRAIN_SECONDS=600`): an agent's stream through it goes on to its end, then the
+   old copy exits (`test/proxy-handover.test.mjs`).
+
+On Kubernetes, that's a Deployment with one replica, `strategy: RollingUpdate`, `maxSurge: 1`,
+`maxUnavailable: 0`, a readiness probe on `/ready`, and `terminationGracePeriodSeconds` covering
+the drain (630 for a 600 s drain, #396).
+
+With Docker Compose, which stops a container before it starts the next, nothing changes: the
+proxy drains for 25 s (`DRAIN_SECONDS`' default, under its `stop_grace_period` of 30 s), and the
+gap stays (above). The Compose test server keeps it.
+
 ## What limits a leaked token
 
 - **Run tokens** (#493): **where**, the services are reachable from the runs' networks only
@@ -118,9 +146,10 @@ file backend on one node, Redis on several (#509).
   end the run), and nothing once its network is removed. The agent's own token,
   which its CLI reads once at start and can't renew, lasts the run instead (7 days at most), bound
   the same way and for the agents' endpoints alone (security.md, Run tokens).
-- **Service tokens** (#500): signed by the broker, with `sub` (the caller) and `aud` (the
-  service called), short-lived, and bound to the caller: its pod's service account on
-  Kubernetes, the network a call arrives on with Docker (one network per caller and callee).
+- **Service tokens** (#500, security.md, Service tokens): signed by the broker, with `sub` (the
+  caller) and `aud` (the service called), 15 minutes, and bound to the caller: its pod's service
+  account on Kubernetes, the network a call arrives on with Docker (one network per caller and
+  callee).
 - **What each caller may do**: each service accepts from each caller only what it needs, in
   one table per service. The github service lets edge read, never mint a token or write: a
   compromised edge, already inside the internal network, gets no more.
@@ -130,7 +159,9 @@ file backend on one node, Redis on several (#509).
 
 ## Rules
 
-- **No shared database**: each service keeps its own state through one store interface (#500), and
+- **No shared database**: each service keeps its own state through one store interface
+  (`lib/store.mjs`: keys with TTLs, atomic operations, leases with a fencing epoch, acknowledged
+  streams, blobs; its file backend for one node, `lib/store-file.mjs`, #500), and
   passes its changes to those that need them as store streams, acknowledged once handled, so a
   handover loses none. The broker streams run starts, ends and progress; edge, verified events; the
   orchestrator, task updates for the dashboard; the runner, run events (started, ended, exit code;

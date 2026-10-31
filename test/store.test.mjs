@@ -1,117 +1,129 @@
+// The store (lib/store.mjs): the shared suite on each backend, then what the file backend
+// adds, everything kept across a restart.
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
-import { loadCredentials, saveCredentials } from "../listener/github-app.mjs";
-import { createOnboardingStore } from "../listener/onboarding.mjs";
-import { createPulls } from "../listener/pulls.mjs";
-import { persistentMap, readJson, writeJsonAtomic } from "../listener/store.mjs";
-import { createTitles } from "../listener/titles.mjs";
+import { openStore } from "../lib/store.mjs";
+import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
+import { storeContract } from "./store-contract.mjs";
 
-const temp = (t) => tempDir(t, "deckhand-store-");
-const leftovers = (dir) => readdirSync(dir).filter((f) => f.endsWith(".tmp"));
+storeContract("memory", (t, clock) => fileStore({ now: clock.now }));
+storeContract("file", (t, clock) => fileStore({ dir: tempDir(t), now: clock.now }));
 
-test("readJson: the value, or the fallback when missing or unreadable", (t) => {
-  const dir = temp(t);
-  assert.equal(readJson(join(dir, "none.json")), null);
-  assert.deepEqual(readJson(join(dir, "none.json"), {}), {});
-  writeFileSync(join(dir, "half.json"), '{"a": ');
-  assert.deepEqual(readJson(join(dir, "half.json"), []), []);
-  writeFileSync(join(dir, "ok.json"), '{"a": 1}');
-  assert.deepEqual(readJson(join(dir, "ok.json"), {}), { a: 1 });
+test("file: keys, leases, streams, consumers and blobs outlive a restart", async (t) => {
+  const dir = tempDir(t);
+  let at = 1_000_000;
+  const now = () => at;
+  const before = fileStore({ dir, now });
+  await before.set("kept", { a: 1 });
+  await before.set("short", 1, { ttlMs: 1000 });
+  const lease = await before.acquire("orchestrator", "copy-a", { ttlMs: 5000 });
+  await before.release("orchestrator", "copy-a", lease.epoch);
+  const ids = [];
+  for (const n of [1, 2, 3]) ids.push(await before.append("runs", { n }));
+  await before.ack("runs", "orchestrator", [ids[0], ids[2]]);
+  await before.appendBlob("log", "a");
+  await before.close();
+
+  at += 1000;
+  const after = fileStore({ dir, now });
+  assert.deepEqual(await after.get("kept"), { a: 1 });
+  assert.equal(await after.get("short"), null);
+  // The epoch goes on from the one before the restart.
+  const next = await after.acquire("orchestrator", "copy-b", { ttlMs: 5000 });
+  assert.ok(next.epoch > lease.epoch);
+  assert.deepEqual(
+    (await after.read("runs", "orchestrator")).map((e) => e.event.n),
+    [2],
+  );
+  const id = await after.append("runs", { n: 4 });
+  assert.ok(Number(id) > Number(ids[2]), "ids go on increasing");
+  await after.appendBlob("log", "b");
+  assert.equal((await after.readBlob("log")).toString(), "ab");
 });
 
-test("writeJsonAtomic: replaces the file whole, leaves no temporary file", (t) => {
-  const dir = temp(t);
-  const path = join(dir, "state.json");
-  writeJsonAtomic(path, { a: 1 });
-  writeJsonAtomic(path, { a: 2 });
-  assert.deepEqual(readJson(path), { a: 2 });
-  assert.deepEqual(leftovers(dir), []);
+test("file: an event cut short by a crash is dropped, and the stream goes on", async (t) => {
+  const dir = tempDir(t);
+  const before = fileStore({ dir });
+  await before.append("runs", { n: 1 });
+  const [file] = readdirSync(join(dir, "streams"));
+  appendFileSync(join(dir, "streams", file), '{"id":2,"ev');
+
+  const after = fileStore({ dir });
+  await after.append("runs", { n: 2 });
+  assert.deepEqual(
+    (await after.read("runs", "edge")).map((e) => e.event.n),
+    [1, 2],
+  );
+  const lines = readFileSync(join(dir, "streams", file), "utf8")
+    .split("\n")
+    .filter(Boolean);
+  assert.equal(lines.length, 2);
 });
 
-test("writeJsonAtomic: a mode for secrets, even over a wider umask", (t) => {
-  const dir = temp(t);
-  const path = join(dir, "secret.json");
-  writeJsonAtomic(path, { pem: "…" }, { mode: 0o600 });
-  assert.equal(statSync(path).mode & 0o777, 0o600);
+test("file: names stay in their folder, whatever they hold", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  await store.putBlob("../../etc/x", "x");
+  await store.append("../up", { n: 1 });
+  assert.deepEqual(readdirSync(dir).sort(), ["blobs", "streams"]);
+  assert.equal(readdirSync(join(dir, "blobs")).length, 1);
+  assert.equal(readdirSync(join(dir, "streams")).length, 1);
 });
 
-test("writeJsonAtomic: a failed write keeps the previous file and cleans up", (t) => {
-  const dir = temp(t);
-  // A directory where the file should be: the rename fails.
-  const path = join(dir, "taken");
-  mkdirSync(path);
-  assert.throws(() => writeJsonAtomic(path, { a: 1 }));
-  assert.deepEqual(leftovers(dir), []);
-  assert.throws(() => writeJsonAtomic(join(dir, "no", "such.json"), { a: 1 }));
-  assert.deepEqual(leftovers(dir), []);
+test("file: a name too long for a file name is cut and hashed, and stays its own", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  const deep = `runs/42/files/${"src/components/".repeat(12)}`;
+  await store.putBlob(`${deep}index.ts`, "a");
+  await store.putBlob(`${deep}other.ts`, "b");
+  await store.append(`progress/${"x".repeat(300)}`, { n: 1 });
+  assert.equal((await store.readBlob(`${deep}index.ts`)).toString(), "a");
+  assert.equal((await store.readBlob(`${deep}other.ts`)).toString(), "b");
+  const names = [...readdirSync(join(dir, "blobs")), ...readdirSync(join(dir, "streams"))];
+  assert.equal(names.length, 3);
+  for (const file of names) assert.ok(Buffer.byteLength(file) <= 255, file);
+  // A short name holding the hash's mark is never taken for a cut one.
+  await store.putBlob("a~b", "c");
+  assert.equal((await store.readBlob("a~b")).toString(), "c");
 });
 
-test("persistentMap: the file's object as a Map, saved whole in the same format", (t) => {
-  const dir = temp(t);
-  const path = join(dir, "pulls.json");
-  // A file from before persistentMap(), as writeJsonAtomic() wrote it.
-  const before = { "o/r#1": { number: 2, state: "draft" }, "o/r#pr-3": { number: 3 } };
-  writeJsonAtomic(path, before);
-  const text = readFileSync(path, "utf8");
-  const map = persistentMap(path);
-  assert.deepEqual([...map.keys()], ["o/r#1", "o/r#pr-3"]);
-  assert.deepEqual(map.get("o/r#1"), { number: 2, state: "draft" });
-  map.save();
-  assert.equal(readFileSync(path, "utf8"), text);
-  map.delete("o/r#1");
-  map.set("o/r#4", "x");
-  map.save();
-  assert.deepEqual(readJson(path), { "o/r#pr-3": { number: 3 }, "o/r#4": "x" });
-  assert.deepEqual(leftovers(dir), []);
-  // Missing or unreadable: empty. Without a path: kept in memory only.
-  assert.equal(persistentMap(join(dir, "none.json")).size, 0);
-  writeFileSync(join(dir, "half.json"), '{"a": ');
-  assert.equal(persistentMap(join(dir, "half.json")).size, 0);
-  const memory = persistentMap(null);
-  memory.set("a", 1);
-  memory.save();
-  assert.deepEqual(readdirSync(dir).sort(), ["half.json", "pulls.json"]);
-  // A mode for the files with comments' text (waits.json).
-  const secret = persistentMap(join(dir, "waits.json"), { mode: 0o600 });
-  secret.set("o/r#5", { blockers: [4] });
-  secret.save();
-  assert.equal(statSync(join(dir, "waits.json")).mode & 0o777, 0o600);
+test("file: a trimmed stream's file is rewritten, not left to grow", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  for (let n = 1; n <= 20; n++) await store.append("progress", { n }, { maxLength: 3 });
+  const [file] = readdirSync(join(dir, "streams"));
+  const lines = readFileSync(join(dir, "streams", file), "utf8")
+    .split("\n")
+    .filter(Boolean);
+  assert.ok(lines.length < 6, `${lines.length} lines`);
+  // Reopened, it holds the last ones only.
+  const reopened = fileStore({ dir });
+  const read = (await reopened.read("progress", "edge")).map((e) => e.event.n);
+  assert.deepEqual(read, [18, 19, 20]);
 });
 
-test("every state file is written through store.mjs: no temporary file left behind", async (t) => {
-  const dir = temp(t);
-  const brainstorms = createBrainstorms({
-    path: join(dir, "brainstorms.json"),
-    idleMs: 60000,
-    busy: () => false,
-    log: () => {},
-  });
-  brainstorms.activate("o/r#1", { repo: "o/r", number: 1 });
-  brainstorms.end("o/r#1");
-  createIssueModes(join(dir, "modes.json")).set("o/r#1", "review");
-  createTitles({ path: join(dir, "titles.json"), fetchTitle: async () => null }).set("o/r#1", "A");
-  createPulls({ path: join(dir, "pulls.json"), listPulls: async () => [] }).record("o/r#1", {
-    number: 2,
-    url: "https://github.com/o/r/pull/2",
-    state: "draft",
-    readyAt: null,
-  });
-  createOnboardingStore(join(dir, "onboarding.json")).record("o/r", 3);
-  saveCredentials(dir, { id: 1, pem: "…" });
+test("file: events trimmed by maxLength stay gone after a restart", async (t) => {
+  const dir = tempDir(t);
+  const before = fileStore({ dir });
+  for (let n = 1; n <= 8; n++) await before.append("progress", { n }, { maxLength: 5 });
+  const read = async (store, consumer) =>
+    (await store.read("progress", consumer)).map((e) => e.event.n);
+  assert.deepEqual(await read(before, "edge"), [4, 5, 6, 7, 8]);
+  const after = fileStore({ dir });
+  assert.deepEqual(await read(after, "dashboard"), [4, 5, 6, 7, 8]);
+  // And appends go on from there.
+  await after.append("progress", { n: 9 }, { maxLength: 5 });
+  assert.deepEqual(await read(fileStore({ dir }), "other"), [5, 6, 7, 8, 9]);
+});
 
-  assert.deepEqual(readdirSync(dir).sort(), [
-    "app.json",
-    "brainstorms.json",
-    "modes.json",
-    "onboarding.json",
-    "pulls.json",
-    "titles.json",
-  ]);
-  assert.deepEqual(readJson(join(dir, "modes.json")), { "o/r#1": "review" });
-  assert.equal(readJson(join(dir, "onboarding.json"))["o/r"].issue, 3);
-  assert.deepEqual(loadCredentials(dir), { id: 1, pem: "…" });
+test("openStore: file: and memory:, nothing else", async (t) => {
+  const dir = tempDir(t);
+  const store = openStore(`file://${dir}`);
+  await store.set("a", 1);
+  assert.deepEqual(readdirSync(dir).includes("state.json"), true);
+  assert.equal(await openStore("memory:").get("a"), null);
+  assert.throws(() => openStore("redis://store:6379"), /isn't a store/);
 });

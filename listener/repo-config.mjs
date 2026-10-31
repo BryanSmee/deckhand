@@ -11,7 +11,7 @@ import { EFFORTS, MODEL_NAME, SPEEDS } from "./events.mjs";
 import { list, normalize } from "./config.mjs";
 import { customMode, PICKED_MODES, RESERVED_MODES } from "./modes.mjs";
 import { FILES_DIR, SCREENSHOT_DIR } from "./runner/inbox.mjs";
-import { isMap, parseYaml } from "./yaml.mjs";
+import { isMap, parseYaml } from "../lib/yaml.mjs";
 
 export const CONFIG_FILE = ".deckhand.yaml";
 

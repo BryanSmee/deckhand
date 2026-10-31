@@ -3,9 +3,9 @@
 // answer streams back as it comes.
 import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
-import { redact } from "./redact.mjs";
-import { AGENT_AUDIENCE } from "./run-token.mjs";
-import { sendJson } from "./web.mjs";
+import { redact } from "../lib/redact.mjs";
+import { AGENT_AUDIENCE } from "../lib/tokens.mjs";
+import { sendJson } from "../lib/http.mjs";
 
 // Plans' credentials (`claude setup-token`, `codex login`, `agy`'s sign-in): logged at start,
 // as the operator is responsible for how they are used, and a plan's terms may not cover a

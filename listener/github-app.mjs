@@ -3,7 +3,7 @@
 // hands sandboxes tokens limited to their run's repo.
 import { createSign } from "node:crypto";
 import { join } from "node:path";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 // What the App asks for when /setup creates it (manifest flow).
 export const APP_PERMISSIONS = {

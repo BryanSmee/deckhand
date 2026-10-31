@@ -248,7 +248,7 @@ Assume it could, and keep secrets away from workflows on `issue-*` branches as a
 ### Run tokens
 
 A sandbox holds no credential of the operator's and no GitHub token: it holds **run tokens**
-(`listener/run-token.mjs`), JWTs the broker (`listener/broker.mjs`) signs with an **Ed25519**
+(`lib/tokens.mjs`), JWTs the broker (`listener/broker.mjs`) signs with an **Ed25519**
 key. Every service checks their signature **offline**, with the public key alone: the
 [GitHub gateway](#the-github-gateway), the git gateway, the run's files and the agents' API
 endpoints (`listener/upstream.mjs`) never ask the broker whether a token is genuine. While
@@ -381,6 +381,71 @@ now that the sandbox never sees them. Anything shaped like a GitHub token (`ghs_
 `gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted too,
 wherever it came from: a token a restarted listener no longer lists, or one the agent found
 elsewhere.
+
+### Service tokens
+
+Once the listener is split into services (#499, [services.md](services.md)), each one calls
+others: edge the orchestrator, the orchestrator the runner, the proxy the github service, and so
+on (`lib/services.mjs` `CALLS`, the one list of who calls whom). Every such call carries a
+**service token** (`lib/service-token.mjs`), which the broker signs with the run tokens' key and
+mechanism: Ed25519, checked offline with its public key, the same strict checks as above.
+
+- **Claims**: `sub`, the calling service; `aud`, the service called, as
+  `deckhand:service:<name>`, so a run token is never a service token nor the other way round;
+  `exp`, **15 minutes**; `ver`, the claims' format.
+- **Issued to its caller only**: each service asks the broker for its tokens at start and again
+  two thirds into their lifetime (`serviceTokens()`; a broker away is asked again every few
+  seconds while the tokens held last). The broker hands a service tokens only for the services
+  `CALLS` says it calls, and only to the service the request proves it is, never one it names:
+  the network it arrived on with Docker, its pod's projected service account token on
+  Kubernetes (#396, #505).
+- **Bound to its caller**: with Docker, each service is attached only to the networks of the
+  services it calls, **one network per caller and callee**, and the service called checks
+  which network a call arrived on (its own address on it, `SERVICE_NETWORKS`:
+  `edge=172.30.1.0/24,…`) against `sub`. A token stolen from one service and replayed from
+  another arrives on the wrong network: `403`. On Kubernetes, NetworkPolicies do it (with a
+  network plugin that enforces them, #396).
+
+**What each caller may do.** `aud` isn't enough: each service declares, for each of its
+endpoints, which callers may call it, in **one table per service**, checked in code
+(`serviceGuard()`) before anything else:
+
+```js
+// The github service's, for example: edge reads, only the orchestrator writes.
+{
+  "GET /repos/:owner/:repo/config": ["edge", "orchestrator"],
+  "POST /tokens": ["orchestrator"],
+  "GET /tarballs/*": ["runner"],
+}
+```
+
+No token, or one that isn't valid for the service (another key, another `aud`, expired):
+`401`. A token from another caller's network, a caller the table doesn't name on the endpoint,
+or an endpoint that isn't in the table at all: `403`. Where routes overlap (`GET /runs/*` and `GET /runs/:id/secret`), each one that matches must name the caller, whatever their order. A path the URL parser would change (`//host/…`, `..` segments) is refused first (`400`), so a handler that routes on the raw path serves the endpoint the guard allowed. A compromised edge, already inside the
+internal network, gets what edge needs (a repository's config, the dashboard's data), never a
+minted token or a write.
+
+**The services' networks.** The runs' networks hold the egress proxy and the sandboxes only:
+from a sandbox, every service is reached through the proxy, which vouches for the sandbox
+(`X-Deckhand-Client`), never directly. Two services share a network only when one calls the
+other, and a service is on no network it doesn't call or isn't called over, but its way out
+when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted hosts).
+`test/networks.test.mjs` reads `compose.yaml` and fails otherwise, and checks which containers the runner joins to a run's network. Until the broker moves out
+of the listener (#505), the listener joins the runs' networks too, for the endpoints sandboxes
+call directly (the agents' APIs, pushes).
+
+To check it by hand, from inside a running sandbox (`docker exec -it <sandbox> sh`), for each
+service (`<service>:<port>`, as `compose.yaml` names them):
+
+```sh
+# Called directly: no route, the run's network is internal and the service isn't on it.
+curl -m 5 --noproxy '*' http://<service>:<port>/    # fails: no such host, or a timeout
+# Through the proxy: refused, unless it is one the proxy relays the run's calls to.
+curl -m 5 http://<service>:<port>/                  # 403 from Deckhand's egress proxy
+```
+
+And from another service's container, a call with no token, or with a token of the wrong
+service, is refused (`401`, `403`), whatever the endpoint.
 
 ### The GitHub gateway
 

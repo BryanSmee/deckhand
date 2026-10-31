@@ -6,7 +6,7 @@
 import { AGENT_SECRETS } from "./agents/index.mjs";
 
 // redact() lives on its own: the API endpoints use it, and agents/ imports them (upstream.mjs).
-export { REDACTED, redact } from "./redact.mjs";
+export { REDACTED, redact } from "../lib/redact.mjs";
 
 // The operator's credentials as the listener holds them: the agents' (AGENT_SECRETS, from its
 // environment), the ChatGPT sign-in's (`ctx.openai`, openai.mjs) and the Google AI plan's

@@ -1,7 +1,7 @@
 // SANDBOX_SUBNETS' arithmetic: ranges, overlaps and the blocks left free.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { freeBlocks, overlaps, parseCidr } from "../listener/subnets.mjs";
+import { freeBlocks, overlaps, parseCidr } from "../lib/subnets.mjs";
 
 const take = (gen, n) => Array.from({ length: n }, () => gen.next().value);
 const range = (cidr, size) => ({ ...parseCidr(cidr), size });

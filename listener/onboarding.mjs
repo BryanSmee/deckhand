@@ -7,7 +7,7 @@ import { repoAllowed } from "./config.mjs";
 import { issueItem, linkedIssue, headInRepo } from "./events.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 export const ONBOARDING_LABEL = "deckhand-onboarding";
 const ONBOARDING_TITLE = "Set up Deckhand for this repository";

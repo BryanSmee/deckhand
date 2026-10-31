@@ -4,9 +4,9 @@
 // else "org/repo#pr-3"). Only decisions a policy was asked for: none anywhere, nothing kept.
 // Kept in decisions.json, so a refused merge still shows after a restart. Its last `/mode
 // policy` dry run too (issue #324), in a file of its own: a dry run is no decision.
-import { redact } from "./redact.mjs";
+import { redact } from "../lib/redact.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 // A task's newest decisions, and how long a task's are kept after its last one.
 export const MAX_DECISIONS = 10;

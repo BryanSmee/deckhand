@@ -16,7 +16,7 @@ import {
   sameRepo,
 } from "./events.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
-import { persistentMap } from "./store.mjs";
+import { persistentMap } from "../lib/files.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 

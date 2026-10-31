@@ -55,6 +55,8 @@ started before you finish.
 ## Layout (target; build it as the issues land)
 
 ```
+lib/          what every service shares, copied into each image: yaml, settings, redact, http,
+              files, drain, tokens, service tokens, the store (store.mjs, store-file.mjs)
 listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
               runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
               agents/ (each agent's specifics: install, env, hosts, session, normalize())
@@ -112,7 +114,7 @@ docs/         setup, per-repo config reference, security model, architecture
   hook runs only with `allow_preview`, branch Dockerfiles only with
   `allow_branch_docker_images` (all three in the grants folder), never for fork pull requests.
 - **No GitHub token in a sandbox:** it holds only a run token (and its agent's token), signed
-  by the broker, bound to its network or pod and dead with the run (`listener/run-token.mjs`,
+  by the broker, bound to its network or pod and dead with the run (`lib/tokens.mjs`,
   docs/security.md, Run tokens). The egress proxy relays its GitHub calls to the listener's GitHub gateway
   (`listener/github-gateway.mjs`), which adds a short-lived installation token for that run's
   repo and redacts what it writes.

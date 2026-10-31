@@ -9,7 +9,7 @@ import { parseKey, taskKey } from "./events.mjs";
 import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
-import { readJson, writeJsonAtomic } from "./store.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json

@@ -11,7 +11,7 @@ import { createBroker } from "../listener/broker.mjs";
 import { clientAddress, createBrokerHttp } from "../listener/broker-http.mjs";
 import { MAX_SHOT, MAX_SHOTS, SHOT_NAME } from "../listener/run-files.mjs";
 import { CLOSE, createInbox } from "../listener/runner/inbox.mjs";
-import { signingKey } from "../listener/run-token.mjs";
+import { signingKey } from "../lib/tokens.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { listening, serve, tempDir, testConfig } from "./helpers.mjs";
 
@@ -23,7 +23,7 @@ const image = (head, size = 64) => Buffer.concat([head, Buffer.alloc(size - head
 
 // A listener with two running tasks, A (its sandbox's network at 127.0.0.1, where the test's
 // requests come from) and B (elsewhere), over `runsDir` and `shotsDir`: what a restart keeps.
-// `key`: the broker's signing key, the same after a restart (run-token.mjs signingKey()), as
+// `key`: the broker's signing key, the same after a restart (lib/tokens.mjs signingKey()), as
 // restart.mjs registers the runs once more by their ids. `ips`: their sandboxes' addresses.
 function listener({ runsDir, shotsDir, key, ips = { a: "127.0.0.1", b: "10.2.0.2" } }) {
   const networks = { [ips.a]: "net-a", [ips.b]: "net-b" };

@@ -4,7 +4,7 @@
 import { issueOutcome, sameRepo } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { issueList } from "./waits.mjs";
-import { refuse } from "./web.mjs";
+import { refuse } from "../lib/http.mjs";
 
 // The "owner/name" of an issue as the REST API describes it (sub-issues and blockers may be
 // another repo's), or null.

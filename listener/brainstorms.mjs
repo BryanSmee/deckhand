@@ -1,7 +1,7 @@
 // Each issue's conversation state, kept across listener restarts: its brainstorm
 // (brainstorms.json) and the repo's own mode its session is in (modes.json).
 import { respellMap } from "./spelling.mjs";
-import { persistentMap, readJson, writeJsonAtomic } from "./store.mjs";
+import { persistentMap, readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
 export const REPLY_GRACE_MS = 2 * 60000;

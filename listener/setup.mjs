@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { APP_EVENTS, APP_PERMISSIONS, GITHUB_HEADERS } from "./github-app.mjs";
 import { escape, page as html, same } from "./html.mjs";
-import { readBody } from "./web.mjs";
+import { readBody } from "../lib/http.mjs";
 
 const STATE_TTL_MS = 60 * 60000;
 
