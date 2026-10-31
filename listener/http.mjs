@@ -23,7 +23,7 @@ import {
 } from "./events.mjs";
 import { UNREAD_EVENTS } from "./github-app.mjs";
 import { fetchPull, getJson } from "./github.mjs";
-import { isLight, kindOf } from "./modes.mjs";
+import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { previewHook } from "./previews.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
@@ -169,8 +169,9 @@ export function createHttp(ctx, { dashboardDir }) {
         // review (board.mjs).
         ...loopStep(t.pending),
         position: places.get(taskKey(t.repo, t.id)) ?? null,
-        // A brainstorm, or one of the repo's light modes: before any work run, whatever the order.
-        ...(isLight(t, t.pending.at(-1).mode) && { startsFirst: true }),
+        // A brainstorm, or another mode whose runs are apart from work's (modes.mjs `volumes`):
+        // before any work run, whatever the order.
+        ...(isApart(t.pending.at(-1).mode) && { startsFirst: true }),
       }));
     const shown = board({
       runs: mine(ctx.runs),

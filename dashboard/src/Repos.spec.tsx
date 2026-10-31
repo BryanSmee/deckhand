@@ -79,6 +79,7 @@ const CONFIG: RepoConfig = {
     mounts: [],
     grant: {
       files: ["org/api.yaml"],
+      grantFiles: [],
       allowPreview: false,
       allowDockerfile: false,
       allowBranchDockerImages: false,
@@ -557,7 +558,7 @@ test("a repository's panel: errors first, then what runs get, then the file", as
   expect(within(pypi).getByText("grants/org/api.yaml")).toBeTruthy();
   expect(within(pypi).getByText("from operator")).toBeTruthy();
   // What the operator grants, workflow pushes included.
-  expect(within(rowIn("Switches", "allow_workflows")).getByText("off")).toBeTruthy();
+  expect(within(rowIn("Switches", "workflows")).getByText("off")).toBeTruthy();
   expect(screen.getByText("users: [alice]")).toBeTruthy();
   expect(screen.getByRole("link", { name: "Edit on GitHub" }).getAttribute("href")).toBe(
     "https://github.com/org/api/edit/main/.deckhand.yaml",
@@ -597,7 +598,7 @@ test("auto-merge: a red badge in the list, a red risk box and its grant in the p
   expect(within(box).getByRole("link").getAttribute("href")).toBe(
     "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge",
   );
-  expect(within(rowIn("Switches", "allow_auto_merge")).getByText("public")).toBeTruthy();
+  expect(within(rowIn("Switches", "auto_merge")).getByText("public")).toBeTruthy();
 });
 
 test("a repository's broken grant: the file to fix, and only this repository stopped", async () => {
@@ -665,7 +666,7 @@ test("a config that parses but asks for what isn't granted: Config has errors, n
           key: "dockerfile",
           value: ".deckhand/Dockerfile",
           source: "refused",
-          note: "the operator's grants don't set allow_dockerfile: true for this repository",
+          note: "the operator's policies don't grant dockerfile to this repository (allow_grant)",
           line: null,
         },
       ],
@@ -678,7 +679,7 @@ test("a config that parses but asks for what isn't granted: Config has errors, n
   ).toHaveLength(1);
   await openRepo("org/api");
   const alert = await screen.findByRole("alert");
-  expect(alert.textContent).toContain("dockerfile: refused: the operator's grants");
+  expect(alert.textContent).toContain("dockerfile: refused: the operator's policies");
   const heading = title().textContent;
   expect(heading).toContain("Config has errors");
   expect(heading).not.toContain("Configured");

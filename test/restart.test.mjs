@@ -16,7 +16,7 @@ import { openStore } from "../lib/store.mjs";
 import { fileLogs, localBroker, tempDir } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it.
-function saveRun(dir, id, issue, record) {
+function saveRun(dir, id, issue, record, more = {}) {
   const secret = `secret-${id}`;
   const saved = {
     task: { repo: "org/repo", id: issue, kind: "issue" },
@@ -27,6 +27,7 @@ function saveRun(dir, id, issue, record) {
     record: { id, key: `org/repo#${issue}`, ...record },
     handled: [],
     unanswered: [],
+    ...more,
   };
   writeFileSync(join(dir, `${id}.live.json`), JSON.stringify(saved));
   return secret;
@@ -1176,4 +1177,32 @@ test("a run saved before capabilities reads after a restart what its mode's toke
   assert.deepEqual(savedCapabilities({ mode: "work" }), reads);
   assert.deepEqual(savedCapabilities({ mode: "brainstorm" }), reads);
   assert.deepEqual(savedCapabilities({ mode: "discussion" }), [...reads, "read:discussions"]);
+});
+
+test("a restored run pushes as its saved capabilities say; one saved before them, as its kind did", async (t) => {
+  const dir = tempDir(t);
+  const broker = createBroker({});
+  const ctx = {
+    config: { dataDir: dir },
+    log: () => {},
+    tasks: new Map(),
+    logDir: dir,
+    runs: [],
+    runsById: new Map(),
+    runner: { closed: async () => false },
+    runLogs: fileLogs(dir),
+    broker,
+    running: 0,
+  };
+  // A repo's mode (its `light` false since #498) its policies gave no `push`, and one they did.
+  const reads = saveRun(dir, "r1", 1, {}, { mode: "audit", capabilities: ["pull"] });
+  const pushes = saveRun(dir, "r2", 2, {}, { mode: "audit", capabilities: ["pull", "push"] });
+  // Before capabilities: its kind decides, a light one never pushes.
+  const work = saveRun(dir, "r3", 3, {});
+  const light = saveRun(dir, "r4", 4, {}, { mode: "brainstorm", light: true });
+  await createRestart(ctx).restoreRuns();
+  assert.deepEqual(
+    [reads, pushes, work, light].map((h) => broker.runOf(h).push),
+    [false, true, true, false],
+  );
 });

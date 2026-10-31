@@ -26,14 +26,14 @@ import { createGithubService } from "../github/service.mjs";
 import { signServiceToken } from "../lib/service-token.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { createGitHub } from "../listener/github.mjs";
-import { grantFor, loadGrants } from "../listener/grants.mjs";
+import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
-import { evalResult, fakeOpa, servePolicies, tempDir, testKey } from "./helpers.mjs";
+import { evalResult, fakeOpa, grantsPolicy, servePolicies, tempDir, testKey } from "./helpers.mjs";
 
 // The policy service's opa allowing a brainstorm's GitHub writes on its own issue only, as
 // Deckhand's mode-brainstorm.rego does for an edit (github-writes.test.mjs evaluates the real
@@ -273,7 +273,7 @@ async function fakeGitHub(files = {}) {
         const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
         return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
-      // A branch's open pull requests (the git gateway, for a repo granted allow_workflows).
+      // A branch's open pull requests (the git gateway, for a repo granted `workflows`).
       if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
         return res.end("[]");
       }
@@ -288,7 +288,7 @@ async function fakeGitHub(files = {}) {
         const expires_at = new Date(Date.now() + 3600000).toISOString();
         return res.end(
           JSON.stringify({
-            // The git gateway's for a repo granted allow_workflows: told apart.
+            // The git gateway's for a repo granted `workflows`: told apart.
             token: !scoped
               ? "app-token"
               : body.includes("workflows")
@@ -449,23 +449,26 @@ async function startGithubService(dir, github, credentials, { key, policyService
   );
   const app = createAppHolder({ dir: own, api: config.githubApi });
   const keys = () => new Map([[key.kid, key.publicKey]]);
+  const policies = createPolicies({
+    config,
+    github: createGitHub(() => app.get()).github,
+    service: policyClient({
+      url: policyService,
+      header: async () => `Bearer ${signServiceToken({ sub: "github", aud: "policy" }, key)}`,
+    }),
+  });
   const made = createGithubService({
     config,
     store: openStore("memory:"),
     app,
     broker: { keys, serviceKeys: keys, unknownKey: async () => {} },
     bound: null,
-    policies: createPolicies({
-      config,
-      github: createGitHub(() => app.get()).github,
-      service: policyClient({
-        url: policyService,
-        header: async () => `Bearer ${signServiceToken({ sub: "github", aud: "policy" }, key)}`,
-      }),
-    }),
+    policies,
+    // As github/server.mjs reads them.
     grants: {
       projects: (repo) => grantFor(loadGrants(config), config, repo).allowProjects,
-      workflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
+      workflows: async (repo) =>
+        (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflows === true,
     },
     mirrorDir: join(own, "mirrors"),
   });
@@ -493,6 +496,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
   function writeGrant(dir, text) {
     mkdirSync(join(dir, "grants", "org"), { recursive: true });
     writeFileSync(join(dir, "grants", "org", "repo.yaml"), text);
+  }
+
+  // What the operator's policies grant org/repo (grants.mjs GRANTS, #498): its policy/grants.rego,
+  // which the policy service's fake opa reads back (helpers.mjs grantDecision()).
+  function writeGrants(dir, names) {
+    mkdirSync(join(dir, "grants", "policy"), { recursive: true });
+    writeFileSync(join(dir, "grants", "policy", "grants.rego"), grantsPolicy(names));
   }
 
   // `opa`: the policy service's (fakeOpa()'s, allowing everything by default).
@@ -1442,7 +1452,7 @@ caches:
         "docker/Dockerfile": "ARG DECKHAND_BASE\nFROM $DECKHAND_BASE\nRUN true\n",
       },
       (dir) => {
-        writeGrant(dir, "allow_dockerfile: true\n");
+        writeGrants(dir, ["dockerfile"]);
         return {};
       },
     );
@@ -1501,7 +1511,7 @@ caches:
     assert.match(JSON.parse(reply.body).body, /🤖 Claude opus · medium effort · fast/);
   });
 
-  test("a preview hook runs only with allow_preview", async (t) => {
+  test("a preview hook runs only with the `preview` grant", async (t) => {
     const delivery = {
       action: "opened",
       installation: { id: 7 },
@@ -1522,10 +1532,10 @@ caches:
     };
     assert.equal((await send(delivery, "pull_request")).status, 202);
     await listener.until(
-      "preview hook of org/repo not run: preview: the operator's grants don't set `allow_preview: true`",
+      "preview hook of org/repo not run: preview: the operator's policies don't grant `preview` to this repository",
     );
     assert.doesNotMatch(calls(), /^create /m);
-    writeGrant(dir, "allow_preview: true\n");
+    writeGrants(dir, ["preview"]);
     await send({ ...delivery, action: "synchronize" }, "pull_request");
     await listener.until("preview hook deckhand-preview-org-repo-");
     assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
@@ -3135,12 +3145,11 @@ model: opus
 modes:
   audit:
     instructions: .deckhand/audit.md
-    light: true
     model: sonnet
     effort: high
 `;
   // What the audit mode gets, as the repo's own modes need its allow rules (capabilities.mjs):
-  // a light run's; and that it runs.
+  // what a brainstorm gets, no branch nor setup; and that it runs.
   const AUDIT_POLICY = `${AUDIT_RUNS}
 allow_capabilities contains "pull"
 allow_capabilities contains "image:repo"
@@ -3377,13 +3386,11 @@ allow_capabilities contains "read:pulls"
     };
     const { dir, github, listener, send } = await listen(t, files, (dir) => {
       // The fake repository says nothing of its visibility: public, so `public`.
-      writeGrant(dir, "allow_auto_merge: public\n");
+      writeGrants(dir, ["auto_merge_public"]);
       writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
       return {};
     });
-    await listener.until(
-      /WARNING: auto-merge is granted to org\/repo, public repositories included/,
-    );
+    await listener.until(/WARNING: policy\/grants\.rego in the grants folder grants auto-merge/);
     await send(
       {
         action: "ready_for_review",
@@ -3539,7 +3546,7 @@ allow_capabilities contains "read:pulls"
     await listener.until("org/repo#pr-13: CI failed on head-1, starting a CI fix run (1 of 1)");
   });
 
-  test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
+  test("/mode audit: the repo's mode without `push`, its instructions and model, the repo's grants", async (t) => {
     const { dir, github, listener, send } = await listen(
       t,
       {
@@ -3568,7 +3575,7 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /^TASK_ISSUE=$/m);
     assert.match(runEnv, /^SANDBOX_SETUP=$/m);
     assert.match(runEnv, /^TASK_PROMPT=You are in the "audit" mode of this repository/m);
-    assert.match(runEnv, /This mode only comments/);
+    assert.match(runEnv, /You can't push, create a branch or open a pull request/);
     assert.match(runEnv, /Read the diff and list the risks\./);
     assert.match(runEnv, /^TASK_MESSAGE=Mind the tests\.$/m);
     // Comments only: its token reads, what its capabilities give (no `read:actions` here).
@@ -3588,7 +3595,8 @@ allow_capabilities contains "read:pulls"
       "registry.npmjs.org",
       "pypi.org",
     ]);
-    // A light run isn't checked for a fork's code (github-forks.mjs): GitHub's file hosts stay
+    // A run without `push`, `setup` or `docker` isn't checked for a fork's code
+    // (github-forks.mjs): GitHub's file hosts stay
     // plain hosts for it, GitHub's own relayed as for any run.
     const answers = egressAnswers(dir);
     assert.equal(answers["raw.githubusercontent.com"].relay, false);
@@ -3649,11 +3657,12 @@ allow_capabilities contains "read:pulls"
     );
     assert.match(
       JSON.parse(refused.body).body,
-      /^Research can't run here: .*`allow_research: true`/,
+      /^Research can't run here: .*don't grant `research`/,
     );
     assert.ok(!exists(join(dir, "run-args")));
 
-    writeGrant(dir, "allow_research: true\nhosts: [registry.npmjs.org]\n");
+    writeGrant(dir, "hosts: [registry.npmjs.org]\n");
+    writeGrants(dir, ["research"]);
     await send(followUp(100, "Deckhand\n/mode research\nWhich one?"));
     const egress = join(dir, "egress");
     await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
@@ -5531,10 +5540,10 @@ mounts:
     assert.equal(done.branch, "issue-12-after");
   });
 
-  test("allow_workflows: pushes are checked against a mirror in the github service's data dir, until the grant goes", async (t) => {
+  test("the `workflows` grant: pushes are checked against a mirror in the github service's data dir, until the grant goes", async (t) => {
     const ctx = await listen(t, {}, (dir, github) => {
       writeFileSync(join(dir, "hold"), "");
-      writeGrant(dir, "allow_workflows: true\n");
+      writeGrants(dir, ["workflows"]);
       return { GITHUB_URL: github.url };
     });
     const { dir, github, brokerPort } = ctx;
@@ -5588,7 +5597,7 @@ mounts:
     );
     // Taken back: the next push goes through without it, no restart, read for what it carries
     // alone.
-    writeGrant(dir, "");
+    writeGrants(dir, []);
     await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
     assert.deepEqual(pushedWith(), ["repo-token"]);
     writeFileSync(join(dir, "go"), "");
@@ -5627,7 +5636,8 @@ mounts:
 
   test("a granted repo's work runs get a container engine, never for a fork's pull request", async (t) => {
     const ctx = await listen(t, { ".deckhand.yaml": "docker:\n  cache: true\n" }, (dir) => {
-      writeGrant(dir, "allow_docker: true\nlimits: { cpus: 3 }\n");
+      writeGrant(dir, "limits: { cpus: 3 }\n");
+      writeGrants(dir, ["docker"]);
       writeFileSync(join(dir, "hold"), "");
       return { SANDBOX_ENGINE: "podman" };
     });

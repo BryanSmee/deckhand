@@ -102,6 +102,8 @@ function mountRows(settings, grant, fs = {}) {
 function grantRows(grant) {
   return {
     files: grant.files,
+    // The operator's policy files with `allow_grant` rules, which decided the switches below.
+    grantFiles: grant.grantFiles ?? [],
     allowPreview: grant.allowPreview,
     allowDockerfile: grant.allowDockerfile,
     allowBranchDockerImages: grant.allowBranchDockerImages,

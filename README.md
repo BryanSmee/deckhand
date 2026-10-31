@@ -30,7 +30,7 @@ operator, across as many repositories as the App is installed on.
     `/mode` and `/after`, they may follow the trigger on its line (`Deckhand /agent codex`).
   - `/mode <name>` picks a mode: `work`, `brainstorm` or one the repository declares in its
     `.deckhand.yaml` (a review that only comments, say). Alone on an issue with a session,
-    it switches modes and keeps the conversation (light modes keep theirs apart from work's).
+    it switches modes and keeps the conversation (brainstorms keep theirs apart from work's).
   - `/after #77` (on the trigger line or its own, `/after #77 #80` for several) holds the
     comment back until those issues are closed as completed, or those pull requests merged,
     then runs it as if just posted. A new trigger comment starts now instead; `/after none`
@@ -149,7 +149,8 @@ A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
 instructions, a Dockerfile for its image, caches, host mounts, inboxes and a preview hook.
 Its Dockerfile, preview hook and host mounts only count once the operator grants them to it
-in its grants file, which also lists the hosts its sandboxes may reach.
+in the grants folder: mounts and the hosts its sandboxes may reach in its file there, the
+Dockerfile and the hook in the operator's policies (`allow_grant`).
 
 ```yaml
 users: [alice]
@@ -205,7 +206,7 @@ Read this before installing Deckhand on a repository.
 - **What isn't covered:** image builds, the Claude Code install and preview hooks run
   outside the sandboxes' networks, and preview hooks get the Docker socket (root on the
   host): a repository only gets its own Dockerfile built or preview hook run when its grants
-  say so (`allow_dockerfile`, `allow_preview`). DNS lookups may leave the internal networks.
+  say so (the `dockerfile` and `preview` grants). DNS lookups may leave the internal networks.
 
 All of it, with the grants folder and the limits of each measure:
 [docs/security.md](docs/security.md).

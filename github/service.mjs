@@ -171,7 +171,7 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref
 // the callers' networks (../lib/service-token.mjs networkCallers()), or null on Kubernetes;
 // `policies`: ../listener/policies.mjs's, for the runs' writes and pushes; `grants`: { projects(repo),
 // workflows(repo) }: the projects the operator grants a repo's runs (allow_projects), and whether
-// it grants `allow_workflows`.
+// it grants `workflows`.
 export function createGithubService({
   config,
   store,

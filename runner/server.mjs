@@ -17,6 +17,9 @@ import { checkout } from "../listener/checkout.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "../listener/config.mjs";
 import { createImages } from "../listener/images.mjs";
 import { createPreviews } from "../listener/previews.mjs";
+import { grantsBy } from "../listener/grants.mjs";
+import { policyClient } from "../listener/policy-client.mjs";
+import { createPolicies } from "../listener/policies.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
 import { createLogs } from "./logs.mjs";
 import { createRunnerService, loginRefresh } from "./service.mjs";
@@ -36,12 +39,12 @@ try {
   // (#396): SERVICE_NETWORKS=none says so. Anywhere else, a runner without it takes no call.
   bound = env.SERVICE_NETWORKS === "none" ? null : networkCallers(env.SERVICE_NETWORKS);
   // The broker service (#505): this service's tokens, for the broker itself (the runs' inboxes
-  // and files), the github service (the repos' tarballs) and the orchestrator (a run's first
-  // tokens).
+  // and files), the github service (the repos' tarballs), the orchestrator (a run's first
+  // tokens) and the policy service (what the operator's policies grant a repository, #498).
   brokerCaller = createBrokerCaller({
     url: config.brokerServiceUrl,
     service: "runner",
-    audiences: ["broker", "github", "orchestrator"],
+    audiences: ["broker", "github", "orchestrator", "policy"],
     podTokenFile: config.serviceAccountTokenFile,
     log,
   });
@@ -120,8 +123,23 @@ const lease = activePassive({
   log,
 });
 
+// What the operator's policies grant each repository (a container engine, its Dockerfile, a
+// preview hook…), asked of the policy service as the listener asks it: the runner checks every
+// spec, build and hook against them again, whatever the orchestrator says (#498). Only the
+// operator's layer: no repository's policies, so no GitHub read.
+const policies = createPolicies({
+  config,
+  github: null,
+  service: policyClient({
+    url: config.policyServiceUrl,
+    header: () => brokerCaller.header("policy"),
+  }),
+  log,
+});
+
 service = createRunnerService({
   config,
+  granted: grantsBy(policies),
   runner: backend.runner,
   images,
   previews,

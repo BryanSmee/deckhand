@@ -48,13 +48,14 @@ import {
   listLabelled,
   listPulls,
 } from "./github.mjs";
-import { autoMergeGrants, grantErrors, grantFor, loadGrants } from "./grants.mjs";
+import { autoMergeFiles, grantErrors, grantFor, grantOf, grantsBy, loadGrants } from "./grants.mjs";
 import { createHttp } from "./http.mjs";
 import { createHistory } from "./history.mjs";
 import { createInputs } from "./inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
 import { createLinkedBranches } from "./linked-branch.mjs";
 import { createPolicies } from "./policies.mjs";
+import { operatorPolicies } from "../lib/policy-files.mjs";
 import { policyClient } from "./policy-client.mjs";
 import { createPulls } from "./pulls.mjs";
 import { createDecisions } from "./decisions.mjs";
@@ -117,9 +118,15 @@ try {
     console.error(`${error.message} (no run starts in that repository until it is fixed)`);
   }
   // Loud on purpose: model output reaches these default branches with no human reading it.
-  for (const { repo, value } of autoMergeGrants(grants)) {
+  let files = new Map();
+  try {
+    files = operatorPolicies(config.grantsDir);
+  } catch {
+    // The policies' own check says it (policies.checkOperator()).
+  }
+  for (const file of autoMergeFiles(files)) {
     console.error(
-      `WARNING: auto-merge is granted to ${repo}${value === "public" ? ", public repositories included" : ""}: with review.merge in its .deckhand.yaml, Deckhand merges its own pull requests with no human review (docs/security.md#auto-merge)`,
+      `WARNING: policy/${file} in the grants folder grants auto-merge: with review.merge in their .deckhand.yaml, Deckhand merges its own pull requests in those repositories with no human review (docs/security.md#auto-merge)`,
     );
   }
 } catch (error) {
@@ -475,6 +482,8 @@ const repoList = createRepoList({
   },
   config,
   store: onboarded,
+  // Asked once the policies below exist: on the first list, not now.
+  granted: (repo) => policies.grants(repo),
   log,
 });
 
@@ -665,7 +674,7 @@ ctx.conflicts = createConflicts({
 });
 // Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review
 // that requests changes a fix loop (`review.fix`), and with the operator's
-// `allow_auto_merge`, a clean review the merge (`review.merge`).
+// `auto_merge` grant, a clean review the merge (`review.merge`).
 // Each task's last policy decisions and dry run, for its page (decisions.mjs).
 ctx.decisions = createDecisions({
   path: join(config.dataDir, "decisions.json"),
@@ -694,9 +703,9 @@ ctx.reviews = createReviews({
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   // `/mode policy`'s deny_request_review, about the run that opened the pull request.
   runOf: (key, pr) => openerOf(ctx.runs, key, pr),
-  grantOf: (repo) => {
+  grantOf: async (repo) => {
     try {
-      return grantFor(loadGrants(config), config, repo);
+      return await grantOf(config, repo, { granted: grantsBy(policies) });
     } catch (error) {
       log(`${repo}: its grants: ${error.message}`);
       return null;
@@ -761,6 +770,7 @@ ctx.repoApi = createRepoApi({
   publicUrl,
   start: (repo, login) => ctx.onboarding.start(repo, login, true),
   policies,
+  granted: grantsBy(policies),
   // The Overview's repository cards: no GitHub read per repo when they show.
   backlogs: (repos, user) => ctx.workApi.counts(repos, user),
   log,
@@ -802,6 +812,7 @@ ctx.workApi = createWorkApi({
   order,
   queueOrder: () => ctx.queueOrder(),
   reviews: ctx.reviews,
+  granted: grantsBy(policies),
   publicUrl,
   fromKey: dashboardKey,
   log,

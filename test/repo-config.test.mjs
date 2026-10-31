@@ -118,7 +118,7 @@ colour: blue
   );
   assert.deepEqual(errors, []);
   assert.deepEqual(warnings, [
-    "allow_branch_docker_images: ignored here, the operator's grants folder sets it for this repository",
+    "allow_branch_docker_images: ignored here, the operator's policies grant `branch_docker_images` to this repository",
     // Only the operator lists hosts: a repo's are no longer read.
     "hosts: ignored, the operator lists the hosts in grants/<owner>/<repo>.yaml",
     // So does what the egress proxy keeps for every run.
@@ -269,7 +269,6 @@ brainstorm_effort: low
 modes:
   Audit:
     instructions: .deckhand/audit.md # from the default branch, like instructions
-    light: true
     model: sonnet
   triage:
     instructions: .deckhand/triage.md
@@ -290,20 +289,18 @@ test("modes: parsed, with the defaults of work or brainstorms", () => {
     "audit",
     "triage",
   ]);
-  // A light mode takes the brainstorms' defaults, a full one work's.
+  // The repo's modes take work's defaults, over which they set their own.
   assert.deepEqual(customMode(settings, "audit"), {
     name: "audit",
-    light: true,
     fresh: false,
     instructions: ".deckhand/audit.md",
     agent: "claude",
     model: "sonnet",
-    effort: "low",
+    effort: "medium",
     speed: null,
   });
   assert.deepEqual(customMode(settings, "triage"), {
     name: "triage",
-    light: false,
     fresh: true,
     instructions: ".deckhand/triage.md",
     agent: "claude",
@@ -327,7 +324,7 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
   "a b": { instructions: a.md }
   escape: { instructions: ../secrets.md }
   absolute: { instructions: /etc/passwd }
-  vague: { light: yes, session: forever, effort: huge }
+  vague: { session: forever, effort: huge }
   bare: { light: true }
   ok: { instructions: ok.md }
   OK: { instructions: other.md }
@@ -342,10 +339,11 @@ test("modes: built-in names, wrong names, unknown keys and bad paths are errors"
     "modes.a b: expected a name of letters, digits, - and _ (32 at most)",
     "modes.escape.instructions: expected a path in the repository (relative, no ..)",
     "modes.absolute.instructions: expected a path in the repository (relative, no ..)",
-    "modes.vague.light: expected true or false",
     "modes.vague.session: expected issue or fresh",
     "modes.vague.effort: expected one of low, medium, high, xhigh, max",
     "modes.vague.instructions: missing: a mode is its instructions",
+    // Gone (#498): an error, so that the mode gets nothing its policies don't say.
+    "modes.bare.light: gone: what a mode's runs get and write is decided by the policies now",
     "modes.bare.instructions: missing: a mode is its instructions",
     "modes.OK: defined twice (names are not case-sensitive)",
   ]);
@@ -367,10 +365,10 @@ modes:
     config,
   );
   assert.deepEqual(errors, [
-    "modes.wide.hosts: unknown key (expected instructions, light, session, agent, model, effort, speed)",
-    "modes.wide.mounts: unknown key (expected instructions, light, session, agent, model, effort, speed)",
-    "modes.wide.limits: unknown key (expected instructions, light, session, agent, model, effort, speed)",
-    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, light, session, agent, model, effort, speed)",
+    "modes.wide.hosts: unknown key (expected instructions, session, agent, model, effort, speed)",
+    "modes.wide.mounts: unknown key (expected instructions, session, agent, model, effort, speed)",
+    "modes.wide.limits: unknown key (expected instructions, session, agent, model, effort, speed)",
+    "modes.wide.allow_branch_docker_images: unknown key (expected instructions, session, agent, model, effort, speed)",
   ]);
   // Refused as a whole, and the repo's own grants are untouched.
   assert.equal(customMode(settings, "wide"), null);
@@ -382,7 +380,6 @@ modes:
     "effort",
     "fresh",
     "instructions",
-    "light",
     "model",
     "name",
     "speed",
@@ -575,7 +572,6 @@ brainstorm_agent: claude
 modes:
   lint:
     instructions: lint.md
-    light: true
   audit:
     instructions: audit.md
     agent: claude
@@ -585,8 +581,8 @@ modes:
   assert.deepEqual(errors, []);
   assert.equal(settings.agent, "codex");
   assert.equal(settings.brainstormAgent, "claude");
-  // A light mode takes the light runs' agent, a full one work's, unless it names its own.
-  assert.equal(customMode(settings, "lint").agent, "claude");
+  // A mode takes work's agent, unless it names its own.
+  assert.equal(customMode(settings, "lint").agent, "codex");
   assert.equal(customMode(settings, "audit").agent, "claude");
   assert.equal(effectiveConfig(both, settings).agent, "codex");
   // Without the keys, the operator's.
@@ -641,10 +637,9 @@ test("review: off without the block, manual with true, its keys checked", () => 
     "policy",
     "review",
   ]);
-  // A light, fresh mode with the light runs' model and effort, unless the block says otherwise.
+  // A fresh mode with the light runs' model and effort, unless the block says otherwise.
   assert.deepEqual(customMode(manual, "review"), {
     name: "review",
-    light: true,
     fresh: true,
     instructions: null,
     agent: "claude",
@@ -827,7 +822,7 @@ test("review.fix: true (one round) or a number of rounds up to MAX_FIX_ROUNDS, o
 
 test("review: a repo's own mode can't take the name, the error says what to do", () => {
   const { settings, errors } = parseRepoConfig(
-    "modes:\n  Review:\n    instructions: .deckhand/review.md\n    light: true\n",
+    "modes:\n  Review:\n    instructions: .deckhand/review.md\n",
     config,
   );
   assert.deepEqual(errors, [
@@ -913,9 +908,21 @@ test("the errors whose message doesn't say how to fix them come with a fix", () 
     /^Give the mode another name/,
   );
   assert.match(
-    fixOf("modes:\n  docs: { light: true }\n", "modes.docs.instructions:"),
+    fixOf("modes:\n  docs: { session: fresh }\n", "modes.docs.instructions:"),
     /^Add instructions/,
   );
+  // A mode written before #498: what to do instead.
+  assert.match(
+    fixOf("modes:\n  docs: { instructions: a.md, light: true }\n", "modes.docs.light:"),
+    /^Remove modes\.docs\.light, and narrow the mode in \.deckhand\/policy\/ .*`allow_capabilities` without `push`, and `allow_github` and `allow_push` rules that leave it out/,
+  );
+  // `light: false`, what every repo mode is now: said, not an error.
+  const kept = parseRepoConfig("modes:\n  docs: { instructions: a.md, light: false }\n", config);
+  assert.deepEqual(kept.errors, []);
+  assert.deepEqual(kept.warnings, [
+    "modes.docs.light: gone, ignored: what a mode's runs get and write is decided by the policies now",
+  ]);
+  assert.ok(kept.settings.modes.docs);
   assert.match(
     fixOf(
       "modes:\n  docs: { instructions: a.md }\n  Docs: { instructions: b.md }\n",

@@ -8,7 +8,7 @@
 //   takes for that (not `issue`, which turns an issue into one);
 // - one that is opened, edited, labelled, readied, drafted or has its branch updated runs its
 //   workflows from a new merge of its branch with its base (an update commits that merge): for
-//   a repo granted `allow_workflows`, its workflow files are checked in that merge first, as the
+//   a repo granted `workflows`, its workflow files are checked in that merge first, as the
 //   git gateway checks a push (git-gateway.mjs checkBranch());
 // - one that is edited, readied or drafted, over any endpoint (`…/pulls/<n>`, `…/issues/<n>`,
 //   GraphQL), or whose token must write more than an issue's (`permissions`: pull requests for

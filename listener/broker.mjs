@@ -117,9 +117,9 @@ export function createBroker({
   // What its token reads is its capabilities' (`caps`, github-app.mjs readsOf()); each write
   // the GitHub gateway checked gets the one permission it needs besides (github-writes.mjs
   // writePermissions()).
-  // `push`: whether it may push and change its pull requests, which only work runs do (light
-  // runs' pushes would run in the issue's next work run). Decided by the kind of run, not
-  // its token: fail closed. `mode`: the run's (modes.mjs), for what the GitHub gateway refuses
+  // `push`: whether it may push and change its pull requests whatever its capabilities: a run
+  // saved before capabilities, restarted (restart.mjs), as its kind of run said; the others
+  // push only with the `push` capability (grant()). Not its token's to say: fail closed. `mode`: the run's (modes.mjs), for what the GitHub gateway refuses
   // a review and the policies' input (`allow_github`, `allow_push`). `issue`: the number of its issue or pull request, and
   // `base`, its repo's default branch, for what its writes may reach (github-writes.mjs), and
   // `created`, the list of the issues it created ({ number, at }), the comments it posted

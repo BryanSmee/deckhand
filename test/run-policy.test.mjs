@@ -97,7 +97,6 @@ test("readTarget and runInput: the target's labels and author, a pull request's 
     repo: "org/repo",
     mode: "work",
     custom_mode: false,
-    light: false,
     fresh: false,
     trigger: "comment",
     continues: false,
@@ -114,7 +113,7 @@ test("readTarget and runInput: the target's labels and author, a pull request's 
     now,
   );
   assert.deepEqual(
-    [pr.custom_mode, pr.fresh, pr.light, pr.trigger, pr.issue, pr.target, pr.pr],
+    [pr.custom_mode, pr.fresh, "light" in pr, pr.trigger, pr.issue, pr.target, pr.pr],
     [
       true,
       true,
@@ -133,8 +132,8 @@ test("readTarget and runInput: the target's labels and author, a pull request's 
     now,
   );
   assert.deepEqual(
-    [talk.light, talk.issue, talk.target],
-    [true, null, { kind: "discussion", number: 4, labels: ["q"], author: "carol" }],
+    ["light" in talk, talk.issue, talk.target],
+    [false, null, { kind: "discussion", number: 4, labels: ["q"], author: "carol" }],
   );
   assert.deepEqual(calls, ["/repos/Org/Repo/issues/12", "/repos/Org/Repo/pulls/30", "graphql 4"]);
   await assert.rejects(
@@ -360,7 +359,6 @@ const runOf =
     repo: "org/repo",
     mode,
     custom_mode: custom,
-    light: false,
     fresh: false,
     trigger: "comment",
     sender: "alice",

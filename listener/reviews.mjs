@@ -18,7 +18,7 @@
 // and N reviews after them, kept across restarts. Once it is over, a maintainer's Fix on the
 // dashboard (work.mjs) grants one more round at a time (`grantedTo`), counted the same way.
 //
-// Auto-merge (`review.merge`, with the operator's per-repo `allow_auto_merge`): the listener,
+// Auto-merge (`review.merge`, with the operator's `auto_merge` grant): the listener,
 // never a sandbox, merges Deckhand's pull request after a review with nothing blocking, at the
 // reviewed head commit, once its gates pass (mergeRefusal()). The review that ends the fix
 // loop decides it: the merge or a comment saying why not (mergeAt), once per pull request.
@@ -49,6 +49,7 @@ import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
 import {
   DECISIONS,
+  OPERATOR_ONLY,
   denyKept,
   INPUT_VERSION,
   isPolicyError,
@@ -544,7 +545,7 @@ export async function mergeRefusal(
   const info = await getJson(github, repo, `/repos/${repo}`);
   if (info.private !== true && grant?.allowAutoMerge !== "public") {
     return {
-      why: "the repository is public, and the operator's grant says `allow_auto_merge: true`, not `public`",
+      why: "the repository is public, and the operator's policies grant it `auto_merge`, not `auto_merge_public`",
     };
   }
   const method = settings.review?.mergeMethod ?? "squash";
@@ -1054,13 +1055,12 @@ export function githubSamples(repo, pr, modes = {}) {
     author: pr.user?.login ?? null,
   });
   const change = { fields: ["body"], labels_added: [], labels_removed: [] };
-  const sample = (what, mode, kind, issue, { custom_mode = false, light = false } = {}) => ({
+  const sample = (what, mode, kind, issue, { custom_mode = false } = {}) => ({
     what,
     input: {
       repo: repo.toLowerCase(),
       mode,
       custom_mode,
-      light,
       reason: null,
       issue,
       action: "comment",
@@ -1071,15 +1071,13 @@ export function githubSamples(repo, pr, modes = {}) {
   });
   const samples = [
     sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
-    sample("a brainstorm's comment on it", "brainstorm", "pr", null, { light: true }),
+    sample("a brainstorm's comment on it", "brainstorm", "pr", null),
   ];
-  // A mode that may write: Deckhand's default allow rules give a light one no write.
-  const names = Object.keys(modes ?? {});
-  const own = names.find((name) => !modes[name].light) ?? names[0];
+  // The repo's first mode: what its own policies allow it, beside Deckhand's.
+  const [own] = Object.keys(modes ?? {});
   if (own) {
-    const light = !!modes[own].light;
-    const what = `a comment on it in the repository's mode ${own}${light ? " (light: Deckhand's default policies allow it no write)" : ""}`;
-    samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true, light }));
+    const what = `a comment on it in the repository's mode ${own}`;
+    samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true }));
   }
   const { target: _, change: __, ...work } = samples[0].input;
   samples.push({
@@ -1100,7 +1098,6 @@ export function linkSample(repo, pr, issue = null) {
       repo: repo.toLowerCase(),
       mode: "work",
       custom_mode: false,
-      light: false,
       reason: null,
       issue: number,
       labels: (issue?.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),
@@ -1204,7 +1201,8 @@ export function openedBy(config, pr) {
 // queues a work item (tasks.mjs). `github`: the App's calls (server.mjs). `busy(key)`: the
 // task has a run going or queued. `now`: the clock, for forgetting old pull requests.
 // `reply(repo, number, text)`: a comment with the listener's token; `grantOf(repo)`: the
-// operator's grant for it (grants.mjs grantFor()), null when its grants have errors;
+// operator's grant for it, with what its policies grant (grants.mjs grantOf()): a promise of
+// it, or null when its grants have errors;
 // `merged(repo, pr)`: a pull request it merged, for the dashboard; `sleep(ms)`: the wait
 // between asks of `mergeable_state`; `policies`: the policies' engine (policies.mjs), none
 // without; `decided(repo, pr, entry)`: a decision a policy was asked for, for the task's page
@@ -1771,7 +1769,7 @@ export function createReviews({
   async function mergeMode(repo, base) {
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.merge) return null;
-    const grant = grantOf(repo);
+    const grant = await grantOf(repo);
     if (autoMergeProblems(grant, settings, null, { preview: false }).length) return null;
     return { settings, grant };
   }
@@ -2556,6 +2554,8 @@ export function createReviews({
       return { decision, messages, layers };
     };
     for (const decision of DECISIONS) {
+      // A repository's grants are no decision on a pull request: its config page says them.
+      if (OPERATOR_ONLY.has(decision)) continue;
       // No run to start: a comment on this pull request asking for one, by whoever asked.
       if (decision === "run") {
         for (const sample of runSamples(repo, pr, found, by, now, settings)) {

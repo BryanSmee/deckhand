@@ -45,7 +45,7 @@ const SETTINGS: SettingRow[] = [
   row("max_parallel", "1", { source: "repo", note: "MAX_PARALLEL is 2", line: 3 }),
   row("dockerfile", ".deckhand/Dockerfile", {
     source: "refused",
-    note: "the operator's grants don't set allow_dockerfile: true for this repository",
+    note: "the operator's policies don't grant dockerfile to this repository (allow_grant)",
     line: 6,
   }),
   row("limits", "2 CPUs, 4g memory, 2048 processes", { note: "built in" }),
@@ -80,6 +80,7 @@ const BROKEN: RepoConfig = {
     mounts: [],
     grant: {
       files: ["default.yaml"],
+      grantFiles: [],
       allowPreview: false,
       allowDockerfile: false,
       allowBranchDockerImages: false,
@@ -156,12 +157,14 @@ test("an invalid config: each error with its key, its fix and its line, when kno
   expect(within(items[0]).getByText(/^Remove modes\.review/).className).toMatch(/fix/);
   expect(items[1].textContent).toBe("something the check can't place");
   expect(items[2].textContent).toContain(
-    "dockerfile: refused: the operator's grants don't set allow_dockerfile",
+    "dockerfile: refused: the operator's policies don't grant dockerfile",
   );
   // Without a line, no link.
   expect(within(items[1]).queryByRole("button")).toBeNull();
   // What isn't granted says who grants it.
-  expect(items[2].textContent).toContain("Only the operator grants it, in grants/acme/site.yaml");
+  expect(items[2].textContent).toContain(
+    "Only the operator grants it, with an allow_grant rule in the grants folder's policy/",
+  );
   expect(within(items[2]).getByRole("button", { name: "line 6" })).toBeTruthy();
   expect(screen.getByLabelText("Warnings").textContent).toContain("colour: unknown, ignored");
   // The header: where it was read, and where to change it.
@@ -184,7 +187,7 @@ test("the file: line numbers, its bad lines marked with their message, a line li
   expect(line8.textContent).toBe("8  review: { agent: codex }");
   expect(line8.nextElementSibling!.textContent).toContain("review is built in");
   expect(document.getElementById("config-line-6")!.nextElementSibling!.textContent).toContain(
-    "refused: the operator's grants",
+    "refused: the operator's policies",
   );
   // A fine line has no message under it.
   expect(document.getElementById("config-line-2")!.nextElementSibling!.id).toBe("config-line-3");
@@ -216,10 +219,8 @@ test("what its runs get: each value's source, filtered by it, the refused ones a
   expect(within(settings()).getAllByRole("listitem")).toHaveLength(4);
   // The grant's switches, on or off.
   const switches = screen.getByRole("list", { name: "Switches" });
-  expect(within(switches).getByText("allow_research").nextElementSibling!.textContent).toBe("on");
-  expect(within(switches).getByText("allow_dockerfile").nextElementSibling!.textContent).toBe(
-    "off",
-  );
+  expect(within(switches).getByText("research").nextElementSibling!.textContent).toBe("on");
+  expect(within(switches).getByText("dockerfile").nextElementSibling!.textContent).toBe("off");
 });
 
 test("a fine config: its banner, the facts at a glance, and the details folded", async () => {

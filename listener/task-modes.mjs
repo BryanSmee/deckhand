@@ -2,6 +2,7 @@
 // the issue's current mode, its brainstorm or its work session. Keeps the issue's brainstorm
 // (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
 import { researchRefusal } from "./access.mjs";
+import { grantsBy } from "./grants.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
 import { customMode, INBOX } from "./modes.mjs";
@@ -46,7 +47,7 @@ export function createTaskModes(ctx) {
       return brainstorm(item, key, wanted);
     }
     // Without a trigger line, a comment only continues work the agent already started (a
-    // brainstorm's session is not work's: sessionName()).
+    // brainstorm's session is not work's: sandbox-spec.mjs sessionName()).
     if (!wanted && !(await hasSession(key, name, false))) {
       return skip(`#${item.replyTo} has no agent session and no trigger line`);
     }
@@ -55,7 +56,8 @@ export function createTaskModes(ctx) {
     const own = customMode(item.settings, mode);
     if (mode === "work" || (own && !own.fresh)) {
       // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
-      // separate sessions (sessionName()): work reads what was settled from the issue.
+      // separate sessions (sandbox-spec.mjs sessionName()): work reads what was settled from the
+      // issue.
       ctx.brainstorms.end(key);
       ctx.issueModes.set(key, own ? mode : null);
       return mode;
@@ -131,10 +133,12 @@ export function createTaskModes(ctx) {
     return "onboarding";
   }
 
-  // Research (modes.mjs OPEN), only with the operator's grant: without it, a reply that names
+  // Research (modes.mjs RESEARCH), only with the operator's grant: without it, a reply that names
   // it and no run. Kept in modes.json like the repo's modes: comments go on in it.
   async function startResearch(item, key) {
-    const refused = researchRefusal(ctx.config, item.repo);
+    const refused = await researchRefusal(ctx.config, item.repo, {
+      granted: grantsBy(ctx.policies),
+    });
     if (refused) {
       const where = taskKey(item.repo, item.id);
       log(`${where}: research refused: ${refused}`);
@@ -217,13 +221,10 @@ export function createTaskModes(ctx) {
 
   // The reply to a "/mode" Claude can't run: the modes there are. No run starts.
   async function unknownMode(item, what) {
-    const own = item.settings?.modes ?? {};
-    const note = (m) =>
-      own[m]?.light
-        ? " (comments only)"
-        : m === "research" && researchRefusal(ctx.config, item.repo)
-          ? " (not granted here)"
-          : "";
+    const research = await researchRefusal(ctx.config, item.repo, {
+      granted: grantsBy(ctx.policies),
+    });
+    const note = (m) => (m === "research" && research ? " (not granted here)" : "");
     const list = modeNames(item.settings)
       .map((m) => `\`${m}\`${note(m)}`)
       .join(", ");

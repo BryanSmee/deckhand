@@ -309,8 +309,9 @@ const OLD_CEILINGS = {
   idea: OLD_INBOX,
   bug: OLD_INBOX,
   discussion: { new_issue: ["create"] },
-  // A repo's own mode: a work run's when it pushes, nothing when light.
+  // A repo's own mode: a work run's, with the repo's allow (#498: no light mode any more).
   plan: OLD_WORK,
+  ask: OLD_WORK,
 };
 // Whether the former policies denied `input`, within the ceiling.
 function oldDenied({ mode, action, actions, target, change }) {
@@ -351,6 +352,8 @@ const OLD_MODES = [
   ["analyze"],
   ["review"],
   ["research"],
+  // A repo's own mode: a work run's, whether it pushes or not (no `light` since #498: its own
+  // policies narrow it).
   ["plan", { push: true }],
   ["ask"],
 ];
@@ -487,8 +490,16 @@ test(
       writeInput("review", {}, ["comment"], "own_pr"),
       /no rule allows `comment` on `own_pr` for a `review` run/,
     );
-    // The repo's own light mode: its allow alone isn't enough.
-    await says(writeInput("ask", {}, ["comment"], "own_issue"), /no rule allows `comment`/);
+    // The repo's own mode, without the repo's allow: Deckhand's alone isn't enough.
+    const bare = defaultPolicies(t, { repo: { "modes.rego": "package deckhand\n" } });
+    assert.match(
+      (
+        await bare.deny("deny_github", "org/repo", "main", () =>
+          writeInput("ask", {}, ["comment"], "own_issue"),
+        )
+      ).join("; "),
+      /no rule of \.deckhand\/policy\/ allows `comment`/,
+    );
   },
 );
 
@@ -857,16 +868,17 @@ test(
       write("POST", "repos/org/repo/labels", { name: "x" }),
       /no rule allows `create` on `label` for a `discussion` run/,
     );
+    // A repo's own mode too, without the repo's allow (its policies decide what it writes).
     for (const mode of ["onboarding", "analyze", "review", "triage"]) {
       await no(
         mode,
         write("POST", "repos/org/repo/issues/1/comments", { body: "x" }),
-        /no rule allows `comment` on `own_issue`/,
+        /no rule (of \.deckhand\/policy\/ )?allows `comment` on `own_issue`/,
       );
       await no(
         mode,
         write("POST", "repos/org/repo/issues", { title: "x" }),
-        /no rule allows `create` on `new_issue`/,
+        /no rule (of \.deckhand\/policy\/ )?allows `create` on `new_issue`/,
       );
     }
   },
@@ -1071,7 +1083,6 @@ test("a run edits and deletes the comments it posted, never the listener's, anot
     repo: "org/repo",
     mode: "work",
     custom_mode: false,
-    light: false,
     reason: null,
     issue: 1,
     action: "edit",
@@ -1530,7 +1541,6 @@ test("deny_github: a rerun's input, its workflow run and pull request", async (t
     repo: "org/repo",
     mode: "work",
     custom_mode: false,
-    light: false,
     reason: "ci-fix",
     issue: 1,
     action: "rerun",
@@ -2175,7 +2185,6 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
     repo: "org/repo",
     mode: "brainstorm",
     custom_mode: false,
-    light: true,
     reason: null,
     issue: 1,
     action: "comment",
@@ -2204,23 +2213,24 @@ test("deny_github: its input, and its reasons refusing the write", async (t) => 
     write("POST", "repos/org/repo/issues/2/dependencies/blocked_by", { issue_id: 903 }),
   );
   assert.deepEqual(evals.at(-1).change.blocked_by, { id: 903, number: 3, kind: "other_issue" });
-  // A work run the listener started itself, and one in the repo's own modes, light or not.
+  // A work run the listener started itself, and one in the repo's own modes.
   await check(
     { ...work, reason: "ci-fix" },
     write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
   );
   assert.deepEqual(
-    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
-    ["work", false, false, "ci-fix"],
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).reason],
+    ["work", false, "ci-fix"],
   );
   await check(
     run("plan", { push: true }),
     write("PATCH", "repos/org/repo/issues/1", { body: "x" }),
   );
   assert.deepEqual(
-    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
-    ["plan", true, false, null],
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).reason],
+    ["plan", true, null],
   );
+  assert.ok(!("light" in evals.at(-1)));
   // A reaction's content, and the comment it is on: its author, and whether the bot wrote it.
   const { check: withBot } = createWriteChecks({
     needsInputLabel: () => null,
@@ -2522,17 +2532,16 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
   assert.equal((await post("/repos/org/repo/issues/1/labels", { labels: ["a"] })).status, 200);
 });
 
-test("runTraits: a repo's own mode, light without push, the listener's reason", () => {
-  assert.deepEqual(runTraits(run("work")), { custom_mode: false, light: false, reason: null });
+test("runTraits: a repo's own mode, the listener's reason; nothing of a mode's traits (#498)", () => {
+  assert.deepEqual(runTraits(run("work")), { custom_mode: false, reason: null });
   assert.deepEqual(runTraits({ ...run("brainstorm"), reason: "x" }), {
     custom_mode: false,
-    light: true,
     reason: "x",
   });
-  // The repo's review block is a built-in mode; a repo's own, light or not; no mode at all.
+  // The repo's review block is a built-in mode; a repo's own, pushing or not; no mode at all.
   assert.equal(runTraits(run("review")).custom_mode, false);
-  assert.deepEqual(runTraits(run("ask")), { custom_mode: true, light: true, reason: null });
-  assert.equal(runTraits(run("plan", { push: true })).light, false);
+  assert.deepEqual(runTraits(run("ask")), { custom_mode: true, reason: null });
+  assert.deepEqual(runTraits(run("plan", { push: true })), { custom_mode: true, reason: null });
   assert.equal(runTraits(run(null)).custom_mode, false);
 });
 
@@ -2553,7 +2562,6 @@ test("read_checks: deny_github asked once per run, its answer kept", async (t) =
     repo: "org/repo",
     mode: "work",
     custom_mode: false,
-    light: false,
     reason: "ci-fix",
     issue: 1,
     action: "read_checks",
@@ -3246,7 +3254,7 @@ deny_github contains "only work runs answer review threads" if {
     for (const mode of ["brainstorm", "review", "triage"]) {
       assert.match(
         (await check(run(mode, { push: false }), replyTo(7, 40))).message,
-        /no rule allows `reply`/,
+        /no rule (of \.deckhand\/policy\/ )?allows `reply`/,
         mode,
       );
     }
@@ -3267,10 +3275,10 @@ deny_github contains "only work runs answer review threads" if {
       /resolves only Deckhand's own review threads/,
     );
     assert.equal(await checkWrite(work, unresolveWrite(41)), null);
-    // A light repository mode: Deckhand's allow none of its writes, whatever the repo's.
+    // A repository mode's run that doesn't push: no pull request of its own to answer on.
     assert.match(
       (await allowed.check(run("ask", { push: false }), replyTo(7, 40))).message,
-      /no rule allows `reply`/,
+      /no rule allows `reply` on `pr`/,
     );
     // The operator's file of its name replaces Deckhand's, for every repository.
     const operator = { "mode-work.rego": workWithout("Resolving hides a thread") };

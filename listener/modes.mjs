@@ -1,20 +1,24 @@
 // What each kind of run is: the built-in modes, and the repo's own (its config's `modes:`,
-// customMode()) that add their `light` and `fresh` to them. Pure: no state, no I/O.
-
-// The listener's own modes, each with its traits:
+// customMode()) that add their `fresh` to them. Pure: no state, no I/O. What a mode's runs may
+// do is never here: what their sandbox gets is their capabilities (capabilities.mjs), what they
+// write to GitHub and where they push the policies' (`allow_github`, `allow_push`), all decided
+// by Deckhand's default policies (../policy/mode-*.rego) and the operator's and the repo's.
+//
+// The listener's own modes, each with its config:
 // - picked: "/mode" picks it; the others come from the inbox, discussions, "/stop" and the
 //   dashboard's Analyze (analysis.mjs).
-// - light: it reads the code and answers, without a branch or the repo's setup. What its
-//   sandbox gets is its capabilities (capabilities.mjs), what its token reads too (#497), and
-//   what it writes to GitHub and where it pushes are the policies' (`allow_github`,
-//   `allow_push`), which Deckhand's defaults (../policy/mode-*.rego) give as these traits did:
-//   the traits still decide its volumes.
+// - volumes: where its runs keep their clone and the agent's session. None: the issue's, which
+//   its work runs share (sandbox-spec.mjs sessionOf(), by the run's capabilities). `apart`:
+//   volumes of their own, never a work run's (what one leaves there, git hooks or the agent's
+//   settings, would otherwise run in the issue's next work run). `research`: their own again,
+//   apart from those too (what a web page leaves there would otherwise run in a run with a
+//   token). Runs apart also go before work runs in the queue (tasks.mjs), and leave the issue's
+//   needs-input label and projects alone (runs.mjs, projects.mjs).
+// - defaults: whose agent, model and effort its runs get unless the repo's config says
+//   otherwise: the work runs' (AGENT, MODEL, EFFORT), or `brainstorm`, the light runs'
+//   (BRAINSTORM_AGENT, BRAINSTORM_MODEL, BRAINSTORM_EFFORT).
 // - fresh: a new session each time. An inbox issue collects unrelated entries, so each entry
 //   is a run of its own (entryRun()); an analysis reads its digest, nothing before.
-// - open: the open internet, with nothing of the repo's: no GitHub token, and volumes of its
-//   own (sessionName()); no clone, image, setup, caches, mounts, engine or screenshots of the
-//   repo's (its capabilities: ../policy/mode-research.rego). Only with the operator's
-//   `allow_research` (access.mjs researchRefusal()).
 // - inbox: inbox issues and discussion categories are their own trigger (workItem()).
 // - kind: what the dashboard shows its runs as (kindOf()).
 // - prompt: its instructions, in ../prompts/ (prompts.mjs).
@@ -24,38 +28,43 @@ export const MODES = {
   work: { picked: true },
   brainstorm: {
     picked: true,
-    light: true,
+    volumes: "apart",
+    defaults: "brainstorm",
     kind: "brainstorm",
     prompt: "brainstorm.md",
   },
   onboarding: {
     picked: true,
-    light: true,
+    volumes: "apart",
+    defaults: "brainstorm",
     prompt: "onboarding.md",
   },
   // Research on the open web: its input is the issue's thread (preparation.mjs).
   research: {
     picked: true,
-    light: true,
-    open: true,
+    volumes: "research",
+    defaults: "brainstorm",
     kind: "research",
     prompt: "research.md",
   },
   // A brainstorm's wrap-up.
   stop: {
-    light: true,
+    volumes: "apart",
+    defaults: "brainstorm",
     kind: "brainstorm",
     prompt: "brainstorm.md",
   },
   idea: {
-    light: true,
+    volumes: "apart",
+    defaults: "brainstorm",
     fresh: true,
     inbox: true,
     kind: "idea",
     prompt: "idea.md",
   },
   bug: {
-    light: true,
+    volumes: "apart",
+    defaults: "brainstorm",
     fresh: true,
     inbox: true,
     kind: "bug",
@@ -63,78 +72,91 @@ export const MODES = {
   },
   // A discussion keeps its session, like a brainstorm.
   discussion: {
-    light: true,
+    volumes: "apart",
+    defaults: "brainstorm",
     inbox: true,
     kind: "discussion",
     prompt: "discussion.md",
   },
-  analyze: { light: true, fresh: true, prompt: "analyze.md" },
+  analyze: { volumes: "apart", defaults: "brainstorm", fresh: true, prompt: "analyze.md" },
   // A pull request's review, only in repos with a `review` block (repo-config.mjs): "/mode"
   // picks it there (modeNames()), and reviews.mjs starts it when a pull request turns ready.
-  review: { light: true, fresh: true, prompt: "review.md" },
+  review: { volumes: "apart", defaults: "brainstorm", fresh: true, prompt: "review.md" },
   // A dry run of the repo's policies on a pull request: no run, the listener evaluates them
   // and replies (task-modes.mjs, reviews.mjs dryRun()).
   policy: { picked: true },
 };
 
 const builtIn = (mode) => (Object.hasOwn(MODES, mode) ? MODES[mode] : null);
-const having = (trait) => new Set(Object.keys(MODES).filter((mode) => MODES[mode][trait]));
+const having = (trait, value = true) =>
+  new Set(Object.keys(MODES).filter((mode) => MODES[mode][trait] === value));
 
 export const RESERVED_MODES = Object.keys(MODES);
 export const PICKED_MODES = RESERVED_MODES.filter((mode) => MODES[mode].picked);
 export const INBOX = having("inbox");
-export const LIGHT = having("light");
 export const FRESH = having("fresh");
-export const OPEN = having("open");
+// The modes whose runs have volumes of their own (`volumes`), and of those, research's.
+export const APART = new Set(Object.keys(MODES).filter((mode) => MODES[mode].volumes));
+export const RESEARCH = having("volumes", "research");
 
 // Any other mode is one of the repo's own.
 export const BUILT_IN = new Set(RESERVED_MODES);
 
 // What a run in the repo's own mode `name` gets, or null when the repo has no such mode
-// (work, brainstorm and the inbox are the listener's): light (no branch, no setup, and none of
-// the work runs' writes in Deckhand's default policies: ../policy/mode-work.rego), fresh (a new
-// session each time, the issue's kept as it is), its instructions file, its agent, model and effort, by default those of work or
-// brainstorms, and its speed. The built-in review takes its `review` block's the same way (reviewMode()).
-// No hosts, mounts or limits: those are the repo's grants, the same in every mode.
+// (work, brainstorm and the inbox are the listener's): fresh (a new session each time, the
+// issue's kept as it is), its instructions file, its agent, model and effort, by default those
+// of work runs, and its speed. The built-in review takes its `review` block's the same way
+// (reviewMode()). Its runs share the issue's volumes, as their capabilities pick them
+// (sandbox-spec.mjs sessionOf()). No hosts, mounts or limits: those are the repo's grants, the
+// same in every mode; nor what its runs may do: its policies decide that.
 export function customMode(settings, name) {
   if (name === "review") return reviewMode(settings);
   const own = settings?.modes?.[name];
   if (!own) return null;
-  const [agent, model, effort] = own.light
-    ? [settings.brainstormAgent, settings.brainstormModel, settings.brainstormEffort]
-    : [settings.agent, settings.model, settings.effort];
   return {
     name,
-    light: own.light,
     fresh: own.session === "fresh",
     instructions: own.instructions,
-    agent: own.agent ?? agent,
-    model: own.model ?? model,
-    effort: own.effort ?? effort,
+    agent: own.agent ?? settings.agent,
+    model: own.model ?? settings.model,
+    effort: own.effort ?? settings.effort,
     // `fast`: `/speed fast` without the command (agents/select.mjs speedFor()).
     speed: own.speed ?? null,
   };
 }
 
-// The repo's `review` block as a mode: light and fresh, its instructions optional (added to
-// prompts/review.md), its agent, model and effort those of light runs unless it says
-// otherwise. Null without the block: the repo hasn't turned reviews on.
+// The repo's `review` block as a mode: fresh, its instructions optional (added to
+// prompts/review.md), its agent, model and effort those of its `defaults` (MODES.review) unless
+// it says otherwise. Null without the block: the repo hasn't turned reviews on.
 function reviewMode(settings) {
   const own = settings?.review;
   if (!own) return null;
+  const [agent, model, effort] = defaultsOf(settings, "review");
   return {
     name: "review",
-    light: true,
     fresh: true,
     instructions: own.instructions,
-    agent: own.agent ?? settings.brainstormAgent,
-    model: own.model ?? settings.brainstormModel,
-    effort: own.effort ?? settings.brainstormEffort,
+    agent: own.agent ?? agent,
+    model: own.model ?? model,
+    effort: own.effort ?? effort,
   };
 }
 
-export function isLight(task, mode) {
-  return LIGHT.has(mode) || !!customMode(task.settings, mode)?.light;
+// Whether a run in `mode` gets the light runs' agent, model and effort by default (its
+// `defaults`), rather than work's: agents/select.mjs.
+export const brainstormDefaults = (mode) => builtIn(mode)?.defaults === "brainstorm";
+
+// The agent, model and effort `settings` (the repo's, over the operator's) give a run in `mode`
+// by default (its `defaults`): [agent, model, effort].
+function defaultsOf(settings, mode) {
+  return brainstormDefaults(mode)
+    ? [settings?.brainstormAgent, settings?.brainstormModel, settings?.brainstormEffort]
+    : [settings?.agent, settings?.model, settings?.effort];
+}
+
+// Whether `mode`'s runs have volumes of their own (`volumes`): the repo's own modes never do.
+export function isApart(mode) {
+  return APART.has(mode);
 }
 
 export function isFresh(task, mode) {
@@ -145,16 +167,6 @@ export function isFresh(task, mode) {
 // running entry. A repo's `fresh` modes run on its issues, where a burst belongs together.
 export function entryRun(mode) {
   return FRESH.has(mode);
-}
-
-// The name of an issue's volumes for a run: light runs get their own clone and Claude session.
-// They can't push (the broker refuses them), but what they leave in a volume (git hooks,
-// Claude's hooks and settings) would run in the issue's next work run, which can. Research
-// runs (`mode`, OPEN) get their own again: what a web page leaves there would otherwise run
-// in a light run, which has a token.
-export function sessionName(name, light, mode) {
-  if (OPEN.has(mode)) return `${name}-research`;
-  return light ? `${name}-light` : name;
 }
 
 // What the dashboard shows a run or queued task as.

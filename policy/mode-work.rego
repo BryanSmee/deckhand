@@ -1,5 +1,5 @@
 # Deckhand's default for work runs (a maintainer's, a review's fix run, a CI fix, a conflict's)
-# and the repository's own modes that aren't light (docs/repo-config.md#the-default-policies):
+# and the repository's own modes (docs/repo-config.md#the-default-policies):
 # what their sandbox gets (`allow_capabilities`), what they write to GitHub (`allow_github`) and
 # where they push (`allow_push`). A grants folder's policy/mode-work.rego replaces it. The
 # repository's own modes get at most these, and only what its .deckhand/policy/ allows too.
@@ -31,10 +31,7 @@ allow_capabilities contains c if {
 # The runs this file's writes are for.
 work_run if input.mode == "work"
 
-work_run if {
-  input.custom_mode
-  not input.light
-}
+work_run if input.custom_mode
 
 # What they write, by the target's kind (docs/repo-config.md#the-github-input): their issue,
 # its sub-issues and the issues they file (`label`: issue #443; `react`, `unreact`: #458;

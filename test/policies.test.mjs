@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   createPolicies,
   DECISIONS,
+  GRANTS_MS,
   RULES,
   rulesOf,
   unallowed,
@@ -26,6 +27,7 @@ import {
   TIMEOUT_MS,
 } from "../policy-service/engine.mjs";
 import { opaBinary, opaRunner } from "../policy-service/opa.mjs";
+import { GRANTS } from "../listener/grants.mjs";
 import { issueServiceTokens, serviceTokens } from "../lib/service-token.mjs";
 import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
@@ -33,6 +35,7 @@ import { mergeInput } from "../listener/reviews.mjs";
 import {
   evalResult,
   fakeOpa as sharedFakeOpa,
+  grantsPolicy,
   hasOpa,
   localService,
   policyEngineOf,
@@ -273,11 +276,14 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   }
   // allow.rego allows each of the listener's own decisions, whatever the input: the listener
   // knows it without opa. Not `run`, which run.rego allows where each mode makes sense, nor a
-  // run's writes and pushes, which each mode's file allows.
+  // run's writes and pushes, which each mode's file allows, nor a repository's grants, which
+  // only the operator's policies give (#498).
   const allow = own.get(ALLOW);
   assert.deepEqual(
     rulesOf(allow),
-    DECISIONS.filter((d) => !["run", "github", "push"].includes(d)).map((d) => `allow_${d}`),
+    DECISIONS.filter((d) => !["run", "github", "push", "grant"].includes(d)).map(
+      (d) => `allow_${d}`,
+    ),
   );
   assert.deepEqual(rulesOf(own.get("run.rego")), ["allow_run"]);
   assert.deepEqual([...allowOnly()], [[ALLOW, allow]]);
@@ -867,6 +873,28 @@ test("check: an operator's allow_github or allow_push whatever the input is warn
   assert.deepEqual((await policies.check(builtInPolicies())).warnings, []);
 });
 
+test("check: a policy reading input.light, gone in #498, is said in either layer; a comment isn't", async (t) => {
+  const { policies } = setup(t);
+  const files = new Map([
+    ["old.rego", `${DENY}deny_github contains "x" if input.light\n`],
+    [
+      "modes.rego",
+      "package deckhand\n\nallow_push if {\n  input.custom_mode\n  not input.light\n}\n",
+    ],
+    ["note.rego", "package deckhand\n# input.light is gone\nallow_push if input.custom_mode\n"],
+  ]);
+  for (const layer of ["operator", "repo"]) {
+    const { warnings } = await policies.check(files, layer);
+    const said = warnings.filter((w) => w.includes("input.light"));
+    assert.deepEqual(
+      said.map((w) => w.split(":")[0]),
+      ["old.rego", "modes.rego"],
+      layer,
+    );
+    assert.match(said[0], /no input has any more \(issue #498\)/);
+  }
+});
+
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
   const opa = fakeOpa({
     checked: (files) =>
@@ -893,7 +921,7 @@ test("check: compile errors and rules nobody evaluates; nothing to check, no opa
     ["bad.rego", "package deckhand\ndeny_merge contains x if { x := http.send({}) }\n"],
   ]);
   const rules =
-    "`allow_run`, `deny_run`, `allow_merge`, `deny_merge`, `allow_review`, `deny_review`, `allow_fix`, `deny_fix`, `allow_link_branch`, `deny_link_branch`, `allow_request_review`, `deny_request_review`, `allow_github`, `deny_github`, `allow_push`, `deny_push`, `allow_capabilities`, `deny_capabilities`";
+    "`allow_run`, `deny_run`, `allow_merge`, `deny_merge`, `allow_review`, `deny_review`, `allow_fix`, `deny_fix`, `allow_link_branch`, `deny_link_branch`, `allow_request_review`, `deny_request_review`, `allow_github`, `deny_github`, `allow_push`, `deny_push`, `allow_grant`, `deny_grant`, `allow_capabilities`, `deny_capabilities`";
   assert.deepEqual(await policies.check(files), {
     errors: ["policy error: bad.rego:2: undefined function http.send"],
     warnings: [
@@ -1039,7 +1067,9 @@ test("describe: each file with its source and rules, the check of them all", asy
       "deckhand",
       null,
       true,
-      DECISIONS.filter((d) => !["run", "github", "push"].includes(d)).map((d) => `allow_${d}`),
+      DECISIONS.filter((d) => !["run", "github", "push", "grant"].includes(d)).map(
+        (d) => `allow_${d}`,
+      ),
       ALLOWING[ALLOW],
     ),
     // The operator's a.rego, evaluated beside the repo's of the same name.
@@ -1389,7 +1419,6 @@ const write =
     repo: "org/repo",
     mode,
     custom_mode: custom,
-    light: false,
     reason: null,
     issue: 1,
     action: "comment",
@@ -1596,8 +1625,14 @@ test(
         },
         write("work"),
       );
-      assert.equal(layers[0].allow, true, decision);
+      // But a repository's grants: none without the operator's own rules (#498).
+      assert.equal(layers[0].allow, decision !== "grant", decision);
     }
+    assert.deepEqual(await policies.grants("org/repo"), {
+      granted: new Set(),
+      files: [],
+      denied: [],
+    });
   },
 );
 
@@ -1639,3 +1674,107 @@ test(
     assert.equal(slow.engine.servers(), 1);
   },
 );
+
+test(
+  "the real opa: a repository's grants are the operator's allow_grant rules, a deny wins (#498)",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const operator = {
+      "grants.rego": grantsPolicy(["dockerfile", "preview", "docker", "auto_merge"], "org/repo"),
+      // Every repository its research: allowed for every one, as it isn't one at a time.
+      "research.rego": 'package deckhand\n\nallow_grant if input.grant == "research"\n',
+      // Workflows for every repository: given one at a time only, so to none.
+      "wide.rego": 'package deckhand\n\nallow_grant if input.grant == "workflows"\n',
+      // Auto-merge on a public repository for all of an owner's, by a prefix or a glob: to none
+      // either. A list of names one by one passes (grants.rego).
+      "owner.rego":
+        'package deckhand\n\nallow_grant if {\n  input.grant == "auto_merge_public"\n  startswith(input.repo.name, "org/")\n}\n\nallow_grant if {\n  input.grant == "acknowledge_automerge_and_preview_is_highly_dangerous"\n  glob.match("org/*", ["/"], input.repo.name)\n}\n',
+      // Research for all of an owner's: allowed, as it isn't one at a time.
+      "research-org.rego":
+        'package deckhand\n\nallow_grant if {\n  input.grant == "research"\n  startswith(input.repo.name, "org/")\n}\n',
+      "deny.rego":
+        'package deckhand\n\ndeny_grant contains "no preview here" if {\n  input.grant == "preview"\n  input.repo.name == "org/repo"\n}\n',
+    };
+    const { policies } = layered(t, { operator });
+    const said = await policies.grants("Org/Repo");
+    assert.deepEqual([...said.granted].sort(), ["auto_merge", "docker", "dockerfile", "research"]);
+    assert.deepEqual([...said.files].sort(), [
+      "grants.rego",
+      "owner.rego",
+      "research-org.rego",
+      "research.rego",
+      "wide.rego",
+    ]);
+    const wide = (grant) => ({
+      grant,
+      reasons: [
+        `\`${grant}\` is granted one repository at a time: a rule that gives it to every repository, or to all of an owner's, gives it to none (name each input.repo.name)`,
+      ],
+    });
+    assert.deepEqual(said.denied, [
+      { grant: "preview", reasons: ["no preview here"] },
+      wide("workflows"),
+      wide("auto_merge_public"),
+      wide("acknowledge_automerge_and_preview_is_highly_dangerous"),
+    ]);
+    // Another repository: what every one gets.
+    assert.deepEqual([...(await policies.grants("org/other")).granted], ["research"]);
+    // None of the operator's files has `allow_grant`: nothing, without opa.
+    const none = layered(t);
+    assert.deepEqual(await none.policies.grants("org/repo"), {
+      granted: new Set(),
+      files: [],
+      denied: [],
+    });
+    // A policy error: no grant, said.
+    const broken = layered(t, {
+      operator: { "grants.rego": "package deckhand\n\nallow_grant if {\n" },
+    });
+    assert.match((await broken.policies.grants("org/repo")).error, /^policy error: /);
+  },
+);
+
+test("check: a repository's grant rules are ignored, an error; the operator's are evaluated", async (t) => {
+  const { policies } = setup(t, { opa: sharedFakeOpa() });
+  const files = new Map([
+    ["grants.rego", 'package deckhand\n\nallow_grant if true\ndeny_grant contains "x" if true\n'],
+  ]);
+  const { errors } = await policies.check(files, "repo");
+  assert.deepEqual(errors, [
+    "grants.rego:3: `allow_grant` is ignored: only the operator's policies decide a repository's grants (#498)",
+    "grants.rego:4: `deny_grant` is ignored: only the operator's policies decide a repository's grants (#498)",
+  ]);
+  assert.deepEqual((await policies.check(files)).warnings, []);
+});
+
+test("grants: kept for the same operator policies and repository, asked again once they change", async (t) => {
+  const files = { "grants.rego": grantsPolicy(["dockerfile"]) };
+  const clock = { now: 1_000 };
+  const opa = sharedFakeOpa();
+  const { policies } = setup(t, {
+    opa,
+    readOperator: () => new Map(Object.entries(files)),
+    now: () => clock.now,
+  });
+  const asked = () => opa.evals().length;
+  assert.deepEqual([...(await policies.grants("org/repo")).granted], ["dockerfile"]);
+  const first = asked();
+  assert.ok(first >= Object.keys(GRANTS).length);
+  // The same answer, without asking: its name in another case too.
+  assert.deepEqual([...(await policies.grants("Org/Repo")).granted], ["dockerfile"]);
+  assert.equal(asked(), first);
+  // Another repository: asked.
+  assert.deepEqual([...(await policies.grants("org/other")).granted], []);
+  assert.ok(asked() > first);
+  // An edit of the operator's policies applies at once.
+  files["grants.rego"] = grantsPolicy(["dockerfile", "preview"]);
+  assert.deepEqual([...(await policies.grants("org/repo")).granted].sort(), [
+    "dockerfile",
+    "preview",
+  ]);
+  // And past GRANTS_MS, asked again whatever.
+  const before = asked();
+  clock.now += GRANTS_MS;
+  await policies.grants("org/repo");
+  assert.ok(asked() > before);
+});

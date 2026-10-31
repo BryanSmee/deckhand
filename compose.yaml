@@ -22,7 +22,7 @@ name: deckhand
 # The base image sandboxes run from: the `sandbox` service below pulls or builds it, the
 # listener starts runs from it.
 x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-sandbox:${DECKHAND_VERSION:-latest}
-# The container engines runs of repositories granted allow_docker get (SANDBOX_ENGINE): the
+# The container engines runs of repositories granted `docker` get (SANDBOX_ENGINE): the
 # `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/setup.md.
 x-engine-image: &engine-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine:${DECKHAND_VERSION:-latest}
 x-engine-podman-image: &engine-podman-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine-podman:${DECKHAND_VERSION:-latest}
@@ -128,7 +128,7 @@ services:
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-}
       # What every sandbox may reach and its limits: grants/default.yaml, below.
-      # A container engine for repos granted allow_docker: sysbox, podman or auto. Empty: none.
+      # A container engine for repos granted `docker`: sysbox, podman or auto. Empty: none.
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
       # A range for the runs' networks (10.200.0.0/16), in blocks of SANDBOX_SUBNET_SIZE
       # (28). Empty: Docker's default address pools.
@@ -265,13 +265,15 @@ services:
     # the preview hooks running end (cut past the grace period). Sandboxes keep running.
     stop_grace_period: 5m
     # The listener's, its own to the broker service (its tokens, the runs' inboxes and files), and
-    # to the github service (the repos' tarballs).
-    networks: [runner, broker-runner, github-runner]
+    # to the github service (the repos' tarballs), and to the policy service (what the operator's
+    # policies grant a repository).
+    networks: [runner, broker-runner, github-runner, policy-runner]
     environment:
       # The settings the runner reads too, as the listener does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
       # GRANTS_DIR: the listener's grants folder, which the runner checks every spec, build and
-      # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs).
+      # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs), with what its
+      # policies grant, asked of the policy service (POLICY_SERVICE_URL, its default).
       GRANTS_DIR: ${GRANTS_DIR:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       RUNNER: ${RUNNER:-}
@@ -347,7 +349,7 @@ services:
     stop_grace_period: 5m
     depends_on: [broker, policy]
     environment:
-      # GitHub's addresses, the repositories let through, and the grants folder (allow_workflows,
+      # GitHub's addresses, the repositories let through, and the grants folder (workflows,
       # allow_projects), as the listener has them.
       GITHUB_URL: ${GITHUB_URL:-}
       GITHUB_API: ${GITHUB_API:-}
@@ -366,7 +368,7 @@ services:
       - github-data:/data
       # Your configuration, read only, as the listener reads it: config.yaml and grants/.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
-    # Pushes of repositories granted allow_workflows are saved in /tmp while checked (up to
+    # Pushes of repositories granted `workflows` are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
     # (docs/security.md#github-actions-on-deckhands-branches).
     # tmpfs:
@@ -384,8 +386,9 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   # The policy service (docs/services.md): Deckhand's, the operator's and the repositories' Rego
-  # policies, evaluated by long-lived `opa` servers for the listener. No secret, no state, and no
-  # network but the listener's: an internal one, without a way out.
+  # policies, evaluated by long-lived `opa` servers for the listener, and for the runner the
+  # grants the operator's give a repository. No secret, no state, and no network but its
+  # callers': internal ones, without a way out.
   policy:
     build:
       context: .
@@ -395,8 +398,9 @@ services:
     # Stopping lets the decisions in flight finish (2 s each at most): the listener waits for the
     # next copy meanwhile, up to 30 s, rather than refuse them (docs/architecture.md#restarts).
     stop_grace_period: 30s
-    # The listener's network to it, and the github service's (the runs' writes and pushes).
-    networks: [policy, policy-github]
+    # The listener's network to it, the github service's (the runs' writes and pushes) and the
+    # runner's (what the operator's policies grant a repository).
+    networks: [policy, policy-github, policy-runner]
     environment:
       # The operator's policies: GRANTS_DIR/policy/*.rego, below. Empty: /etc/deckhand/grants.
       GRANTS_DIR: ${GRANTS_DIR:-}
@@ -534,6 +538,9 @@ networks:
   policy:
     internal: true
   policy-github:
+    internal: true
+  # The runner and the policy service alone, the same.
+  policy-runner:
     internal: true
   # The listener and the runner: one calls the other, nothing else is on it, and it has no way
   # out. Its subnet is fixed, as each tells its caller by it (SERVICE_NETWORKS): RUNNER_SUBNET in

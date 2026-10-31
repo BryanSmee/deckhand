@@ -157,7 +157,7 @@ const DECISIONS: {
       "A denial refuses a run's push of a branch (the whole push): git prints the messages for each ref.",
     refused: (until) => `Every run's push is refused ${until}.`,
     allows: () =>
-      "Its allow rules decide which modes push: Deckhand's mode-work.rego, work runs and the repo's modes that aren't light.",
+      "Its allow rules decide which modes push: Deckhand's mode-work.rego, work runs and the repo's own modes (with the repo's allow too).",
   },
 ];
 
@@ -253,9 +253,8 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         <code>target</code>, <code>change</code>), or a read of CI's checks or of projects (
         <code>action</code> <code>read_checks</code>, <code>read_projects</code>, no{" "}
         <code>target</code> or <code>change</code>), and the run: its <code>mode</code>,{" "}
-        <code>custom_mode</code> (one of the repo's <code>modes:</code>), <code>light</code> and{" "}
-        <code>reason</code> (<code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or
-        null).{" "}
+        <code>custom_mode</code> (one of the repo's <code>modes:</code>) and <code>reason</code> (
+        <code>review-fix</code>, <code>ci-fix</code>, <code>conflict</code>, or null).{" "}
         <a href={GITHUB_INPUT} target="_blank" rel="noreferrer">
           The GitHub input
         </a>

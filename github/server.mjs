@@ -21,7 +21,7 @@ import { openStore } from "../lib/store.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "../listener/config.mjs";
 import { createGitHub } from "../listener/github.mjs";
-import { grantFor, loadGrants } from "../listener/grants.mjs";
+import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createAppHolder } from "./app.mjs";
@@ -85,7 +85,9 @@ const policies = createPolicies({
 // The operator's grants, read again at each call: one taken back applies to the next.
 const grants = {
   projects: (repo) => grantFor(loadGrants(config), config, repo).allowProjects,
-  workflows: (repo) => grantFor(loadGrants(config), config, repo).allowWorkflows,
+  // Through grantOf(), as the listener reads every grant: its policies' and its files'.
+  workflows: async (repo) =>
+    (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflows === true,
 };
 
 const { server } = createGithubService({

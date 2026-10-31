@@ -53,11 +53,10 @@ interface Problem {
 // The file's errors, the grants' (which the operator fixes), and what the repo asks for that
 // isn't granted.
 function problemsOf(config: RepoConfig): Problem[] {
-  const grants = <code>grants/{config.repo.repo}.yaml</code>;
   const ungranted = (
     <>
-      Only the operator grants it, in {grants}; until then, remove it from{" "}
-      <code>.deckhand.yaml</code>.
+      Only the operator grants it, with an <code>allow_grant</code> rule in the grants folder's{" "}
+      <code>policy/</code>; until then, remove it from <code>.deckhand.yaml</code>.
     </>
   );
   const problems: Problem[] = config.errors.map((e) => ({
@@ -675,24 +674,29 @@ function GrantSection({ grant }: { grant: Grant | null }) {
   );
 }
 
-// Its switches as on/off pills, then what it lists.
+// Its switches as on/off pills, the grants the operator's policies give (`allow_grant`), then
+// what its files list.
 function GrantCard({ grant }: { grant: Grant }) {
   const { cpus, memory, pids } = grant.limits;
   const flags: [string, boolean | string][] = [
-    ["allow_dockerfile", grant.allowDockerfile],
-    ["allow_branch_docker_images", grant.allowBranchDockerImages],
-    ["allow_preview", grant.allowPreview],
-    ["allow_docker", grant.allowDocker],
-    ["allow_research", grant.allowResearch],
-    ["allow_workflows", grant.allowWorkflows],
-    ["allow_auto_merge", grant.allowAutoMerge],
+    ["dockerfile", grant.allowDockerfile],
+    ["branch_docker_images", grant.allowBranchDockerImages],
+    ["preview", grant.allowPreview],
+    ["docker", grant.allowDocker],
+    ["research", grant.allowResearch],
+    ["workflows", grant.allowWorkflows],
+    ["auto_merge", grant.allowAutoMerge],
   ];
   // Only said when set: it acknowledges what auto-merge with a preview hook risks.
   if (grant.acknowledgeAutoMergePreview) {
     flags.push(["acknowledge_automerge_and_preview_is_highly_dangerous", true]);
   }
+  const policies = grant.grantFiles.length
+    ? grant.grantFiles.map((f) => `policy/${f}`).join(", ")
+    : "none: no allow_grant rule, nothing granted";
   const lists: [string, string][] = [
     ["files", grant.files.join(", ") || "none: nothing beyond what every repository gets"],
+    ["policies", policies],
     ["hosts", grant.hosts.join(", ") || "none"],
   ];
   if (grant.cachedHosts.length) lists.push(["cached_hosts", grant.cachedHosts.join(", ")]);

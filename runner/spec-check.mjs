@@ -13,12 +13,13 @@
 //   - host paths resolved again here (`..`, symlinks) and inside a root the operator grants that
 //     repository, read-only unless the root is granted read-write;
 //   - the operator's limits for that repository, its own task's label only;
-//   - a container engine only for a repository granted `allow_docker`.
+//   - a container engine only for a repository the operator's policies grant `docker`, which
+//     the runner asks the policy service itself (grants.mjs grantOf()).
 //
 // A compromised orchestrator can still start a run: it is its job. It can't make one root on the
 // host through the runner.
 import { posix } from "node:path";
-import { grantFor, loadGrants, resolveMounts } from "../listener/grants.mjs";
+import { grantFor, grantOf, loadGrants, resolveMounts } from "../listener/grants.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import {
   cacheVolume,
@@ -82,11 +83,12 @@ function sessionVolumes(name) {
 }
 
 // [why] for each rule `spec` breaks, [] when none. `grants()`: the grants folder, read now;
+// `granted(repo)`: what the operator's policies grant it (grants.mjs grantsBy(), none: nothing);
 // `resolve`: grants.mjs resolveMounts(), in the runner's own filesystem.
-export function specProblems(
+export async function specProblems(
   config,
   spec,
-  { grants = () => loadGrants(config), resolve = resolveMounts } = {},
+  { grants = () => loadGrants(config), granted = null, resolve = resolveMounts } = {},
 ) {
   const problems = [];
   const key = spec.labels?.["deckhand.task"];
@@ -123,10 +125,10 @@ export function specProblems(
     if (!LABELS.has(label)) problems.push(`its label ${label}`);
   }
   let grant = null;
-  const grantOf = () => (grant ??= grantFor(grants(), config, repo));
+  const ownGrant = () => (grant ??= grantFor(grants(), config, repo));
   // The operator's limits for the repository, its engine's too (access.mjs): never the spec's.
   const sameLimits = (limits) =>
-    ["cpus", "memory", "pids"].every((k) => String(limits?.[k]) === String(grantOf().limits?.[k]));
+    ["cpus", "memory", "pids"].every((k) => String(limits?.[k]) === String(ownGrant().limits?.[k]));
   if (!sameLimits(spec.limits)) problems.push("its limits aren't the operator's for it");
   if (spec.engine && !sameLimits(spec.engine.limits)) {
     problems.push("its engine's limits aren't the operator's for it");
@@ -157,7 +159,7 @@ export function specProblems(
         problems.push(`the host path ${v.name}: not a plain absolute path`);
         continue;
       }
-      const { mounts, refused } = resolve([{ path: v.name, readOnly: v.readOnly }], grantOf());
+      const { mounts, refused } = resolve([{ path: v.name, readOnly: v.readOnly }], ownGrant());
       const [found] = mounts;
       if (!found || found.source !== v.name || (found.readOnly && !v.readOnly)) {
         const why = refused.length ? refused.join("; ") : "not as the operator grants it";
@@ -165,10 +167,20 @@ export function specProblems(
       }
     } else problems.push(`${what}: of no kind a sandbox has (${v.kind})`);
   }
-  if (spec.engine && !(config.engine && grantOf().allowDocker)) {
+  if (spec.engine && !(config.engine && (await engineGranted(config, repo, grants, granted)))) {
     problems.push(`a container engine, which the operator doesn't grant ${repo}`);
   } else if (spec.engine?.cache && spec.engine.cache !== engineCacheVolume(config, repo)) {
     problems.push(`its engine's cache ${spec.engine.cache}: not ${repo}'s`);
   }
   return problems;
+}
+
+// Whether the operator's policies grant `repo` a container engine (`docker`): not when its grants
+// have errors or can't be decided.
+async function engineGranted(config, repo, grants, granted) {
+  try {
+    return (await grantOf(config, repo, { load: grants, granted })).allowDocker === true;
+  } catch {
+    return false;
+  }
 }

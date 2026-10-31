@@ -38,6 +38,7 @@ import {
   previewJob,
   validRepo,
 } from "./hooks.mjs";
+import { notGranted } from "../listener/grants.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId } from "./logs.mjs";
 
@@ -178,7 +179,10 @@ export function createRunnerService({
   log = () => {},
   now = Date.now,
   watchMs = 5000,
-  checkSpec = (spec) => specProblems(config, spec),
+  // What the operator's policies grant a repository (grants.mjs grantsBy(), the policy
+  // service's): none, nothing granted.
+  granted = null,
+  checkSpec = (spec) => specProblems(config, spec, { granted }),
   // The grants folder, read now (the tests' own).
   grants,
   // (repo, ref) → a folder of the repo's files (checkout.mjs, from the github service's
@@ -196,7 +200,8 @@ export function createRunnerService({
     now,
   });
   const table = Object.keys(ROUTES).map((key) => ({ key, match: route(key) }));
-  const previewsGranted = (repo) => grantOrRefuse(config, repo, grants).allowPreview;
+  const previewsGranted = async (repo) =>
+    (await grantOrRefuse(config, repo, grants, granted)).allowPreview;
   const events = createEvents({ store, runner, log });
   // Output streams and log reads in flight: ended first on SIGTERM, their callers come back.
   const streams = new Set();
@@ -233,7 +238,7 @@ export function createRunnerService({
     const { run, name } = spec;
     // What holds whatever the orchestrator says (spec-check.mjs), first: a start asked again is
     // checked as the first was, and names only its own sandbox and run.
-    const problems = checkSpec(spec);
+    const problems = await checkSpec(spec);
     if (problems.length) {
       log(`${name}: not started: ${problems.join("; ")}`);
       throw new Refused(403, `the runner refuses its spec: ${problems.join("; ")}`);
@@ -267,8 +272,8 @@ export function createRunnerService({
         tokens: (sandbox) => broker.runTokens(run, sandbox),
         // Its host paths resolved again once the waits are over (the orchestrator answers the
         // tokens, as slowly as it likes): a sandbox may have swapped one for a symlink since.
-        recheck: () => {
-          const again = checkSpec(spec);
+        recheck: async () => {
+          const again = await checkSpec(spec);
           if (again.length) {
             log(`${name}: not started: ${again.join("; ")}`);
             throw new Refused(403, `the runner refuses its spec: ${again.join("; ")}`);
@@ -444,7 +449,7 @@ export function createRunnerService({
       // What the grants allow, whatever the orchestrator asks; and what it builds from, the
       // runner's to decide: the default branch unless a branch is granted, the Dockerfile's
       // blob as GitHub says it, the hosts the grants give (hooks.mjs).
-      const problem = buildProblem(config, asked, grants);
+      const problem = await buildProblem(config, asked, grants, granted);
       if (problem) throw new Refused(403, `no build: ${problem}`);
       const plan = await buildPlan(config, asked, { grants, blobOf });
       return streamed(res, async (output, line) => {
@@ -488,8 +493,8 @@ export function createRunnerService({
       const problem = previewEventProblem(repo, event, payload);
       if (problem) throw new Refused(400, problem);
       // Refused now when the grants don't allow it; the config is read once queued.
-      if (!previewsGranted(repo)) {
-        throw new Refused(403, `the operator doesn't grant ${repo} \`allow_preview\``);
+      if (!(await previewsGranted(repo))) {
+        throw new Refused(403, `${repo}: ${notGranted("preview")}`);
       }
       // Sent again (its answer lost): queued once.
       if (
@@ -499,7 +504,11 @@ export function createRunnerService({
         return send(res, 202, {});
       }
       // Queued: it may build an image and run for minutes; why it didn't, logged here.
-      previewJob(config, { repo, event, payload }, { checkout, imageFor: images.imageFor, grants })
+      previewJob(
+        config,
+        { repo, event, payload },
+        { checkout, imageFor: images.imageFor, grants, granted },
+      )
         .then((job) => previews.run(job))
         .catch((error) => log(`${repo}: preview hook not run: ${error.message}`));
       send(res, 202, {});
