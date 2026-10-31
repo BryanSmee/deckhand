@@ -57,13 +57,13 @@ test("/mode with a name the repo doesn't have: a reply listing its modes, no run
       "Unknown mode `foo`. The modes here: `work`, `brainstorm`, `onboarding`, `research` (not granted here), `policy`. Pick one with a `/mode <name>` line.",
     ],
   ]);
-  // The repo's own modes are listed too, a light one as comments only.
-  const modes = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n    light: true\n";
+  // The repo's own modes are listed too.
+  const modes = "modes:\n  audit:\n    instructions: .deckhand/audit.md\n";
   const own = await modeOf({ trigger: "work", modeLine: "reveiw" }, modes);
   assert.equal(own.mode, null);
   assert.match(
     own.replies[0][2],
-    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `policy`, `audit` \(comments only\)\./,
+    /^Unknown mode `reveiw`\. The modes here: `work`, `brainstorm`, `onboarding`, `research` \(not granted here\), `policy`, `audit`\./,
   );
   assert.equal((await modeOf({ trigger: "work", modeLine: "audit" }, modes)).mode, "audit");
 });

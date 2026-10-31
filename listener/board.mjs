@@ -28,7 +28,7 @@
 // again, and `dismissed` ({ by, at }) while that run is the one someone dismissed from the
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
-import { LIGHT } from "./modes.mjs";
+import { APART } from "./modes.mjs";
 import { LOOP_STEPS, reviewLoop } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
@@ -92,7 +92,7 @@ export function rerunnable(t) {
     t.state === last.status &&
     ["issue", "pr"].includes(t.kind) &&
     !!last.taskMode &&
-    !LIGHT.has(last.taskMode) &&
+    !APART.has(last.taskMode) &&
     Array.isArray(last.items)
   );
 }

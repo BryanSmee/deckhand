@@ -13,7 +13,7 @@ import {
   outcomeOf,
   RISKY,
 } from "../listener/capabilities.mjs";
-import { LIGHT, MODES, OPEN } from "../listener/modes.mjs";
+import { APART, MODES, RESEARCH } from "../listener/modes.mjs";
 import { readsOf } from "../listener/github-app.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
@@ -453,15 +453,15 @@ test(
     for (const { mode } of modes) {
       const allowed = [...results[mode].operator.allow.keys()].sort();
       assert.deepEqual(allowed, [...defaultCapabilities(inputs[mode])].sort(), mode);
-      // And what its traits (modes.mjs) gave it, so the two can't drift apart: an open mode the
-      // internet alone; a light one no branch, setup or engine; a token with discussions, their
-      // reads; a work run the rest.
+      // And what its traits gave it before #498, so the policies still give it: research the
+      // internet alone; a mode apart from work (modes.mjs `volumes`) no branch, setup or engine;
+      // a token with discussions, their reads; a work run the rest.
       const has = (c) => allowed.includes(c);
-      if (OPEN.has(mode)) assert.deepEqual(allowed, ["internet"], mode);
+      if (RESEARCH.has(mode)) assert.deepEqual(allowed, ["internet"], mode);
       else {
         assert.ok(has("pull") && !has("internet"), mode);
         for (const c of ["push", "setup", "docker", "image:branch", "preview"]) {
-          assert.equal(has(c), !LIGHT.has(mode), `${mode}: ${c}`);
+          assert.equal(has(c), !APART.has(mode), `${mode}: ${c}`);
         }
         // Discussions for discussion runs only, as their token had.
         const discussions = mode === "discussion";
@@ -632,9 +632,8 @@ test(
   },
 );
 
-test("a light mode's run doesn't get `push`, whatever the policies allow, nor what needs it", () => {
-  const modes = { fixer: { light: true }, audit: {} };
-  const settings = { ...full, modes };
+test("a mode's runs get `push` when the policies give it, whatever the mode (#498)", () => {
+  const settings = { ...full, modes: { fixer: {}, audit: {} } };
   for (const [mode, custom] of [
     ["brainstorm", false],
     ["fixer", true],
@@ -647,27 +646,20 @@ test("a light mode's run doesn't get `push`, whatever the policies allow, nor wh
       repo: { private: true },
       mode,
     });
-    const push = said.capabilities.find((c) => c.name === "push");
-    assert.equal(push.status, "denied", mode);
-    assert.match(push.reason, /is a light mode: it has no branch to push/, mode);
-    assert.ok(!said.used.includes("push") && !said.used.includes("image:branch"), mode);
-    assert.ok(said.used.includes("pull") && said.used.includes("setup"), mode);
+    assert.ok(said.used.includes("push") && said.used.includes("image:branch"), mode);
     assert.deepEqual(said.errors, [], mode);
-    assert.ok(
-      said.warnings.some((w) => w.startsWith("`push` isn't used")),
-      mode,
-    );
   }
-  // A mode that isn't light keeps it.
+  // Without an allow rule for it, none: what a mode that only reads and answers asks of them.
+  const { push: _, ...rules } = everything();
   const audit = outcomeOf({
-    rules: { operator: layer(everything()), repo: layer(everything()) },
+    rules: { operator: layer(everything()), repo: layer(rules) },
     custom: true,
     settings,
     grant: granted,
     repo: { private: true },
     mode: "audit",
   });
-  assert.ok(audit.used.includes("push"));
+  assert.ok(!audit.used.includes("push") && audit.used.includes("pull"));
 });
 
 test("the config page: a config key its grant doesn't give stops every mode with a clone, said once", async () => {

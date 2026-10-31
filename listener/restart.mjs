@@ -10,7 +10,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
-import { OPEN } from "./modes.mjs";
+import { RESEARCH } from "./modes.mjs";
 import { addRun, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
@@ -667,7 +667,7 @@ export function savedCapabilities(saved) {
     if (saved.mode === "discussion") return saved.capabilities;
     return saved.capabilities.filter((c) => c !== "read:discussions");
   }
-  if (OPEN.has(saved.mode)) return [];
+  if (RESEARCH.has(saved.mode)) return [];
   const reads = ["pull", "read:issues", "read:pulls", "read:actions"];
   return saved.mode === "discussion" ? [...reads, "read:discussions"] : reads;
 }

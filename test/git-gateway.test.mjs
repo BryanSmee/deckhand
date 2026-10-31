@@ -682,9 +682,13 @@ test("no secret, another run's repo or a finished run: no push", async (t) => {
   assert.deepEqual(seen, []);
 });
 
-// Light runs: brainstorms, inbox entries, onboarding and a repo's light modes, registered
-// without `push`: the kind of run decides, not its token.
-for (const what of ["a brainstorm", "a light repo mode", "a run registered without saying"]) {
+// Runs without the `push` capability: brainstorms, inbox entries, onboarding, a repo's mode its
+// policies give none, registered without it: what the broker has decides, not its token.
+for (const what of [
+  "a brainstorm",
+  "a repo mode without push",
+  "a run registered without saying",
+]) {
   test(`${what} can't push`, async (t) => {
     const { work, remote, seen } = await setup(t, {
       register: (b) => b.register("org/repo"),
@@ -747,7 +751,6 @@ test("a policy's refusal refuses the push, with its message; nothing reaches Git
         repo: "org/repo",
         mode: "work",
         custom_mode: false,
-        light: false,
         reason: null,
         issue: 1,
         action: "push",
@@ -776,7 +779,6 @@ test("a push's input: the run, its branch, whether it creates or deletes it", ()
     repo: "org/repo",
     mode: "plan",
     custom_mode: true,
-    light: false,
     reason: "ci",
     issue: 4,
     action: "push",
@@ -786,19 +788,19 @@ test("a push's input: the run, its branch, whether it creates or deletes it", ()
     deleted: false,
     default_branch: "trunk",
   });
-  // A new branch, a deleted one; a light run with no mode nor issue; a ref that isn't a branch.
+  // A new branch, a deleted one; a run with no mode nor issue; a ref that isn't a branch.
   assert.equal(pushInput(run, { ref: "refs/heads/x", old: ZERO, new: B }, "main").created, true);
   assert.equal(pushInput(run, { ref: "refs/heads/x", old: A, new: ZERO }, "main").deleted, true);
   const bare = pushInput({ repo: "org/repo" }, { ref: "refs/tags/v1", old: ZERO, new: A }, "main");
   assert.equal(bare.mode, null);
   assert.equal(bare.issue, null);
-  assert.equal(bare.light, true);
+  assert.ok(!("light" in bare));
   assert.equal(bare.custom_mode, false);
   assert.equal(bare.branch, null);
 });
 
 test(
-  "Deckhand's default policies: work runs push, a light run doesn't, a repo's own mode with its allow",
+  "Deckhand's default policies: work runs push, a brainstorm doesn't, a repo's own mode with its allow",
   {
     skip: !hasOpa() && "no opa on the PATH",
   },
@@ -824,7 +826,7 @@ test(
   },
 );
 
-test("a light run can't push even with a token that writes pull requests", async (t) => {
+test("a run without `push` can't push even with a token that writes pull requests", async (t) => {
   const { work, remote, seen } = await setup(t, {
     register: (b) => b.register("org/repo", { push: false }),
   });

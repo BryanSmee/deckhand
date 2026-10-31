@@ -1148,7 +1148,7 @@ const GH_PR_EDIT =
   "mutation PullRequestUpdate($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { __typename } }";
 
 test(
-  "Deckhand's policies over GraphQL: a work run's items, a brainstorm's of the issues it filed only, a repo's light mode's none",
+  "Deckhand's policies over GraphQL: a work run's items, a brainstorm's of the issues it filed only, a repo's mode's with its allow",
   withOpa,
   async (t) => {
     const { check } = checks({ policies: defaultPolicies(t) });
@@ -1166,12 +1166,16 @@ test(
       (await check(brainstorm, addItem("I_1"))).refused.message,
       /no rule allows `project` on `own_issue` for a `brainstorm` run/,
     );
-    // A repo's own light mode, even with the repo's allow: Deckhand's allow none of its writes.
+    // A repo's own mode: Deckhand's allow and the repo's (no light mode any more: #498).
     const repo = { "ask.rego": 'package deckhand\n\nallow_github if input.mode == "ask"\n' };
     const own = checks({ policies: defaultPolicies(t, { repo }) });
+    assert.equal((await own.check(run("ask"), addItem("I_1"))).write, true);
+    const none = checks({
+      policies: defaultPolicies(t, { repo: { "x.rego": "package deckhand\n" } }),
+    });
     assert.match(
-      (await own.check(run("ask"), addItem("I_1"))).refused.message,
-      /no rule allows `project` on `own_issue` for a `ask` run/,
+      (await none.check(run("ask"), addItem("I_1"))).refused.message,
+      /no rule of \.deckhand\/policy\/ allows `project` on `own_issue` for a `ask` run/,
     );
   },
 );
@@ -1379,7 +1383,7 @@ test("createLabel: a label of the run's repository, the same write as REST's", a
 });
 
 test(
-  "Deckhand's policies over GraphQL: the modes that create labels; light modes, reviews and analyses don't",
+  "Deckhand's policies over GraphQL: the modes that create labels; reviews and analyses don't",
   withOpa,
   async (t) => {
     // A repo's own mode that pushes, which its .deckhand/policy/ allows writes.
@@ -1393,7 +1397,7 @@ test(
       const out = await check(r, label);
       assert.equal(out.refused, undefined, `${r.mode}: ${out.refused?.message}`);
     }
-    for (const mode of ["review", "analyze", "onboarding", "discussion", "plan"]) {
+    for (const mode of ["review", "analyze", "onboarding", "discussion"]) {
       const out = await check(run(mode), label);
       assert.match(out.refused?.message ?? "", /no rule allows `create` on `label`/, mode);
     }
@@ -1452,7 +1456,7 @@ test("the needs-input label of a sub-issue: neither removed nor added over Graph
   assert.equal(kept.refused, undefined);
 });
 
-test("deny_github over GraphQL: the run's mode, whether it is the repo's own, light, and its reason", async (t) => {
+test("deny_github over GraphQL: the run's mode, whether it is the repo's own, and its reason", async (t) => {
   const { engine: policies, evals } = policyEngine(t, {
     operator: { "gh-x.rego": "package deckhand\n" },
     messages: (input) =>
@@ -1462,23 +1466,18 @@ test("deny_github over GraphQL: the run's mode, whether it is the repo's own, li
   const comment = call(GH_COMMENT, { input: { subjectId: "I_1", body: "x" } });
   assert.equal((await check(run("work", 1, { reason: "review-fix" }), comment)).write, true);
   assert.deepEqual(
-    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
-    ["work", false, false, "review-fix"],
+    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).reason],
+    ["work", false, "review-fix"],
   );
   assert.equal((await check(run("brainstorm"), comment)).write, true);
-  assert.deepEqual(
-    [evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
-    [false, true, null],
-  );
-  // A repo's own mode, not light: the policies know it is one.
+  assert.deepEqual([evals.at(-1).custom_mode, evals.at(-1).reason], [false, null]);
+  assert.ok(!("light" in evals.at(-1)));
+  // A repo's own mode: the policies know it is one.
   const plan = run("plan", 1, { push: true, reason: "conflict" });
   const refused = await check(plan, comment);
   assert.equal(refused.refused.status, 403);
   assert.match(refused.refused.message, /the policies refuse it: not in a rebase/);
-  assert.deepEqual(
-    [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light],
-    ["plan", true, false],
-  );
+  assert.deepEqual([evals.at(-1).mode, evals.at(-1).custom_mode], ["plan", true]);
 });
 
 test("reactions over GraphQL: on the run's issues, pull requests and their comments; removed only when its own", async () => {

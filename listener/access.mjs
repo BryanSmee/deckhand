@@ -86,7 +86,7 @@ export function grantedAccess(config, task, settings, { agent, note, log, fs }) 
   };
 }
 
-// Why a research run (modes.mjs OPEN) can't run in `repo`, or null: its grants have errors, or
+// Why a research run (modes.mjs RESEARCH) can't run in `repo`, or null: its grants have errors, or
 // don't set `allow_research`. Checked when `/mode research` is asked for (task-modes.mjs), and
 // again when a run with `internet` starts (capabilities.mjs, bareAccess()): the grant may be
 // gone meanwhile.

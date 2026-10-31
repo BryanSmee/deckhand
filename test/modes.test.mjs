@@ -1,8 +1,17 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { BUILT_IN, entryRun, MODES, sessionName } from "../listener/modes.mjs";
+import {
+  APART,
+  brainstormDefaults,
+  BUILT_IN,
+  customMode,
+  entryRun,
+  MODES,
+  RESEARCH,
+} from "../listener/modes.mjs";
 import { modeNames, RESERVED_MODES } from "../listener/repo-config.mjs";
+import { sessionName } from "../listener/sandbox-spec.mjs";
 
 test("built-in modes: one list, which the dashboard's copy follows", () => {
   assert.deepEqual([...BUILT_IN], RESERVED_MODES);
@@ -19,18 +28,61 @@ test("built-in modes: one list, which the dashboard's copy follows", () => {
   );
 });
 
-test("light runs have volumes of their own, apart from work's", () => {
-  assert.equal(sessionName("deckhand-org-repo-12", false), "deckhand-org-repo-12");
-  assert.equal(sessionName("deckhand-org-repo-12", true), "deckhand-org-repo-12-light");
+test("modes apart from work have volumes of their own, research's apart again", () => {
+  assert.equal(sessionName("deckhand-org-repo-12", "work"), "deckhand-org-repo-12");
+  assert.equal(sessionName("deckhand-org-repo-12", "brainstorm"), "deckhand-org-repo-12-light");
+  assert.equal(sessionName("deckhand-org-repo-12", "review"), "deckhand-org-repo-12-light");
   // Research runs' own again: what a web page leaves there never runs with a token.
-  assert.equal(
-    sessionName("deckhand-org-repo-12", true, "research"),
-    "deckhand-org-repo-12-research",
+  assert.equal(sessionName("deckhand-org-repo-12", "research"), "deckhand-org-repo-12-research");
+  // The repo's own modes share the issue's, as their capabilities pick them.
+  assert.equal(sessionName("deckhand-org-repo-12", "audit"), "deckhand-org-repo-12");
+  assert.deepEqual([...RESEARCH], ["research"]);
+  assert.ok(!APART.has("work") && !APART.has("policy") && APART.has("research"));
+});
+
+test("a mode's defaults: the light runs' agent, model and effort, or work's", () => {
+  const settings = {
+    agent: "claude",
+    model: "opus",
+    effort: "high",
+    brainstormAgent: "codex",
+    brainstormModel: "fast",
+    brainstormEffort: "low",
+    review: {},
+    modes: { audit: { session: "fresh" }, own: { agent: "codex", model: "x", effort: "max" } },
+  };
+  assert.equal(brainstormDefaults("brainstorm"), true);
+  assert.equal(brainstormDefaults("work"), false);
+  assert.equal(brainstormDefaults("audit"), false);
+  // A review takes the light runs'; the repo's own modes work's, unless they say otherwise.
+  assert.deepEqual(
+    [customMode(settings, "review").agent, customMode(settings, "review").model],
+    ["codex", "fast"],
   );
-  assert.equal(
-    sessionName("deckhand-org-repo-12", true, "brainstorm"),
-    "deckhand-org-repo-12-light",
+  const audit = customMode(settings, "audit");
+  assert.deepEqual(
+    [audit.agent, audit.model, audit.effort, audit.fresh],
+    ["claude", "opus", "high", true],
   );
+  const own = customMode(settings, "own");
+  assert.deepEqual([own.agent, own.model, own.effort, own.fresh], ["codex", "x", "max", false]);
+});
+
+test("no mode says what its runs may do: no light, open, permissions, ceiling or issue label", async () => {
+  const modes = await import("../listener/modes.mjs");
+  for (const name of ["LIGHT", "OPEN", "isLight", "ceilingOf", "issueLabelOf"]) {
+    assert.equal(modes[name], undefined, name);
+  }
+  for (const [name, mode] of Object.entries(MODES)) {
+    for (const trait of ["light", "open", "permissions", "ceiling", "issueLabel"]) {
+      assert.ok(!(trait in mode), `${name}: ${trait}`);
+    }
+  }
+  // Nor a repo's own mode.
+  const own = customMode({ modes: { audit: { light: true } } }, "audit");
+  assert.ok(!("light" in own));
+  const source = readFileSync(new URL("../listener/modes.mjs", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /\b(light|open|permissions|ceiling)\b\s*:/);
 });
 
 test("entryRun: only the ideas and bugs inboxes' entries are a run each", () => {
@@ -52,16 +104,6 @@ test("every built-in mode's prompt is in prompts/, and copied into the listener'
       new RegExp(`^COPY .*\\bprompts/${prompt.replace(".", "\\.")}\\b`, "m"),
       name,
     );
-  }
-});
-
-test("no mode holds a write ceiling or an issue label: the policies' per-mode files do", async () => {
-  const modes = await import("../listener/modes.mjs");
-  for (const name of ["ceilingOf", "issueLabelOf"]) assert.equal(modes[name], undefined, name);
-  for (const [name, mode] of Object.entries(MODES)) {
-    for (const trait of ["ceiling", "issueLabel"]) assert.ok(!(trait in mode), `${name}: ${trait}`);
-    // A token only reads: each write gets its own (github-writes.mjs writePermissions()).
-    for (const level of Object.values(mode.permissions || {})) assert.equal(level, "read", name);
   }
 });
 

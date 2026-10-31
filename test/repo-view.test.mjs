@@ -31,7 +31,6 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
       "modes:",
       "  audit:",
       "    instructions: .github/audit.md",
-      "    light: true",
     ].join("\n"),
   );
   assert.deepEqual(byKey(settings, "users"), {
@@ -50,8 +49,8 @@ test("settings: the repo's values tagged as such, the operator's otherwise", () 
   assert.equal(byKey(settings, "dockerfile").value, "docker/Dockerfile");
   assert.equal(byKey(settings, "dockerfile").source, "refused");
   assert.match(byKey(settings, "dockerfile").note, /allow_dockerfile: true/);
-  // A light mode takes the brainstorms' model and effort by default (customMode()).
-  assert.equal(byKey(settings, "modes.audit").value, ".github/audit.md · best/medium · light");
+  // A mode takes work's model and effort by default (customMode()).
+  assert.equal(byKey(settings, "modes.audit").value, ".github/audit.md · sonnet/medium");
   assert.deepEqual(byKey(settings, "limits"), {
     key: "limits",
     value: "2 CPUs, 4g memory, 2048 processes",

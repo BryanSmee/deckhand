@@ -42,7 +42,7 @@ export function projectName(value) {
 export const PROJECT_STEPS = ["start", "ready", "merged"];
 const PROJECT_KEYS = ["project", "field", ...PROJECT_STEPS];
 
-const MODE_KEYS = ["instructions", "light", "session", "agent", "model", "effort", "speed"];
+const MODE_KEYS = ["instructions", "session", "agent", "model", "effort", "speed"];
 
 const REVIEW_KEYS = [
   "on",
@@ -787,7 +787,6 @@ function modeRow(settings, name) {
   const traits = [
     mode.instructions,
     `${mode.model}/${mode.effort}${mode.speed === "fast" ? "/fast" : ""}`,
-    mode.light ? "light" : null,
     mode.fresh ? "fresh session" : null,
   ];
   return {
@@ -856,7 +855,6 @@ function parseMode(name, mode, settings, config, fail) {
   const before = settings.modes[id];
   const own = {
     instructions: null,
-    light: false,
     session: "issue",
     agent: null,
     model: null,
@@ -869,14 +867,20 @@ function parseMode(name, mode, settings, config, fail) {
     fail(`${where}.${key}`, what, fix);
   };
   for (const [key, value] of Object.entries(mode)) {
-    if (!MODE_KEYS.includes(key)) {
+    if (key === "light") {
+      // Gone (#498): what a mode's runs get and write is its policies', which a repo written
+      // before kept as the trait. An error rather than ignored: its runs would get what
+      // Deckhand's defaults give the repo's modes, a branch and its writes.
+      bad(
+        key,
+        "gone: what a mode's runs get and write is decided by the policies now",
+        `Remove ${where}.light, and give the mode what its runs may do in .deckhand/policy/: \`allow_capabilities\` without \`push\` for a mode that only reads and answers (docs/repo-config.md#modes).`,
+      );
+    } else if (!MODE_KEYS.includes(key)) {
       bad(key, `unknown key (expected ${MODE_KEYS.join(", ")})`);
     } else if (key === "instructions") {
       own.instructions = repoPath(value);
       if (!own.instructions) bad(key, "expected a path in the repository (relative, no ..)");
-    } else if (key === "light") {
-      if (typeof value === "boolean") own.light = value;
-      else bad(key, "expected true or false");
     } else if (key === "session") {
       if (["issue", "fresh"].includes(value)) own.session = value;
       else bad(key, "expected issue or fresh");

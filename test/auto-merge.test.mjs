@@ -680,8 +680,7 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
     pr: { additions: 12 },
     yaml: `${MERGE}  request: [alice]\n`,
     // The run that opened it: a repository mode's.
-    runOf: (key, pr) =>
-      key === "org/repo#12" && pr.number === 5 ? { taskMode: "plan", light: false } : null,
+    runOf: (key, pr) => (key === "org/repo#12" && pr.number === 5 ? { taskMode: "plan" } : null),
   });
   const { text, denials } = await s.reviews.dryRun({
     repo: "org/repo",
@@ -753,8 +752,8 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   assert.match(samples[0].input.time, /^\d{4}-\d\d-\d\dT/);
   // Built as the real decision's input (run-policy.mjs runInput()): its traits, the target.
   assert.deepEqual(
-    [samples[1].input.light, samples[1].input.continues, samples[1].input.trigger],
-    [true, false, "comment"],
+    [samples[1].input.fresh, samples[1].input.continues, samples[1].input.trigger],
+    [false, false, "comment"],
   );
   assert.deepEqual(samples[1].input.target.kind, "pr");
   assert.equal(samples[2].input.issue, 12);
@@ -842,17 +841,18 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
 test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's own mode", () => {
   const pr = { number: 5, labels: [{ name: "ui" }], user: { login: "bob" } };
   const traits = (samples) =>
-    samples.map((x) => [x.input.mode, x.input.custom_mode, x.input.light, x.input.reason]);
+    samples.map((x) => [x.input.mode, x.input.custom_mode, x.input.reason]);
   assert.deepEqual(traits(githubSamples("Org/Repo", pr)), [
-    ["work", false, false, null],
-    ["brainstorm", false, true, null],
-    ["work", false, false, null],
+    ["work", false, null],
+    ["brainstorm", false, null],
+    ["work", false, null],
   ]);
-  // The first mode that may write: a light one's ceiling refuses the comment anyway.
-  const own = githubSamples("Org/Repo", pr, { ask: { light: true }, plan: { light: false } });
-  assert.deepEqual(traits(own)[2], ["plan", true, false, null]);
+  // The repo's first mode: what its policies allow it is theirs to say.
+  const own = githubSamples("Org/Repo", pr, { plan: {}, ask: {} });
+  assert.deepEqual(traits(own)[2], ["plan", true, null]);
   assert.equal(own.length, 4);
   assert.equal(own[2].what, "a comment on it in the repository's mode plan");
+  assert.ok(own.every((x) => !("light" in x.input)));
   // The work run reading CI's checks: the run's fields, no target or change.
   assert.deepEqual(own[3], {
     what: "a work run's read of CI's checks",
@@ -860,16 +860,12 @@ test("githubSamples: a work run's comment, a brainstorm's, and one in the repo's
       repo: "org/repo",
       mode: "work",
       custom_mode: false,
-      light: false,
       reason: null,
       issue: 5,
       action: "read_checks",
       actions: ["read_checks"],
     },
   });
-  const light = githubSamples("Org/Repo", pr, { ask: { light: true } });
-  assert.deepEqual(traits(light)[2], ["ask", true, true, null]);
-  assert.match(light[2].what, /mode ask \(light: Deckhand's default policies allow it no write\)$/);
   assert.deepEqual(own[2].input.target, {
     kind: "own_pr",
     number: 5,

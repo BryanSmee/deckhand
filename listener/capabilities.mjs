@@ -7,7 +7,7 @@
 // policy says: each capability's dependencies, and the risky combinations. One function,
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
 // config page shows it for each mode (repos.mjs). Format: ../docs/repo-config.md#capabilities.
-import { BUILT_IN, customMode, isLight, MODES, OPEN } from "./modes.mjs";
+import { BUILT_IN, customMode, MODES, RESEARCH } from "./modes.mjs";
 import { ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 
@@ -240,15 +240,6 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
     if (c.grant && !grant?.[c.grant]) return row("not-granted", files, grantNote(c));
     return row("used", files);
   });
-  // A light mode's run doesn't get `push`, whatever the policies allow: it has no branch to push
-  // or open a pull request from (its `light` trait, until #498), and it would start as a work run in the light runs' volumes, which other runs reset without
-  // stashing (sandbox-spec.mjs sessionOf()). What needs it goes with it (narrow()).
-  const push = capabilities.find((c) => c.name === "push");
-  if (mode !== null && isLight({ settings }, mode) && push.used) {
-    const reason = `\`${mode}\` is a light mode: it has no branch to push or open a pull request from until #498`;
-    Object.assign(push, { status: "denied", used: false, files: [], reason });
-    warnings.push(`\`push\` isn't used: ${reason}`);
-  }
   const dropped = narrow(capabilities, warnings);
   for (const c of capabilities) {
     if (c.status === "not-granted" && !dropped.has(c.name) && !BY_NAME.get(c.name).optional) {
@@ -288,8 +279,8 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
     );
   }
   // A research run's input is the issue's thread, which prepareBare() writes, and its volumes
-  // are its own (modes.mjs sessionName()): it starts with nothing of the repository's.
-  if (OPEN.has(mode) && used.includes("pull")) {
+  // are its own (modes.mjs `volumes`): it starts with nothing of the repository's.
+  if (RESEARCH.has(mode) && used.includes("pull")) {
     errors.push(
       `a \`${mode}\` run can't have \`pull\`: it reads the issue's thread, with nothing of the repository's`,
     );
@@ -385,7 +376,7 @@ export function modesOf(settings, grant = null) {
   const builtIn = Object.keys(MODES)
     .filter((mode) => mode !== "policy")
     .filter((mode) => mode !== "review" || !!customMode(settings, "review"))
-    .filter((mode) => !OPEN.has(mode) || !!grant?.allowResearch);
+    .filter((mode) => !RESEARCH.has(mode) || !!grant?.allowResearch);
   const own = Object.keys(settings?.modes ?? {}).filter((mode) => !BUILT_IN.has(mode));
   return [
     ...builtIn.map((mode) => ({ mode, custom: false })),

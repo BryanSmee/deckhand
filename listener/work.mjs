@@ -87,7 +87,7 @@ import { createInputSeeder } from "./inputs.mjs";
 import { createRepoCheck } from "./repo-check.mjs";
 import { MAX_NAME, createLanes, laneName } from "./lanes.mjs";
 import { leadsTo, planSummary, readTree, waitsOf } from "./plans.mjs";
-import { isLight } from "./modes.mjs";
+import { isApart } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { latestReview } from "./reviews.mjs";
 import { issueList, waitsFor } from "./waits.mjs";
@@ -1127,7 +1127,7 @@ export function createWorkApi({
     const at = find(key);
     const name = `#${parseKey(key).number}`;
     if (at < 0) refuse(409, `${name} isn't waiting for a slot: only queued tasks move.`);
-    if (isLight(queue[at], queue[at].pending.at(-1)?.mode)) {
+    if (isApart(queue[at].pending.at(-1)?.mode)) {
       refuse(409, `${name} is a brainstorm: brainstorms start before work runs anyway.`);
     }
     const other = before ?? after;

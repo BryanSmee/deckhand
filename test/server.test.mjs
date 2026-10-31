@@ -3022,12 +3022,11 @@ model: opus
 modes:
   audit:
     instructions: .deckhand/audit.md
-    light: true
     model: sonnet
     effort: high
 `;
   // What the audit mode gets, as the repo's own modes need its allow rules (capabilities.mjs):
-  // a light run's; and that it runs.
+  // what a brainstorm gets, no branch nor setup; and that it runs.
   const AUDIT_POLICY = `${AUDIT_RUNS}
 allow_capabilities contains "pull"
 allow_capabilities contains "image:repo"
@@ -3426,7 +3425,7 @@ allow_capabilities contains "read:pulls"
     await listener.until("org/repo#pr-13: CI failed on head-1, starting a CI fix run (1 of 1)");
   });
 
-  test("/mode audit: the repo's light mode, its instructions and model, the repo's grants", async (t) => {
+  test("/mode audit: the repo's mode without `push`, its instructions and model, the repo's grants", async (t) => {
     const { dir, github, listener, send } = await listen(
       t,
       {
@@ -3455,7 +3454,7 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /^TASK_ISSUE=$/m);
     assert.match(runEnv, /^SANDBOX_SETUP=$/m);
     assert.match(runEnv, /^TASK_PROMPT=You are in the "audit" mode of this repository/m);
-    assert.match(runEnv, /This mode only comments/);
+    assert.match(runEnv, /You can't push, create a branch or open a pull request/);
     assert.match(runEnv, /Read the diff and list the risks\./);
     assert.match(runEnv, /^TASK_MESSAGE=Mind the tests\.$/m);
     // Comments only: its token reads, what its capabilities give (no `read:actions` here).
@@ -3475,7 +3474,8 @@ allow_capabilities contains "read:pulls"
       "registry.npmjs.org",
       "pypi.org",
     ]);
-    // A light run isn't checked for a fork's code (github-forks.mjs): GitHub's file hosts stay
+    // A run without `push`, `setup` or `docker` isn't checked for a fork's code
+    // (github-forks.mjs): GitHub's file hosts stay
     // plain hosts for it, GitHub's own relayed as for any run.
     const answers = egressAnswers(dir);
     assert.equal(answers["raw.githubusercontent.com"].relay, false);

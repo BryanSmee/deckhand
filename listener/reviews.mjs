@@ -1054,13 +1054,12 @@ export function githubSamples(repo, pr, modes = {}) {
     author: pr.user?.login ?? null,
   });
   const change = { fields: ["body"], labels_added: [], labels_removed: [] };
-  const sample = (what, mode, kind, issue, { custom_mode = false, light = false } = {}) => ({
+  const sample = (what, mode, kind, issue, { custom_mode = false } = {}) => ({
     what,
     input: {
       repo: repo.toLowerCase(),
       mode,
       custom_mode,
-      light,
       reason: null,
       issue,
       action: "comment",
@@ -1071,15 +1070,13 @@ export function githubSamples(repo, pr, modes = {}) {
   });
   const samples = [
     sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
-    sample("a brainstorm's comment on it", "brainstorm", "pr", null, { light: true }),
+    sample("a brainstorm's comment on it", "brainstorm", "pr", null),
   ];
-  // A mode that may write: Deckhand's default allow rules give a light one no write.
-  const names = Object.keys(modes ?? {});
-  const own = names.find((name) => !modes[name].light) ?? names[0];
+  // The repo's first mode: what its own policies allow it, beside Deckhand's.
+  const [own] = Object.keys(modes ?? {});
   if (own) {
-    const light = !!modes[own].light;
-    const what = `a comment on it in the repository's mode ${own}${light ? " (light: Deckhand's default policies allow it no write)" : ""}`;
-    samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true, light }));
+    const what = `a comment on it in the repository's mode ${own}`;
+    samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true }));
   }
   const { target: _, change: __, ...work } = samples[0].input;
   samples.push({
@@ -1100,7 +1097,6 @@ export function linkSample(repo, pr, issue = null) {
       repo: repo.toLowerCase(),
       mode: "work",
       custom_mode: false,
-      light: false,
       reason: null,
       issue: number,
       labels: (issue?.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),

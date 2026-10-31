@@ -15,7 +15,7 @@ import {
   workItem,
 } from "./events.mjs";
 import { getJson } from "./github.mjs";
-import { customMode, entryRun, isLight } from "./modes.mjs";
+import { customMode, entryRun, isApart } from "./modes.mjs";
 import { liveMessage } from "./prompts.mjs";
 import { hasOpenQuestions, stillAsks } from "./questions.mjs";
 import {
@@ -152,17 +152,17 @@ export function createTasks(ctx) {
     return !!takeOptions(item.text ?? "", {});
   }
 
-  // Whether the repo's `wait_for_answers` holds `item` back: work, or a mode of the repo's that
-  // isn't light, on an issue (`issue`: as GitHub has it) that carries NEEDS_INPUT_LABEL for its
-  // own open questions, not all answered by their ticked boxes. Brainstorms and light modes
-  // still run: they can help answer. A run that stopped to ask isn't held either: any comment
+  // Whether the repo's `wait_for_answers` holds `item` back: work, or a mode of the repo's, on an
+  // issue (`issue`: as GitHub has it) that carries NEEDS_INPUT_LABEL for its own open questions,
+  // not all answered by their ticked boxes. Brainstorms and the other modes apart from work
+  // (modes.mjs `volumes`) still run: they can help answer. A run that stopped to ask isn't held either: any comment
   // continues it.
   function unanswered(item, issue) {
     if (!item.settings?.waitForAnswers || !config.needsInputLabel || !issue) return false;
     if (item.kind !== "issue" || item.replyTo !== item.number) return false;
     const mode = item.modeLine ?? (item.trigger === "work" ? "work" : null);
     const own = customMode(item.settings, mode);
-    if (mode !== "work" && (!own || own.light)) return false;
+    if (mode !== "work" && (!own || isApart(mode))) return false;
     if (!hasLabel(issue.labels, config.needsInputLabel)) return false;
     // Ticks in the bot's issue (an inbox run's), or that the listener didn't take for answers
     // (the bot's, someone not allowed: questions.mjs editedInput()), answer nothing until an
@@ -300,9 +300,10 @@ export function createTasks(ctx) {
     return item.mode;
   }
 
-  // A light run is what the task's next run will be: it goes first, after a shorter pause.
+  // A run apart from work (modes.mjs `volumes`) is what the task's next run will be: it goes
+  // first, after a shorter pause.
   function talking(task) {
-    return isLight(task, task.pending.at(-1)?.mode);
+    return isApart(task.pending.at(-1)?.mode);
   }
 
   function debounce(task) {

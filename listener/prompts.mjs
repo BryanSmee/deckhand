@@ -91,7 +91,7 @@ ${modeInstructions.analyze}
 ${text ? `\nThe selection:\n\n${text}\n` : ""}`;
 }
 
-// A research run (modes.mjs OPEN) has no token to read the issue with: its thread is the run's
+// A research run (modes.mjs RESEARCH) has no token to read the issue with: its thread is the run's
 // file TASK_DIGEST names (preparation.mjs threadDigest()).
 function researchPrompt(task) {
   return `Research what GitHub issue #${task.number} of ${task.repo} asks. Its thread (title, description
@@ -230,8 +230,8 @@ function prPush(branches) {
 const NO_PUSH =
   "this run doesn't have the `push` capability (the repository's or the operator's policies decide it)";
 
-// A work run, or one of the repo's own modes that isn't light, without the `push` capability:
-// it reads and changes the clone, and its reply carries the changes.
+// A work run without the `push` capability: it reads and changes the clone, and its reply carries
+// the changes.
 function noPushPrompt(task, rules = "") {
   const n = task.number;
   const read =
@@ -332,7 +332,7 @@ ${common}`;
 // A run in one of the repo's own modes: its instructions (`instructions`, the file's text
 // from the default branch) after what every run of that kind is told. The agent's
 // instructions have the generic rules, as for work.
-function modePrompt(task, own, instructions, branches = [], grant = null) {
+function modePrompt(task, own, instructions, branches = [], grant = null, caps = null) {
   const { number: n, repo } = task;
   const { base } = task;
   const where =
@@ -340,18 +340,20 @@ function modePrompt(task, own, instructions, branches = [], grant = null) {
       ? `pull request #${n} of ${repo}. Read it with \`gh pr view ${n} --comments\` and \`gh pr diff ${n}\``
       : `GitHub issue #${n} of ${repo}. Read it with \`gh issue view ${n} --comments\`, and its pull
 request if it has one (\`gh pr list --state all --search ${n}\`)`;
-  const rules = own.light
-    ? `This mode only comments: never write or edit code, create a branch, commit, push, open a
-pull request or create issues (your GitHub token can only read). The clone in /workspace is
-set up for reading, not running: the project's setup was skipped. The base branch was
-fetched from \`origin\` at the start of this run.`
+  // Its capabilities (null: not known yet, as a run that pushes): without `push`, no branch.
+  const push = !caps || caps.has("push");
+  const setup = !caps || caps.has("setup");
+  const rules = !push
+    ? `You can't push, create a branch or open a pull request: ${NO_PUSH}. What you change in
+the clone in /workspace stays there: put what matters in your final message.${setup ? "" : " The project's setup was skipped: the clone is set up for reading, not running."} The base
+branch was fetched from \`origin\` at the start of this run.`
     : task.kind === "pr"
       ? `Check the pull request out with \`gh pr checkout ${n}\` if you change code, and ${prPush(branches)}.
 Never push to ${base}.`
       : `The sandbox has already checked out the issue's branch, pushed it and opened a draft pull
 request (\`gh pr view\` shows it): if you change code, commit and push to that branch
 (Deckhand refuses pushes to branches not named ${issueBranches(n, branches)}). Never push to ${base}.`;
-  const note = own.light ? "" : workflowsNote(task, grant, branches);
+  const note = push ? workflowsNote(task, grant, branches) : "";
   const workflows = note && `\n${note}`;
   return `You are in the "${own.name}" mode of this repository, on ${where}.
 
@@ -406,9 +408,9 @@ export function promptFor(
   if (mode === "review")
     return reviewPrompt(task, pull ?? task.number, instructions, text, allowed, ciNote);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
-  // Work and the repo's own modes that aren't light expect a branch: without `push`, told so.
-  if (caps && !caps.has("push") && !own?.light) return noPushPrompt(task, ownRules);
-  if (own) return modePrompt(task, own, instructions, branches, grant);
+  // Work expects a branch: without `push`, told so. The repo's own modes say it in theirs.
+  if (own) return modePrompt(task, own, instructions, branches, grant, caps);
+  if (caps && !caps.has("push")) return noPushPrompt(task, ownRules);
   return onboardingWork ? onboardingWorkPrompt(task) : initialPrompt(task, branches, grant);
 }
 
