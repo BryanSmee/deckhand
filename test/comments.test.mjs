@@ -218,3 +218,54 @@ test("the listener's reactions: claimed before GitHub is asked, on any comment, 
   discussions.received({ repo: "org/repo", comment: { id: 7, discussion: true, node_id: "D" } });
   assert.equal(discussions.listenerReacted("org/repo", "issue_comment:7", "eyes"), false);
 });
+
+test("the listener's reactions with the github service: noted there before GitHub is asked, reactions.json handed over", async (t) => {
+  const dir = tempDir(t);
+  const { writeFileSync, readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  // What a listener from before the github service saved.
+  writeFileSync(
+    join(dir, "reactions.json"),
+    JSON.stringify({ "org/repo issue_comment:3 rocket": 1 }),
+  );
+  const order = [];
+  const shared = async (repo, subject, content, held) => {
+    order.push(["claim", repo, subject, content, held]);
+  };
+  const github = async (repo, method, path) => {
+    order.push([method, path]);
+    if (method === "DELETE") return new Response(null, { status: 204 });
+    return Response.json({ id: 40, content: "eyes" }, { status: 201 });
+  };
+  const comments = createComments({ config: { dataDir: dir }, github, shared, log: () => {} });
+  // The old ones go to the service, then leave the file.
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(order.shift(), ["claim", "org/repo", "issue_comment:3", "rocket", true]);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "reactions.json"), "utf8")), {});
+  const item = { repo: "Org/Repo", comment: { id: 5 } };
+  comments.received(item);
+  await item.eyes;
+  await comments.settle(item, "ok");
+  assert.deepEqual(order, [
+    ["claim", "org/repo", "issue_comment:5", "eyes", true],
+    ["POST", "/repos/Org/Repo/issues/comments/5/reactions"],
+    ["DELETE", "/repos/Org/Repo/issues/comments/5/reactions/40"],
+    ["claim", "org/repo", "issue_comment:5", "eyes", false],
+    ["claim", "org/repo", "issue_comment:5", "rocket", true],
+    ["POST", "/repos/Org/Repo/issues/comments/5/reactions"],
+  ]);
+  // A service that doesn't answer: logged, the reaction still added.
+  const logs = [];
+  const down = createComments({
+    config: {},
+    github,
+    shared: async () => {
+      throw new Error("the github service: 503");
+    },
+    log: (line) => logs.push(line),
+  });
+  const other = { repo: "org/repo", comment: { id: 6 } };
+  down.received(other);
+  assert.equal(await other.eyes, 40);
+  assert.match(logs[0], /Noting the listener's reaction: the github service: 503/);
+});

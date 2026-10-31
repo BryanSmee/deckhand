@@ -10,10 +10,10 @@
 // broker gave it (../listener/broker.mjs): check() and bySandbox() give them the same object
 // for the same run in this copy (their per-run memories are by object), its fields and state
 // read again from the store on each call.
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 import { NOT_ITS_SANDBOX } from "../listener/broker.mjs";
-import { IDLE_MS } from "../listener/upstream.mjs";
 
 // A run lasts 7 days at most (its agent token's lifetime): its record, a day more.
 export const RUN_TTL_MS = 8 * 24 * 60 * 60_000;
@@ -22,6 +22,10 @@ export const CLAIM_TTL_MS = 30 * 24 * 60 * 60_000;
 // The events the orchestrator reads (pushes, notes for a run's log, pull requests changed).
 export const STREAM = "github";
 const STREAM_MAX = 10_000;
+
+// How long a call's slot counts once its copy stops renewing it, and how often it is renewed.
+export const SLOT_MS = 60_000;
+const SLOT_RENEW_MS = SLOT_MS / 3;
 
 const hash = (value) => createHash("sha256").update(String(value)).digest("hex");
 
@@ -47,8 +51,16 @@ export function runFields(body) {
     // and the label its questions wait under: the orchestrator's settings, as the run started.
     users: strings(body.users).map((u) => u.toLowerCase()),
     needsInputLabel: string(body.needsInputLabel),
-    // A run from before tokens: its secret's hash, never the secret.
+    // A run from before tokens: its secret's hash, never the secret, and its fingerprints, which
+    // its writes are redacted by (lib/fingerprints.mjs).
     secretHash: /^[0-9a-f]{64}$/.test(body.secretHash ?? "") ? body.secretHash : null,
+    secretPrints:
+      typeof body.secretPrints?.salt === "string" && Array.isArray(body.secretPrints.prints)
+        ? {
+            salt: body.secretPrints.salt,
+            prints: body.secretPrints.prints.filter((p) => typeof p === "string").slice(0, 1000),
+          }
+        : null,
   };
 }
 
@@ -59,6 +71,8 @@ export function createRuns({
   keys = () => new Map(),
   unknownKey = async () => {},
   now = Date.now,
+  setTimer = setTimeout,
+  clearTimer = clearTimeout,
   log = () => {},
 }) {
   const key = (id) => `runs/${id}`;
@@ -132,10 +146,15 @@ export function createRuns({
         note: (message) => void event({ type: "note", run: id, message }),
         pushed: ({ branch, at }) => void event({ type: "pushed", run: id, branch, at }),
         update: (fn) => update(run, fn),
+        scrubSecret: (text) => text,
       };
       objects.set(id, run);
     }
+    if (run.secretPrints !== JSON.stringify(fields.secretPrints)) {
+      run.scrubSecret = fingerprintRedactor(fields.secretPrints);
+    }
     Object.assign(run, fields, {
+      secretPrints: JSON.stringify(fields.secretPrints),
       created: found?.created ?? [],
       reruns: found?.reruns ?? [],
     });
@@ -207,22 +226,47 @@ export function createRuns({
     return load(await store.get(`sandboxes/${sandbox}`));
   }
 
-  // MAX_IN_FLIGHT across the copies: a counter in the store. It expires with a call's longest
-  // idle time, from its first call: a copy that stops in the middle of calls leaves them counted
-  // that long at most.
+  // MAX_IN_FLIGHT across the copies: the run's calls in flight, one slot each in the store
+  // ({ id, until }), taken and given back with compare-and-set. A slot is renewed while its call
+  // goes on (SLOT_RENEW_MS), and lapses SLOT_MS after a copy stopped renewing it (a crash): a
+  // long call stays counted, a lost one doesn't hold the run's place for long.
+  const slotsKey = (run) => `inflight/${run.id}`;
+  async function slots(run, change) {
+    for (;;) {
+      const stored = await store.get(slotsKey(run));
+      const live = (stored ?? []).filter((slot) => slot.until > now());
+      const next = change(live);
+      if (next === null) return false;
+      if (await store.compareAndSet(slotsKey(run), stored, next, { ttlMs: SLOT_MS })) return true;
+    }
+  }
   const inFlight = {
+    // → the slot taken, or null when the run has `max` calls in flight already.
     async take(run, max) {
-      const n = await store.increment(`inflight/${run.id}`, 1, { ttlMs: IDLE_MS });
-      if (n <= max) return true;
-      await inFlight.release(run);
-      return false;
+      const id = randomUUID();
+      const taken = await slots(run, (live) =>
+        live.length >= max ? null : [...live, { id, until: now() + SLOT_MS }],
+      );
+      if (!taken) return null;
+      const slot = { id, timer: setTimer(() => renew(run, slot), SLOT_RENEW_MS) };
+      slot.timer.unref?.();
+      return slot;
     },
-    async release(run) {
-      const n = await store.increment(`inflight/${run.id}`, -1, { ttlMs: IDLE_MS });
-      // Counted again after it expired: from nothing.
-      if (n < 0) await store.increment(`inflight/${run.id}`, -n, { ttlMs: IDLE_MS });
+    async release(run, slot) {
+      clearTimer(slot.timer);
+      slot.released = true;
+      await slots(run, (live) => live.filter((s) => s.id !== slot.id));
     },
   };
+  function renew(run, slot) {
+    slots(run, (live) => live.map((s) => (s.id === slot.id ? { ...s, until: now() + SLOT_MS } : s)))
+      .catch((error) => log(`GitHub service: a call's slot (${error.message})`))
+      .finally(() => {
+        if (slot.released) return;
+        slot.timer = setTimer(() => renew(run, slot), SLOT_RENEW_MS);
+        slot.timer.unref?.();
+      });
+  }
 
   // What GitHub advertised to the run's git (../listener/github-forks.mjs `shared`): appended
   // to one blob per run, as JSON lines.

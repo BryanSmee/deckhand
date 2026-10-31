@@ -541,12 +541,12 @@ for that call (below), the listener's own with one it never gets.
 
 What each caller may do (`github/service.mjs` `ROUTES`, checked with their service tokens first):
 
-| Caller       | May                                                                                                                                                                                                                                                                                                   |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| proxy        | the sandboxes' calls: the [GitHub gateway](#the-github-gateway) (`/relay/<host>/…`) and the git gateway (`/git/…`), the network (or pod) they came from vouched for (`X-Deckhand-Sandbox`), their own credential passed on apart (`X-Deckhand-Run-Authorization`)                                     |
-| orchestrator | its own GitHub calls, reads and writes, as a repository's installation (`/as/<owner>/<repo>/<path>`), GraphQL, as the App (`/as-app/…`: its deliveries, redelivering one); the runs it starts and ends (`/runs/<id>`), its reactions, the events; /setup's conversion; the sandboxes' calls it relays |
-| edge         | reads only: `GET`s as a repository's installation, as the App or one installation (the repositories it lists), GraphQL without a mutation (or a subscription), the App's public parts                                                                                                                 |
-| runner       | a repository's tarball and a file's blob id, nothing else of GitHub's                                                                                                                                                                                                                                 |
+| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| proxy        | the sandboxes' calls: the [GitHub gateway](#the-github-gateway) (`/relay/<host>/…`) and the git gateway (`/git/…`), the network (or pod) they came from vouched for (`X-Deckhand-Sandbox`), their own credential passed on apart (`X-Deckhand-Run-Authorization`)                                                                                                                        |
+| orchestrator | its own GitHub calls, reads and writes, as a repository's installation (`/as/<owner>/<repo>/<path>`), GraphQL, as the App (`/as-app/…`: reads, and one write, a delivery's redelivery: never a token minted, the webhook changed or an installation removed); the runs it starts and ends (`/runs/<id>`), its reactions, the events; /setup's conversion; the sandboxes' calls it relays |
+| edge         | reads only: `GET`s as a repository's installation, as the App or one installation (the repositories it lists), GraphQL without a mutation (or a subscription), the App's public parts                                                                                                                                                                                                    |
+| runner       | a repository's tarball and a file's blob id, nothing else of GitHub's                                                                                                                                                                                                                                                                                                                    |
 
 The listener holds edge and the orchestrator until #506, and calls as the orchestrator. Every
 orchestrator call that changes something carries its fencing epoch, refused when stale (`409`),
@@ -564,8 +564,9 @@ posted, the reactions it added and the workflow runs it reran are changed with c
 slot is taken; and each is kept before GitHub's answer ends for the sandbox (`settle`,
 `listener/upstream.mjs`), so that its next call sees it, whichever copy takes it. The listener's
 own reactions are noted there before GitHub is asked (`PUT /reactions`), as reactions.json noted
-them in the listener before. The limit of 16 calls in flight per run is a counter in the store
-(an increment with a TTL), what GitHub advertised to a run's git is shared too (a fetch's pack
+them in the listener before. The limit of 16 calls in flight per run is a set of slots in the
+store, one per call, taken and given back with compare-and-set, renewed while its call goes on
+and lapsing a minute after a copy stops renewing it (a crash), what GitHub advertised to a run's git is shared too (a fetch's pack
 request may reach the other copy), and the pushes, a run's notes and the pull requests runs
 change reach the orchestrator as events it acknowledges. Each copy keeps its own installation
 tokens and git mirrors: caches only.
@@ -580,7 +581,23 @@ on no caller's network.
 **The key's move.** A listener from before the service hands its key over at start (`PUT /app`,
 the orchestrator alone; the same App's only: another one's is refused), then removes it from
 its `app.json`. A new App's key never reaches the listener: /setup has the service convert the
-manifest's code (`POST /app/manifest`), which keeps the key and answers with the rest.
+manifest's code (`POST /app/manifest`), which keeps the key and answers with the rest. GitHub
+converts a code once: the rest is kept beside the key for an hour (`setup.json`), so that a
+listener that didn't get the answer gets it by asking again with the same code (its /setup
+callback loaded again), and goes then. A refused handover (another App's key there) is said
+once in the listener's log, and the key stays in its `app.json` until the operator removes one
+of the two.
+
+**The operator's credentials** (the agents' keys, the plans' logins) are no service's but the
+listener's (the models service's, #504): the github service redacts them from the runs' writes
+without holding them, by their **fingerprints** (`lib/fingerprints.mjs`): the listener sends a
+salted SHA-256 of each whole credential, with its length and a 31-bit rolling hash that finds
+the candidates quickly (`PUT /fingerprints`, again when a login is refreshed), and the gateway
+redacts each part of a write of that length whose hashes match.
+Never a hash of one of its parts: parts that overlap would give a credential away a character at
+a time, from what is known of its shape. So a credential cut short in a write isn't found, where
+`redact()` would find it down to 16 characters: the cost of the service not holding it. A run
+from before tokens' secret goes there the same way.
 
 ### Service tokens
 
@@ -700,8 +717,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 - **Writes are redacted before GitHub gets them.** The body of every call but a read (`GET`,
   `HEAD`) and a fetch's pack request goes through the same redaction as the run's reply and
   log: the run's tokens (the one the call carries, and any by their shape), the tokens used for
-  the run and anything shaped like a GitHub token (the operator's agent credentials aren't
-  among them: the github service holds none, and they never reach a sandbox),
+  the run, anything shaped like a GitHub token, and the operator's credentials, which the github
+  service holds none of, by their fingerprints ([The github service](#the-github-service)),
   in each string of its JSON (so an escaped character can't split one), replaced in place so
   the rest of the body goes on as it was sent, then as text (a body that isn't JSON; one
   that isn't UTF-8, byte for byte). GraphQL is redacted that way too, its query and variables, inline literals

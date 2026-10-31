@@ -33,6 +33,7 @@ import { pipeline } from "node:stream/promises";
 import { RUN_AUTH_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { createFence } from "../lib/fence.mjs";
+import { fingerprintRedactor, MAX_PRINTS } from "../lib/fingerprints.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { repoAllowed } from "../listener/config.mjs";
@@ -53,6 +54,10 @@ import { createRuns, STREAM } from "./runs.mjs";
 import { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER } from "./client.mjs";
 export { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER };
 
+// Where the operator's credentials' fingerprints are kept, and how often a copy reads them.
+const FINGERPRINTS_KEY = "fingerprints";
+const FINGERPRINTS_MS = 10_000;
+
 const SANDBOX = ["proxy", "orchestrator"];
 const READERS = ["edge", "orchestrator"];
 const WRITER = ["orchestrator"];
@@ -70,7 +75,10 @@ export const ROUTES = {
   ...each(WRITES, "/as/:owner/:repo/*", WRITER),
   "POST /graphql/:owner/:repo": READERS,
   "GET /as-app/*": READERS,
-  ...each(WRITES, "/as-app/*", WRITER),
+  // The App's one write the listener makes: a delivery GitHub couldn't hand over, asked again
+  // (redeliveries.mjs). Never a token minted (`…/access_tokens`), a webhook's config changed or
+  // an installation removed: no other write as the App is routed.
+  "POST /as-app/app/hook/deliveries/:id/attempts": WRITER,
   "GET /as-installation/:id/*": READERS,
   // The App.
   "GET /app": READERS,
@@ -81,6 +89,8 @@ export const ROUTES = {
   "GET /runs/:id": WRITER,
   "DELETE /runs/:id": WRITER,
   "PUT /reactions": WRITER,
+  // The operator's credentials' fingerprints, which its gateway redacts by (lib/fingerprints.mjs).
+  "PUT /fingerprints": WRITER,
   "GET /events": WRITER,
   "POST /events/ack": WRITER,
   // The runner's: a repo's files, and a file's blob id, nothing else of GitHub's.
@@ -265,9 +275,10 @@ export function createGithubService({
     clientOf: async (req) => sandboxOf(req),
     runFrom: (sandbox) => runs.bySandbox(sandbox),
     // The run's tokens are the broker's, redacted by their shape (lib/redact.mjs), and the one
-    // the call carries; the operator's agent credentials are no service's but the models': none
-    // here (docs/security.md, The GitHub gateway).
+    // the call carries; the operator's credentials, which this service doesn't hold, by the
+    // fingerprints the orchestrator sends (docs/security.md, The GitHub gateway).
     secrets: () => [],
+    scrub: (run) => (text) => run.scrubSecret(redactor(text)),
     checkWrite: writeChecks.check,
     checkGraphql: graphqlChecks.check,
     checkRead: createReadChecks({ policies }).checkRead,
@@ -290,11 +301,26 @@ export function createGithubService({
     log,
   });
 
+  // The operator's credentials' fingerprints, as the orchestrator last sent them (PUT
+  // /fingerprints), read again from the store every FINGERPRINTS_MS: both copies redact by them.
+  let redactor = (text) => text;
+  let readAt = -Infinity;
+  async function fingerprints() {
+    if (now() - readAt < FINGERPRINTS_MS) return;
+    readAt = now();
+    try {
+      redactor = fingerprintRedactor(await store.get(FINGERPRINTS_KEY));
+    } catch (error) {
+      log(`GitHub service: the operator's credentials' fingerprints (${error.message})`);
+    }
+  }
+
   // --- The sandboxes' calls -----------------------------------------------------------------
 
   // The vouched network kept on the request, apart from its headers (which the gateway passes
   // on to GitHub), and the sandbox's own Authorization put back where the gateways read it.
-  function sandboxCall(req, res, path) {
+  async function sandboxCall(req, res, path) {
+    await fingerprints();
     const sandbox = req.headers[SANDBOX_HEADER];
     req.deckhandSandbox = typeof sandbox === "string" ? sandbox : "";
     const auth = req.headers[RUN_AUTH_HEADER];
@@ -498,6 +524,10 @@ export function createGithubService({
       );
     }
     m = /^\/as-app(\/.*)$/.exec(path);
+    // What ROUTES lets through, checked again here: a GET, or a delivery's redelivery.
+    if (m && req.method !== "GET" && !/^\/app\/hook\/deliveries\/\d+\/attempts$/.test(m[1])) {
+      throw new Refused(403, `no ${req.method} as the App but a delivery's redelivery`);
+    }
     if (m) return asGitHub(req, res, () => app.get().asApp(req.method, m[1] + url.search));
     m = /^\/as-installation\/(\d+)(\/.*)$/.exec(path);
     if (m) {
@@ -531,6 +561,17 @@ export function createGithubService({
         return sendJson(res, state);
       }
       return sendJson(res, { state: await runs.end(id) });
+    }
+    if (path === "/fingerprints") {
+      const { salt, prints } = (await readJsonBody(req, 16 * 1024 * 1024)) ?? {};
+      if (typeof salt !== "string" || !Array.isArray(prints) || prints.length > MAX_PRINTS) {
+        throw new Refused(400, "salt, prints?");
+      }
+      const kept = { salt, prints: prints.filter((p) => typeof p === "string") };
+      await store.set(FINGERPRINTS_KEY, kept);
+      redactor = fingerprintRedactor(kept);
+      readAt = now();
+      return res.writeHead(204).end();
     }
     if (path === "/reactions") {
       const { repo, subject, content, held } = (await readJsonBody(req, 64 * 1024)) ?? {};

@@ -617,3 +617,17 @@ test("reopenedMode: a run's record once the volume its capabilities give it is k
     "restore",
   );
 });
+
+test("a run's reply carries its idempotency key: asked again after a handover, it isn't posted twice", async (t) => {
+  const sent = [];
+  const { ctx, runs, following } = setup(t, {
+    graceMs: 5000,
+    answer: async (target, text, options) => sent.push(options),
+  });
+  ctx.deliver = () => true;
+  runs.cancel("org/repo#12", "bryansmee");
+  await following;
+  assert.equal(sent.length, 1);
+  // The run's id, its key whoever asks.
+  assert.equal(sent[0].key, "run:reply");
+});

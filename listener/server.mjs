@@ -7,7 +7,9 @@
 // previous listener left. How a comment becomes a run, and which module does what:
 // ../docs/architecture.md. No dependencies: node:http, node:crypto. Sandboxes, images and
 // preview hooks are the runner service's (../runner/), the only one with the Docker socket.
+import { createHash } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { fingerprint } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
@@ -93,6 +95,9 @@ const EYES_WAIT_MS = 10_000;
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
 const RELINK_MS = 60000;
+
+// How often the operator's credentials are looked at again, for their fingerprints.
+const FINGERPRINTS_MS = 30_000;
 
 // How often the runs the broker service has are compared with the listener's.
 const RECONCILE_MS = 60 * 60_000;
@@ -222,9 +227,12 @@ function githubGateway() {
           : null;
         if (task && sandbox) task.live.sandbox ??= sandbox;
       }
+      // A run from before tokens: its secret's fingerprints, which its writes are redacted by.
+      const secret = [...ctx.tasks.values()].find((t) => t.live?.id === id)?.live.secret;
       await githubService.runs.put(id, {
         ...fields,
         sandbox: sandbox ?? null,
+        ...(fields.secretHash && secret && { secretPrints: fingerprint([secret]) }),
         users: ctx.usersOf?.(fields.repo) ?? config.users,
         needsInputLabel: config.needsInputLabel,
       });
@@ -297,8 +305,16 @@ let handedOver = Promise.resolve();
       let taken = false;
       handedOver = githubService
         .persist("handing over the App's key", async () => {
-          await githubService.setup.handOver(credentials);
-          taken = true;
+          try {
+            await githubService.setup.handOver(credentials);
+            taken = true;
+          } catch (error) {
+            // Refused for good (another App's key there, say): asking again changes nothing.
+            if (!(error.status >= 400 && error.status < 500)) throw error;
+            console.error(
+              `The GitHub App's key: the github service refused it (${error.message}). It stays in /data/app.json until resolved by hand: remove the github service's app.json (its github-key volume) to take this App's, or this one's key from /data/app.json to keep the service's (docs/setup.md#the-github-service)`,
+            );
+          }
         })
         .then(() => {
           if (!taken || !loadCredentials(config.dataDir)?.pem) return;
@@ -931,6 +947,22 @@ const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
 // Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
 brokerService.consume({ shotsDir });
+// The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
+// writes by without holding them (lib/fingerprints.mjs): sent at start, and again once they
+// change (a plan's login refreshed).
+let printed = null;
+function sendFingerprints() {
+  const secrets = operatorSecrets(ctx).filter((s) => typeof s === "string" && s);
+  const digest = createHash("sha256").update(secrets.join("\0")).digest("hex");
+  if (digest === printed) return Promise.resolve();
+  return githubService.fingerprints(fingerprint(secrets)).then(() => (printed = digest));
+}
+githubService.persist("the operator's credentials' fingerprints", sendFingerprints);
+const printing = setInterval(
+  () => sendFingerprints().catch((error) => log(`GitHub service: fingerprints (${error.message})`)),
+  FINGERPRINTS_MS,
+);
+printing.unref();
 // The github service's: the pushes GitHub took (the run's record, restart.mjs watchPushes()),
 // the lines its gateways add to a run's log, the pull requests runs changed (the dashboard has
 // them at once, whether their delivery comes or not).
@@ -1016,6 +1048,7 @@ process.on("SIGTERM", () => {
   clearInterval(previewing);
   clearInterval(relinking);
   clearInterval(reconciling);
+  clearInterval(printing);
   // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
   brokerService.stop();
   githubService.stop();

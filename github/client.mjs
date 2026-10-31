@@ -121,6 +121,10 @@ export function createGithubClient({
   const claim = (repo, subject, content, held = true) =>
     client.json("PUT", "/reactions", { body: { repo, subject, content, held } });
 
+  // The operator's credentials' fingerprints (lib/fingerprints.mjs fingerprint()'s), which the
+  // service's gateway redacts the runs' writes by: never the credentials themselves.
+  const fingerprints = (body) => client.json("PUT", "/fingerprints", { body });
+
   const setup = {
     info: () => client.json("GET", "/app", { waitMs: 10_000 }),
     // /setup's manifest code → the App's credentials but its key, which the service keeps.
@@ -235,6 +239,7 @@ export function createGithubClient({
     app,
     runs,
     claim,
+    fingerprints,
     setup,
     consume,
     persist,

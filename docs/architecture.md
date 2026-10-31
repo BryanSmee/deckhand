@@ -448,7 +448,8 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   it pushes reaching a fork's objects (the git gateway); its clone is whole, as a blob fetched
   by its id is refused to it);
   redacts every write's body
-  (`redact()`, the run's tokens) and notes it in the run's log; holds each
+  (`redact()`, the run's tokens, and the operator's credentials by their fingerprints,
+  `lib/fingerprints.mjs`) and notes it in the run's log; holds each
   REST write to its built-in checks and the policies' `allow_github` and `deny_github`
   (`github-writes.mjs`, its target's kind looked up with the service's token; Deckhand's
   defaults allow each mode its writes in `policy/mode-<mode>.rego`, and without policies every
@@ -1057,8 +1058,8 @@ from `github-app.mjs` before (`request()`, `asApp()`, `asInstallation()`, `ident
   end (its reruns, for the CI step). Its pushes, the lines the gateways add to its log and the
   pull requests it changed come to the listener as the service's events (`GET /events`,
   acknowledged once handled: `consume()`), as the broker's do.
-- **Two copies** may run on one store: a run's state, its calls in flight (a counter with a
-  TTL), what GitHub advertised to its git, the listener's reactions, the fencing epoch and the
+- **Two copies** may run on one store: a run's state, its calls in flight (a slot each,
+  renewed while it goes on), what GitHub advertised to its git, the listener's reactions, the fencing epoch and the
   idempotency keys are there; installation tokens and git mirrors are each copy's cache. Every
   orchestrator call that changes something carries its epoch (`lib/fence.mjs`, as the
   runner's), and a write may carry an idempotency key, made once however often it is asked: a

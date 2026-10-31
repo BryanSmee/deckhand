@@ -13,7 +13,9 @@ import { RUN_AUTH_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createAppHolder } from "../github/app.mjs";
 import { createGithubClient } from "../github/client.mjs";
+import { createRuns, SLOT_MS } from "../github/runs.mjs";
 import { createGithubService, GITHUB_STATUS, mutates } from "../github/service.mjs";
+import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { allowingPolicies, localBroker, serve, tempDir, testKey } from "./helpers.mjs";
 
@@ -285,9 +287,9 @@ test("a failed write isn't kept for its key: asked again, it is made again", asy
 test("a run's calls: bound to its sandbox, with a token for its repo, its state shared by both copies", async (t) => {
   let reactions = 0;
   const { a, b, run, relayed, call, github } = await setup(t, {
-    answer: (req) => {
+    answer: (req, body) => {
       if (req.method === "POST" && req.url.endsWith("/reactions")) {
-        return [201, { id: 900 + ++reactions, content: "+1" }];
+        return [201, { id: 900 + ++reactions, content: JSON.parse(body).content }];
       }
       if (req.method === "DELETE") return [204];
       if (req.url === "/api/v3/repos/org/repo/issues/comments/5") {
@@ -313,11 +315,25 @@ test("a run's calls: bound to its sandbox, with a token for its repo, its state 
   // One it didn't add: refused, through either copy.
   const other = await relayed(b, r, "DELETE", "/repos/org/repo/issues/comments/5/reactions/42");
   assert.equal(other.status, 403);
-  // The listener's reaction, noted before GitHub is asked, is never the run's.
+  // The listener's reaction, noted through one copy before GitHub is asked, is never the run's
+  // to take off, though the run's came first (GitHub keeps one per user and content).
+  const heart = await relayed(a, r, "POST", "/repos/org/repo/issues/comments/5/reactions", {
+    content: "heart",
+  });
+  assert.equal(heart.status, 201);
   const claimed = await call(a, "orchestrator", "PUT", "/reactions", {
-    body: { repo: "org/repo", subject: "comment:5", content: "heart", held: true },
+    body: { repo: "org/repo", subject: "issue_comment:5", content: "heart", held: true },
   });
   assert.equal(claimed.status, 204);
+  const taken = await relayed(b, r, "DELETE", "/repos/org/repo/issues/comments/5/reactions/902");
+  assert.equal(taken.status, 403);
+  assert.match((await taken.json()).message, /a reaction the listener added there/);
+  // Once the listener took its own off, the run's is its own again.
+  await call(b, "orchestrator", "PUT", "/reactions", {
+    body: { repo: "org/repo", subject: "issue_comment:5", content: "heart", held: false },
+  });
+  const freed = await relayed(a, r, "DELETE", "/repos/org/repo/issues/comments/5/reactions/902");
+  assert.equal(freed.status, 204);
   // The run's state, as the orchestrator reads it at its end, from either copy.
   const state = await (await call(b, "orchestrator", "GET", "/runs/r1")).json();
   assert.deepEqual(state.created, []);
@@ -489,4 +505,81 @@ test("mutates(): what edge may not send over GraphQL", () => {
   assert.equal(mutates("query { a } mutation { b }"), true);
   assert.equal(mutates("subscription { x }"), true);
   assert.equal(mutates("not graphql {"), true);
+});
+
+test("a run's slots in flight: renewed while its calls go on, lapsed once their copy stopped", async () => {
+  let time = 0;
+  const now = () => time;
+  const timers = [];
+  const store = openStore("memory:", { now });
+  const runs = createRuns({
+    store,
+    now,
+    setTimer: (fn) => (timers.push(fn), { unref() {} }),
+    clearTimer: () => {},
+  });
+  const run = { id: "r1" };
+  const first = await runs.inFlight.take(run, 2);
+  const second = await runs.inFlight.take(run, 2);
+  assert.ok(first && second);
+  assert.equal(await runs.inFlight.take(run, 2), null);
+  // Long calls, renewed (their timers fire) past a slot's lifetime: still counted.
+  for (time = 0; time <= 3 * SLOT_MS; time += SLOT_MS / 3) {
+    for (const fire of timers.splice(0)) fire();
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  assert.equal(await runs.inFlight.take(run, 2), null);
+  // One given back: its place, at once; never counted twice, nor below nothing.
+  await runs.inFlight.release(run, first);
+  await runs.inFlight.release(run, first);
+  const third = await runs.inFlight.take(run, 2);
+  assert.ok(third);
+  assert.equal(await runs.inFlight.take(run, 2), null);
+  // Their copy stopped (no renewal): they lapse, and the run's places come back.
+  timers.length = 0;
+  time += SLOT_MS + 1;
+  assert.ok(await runs.inFlight.take(run, 2));
+  assert.ok(await runs.inFlight.take(run, 2));
+  assert.equal(await runs.inFlight.take(run, 2), null);
+});
+
+test("the operator's credentials, redacted from a run's writes by their fingerprints, never held", async (t) => {
+  const { a, b, run, relayed, call, github, store } = await setup(t, {
+    answer: (req) => (req.method === "POST" ? [201, { id: 1 }] : null),
+  });
+  const key = "sk-ant-api03-operatorkeyoperatorkey0123456789";
+  const sent = await call(a, "orchestrator", "PUT", "/fingerprints", {
+    body: fingerprint([key]),
+  });
+  assert.equal(sent.status, 204);
+  // The store has no part of it, nor a print of one.
+  const kept = await store.get("fingerprints");
+  assert.equal(JSON.stringify(kept).includes(key.slice(0, 16)), false);
+  assert.equal(kept.prints.length, 1);
+  const r = await run("r1");
+  // Through the other copy, which reads them from the store.
+  const wrote = await relayed(b, r, "POST", "/repos/org/repo/issues/12/comments", {
+    body: `the key is ${key}, in a word:${key}.`,
+  });
+  assert.equal(wrote.status, 201);
+  const { body } = JSON.parse(github.calls.at(-1).body);
+  assert.equal(body.includes("operatorkey"), false);
+  assert.equal(body, "the key is [redacted], in a word:[redacted].");
+});
+
+test("fingerprints: a whole secret found wherever it is; never one of its parts, which would give it away", () => {
+  const secret = "ya29.a0AfH6SMBx-longgoogletoken_0123456789";
+  const prints = fingerprint([secret, "short"]);
+  // One print per secret long enough, whole.
+  assert.equal(prints.prints.length, 1);
+  assert.match(prints.prints[0], new RegExp(`^${secret.length}:`));
+  const redact = fingerprintRedactor(prints);
+  assert.equal(redact(`token=${secret}&x=1`), "token=[redacted]&x=1");
+  assert.equal(redact(`${secret}${secret}`), "[redacted][redacted]");
+  // Cut short: not found (the service can't hold its parts).
+  assert.equal(redact(secret.slice(0, 30)), secret.slice(0, 30));
+  assert.equal(redact("an ordinary sentence, with words."), "an ordinary sentence, with words.");
+  // Another salt: another print, the same find.
+  assert.equal(fingerprintRedactor(fingerprint([secret]))(secret), "[redacted]");
+  assert.equal(fingerprintRedactor(null)("x"), "x");
 });

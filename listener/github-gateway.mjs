@@ -231,11 +231,14 @@ export function secretOf(header) {
 // JSON decoded, so an escaped character can't split a secret, and replaced in place; then the
 // rest as text (a number, or a body that isn't JSON). A body that isn't UTF-8 is redacted as
 // bytes (latin1 keeps each one). Null when nothing was redacted.
-export function redactBody(body, secrets) {
+// `scrub(text)`: more that is redacted the same way, by what isn't held here (the operator's
+// credentials' fingerprints, the github service's: lib/fingerprints.mjs).
+export function redactBody(body, secrets, scrub = (text) => text) {
+  const clean = (text) => scrub(redact(text, secrets));
   const text = body.toString("utf8");
   if (!Buffer.from(text, "utf8").equals(body)) {
     const bytes = body.toString("latin1");
-    const out = redact(bytes, secrets);
+    const out = clean(bytes);
     return out === bytes ? null : Buffer.from(out, "latin1");
   }
   let out = text;
@@ -244,11 +247,11 @@ export function redactBody(body, secrets) {
     // In valid JSON, a quote outside a string starts one: the literals are exactly these.
     out = text.replace(/"(?:[^"\\]|\\.)*"/g, (literal) => {
       const value = JSON.parse(literal);
-      const clean = redact(value, secrets);
-      return clean === value ? literal : JSON.stringify(clean);
+      const cleaned = clean(value);
+      return cleaned === value ? literal : JSON.stringify(cleaned);
     });
   } catch {}
-  out = redact(out, secrets);
+  out = clean(out);
   return out === text ? null : Buffer.from(out);
 }
 
@@ -327,11 +330,12 @@ function readBody(req, max, idleMs, clock) {
 export function countInFlight() {
   const calls = new WeakMap();
   return {
+    // → the call's slot, or null when the run has `max` in flight.
     take(run, max) {
       const n = calls.get(run) ?? 0;
-      if (n >= max) return false;
+      if (n >= max) return null;
       calls.set(run, n + 1);
-      return true;
+      return {};
     },
     release: (run) => calls.set(run, (calls.get(run) ?? 1) - 1),
   };
@@ -359,6 +363,10 @@ export function createGithubGateway({
   // run → the secrets its writes must not carry, besides its GitHub tokens: its own tokens (or secret) and the
   // operator's credentials (secrets.mjs operatorSecrets()).
   secrets = () => [],
+  // run → (text) → the text without what `secrets` can't list: the operator's credentials (and
+  // a run from before tokens' secret), by their fingerprints, where they aren't held (the github
+  // service's, lib/fingerprints.mjs).
+  scrub = () => (text) => text,
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.
   checkWrite = async () => ({ status: 403, message: "no write is checked here" }),
@@ -387,8 +395,9 @@ export function createGithubGateway({
   repoId = async () => null,
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
-  // { take(run, max) → whether the run had fewer than `max` calls in flight, now one more;
-  // release(run) }: this process's count by default, the github service's store for its copies.
+  // { take(run, max) → a slot when the run had fewer than `max` calls in flight, else null;
+  // release(run, slot) }: this process's count by default, the github service's store for its
+  // copies.
   inFlight = countInFlight(),
   maxWrite = MAX_WRITE,
   idleMs = IDLE_MS,
@@ -531,7 +540,8 @@ export function createGithubGateway({
     // A file host's call holds no token, and was a plain host's before: not counted, so a setup
     // that downloads many files at once isn't cut off part-way.
     const counted = !where.file;
-    if (counted && !(await inFlight.take(run, maxInFlight))) {
+    const inFlightSlot = counted ? await inFlight.take(run, maxInFlight) : null;
+    if (counted && !inFlightSlot) {
       return fail(res, 429, `more than ${maxInFlight} calls at once`);
     }
     // A rerun's slot (github-writes.mjs reserve()): free again once the call is over, unless
@@ -720,7 +730,7 @@ export function createGithubGateway({
       });
     } finally {
       await slot?.release?.();
-      if (counted) await inFlight.release(run);
+      if (inFlightSlot) await inFlight.release(run, inFlightSlot);
     }
   }
 
@@ -890,24 +900,25 @@ export function createGithubGateway({
     try {
       text = decodeURIComponent(call);
     } catch {}
-    return redact(text, [...secrets(run), ...run.tokens]).slice(0, 200);
+    return scrub(run)(redact(text, [...secrets(run), ...run.tokens])).slice(0, 200);
   }
 
   // Whether `target` holds one of the run's secrets, as sent or percent-decoded.
   function urlHolds(run, req, target) {
     const values = [...secrets(run), secretOf(req.headers.authorization), ...run.tokens];
+    const clean = scrub(run);
     const raw = target.pathname + target.search;
     let decoded = raw;
     try {
       decoded = decodeURIComponent(raw.replaceAll("+", " "));
     } catch {}
-    return redact(raw, values) !== raw || redact(decoded, values) !== decoded;
+    return [raw, decoded].some((text) => clean(redact(text, values)) !== text);
   }
 
   // The write's body without the run's secrets; noted when it had one. It still goes on.
   function redacted(run, req, body, call) {
     const values = [...secrets(run), secretOf(req.headers.authorization), ...run.tokens];
-    const clean = redactBody(body, values);
+    const clean = redactBody(body, values, scrub(run));
     if (!clean) return body;
     note(run, `Deckhand redacted a secret from the run's GitHub write ${clip(run, call)}`);
     log(`GitHub gateway: redacted a secret from ${clip(run, call)} for ${run.repo}`);

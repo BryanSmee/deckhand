@@ -3,12 +3,17 @@
 // service's. They come either from /setup's manifest conversion, which the service makes itself
 // (convert(): the key never leaves it, the listener gets the rest), or from a listener that held
 // them before this service (handOver(), once: the listener then removes its key).
+import { createHash } from "node:crypto";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
-import { readJson } from "../lib/files.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { createGitHubApp, GITHUB_HEADERS, saveCredentials } from "../listener/github-app.mjs";
 
 // What the service keeps of the App: what it signs its JWT and names its bot with. The webhook
 // secret and the OAuth client's are edge's (the listener's): not kept here.
+// How long a conversion's answer is kept for the listener to ask again.
+const SETUP_KEPT_MS = 60 * 60_000;
+
 const KEPT = ["id", "slug", "client_id", "pem", "owner", "html_url", "bot_id", "created_at"];
 const kept = (credentials) =>
   Object.fromEntries(KEPT.filter((k) => credentials[k] != null).map((k) => [k, credentials[k]]));
@@ -21,6 +26,15 @@ export function createAppHolder({
   log = () => {},
 }) {
   const file = join(dir, "app.json");
+  // /setup's last conversion, for a listener that didn't get its answer (convert()).
+  const setupFile = join(dir, "setup.json");
+  const codeHash = (code) => createHash("sha256").update(code).digest("hex");
+  // The edge's secrets it holds go once the listener had its time to ask again.
+  function sweep() {
+    const kept = readJson(setupFile);
+    if (kept && !(now() - kept.at < SETUP_KEPT_MS)) rmSync(setupFile, { force: true });
+  }
+  sweep();
   let app = null;
   function use(credentials) {
     app = credentials?.pem ? createGitHubApp({ credentials, api, fetch, now, log }) : null;
@@ -55,10 +69,17 @@ export function createAppHolder({
   // /setup's manifest code → the App's credentials but its key, which only this service keeps.
   // → { status, message } when GitHub refused it, or the service has an App already.
   async function convert(code) {
-    if (app) return { status: 409, message: "the github service holds an App already" };
     if (typeof code !== "string" || !/^[\w-]+$/.test(code)) {
       return { status: 400, message: "not a manifest code" };
     }
+    // The same code again: its answer was lost on its way to the listener, which reloads the
+    // page. GitHub converts a code once: what the listener needs of it is kept a while here,
+    // the service's own volume, the key apart.
+    const kept = readJson(setupFile);
+    if (app && kept?.code === codeHash(code) && now() - kept.at < SETUP_KEPT_MS) {
+      return { credentials: kept.credentials };
+    }
+    if (app) return { status: 409, message: "the github service holds an App already" };
     const res = await fetch(`${api}/app-manifests/${code}/conversions`, {
       method: "POST",
       headers: GITHUB_HEADERS,
@@ -90,9 +111,14 @@ export function createAppHolder({
       bot_id: botId,
       created_at: new Date(now()).toISOString(),
     };
+    const { pem: _, ...rest } = credentials;
+    writeJsonAtomic(
+      setupFile,
+      { code: codeHash(code), at: now(), credentials: rest },
+      { mode: 0o600 },
+    );
     save(credentials);
     log(`Setup: GitHub App ${made.slug} (id ${made.id}) stored`);
-    const { pem: _, ...rest } = credentials;
     return { credentials: rest };
   }
 
