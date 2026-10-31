@@ -2,7 +2,7 @@
 // on their way to GitHub, preview hooks; `idle` when none is. Reactions are tracked here
 // (track()) as runs end and queued comments are dropped.
 import { entryOf } from "./agents/index.mjs";
-import { AUTHS } from "./anthropic.mjs";
+import { AUTHS } from "./agents/credentials.mjs";
 import { parseKey } from "./events.mjs";
 import { GrantsError, grantErrors, loadGrants } from "./grants.mjs";
 

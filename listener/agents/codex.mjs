@@ -2,7 +2,7 @@
 // ../../sandbox/agents/codex.sh, which runs `codex exec --json` and adds, once Codex exits,
 // one line of its own with the turn's outcome (`deckhand.result`): Codex's JSONL has no
 // event that holds both the last message and whether the turn worked.
-import { OPENAI_CREDENTIALS } from "../openai.mjs";
+import { OPENAI_CREDENTIALS } from "./credentials.mjs";
 import { cutOutput, EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
 
 // Deckhand's model tiers → the pinned Codex's own catalog (`codex` lists it as best: frontier,

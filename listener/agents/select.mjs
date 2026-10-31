@@ -1,6 +1,6 @@
 // Which agent, provider, model, effort and speed a run gets: the settings', a fallback's, `/agent`'s,
 // or the one that stuck to the issue (docs/architecture.md, Agents). Pure.
-import { AUTHS, NAMED, PLAN_WINDOW_MS } from "../anthropic.mjs";
+import { AUTHS, NAMED, PLAN_WINDOW_MS } from "./credentials.mjs";
 import { agentFor, effortOf, entryName, entryOf, modelOf, providerError } from "./index.mjs";
 
 // The agent of a run: the repo's mode's, else that of light runs or work (the repo's, among

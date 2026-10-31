@@ -1,18 +1,16 @@
 // Google endpoint, the Antigravity CLI's like openai.mjs is Codex's. With a GEMINI_API_KEY, a
 // sandbox's `agy` gets GOOGLE_GEMINI_BASE_URL=<broker>/google and the run's agent token as its
-// key (agents/antigravity.mjs, antigravity.sh); here the token in `x-goog-api-key` is checked
-// (broker.mjs check(), from its own sandbox), swapped for the operator's key, and the call goes on to Google (or the
-// listener's GEMINI_BASE_URL). With a Google AI plan's login instead (AGY_AUTH_FILE,
-// antigravity-login.mjs), `agy` has no base URL: the egress proxy decrypts the hosts that carry
-// its token, for its runs only (egress.mjs, agents/antigravity.mjs `relayed`), and sends each
-// request here as /relay/<host>/<path>, where the token in `Authorization: Bearer` is swapped
-// for the plan's access token. Served on the broker's port, which only the runs' networks reach.
+// key (../listener/agents/antigravity.mjs, antigravity.sh); the egress proxy sends those calls
+// here, where the token in `x-goog-api-key` is checked (runs.mjs, from its own sandbox), swapped
+// for the operator's key, and the call goes on to Google (or GEMINI_BASE_URL). With a Google AI
+// plan's login instead (AGY_AUTH_FILE, antigravity-login.mjs), `agy` has no base URL: the egress
+// proxy decrypts the hosts that carry its token, for its runs only (../listener/egress.mjs,
+// agents/antigravity.mjs `relayed`), and sends each request here as /relay/<host>/<path>, where
+// the token in `Authorization: Bearer` is swapped for the plan's access token.
+import { GEMINI_URL } from "../listener/agents/credentials.mjs";
 import { baseOf, createApiProxy } from "./upstream.mjs";
 
-// An API key first, as Claude Code's and Codex's orders put one before a plan's login.
-export const GOOGLE_CREDENTIALS = ["GEMINI_API_KEY", "AGY_AUTH_FILE"];
-
-export const GEMINI_URL = "https://generativelanguage.googleapis.com";
+export { GEMINI_URL };
 
 // Gemini's API under /v1 or /v1beta (models/<name>:<method>), nothing else (createApiProxy()).
 const GEMINI_PATH = /^\/google\/(v1(?:beta)?(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)+(?::[A-Za-z]+)?)$/;
@@ -45,9 +43,9 @@ const ERRORS = {
 };
 
 export function createGoogleRelay({
-  broker, // broker.mjs: the run a token belongs to
+  runs, // runs.mjs: the run an agent token belongs to
   credential = null, // the operator's GEMINI_API_KEY
-  upstream = GEMINI_URL, // the listener's GEMINI_BASE_URL, if any (or host => url in tests)
+  upstream = GEMINI_URL, // GEMINI_BASE_URL, if any (or host => url in tests)
   login = null, // without a key: antigravity-login.mjs's, from AGY_AUTH_FILE
   log = () => {},
 }) {
@@ -58,7 +56,7 @@ export function createGoogleRelay({
   );
 
   const gemini = createApiProxy({
-    broker,
+    runs,
     pathRe: GEMINI_PATH,
     routes: GEMINI_ROUTES,
     errorShape: ERRORS,
@@ -82,7 +80,7 @@ export function createGoogleRelay({
     ...Object.entries(RELAYED_PATHS).map(([host, [method, path]]) => {
       const prefix = `/relay/${host}/`;
       const { handle } = createApiProxy({
-        broker,
+        runs,
         pathRe: new RegExp(`^${prefix.replaceAll(".", "\\.")}(${path})$`),
         routes: [[method, /^/]],
         errorShape: ERRORS,

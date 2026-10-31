@@ -76,6 +76,9 @@ GitHub ──webhook──▶ listener ──▶ runner ──docker──▶ sa
 - The **runner** (`runner/`) is the only service with the Docker socket: it starts, follows
   and removes the sandboxes, builds repository images and keeps the runs' logs, for the
   listener alone, checking each sandbox against your grants again.
+- The **models service** (`models/`) is the only one holding your Claude (or OpenAI, Google)
+  credential: the sandboxes' agents call their API through it, with their run's token in its
+  place.
 - A **sandbox** (`sandbox/`) is a container from the base image, or the repository's own
   image built `FROM` it. It runs Claude Code with permissions bypassed, in a clone of the
   repository kept between the issue's runs.

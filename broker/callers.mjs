@@ -24,7 +24,7 @@ const ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
 // SERVICE_ACCOUNTS → username (`system:serviceaccount:<namespace>:<name>`) → the services it
 // may be. Services that still run in one pod (the listener's, until #506) share its account:
-// "edge+orchestrator+models=deckhand:deckhand-listener", as networkCallers() takes them.
+// "edge+orchestrator=deckhand:deckhand-listener", as networkCallers() takes them.
 export function accountCallers(text) {
   const accounts = new Map();
   for (const part of String(text ?? "")

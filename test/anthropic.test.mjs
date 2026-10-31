@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
-import { createAnthropicProxy, credentialName, resetOf } from "../listener/anthropic.mjs";
-import { planWarning } from "../listener/upstream.mjs";
+import { createAnthropicProxy, resetOf } from "../models/anthropic.mjs";
+import { credentialName, planWarning } from "../listener/agents/credentials.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { operatorSecrets, redact } from "../listener/secrets.mjs";
@@ -45,7 +45,7 @@ async function serveProxy(
 ) {
   const upstream = await fakeAnthropic(t);
   const broker = createBroker({ sentFrom });
-  const proxy = createAnthropicProxy({ broker, name, credential, upstream: upstream.url });
+  const proxy = createAnthropicProxy({ runs: broker, name, credential, upstream: upstream.url });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
 }
@@ -141,7 +141,7 @@ test("a gateway's token goes as a bearer, under the gateway's own path", async (
   upstream.release();
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
-    broker,
+    runs: broker,
     name: "ANTHROPIC_AUTH_TOKEN",
     credential: "sk-or-v1-real",
     upstream: `${upstream.url}/api`,
@@ -172,7 +172,7 @@ async function serveBoth(t, limited = false) {
   });
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
-    broker,
+    runs: broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
     credential: "sk-ant-oat01-plan",
     named: { plan: "sk-ant-oat01-plan", key: "sk-ant-api03-key" },
@@ -220,7 +220,7 @@ test("a plan's 429: the run learns when its limit resets; a key's doesn't", asyn
   assert.equal(broker.runOf(plan).apiStatus, 429);
   assert.equal(broker.runOf(plan).apiReset, 1_900_000_000_000);
   assert.equal(broker.runOf(key).apiStatus, 429);
-  assert.equal(broker.runOf(key).apiReset, null);
+  assert.equal(broker.runOf(key).apiReset ?? null, null);
   // An answer past it clears it: a later failure is another one.
   limit.on = false;
   await (await ask(url, { authorization: `Bearer ${plan}` })).text();
@@ -234,7 +234,7 @@ test("a run naming a credential the operator didn't set gets none, and says whic
   const upstream = await fakeAnthropic(t);
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
-    broker,
+    runs: broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
     credential: "sk-ant-oat01-plan",
     named: { plan: "sk-ant-oat01-plan" },
@@ -363,7 +363,7 @@ test("a run's secret sent from another sandbox's address: 403, and Anthropic nev
   ]);
   assert.equal(upstream.requests.length, 0);
   // What the leaked run's reply says is left alone.
-  assert.equal(broker.runOf(secret).apiError, null);
+  assert.equal(broker.runOf(secret).apiError, undefined);
 });
 
 test("without a credential set, a live run gets an error rather than an empty header", async (t) => {
@@ -376,7 +376,7 @@ test("without a credential set, a live run gets an error rather than an empty he
 test("Anthropic out of reach: a 502 in Anthropic's error shape", async (t) => {
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
-    broker,
+    runs: broker,
     name: "ANTHROPIC_API_KEY",
     credential: "k",
     upstream: "http://127.0.0.1:1",
@@ -397,16 +397,14 @@ test("redaction replaces every occurrence of each secret, and leaves short value
   assert.equal(redact("abc", ["abc"]), "abc");
 });
 
-test("operatorSecrets: the agents' credentials from the environment, and the ChatGPT sign-in's", () => {
+test("operatorSecrets: the agents' credentials' fingerprints from the models service, and any left in the environment", () => {
   const env = { ANTHROPIC_API_KEY: "sk-ant-api03-abcdefghijklmnop", OTHER: "not a secret" };
-  const secrets = operatorSecrets({ openai: { secrets: () => ["chatgpt-token"] } }, env);
+  const prints = { salt: "s", values: [] };
+  const secrets = operatorSecrets({ models: { prints: () => [prints] } }, env);
   assert.ok(AGENT_SECRETS.includes("ANTHROPIC_API_KEY"));
-  assert.ok(secrets.includes(env.ANTHROPIC_API_KEY));
-  assert.ok(!secrets.includes(env.OTHER));
-  assert.equal(secrets.at(-1), "chatgpt-token");
-  assert.equal(secrets.length, AGENT_SECRETS.length + 1);
-  // Before the ChatGPT proxy exists.
-  assert.equal(operatorSecrets({}, env).length, AGENT_SECRETS.length);
+  assert.deepEqual(secrets, [env.ANTHROPIC_API_KEY, prints]);
+  // Before the models service answered, and with nothing in the environment.
+  assert.deepEqual(operatorSecrets({}, {}), []);
 });
 
 test("a run on another provider goes to its URL with its key; the provider's status is kept", async (t) => {
@@ -415,7 +413,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
   openrouter.release();
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
-    broker,
+    runs: broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
     credential: "sk-ant-oat01-real",
     upstream: anthropic.url,
@@ -452,7 +450,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
 test("a provider that can't be reached counts as a 502", async (t) => {
   const broker = createBroker({ sentFrom: sandboxAt() });
   const proxy = createAnthropicProxy({
-    broker,
+    runs: broker,
     name: "ANTHROPIC_API_KEY",
     credential: "sk-ant-api03-real",
     upstream: "http://127.0.0.1:1",

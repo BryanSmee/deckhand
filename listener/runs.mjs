@@ -731,7 +731,11 @@ export function createRuns(ctx) {
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
       removeEmptyShots(live);
       const status = outcome(live.result);
-      const { apiStatus, apiReset } = ctx.broker.runOf(live.id) ?? {};
+      // What its agent's calls last got, from the models service (#504), for an error's
+      // fallback and reply.
+      const api = status === "error" && !live.replied ? await ctx.models.apiOf(live.id) : {};
+      const { apiStatus, apiReset } = api;
+      live.apiError = api.apiError ?? null;
       const fallback =
         status === "error" && !live.replied
           ? nextFallback(config, record, live.result, apiStatus, { apiReset, now: Date.now() })
@@ -784,8 +788,8 @@ export function createRuns(ctx) {
     });
     const footer = replyFooter(live.record, result, hint, live.later);
     const check = status !== "error" && mode === "work" ? await configCheck(task) : null;
-    const apiError = ctx.broker.runOf(live.id)?.apiError;
-    const why = apiError ? `Its last failed API call, through the listener: ${apiError}.\n\n` : "";
+    const apiError = live.apiError;
+    const why = apiError ? `Its last failed API call, through Deckhand: ${apiError}.\n\n` : "";
     const text =
       status !== "error"
         ? `${result.text}\n\n${check ? `${check}\n\n` : ""}${footer}`
