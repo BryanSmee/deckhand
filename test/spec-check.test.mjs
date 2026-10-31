@@ -6,7 +6,7 @@ import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { cacheVolume, repoImage, sandboxName } from "../listener/repo-config.mjs";
-import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
+import { SANDBOX_USER, sessionOf } from "../listener/sandbox-spec.mjs";
 import { cliEnv, cliName } from "../listener/runner/docker.mjs";
 import { specProblems } from "../runner/spec-check.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -133,6 +133,10 @@ test("root, capabilities, another image, another's volumes: refused, each said",
           // (sandbox-spec.mjs sessionOf()).
           { kind: "session", name: `${hashed}-bare-workspace`, path: "/w1" },
           { kind: "session", name: `${hashed}-light-trusted-claude`, path: "/w2" },
+          // A work run's without `push`, a fork's, and a light run's without `pull`.
+          { kind: "session", name: `${hashed}-readonly-trusted-workspace`, path: "/w3" },
+          { kind: "session", name: `${hashed}-readonly-fork-workspace`, path: "/w4" },
+          { kind: "session", name: `${hashed}-light-bare-claude`, path: "/w5" },
           { kind: "session", name: `${hashed}-claude-code`, path: "/x" },
         ],
       }),
@@ -238,4 +242,31 @@ test("the environment names the runner's docker CLI keeps are the ones a spec ma
     ]);
   }
   assert.equal(cliName("TASK_PROMPT"), false);
+});
+
+test("specProblems: every session volume the listener may name for a run is the task's", (t) => {
+  const { config } = setup(t);
+  const name = sandboxName(config, "org/repo", "12");
+  const runs = [
+    { mode: "work", light: false, capabilities: ["pull", "push"] },
+    { mode: "work", light: false, capabilities: ["pull"] },
+    { mode: "work", light: false, capabilities: ["pull"], fork: true },
+    { mode: "work", light: false, capabilities: [] },
+    { mode: "brainstorm", light: true, capabilities: ["pull"] },
+    { mode: "audit", light: true, capabilities: ["pull", "setup"] },
+    { mode: "brainstorm", light: true, capabilities: [] },
+    { mode: "research", light: true, capabilities: ["internet"] },
+  ];
+  for (const live of runs) {
+    const base = sessionOf(name, live);
+    const volumes = [
+      { kind: "session", name: `${base}${live.fork ? "-fork" : ""}-workspace`, path: "/workspace" },
+      { kind: "session", name: `${base}-claude`, path: "/home/node/.claude" },
+    ];
+    assert.deepEqual(
+      specProblems(config, spec(config, { name, run: `${name}-1`, volumes })),
+      [],
+      JSON.stringify(live),
+    );
+  }
 });
