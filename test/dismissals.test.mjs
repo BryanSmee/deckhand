@@ -68,8 +68,10 @@ test("setAside: a run's questions, once; askedOn: the task's last run, if it ask
   assert.equal(askedOn(runs, "org/app#6"), null);
   // Its key as the run spells it.
   assert.equal(askedOn(runs, "org/APP#7").key, "Org/App#7");
-  // setAsideOn(): the task's key, once set aside; null when nothing asked.
-  assert.equal(d.setAsideOn(runs, "org/app#pr-9", "carol"), "org/app#pr-9");
+  // setAsideOn(): the task's key, once set aside; null when nothing asked, or when what sets it
+  // aside happened before the run asked (a delivery redelivered late).
+  assert.equal(d.setAsideOn(runs, "org/app#pr-9", "carol", 19), null);
+  assert.equal(d.setAsideOn(runs, "org/app#pr-9", "carol", 20), "org/app#pr-9");
   assert.equal(d.setAsideOn(runs, "org/app#6", null), null);
   assert.deepEqual(
     d.list().map((x) => [x.key, x.runId, x.by]),
@@ -78,11 +80,13 @@ test("setAside: a run's questions, once; askedOn: the task's last run, if it ask
       ["org/app#pr-9", "b", "carol"],
     ],
   );
-  // restoreOn(): the label put back takes the entry of its task's last run back, nothing else.
+  // restoreOn(): the label put back takes the entry of its task's last run back, nothing else,
+  // and not for a label put back before the entry (`at` 3).
   d.dismiss("org/app#5", "a", "alice");
   assert.equal(d.restoreOn(runs, "org/app#5"), null);
   assert.equal(d.restoreOn(runs, "org/app#6"), null);
-  assert.equal(d.restoreOn(runs, "org/app#pr-9"), "org/app#pr-9");
+  assert.equal(d.restoreOn(runs, "org/app#pr-9", 2), null);
+  assert.equal(d.restoreOn(runs, "org/app#pr-9", 3), "org/app#pr-9");
   assert.deepEqual(
     d.list().map((x) => x.key),
     ["org/app#1", "org/app#5"],
@@ -99,18 +103,27 @@ test("closed since their run asked: set aside after GitHub's closed_at, not befo
     r("e", "org/app#5", "ok", 100),
     r("f", "org/app#6", "needs-input", 100),
     r("g", "org/app#discussion-7", "needs-input", 100),
+    r("h", "org/app#8", "needs-input", 100),
+    r("i", "org/app#pr-9", "needs-input", 100),
   ];
   // #1 closed, #2 closed before its run asked (a comment on a closed issue), #3 open with its
   // pull request #30 merged, #4 open, #5's run didn't ask, #6 closed and set aside already.
   const closed = (key) =>
     ["org/app#1", "org/app#2", "org/app#5", "org/app#6"].includes(key) ? "completed" : null;
-  const pr = (key) => (key === "org/app#3" ? { number: 30, state: "merged" } : null);
+  // #8's pull request closed without merging: nothing of #8's. #pr-9 closed: its own.
+  const pr = (key) =>
+    ({
+      "org/app#3": { number: 30, state: "merged" },
+      "org/app#8": { number: 80, state: "closed" },
+      "org/app#pr-9": { number: 9, state: "closed" },
+    })[key] ?? null;
   const tasks = closedTasks(runs, closed, pr);
   assert.deepEqual(tasks, [
     { key: "org/app#1", repo: "org/app", numbers: [1] },
     { key: "org/app#2", repo: "org/app", numbers: [2] },
     { key: "org/app#3", repo: "org/app", numbers: [30] },
     { key: "org/app#6", repo: "org/app", numbers: [6] },
+    { key: "org/app#pr-9", repo: "org/app", numbers: [9] },
   ]);
   const d = createDismissals({ now: () => 7 });
   d.setAside("org/app#6", "f", "alice");
@@ -119,7 +132,7 @@ test("closed since their run asked: set aside after GitHub's closed_at, not befo
   const aside = await setAsideClosed({
     runs,
     dismissals: d,
-    tasks,
+    tasks: tasks.slice(0, 4),
     closedAt: async (repo, number) => (asked.push(number), at[number] ?? null),
   });
   assert.deepEqual(aside, ["org/app#1", "org/app#3"]);

@@ -26,20 +26,24 @@ export function createDismissals({ path, now = Date.now } = {}) {
     save();
   }
 
-  // The questions of task `key`'s last run set aside, if it stopped to ask (askedOn()): its
-  // key, else null.
-  function setAsideOn(runs, key, by) {
+  // The questions of task `key`'s last run set aside, if it stopped to ask (askedOn()) before
+  // `at`, when what sets them aside happened (GitHub's time, ms; null: unknown, now): its key,
+  // else null. A delivery redelivered late (redeliveries.mjs) says nothing of a run that asked
+  // since.
+  function setAsideOn(runs, key, by, at = null) {
     const asked = askedOn(runs, key);
-    if (asked) setAside(asked.key, asked.runId, by);
-    return asked?.key ?? null;
+    if (!asked || (at !== null && at < asked.finishedAt)) return null;
+    setAside(asked.key, asked.runId, by);
+    return asked.key;
   }
 
-  // The questions of task `key`'s last run asking again: the label put back. Its key when
-  // they were set aside, else null.
-  function restoreOn(runs, key) {
+  // The questions of task `key`'s last run asking again: the label put back, at `at` (as
+  // setAsideOn()), after they were set aside. Its key when they were, else null.
+  function restoreOn(runs, key, at = null) {
     const asked = askedOn(runs, key);
     const entry = asked && dismissed.get(asked.key);
     if (!entry?.questions || entry.runId !== asked.runId) return null;
+    if (at !== null && at < entry.at) return null;
     dismissed.delete(asked.key);
     save();
     return asked.key;
@@ -109,7 +113,10 @@ export function closedTasks(runs, closed, pr) {
     const pull = pr(r.key);
     const numbers = new Set();
     if (closed(r.key)) numbers.add(target.number);
-    if (["merged", "closed"].includes(pull?.state)) numbers.add(pull.number);
+    // A pull request closed without merging answers nothing of its issue's questions.
+    if (pull?.state === "merged" || (pull?.state === "closed" && target.kind === "pr")) {
+      numbers.add(pull.number);
+    }
     if (numbers.size) tasks.push({ key: r.key, repo: target.repo, numbers: [...numbers] });
   }
   return tasks;

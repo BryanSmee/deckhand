@@ -157,9 +157,12 @@ aside in `dismissed.json` while that run is the task's last:
   takes the entry back;
 - the issue or its pull request closes or merges: its `closed` delivery, or, for one the
   listener didn't hear, a check at start of GitHub's `closed_at` against when the run ended. A
-  run that asks after the close (a comment on a closed issue starts one) still waits. An issue
-  left open when its pull request merges keeps the label its run put, which then no longer
-  holds the task; open questions in the issue's body still do.
+  pull request closed without merging sets aside only its own task's questions, not those of
+  the issue it would have closed. A run that asks after the close (a comment on a closed issue
+  starts one) still waits, and so does one that asked after a redelivered delivery's own time
+  (`closed_at`, `merged_at`, or `updated_at` for a label). An issue left open when its pull
+  request merges keeps the label its run put, which then no longer holds the task; open
+  questions in the issue's body still do.
 
 The task then shows as `done`, and the run keeps its `needs-input` outcome.
 

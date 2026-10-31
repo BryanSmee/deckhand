@@ -4421,6 +4421,8 @@ mounts:
         ["org-repo-5-1000", "org/repo#5"],
         ["org-repo-pr-6-1000", "org/repo#pr-6"],
         ["org-repo-9-1000", "org/repo#9"],
+        ["org-repo-12-1000", "org/repo#12"],
+        ["org-repo-13-1000", "org/repo#13"],
       ]) {
         writeFileSync(
           join(dir, "logs", `${id}.log`),
@@ -4453,6 +4455,8 @@ mounts:
       "org/repo#5": "needs-input",
       "org/repo#pr-6": "needs-input",
       "org/repo#9": "needs-input",
+      "org/repo#12": "needs-input",
+      "org/repo#13": "needs-input",
     });
     const repository = { full_name: "org/repo", default_branch: "main" };
     const installation = { id: 7 };
@@ -4466,7 +4470,8 @@ mounts:
       title: "Nine",
       state: "closed",
       merged: true,
-      merged_at: "2026-10-31T12:00:00Z",
+      // After the runs asked (their logs' time): a close from before says nothing of them.
+      merged_at: new Date(Date.now() + 60_000).toISOString(),
       body: "Closes #9",
       html_url: "https://github.com/org/repo/pull/19",
       head: { ref: "issue-9-nine", repo: { full_name: "org/repo" } },
@@ -4476,6 +4481,27 @@ mounts:
       "pull_request",
     );
     await listener.until("org/repo#9: closed, its last run's questions set aside");
+    // Pull request #22, which would close #12, closed without merging: #12 still asks. Issue
+    // #13's `closed`, redelivered from before its run asked: #13 still asks.
+    await send(
+      {
+        action: "closed",
+        installation,
+        repository,
+        sender,
+        pull_request: {
+          ...merged,
+          number: 22,
+          merged: false,
+          merged_at: null,
+          closed_at: new Date(Date.now() + 60_000).toISOString(),
+          body: "Closes #12",
+        },
+      },
+      "pull_request",
+    );
+    const stale = { number: 13, state: "closed", closed_at: "2000-01-01T00:00:00Z" };
+    await send({ action: "closed", installation, repository, sender, issue: stale }, "issues");
     const pull = { number: 6, title: "A change", state: "open", labels: [] };
     const label = { name: "needs-input" };
     await send(
@@ -4487,6 +4513,8 @@ mounts:
       "org/repo#5": "done",
       "org/repo#pr-6": "done",
       "org/repo#9": "done",
+      "org/repo#12": "needs-input",
+      "org/repo#13": "needs-input",
     });
     // The label put back on #6: its questions ask again.
     await send(

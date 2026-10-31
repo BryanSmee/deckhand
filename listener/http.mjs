@@ -426,14 +426,15 @@ export function createHttp(ctx, { dashboardDir }) {
     );
   }
 
-  // An issue or pull request just closed or merged: the questions its task's last run asked
-  // (`keys`: the issue's or pull request's own task, and the one a pull request closes) no
-  // longer wait (dismissals.mjs). Set aside now, not derived from the closed state later: a
-  // comment on a closed issue starts a run, whose questions do wait.
-  function settleQuestions(keys) {
+  // An issue or pull request just closed or merged, at `at` (GitHub's time, ms, or null): the
+  // questions its task's last run asked before (`keys`: the issue's or pull request's own task,
+  // and the one a merged pull request closes) no longer wait (dismissals.mjs). Set aside now,
+  // not derived from the closed state later: a comment on a closed issue starts a run, whose
+  // questions do wait, and a redelivered `closed` is older than that run.
+  function settleQuestions(keys, at) {
     if (!ctx.dismissals) return;
     for (const key of new Set(keys.filter(Boolean))) {
-      const aside = ctx.dismissals.setAsideOn(ctx.runs, key, null);
+      const aside = ctx.dismissals.setAsideOn(ctx.runs, key, null, at);
       if (aside) log(`${aside}: closed, its last run's questions set aside`);
     }
   }
@@ -469,7 +470,12 @@ export function createHttp(ctx, { dashboardDir }) {
     const closed = closedItem(config, event, payload, skip);
     if (closed) {
       ctx.titles.setClosed(closed.key, closedAs(closed.state));
-      if (closed.state !== "open") settleQuestions([closed.key, pr?.key]);
+      if (closed.state !== "open") {
+        // Merged, the issue it closes too; closed without merging, only its own task.
+        const target = payload.issue ?? payload.pull_request;
+        const at = Date.parse(target?.merged_at ?? target?.closed_at) || null;
+        settleQuestions([closed.key, closed.state === "done" && pr?.key], at);
+      }
       admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
     }
     // Anything else about what comments wait for, or about the issue a pull request closes,
