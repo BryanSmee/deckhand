@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { DISCUSSION_PERMISSIONS, NO_TOKEN, SANDBOX_PERMISSIONS } from "../listener/github-app.mjs";
-import { isFresh, isLight, kindOf, permissionsFor, RESERVED_MODES } from "../listener/modes.mjs";
+import { READ_PERMISSIONS } from "../listener/github-app.mjs";
+import { isFresh, isLight, kindOf } from "../listener/modes.mjs";
 import {
   compactTables,
   firstMessage,
@@ -66,24 +66,11 @@ test("modes: light, fresh and the dashboard's kind, built-in or the repo's own",
   assert.equal(kindOf("research", "issue"), "research");
 });
 
-test("modes: every token only reads, discussions' reads them, research gets none", () => {
-  assert.equal(permissionsFor("discussion"), DISCUSSION_PERMISSIONS);
-  assert.deepEqual(DISCUSSION_PERMISSIONS, { discussions: "read" });
-  // The others read what the sandbox's token reads: what a run writes is the policies'.
-  for (const mode of ["work", "brainstorm", "stop", "idea", "bug", "onboarding", "analyze"]) {
-    assert.equal(permissionsFor(mode), undefined, mode);
-  }
-  for (const mode of ["review", "audit", "triage"]) assert.equal(permissionsFor(mode), undefined);
+test("modes: a review is light and fresh; no read capability gives workflows", () => {
   assert.equal(isLight({ settings: {} }, "review"), true);
   assert.equal(isFresh({ settings: {} }, "review"), true);
-  // Research reads the open web: no token at all, not even one that reads.
-  assert.equal(permissionsFor("research"), NO_TOKEN);
-  // Nothing a sandbox's token writes, workflows least of all: the git gateway's push token only
-  // (allow_workflows).
-  assert.ok(Object.values(SANDBOX_PERMISSIONS).every((level) => level === "read"));
-  for (const mode of [...RESERVED_MODES, "audit"]) {
-    assert.equal(permissionsFor(mode)?.workflows, undefined, mode);
-  }
+  // Workflows: the git gateway's push token only (allow_workflows), never a sandbox's.
+  assert.ok(Object.values(READ_PERMISSIONS).every((names) => !names.includes("workflows")));
 });
 
 test("prompts: each kind of run gets its own", () => {

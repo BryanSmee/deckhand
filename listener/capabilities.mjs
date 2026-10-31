@@ -7,8 +7,7 @@
 // policy says: each capability's dependencies, and the risky combinations. One function,
 // outcomeOf(), says what a run gets: runs start with it (preparation.mjs), and the repository's
 // config page shows it for each mode (repos.mjs). Format: ../docs/repo-config.md#capabilities.
-import { NO_TOKEN, readsOf } from "./github-app.mjs";
-import { BUILT_IN, customMode, isLight, MODES, OPEN, permissionsFor } from "./modes.mjs";
+import { BUILT_IN, customMode, isLight, MODES, OPEN } from "./modes.mjs";
 import { ungranted } from "./grants.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 
@@ -16,15 +15,16 @@ import { POLICY_DIR } from "./policies.mjs";
 // .deckhand.yaml keys that ask for it (`config`, settings fields: repo-config.mjs) and the
 // grant that gates it (`grant`, grants.mjs), if any: one the policies allow and the config asks
 // for stops the run without its grant, unless `optional`. What it gives (`what`) and what enforces
-// it (`enforcedBy`). The reads (#497) are decided here, and given to the token there: until
-// then they need `pull`, without which a run gets no token at all (broker.mjs grant()).
+// it (`enforcedBy`). The reads are the token's permissions (#497: github-app.mjs
+// READ_PERMISSIONS), and need `pull`, without which a run gets nothing from GitHub at all.
 export const CAPABILITIES = [
   {
     name: "pull",
     needs: [],
     what: "a clone of the repository: its code and history",
-    // Without it, the run gets no GitHub token at all (broker.mjs grant()).
-    enforcedBy: "the listener at start (the clone), the GitHub gateway (no token without it)",
+    // Without it, the run gets nothing from GitHub at all (github-app.mjs readsGitHub()).
+    enforcedBy:
+      "the listener at start (the clone), GitHub (contents: read), the GitHub gateway (nothing without it)",
   },
   {
     name: "push",
@@ -85,30 +85,27 @@ export const CAPABILITIES = [
   {
     name: "read:issues",
     needs: ["pull"],
-    what: "the repository's issues",
-    enforcedBy:
-      "not yet: the run's token follows its mode until #497 (then the GitHub gateway, issues: read)",
+    // Without it, the run still reads its own issue (github-gateway.mjs ownIssuePath()).
+    what: "every issue of the repository, lists and search included (without it, its own issue only)",
+    enforcedBy: "GitHub (issues: read), the GitHub gateway (its own issue only without it)",
   },
   {
     name: "read:pulls",
     needs: ["pull"],
-    what: "the repository's pull requests",
-    enforcedBy:
-      "not yet: the run's token follows its mode until #497 (then the GitHub gateway, pull_requests: read)",
+    what: "every pull request of the repository, lists and search included",
+    enforcedBy: "GitHub (pull_requests: read)",
   },
   {
     name: "read:discussions",
     needs: ["pull"],
     what: "the repository's discussions",
-    enforcedBy:
-      "not yet: the run's token follows its mode until #497 (then the GitHub gateway, discussions: read)",
+    enforcedBy: "GitHub (discussions: read)",
   },
   {
     name: "read:actions",
     needs: ["pull"],
-    what: "its GitHub Actions runs and their logs",
-    enforcedBy:
-      "not yet: the run's token follows its mode until #497 (then the GitHub gateway, actions: read)",
+    what: "its GitHub Actions runs and their logs, check runs and commit statuses",
+    enforcedBy: "GitHub (actions, checks and statuses: read)",
   },
 ];
 
@@ -271,37 +268,35 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
       "`preview` is denied, but the repository's preview hook still runs on its pull requests' events: the capabilities don't decide it yet",
     );
   }
-  // The reads aren't the token's yet (#497): one refused while the run has `pull`, and so its
-  // mode's token, is still read when that token has it.
-  if (used.includes("pull") && mode !== null) {
-    const extra = permissionsFor(mode);
-    const token = extra === NO_TOKEN ? {} : readsOf(extra);
-    for (const c of capabilities) {
-      const permission = READ_PERMISSIONS[c.name];
-      if (!permission || c.used || !["denied", "not-allowed"].includes(c.status)) continue;
-      if (!token[permission]) continue;
-      warnings.push(
-        `\`${c.name}\` isn't given, but the run's token still reads it until #497: its mode's permissions decide the token`,
-      );
-    }
-  }
-
   // Modes that can't do without it: a review reads the diff and gives its verdict from it (the
   // listener parses it), a discussion's thread is read with its token (preparation.mjs reads
   // an issue's only).
   if (NEED_PULL[mode] && !used.includes("pull")) {
     errors.push(`a \`${mode}\` run needs \`pull\`: ${NEED_PULL[mode]}`);
   }
-  // A research run has no token (its mode's NO_TOKEN, until #497 gives the reads to the token)
-  // and its input is the thread prepareBare() writes: the clone it was given would fail.
+  // A discussion run reads its thread with its token's `discussions` (github-app.mjs readsOf()).
+  if (mode === "discussion" && used.includes("pull") && !used.includes("read:discussions")) {
+    errors.push(
+      "a `discussion` run needs `read:discussions`: it reads the discussion with its token",
+    );
+  }
+  // A review reads its pull request with its token (`gh pr diff`, `gh pr view`: prompts/review.md),
+  // and its verdict decides fixes and merges.
+  if (mode === "review" && used.includes("pull") && !used.includes("read:pulls")) {
+    errors.push(
+      "a `review` run needs `read:pulls`: it reads its pull request with its token, and its verdict decides fixes and merges",
+    );
+  }
+  // A research run's input is the issue's thread, which prepareBare() writes, and its volumes
+  // are its own (modes.mjs sessionName()): it starts with nothing of the repository's.
   if (OPEN.has(mode) && used.includes("pull")) {
     errors.push(
-      `a \`${mode}\` run can't have \`pull\` yet: it has no GitHub token to clone with (#497)`,
+      `a \`${mode}\` run can't have \`pull\`: it reads the issue's thread, with nothing of the repository's`,
     );
   }
   // The repository's own modes need its allow rules too, which a repository written before
-  // capabilities doesn't have: its runs would start without the code its mode expects, and the
-  // full token their traits give (permissionsFor()) until #497. Refused, saying what to add.
+  // capabilities doesn't have: its runs would start without the code its mode expects, nor
+  // anything of GitHub's. Refused, saying what to add.
   if (custom && !rules.repo?.allow.size) {
     errors.push(
       `no \`allow_capabilities\` rule of the repository's policies (${POLICY_DIR}/) gives this mode anything: add one naming what its runs get (\`pull\`, \`push\`, \`setup\`…)`,
@@ -328,14 +323,6 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
   }
   return { capabilities, used, errors, warnings };
 }
-
-// The token permission each read is until #497 maps them (outcomeOf()'s warning).
-const READ_PERMISSIONS = {
-  "read:issues": "issues",
-  "read:pulls": "pull_requests",
-  "read:discussions": "discussions",
-  "read:actions": "actions",
-};
 
 // The built-in modes refused without `pull`, and why (outcomeOf()).
 const NEED_PULL = {

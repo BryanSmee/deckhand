@@ -1062,14 +1062,18 @@ What a run's sandbox gets (`pull`, `push`, `setup`, `docker`, `internet`, `read:
 `custom_mode`, `issue`, `reason`, `fork`, `trigger` (as the run input's) and `command` (the
 comment's first line: `work`, `stop`…); used if its key (`setup`, `dockerfile`,
 `docker`, `preview`) asks for it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give built-in modes what they
-always had (but a pull request's branch image, which needs `push`); the repository's `modes:` only what its `.deckhand/policy/` allows too (nothing: refused):
+always had (but a pull request's branch image, which needs `push`); the repository's `modes:` only what its `.deckhand/policy/` allows too (nothing: refused).
+The `read:*` are what the run's token reads on GitHub (`read:issues` every issue, `read:pulls`
+every pull request, `read:discussions`, `read:actions` CI): without `read:issues`, a run reads its
+own issue only. A limit on what a run asks for, not a secret: with `pull`, commit messages may
+quote an issue. Here, an audit mode that reads its own issue, pull requests and the code:
 
 ```rego
 package deckhand
 
 allow_capabilities contains c if {
   input.mode == "audit"
-  some c in {"pull", "read:issues", "read:pulls"}
+  some c in {"pull", "read:pulls"}
 }
 ```
 

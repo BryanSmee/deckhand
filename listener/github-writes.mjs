@@ -1060,6 +1060,18 @@ export function createWriteChecks({
     } else {
       target = { number: null, labels: [], author: null, ...target };
     }
+    // Without `read:issues` (issue #497), an issue it can't read isn't written to either but by
+    // a comment or a reaction: GitHub answers the other writes with the issue, body and all.
+    const unread = !run.caps?.includes("read:issues");
+    if (unread && UNREAD.has(target.kind)) {
+      const answered = write.actions.filter((a) => !ANSWERED_APART.has(a));
+      if (answered.length) {
+        return refusal(
+          403,
+          `this run's capabilities don't give \`read:issues\`: it can't ${answered.join(", ")} on ${target.kind} #${target.number}, whose answer is that issue (it may comment or react)`,
+        );
+      }
+    }
     if (write.thread) {
       let thread;
       try {
@@ -1125,6 +1137,14 @@ export function createWriteChecks({
       if (!LINKABLE.has(sub.kind)) {
         return refusal(403, "a run links only issues it created, or those already under its issue");
       }
+      // Without `read:issues`, only one it created: GitHub may answer with the sub-issue (a
+      // removal, a new priority).
+      if (!run.caps?.includes("read:issues") && sub.kind !== "created_issue") {
+        return refusal(
+          403,
+          "this run's capabilities don't give `read:issues`: it links, unlinks or reorders only issues it created",
+        );
+      }
       change.sub_issue = sub;
     }
     if (write.blocker) {
@@ -1139,6 +1159,13 @@ export function createWriteChecks({
         return refusal(
           403,
           "a run's blocking issue is one it created, one under its issue, or an open issue of its repository",
+        );
+      }
+      // Without `read:issues`, only one it created: GitHub answers with the blocking issue.
+      if (!run.caps?.includes("read:issues") && found.kind !== "created_issue") {
+        return refusal(
+          403,
+          "this run's capabilities don't give `read:issues`: its blocking issue is one it created",
         );
       }
       const { open: _, ...blocked_by } = found;
@@ -1382,6 +1409,10 @@ function ownReaction(run, { subject, id, content }) {
 
 // The children a link may name (resolveChild()).
 const LINKABLE = new Set(["sub_issue", "created_issue"]);
+// The issues a run without `read:issues` can't read (issue #497): only comments and reactions
+// (whose answer is the comment or the reaction, not the issue) and project items reach them.
+const UNREAD = new Set(["sub_issue", "other_issue"]);
+const ANSWERED_APART = new Set(["comment", "react", "unreact", "project"]);
 
 // Whether GitHub's issue (or parent) is in `repo` ("owner/name", lower case).
 function inRepo(issue, repo) {

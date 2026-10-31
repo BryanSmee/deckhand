@@ -197,7 +197,7 @@ test("a refused call's path is redacted, and doesn't hide a provider's failure",
     pathRe: /^\/api\/([A-Za-z0-9_]+)$/,
   });
   const notes = [];
-  const secret = broker.register("org/repo", undefined, { secret: "s".repeat(40) });
+  const secret = broker.register("org/repo", { secret: "s".repeat(40) });
   broker.provide(secret, "test", (message) => notes.push(message));
   const token = `ghs_${"A".repeat(36)}`;
   broker.runOf(secret).apiError = "Provider answered 529";

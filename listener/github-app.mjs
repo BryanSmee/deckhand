@@ -105,7 +105,7 @@ export async function checkAppSettings(asApp, log, { githubUrl, credentials = {}
 
 // A sandbox's token reads less than the App: no deployments, nothing outside its repo, and
 // nothing it writes. Each write the GitHub gateway checked and the policies allowed gets a token
-// of its own (github-gateway.mjs), with these reads and only the write permission it needs
+// of its own (github-gateway.mjs), with the run's reads and only the write permission it needs
 // (github-writes.mjs writePermissions()): `issues: write` for an issue's or a comment's,
 // `pull_requests: write` to open or edit a pull request, `contents: write` to ready, draft or
 // update the branch of one, `actions: write` for a rerun, `organization_projects: write` for an
@@ -115,37 +115,49 @@ export async function checkAppSettings(asApp, log, { githubUrl, credentials = {}
 // merge into it directly. Pull requests are never written but by those checked writes:
 // `pull_requests: write` would let it approve any pull request of its repo as the App, or
 // replace the review mode's verdict (GitHub counts a reviewer's latest review).
-export const SANDBOX_PERMISSIONS = {
-  contents: "read",
-  issues: "read",
-  pull_requests: "read",
-  metadata: "read",
-  actions: "read",
-  checks: "read",
-  statuses: "read",
+//
+// What a run's token reads is its capabilities' (issue #497, capabilities.mjs): each read
+// capability gives these permissions, read, and GitHub enforces them. A limit on what a run is
+// given and may ask for, not a promise that the rest stays secret: with `pull`, commit messages
+// and pull request descriptions may quote an issue. `read:actions` is CI's results, beyond
+// Actions too (check runs, commit statuses: `gh pr checks`).
+export const READ_PERMISSIONS = {
+  pull: ["contents"],
+  "read:issues": ["issues"],
+  "read:pulls": ["pull_requests"],
+  "read:discussions": ["discussions"],
+  "read:actions": ["actions", "checks", "statuses"],
 };
+
+// What a run's token gets for anything but a write the GitHub gateway checked and let through
+// (github-gateway.mjs): its read capabilities' permissions (READ_PERMISSIONS), and the
+// repository's metadata, which every token has. `caps`: the run's (broker.mjs grant()).
+export function readsOf(caps = []) {
+  const permissions = { metadata: "read" };
+  for (const cap of caps) {
+    for (const name of READ_PERMISSIONS[cap] ?? []) permissions[name] = "read";
+  }
+  return permissions;
+}
+
+// Whether a run gets anything from GitHub: only with `pull`, which every read capability needs
+// (capabilities.mjs). Without it (a research run) the GitHub gateway refuses its calls, and its
+// sandbox reaches public GitHub anonymously (broker-http.mjs).
+export const readsGitHub = (run) => !!run?.caps?.includes("pull");
+// Whether a run's sandbox reaches GitHub's hosts through a tunnel rather than the GitHub gateway:
+// only once its capabilities are decided (broker.mjs grant()) and give no `pull`. A run the
+// broker doesn't know, or one before its start decided them, goes to the gateway, which
+// refuses it: fail closed.
+export const tunnelsGitHub = (run) => !!run?.decided && !readsGitHub(run);
+
 // What a write on an issue, a pull request's conversation, a comment, a reaction or a label
 // needs (github-writes.mjs writePermissions()).
 export const ISSUES_WRITE = { issues: "write" };
-// Added for discussion runs only: an App created before discussions keeps working elsewhere.
-export const DISCUSSION_PERMISSIONS = { discussions: "read" };
-// A research run (modes.mjs) gets no token at all: the broker refuses it one (broker.mjs).
-export const NO_TOKEN = false;
 // The git gateway's own token for a push it lets through: never handed to a sandbox.
 export const PUSH_PERMISSIONS = { contents: "write" };
 // Its token for a push of a repo granted `allow_workflows` (grants.mjs): GitHub refuses any
 // push that adds or changes a file under .github/workflows/ without it.
 export const WORKFLOW_PUSH_PERMISSIONS = { ...PUSH_PERMISSIONS, workflows: "write" };
-
-// What a run's token gets for anything but a write the GitHub gateway checked and let through
-// (github-gateway.mjs): its permissions (`extra`, over SANDBOX_PERMISSIONS), each only read,
-// whatever they say.
-export function readsOf(extra = {}) {
-  const levels = { ...SANDBOX_PERMISSIONS, ...extra };
-  return Object.fromEntries(
-    Object.entries(levels).map(([name, level]) => [name, level === "write" ? "read" : level]),
-  );
-}
 
 // Permissions a run's token goes without when its installation lacks them (it hasn't accepted
 // them yet, or the App was created before them), rather than GitHub refusing the whole token:
@@ -318,13 +330,13 @@ export function createGitHubApp({
     return missing?.length ? { missing, account: found.account, url: found.url } : null;
   }
 
-  // `repo`: a token for that repo alone, with the sandbox's permissions (and `extra`), but for
+  // `repo`: a token for that repo alone, with `wanted` (name → level) and its metadata, but for
   // the optional ones its installation lacks; none: the whole installation with the App's, for
   // the listener's own calls.
-  async function token(installationId, repo, extra = {}) {
+  async function token(installationId, repo, wanted = {}) {
     let permissions;
     if (repo) {
-      permissions = { ...SANDBOX_PERMISSIONS, ...extra };
+      permissions = { metadata: "read", ...wanted };
       const optional = Object.keys(permissions).some((name) => OPTIONAL_PERMISSIONS.has(name));
       const found = optional && (await grantedTo(installationId));
       for (const [name, level] of Object.entries(permissions)) {
@@ -356,9 +368,10 @@ export function createGitHubApp({
     return minted;
   }
 
-  // A sandbox's token: only its repo, only what a run needs.
-  async function repoToken(repo, extra) {
-    return token(await installationOf(repo), repo.toLowerCase(), extra);
+  // A sandbox's token: only its repo, only `permissions` (readsOf(), a checked write's, the
+  // git gateway's).
+  async function repoToken(repo, permissions) {
+    return token(await installationOf(repo), repo.toLowerCase(), permissions);
   }
 
   // `expected`: error statuses that are normal for this call, so not logged.

@@ -13,7 +13,8 @@ import {
   outcomeOf,
   RISKY,
 } from "../listener/capabilities.mjs";
-import { LIGHT, MODES, OPEN, permissionsFor } from "../listener/modes.mjs";
+import { LIGHT, MODES, OPEN } from "../listener/modes.mjs";
+import { readsOf } from "../listener/github-app.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
@@ -88,7 +89,7 @@ test("the catalogue: its names, dependencies and config sides", () => {
     "image:repo": ["pull"],
     "image:branch": ["push", "image:repo"],
     docker: ["pull"],
-    // Until #497: without `pull`, a run has no token to read with.
+    // Without `pull`, a run gets nothing from GitHub (github-app.mjs readsGitHub()).
     "read:issues": ["pull"],
     "read:pulls": ["pull"],
     "read:discussions": ["pull"],
@@ -173,7 +174,7 @@ test("a not-granted capability whose need goes isn't an error; a review or discu
   }
 });
 
-test("a research run given `pull` doesn't start: it has no token to clone with (#497)", () => {
+test("a research run given `pull` doesn't start: it reads the issue's thread, without a clone", () => {
   const said = outcomeOf({
     rules: { operator: layer(only("pull", "internet")) },
     custom: false,
@@ -183,7 +184,7 @@ test("a research run given `pull` doesn't start: it has no token to clone with (
     mode: "research",
   });
   assert.deepEqual(said.errors, [
-    "a `research` run can't have `pull` yet: it has no GitHub token to clone with (#497)",
+    "a `research` run can't have `pull`: it reads the issue's thread, with nothing of the repository's",
   ]);
   const internet = outcomeOf({
     rules: { operator: layer(only("internet")) },
@@ -226,7 +227,6 @@ test("forks don't push: a work run with branch images granted keeps its code, wi
     "preview",
     "read:issues",
     "read:pulls",
-    "read:discussions",
     "read:actions",
   ]);
   const branch = said.capabilities.find((c) => c.name === "image:branch");
@@ -463,8 +463,8 @@ test(
         for (const c of ["push", "setup", "docker", "image:branch", "preview"]) {
           assert.equal(has(c), !LIGHT.has(mode), `${mode}: ${c}`);
         }
-        // A work run's, or a token that reads discussions (a discussion run's).
-        const discussions = !LIGHT.has(mode) || !!permissionsFor(mode)?.discussions;
+        // Discussions for discussion runs only, as their token had.
+        const discussions = mode === "discussion";
         assert.equal(has("read:discussions"), discussions, mode);
       }
       assert.deepEqual(results[mode].operator.deny, [], mode);
@@ -697,7 +697,7 @@ test("the config page: a config key its grant doesn't give stops every mode with
   assert.deepEqual(research.modes.find((m) => m.mode === "research").errors, []);
 });
 
-test("a read refused while the run has `pull`: said, since its token still has it until #497", () => {
+test("a read refused while the run has `pull`: its token goes without, nothing to warn of", () => {
   const said = outcomeOf({
     rules: {
       operator: layer(everything(), [
@@ -711,24 +711,12 @@ test("a read refused while the run has `pull`: said, since its token still has i
     mode: "work",
   });
   assert.ok(said.used.includes("pull") && !said.used.includes("read:actions"));
-  assert.ok(said.warnings.some((w) => /^`read:actions` isn't given, but the run's token/.test(w)));
-  // A brainstorm's token reads no discussions: nothing to say.
-  const brainstorm = outcomeOf({
-    rules: {
-      operator: layer(everything(), [
-        { capability: "read:discussions", reason: "not here", file: "mode.rego" },
-      ]),
-    },
-    custom: false,
-    settings: full,
-    grant: granted,
-    repo: { private: true },
-    mode: "brainstorm",
-  });
-  assert.ok(!brainstorm.warnings.some((w) => w.startsWith("`read:discussions`")));
-  // What the page says enforces it.
+  assert.ok(!said.warnings.some((w) => w.startsWith("`read:actions`")), said.warnings);
+  assert.equal(readsOf(said.used).actions, undefined);
+  assert.equal(readsOf(said.used).checks, undefined);
+  // What the page says enforces it: GitHub, through the token's permissions.
   const entry = CAPABILITIES.find((c) => c.name === "read:actions");
-  assert.match(entry.enforcedBy, /^not yet: the run's token follows its mode until #497/);
+  assert.match(entry.enforcedBy, /^GitHub \(actions, checks and statuses: read\)/);
 });
 
 test("the config page: grants that can't be read stop every mode, as every run", async () => {
@@ -745,8 +733,29 @@ test("the config page: grants that can't be read stop every mode, as every run",
   }
 });
 
-test("Deckhand's defaults give each built-in mode every read its token has: no warning", () => {
-  for (const mode of ["work", "brainstorm", "discussion", "review", "analyze"]) {
+test("Deckhand's defaults give each built-in mode's token what it read before capabilities", () => {
+  const before = {
+    metadata: "read",
+    contents: "read",
+    issues: "read",
+    pull_requests: "read",
+    actions: "read",
+    checks: "read",
+    statuses: "read",
+  };
+  const expected = {
+    work: before,
+    brainstorm: before,
+    stop: before,
+    idea: before,
+    bug: before,
+    onboarding: before,
+    analyze: before,
+    review: before,
+    discussion: { ...before, discussions: "read" },
+    research: { metadata: "read" },
+  };
+  for (const [mode, reads] of Object.entries(expected)) {
     const said = outcomeOf({
       rules: {
         operator: layer(Object.fromEntries(defaultCapabilities({ mode }).map((c) => [c, ["m"]]))),
@@ -757,10 +766,7 @@ test("Deckhand's defaults give each built-in mode every read its token has: no w
       repo: { private: false },
       mode,
     });
-    assert.ok(
-      !said.warnings.some((w) => /token still reads it/.test(w)),
-      `${mode}: ${said.warnings}`,
-    );
+    assert.deepEqual(readsOf(said.used), reads, mode);
   }
 });
 
@@ -782,4 +788,36 @@ test("a deny of `preview`: said not to stop the hook yet, which runs on pull req
   // No hook asked for, or none granted: none runs, nothing to say.
   assert.equal(preview({ ...full, preview: null }, granted), false);
   assert.equal(preview(full, { ...granted, allowPreview: false }), false);
+});
+
+test("a discussion run without read:discussions doesn't start: it reads its thread with its token", () => {
+  const said = (caps) =>
+    outcomeOf({
+      rules: { operator: layer(only(...caps)) },
+      custom: false,
+      settings: {},
+      grant: granted,
+      repo: { private: true },
+      mode: "discussion",
+    });
+  assert.deepEqual(said(["pull", "read:issues"]).errors, [
+    "a `discussion` run needs `read:discussions`: it reads the discussion with its token",
+  ]);
+  assert.deepEqual(said(["pull", "read:discussions"]).errors, []);
+});
+
+test("a review without read:pulls doesn't start: it reads its pull request with its token", () => {
+  const said = (caps) =>
+    outcomeOf({
+      rules: { operator: layer(only(...caps)) },
+      custom: false,
+      settings: {},
+      grant: granted,
+      repo: { private: true },
+      mode: "review",
+    });
+  assert.deepEqual(said(["pull", "read:issues"]).errors, [
+    "a `review` run needs `read:pulls`: it reads its pull request with its token, and its verdict decides fixes and merges",
+  ]);
+  assert.deepEqual(said(["pull", "read:pulls"]).errors, []);
 });

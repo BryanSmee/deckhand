@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
-import { NO_TOKEN } from "../listener/github-app.mjs";
+import { readsGitHub } from "../listener/github-app.mjs";
 import { localBroker, sandboxAt } from "./helpers.mjs";
 
 test("a run keeps why the listener started it, which deny_github reads", () => {
   const broker = createBroker({ sentFrom: sandboxAt() });
-  const fix = broker.register("org/c", undefined, { mode: "work", push: true, reason: "conflict" });
+  const fix = broker.register("org/c", { mode: "work", push: true, reason: "conflict" });
   assert.equal(broker.runOf(fix).reason, "conflict");
   assert.equal(broker.runOf(broker.register("org/c")).reason, null);
 });
@@ -15,7 +15,7 @@ test("a run keeps why the listener started it, which deny_github reads", () => {
 test("a run's secret names its run until the run ends, and only from its own sandbox", async () => {
   const sentFrom = sandboxAt("10.9.0.5");
   const broker = createBroker({ sentFrom });
-  const a = broker.register("Org/A", undefined, { mode: "review" });
+  const a = broker.register("Org/A", { mode: "review" });
   const b = broker.register("org/b");
   assert.equal(broker.runOf(a).repo, "org/a");
   assert.equal(broker.runOf(a).mode, "review");
@@ -53,26 +53,26 @@ test("a run's secret names its run until the run ends, and only from its own san
 
 test("a research run's secret still names the run, which pushes nothing", () => {
   const broker = createBroker({});
-  const research = broker.register("org/a", NO_TOKEN);
+  const research = broker.register("org/a", { caps: ["internet"] });
   assert.equal(broker.runOf(research).repo, "org/a");
-  assert.equal(broker.runOf(research).extra, NO_TOKEN);
+  assert.equal(readsGitHub(broker.runOf(research)), false);
   assert.equal(broker.runOf(research).push, false);
 });
 
 test("only runs registered as work push; a restarted run's secret keeps its own", () => {
   const broker = createBroker({});
   assert.equal(broker.runOf(broker.register("org/a")).push, false);
-  assert.equal(broker.runOf(broker.register("org/a", { pull_requests: "write" })).push, false);
-  assert.equal(broker.runOf(broker.register("org/a", undefined, { push: "yes" })).push, false);
-  assert.equal(broker.runOf(broker.register("org/a", undefined, { push: true })).push, true);
-  const secret = broker.register("org/a", undefined, { push: true, secret: "kept" });
+  assert.equal(broker.runOf(broker.register("org/a")).push, false);
+  assert.equal(broker.runOf(broker.register("org/a", { push: "yes" })).push, false);
+  assert.equal(broker.runOf(broker.register("org/a", { push: true })).push, true);
+  const secret = broker.register("org/a", { push: true, secret: "kept" });
   assert.equal(secret, "kept");
   assert.equal(broker.runOf("kept").push, true);
 });
 
 test("a run's branches: none until allowed, and never for a run that can't push", () => {
   const broker = createBroker({});
-  const work = broker.register("org/a", undefined, { push: true });
+  const work = broker.register("org/a", { push: true });
   assert.deepEqual(broker.runOf(work).branches, []);
   broker.allow(work, ["issue-1-*"]);
   assert.deepEqual(broker.runOf(work).branches, ["issue-1-*"]);
@@ -83,16 +83,17 @@ test("a run's branches: none until allowed, and never for a run that can't push"
   broker.grant(light, ["pull", "push"]);
   broker.allow(light, ["issue-1-*"]);
   assert.deepEqual(broker.runOf(light).branches, ["issue-1-*"]);
-  assert.deepEqual(broker.runOf(light).extra, undefined);
-  // Without `pull`, no GitHub token at all, whatever its mode gave it; restored the same way.
-  const bare = broker.register("org/a", { pull_requests: "read" });
+  assert.equal(readsGitHub(broker.runOf(light)), true);
+  // Without `pull`, nothing from GitHub, whatever its mode writes; restored the same way, and
+  // before its capabilities are decided.
+  const bare = broker.register("org/a");
+  assert.equal(readsGitHub(broker.runOf(bare)), false);
+  assert.equal(broker.runOf(bare).decided, false);
   broker.grant(bare, ["read:issues"]);
-  assert.equal(broker.runOf(bare).extra, NO_TOKEN);
-  const restored = broker.register("org/a", { pull_requests: "read" }, { caps: [] });
-  assert.equal(broker.runOf(restored).extra, NO_TOKEN);
-  // A run saved before capabilities keeps its mode's.
-  const older = broker.register("org/a", { pull_requests: "read" }, { caps: null });
-  assert.deepEqual(broker.runOf(older).extra, { pull_requests: "read" });
+  assert.equal(readsGitHub(broker.runOf(bare)), false);
+  assert.equal(broker.runOf(bare).decided, true);
+  const restored = broker.register("org/a", { caps: [] });
+  assert.equal(readsGitHub(broker.runOf(restored)), false);
   // A finished run stays finished.
   broker.revoke(work);
   broker.allow(work, ["x"]);
@@ -114,7 +115,7 @@ function tokenBroker(networks = { "10.9.0.5": "net-a", "10.9.1.5": "net-b" }) {
 
 test("a run's tokens name it from its own sandbox's network alone", async () => {
   const { broker, service } = tokenBroker();
-  const id = broker.register("Org/A", undefined, { id: "run-a", mode: "work", push: true });
+  const id = broker.register("Org/A", { id: "run-a", mode: "work", push: true });
   assert.equal(id, "run-a");
   broker.grant(id, ["pull", "push"]);
   broker.allow(id, ["issue-1-*"]);
@@ -169,8 +170,8 @@ test("a run's tokens name it from its own sandbox's network alone", async () => 
 test("a token from another broker's key is refused, as one signed for another sandbox", async () => {
   const { broker } = tokenBroker();
   const other = tokenBroker().broker;
-  other.register("org/a", undefined, { id: "run-a" });
-  broker.register("org/a", undefined, { id: "run-a" });
+  other.register("org/a", { id: "run-a" });
+  broker.register("org/a", { id: "run-a" });
   const { token } = await other.issue("run-a", "net-a");
   assert.match((await broker.check(token, "10.9.0.5")).message, /unknown key/);
   const mine = (await broker.issue("run-a", "net-b")).token;
@@ -180,7 +181,7 @@ test("a token from another broker's key is refused, as one signed for another sa
 
 test("a run from before tokens keeps its secret, bound to its sandbox's address", async () => {
   const broker = createBroker({ sentFrom: sandboxAt("10.9.0.5"), ...localBroker() });
-  const secret = broker.register("org/a", undefined, { id: "old", secret: "kept-secret" });
+  const secret = broker.register("org/a", { id: "old", secret: "kept-secret" });
   assert.equal(secret, "kept-secret");
   assert.equal(broker.runOf("old"), broker.runOf("kept-secret"));
   assert.equal((await broker.check("kept-secret", "10.9.0.5")).run.id, "old");
@@ -189,7 +190,7 @@ test("a run from before tokens keeps its secret, bound to its sandbox's address"
   broker.revoke("old");
   assert.equal((await broker.check("kept-secret", "10.9.0.5")).status, 401);
   // A token run has no secret at all, and can't be issued once ended.
-  broker.register("org/a", undefined, { id: "new" });
+  broker.register("org/a", { id: "new" });
   assert.equal(broker.runOf("new").secret, undefined);
   broker.revoke("new");
   await assert.rejects(broker.issue("new", "net-a"), /ended/);
@@ -197,7 +198,7 @@ test("a run from before tokens keeps its secret, bound to its sandbox's address"
 
 test("without the broker service, no run gets a token", async () => {
   const broker = createBroker({});
-  broker.register("org/a", undefined, { id: "run-a" });
+  broker.register("org/a", { id: "run-a" });
   await assert.rejects(broker.issue("run-a", "net-a"), /no broker service/);
 });
 
@@ -216,7 +217,7 @@ test("a run that ends while its tokens are being signed gets none, and ends at t
       end: async (id) => (ended.push(id), service.issuer.end(id)),
     },
   });
-  broker.register("org/a", undefined, { id: "run-a" });
+  broker.register("org/a", { id: "run-a" });
   const issued = broker.issue("run-a", "net-a");
   await new Promise((resolve) => setImmediate(resolve));
   await broker.revoke("run-a");
@@ -228,14 +229,14 @@ test("a run that ends while its tokens are being signed gets none, and ends at t
 
 test("a restarted listener redacts the run tokens saved with the run, and tells the broker service it goes on", async () => {
   const { broker, service } = tokenBroker();
-  broker.register("org/a", undefined, { id: "run-a", mode: "work", push: true });
+  broker.register("org/a", { id: "run-a", mode: "work", push: true });
   broker.allow("run-a", ["issue-1-*"]);
   const { token } = await broker.issue("run-a", "net-a");
   // The broker service lost it meanwhile (a run from before it): told again, with its claims.
   await service.runs.end("run-a");
   const again = tokenBroker().broker;
   const restarted = createBroker({ ...service, sandboxOf: async () => "net-a" });
-  restarted.register("org/a", undefined, {
+  restarted.register("org/a", {
     id: "run-a",
     mode: "work",
     push: true,
@@ -256,7 +257,7 @@ test("a restarted listener redacts the run tokens saved with the run, and tells 
   assert.equal(issued[0].hash, createHash("sha256").update(token).digest("hex"));
   assert.equal(issued.length, 2);
   // A run from before tokens has nothing there.
-  restarted.register("org/a", undefined, { id: "old", secret: "kept" });
+  restarted.register("org/a", { id: "old", secret: "kept" });
   await restarted.restore("old");
   assert.equal(await service.runs.get("old"), null);
   assert.equal(again.size(), 0);

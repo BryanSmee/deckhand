@@ -372,13 +372,13 @@ test("a work run that isn't a fork's is checked; a fork's run and other runs are
   const { get } = fakeGithub();
   const forks = createForkChecks({ get });
   const broker = createBroker({});
-  const work = broker.register("Org/Repo", {}, { push: true });
+  const work = broker.register("Org/Repo", { push: true, caps: ["pull"] });
   assert.equal(forks.restricted(broker.runOf(work)), true);
   broker.allow(work, ["issue-1-*"]);
   assert.equal(forks.restricted(broker.runOf(work)), true);
   broker.allow(work, [], true);
   assert.equal(forks.restricted(broker.runOf(work)), false);
-  const light = broker.register("Org/Repo", {}, { push: false });
+  const light = broker.register("Org/Repo", { push: false });
   assert.equal(forks.restricted(broker.runOf(light)), false);
   // A light run (a repo's light mode, say) its capabilities give what later runs trust: caches
   // (`setup`) or an engine (`docker`). Checked, unless a fork's.
@@ -387,13 +387,13 @@ test("a work run that isn't a fork's is checked; a fork's run and other runs are
     ["pull", "docker"],
     ["pull", "push"],
   ]) {
-    const run = broker.register("Org/Repo", {}, { push: false });
+    const run = broker.register("Org/Repo", { push: false });
     broker.grant(run, caps);
     assert.equal(forks.restricted(broker.runOf(run)), true, caps.join());
     broker.allow(run, [], true);
     assert.equal(forks.restricted(broker.runOf(run)), false, caps.join());
   }
-  const reads = broker.register("Org/Repo", {}, { push: false });
+  const reads = broker.register("Org/Repo", { push: false });
   broker.grant(reads, ["pull", "image:repo", "read:issues"]);
   assert.equal(forks.restricted(broker.runOf(reads)), false);
 });
@@ -805,7 +805,7 @@ async function gateway(t, { maxInFlight } = {}) {
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   const register = (fork) => {
-    const secret = broker.register("Org/Repo", {}, { push: true });
+    const secret = broker.register("Org/Repo", { push: true, caps: ["pull"] });
     const notes = [];
     broker.provide(secret, "anthropic", (line) => notes.push(line));
     broker.allow(secret, ["issue-1-*"], fork);
@@ -1064,7 +1064,7 @@ test("real git through the gateway: a whole clone goes, a fork's head and lone b
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   const via = `${url}/relay/127.0.0.1/org/repo.git`;
   const as = (fork) => {
-    const secret = broker.register("org/repo", {}, { push: true });
+    const secret = broker.register("org/repo", { push: true, caps: ["pull"] });
     broker.allow(secret, [], fork);
     current = broker.runOf(secret);
   };
@@ -1230,7 +1230,7 @@ async function realGateway(t) {
     forks: createForkChecks({ get: fakeGithub().get }),
   });
   const { port } = await serve(t, (req, res) => gw.handle(req, res));
-  const secret = broker.register("Org/Repo", {}, { push: true });
+  const secret = broker.register("Org/Repo", { push: true, caps: ["pull"] });
   broker.allow(secret, ["issue-1-*"], false);
   return (host, path, { method = "GET", body } = {}) =>
     new Promise((resolve, reject) => {

@@ -586,6 +586,8 @@ ctx.githubGateway = createGithubGateway({
   // comments it posted, which it may edit.
   wroteWrite: writeChecks.answered,
   readsProjects,
+  // A run's own issue's next pages, which GitHub's links name by its repository's id.
+  repoId: async (repo) => (await lookup(repo, `/repos/${repo}`))?.id ?? null,
   log,
 });
 // Their pushes, on the broker's port: to the run's own branches only, never the default one,

@@ -3458,16 +3458,13 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /This mode only comments/);
     assert.match(runEnv, /Read the diff and list the risks\./);
     assert.match(runEnv, /^TASK_MESSAGE=Mind the tests\.$/m);
-    // Comments only: its token reads.
+    // Comments only: its token reads, what its capabilities give (no `read:actions` here).
     const mint = github.requests.find((r) => r.body.includes("repositories"));
     assert.deepEqual(JSON.parse(mint.body).permissions, {
       contents: "read",
       issues: "read",
       pull_requests: "read",
       metadata: "read",
-      actions: "read",
-      checks: "read",
-      statuses: "read",
     });
     // The same hosts as any run of the repo: the mandatory ones and its grant's.
     assert.deepEqual(allowedHosts(egressAnswers(dir)), [

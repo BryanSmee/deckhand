@@ -680,13 +680,7 @@ test("a repo's config: what each mode's runs get, the file that decided it, what
   });
   const work = capabilities.modes.find((m) => m.mode === "work");
   assert.equal(work.custom, false);
-  assert.deepEqual(work.used, [
-    "pull",
-    "read:issues",
-    "read:pulls",
-    "read:discussions",
-    "read:actions",
-  ]);
+  assert.deepEqual(work.used, ["pull", "read:issues", "read:pulls", "read:actions"]);
   // Written for GitHub replies, without their backquotes.
   assert.deepEqual(
     work.capabilities.find((c) => c.name === "push"),

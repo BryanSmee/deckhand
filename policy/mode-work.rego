@@ -15,7 +15,6 @@ work_capabilities := {
   "preview",
   "read:issues",
   "read:pulls",
-  "read:discussions",
   "read:actions",
 }
 

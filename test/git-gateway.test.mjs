@@ -27,7 +27,6 @@ import {
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
-import { NO_TOKEN } from "../listener/github-app.mjs";
 import { createForkChecks } from "../listener/github-forks.mjs";
 import {
   allowingPolicies,
@@ -263,7 +262,7 @@ const gitEnv = {
 
 // A work run on issue 1 by default.
 function issueRun(b, branches = ["issue-1-*"]) {
-  const secret = b.register("org/repo", undefined, { push: true });
+  const secret = b.register("org/repo", { push: true });
   b.allow(secret, branches);
   return secret;
 }
@@ -274,7 +273,7 @@ function tokenRun(
   b,
   { branches = ["issue-1-*"], fork = false, repo = "org/repo", push = true } = {},
 ) {
-  b.register(repo, undefined, { id: "run-1", push });
+  b.register(repo, { id: "run-1", push });
   b.allow("run-1", branches, fork);
   return b.issue("run-1", "net-1").then((issued) => issued.token);
 }
@@ -683,16 +682,12 @@ test("no secret, another run's repo or a finished run: no push", async (t) => {
   assert.deepEqual(seen, []);
 });
 
-// Light runs: brainstorms and inbox entries keep a token that writes issues, onboarding and
-// a repo's light modes one that only reads. Neither decides: the kind of run does.
-for (const [what, extra] of [
-  ["a brainstorm", { pull_requests: "read" }],
-  ["a light repo mode", { contents: "read", issues: "read", pull_requests: "read" }],
-  ["a run registered without saying", undefined],
-]) {
+// Light runs: brainstorms, inbox entries, onboarding and a repo's light modes, registered
+// without `push`: the kind of run decides, not its token.
+for (const what of ["a brainstorm", "a light repo mode", "a run registered without saying"]) {
   test(`${what} can't push`, async (t) => {
     const { work, remote, seen } = await setup(t, {
-      register: (b) => b.register("org/repo", extra),
+      register: (b) => b.register("org/repo"),
     });
     const res = await git(work, "push", remote(), "HEAD:refs/heads/x");
     assert.equal(res.ok, false);
@@ -712,7 +707,7 @@ test("a policy's refusal refuses the push, with its message; nothing reaches Git
   };
   const { work, remote, seen, upstream } = await setup(t, {
     register: (b) => {
-      const secret = b.register("org/repo", undefined, { push: true, mode: "work", issue: 1 });
+      const secret = b.register("org/repo", { push: true, mode: "work", issue: 1 });
       b.allow(secret, ["issue-1-*"]);
       return secret;
     },
@@ -831,7 +826,7 @@ test(
 
 test("a light run can't push even with a token that writes pull requests", async (t) => {
   const { work, remote, seen } = await setup(t, {
-    register: (b) => b.register("org/repo", { pull_requests: "write" }, { push: false }),
+    register: (b) => b.register("org/repo", { push: false }),
   });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/x");
   assert.equal(res.ok, false);
@@ -841,7 +836,7 @@ test("a light run can't push even with a token that writes pull requests", async
 
 test("a research run can't push: it has no token, and no push right", async (t) => {
   const { work, remote, seen } = await setup(t, {
-    register: (b) => b.register("org/repo", NO_TOKEN, { push: false }),
+    register: (b) => b.register("org/repo", { push: false, caps: ["internet"] }),
   });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-12-x");
   assert.equal(res.ok, false);
@@ -1421,7 +1416,7 @@ test("a work run that isn't a fork's can't point its branch at a fork's objects 
 
 test("a fork's run points its branch at its pull request's commit, as before", async (t) => {
   const register = (b) => {
-    const secret = b.register("org/repo", undefined, { push: true });
+    const secret = b.register("org/repo", { push: true });
     b.allow(secret, ["issue-1-*"], true);
     return secret;
   };

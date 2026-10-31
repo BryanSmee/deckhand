@@ -432,15 +432,7 @@ test("a work run's capabilities: decided once, in its tokens and log, its input 
     },
   ]);
   // The config asks for its setup and caches; no Dockerfile, engine or preview hook.
-  const used = [
-    "pull",
-    "push",
-    "setup",
-    "read:issues",
-    "read:pulls",
-    "read:discussions",
-    "read:actions",
-  ];
+  const used = ["pull", "push", "setup", "read:issues", "read:pulls", "read:actions"];
   assert.deepEqual(task.live.capabilities, used);
   assert.equal(calls[0], `grant ${used.join(" ")}`);
   assert.ok(notes.includes(`Capabilities: ${used.join(", ")}`));

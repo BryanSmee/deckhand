@@ -6,17 +6,20 @@ import { test } from "node:test";
 import {
   APP_EVENTS,
   APP_PERMISSIONS,
-  DISCUSSION_PERMISSIONS,
+  ISSUES_WRITE,
   OPTIONAL_PERMISSIONS,
   PERMISSIONS_MS,
+  READ_PERMISSIONS,
   REFRESH_MS,
-  SANDBOX_PERMISSIONS,
   WORKFLOW_PUSH_PERMISSIONS,
   appSettingsUrl,
   checkAppSettings,
   createGitHubApp,
   loadCredentials,
   missingPermissions,
+  readsGitHub,
+  readsOf,
+  tunnelsGitHub,
   saveCredentials,
 } from "../listener/github-app.mjs";
 import { recordingFetch, tempDir } from "./helpers.mjs";
@@ -59,6 +62,10 @@ function setup() {
   return { clock, gh, app };
 }
 
+// What a work run's token reads (readsOf()), and a checked write of one's (issue #497).
+const READS = readsOf(["pull", "read:issues", "read:pulls", "read:actions"]);
+const RUN_TOKEN = { ...READS, ...ISSUES_WRITE };
+
 test("the App's JWT is signed with its key and short-lived", () => {
   const { app, clock } = setup();
   const [header, claims, signature] = app.jwt().split(".");
@@ -72,35 +79,66 @@ test("the App's JWT is signed with its key and short-lived", () => {
   assert.ok(body.iat <= clock.now / 1000);
 });
 
-test("a sandbox token covers its repo only, with the sandbox's permissions", async () => {
+test("a sandbox token covers its repo only, with exactly the permissions asked and its metadata", async () => {
   const { app, gh } = setup();
-  const { token } = await app.repoToken("Org/Repo");
+  const { token } = await app.repoToken("Org/Repo", READS);
   assert.equal(token, "tok-1");
   const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
   assert.match(mint.auth, /^Bearer .+\..+\..+$/); // the JWT, not a token
-  assert.deepEqual(JSON.parse(mint.body), {
-    repositories: ["repo"],
-    permissions: SANDBOX_PERMISSIONS,
-  });
-  assert.equal(SANDBOX_PERMISSIONS.deployments, undefined);
-  // Pushes go through the git gateway: a sandbox token never writes the code.
-  assert.equal(SANDBOX_PERMISSIONS.contents, "read");
-  // Nor reviews, which `pull_requests: write` would let it approve: the gateway adds it to the
-  // checked writes of its own pull requests only (github-pulls.mjs).
-  assert.equal(SANDBOX_PERMISSIONS.pull_requests, "read");
+  assert.deepEqual(JSON.parse(mint.body), { repositories: ["repo"], permissions: READS });
+  // Nothing beyond what it asks: no issues without them.
+  await app.repoToken("org/repo", {});
+  const bare = gh.calls.filter((c) => c.path.endsWith("/access_tokens")).at(-1);
+  assert.deepEqual(JSON.parse(bare.body).permissions, { metadata: "read" });
 });
 
-test("a discussion run's token adds discussions, cached apart from the others", async () => {
+test("readsOf: each read capability's permissions, only read; every token reads its metadata", () => {
+  assert.deepEqual(readsOf(), { metadata: "read" });
+  assert.deepEqual(readsOf(["push", "setup", "internet"]), { metadata: "read" });
+  assert.deepEqual(readsOf(["pull"]), { metadata: "read", contents: "read" });
+  assert.deepEqual(readsOf(["read:issues"]), { metadata: "read", issues: "read" });
+  assert.deepEqual(readsOf(["read:pulls"]), { metadata: "read", pull_requests: "read" });
+  assert.deepEqual(readsOf(["read:discussions"]), { metadata: "read", discussions: "read" });
+  assert.deepEqual(readsOf(["read:actions"]), {
+    metadata: "read",
+    actions: "read",
+    checks: "read",
+    statuses: "read",
+  });
+  // Never a write: pushes go through the git gateway, and `pull_requests: write` would let a
+  // run approve pull requests (the gateway adds writes to checked writes only).
+  for (const names of Object.values(READ_PERMISSIONS)) {
+    for (const name of names) assert.notEqual(name, "deployments");
+  }
+  assert.ok(Object.values(readsOf(Object.keys(READ_PERMISSIONS))).every((l) => l === "read"));
+  // Nothing from GitHub without `pull`.
+  assert.equal(readsGitHub({ caps: ["read:issues"] }), false);
+  assert.equal(readsGitHub({ caps: ["pull"] }), true);
+  assert.equal(readsGitHub(undefined), false);
+  // A tunnel to GitHub only once its capabilities are decided without `pull`: an unknown run, or
+  // one before its start decided them, goes to the gateway, which refuses it.
+  assert.equal(tunnelsGitHub({ caps: ["internet"], decided: true }), true);
+  assert.equal(tunnelsGitHub({ caps: ["pull"], decided: true }), false);
+  assert.equal(tunnelsGitHub({ caps: [], decided: false }), false);
+  assert.equal(tunnelsGitHub(undefined), false);
+});
+
+test("a discussion run's reads add discussions, cached apart from the others", async () => {
   const { app, gh } = setup();
-  await app.repoToken("org/repo");
-  const { token } = await app.repoToken("org/repo", DISCUSSION_PERMISSIONS);
+  // Required: only discussion runs read them, and their token fails without.
+  assert.equal(OPTIONAL_PERMISSIONS.has("discussions"), false);
+  await app.repoToken("org/repo", READS);
+  const discussion = readsOf([
+    "pull",
+    "read:issues",
+    "read:pulls",
+    "read:actions",
+    "read:discussions",
+  ]);
+  const { token } = await app.repoToken("org/repo", discussion);
   assert.equal(token, "tok-2");
   const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
-  assert.deepEqual(JSON.parse(mints[1].body).permissions, {
-    ...SANDBOX_PERMISSIONS,
-    discussions: "read",
-  });
-  assert.equal(SANDBOX_PERMISSIONS.discussions, undefined);
+  assert.deepEqual(JSON.parse(mints[1].body).permissions, { ...READS, discussions: "read" });
 });
 
 test("a read-only token is never a cached writing one, nor the reverse", async () => {
@@ -108,16 +146,11 @@ test("a read-only token is never a cached writing one, nor the reverse", async (
   // The same permission names at other levels: a cache keyed on names alone would mix them.
   const reads = { contents: "read", issues: "read", pull_requests: "read" };
   await app.repoToken("org/repo", { contents: "write", issues: "write", pull_requests: "write" });
-  const { token } = await app.repoToken("org/repo", reads);
+  const { token } = await app.repoToken("org/repo", READS);
   assert.equal(token, "tok-2");
-  assert.equal((await app.repoToken("org/repo", reads)).token, "tok-2");
+  assert.equal((await app.repoToken("org/repo", READS)).token, "tok-2");
   const mints = gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
-  assert.deepEqual(JSON.parse(mints[1].body).permissions, {
-    ...SANDBOX_PERMISSIONS,
-    contents: "read",
-    issues: "read",
-    pull_requests: "read",
-  });
+  assert.deepEqual(JSON.parse(mints[1].body).permissions, READS);
 });
 
 test("a token the installation can't give fails with GitHub's status, and isn't cached", async () => {
@@ -138,7 +171,7 @@ test("a token the installation can't give fails with GitHub's status, and isn't 
   assert.equal((await app.repoToken("org/repo", WORKFLOW_PUSH_PERMISSIONS)).token, "tok");
   const mint = gh.calls.filter((c) => c.path.endsWith("/access_tokens")).at(-1);
   assert.deepEqual(JSON.parse(mint.body).permissions, {
-    ...SANDBOX_PERMISSIONS,
+    metadata: "read",
     contents: "write",
     workflows: "write",
   });
@@ -146,12 +179,12 @@ test("a token the installation can't give fails with GitHub's status, and isn't 
 
 test("tokens are cached, and renewed before they run out", async () => {
   const { app, gh, clock } = setup();
-  await app.repoToken("org/repo");
-  assert.equal((await app.repoToken("org/repo")).token, "tok-1");
+  await app.repoToken("org/repo", RUN_TOKEN);
+  assert.equal((await app.repoToken("org/repo", RUN_TOKEN)).token, "tok-1");
   assert.equal(gh.calls.filter((c) => c.path === "/repos/org/repo/installation").length, 1);
   // 55 minutes later, less than REFRESH_MS is left: a new one.
   clock.now += 60 * 60000 - REFRESH_MS + 1;
-  assert.equal((await app.repoToken("org/repo")).token, "tok-2");
+  assert.equal((await app.repoToken("org/repo", RUN_TOKEN)).token, "tok-2");
 });
 
 test("the listener's own calls use an installation token", async () => {
@@ -256,15 +289,15 @@ test("checkAppSettings: the permissions the App lacks, at a lower level or not a
 });
 
 // An installation without one of the sandbox's required permissions (contents).
-const { contents: _, ...withoutContents } = SANDBOX_PERMISSIONS;
+const { contents: _, ...withoutContents } = READS;
 
 test("a failing token fails every caller waiting on it, from one call to GitHub", async () => {
   const { app, gh } = installedWith(withoutContents);
-  const all = await Promise.allSettled([1, 2, 3, 4].map(() => app.repoToken("org/repo")));
+  const all = await Promise.allSettled([1, 2, 3, 4].map(() => app.repoToken("org/repo", READS)));
   assert.ok(all.every((r) => r.status === "rejected" && r.reason.status === 422));
   assert.equal(gh.calls.filter((c) => c.path.endsWith("/access_tokens")).length, 1);
   // Not cached: the next one asks again.
-  await assert.rejects(app.repoToken("org/repo"), { status: 422 });
+  await assert.rejects(app.repoToken("org/repo", RUN_TOKEN), { status: 422 });
   assert.equal(gh.calls.filter((c) => c.path.endsWith("/access_tokens")).length, 2);
 });
 
@@ -303,11 +336,11 @@ function installedWith(granted, clock = { now: Date.parse("2026-10-14T12:00:00Z"
 
 test("an optional permission the installation lacks: the token goes without it", async () => {
   assert.ok(OPTIONAL_PERMISSIONS.has("actions"));
-  const granted = { ...SANDBOX_PERMISSIONS, actions: undefined };
+  const granted = { ...RUN_TOKEN, actions: undefined };
   const { app, gh, clock, html_url } = installedWith(granted);
-  assert.equal((await app.repoToken("org/repo")).token, "tok-1");
+  assert.equal((await app.repoToken("org/repo", RUN_TOKEN)).token, "tok-1");
   const mints = () => gh.calls.filter((c) => c.path.endsWith("/access_tokens"));
-  const { actions, ...rest } = SANDBOX_PERMISSIONS;
+  const { actions, ...rest } = RUN_TOKEN;
   assert.equal(actions, "read");
   assert.deepEqual(JSON.parse(mints()[0].body).permissions, rest);
   // What the gateway names when a call needs it.
@@ -322,14 +355,14 @@ test("an optional permission the installation lacks: the token goes without it",
   // An owner accepts it: the delivery says so, and the next token asks for it again.
   granted.actions = "read";
   app.rememberPermissions({ id: 7, permissions: { ...granted } });
-  assert.equal((await app.repoToken("org/repo")).token, "tok-2");
-  assert.deepEqual(JSON.parse(mints()[1].body).permissions, SANDBOX_PERMISSIONS);
+  assert.equal((await app.repoToken("org/repo", RUN_TOKEN)).token, "tok-2");
+  assert.deepEqual(JSON.parse(mints()[1].body).permissions, RUN_TOKEN);
   assert.equal(await app.lacking("org/repo", { actions: "read" }), null);
   // Without a delivery, GitHub is asked again once PERMISSIONS_MS went by.
   delete granted.actions;
   clock.now += PERMISSIONS_MS;
   // The token without it, still fresh.
-  assert.equal((await app.repoToken("org/repo")).token, "tok-1");
+  assert.equal((await app.repoToken("org/repo", RUN_TOKEN)).token, "tok-1");
   assert.equal(gh.calls.filter((c) => c.path === "/app/installations/7").length, 1);
 });
 
@@ -337,14 +370,14 @@ test("organization_projects: optional, so an installation that lacks it still mi
   assert.ok(OPTIONAL_PERMISSIONS.has("organization_projects"));
   assert.equal(APP_PERMISSIONS.organization_projects, "write");
   // Not every run's: only a granted repo's reads (PROJECT_READ) and project writes ask for it.
-  assert.equal(SANDBOX_PERMISSIONS.organization_projects, undefined);
-  const { app, gh, html_url } = installedWith({ ...SANDBOX_PERMISSIONS });
+  assert.equal(RUN_TOKEN.organization_projects, undefined);
+  const { app, gh, html_url } = installedWith({ ...RUN_TOKEN });
   assert.equal(
-    (await app.repoToken("org/repo", { organization_projects: "write" })).token,
+    (await app.repoToken("org/repo", { ...RUN_TOKEN, organization_projects: "write" })).token,
     "tok-1",
   );
   const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
-  assert.deepEqual(JSON.parse(mint.body).permissions, SANDBOX_PERMISSIONS);
+  assert.deepEqual(JSON.parse(mint.body).permissions, RUN_TOKEN);
   assert.deepEqual(await app.lacking("org/repo", { organization_projects: "write" }), {
     missing: ["organization_projects: write"],
     account: "org",
@@ -356,14 +389,14 @@ test("checks and statuses: optional, in the App's and the runs' permissions, eve
   for (const name of ["checks", "statuses"]) {
     assert.ok(OPTIONAL_PERMISSIONS.has(name), name);
     assert.equal(APP_PERMISSIONS[name], "read", name);
-    assert.equal(SANDBOX_PERMISSIONS[name], "read", name);
+    assert.equal(RUN_TOKEN[name], "read", name);
   }
   assert.ok(APP_EVENTS.includes("check_suite") && APP_EVENTS.includes("status"));
   // An installation that hasn't accepted them: its runs' tokens go without them, and work.
-  const granted = { ...SANDBOX_PERMISSIONS, checks: undefined, statuses: undefined };
+  const granted = { ...RUN_TOKEN, checks: undefined, statuses: undefined };
   const { app, gh } = installedWith(granted);
-  assert.equal((await app.repoToken("org/repo")).token, "tok-1");
-  const { checks: _, statuses: __, ...rest } = SANDBOX_PERMISSIONS;
+  assert.equal((await app.repoToken("org/repo", RUN_TOKEN)).token, "tok-1");
+  const { checks: _, statuses: __, ...rest } = RUN_TOKEN;
   const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
   assert.deepEqual(JSON.parse(mint.body).permissions, rest);
   assert.deepEqual((await app.lacking("org/repo", { checks: "read", statuses: "read" })).missing, [
@@ -374,7 +407,7 @@ test("checks and statuses: optional, in the App's and the runs' permissions, eve
 
 test("a required permission the installation lacks still fails the token", async () => {
   const { app, gh } = installedWith(withoutContents);
-  await assert.rejects(app.repoToken("org/repo"), { status: 422 });
+  await assert.rejects(app.repoToken("org/repo", READS), { status: 422 });
   const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
   assert.equal(JSON.parse(mint.body).permissions.contents, "read");
   // Only optional ones are the gateway's to name.
@@ -384,10 +417,10 @@ test("a required permission the installation lacks still fails the token", async
 test("an installation's permissions GitHub can't say: the token asks for everything", async () => {
   const { app, gh } = setup();
   app.remember("org/repo", 7); // from a delivery: its permissions unknown
-  await app.repoToken("org/repo");
+  await app.repoToken("org/repo", RUN_TOKEN);
   assert.equal(gh.calls.filter((c) => c.path === "/app/installations/7").length, 1);
   const mint = gh.calls.find((c) => c.path.endsWith("/access_tokens"));
-  assert.deepEqual(JSON.parse(mint.body).permissions, SANDBOX_PERMISSIONS);
+  assert.deepEqual(JSON.parse(mint.body).permissions, RUN_TOKEN);
   assert.equal(await app.lacking("org/repo", { actions: "read" }), null);
 });
 
@@ -404,4 +437,11 @@ test("appSettingsUrl: under the organization that owns the App, else the user's 
 
 test("APP_EVENTS: no event twice", () => {
   assert.equal(new Set(APP_EVENTS).size, APP_EVENTS.length);
+});
+
+test("discussions: an installation without them mints no discussion run's token", async () => {
+  const { app } = installedWith({ ...RUN_TOKEN });
+  await assert.rejects(app.repoToken("org/repo", { ...READS, discussions: "read" }), {
+    status: 422,
+  });
 });

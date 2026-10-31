@@ -11,6 +11,7 @@ import {
   githubSchema,
   lookupNodes,
   MAX_CHECK_PATHS,
+  issueReads,
   MAX_FIELDS,
   MAX_QUERY,
   MAX_TOKENS,
@@ -239,6 +240,7 @@ const run = (mode, issue = 1, { push = mode === "work", reason = null } = {}) =>
   branches: push ? ["issue-1-*"] : [],
   created: [],
   reason,
+  caps: ["pull", "read:issues", "read:pulls"],
 });
 
 // The checks, with the writes they held and the IDs they looked up. `policies`: allowing every
@@ -1938,4 +1940,285 @@ test("MAX_REFUSED_LOOKUPS: a GraphQL call that goes on, or whose nodes GitHub fa
     assert.equal((await check(work, comment)).refused.status, 502);
   down = false;
   assert.equal((await check(work, comment)).refused, undefined);
+});
+
+test("issueReads: a run without read:issues reads its own issue only, whatever the way", () => {
+  const run = { repo: "org/repo", issue: 7, caps: ["pull", "read:pulls"] };
+  const reads = (query, variables = {}) => {
+    const call = parseCall(Buffer.from(JSON.stringify({ query, variables })));
+    assert.equal(call.refused, undefined, query);
+    return issueReads(githubSchema(), call.doc, call.op, call.coerced?.coerced ?? {}, run);
+  };
+  const own = { own: true, other: null };
+  const none = { own: false, other: null };
+  // Its own issue: by number, inline or in a variable, under an alias, through fragments.
+  assert.deepEqual(
+    reads('{ repository(owner: "org", name: "repo") { issue(number: 7) { title } } }'),
+    own,
+  );
+  assert.deepEqual(
+    reads(
+      `query($o: String!, $n: Int!) { r: repository(owner: $o, name: "Repo") {
+        i: issueOrPullRequest(number: $n) { ... on Issue { ...I } ... on PullRequest { title } } } }
+      fragment I on Issue { title body labels(first: 5) { nodes { name } }
+        comments(first: 10) { nodes { body author { login } } } }`,
+      { o: "Org", n: 7 },
+    ),
+    own,
+  );
+  // Nothing of issues: a pull request, the repository, the viewer, `__typename` of a node.
+  assert.deepEqual(
+    reads('{ repository(owner: "org", name: "repo") { pullRequest(number: 7) { title } } }'),
+    none,
+  );
+  assert.deepEqual(reads("{ viewer { login } }"), none);
+  assert.deepEqual(reads('{ node(id: "x") { __typename } }'), none);
+  assert.deepEqual(reads('{ node(id: "x") { ... on PullRequest { title } } }'), none);
+  assert.deepEqual(
+    reads('{ search(query: "deckhand", type: REPOSITORY, first: 1) { repositoryCount } }'),
+    none,
+  );
+  // Any other issue: another number, another repository, a list, a count, a search, a node, a
+  // fragment on an interface Issue implements, and what its own issue links to.
+  for (const [query, field] of [
+    ['{ repository(owner: "org", name: "repo") { issue(number: 8) { title } } }', "issue"],
+    ['{ repository(owner: "other", name: "repo") { issue(number: 7) { title } } }', "issue"],
+    [
+      '{ repository(owner: "org", name: "repo") { issues(first: 5) { nodes { title } } } }',
+      "issues",
+    ],
+    ['{ repository(owner: "org", name: "repo") { issues { totalCount } } }', "issues"],
+    ['{ search(query: "x", type: ISSUE, first: 5) { issueCount } }', "search"],
+    ['{ node(id: "I_1") { ... on Issue { title } } }', "node"],
+    ['{ nodes(ids: ["I_1"]) { ... on Closable { closed } } }', "nodes"],
+    ['{ node(id: "I_1") { id } }', "node"],
+    [
+      '{ repository(owner: "org", name: "repo") { issue(number: 7) { parent { title } } } }',
+      "parent",
+    ],
+    [
+      '{ repository(owner: "org", name: "repo") { issue(number: 7) { comments(first: 1) { nodes { issue { title } } } } } }',
+      "issue",
+    ],
+    [
+      '{ repository(owner: "org", name: "repo") { pullRequest(number: 7) { closingIssuesReferences(first: 5) { nodes { title } } } } }',
+      "closingIssuesReferences",
+    ],
+    [
+      '{ repository(owner: "org", name: "repo") { issue(number: 7) { title } other: issue(number: 8) { title } } }',
+      "issue",
+    ],
+  ]) {
+    const found = reads(query);
+    assert.equal(found.other, field, query);
+  }
+  // A run whose issue is unknown reads none.
+  const unknown = { ...run, issue: null };
+  const call = parseCall(
+    Buffer.from(
+      JSON.stringify({
+        query: '{ repository(owner: "org", name: "repo") { issue(number: 7) { title } } }',
+      }),
+    ),
+  );
+  assert.equal(issueReads(githubSchema(), call.doc, call.op, {}, unknown).other, "issue");
+});
+
+test("a run without read:issues: the GraphQL checks refuse another issue, say its own is read", async () => {
+  const checks = createGraphqlChecks({ nodes: async () => [], checkWrite: async () => null });
+  const run = { repo: "org/repo", issue: 7, caps: ["pull"] };
+  const own = await checks.check(
+    run,
+    Buffer.from(
+      JSON.stringify({
+        query: '{ repository(owner: "org", name: "repo") { issue(number: 7) { title } } }',
+      }),
+    ),
+  );
+  assert.equal(own.ownIssue, true);
+  const other = await checks.check(
+    run,
+    Buffer.from(
+      JSON.stringify({
+        query: '{ repository(owner: "org", name: "repo") { issues(first: 1) { totalCount } } }',
+      }),
+    ),
+  );
+  assert.equal(other.refused.status, 403);
+  assert.equal(
+    other.refused.message,
+    "issues: this run's capabilities don't give `read:issues`, so it reads its own issue only, as repository(owner:, name:) { issue(number: 7) }",
+  );
+  // With read:issues, nothing to check: every issue is its token's.
+  const all = await checks.check(
+    { ...run, caps: ["pull", "read:issues"] },
+    Buffer.from(
+      JSON.stringify({
+        query: '{ repository(owner: "org", name: "repo") { issues(first: 1) { totalCount } } }',
+      }),
+    ),
+  );
+  assert.equal(all.refused, undefined);
+  assert.equal(all.ownIssue, false);
+});
+
+test("issueReads: other issues' comments, refused once the token reads issues; a pull request's go", () => {
+  const run = { repo: "org/repo", issue: 7, caps: ["pull", "read:pulls"] };
+  const reads = (query) => {
+    const call = parseCall(Buffer.from(JSON.stringify({ query })));
+    assert.equal(call.refused, undefined, query);
+    return issueReads(githubSchema(), call.doc, call.op, {}, run);
+  };
+  const own = '{ repository(owner: "org", name: "repo") { issue(number: 7) { title } } }';
+  for (const [query, field] of [
+    [
+      `{ repository(owner: "org", name: "repo") { issue(number: 7) { title } }
+        user(login: "maintainer") { issueComments(last: 100) { nodes { body url } } } }`,
+      "issueComments",
+    ],
+    [
+      `{ repository(owner: "org", name: "repo") { issue(number: 7) {
+        author { ... on User { issueComments(last: 100) { nodes { body } } } } } } }`,
+      "issueComments",
+    ],
+    [
+      `{ repository(owner: "org", name: "repo") { issue(number: 7) { title }
+        pullRequest(number: 9) { comments(first: 5) { nodes { body } } } } }`,
+      "comments",
+    ],
+  ]) {
+    assert.equal(reads(query).other, field, query);
+  }
+  // Its own issue's comments, and a pull request's without its own issue: GitHub decides.
+  assert.deepEqual(reads(own), { own: true, other: null });
+  assert.deepEqual(
+    reads(
+      '{ repository(owner: "org", name: "repo") { pullRequest(number: 9) { comments(first: 5) { nodes { body } } } } }',
+    ),
+    { own: false, other: null },
+  );
+});
+
+test("issueReads: a mutation's answer names what it wrote to, nothing else of issues", () => {
+  const run = { repo: "org/repo", issue: 7, caps: ["pull"] };
+  const reads = (query) => {
+    const call = parseCall(Buffer.from(JSON.stringify({ query })));
+    assert.equal(call.refused, undefined, query);
+    return issueReads(githubSchema(), call.doc, call.op, {}, run).other;
+  };
+  // gh's: what each wrote.
+  for (const query of [
+    'mutation { addComment(input: {subjectId: "I_7", body: "x"}) { commentEdge { node { url } } } }',
+    'mutation { createIssue(input: {repositoryId: "R_1", title: "t"}) { issue { id url } } }',
+    'mutation { addReaction(input: {subjectId: "I_7", content: THUMBS_UP}) { reaction { content } subject { id } } }',
+    'mutation { updateIssueComment(input: {id: "IC_1", body: "x"}) { issueComment { body } } }',
+  ]) {
+    assert.equal(reads(query), null, query);
+  }
+  for (const [query, field] of [
+    [
+      `mutation { addReaction(input: {subjectId: "I_7", content: THUMBS_UP}) { subject {
+        ... on Issue { repository { issues(first: 100) { nodes { title body } } } } } } }`,
+      "repository",
+    ],
+    // The issue it wrote to may be a sub-issue it can't read: named, never read.
+    [
+      `mutation { addReaction(input: {subjectId: "I_8", content: THUMBS_UP}) { subject {
+        ... on Issue { title body comments(first: 100) { nodes { body } } } } } }`,
+      "title",
+    ],
+    ['mutation { updateIssue(input: {id: "I_8", body: "x"}) { issue { body } } }', "body"],
+    [
+      `mutation { addComment(input: {subjectId: "I_7", body: "x"}) { subject { ... on Issue {
+        parent { title } } } } }`,
+      "parent",
+    ],
+    [
+      `mutation { addComment(input: {subjectId: "I_7", body: "x"}) { commentEdge { node {
+        author { ... on User { issueComments(last: 5) { nodes { body } } } } } } } }`,
+      "issueComments",
+    ],
+  ]) {
+    assert.equal(reads(query), field, query);
+  }
+});
+
+test("a run without read:issues: the GraphQL checks refuse a mutation whose answer reads other issues", async () => {
+  const checks = createGraphqlChecks({
+    nodes: async () => [
+      { __typename: "Issue", number: 7, repository: { nameWithOwner: "org/repo" } },
+    ],
+    checkWrite: async () => null,
+  });
+  const run = { repo: "org/repo", issue: 7, caps: ["pull"] };
+  const call = (query) => checks.check(run, Buffer.from(JSON.stringify({ query })));
+  const leaky = await call(
+    `mutation { addReaction(input: {subjectId: "I_7", content: THUMBS_UP}) { subject {
+      ... on Issue { repository { issues(first: 100) { nodes { title } } } } } } }`,
+  );
+  assert.equal(leaky.refused.status, 403);
+  assert.match(
+    leaky.refused.message,
+    /^repository: this run's capabilities don't give `read:issues`, so a mutation's answer may only name/,
+  );
+  const plain = await call(
+    'mutation { addReaction(input: {subjectId: "I_7", content: THUMBS_UP}) { reaction { content } } }',
+  );
+  assert.equal(plain.refused, undefined);
+  assert.equal(plain.write, true);
+});
+
+test("issueReads: project items, refused once the token reads issues but its own issue's and an added item's id", () => {
+  const run = { repo: "org/repo", issue: 7, caps: ["pull", "read:pulls"] };
+  const reads = (query) => {
+    const call = parseCall(Buffer.from(JSON.stringify({ query })));
+    assert.equal(call.refused, undefined, query);
+    return issueReads(githubSchema(), call.doc, call.op, {}, run).other;
+  };
+  const titles = `items(first: 100) { nodes { fieldValueByName(name: "Title") {
+    ... on ProjectV2ItemFieldTextValue { text } } } }`;
+  for (const [query, field] of [
+    [
+      `{ repository(owner: "org", name: "repo") { issue(number: 7) { title }
+        projectsV2(first: 5) { nodes { ${titles} } } } }`,
+      "items",
+    ],
+    [
+      `{ repository(owner: "org", name: "repo") { issue(number: 7) {
+        projectItems(first: 5) { nodes { project { ${titles} } } } } } }`,
+      "items",
+    ],
+    [
+      `mutation { addComment(input: {subjectId: "I_7", body: "x"}) { commentEdge { node {
+        repository { projectsV2(first: 5) { nodes { ${titles} } } } } } } }`,
+      "items",
+    ],
+    [
+      'mutation { addProjectV2ItemById(input: {projectId: "P_1", contentId: "I_7"}) { item { content { ... on Issue { title } } } } }',
+      "content",
+    ],
+  ]) {
+    assert.equal(reads(query), field, query);
+  }
+  // gh issue view's project items, and gh project item-add's answer: through.
+  assert.equal(
+    reads(`{ repository(owner: "org", name: "repo") { issue(number: 7) { title
+      projectItems(first: 100) { nodes { id project { id title }
+        status: fieldValueByName(name: "Status") { ... on ProjectV2ItemFieldSingleSelectValue {
+          optionId name } } } } } } }`),
+    null,
+  );
+  assert.equal(
+    reads(
+      'mutation { addProjectV2ItemById(input: {projectId: "P_1", contentId: "I_7"}) { item { id } } }',
+    ),
+    null,
+  );
+  // Without its own issue in the query, the token reads no issue: GitHub decides.
+  assert.equal(
+    reads(
+      `{ repository(owner: "org", name: "repo") { projectsV2(first: 5) { nodes { ${titles} } } } }`,
+    ),
+    null,
+  );
 });
