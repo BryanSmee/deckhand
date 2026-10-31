@@ -254,8 +254,10 @@ export function parseConfigFile(text, path) {
 
 // Why config.yaml may not hold `key`, or null.
 function refused(key, name) {
-  if (AGENT_SECRETS.includes(name)) return "a secret, keep it in the environment (.env), not in a file";
-  if (name === "GRANTS_FILE") return "gone, one file per repository in grants_dir instead (docs/security.md)";
+  if (AGENT_SECRETS.includes(name))
+    return "a secret, keep it in the environment (.env), not in a file";
+  if (name === "GRANTS_FILE")
+    return "gone, one file per repository in grants_dir instead (docs/security.md)";
   if (key === name.toLowerCase() && MOVED_TO_GRANTS[name]) {
     return `gone, set ${MOVED_TO_GRANTS[name]} instead (docs/security.md)`;
   }

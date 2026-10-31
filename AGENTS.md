@@ -55,6 +55,8 @@ started before you finish.
 ## Layout (target; build it as the issues land)
 
 ```
+lib/          what every service shares, copied into each image: yaml, settings, redact, http,
+              files, drain, tokens, service tokens, the store (store.mjs, store-file.mjs)
 listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
               runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
               agents/ (each agent's specifics: install, env, hosts, session, normalize())
