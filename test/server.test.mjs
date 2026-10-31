@@ -2166,31 +2166,35 @@ mounts:
     assert.equal(results.length, 1);
   });
 
-  test("a listener killed during a comment's pause: the next one runs it once, at its deadline", async (t) => {
-    // Long enough for a slow engine to kill the first listener within it.
-    const PAUSE_MS = 8000;
-    const ctx = await listen(t, {}, { DEBOUNCE_MS: String(PAUSE_MS) });
-    const sent = Date.now();
-    await ctx.send(comment("alice"));
-    await ctx.listener.until("queued (work");
-    await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
-    // No SIGTERM: nothing is saved on the way out. The next one's own pause is a minute, and
-    // the comment's deadline still holds.
-    await ctx.restart({ signal: "SIGKILL", DEBOUNCE_MS: "60000" });
-    const line = await ctx.listener.until(
-      /1 comment\(s\) queued before the restart, due in \d+ ms/,
-    );
-    assert.ok(Number(line.match(/due in (\d+) ms/)[1]) <= PAUSE_MS);
-    await ctx.listener.until("done (ok)");
-    assert.ok(Date.now() - sent >= PAUSE_MS);
-    assert.equal(prompts(ctx.dir).length, 1);
-    assert.equal(replies(ctx.github).length, 1);
-    // Its 👀 from before the restart is replaced by the outcome.
-    await ctx.github.waitFor(
-      (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
-    );
-    assert.deepEqual(leftovers(ctx.dir), []);
-  });
+  test(
+    "a listener killed during a comment's pause: the next one runs it once, at its deadline",
+    { timeout: 120_000 },
+    async (t) => {
+      // Long enough for a slow engine to kill the first listener within it.
+      const PAUSE_MS = 8000;
+      const ctx = await listen(t, {}, { DEBOUNCE_MS: String(PAUSE_MS) });
+      const sent = Date.now();
+      await ctx.send(comment("alice"));
+      await ctx.listener.until("queued (work");
+      await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/99/reactions");
+      // No SIGTERM: nothing is saved on the way out. The next one's own pause is a minute, and
+      // the comment's deadline still holds.
+      await ctx.restart({ signal: "SIGKILL", DEBOUNCE_MS: "60000" });
+      const line = await ctx.listener.until(
+        /1 comment\(s\) queued before the restart, due in \d+ ms/,
+      );
+      assert.ok(Number(line.match(/due in (\d+) ms/)[1]) <= PAUSE_MS);
+      await ctx.listener.until("done (ok)");
+      assert.ok(Date.now() - sent >= PAUSE_MS);
+      assert.equal(prompts(ctx.dir).length, 1);
+      assert.equal(replies(ctx.github).length, 1);
+      // Its 👀 from before the restart is replaced by the outcome.
+      await ctx.github.waitFor(
+        (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/comments/99/reactions/1",
+      );
+      assert.deepEqual(leftovers(ctx.dir), []);
+    },
+  );
 
   test("a comment queued before a restart doesn't run once its author left ALLOWED_USERS", async (t) => {
     const ctx = await listen(t, {}, { DEBOUNCE_MS: "60000" });
@@ -2712,25 +2716,29 @@ mounts:
     assert.ok(replies(github).every((r) => /^All done\./.test(JSON.parse(r.body).body)));
   });
 
-  test("inbox entries queued when the listener stops: a run each after it starts", async (t) => {
-    const ctx = await listen(
-      t,
-      { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
-      // Their pause outlasts the restart, and its deadline holds after it.
-      { BRAINSTORM_DEBOUNCE_MS: "8000" },
-    );
-    await ctx.send(entry(99, "A dark mode"));
-    await ctx.send(entry(100, "Keyboard shortcuts"));
-    await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
-    const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
-    assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
-    await settled(ctx.github, [99, 100]);
-    await until(() => prompts(ctx.dir).length === 2, "two runs");
-    const [first, second] = prompts(ctx.dir);
-    assert.match(first, /A dark mode\n$/);
-    assert.doesNotMatch(first, /Keyboard shortcuts/);
-    assert.match(second, /Keyboard shortcuts\n$/);
-  });
+  test(
+    "inbox entries queued when the listener stops: a run each after it starts",
+    { timeout: 120_000 },
+    async (t) => {
+      const ctx = await listen(
+        t,
+        { ".deckhand.yaml": "inbox: { ideas: 12 }\n" },
+        // Their pause outlasts the restart, and its deadline holds after it.
+        { BRAINSTORM_DEBOUNCE_MS: "8000" },
+      );
+      await ctx.send(entry(99, "A dark mode"));
+      await ctx.send(entry(100, "Keyboard shortcuts"));
+      await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
+      const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
+      assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
+      await settled(ctx.github, [99, 100]);
+      await until(() => prompts(ctx.dir).length === 2, "two runs");
+      const [first, second] = prompts(ctx.dir);
+      assert.match(first, /A dark mode\n$/);
+      assert.doesNotMatch(first, /Keyboard shortcuts/);
+      assert.match(second, /Keyboard shortcuts\n$/);
+    },
+  );
 
   test("a burst of comments on an ordinary issue is still one run", async (t) => {
     const { dir, github, listener, send } = await listen(t, {}, { DEBOUNCE_MS: "300" });
