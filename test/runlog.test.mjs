@@ -18,6 +18,7 @@ import {
   buildOutput,
   reader,
   saveSummary,
+  sessionEventOf,
   sessionModeOf,
   stream,
   summaryOf,
@@ -974,15 +975,23 @@ test("moveLogs: a run's summary has its record mode as its capabilities correcte
     [
       line({ type: "listener", key: "org/repo#5", startedAt: 1000, mode: "continue" }),
       line({ type: "listener", event: "note", at: 1001, message: "it starts afresh" }),
-      line({ type: "listener", event: "session", at: 1001, mode: "start" }),
+      line({
+        type: "listener",
+        event: "session",
+        at: 1001,
+        mode: "start",
+        capabilities: ["pull", "internet"],
+      }),
       line({ type: "listener", event: "sandbox", at: 1002 }),
       // The sandbox's own output, which can't pass for one.
-      line({ type: "listener", event: "session", at: 1003, mode: "continue" }),
+      line({ type: "listener", event: "session", at: 1003, mode: "continue", capabilities: [] }),
     ].join("\n"),
   );
   await moveLogs(dir, logs).done;
   const [run] = loadRuns(dir);
   assert.equal(run.mode, "start");
+  // What its start decided it gets, kept: an analysis leaves it out (analysis.mjs).
+  assert.deepEqual(run.capabilities, ["pull", "internet"]);
   // Not a line of its own in the log: the note says it.
   assert.deepEqual(format(line({ type: "listener", event: "session", mode: "start" })), []);
   // A log too big to read whole: the correction near its start still counts.
@@ -1001,6 +1010,35 @@ test("moveLogs: a run's summary has its record mode as its capabilities correcte
   await moveLogs(dir, logs, { max: 1024, log: () => {} }).done;
   const loaded = loadRuns(dir).find((r) => r.key === "org/repo#6");
   assert.equal(loaded.mode, "continue");
+});
+
+test("sessionEventOf: the capabilities its start decided, when the first event says them as names", () => {
+  const header = line({ type: "listener", mode: "start" });
+  const marker = line({ type: "listener", event: "sandbox" });
+  const session = (fields) => line({ type: "listener", event: "session", ...fields });
+  assert.deepEqual(
+    sessionEventOf([
+      header,
+      session({ mode: "start", capabilities: ["pull", "internet"] }),
+      marker,
+    ]),
+    { mode: "start", capabilities: ["pull", "internet"] },
+  );
+  assert.deepEqual(
+    sessionEventOf([header, session({ mode: "start", capabilities: [1] }), marker]),
+    { mode: "start", capabilities: null },
+  );
+  // A later line, a build's say, doesn't change them.
+  const forged = session({ mode: "start", capabilities: [] });
+  assert.deepEqual(
+    sessionEventOf([
+      header,
+      session({ mode: "start", capabilities: ["internet"] }),
+      forged,
+      marker,
+    ]),
+    { mode: "start", capabilities: ["internet"] },
+  );
 });
 
 test("sessionModeOf: only before the sandbox's marker, and only a record's mode", () => {

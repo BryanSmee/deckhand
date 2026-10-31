@@ -712,3 +712,24 @@ test("a pull request that can't be looked up, with a policy denying forks `push`
     [true, false],
   );
 });
+
+test("a run with the open internet gets no host mount, which says so", async (t) => {
+  const nfs = join(realpathSync(tempDir(t)), "nfs");
+  mkdirSync(join(nfs, "data"), { recursive: true });
+  const grant = `allow_research: true\nmounts: [${nfs}]\n`;
+  const yaml = `mounts:\n  - ${nfs}/data\n`;
+  // The operator gives work runs the open internet, the risky combination named too.
+  const internet = capabilityPolicies({
+    operator: () => ["pull", "push", "internet", "pull+internet"],
+  });
+  const { parts, notes } = await workRun(t, "org/repo", { grant, yaml, policies: internet });
+  assert.deepEqual(parts.access.mounts, []);
+  assert.deepEqual(parts.access.hosts, ["*"]);
+  assert.ok(notes.some((n) => /^No host mounts: this run reaches the open internet/.test(n)));
+  // Without it, the mount as granted.
+  const plain = await workRun(t, "org/repo", { grant, yaml });
+  assert.deepEqual(
+    plain.parts.access.mounts.map((m) => m.target),
+    [`${nfs}/data`],
+  );
+});

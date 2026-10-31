@@ -36,6 +36,9 @@ export interface Run {
   mode: string | null;
   // work, brainstorm, idea, bug, discussion or one of the repo's own modes
   taskMode: string | null;
+  // What its start decided it gets (pull, push, internet…); null before, or for a run from before
+  // capabilities.
+  capabilities?: string[] | null;
   // Why the listener started it itself ("conflict": a pull request to rebase, "review": one
   // that turned ready, "review-fix": one whose review requested changes, "ci-fix": one whose CI
   // failed before its review); null for comments.

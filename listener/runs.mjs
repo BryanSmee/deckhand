@@ -298,7 +298,7 @@ export function createRuns(ctx) {
       // this event's, the first of the log (runlog.mjs sessionModeOf()). Written for every run,
       // before anything of the run's own (its image's build, its agent's install) goes in the
       // log, so that no line of theirs can come first.
-      writeEvent(logFile, "session", { mode: record.mode });
+      writeEvent(logFile, "session", { mode: record.mode, capabilities: task.live.capabilities });
       if (changed === null) return null;
       note?.(
         now
@@ -363,8 +363,10 @@ export function createRuns(ctx) {
       ciNote: live.mode === "review" ? (items.findLast((i) => i.ciNote)?.ciNote ?? null) : null,
       capabilities: live.capabilities,
     });
-    // A run without `pull` mounts nothing (access.mjs bareAccess()).
-    if (live.capabilities?.includes("pull")) recheckMounts(agent, settings, access);
+    // A run without `pull` mounts nothing (access.mjs bareAccess()), nor one with the open
+    // internet (preparation.mjs): no mount to check again.
+    const caps = live.capabilities ?? [];
+    if (caps.includes("pull") && !caps.includes("internet")) recheckMounts(agent, settings, access);
     const digest =
       parts.digest ??
       (live.mode === "analyze" ? await analysisDigest(task, items, note) : undefined);

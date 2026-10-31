@@ -30,6 +30,7 @@ import {
   CAPABILITY_RULES,
   FILE,
   layerDigest,
+  MAX_CAPABILITY_INPUTS,
   operatorPolicies,
   rulesOf,
 } from "../lib/policy-files.mjs";
@@ -56,9 +57,9 @@ export const RULES = [
   ...CAPABILITY_RULES,
 ];
 
-// The inputs one call of the policy service's capabilities takes (its engine's MAX_INPUTS): more
-// go in several (a repository's modes, for its config page).
-export const CAPABILITY_INPUTS_MAX = 64;
+// The inputs one call of the policy service's capabilities takes (lib/policy-files.mjs, its
+// engine's MAX_INPUTS too): more go in several (a repository's modes, for its config page).
+export const CAPABILITY_INPUTS_MAX = MAX_CAPABILITY_INPUTS;
 
 // Where they are now (lib/policy-files.mjs, which the policy service shares): the listener's
 // modules and tests import them from here.

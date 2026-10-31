@@ -33,6 +33,7 @@ import {
   byFile,
   FILE,
   layerDigest,
+  MAX_CAPABILITY_INPUTS,
   operatorPolicies,
   UNION_DIR,
   UNION_FILE,
@@ -53,7 +54,7 @@ export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url)
 export const TIMEOUT_MS = 2000;
 
 // The inputs one capabilities() call evaluates: a run's one, or a config page's modes.
-export const MAX_INPUTS = 64;
+export const MAX_INPUTS = MAX_CAPABILITY_INPUTS;
 
 // The servers kept at once: each is one policy set, about 40 MB.
 export const MAX_SERVERS = 8;

@@ -77,7 +77,17 @@ export function createPreparation(ctx) {
     const access = grantedAccess(config, task, settings, { agent, note, log });
     // The open internet: any public host, private addresses only for those every run needs
     // (access.mjs bareAccess() says why).
-    if (caps.has("internet")) Object.assign(access, openHosts(agent));
+    if (caps.has("internet")) {
+      Object.assign(access, openHosts(agent));
+      // And no host mount: what the operator mounts may be private, whatever the repository is,
+      // and the open internet would be its way out (as for research runs, bareAccess()).
+      if (access.mounts?.length) {
+        note(
+          `No host mounts: this run reaches the open internet (${access.mounts.map((m) => m.target).join(", ")} left out)`,
+        );
+        access.mounts = [];
+      }
+    }
     // Never where a fork's code may run, whether the run pushes or not.
     const engine = caps.has("docker")
       ? engineFor(config, task, settings, access, fork, note)
@@ -171,6 +181,8 @@ export function createPreparation(ctx) {
       );
     }
     live.capabilities = outcome.used;
+    // On its record too: saved with its summary, so an analysis knows it had the open internet.
+    if (live.record) live.record.capabilities = outcome.used;
     ctx.broker.grant(live.id, outcome.used);
     note(`Capabilities: ${listed(outcome.used)}`);
     return new Set(outcome.used);

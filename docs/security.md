@@ -2151,6 +2151,10 @@ a run that fails them doesn't start, and its reply says why:
   `internet`: its private code, untrusted content from any page and a way out, in one run.
   Refused unless an allow rule of **yours** gives `pull+internet` (a repository's can't), and
   said as a warning on its config page even then.
+- **The open internet, whatever the mode**: a run with `internet` gets no host mount (what you
+  mount may be private, whatever the repository is; its log says what was left out), and is
+  never in an analysis's digest, as research runs aren't: what a page made it say would reach a
+  run that has the code and a token. Its record keeps its capabilities for that.
 
 **Fail closed**: policies that don't compile, time out, or give `allow_capabilities` anything
 but a set of strings or `deny_capabilities` anything but a set of `{"capability", "reason"}`

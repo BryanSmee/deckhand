@@ -281,6 +281,8 @@ export function newRecord(
       text,
     })),
     mode: null,
+    // What its start decided it gets (preparation.mjs, capabilities.mjs), once it did.
+    capabilities: null,
     // The part of the run it is in (enterPhase()), while it runs: setup from the moment it
     // leaves the queue, so the dashboard shows it scheduled until its agent starts.
     phase: "setup",
@@ -311,22 +313,30 @@ const SANDBOX_EVENT = '{"type":"listener","event":"sandbox"';
 // The record modes a `session` event may say (runs.mjs reopenedMode()).
 const RECORD_MODES = new Set(["start", "continue", "restore", "wrap-up"]);
 
-// A run's record mode as its capabilities decided it (runs.mjs reopen()), from its log's
-// `lines`, or null. The first `session` event only: the listener writes one for every run before
-// anything of the run's own goes in the log raw (its image's build, its agent's install, its
-// sandbox's output), so a line of theirs that looks like one always comes after it. And only
-// before the `sandbox` marker: a log without one (its sandbox never started, or a listener from
-// before) has none.
-export function sessionModeOf(lines) {
-  let mode;
+// What a run's start decided (runs.mjs reopen()), from its log's `lines`: { mode, its record's as
+// its capabilities corrected it (null: none a record has), capabilities (null: not said) }, or
+// null. The first `session` event only: the listener writes one for every run before anything of
+// the run's own goes in the log raw (its image's build, its agent's install, its sandbox's
+// output), so a line of theirs that looks like one always comes after it. And only before the
+// `sandbox` marker: a log without one (its sandbox never started, or a listener from before) has
+// none.
+export function sessionEventOf(lines) {
+  let event;
   for (const line of lines.slice(1)) {
-    if (line.startsWith(SANDBOX_EVENT)) return mode ?? null;
-    if (mode !== undefined || !line.startsWith(SESSION_EVENT)) continue;
-    const said = parse(line)?.mode;
-    mode = RECORD_MODES.has(said) ? said : null;
+    if (line.startsWith(SANDBOX_EVENT)) return event ?? null;
+    if (event !== undefined || !line.startsWith(SESSION_EVENT)) continue;
+    const said = parse(line);
+    const caps = said?.capabilities;
+    event = {
+      mode: RECORD_MODES.has(said?.mode) ? said.mode : null,
+      capabilities: Array.isArray(caps) && caps.every((c) => typeof c === "string") ? caps : null,
+    };
   }
   return null;
 }
+
+// Its record mode alone (sessionEventOf()).
+export const sessionModeOf = (lines) => sessionEventOf(lines)?.mode ?? null;
 
 // The most of a log moveLogs() reads whole: a string can't hold much more than 512 MB, and
 // older logs had no cap (RUN_LOG_MAX_MB). Past it, its first and last ENDS bytes.
@@ -365,8 +375,8 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
   const logPath = join(logDir, file);
   const lines = logLines(logPath, max, log);
   const header = parse(lines[0])?.type === "listener" ? parse(lines[0]) : {};
-  const corrected = sessionModeOf(lines);
-  const meta = corrected ? { ...header, mode: corrected } : header;
+  const session = sessionEventOf(lines);
+  const meta = session?.mode ? { ...header, mode: session.mode } : header;
   // Logs from before agents had names are Claude Code's.
   const agent = agentFor(meta.agent);
   const result = lastResult(lines, agent);
@@ -392,6 +402,9 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     repo: meta.repo ?? null,
     replyTo: meta.replyTo ?? null,
     mode: meta.mode ?? null,
+    // What its start decided it gets (capabilities.mjs): an analysis leaves out a run that had the
+    // open internet. None in logs from before capabilities.
+    capabilities: session?.capabilities ?? null,
     taskMode: meta.taskMode ?? null,
     reason: meta.reason ?? null,
     round: meta.round ?? null,
