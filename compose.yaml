@@ -371,8 +371,10 @@ services:
     # (docs/security.md#github-actions-on-deckhands-branches).
     # tmpfs:
     #   - /tmp:size=4g
+    # Its way out on a network of its own: on `default` too, its name would resolve there for
+    # the listener and the proxy, whose calls would then arrive on no caller's network.
     networks:
-      - default
+      - github-out
       - github-orchestrator
       - github-proxy
       - github-runner
@@ -505,6 +507,8 @@ networks:
     ipam:
       config:
         - subnet: ${BROKER_RUNNER_SUBNET:-10.231.250.32/28}
+  # The github service's way to GitHub, alone.
+  github-out:
   broker-github:
     internal: true
     ipam:
