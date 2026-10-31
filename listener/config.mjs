@@ -159,6 +159,11 @@ export const SETTINGS = {
   SANDBOX_FAST_MODE: { default: false, parse: fastModeSetting },
   BRAINSTORM_IDLE_MINUTES: { default: 10, parse: whole("a whole number of minutes") },
   MAX_PARALLEL: { default: 2, parse: whole("a whole number of sandboxes") },
+  // Slots within MAX_PARALLEL kept for the open issues labelled AUTO_PICKUP_LABEL, which the
+  // listener starts by itself, oldest first, in the repos whose `auto_pickup` opts in
+  // (auto-pickup.mjs). 0: off.
+  AUTO_PICKUP_SLOTS: { default: 0, parse: whole("a whole number of sandboxes (0: off)") },
+  AUTO_PICKUP_LABEL: { default: "auto-pickup" },
   // Where sandboxes run (runner/index.mjs): the host's Docker, or pods of a Kubernetes cluster.
   RUNNER: { default: "docker", parse: runnerSetting },
   // The Kubernetes runner's (runner/kubernetes.mjs): its namespace, which holds the listener's
@@ -328,6 +333,7 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
   requiredSettings(env, from, { users: service !== "runner" });
   const s = readSettings(env, from, settings);
   registryCredentials(s);
+  pickupSlots(s);
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
   const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   const policyPort = wholeNumber(env.POLICY_PORT, 8082, "POLICY_PORT", "a port");
@@ -446,6 +452,8 @@ function sandboxConfig(env, s) {
       agentSize: s.KUBERNETES_AGENT_SIZE,
     },
     maxParallel: s.MAX_PARALLEL,
+    autoPickupSlots: s.AUTO_PICKUP_SLOTS,
+    autoPickupLabel: s.AUTO_PICKUP_LABEL,
     subnets: s.SANDBOX_SUBNETS,
     // Per sandbox, under the grants folder's: default.yaml's limits, then a repo's own.
     limits: DEFAULT_LIMITS,
@@ -473,6 +481,16 @@ function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(
       "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/setup.md, Repo images on Kubernetes)",
+    );
+  }
+}
+
+// The reserved slots leave at least one to the runs people start: all of them reserved, a
+// trigger comment would wait for every labelled issue to be picked first.
+function pickupSlots(s) {
+  if (s.AUTO_PICKUP_SLOTS && s.AUTO_PICKUP_SLOTS >= s.MAX_PARALLEL) {
+    throw new ConfigError(
+      `AUTO_PICKUP_SLOTS (${s.AUTO_PICKUP_SLOTS}) must be below MAX_PARALLEL (${s.MAX_PARALLEL}): the reserved slots come out of it`,
     );
   }
 }

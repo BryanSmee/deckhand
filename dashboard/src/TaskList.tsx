@@ -194,6 +194,7 @@ function Row({
       </span>
     ),
     loopLine(t) && <span key="loop">{loopLine(t)}</span>,
+    t.autoPickup && <span key="auto">Auto-pickup</span>,
   ].filter(Boolean);
   return (
     <button type="button" class={styles.row} aria-current={current} onClick={() => onSelect(t.key)}>

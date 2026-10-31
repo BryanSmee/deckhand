@@ -265,6 +265,16 @@ async function fakeGitHub(files = {}) {
         const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
         return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
+      // The repo's open pull requests, every page (auto-pickup.mjs): none unless the test sets
+      // them.
+      if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&page=")) {
+        return res.end(req.url.endsWith("page=1") ? (files.openPulls ?? "[]") : "[]");
+      }
+      // An issue's events, as a JSON list, when the test sets them.
+      const events = /^\/repos\/org\/repo\/issues\/(\d+)\/events\?/.exec(req.url);
+      if (req.method === "GET" && events && files[`events:${events[1]}`]) {
+        return res.end(req.url.endsWith("page=1") ? files[`events:${events[1]}`] : "[]");
+      }
       // A branch's open pull requests (the git gateway, for a repo granted `workflows`).
       if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
         return res.end("[]");
@@ -4217,6 +4227,53 @@ mounts:
       r.path.startsWith("/repos/org/repo/issues?state=open&sort=created"),
     );
     assert.equal(reads.length, 1);
+  });
+
+  test("auto-pickup: an opted-in repo's labelled issue starts by itself, for whoever added the label", async (t) => {
+    const repo = { full_name: "org/repo", html_url: "https://github.com/org/repo" };
+    const labelled = {
+      number: 12,
+      title: "Left in the backlog",
+      state: "open",
+      created_at: "2026-01-01T00:00:00Z",
+      labels: [{ name: "auto-pickup" }],
+      issue_dependencies_summary: { total_blocked_by: 0 },
+    };
+    const { github, listener } = await listen(
+      t,
+      {
+        ".deckhand.yaml": "auto_pickup: true\n",
+        installed: JSON.stringify({ repositories: [{ ...repo, default_branch: "trunk" }] }),
+        backlog: JSON.stringify([labelled]),
+        "events:12": JSON.stringify([
+          {
+            event: "labeled",
+            label: { name: "auto-pickup" },
+            actor: { login: "bob", type: "User" },
+          },
+        ]),
+        // Its description never edited since.
+        "graphql:userContentEdits": JSON.stringify({
+          data: {
+            repository: {
+              issue: { userContentEdits: { pageInfo: { hasPreviousPage: false }, nodes: [] } },
+            },
+          },
+        }),
+      },
+      { MAX_PARALLEL: "2", AUTO_PICKUP_SLOTS: "1" },
+    );
+    // The App's comment, then the label off, then the run, as the dashboard's start queues it.
+    const removed = await github.waitFor(
+      (r) => r.method === "DELETE" && r.path === "/repos/org/repo/issues/12/labels/auto-pickup",
+    );
+    const posted = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.ok(github.requests.indexOf(posted) < github.requests.indexOf(removed));
+    assert.match(JSON.parse(posted.body).body, /^Picked automatically: .* added by @bob/);
+    await listener.until("org/repo#12: queued (work, issue 12, reply on #12)");
+    await listener.until("Auto-pickup: org/repo#12: started (label added by bob)");
   });
 
   test("Work area plan: a parent's sub-issues start or wait from their links, the parent last", async (t) => {
