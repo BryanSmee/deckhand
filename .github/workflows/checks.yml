@@ -19,6 +19,7 @@ jobs:
   tests:
     # As the runner's own user, not root: some tests need a directory root could write anyway.
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -44,7 +45,7 @@ jobs:
       # Fails, too, when a real-opa test skipped: opa is on the PATH here.
       - name: Tests
         run: |
-          node --test --test-force-exit \
+          node --test --test-force-exit --test-timeout=120000 \
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=tap --test-reporter-destination="$RUNNER_TEMP/tests.tap"
           if grep "# SKIP no opa on the PATH" "$RUNNER_TEMP/tests.tap"; then
