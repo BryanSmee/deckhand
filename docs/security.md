@@ -1791,8 +1791,9 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 ## Policies
 
-[Policies](repo-config.md#policies) are Rego rules that allow and refuse a decision: `merge`,
-the last gate of an auto-merge; `review`, a review that starts by itself; `fix`, a review's fix
+[Policies](repo-config.md#policies) are Rego rules that allow and refuse a decision: `run`, a
+run a person asks for (a comment, the dashboard, an inbox entry, a discussion), before it is
+queued; `merge`, the last gate of an auto-merge; `review`, a review that starts by itself; `fix`, a review's fix
 run, a CI fix run or a conflict's rebase run; `link_branch`, the branch the listener links to a
 work run's issue ([The default branch](#the-default-branch)); `request_review`, the reviewers
 the listener requests on Deckhand's ready pull request (`review.request`, allowed users only,
@@ -1808,7 +1809,9 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
 
 - **The operator's**: Deckhand ships its own in the listener's image
   ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows each
-  decision, `github.rego`, a `gh-<feature>.rego` per `gh` feature, and `review.rego`), which
+  decision but `run`, `run.rego`, which allows each mode where it makes sense (brainstorms and
+  onboarding on issues only), `github.rego`, a `gh-<feature>.rego` per `gh` feature, and
+  `review.rego`), which
   hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, read
   again at each decision: one with the same name as Deckhand's replaces it, others add to
   them. **Their allow rules are the ceiling** of every repository.
@@ -1858,7 +1861,11 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
   layer's is missing. A policy that doesn't compile, takes too long, or gives an allow rule
   anything but `true` or `false`, or a deny rule anything but a set of strings, refuses the
   decision with a `policy error: …` reason, whatever the other layer says; so does a policy
-  folder that can't be read (yours or GitHub's). For `merge`, the pull request then waits for
+  folder that can't be read (yours or GitHub's). For `run`, nothing starts (a reply quotes the
+  messages), and a run's input that GitHub can't give (the issue, pull request or discussion it
+  is on) refuses it too, so a broken policy or `opa` stops every run people start in that
+  repository (every repository, for yours): the listener's own runs (reviews, fix runs) aren't
+  asked. For `merge`, the pull request then waits for
   a human, as with any refusal; for `review`, the review is skipped (the log says why); for
   `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
   sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says
