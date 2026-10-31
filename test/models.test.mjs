@@ -20,10 +20,14 @@ import { keyFolder } from "../lib/tokens.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { loadConfig, withModelCredentials } from "../listener/config.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
-import { createRunnerClient } from "../runner/client.mjs";
 import { fingerprintSalt, loginKey, loginSeal } from "../models/logins.mjs";
 import { fingerprints } from "../models/http.mjs";
-import { createModels, credentialNames } from "../models/server.mjs";
+import {
+  createModels,
+  credentialNames,
+  runnerOf,
+  unreadableCredentials,
+} from "../models/server.mjs";
 import { RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { listening, serve, tempDir, testKey } from "./helpers.mjs";
@@ -188,7 +192,17 @@ async function setup(t, { env = {}, copies = 1, clock = { now: Date.now() } } = 
       ...options,
       headers: { authorization: await orchestrator.header("models"), ...options.headers },
     });
-  return { copies: started, startRun, endRun, agentCall, asOrchestrator, tokenFor, clock, dir };
+  return {
+    copies: started,
+    startRun,
+    endRun,
+    agentCall,
+    asOrchestrator,
+    tokenFor,
+    clock,
+    dir,
+    brokerPort,
+  };
 }
 
 test("a Claude Code run's call gets the operator's key in place of its agent token", async (t) => {
@@ -424,25 +438,31 @@ test("two copies: a streaming call in flight finishes while its copy drains, the
   assert.equal(await drained, true);
 });
 
-test("the Antigravity login's refresh is asked of the runner, as the models service", async (t) => {
+test("the Antigravity login's refresh is asked of the runner, with the models service's token for it", async (t) => {
+  const ctx = await setup(t, { env: { ANTHROPIC_API_KEY: KEY } });
   const calls = [];
-  const runner = createRunnerClient({
+  // The models service's real broker caller, as models/server.mjs builds it.
+  const caller = createBrokerCaller({
+    url: `http://${AT.models}:${ctx.brokerPort}`,
+    service: "models",
+    audiences: ["broker", "runner"],
+  });
+  const runner = runnerOf({
     urls: "http://runner.test",
-    token: async (service) => `Bearer token-of-${service}`,
-    epoch: () => null,
+    caller,
     fetch: async (url, init) => {
       calls.push({ url, auth: init.headers.authorization, body: JSON.parse(init.body) });
       return new Response(JSON.stringify({ code: 0, out: "{}", err: "" }));
     },
   });
   assert.deepEqual(await runner.refreshLogin("the file"), { code: 0, out: "{}", err: "" });
-  assert.deepEqual(calls, [
-    {
-      url: "http://runner.test/logins/antigravity/refresh",
-      auth: "Bearer token-of-models",
-      body: { input: "the file" },
-    },
-  ]);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, "http://runner.test/logins/antigravity/refresh");
+  assert.deepEqual(calls[0].body, { input: "the file" });
+  // A service token from models for the runner: what the runner's guard checks.
+  const claims = JSON.parse(Buffer.from(calls[0].auth.split(".")[1], "base64url"));
+  assert.equal(claims.sub, "models");
+  assert.equal(claims.aud, "deckhand:service:runner");
 });
 
 test("through the egress proxy: an agent's call on the broker's host goes to the models service, vouched for by the proxy", async (t) => {
@@ -619,4 +639,35 @@ test("loginKey(): made once, then read; the same key for every caller", () => {
   assert.deepEqual(loginKey(dir), key);
   assert.deepEqual(readdirSync(dir), ["models.key"]);
   assert.equal(statSync(join(dir, "models.key")).mode & 0o777, 0o600);
+});
+
+test("a credentials folder or login the models service can't read is said at start, by name", () => {
+  const denied = new Set(["/data/credentials/codex-auth.json", "/elsewhere/agy.json"]);
+  const access = (path) => {
+    if (path === "/data/credentials/agy-auth.json")
+      throw Object.assign(new Error(), { code: "ENOENT" });
+    if (denied.has(path)) throw Object.assign(new Error(), { code: "EACCES" });
+  };
+  const lines = unreadableCredentials(
+    { DATA_DIR: "/data", AGY_AUTH_FILE: "/elsewhere/agy.json" },
+    { access },
+  );
+  assert.equal(lines.length, 2);
+  assert.match(
+    lines[0],
+    /AGY_AUTH_FILE, \/elsewhere\/agy\.json can't be read \(EACCES\): it runs as uid 1000/,
+  );
+  assert.match(lines[1], /the login \/data\/credentials\/codex-auth\.json can't be read/);
+  // The folder itself: said once, not for each file in it.
+  const folder = unreadableCredentials(
+    { DATA_DIR: "/data" },
+    {
+      access: () => {
+        throw Object.assign(new Error(), { code: "EACCES" });
+      },
+    },
+  );
+  assert.equal(folder.length, 1);
+  assert.match(folder[0], /the credentials folder \/data\/credentials/);
+  assert.deepEqual(unreadableCredentials({ DATA_DIR: "/data" }, { access: () => {} }), []);
 });

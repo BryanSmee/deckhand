@@ -34,8 +34,7 @@ import {
   withCredentialFiles,
 } from "../listener/config.mjs";
 import { loginSeal } from "../models/logins.mjs";
-import { createModels, credentialNames } from "../models/server.mjs";
-import { createRunnerClient } from "../runner/client.mjs";
+import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -441,11 +440,7 @@ function startModels(settings, { dir, runnerUrl, log }) {
   });
   const broker = createBrokerClient({ caller });
   broker.start().catch(() => {});
-  const runner = createRunnerClient({
-    urls: runnerUrl,
-    token: (service) => caller.header(service),
-    epoch: () => null,
-  });
+  const runner = runnerOf({ urls: runnerUrl, caller });
   const models = createModels({
     env,
     config,

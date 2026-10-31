@@ -22,7 +22,7 @@
 //   BROKER_SERVICE_URL, RUNNER_URL, SERVICE_ACCOUNT_TOKEN_FILE: as the listener's
 //   DRAIN_SECONDS     how long a stopping copy lets its calls finish: 600, an agent call's length
 import { randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
+import { accessSync, constants, mkdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -38,6 +38,7 @@ import {
   ConfigError,
   loadConfig,
   readConfigFile,
+  CREDENTIAL_FILES,
   withCredentialFiles,
 } from "../listener/config.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
@@ -59,6 +60,51 @@ export function drainMs(text) {
   if (text === undefined || text === "") return DRAIN_MS;
   if (!/^\d+$/.test(text)) throw new Error(`DRAIN_SECONDS: expected seconds, got ${text}`);
   return Number(text) * 1000;
+}
+
+// The runner as the models service calls it (the Antigravity login's refresh): the runner
+// client names the service it calls as ("models"), the token is the one for the runner's
+// audience. `caller`: lib/broker-client.mjs's, with "runner" among its audiences.
+export function runnerOf({ urls, caller, fetch, log = () => {} }) {
+  return createRunnerClient({
+    urls,
+    token: () => caller.header("runner"),
+    epoch: () => null,
+    ...(fetch && { fetch }),
+    log,
+  });
+}
+
+// What the models service can't read of its credentials folder and the plans' files, said at
+// start: it reads them as uid 1000, where the listener before it read and rewrote them as root
+// (owner-only), and a folder it can't list hides the logins in it (withCredentialFiles()).
+// → lines for the log, [] when all is readable.
+export function unreadableCredentials(env, { access = accessSync } = {}) {
+  const dir = join(env.DATA_DIR || "/data", "credentials");
+  const problems = [];
+  const check = (path, mode, what) => {
+    try {
+      access(path, mode);
+    } catch (error) {
+      if (error.code === "ENOENT") return;
+      problems.push(
+        `Models: ${what} ${path} can't be read (${error.code}): it runs as uid 1000, give it the credentials folder and its files (chown -R 1000, docs/setup.md#the-models-service)`,
+      );
+    }
+  };
+  check(dir, constants.R_OK | constants.X_OK, "the credentials folder");
+  // Its files can't be read either then: said once.
+  if (problems.length) return problems;
+  for (const name of Object.keys(CREDENTIAL_FILES)) {
+    if (env[name]) check(env[name], constants.R_OK, `${name},`);
+  }
+  for (const file of Object.values(CREDENTIAL_FILES)) {
+    const path = join(dir, file);
+    if (!Object.keys(CREDENTIAL_FILES).some((name) => env[name] === path)) {
+      check(path, constants.R_OK, "the login");
+    }
+  }
+  return problems;
 }
 
 // The credentials `env` holds, by name (AGENT_SECRETS): what the listener is told it has.
@@ -223,12 +269,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       password: env.REDIS_PASSWORD,
       secrets: () => AGENT_SECRETS.map((name) => env[name]).filter(Boolean),
     });
-    const runner = createRunnerClient({
-      urls: config.runnerUrl,
-      token: (service) => caller.header(service),
-      epoch: () => null,
-      log,
-    });
+    const runner = runnerOf({ urls: config.runnerUrl, caller, log });
     const models = createModels({
       env,
       config,
@@ -264,6 +305,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // waits for them (lib/broker-client.mjs).
   caller.start();
   broker.start().catch((error) => log(`Broker: ${error.stack ?? error}`));
+  for (const line of unreadableCredentials(env)) log(line);
   ready();
   // A rolling update starts the next copy first: this one, out of rotation (/ready), lets the
   // agents' calls in flight finish (10 minutes at most), then exits.

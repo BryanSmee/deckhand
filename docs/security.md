@@ -260,10 +260,11 @@ A sandbox holds no credential of the operator's and no GitHub token: it holds **
 (`lib/tokens.mjs`), JWTs the **broker service** (`broker/`, a container of its own, #505)
 signs with an **Ed25519** key that no other service holds. Every service checks their
 signature **offline**, with the broker's public keys alone (`GET /keys`): the
-[GitHub gateway](#the-github-gateway), the git gateway and the agents' API endpoints
-(`listener/upstream.mjs`, through `listener/broker.mjs`) never ask the broker whether a token
-is genuine. The listener also checks that its run is one it still has going, which costs
-nothing there. No HMAC: a service that can check a token can't mint one, so the listener, which
+[GitHub gateway](#the-github-gateway) and the git gateway (through `listener/broker.mjs`), and the
+models service's agent endpoints (`models/upstream.mjs`, through `models/runs.mjs`) never ask the
+broker whether a token is genuine. The listener also checks that its run is one it still has
+going, which costs nothing there; the models service asks the broker whether the run still goes
+(`GET /runs/:id`, every 30 s at most per run). No HMAC: a service that can check a token can't mint one, so the listener, which
 the internet reaches, signs nothing (#492). The checks are strict and hand-written on
 `node:crypto`:
 
@@ -874,7 +875,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   capability, over REST, and GitHub's refusal of those fields explained, over GraphQL.
   `discussions` stays required: only discussion runs read them (`read:discussions`), and their
   token fails without it, as before. The answer streams back as it comes, with the agents' endpoints' limits
-  (`listener/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
+  (`lib/upstream.mjs`): a call cut off after 10 minutes without a byte either way, 16
   calls in flight per run.
 - **A work run that isn't a fork's gets nothing that would bring a fork's code**: a fork's
   repository, a fork's pull request's head, a commit that isn't its repository's, by git, the

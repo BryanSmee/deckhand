@@ -5,7 +5,8 @@
 // its log are redacted before they are posted or stored.
 import { AGENT_SECRETS } from "./agents/index.mjs";
 
-// redact() lives on its own: the API endpoints use it, and agents/ imports them (upstream.mjs).
+// redact() lives on its own (lib/redact.mjs): the models service's endpoints use it too
+// (../models/upstream.mjs).
 export { REDACTED, redact } from "../lib/redact.mjs";
 
 // The operator's credentials as the listener knows them: their fingerprints, from the models

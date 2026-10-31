@@ -512,7 +512,7 @@ export function createRunnerClient({
     ack: (ids) => orchestrator.json("POST", "/events/ack", { body: { ids } }),
   };
 
-  // `agy models` on the login's volume (../listener/antigravity-login.mjs): { code, out, err }.
+  // `agy models` on the login's volume (../models/antigravity-login.mjs): { code, out, err }.
   // Once: its refresh token is spent by the first.
   const refreshLogin = (input) =>
     models.json("POST", "/logins/antigravity/refresh", { body: { input }, once: true });

@@ -138,8 +138,8 @@ export const SETTINGS = {
   OPENAI_BASE_URL: { default: "https://api.openai.com/v1", parse: apiUrl },
   // What best, balanced and fast mean to Codex, when not its built-in models.
   ...tierSettings("CODEX", TIERS),
-  // The Antigravity CLI's, with a Gemini API key or a Google AI plan's login that the listener
-  // holds (agents/antigravity.mjs, google.mjs, antigravity-login.mjs), and what best, balanced
+  // The Antigravity CLI's, with a Gemini API key or a Google AI plan's login that the models
+  // service holds (agents/antigravity.mjs, ../models/google.mjs, ../models/antigravity-login.mjs), and what best, balanced
   // and fast mean to it.
   AGY_VERSION: { default: AGY_DEFAULT_VERSION },
   // Its tarballs' sha256 by architecture, "x64:<hex>,arm64:<hex>" (one will do): the default
@@ -458,7 +458,8 @@ function sandboxConfig(env, s) {
     agyVolume: s.AGY_VOLUME,
     agyVersion: s.AGY_VERSION,
     agySha256: s.AGY_SHA256,
-    // Where the listener refreshes the plan's login with `agy` itself (antigravity-login.mjs).
+    // Where the runner refreshes the plan's login with `agy` itself, for the models service
+    // (../models/antigravity-login.mjs).
     agyLoginVolume: `${s.AGY_VOLUME}-login`,
     runner: s.RUNNER,
     kubernetes: {

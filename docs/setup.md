@@ -463,11 +463,13 @@ The plans' logins (see [With a ChatGPT plan](#with-a-chatgpt-plan) and
 account-wide credentials, and would end up in git. They have a folder of their own, which
 `compose.yaml` mounts read only at `/data/credentials` in the models service alone:
 `./credentials` by default (`DECKHAND_CREDENTIALS_DIR` in `.env` to move it). Keep it out of git
-(this repository's `.gitignore` does) and readable by you and root alone. Create it before the
-models service starts, or Docker creates it empty and owned by root:
+(this repository's `.gitignore` does) and readable by the models service alone, which runs as the
+`node` user (uid 1000), not root. Create it before the models service starts, or Docker creates
+it empty and owned by root, where the service can't read it:
 
 ```sh
-mkdir -m 700 credentials
+mkdir -m 700 credentials && sudo chown 1000 credentials
+# each login you put there: owned by uid 1000 too, mode 600
 ```
 
 ```
@@ -1264,7 +1266,14 @@ wait at the proxy, 5 minutes at most ([services](services.md#the-models-service)
 
 **From a listener that held the credentials.** Move the credentials from the listener's
 environment to the models service's (the new `compose.yaml` does), and leave the credentials
-folder where it is: the models service mounts it. A listener that still has one in its
+folder where it is: the models service mounts it. The listener read it as root and rewrote the
+plans' logins at each refresh, owner-only: root's. The models service reads it as the `node`
+user (uid 1000), so give it the folder and its files before you update, or every run on a plan
+fails (its log says which file it can't read, at start):
+
+````sh
+sudo chown -R 1000 credentials
+``` A listener that still has one in its
 environment warns about it at start, and uses none of them.
 
 ## Kubernetes runner
@@ -1340,18 +1349,18 @@ be allowed to reach them, and every run would be refused.
         ports: [{ port: 3128 }]
       - to: [{ podSelector: { matchLabels: { app: deckhand-listener } } }]
         ports: [{ port: 8081 }]
-  ```
+````
 
-  Sandboxes reach the listener through the proxy (#511); the second rule is for those started
-  before, which still call it directly, and can go once none of them runs. The proxy
-  recognises their calls by its own `BROKER_URL`, which must be the listener's (same scheme,
-  host and port): its default, `RELAY_URL`'s origin, is only right when both name the same
-  Service. Set it in the proxy's Deployment otherwise; with another value, the runs' agent
-  calls, pushes and files are refused, and the listener logs that the proxy's `BROKER_URL`
-  isn't its own.
+Sandboxes reach the listener through the proxy (#511); the second rule is for those started
+before, which still call it directly, and can go once none of them runs. The proxy
+recognises their calls by its own `BROKER_URL`, which must be the listener's (same scheme,
+host and port): its default, `RELAY_URL`'s origin, is only right when both name the same
+Service. Set it in the proxy's Deployment otherwise; with another value, the runs' agent
+calls, pushes and files are refused, and the listener logs that the proxy's `BROKER_URL`
+isn't its own.
 
-  The cluster's network plugin has to enforce NetworkPolicies (Calico, Cilium…): one that
-  ignores them leaves the sandboxes unisolated, whatever the policy says.
+The cluster's network plugin has to enforce NetworkPolicies (Calico, Cilium…): one that
+ignores them leaves the sandboxes unisolated, whatever the policy says.
 
 - **The policy service** (`deckhand-policy`'s image, [architecture.md](architecture.md#the-policy-service)):
   a Deployment and a Service the listener's `POLICY_SERVICE_URL` names (`policy` on 8181), the
