@@ -505,3 +505,51 @@ test("runPath: what the listener relays to the broker service, the sandbox's own
     assert.equal(runPath(url), null, url);
   }
 });
+
+test("egress: an agent's relayed host is the models service's, with its sandbox's network; GitHub's stays the gateway's", async (t) => {
+  const config = testConfig();
+  config.brokerPort = 0;
+  config.brokerUrl = "http://127.0.0.1:0";
+  const broker = createBroker({});
+  const ctx = {
+    config,
+    broker,
+    log: () => {},
+    runner: {
+      proxyAddresses: async () => ["127.0.0.1"],
+      locate: async (ip) => (ip === "10.1.0.2" ? { sandbox: "net-a", name: "a" } : null),
+      installing: async () => false,
+    },
+    images: { egressFor: async () => null },
+    tasks: new Map([
+      [
+        "org/a#1",
+        {
+          name: "a",
+          repo: "org/a",
+          id: "1",
+          live: {
+            secret: broker.register("org/a"),
+            sandbox: "net-a",
+            hosts: ["github.com", "api.github.com", "daily-cloudcode-pa.googleapis.com"],
+            trusted: [],
+            record: { agent: "antigravity" },
+          },
+        },
+      ],
+    ]),
+  };
+  const server = createBrokerHttp(ctx).listen();
+  await once(server, "listening");
+  t.after(() => server.close());
+  const ask = async (host) =>
+    (await fetch(`http://127.0.0.1:${config.brokerPort}/egress?ip=10.1.0.2&host=${host}`)).json();
+  const agent = await ask("daily-cloudcode-pa.googleapis.com");
+  assert.equal(agent.relay, true);
+  assert.equal(agent.models, true);
+  assert.equal(agent.sandbox, "net-a");
+  const github = await ask("api.github.com");
+  assert.equal(github.relay, true);
+  assert.equal(github.models, undefined);
+  assert.equal(github.sandbox, undefined);
+});

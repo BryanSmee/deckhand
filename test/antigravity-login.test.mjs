@@ -1,16 +1,20 @@
-// The Antigravity CLI's plan login, held by the listener: refreshed by `agy` itself in a short
-// container the runner starts (a fake docker here), once for concurrent calls, re-read when replaced, and a
-// refused refresh says to sign in again. And its endpoint (google.mjs): the run's secret in,
+// The Antigravity CLI's plan login, held by the models service: refreshed by `agy` itself in a
+// short container the runner starts (a fake docker here), once for concurrent calls and every
+// copy of the service, kept sealed in its store, re-read when replaced, and a refused refresh
+// says to sign in again. And its endpoint (google.mjs): the run's secret in,
 // the plan's access token out, on the paths `agy` calls only.
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { chmodSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { test } from "node:test";
-import { createAntigravityLogin } from "../listener/antigravity-login.mjs";
+import { openStore } from "../lib/store.mjs";
+import { createAntigravityLogin } from "../models/antigravity-login.mjs";
+import { loginSeal } from "../models/logins.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
 import { loginRefresh } from "../runner/service.mjs";
 import { createBroker } from "../listener/broker.mjs";
-import { createGoogleRelay } from "../listener/google.mjs";
+import { createGoogleRelay } from "../models/google.mjs";
 import { sandboxAt, serve, tempDir } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-17T12:00:00Z");
@@ -71,8 +75,10 @@ test("a token far from its expiry is used as it is: no container", async (t) => 
   assert.deepEqual(login.secrets(), ["ya29.current", "1//refresh"]);
 });
 
-test("near its expiry: one refresh by `agy models` for concurrent calls, written back", async (t) => {
+test("near its expiry: one refresh by `agy models` for concurrent calls, kept sealed in the store", async (t) => {
   const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
+  const store = openStore("memory:");
+  const seal = loginSeal(randomBytes(32));
   let open;
   const gate = new Promise((resolve) => (open = resolve));
   const { docker, calls } = fakeDocker(refreshed, gate);
@@ -82,6 +88,8 @@ test("near its expiry: one refresh by `agy models` for concurrent calls, written
     file,
     config,
     refresh: onDocker(docker, async () => installs++),
+    store,
+    seal,
     now: () => NOW,
     log: (line) => logs.push(line),
   });
@@ -115,8 +123,12 @@ test("near its expiry: one refresh by `agy models` for concurrent calls, written
   // The file `agy` gets says its token expired, so that it refreshes it.
   assert.equal(input.token.expiry, "2000-01-01T00:00:00Z");
   assert.equal(input.token.refresh_token, "1//refresh");
-  // Written back for the next start, readable by the listener alone.
-  assert.equal(JSON.parse(readFileSync(file, "utf8")).token.access_token, "ya29.fresh");
+  // Kept for the next start, sealed in the store; the file left as it was.
+  const raw = await store.get("login:antigravity");
+  assert.equal(raw.kid, seal.kid);
+  assert.ok(!raw.sealed.includes("ya29.fresh"));
+  assert.equal(JSON.parse(seal.open(raw.sealed)).login.token.access_token, "ya29.fresh");
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).token.access_token, "ya29.old");
   assert.match(logs.join("\n"), /refreshed the Google AI plan's login/);
   // Fresh now: no second refresh.
   await login.headers();
@@ -136,31 +148,14 @@ test("a token Google refused is refreshed on the next call, once", async (t) => 
   assert.equal(calls.length, 1);
 });
 
-test("a file the listener can't rewrite: refused before any refresh container", async (t) => {
+test("a read-only file: refreshed all the same, never written", async (t) => {
   const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
-  chmodSync(dirname(file), 0o555);
+  chmodSync(file, 0o444);
   const { docker, calls } = fakeDocker(refreshed);
-  let installs = 0;
-  const login = createAntigravityLogin({
-    file,
-    config,
-    refresh: onDocker(docker, async () => installs++),
-    now: () => NOW,
-  });
-  await assert.rejects(login.headers(), (error) => {
-    assert.match(
-      error.message,
-      /^AGY_AUTH_FILE \(.+\) must be in a folder the listener can write to \(EACCES\)/,
-    );
-    assert.match(error.message, /\/data\/credentials \(docs\/setup\.md#antigravity-cli\)/);
-    assert.equal(error.status, 401);
-    // Moving the file is the fix, not signing in again (upstream.mjs credentialFailure()).
-    assert.equal(error.refused, false);
-    return true;
-  });
-  assert.equal(calls.length, 0);
-  assert.equal(installs, 0);
-  chmodSync(dirname(file), 0o755); // for tempDir()'s cleanup
+  const login = createAntigravityLogin({ file, config, refresh: onDocker(docker), now: () => NOW });
+  assert.deepEqual(await login.headers(), { authorization: "Bearer ya29.fresh" });
+  assert.equal(calls.length, 1);
+  assert.equal(JSON.parse(readFileSync(file, "utf8")).token.access_token, "ya29.old");
 });
 
 // What the refresh container prints on stderr when it fails: `agy`'s error, then the line of
@@ -292,7 +287,7 @@ async function relay(t, options = {}) {
           secrets: () => ["ya29.plan", "1//refresh"],
         };
   const endpoint = createGoogleRelay({
-    broker,
+    runs: broker,
     credential: options.credential ?? null,
     login: plan,
     upstream: () => options.upstream ?? google.url,
@@ -411,7 +406,7 @@ test("Google's 401 marks the plan's token for a refresh; a spent login refuses t
   );
   assert.equal(refused.status, 503);
   const message =
-    "the operator's login for Google was refused, and must be signed in again: see the listener's log";
+    "the operator's login for Google was refused, and must be signed in again: see the models service's log";
   assert.deepEqual(await refused.json(), {
     error: { status: "UNAVAILABLE", message: `Deckhand: ${message}` },
   });
@@ -419,14 +414,14 @@ test("Google's 401 marks the plan's token for a refresh; a spent login refuses t
   assert.equal(broken.broker.runOf(brokenRun).apiError, message);
 });
 
-test("a login that can't be refreshed: its error stays in the listener's log, redacted", async (t) => {
+test("a login that can't be refreshed: its error stays in the models service's log, redacted", async (t) => {
   // What a failed refresh's message could quote: part of the token file (#242).
   const leak = new Error('can\'t be refreshed ({"token":{"access_token":"ya29.plan-access-tok');
   const logs = [];
   const google = await fakeGoogle(t);
   const broker = createBroker({ sentFrom: sandboxAt() });
   const endpoint = createGoogleRelay({
-    broker,
+    runs: broker,
     login: {
       headers: async () => Promise.reject(leak),
       refused: () => {},
@@ -445,7 +440,7 @@ test("a login that can't be refreshed: its error stays in the listener's log, re
   );
   assert.equal(res.status, 503);
   const message =
-    "the operator's login for Google can't be refreshed right now: see the listener's log";
+    "the operator's login for Google can't be refreshed right now: see the models service's log";
   assert.equal((await res.json()).error.message, `Deckhand: ${message}`);
   assert.equal(broker.runOf(secret).apiError, message);
   assert.equal(broker.runOf(secret).apiStatus, 502);

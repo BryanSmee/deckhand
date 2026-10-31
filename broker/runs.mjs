@@ -68,6 +68,11 @@ function claimsOf(record) {
     sandbox: record.sandbox,
     // What the run's start decided it gets (the listener's capabilities.mjs): names only.
     caps: record.caps ?? [],
+    // The provider of the run's agent, and the credential of its it names (null: the default),
+    // which the models service reads (#504): a run of one agent never gets another's.
+    ...(record.provider && {
+      agent: { provider: record.provider, credential: record.credential ?? null },
+    }),
   };
 }
 
@@ -75,7 +80,8 @@ function claimsOf(record) {
 const CAP = /^[a-z][a-z0-9:_-]{0,63}$/;
 
 // What the orchestrator says of a run (PUT /runs/:id, POST /runs/:id/tokens), checked: the
-// claims' fields and its screenshots' folder. Anything else is dropped.
+// claims' fields (its agent's provider and credential among them) and its screenshots' folder.
+// Anything else is dropped.
 export function runFields(body) {
   const text = (v) => (typeof v === "string" && v ? v : null);
   return {
@@ -87,6 +93,8 @@ export function runFields(body) {
     sandbox: text(body?.sandbox),
     shots: text(body?.shots),
     caps: Array.isArray(body?.caps) ? body.caps.filter((c) => CAP.test(c ?? "")).slice(0, 64) : [],
+    provider: text(body?.provider),
+    credential: text(body?.credential),
   };
 }
 

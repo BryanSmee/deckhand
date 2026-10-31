@@ -1,5 +1,5 @@
-// Every environment variable the listener, the runner, the policy service, the egress proxy and
-// the broker read is in docs/setup.md: a setting nobody can find is one nobody can change. Every
+// Every environment variable the listener, the runner, the policy service, the egress proxy, the
+// broker and the models service read is in docs/setup.md: a setting nobody can find is one nobody can change. Every
 // setting config.yaml takes is in compose.yaml too, which passes .env's value.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
@@ -16,7 +16,8 @@ function sources(dir) {
 }
 
 // SETTINGS, `env.X`, `process.env.X` and `setting("X")`: how config.mjs, server.mjs, runs.mjs,
-// proxy.mjs, the policy service's service.mjs and the broker's server.mjs read them.
+// proxy.mjs, the policy service's service.mjs, the broker's and the models service's server.mjs
+// read them.
 function settingsRead() {
   const names = new Set(Object.keys(SETTINGS));
   for (const source of [
@@ -25,6 +26,7 @@ function settingsRead() {
     ...sources("proxy"),
     ...sources("policy-service"),
     ...sources("broker"),
+    ...sources("models"),
   ]) {
     for (const [, name] of source.matchAll(/\b(?:env\.|setting\(")([A-Z][A-Z0-9_]*)/g))
       names.add(name);
@@ -45,7 +47,7 @@ test("the listener, the policy service and the proxy read settings that the scan
   }
 });
 
-test("docs/setup.md documents every setting the listener, the runner, the policy service, the proxy and the broker read", () => {
+test("docs/setup.md documents every setting the listener, the runner, the policy service, the proxy, the broker and the models service read", () => {
   const doc = readFileSync(join(root, "docs/setup.md"), "utf8");
   const missing = settingsRead().filter((name) => !doc.includes(`\`${name}\``));
   assert.deepEqual(missing, [], `not in docs/setup.md: ${missing.join(", ")}`);

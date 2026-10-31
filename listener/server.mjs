@@ -11,12 +11,9 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { createAnalysis } from "./analysis.mjs";
 import { createAuth, sessionKey } from "./auth.mjs";
-import { createAnthropicProxy, NAMED } from "./anthropic.mjs";
-import { createAntigravityLogin } from "./antigravity-login.mjs";
-import { createChatgptLogin } from "./chatgpt.mjs";
-import { createGoogleRelay } from "./google.mjs";
-import { createOpenAiProxy } from "./openai.mjs";
-import { planWarning } from "./upstream.mjs";
+import { planWarning } from "./agents/credentials.mjs";
+import { AGENT_SECRETS } from "./agents/index.mjs";
+import { createModelsService } from "./models-service.mjs";
 import { createBroker } from "./broker.mjs";
 import { createBrokerService, legacyKey } from "./broker-service.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
@@ -31,7 +28,14 @@ import { createProjects } from "./projects.mjs";
 import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
 import { createComments } from "./comments.mjs";
 import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
-import { ConfigError, loadConfig, readConfigFile, withCredentialFiles } from "./config.mjs";
+import {
+  brokerServiceUrl,
+  ConfigError,
+  loadConfig,
+  modelsServiceUrl,
+  readConfigFile,
+  withModelCredentials,
+} from "./config.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
 import { nextEpoch, openStore } from "../lib/store.mjs";
@@ -105,12 +109,52 @@ const RECONCILE_MS = 60 * 60_000;
 // How often the preview hooks the runner runs are asked again, for /status and the dashboard.
 const PREVIEWS_MS = 5000;
 
-// With the plans' logins found in the credentials folder (/data/credentials) when their
-// variables are unset.
-const env = withCredentialFiles(process.env);
+const env = process.env;
+
+function log(...args) {
+  console.log(new Date().toISOString(), ...args);
+}
+
+// The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
+// its stream of their events. The key the listener signed tokens with before it moves out of
+// the data volume, but for its public part (legacyKey()).
+// Its calls carry the listener's service tokens, as the orchestrator: for the broker, the policy
+// service, the runner and the models service.
+let brokerCaller;
+let models;
+try {
+  brokerCaller = createBrokerCaller({
+    url: brokerServiceUrl(env),
+    service: "orchestrator",
+    audiences: ["broker", "policy", "runner", "models"],
+    podTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
+    log,
+  });
+  // The models service (../models/, #504), the only one holding the agents' credentials: the
+  // listener learns which of them it has, by name, before its settings are read (FALLBACKS and
+  // the agents need them), and their fingerprints, for redaction.
+  models = createModelsService({
+    urls: modelsServiceUrl(env),
+    token: () => brokerCaller.header("models"),
+    log,
+  });
+} catch (error) {
+  console.error(error.message);
+  process.exit(1);
+}
+const held = await models.credentials();
+// Their fingerprints too, before any run's output is read (the runs restored below): read again
+// every minute from then on.
+await models.start();
+const stray = AGENT_SECRETS.filter((name) => env[name]);
+if (stray.length) {
+  log(
+    `Warning: the listener's environment holds ${stray.join(", ")}, which it no longer uses: the models service holds the agents' credentials (docs/setup.md). Remove them from the listener's.`,
+  );
+}
 let config;
 try {
-  config = loadConfig(env, readConfigFile(env));
+  config = loadConfig(withModelCredentials(env, held), readConfigFile(env));
   // Read again at each run. A broken layout or default.yaml at start is the operator's to fix
   // now; a broken repo file stops that repo's runs only, so the others start.
   const grants = loadGrants(config);
@@ -138,22 +182,6 @@ const logDir = join(config.dataDir, "logs");
 const shotsDir = join(config.dataDir, "shots");
 for (const dir of [logDir, shotsDir]) mkdirSync(dir, { recursive: true });
 
-function log(...args) {
-  console.log(new Date().toISOString(), ...args);
-}
-
-// The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
-// its stream of their events. The key the listener signed tokens with before it moves out of
-// the data volume, but for its public part (legacyKey()).
-// Its calls carry the listener's service tokens, as the orchestrator: for the broker, the policy
-// service and the runner.
-const brokerCaller = createBrokerCaller({
-  url: config.brokerServiceUrl,
-  service: "orchestrator",
-  audiences: ["broker", "policy", "runner"],
-  podTokenFile: config.serviceAccountTokenFile,
-  log,
-});
 const brokerService = createBrokerService({
   caller: brokerCaller,
   legacy: legacyKey(config.dataDir, { log }),
@@ -175,11 +203,11 @@ const epoch = await nextEpoch(store);
 
 // The services the listener still is, each with its own token for the runner, from the broker
 // service: the orchestrator drives runs (and the egress policy asks where a sandbox is), edge
-// reads their logs, models has the Antigravity login refreshed (runner/service.mjs ROUTES).
+// reads their logs (runner/service.mjs ROUTES).
 const callers = {
   orchestrator: brokerCaller,
   ...Object.fromEntries(
-    ["edge", "models"].map((service) => [
+    ["edge"].map((service) => [
       service,
       createBrokerCaller({
         url: config.brokerServiceUrl,
@@ -193,7 +221,6 @@ const callers = {
 };
 // Asked for until the broker answers; a call waits for its token (lib/broker-client.mjs).
 callers.edge.start();
-callers.models.start();
 
 // The runs being started: the first tokens the runner asks for once their network or pod
 // exists (services-http.mjs).
@@ -246,6 +273,8 @@ const ctx = {
   // The listener's store (above): the operator's secrets are left out of what the queue writes
   // there (restart.mjs storable()).
   store,
+  // The models service: the agents' credentials' fingerprints, a run's API state at its end.
+  models,
   storeSecrets: () => operatorSecrets(ctx),
 };
 storeSecrets = () => operatorSecrets(ctx);
@@ -618,58 +647,6 @@ ctx.gitGateway = createGitGateway({
   mirrorDir: join(config.dataDir, "git-mirrors"),
   log,
 });
-// Their Claude Code's API calls, with the operator's credential that they never see.
-ctx.anthropic = createAnthropicProxy({
-  broker: ctx.broker,
-  name: config.claudeCredential,
-  credential: config.claudeCredential && env[config.claudeCredential],
-  // For runs on a credential their entry names (`claude@anthropic:key`, FALLBACKS).
-  named: Object.fromEntries(
-    config.credentials["claude@anthropic"].set.map((c) => [c, env[NAMED[c].variable]]),
-  ),
-  upstream: config.anthropicUrl,
-  // claude@openrouter, for runs that fall back to it (FALLBACKS).
-  providers: {
-    openrouter: {
-      name: "OPENROUTER_API_KEY",
-      credential: env.OPENROUTER_API_KEY,
-      upstream: config.openrouterUrl,
-    },
-  },
-  log,
-});
-// Their Codex's, likewise: with a ChatGPT plan's login, the listener holds and refreshes it.
-const chatgptLogin =
-  config.openaiCredential === "CODEX_AUTH_FILE"
-    ? createChatgptLogin({ file: env.CODEX_AUTH_FILE, log })
-    : null;
-ctx.openai = createOpenAiProxy({
-  broker: ctx.broker,
-  credential: config.openaiCredential === "OPENAI_API_KEY" ? env.OPENAI_API_KEY : null,
-  login: chatgptLogin,
-  upstream: config.openaiUrl,
-  log,
-});
-// Their Antigravity CLI's: a Gemini API key, or a Google AI plan's login (relayed by the
-// egress proxy), which the listener holds and refreshes with `agy` itself, in a container the
-// runner starts (runner/service.mjs loginRefresh()).
-const agyLogin =
-  config.agyCredential === "AGY_AUTH_FILE"
-    ? createAntigravityLogin({
-        file: env.AGY_AUTH_FILE,
-        config,
-        refresh: runnerClient.refreshLogin,
-        log,
-      })
-    : null;
-ctx.google = createGoogleRelay({
-  broker: ctx.broker,
-  credential: config.agyCredential === "GEMINI_API_KEY" ? env.GEMINI_API_KEY : null,
-  login: agyLogin,
-  upstream: config.geminiUrl,
-  log,
-});
-
 // --- Tasks, runs and restarts --------------------------------------------------------------
 
 // A task with a run going or comments waiting for one, under any spelling of its repo.
@@ -981,15 +958,6 @@ for (const name of [claudeCredential, config.openaiCredential, config.agyCredent
   const plan = planWarning(name);
   if (plan) log(plan);
 }
-// Read (and refreshed if due) now, so a missing or spent login shows before a run needs it.
-chatgptLogin
-  ?.headers()
-  .then(() => log(`Codex: a ChatGPT plan's login, from ${env.CODEX_AUTH_FILE}`))
-  .catch((error) => log(`Codex: ${error.message}`));
-agyLogin
-  ?.headers()
-  .then(() => log(`Antigravity CLI: a Google AI plan's login, from ${env.AGY_AUTH_FILE}`))
-  .catch((error) => log(`Antigravity CLI: ${error.message}`));
 if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
 
 // The broker service's keys first: the restored runs' tokens are checked with them.
@@ -1009,6 +977,8 @@ const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
 // Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
 brokerService.consume({ shotsDir });
+// The models service's: the agents' calls it refused, each a line in its run's log.
+models.consume({ note: (event) => ctx.broker.runOf(event.run)?.note?.(event.message) });
 const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
@@ -1084,6 +1054,7 @@ process.on("SIGTERM", () => {
   clearInterval(reconciling);
   // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
   brokerService.stop();
+  models.stop();
   log("Stopping: running sandboxes go on, the next listener picks them up");
   // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).
   web.close();

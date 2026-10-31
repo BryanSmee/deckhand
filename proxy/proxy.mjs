@@ -16,13 +16,15 @@
 // Deckhand's CA (authority.mjs), that sandboxes trust, then sends on over TLS it verifies.
 // The hosts the listener says to relay (GitHub's, whose calls carry the run token in place of
 // a token, ../listener/github-gateway.mjs, and an agent's, in place of the operator's
-// credential, ../listener/google.mjs) are decrypted the same way, whether the cache is on or
+// credential, ../models/google.mjs) are decrypted the same way, whether the cache is on or
 // not, and each request goes to the listener (RELAY_URL) instead of the host, with the address
-// of the sandbox it came from (CLIENT_HEADER). Plain HTTP to the listener's broker (BROKER_URL:
-// the agents' APIs, pushes) goes to it the same way, for whom the policy allows it; what a
-// sandbox calls there about its own run (`/run/…`: its token's renewal, its inbox and files)
-// goes to the broker service instead (BROKER_SERVICE_URL, ../broker/, #505), vouched for with
-// the proxy's own service token: the network (or pod) it came from, as the policy said.
+// of the sandbox it came from (CLIENT_HEADER); an agent's to the models service
+// (MODELS_SERVICE_URL, #504). Plain HTTP to the listener's broker (BROKER_URL: pushes) goes to
+// it the same way, for whom the policy allows it; what a sandbox calls there about its own run
+// (`/run/…`: its token's renewal, its inbox and files) goes to the broker service instead
+// (BROKER_SERVICE_URL, ../broker/, #505), and its agents' API calls (`/anthropic/`, `/openai/`,
+// `/google/`) to the models service, vouched for with the proxy's own service token: the network
+// (or pod) it came from, as the policy said.
 // Everything else, and every CONNECT to another host, is forwarded as is: a raw tunnel.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
@@ -36,7 +38,13 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
-import { createBrokerCaller, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import {
+  AGENT_TOKEN_HEADERS,
+  agentTokenOf,
+  createBrokerCaller,
+  RUN_TOKEN_HEADER,
+  SANDBOX_HEADER,
+} from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -94,7 +102,10 @@ export function listenerPolicy(url, timeoutMs = 5000, wait = {}) {
         cache: answer.cache === true,
         decrypt: answer.decrypt === true,
         relay: answer.relay === true,
-        // For the broker's host: the network (or pod) of the run's sandbox.
+        // A relayed host whose calls are an agent's: to the models service (#504).
+        models: answer.models === true,
+        // For the broker's host, and an agent's relayed one: the network (or pod) of the run's
+        // sandbox.
         sandbox: typeof answer.sandbox === "string" && answer.sandbox ? answer.sandbox : null,
       };
     } catch {
@@ -149,6 +160,9 @@ class Refused extends Error {}
 // A run token's shape (../lib/tokens.mjs isToken()): what goes to the broker service.
 const JWT = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
 
+// The agents' API calls on the broker's host (BROKER_URL/anthropic, /openai, /google): the
+// models service's (#504), which holds the operator's credentials.
+const AGENT_PATH = /^\/(?:anthropic|openai|google)\//;
 // The most a CONNECT's client may send before its answer (a ClientHello sent early).
 export const EARLY_MAX = 16 * 1024;
 
@@ -201,6 +215,9 @@ export function createProxy({
   // The broker service, where the sandboxes' `/run/…` calls go: { url, header() → the proxy's
   // service token for it } (../lib/broker-client.mjs). None: to the listener, which relays them.
   brokerService = null,
+  // The models service, where the agents' calls go (#504), the same way. None: to the listener,
+  // which relays them.
+  modelsService = null,
   upstreamCa, // what verifies the hosts' certificates, and an https: relayUrl's; default: Node's trust store
   // How relayed requests wait for a listener restarting (wait.mjs): { limitMs, now, sleep }.
   wait = {},
@@ -217,6 +234,8 @@ export function createProxy({
       cache: cacheOk,
       decrypt,
       relay,
+      models,
+      sandbox,
     } = await policy(ip, host, { gone });
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
@@ -225,8 +244,18 @@ export function createProxy({
           "The operator adds it to `hosts` in their grants folder: grants/<owner>/<repo>.yaml for one repository, grants/default.yaml for all.",
       );
     }
-    // Relayed: its requests go to the listener, never to the host's address.
-    if (relay === true) return { address: null, cache: false, decrypt: true, relay: true };
+    // Relayed: its requests go to the listener (or the models service), never to the host's
+    // address.
+    if (relay === true) {
+      return {
+        address: null,
+        cache: false,
+        decrypt: true,
+        relay: true,
+        models: models === true,
+        sandbox: sandbox ?? null,
+      };
+    }
     let addresses;
     try {
       addresses = isIP(host) ? [{ address: host }] : await lookup(host);
@@ -293,7 +322,7 @@ export function createProxy({
     // Never a tunnel: the sandbox's calls would reach the host with the run's token alone.
     if (decision.relay) {
       if (authority && relayUrl && certifiable(to.host)) {
-        return intercept(client, head, to, decision.address, req.socket.remoteAddress, true);
+        return intercept(client, head, to, decision.address, req.socket.remoteAddress, decision);
       }
       log(`refused ${to.host}: no CA or RELAY_URL to relay it`);
       return refuse(
@@ -327,10 +356,12 @@ export function createProxy({
 
   // The tunnel's TLS ends here, with a certificate for the host from Deckhand's CA: its
   // requests go through the cache like plain HTTP (relay()), and on to the host over TLS
-  // that is verified (send()), or to the listener when `relay`. A client that doesn't start
+  // that is verified (send()), or to the listener (or the models service) when `relay`. A client that doesn't start
   // with TLS, or a host the CA can't make a certificate for, gets the raw tunnel; never a
-  // relayed host. `from`: the client's address, which a relayed request names.
-  async function intercept(client, head, to, address, from, relay = false) {
+  // relayed host. `from`: the client's address, which a relayed request names. `relayed`: the
+  // policy's decision for a relayed host, null for a cached one.
+  async function intercept(client, head, to, address, from, relayed = null) {
+    const relay = !!relayed;
     let context;
     try {
       context = await contextFor(to.host);
@@ -356,7 +387,15 @@ export function createProxy({
       log(`TLS with the client for ${to.host}: ${error.code ?? error.message}`);
       tls.destroy();
     });
-    tls.deckhand = { to, address, relay, from, busy: 0 };
+    tls.deckhand = {
+      to,
+      address,
+      relay,
+      models: relayed?.models === true,
+      sandbox: relayed?.sandbox ?? null,
+      from,
+      busy: 0,
+    };
     decrypted.add(tls);
     tls.on("close", () => decrypted.delete(tls));
     inside.emit("connection", tls);
@@ -384,7 +423,7 @@ export function createProxy({
   // Requests inside an intercepted tunnel: to its host, whatever their Host header says.
   const inside = drainable(
     createServer((req, res) => {
-      const { to, address, relay: toListener, from } = req.socket.deckhand;
+      const { to, address, relay: toListener, models, sandbox, from } = req.socket.deckhand;
       req.socket.deckhand.busy++;
       res.on("close", () => {
         req.socket.deckhand.busy--;
@@ -393,6 +432,14 @@ export function createProxy({
       if (!req.url.startsWith("/")) {
         res.writeHead(400, { "content-type": "text/plain" });
         return res.end("Deckhand's egress proxy: expected a path\n");
+      }
+      if (toListener && models && modelsService) {
+        const url = relayTarget(`${modelsService.url}/relay`, to.host, req.url);
+        if (!url) {
+          res.writeHead(400, { "content-type": "text/plain" });
+          return res.end("Deckhand's egress proxy: not a path it relays\n");
+        }
+        return toModels(req, res, url, from, sandbox).catch(() => res.destroy());
       }
       if (toListener) return relayed(req, res, to.host, from).catch(() => res.destroy());
       const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
@@ -479,6 +526,13 @@ export function createProxy({
     });
     if (req.socket.destroyed) return;
     if (!allowed) return forbid("only a running sandbox reaches the listener's broker");
+    // An agent's API call: to the models service, with the network (or pod) it came from.
+    if (modelsService && AGENT_PATH.test(to.pathname)) {
+      const url = new URL(modelsService.url);
+      url.pathname = to.pathname;
+      url.search = to.search;
+      return toModels(req, res, url, from, sandbox);
+    }
     // A run token's calls about its own run: to the broker service. A run's from before tokens
     // (a secret) still to the listener, which has its files.
     const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
@@ -505,8 +559,37 @@ export function createProxy({
     return toListener(req, res, to, from);
   }
 
-  // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
-  // the run's token and sends it on with the operator's credential (../listener/google.mjs).
+  // An agent's call, to the models service at `url`: its agent token moved to RUN_TOKEN_HEADER,
+  // the proxy's own service token in its place, and the network (or pod) `sandbox` it came from,
+  // as the listener's policy said. Waited for as the call is, as for the broker.
+  async function toModels(req, res, url, from, sandbox) {
+    let authorization;
+    try {
+      authorization = await untilReached(() => modelsService.header(), {
+        ...wait,
+        gone: () => req.socket.destroyed,
+      });
+    } catch {
+      return unreachable(res, "the models service");
+    }
+    return toListener(
+      req,
+      res,
+      url,
+      from,
+      {
+        authorization,
+        [RUN_TOKEN_HEADER]: agentTokenOf(req.headers),
+        [SANDBOX_HEADER]: sandbox ?? "",
+      },
+      AGENT_TOKEN_HEADERS,
+    );
+  }
+
+  // A relayed host's request, to the listener as <relayUrl>/<host><path>: GitHub's, whose
+  // gateway checks the run's token (../listener/github-gateway.mjs); an agent's, when no
+  // MODELS_SERVICE_URL is set, which the listener relays on to the models service
+  // (../models/google.mjs, the operator's credential in the token's place).
   // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
   // would reach the listener's other endpoints (/egress) from the proxy's address. `from`: the
   // client's address.
@@ -519,13 +602,15 @@ export function createProxy({
     return toListener(req, res, url, from);
   }
 
-  // A request on to the listener (or the broker service) at `url`, naming its client (`from`),
-  // with `extra` headers over its own. A listener restarting is waited for: the request is sent
-  // once a connection is made, and never again (wait.mjs).
-  async function toListener(req, res, url, from, extra = {}) {
+  // A request on to the listener (or the broker or models service) at `url`, naming its client
+  // (`from`), with `extra` headers over its own, without those of `drop`. A listener restarting
+  // is waited for: the request is sent once a connection is made, and never again (wait.mjs).
+  async function toListener(req, res, url, from, extra = {}, drop = []) {
     const headers = { ...req.headers, host: url.host };
     for (const name of Object.keys(headers)) {
-      if (name.startsWith("proxy-") || VOUCHED.includes(name)) delete headers[name];
+      if (name.startsWith("proxy-") || VOUCHED.includes(name) || drop.includes(name)) {
+        delete headers[name];
+      }
     }
     Object.assign(headers, extra);
     headers[CLIENT_HEADER] = String(from ?? "").replace(/^::ffff:/, "");
@@ -668,14 +753,30 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The broker service (#505), where their calls about their own run go, with the proxy's own
   // service token (asked for in the background: the proxy serves the rest meanwhile). Unset:
   // they go to the listener, which relays them.
-  const brokerService = process.env.BROKER_SERVICE_URL
+  // The models service (#504) likewise, for the agents' calls, with its token from the broker.
+  const modelsUrl = process.env.MODELS_SERVICE_URL || null;
+  // One address: the proxy can't try a streamed call again elsewhere, so its copies are behind
+  // one name (a Service on Kubernetes), not listed as the listener may list them.
+  if (modelsUrl && !/^https?:\/\/[^,\s]+$/.test(modelsUrl)) {
+    console.error(
+      `MODELS_SERVICE_URL: ${modelsUrl} is not one http(s) URL: the egress proxy takes one address, which balances between the models service's copies`,
+    );
+    process.exit(1);
+  }
+  const caller = process.env.BROKER_SERVICE_URL
     ? createBrokerCaller({
         url: process.env.BROKER_SERVICE_URL,
+        audiences: modelsUrl ? ["broker", "models"] : ["broker"],
         podTokenFile: process.env.SERVICE_ACCOUNT_TOKEN_FILE || null,
         log,
       })
     : null;
-  brokerService?.start();
+  caller?.start();
+  const brokerService = caller;
+  const modelsService =
+    caller && modelsUrl
+      ? { url: modelsUrl.replace(/\/$/, ""), header: () => caller.header("models") }
+      : null;
   const https = authority ? ", HTTPS too" : "";
   const proxy = createProxy({
     policy: listenerPolicy(url),
@@ -684,6 +785,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     relayUrl,
     brokerUrl,
     brokerService,
+    modelsService,
     log,
   });
   proxy.listen(port, () =>
