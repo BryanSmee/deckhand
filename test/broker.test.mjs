@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { NO_TOKEN } from "../listener/github-app.mjs";
@@ -233,6 +234,11 @@ test("a restarted listener redacts the run tokens saved with the run, and tells 
   assert.deepEqual(record.branches, ["issue-1-*"]);
   assert.equal(record.shots, "0123456789abcdef01234567");
   assert.ok((await service.runs.renew(token, "net-a")).token);
+  // The hash of the token the sandbox was handed went with it, the first of the run's list: past
+  // their expiry, only the newest renews, as before the restart.
+  const { issued } = await service.runs.get("run-a");
+  assert.equal(issued[0].hash, createHash("sha256").update(token).digest("hex"));
+  assert.equal(issued.length, 2);
   // A run from before tokens has nothing there.
   restarted.register("org/a", undefined, { id: "old", secret: "kept" });
   await restarted.restore("old");

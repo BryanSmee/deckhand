@@ -150,7 +150,7 @@ test("the runs the broker still has that ended while the listener was down end t
   for (const id of ["going", "gone"]) {
     await listener.issuer.issue(id, { repo: "org/a", sandbox: `net-${id}` });
   }
-  await listener.reconcile(["going"]);
+  await listener.reconcile(() => ["going"]);
   assert.deepEqual(await broker.runs.list(), ["going"]);
   // Its end while the broker is away: told again once it is back.
   const { port } = broker;

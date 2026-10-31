@@ -135,6 +135,12 @@ test("a sandbox gets its own run's CA and digest; another run's token or none is
     assert.equal((await get(path, {}))[0], 401, path);
   }
   assert.equal((await get("/run/nothing", auth(secret("a"))))[0], 404);
+  // A sandbox calling the listener's port directly: nothing past its own run's endpoints, which
+  // the relay's service token would otherwise open.
+  for (const path of ["/run/../runs", "/run/%2e%2e/keys", "/run/../events"]) {
+    const [status] = await get(path, auth("a.b.c"));
+    assert.equal(status, 404, path);
+  }
 });
 
 test("the inbox: whole lines after an offset, a long poll woken by a message, a bad offset refused", async (t) => {

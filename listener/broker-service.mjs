@@ -152,10 +152,11 @@ export function createBrokerService({
   };
 
   // The runs the broker has that the listener doesn't (it ended while the listener was down):
-  // ended there too. `known`: the ids of the runs going.
+  // ended there too. `known()`: the ids of the runs going, asked once the broker answered, so a
+  // run that got its tokens meanwhile is among them.
   async function reconcile(known) {
     const res = await ok(await caller.call("GET", "/runs"), "its runs");
-    const ids = new Set(known);
+    const ids = new Set(known());
     for (const id of res.json().runs) if (!ids.has(id)) await end(id);
   }
 
@@ -214,9 +215,11 @@ export function createBrokerService({
   // `sandbox` the listener found it came from, as the proxy would: a proxy from before the
   // broker service sends them here, and so do sandboxes from before #511, directly. `token`:
   // the run token it sent.
-  async function relay(req, res, { sandbox, token }) {
+  // `path`: the call's, checked (broker-http.mjs runPath()): the listener's service token goes
+  // with it, so it is never req.url as sent.
+  async function relay(req, res, { sandbox, token, path }) {
     const kept = ["content-type", "content-length", "transfer-encoding"];
-    const answer = await caller.call(req.method, req.url, {
+    const answer = await caller.call(req.method, path, {
       // As it comes: an upload is counted against the run's cap while it does.
       body: req,
       headers: {
@@ -301,7 +304,14 @@ export function createBrokerService({
     return consuming;
   }
 
-  const sleep = (ms) => new Promise((resolve) => later(resolve, ms));
+  // A pause, cut short by stop(): what waits on one then sees `stopped` and ends.
+  const sleeping = new Set();
+  const sleep = (ms) =>
+    new Promise((resolve) => {
+      if (stopped) return resolve();
+      sleeping.add(resolve);
+      later(() => (sleeping.delete(resolve), resolve()), ms);
+    });
 
   // `fn()` until it resolves, again a little later each time it fails (`what` in the log):
   // what a restarted listener tells the broker of the runs it picked up.
@@ -309,7 +319,7 @@ export function createBrokerService({
     return fn().catch((error) => {
       if (stopped) return;
       log(`Broker: ${what} (${error.message}), trying again`);
-      return sleep(RETRY_MS).then(() => persist(what, fn));
+      return sleep(RETRY_MS).then(() => !stopped && persist(what, fn));
     });
   }
 
@@ -325,6 +335,8 @@ export function createBrokerService({
       stopped = true;
       for (const timer of timers) clearTimer(timer);
       timers.clear();
+      for (const resolve of sleeping) resolve();
+      sleeping.clear();
       caller.stop();
     },
     reconcile,

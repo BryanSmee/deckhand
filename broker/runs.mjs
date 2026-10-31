@@ -84,6 +84,15 @@ export function runFields(body) {
   };
 }
 
+// The hashes of a run's tokens the orchestrator sends (PUT /runs/:id), checked: { hash, exp, at:
+// 0 }, the newest last.
+export function issuedFields(list) {
+  return (Array.isArray(list) ? list : [])
+    .filter((t) => /^[0-9a-f]{64}$/.test(t?.hash ?? "") && Number.isFinite(t?.exp))
+    .map(({ hash: h, exp }) => ({ hash: h, exp, at: 0 }))
+    .slice(-20);
+}
+
 // `store`: lib/store.mjs's. `key`: { privateKey, publicKey, kid }.
 export function createRuns({ store, key, now = Date.now }) {
   const seal = createSeal(key.privateKey);
@@ -165,13 +174,23 @@ export function createRuns({ store, key, now = Date.now }) {
   // A run the orchestrator knows is going (PUT /runs/:id): one a listener restarted with, or
   // from before the broker service, whose sandbox already holds its tokens. What the broker
   // keeps of its tokens stays.
-  async function put(id, fields) {
+  // `issued`: the hashes of the run tokens its sandbox was handed ({ hash, exp }), as the
+  // orchestrator saved them: a record the broker doesn't have yet starts with them, so that
+  // past its expiry only the newest of them renews, as the listener that signed them ruled.
+  async function put(id, fields, issued = []) {
     // What the orchestrator doesn't know (a run from before tokens, its sandbox not looked up
     // yet) leaves what the broker has.
     const known = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
     const record = await update(
       runKey(id),
-      (old) => ({ issued: [], presented: null, last: null, ...old, ...known, id }),
+      (old) => ({
+        presented: null,
+        last: null,
+        ...old,
+        issued: old?.issued?.length ? old.issued : issuedFields(issued),
+        ...known,
+        id,
+      }),
       { ttlMs: RECORD_TTL_MS },
     );
     await index((ids) => (ids[id] ? undefined : { ...ids, [id]: true }));

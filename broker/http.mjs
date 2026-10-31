@@ -167,7 +167,7 @@ export function createBrokerHandler({
     if (req.method === "GET" && path === "/runs") return sendJson(res, { runs: await runs.list() });
     if (req.method === "PUT" && run && path === `/runs/${id}`) {
       const body = await readJsonBody(req, BODY_MAX);
-      await runs.put(run, runFields(body));
+      await runs.put(run, runFields(body), body?.issued);
       return res.writeHead(204).end();
     }
     if (req.method === "DELETE" && run && path === `/runs/${id}`) {

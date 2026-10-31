@@ -845,7 +845,9 @@ brokerService
   .then(() => ctx.reattach(restored))
   .catch((error) => log(`Re-attaching: ${error.stack ?? error}`))
   // Runs the broker service still has that ended while the listener was down.
-  .then(() => brokerService.reconcile([...ctx.tasks.values()].flatMap((t) => t.live?.id ?? [])))
+  .then(() =>
+    brokerService.reconcile(() => [...ctx.tasks.values()].flatMap((t) => t.live?.id ?? [])),
+  )
   .catch((error) => log(`Broker: its runs: ${error.message ?? error}`));
 // Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
 brokerService.consume({ shotsDir });

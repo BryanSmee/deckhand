@@ -49,6 +49,23 @@ function oldPrAnswer(match) {
   };
 }
 
+// What a sandbox may call the broker service about its own run (`/run/…`, ../broker/http.mjs),
+// relayed by the listener: the path and query as sent, when it is one of those and nothing the
+// URL parser would change (no dot segment, encoded or not, no `//`); else null.
+const RUN_PATHS = /^\/run\/(?:token|inbox|ca|digest|shots\/[^/]+)$/;
+export function runPath(url) {
+  const raw = String(url ?? "");
+  const [pathname] = raw.split("?");
+  let parsed;
+  try {
+    parsed = new URL(raw, "http://listener");
+  } catch {
+    return null;
+  }
+  if (parsed.pathname !== pathname || !RUN_PATHS.test(pathname)) return null;
+  return parsed.pathname + parsed.search;
+}
+
 // The ID of the network (or pod) of the task's sandbox, or null: what its tokens are bound to
 // (broker.mjs), which tokenEnv() kept on its live state when it signed them. A run from before
 // tokens, picked up from a listener that didn't keep it, has it looked up once by its
@@ -262,8 +279,12 @@ export function createBrokerHttp(ctx) {
     const [scheme, credential] = (req.headers.authorization ?? "").split(" ");
     const token = scheme === "Bearer" ? (credential ?? "") : "";
     if (isToken(token) && ctx.brokerService) {
+      // The sandbox's own endpoints only, on a plain path: the relay carries the listener's
+      // service token, which "/run/../runs" would take to the orchestrator's.
+      const path = runPath(req.url);
+      if (!path) return sendJson(res, { message: "not found" }, 404);
       const sandbox = await sandboxAt(ctx, await clientAddress(ctx, req));
-      return ctx.brokerService.relay(req, res, { sandbox, token });
+      return ctx.brokerService.relay(req, res, { sandbox, token, path });
     }
     if (req.url === "/run/token") {
       return sendJson(res, { message: "only a run token is renewed" }, 401);

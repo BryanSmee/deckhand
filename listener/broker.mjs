@@ -266,7 +266,10 @@ export function createBroker({
     const run = runOf(handle);
     if (!run || run.secret) return;
     run.shots = shots;
-    await issuer.put(run.id, fieldsOf(run));
+    // The hashes of the tokens it handed the sandbox, for the broker's rule past their expiry
+    // (only the newest renews), should it not have the run yet.
+    const issued = run.issued.map((t) => ({ hash: hash(t.token), exp: t.exp }));
+    await issuer.put(run.id, { ...fieldsOf(run), issued });
   }
 
   // The run a call's credential (a token, or a secret from before tokens) names, once checked:

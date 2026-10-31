@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
-import { createRuns } from "../broker/runs.mjs";
+import { createRuns, runFields } from "../broker/runs.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyId } from "../lib/tokens.mjs";
 
@@ -74,7 +74,7 @@ export function localBroker({ now = Date.now, key = testKey() } = {}) {
       if (!issued.token) throw new Error(issued.message);
       return issued;
     },
-    put: (id, fields) => runs.put(id, fields),
+    put: (id, { issued, ...fields }) => runs.put(id, runFields(fields), issued),
     end: (id) => runs.end(id),
   };
   return { issuer, keys: () => new Map([[key.kid, key.publicKey]]), runs, store, key };
