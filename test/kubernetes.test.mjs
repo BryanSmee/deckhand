@@ -368,12 +368,21 @@ test("locate: the UID of the running sandbox pod at an address, else null", asyn
   const found = await Promise.all([1, 2, 3].map(() => runner.locate("10.244.8.8")));
   assert.deepEqual(found, [null, null, null]);
   assert.equal(lists(), before + 1);
-  // An API error keeps what was known: one failed call refuses no sandbox.
+  // An API error keeps what was known, even right after another sandbox started: one failed
+  // call refuses no sandbox. Nor is it asked again for every connection meanwhile.
   time += 60_000;
   failing = true;
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1730000000" }));
   assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
   assert.equal(failed, 1);
+  for (let i = 0; i < 5; i++) {
+    time += 10;
+    assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+    assert.equal(await runner.locate("10.244.5.5"), null);
+  }
+  assert.equal(failed, 2);
   failing = false;
+  objects.pods.delete("dh-org-repo-13-abc");
   // Gone with its pod: an address never names a pod that was removed.
   await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
   assert.equal(await runner.locate("10.244.1.7"), null);

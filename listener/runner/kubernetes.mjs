@@ -773,7 +773,8 @@ export function createKubernetesRunner({
     const which = run ?? pod?.metadata?.annotations?.["deckhand.run"];
     const grace = pod && running(pod) ? KILL_GRACE_S : 0;
     await api.remove(podPath(name), { gracePeriodSeconds: grace });
-    forgetUids();
+    // Its address no longer names it; the others' answers are kept as they were.
+    forgetUids({ removed: pod?.metadata?.uid ?? true });
     if (which) await api.remove(`secrets/${secretName(which)}`);
     if (run) inbox.remove(run);
   }
@@ -806,20 +807,31 @@ export function createKubernetesRunner({
   // (../broker.mjs check()). A UID, not the pod's name (each of the issue's runs has the same)
   // nor its IP (reused). Cached for PROXY_TTL_MS, as each call to the broker asks, an address
   // with no sandbox for PROXY_RETRY_MS (a token replayed from elsewhere asks the API that often
-  // at most), and forgotten as a sandbox starts or is removed. One lookup per address at a
-  // time: the connections that ask meanwhile share it.
-  let uids = new Map(); // ip → { uid, at }
+  // at most), and looked up again as a sandbox starts (what was known kept, should that lookup
+  // fail) or forgotten as one is removed. One lookup per address at a time: the connections that
+  // ask meanwhile share it. An API error answers what was known, and is asked again after
+  // PROXY_RETRY_MS: an outage mustn't refuse every sandbox, nor cost an API call per connection.
+  let uids = new Map(); // ip → { uid, at, failed }
   const looking = new Map(); // ip → Promise<uid>
   let uidsGen = 0; // counts forgetUids()
-  function forgetUids() {
+  // `removed`: the UID of the pod removed (true: unknown, all of them go).
+  function forgetUids({ removed = null } = {}) {
     uidsGen++;
-    uids = new Map();
     looking.clear();
+    if (removed === true) return void (uids = new Map());
+    // Every answer looked up again; the sandboxes known kept for a failed lookup, not the
+    // addresses that had none (the new pod may have one of them now) nor the removed pod's.
+    uids = new Map(
+      [...uids]
+        .filter(([, k]) => k.uid && k.uid !== removed)
+        .map(([ip, k]) => [ip, { ...k, at: -Infinity }]),
+    );
   }
   async function sandboxOf(ip) {
     const known = uids.get(ip);
     const age = known ? now() - known.at : Infinity;
-    if (known && age < (known.uid ? PROXY_TTL_MS : PROXY_RETRY_MS)) return known.uid;
+    const ttl = known?.uid && !known.failed ? PROXY_TTL_MS : PROXY_RETRY_MS;
+    if (known && age < ttl) return known.uid;
     if (!looking.has(ip)) {
       looking.set(
         ip,
@@ -843,9 +855,11 @@ export function createKubernetesRunner({
       const live = items.filter((p) => at(p) && !p.metadata?.deletionTimestamp && running(p));
       uid = live.length === 1 ? (live[0].metadata?.uid ?? null) : null;
     } catch (error) {
-      // What was known, if anything: an API error mustn't refuse a sandbox it knew. Not kept.
+      // What was known, if anything, until PROXY_RETRY_MS on.
       log(`Looking up the sandbox at ${ip}: ${error.message}`);
-      return uids.get(ip)?.uid ?? null;
+      const kept = uids.get(ip)?.uid ?? null;
+      if (seen === uidsGen) uids.set(ip, { uid: kept, at: now(), failed: true });
+      return kept;
     }
     if (uids.size > 1000) uids = new Map();
     // Unless a sandbox started or went meanwhile: its answer would be older than that.

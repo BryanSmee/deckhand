@@ -202,11 +202,14 @@ export function createNetworks({ config, docker, log, now }) {
   let sandboxes = { at: -Infinity, byAddress: new Map() };
   let generation = 0; // counts forget()s
   let looking = null; // { generation, done: Promise<Map> }
+  let failedAt = -Infinity; // the last lookup that failed
   async function locate(ip) {
     const age = now() - sandboxes.at;
     const known = sandboxes.byAddress.get(ip);
     if (known && age < PROXY_TTL_MS) return known;
-    if (age < PROXY_RETRY_MS) return known ?? null;
+    // Within PROXY_RETRY_MS of a lookup, or of one that failed: what was known, whatever the
+    // address, rather than one more Docker call per connection.
+    if (age < PROXY_RETRY_MS || now() - failedAt < PROXY_RETRY_MS) return known ?? null;
     if (looking?.generation !== generation) {
       const flight = { generation, done: lookUp(generation) };
       looking = flight;
@@ -225,11 +228,10 @@ export function createNetworks({ config, docker, log, now }) {
       for (const [address, where] of await runAddresses()) byAddress.set(address, where);
     } catch (error) {
       log(`Looking up the runs' networks: ${error.message}`);
-      if (seen === generation) {
-        sandboxes = { at: at - PROXY_TTL_MS + PROXY_RETRY_MS, byAddress: sandboxes.byAddress };
-      }
+      failedAt = at;
       return sandboxes.byAddress;
     }
+    failedAt = -Infinity;
     if (seen === generation) sandboxes = { at, byAddress };
     return byAddress;
   }

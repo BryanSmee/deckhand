@@ -1,7 +1,7 @@
 // A ChatGPT plan's login for Codex, held by the listener alone (CODEX_AUTH_FILE: the auth.json
 // `codex login` writes). Its refresh token is single-use and rotated on every refresh: copies
 // in several sandboxes would invalidate each other, and it is an account-wide credential that
-// must stay out of them anyway. So sandboxes keep their run's secret, openai.mjs asks this
+// must stay out of them anyway. So sandboxes keep their run's agent token, openai.mjs asks this
 // module for the plan's headers, and the refresh happens here, one at a time, written back to
 // the file for the next start.
 //

@@ -423,8 +423,8 @@ export function createProxy({
     relay(req, res, { address: decision.address, url, host }, decision.cache);
   }
 
-  // A sandbox's call to the broker (#511): on to it, naming the sandbox, which the broker binds
-  // the run's secret to, as for a relayed request. Only for whom the listener says may (its runs'
+  // A sandbox's call to the broker (#511): on to it, naming the sandbox, whose network the
+  // broker binds the run's token to, as for a relayed request. Only for whom the listener says may (its runs'
   // sandboxes and engines, not a build or an install), and never its policy's path: the broker
   // would take the question for the proxy's own. `url`: parsed, its dot segments resolved.
   async function toBroker(req, res, url) {

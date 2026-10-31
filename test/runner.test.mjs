@@ -309,6 +309,15 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   failing = true;
   await r.start({ run: "dh-b-1", name: "dh-b", image: "dh-sandbox" });
   assert.equal(await sandboxOf("10.1.0.2"), "id-dh-org-repo-12-1");
+  // Nor does it make one more Docker call per connection while it fails: an unknown address (a
+  // build's) waits 2 s too.
+  const lists = () => calls.filter((c) => c.args[0] === "network" && c.args[1] === "ls").length;
+  const failed = lists();
+  for (let i = 0; i < 5; i++) {
+    now += 10;
+    assert.equal(await sandboxOf("10.9.9.7"), null);
+  }
+  assert.equal(lists(), failed);
   // Asked again 2 s on, once Docker answers.
   failing = false;
   now += 2_000;
