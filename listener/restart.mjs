@@ -529,8 +529,12 @@ export function createRestart(ctx) {
     task.running = true;
     ctx.running++;
     ctx.broker.register(task.repo, {
-      // Fail closed: a saved run that doesn't say it was a work run doesn't push.
-      push: saved.light === false,
+      // Fail closed: a run saved with its capabilities pushes only with `push` (its `light` says
+      // only whether its mode has volumes of its own, #498); one saved before them, only when it
+      // says it was a work run.
+      push: Array.isArray(saved.capabilities)
+        ? saved.capabilities.includes("push")
+        : saved.light === false,
       mode: saved.mode,
       issue: task.number,
       base: task.base,

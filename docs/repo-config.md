@@ -444,9 +444,12 @@ error, listed in the reply:
   `allow_capabilities` without `push` only reads and answers: no branch, its final message the
   reply, and its prompt says it can't push (and that `setup` was skipped, without `setup`).
   It can run on pull requests, where an audit mode is most useful.
-- **`light` is gone** (#498): `modes.<name>.light` is an error that stops the repository's
-  runs. Remove it, and for a mode that only reads and answers, write an `allow_capabilities`
-  rule without `push` (`pull` and the `read:*` it needs).
+- **`light` is gone** (#498): `modes.<name>.light: true` is an error that stops the
+  repository's runs (`false`, what every mode is now, a warning). Remove it, and for a mode that
+  only reads and answers, write an `allow_capabilities` rule without `push` (`pull` and the
+  `read:*` it needs), and make sure your `allow_github` and `allow_push` rules leave it out: one
+  on `input.custom_mode` alone gives it work's writes (issues, pull requests, labels…). A
+  policy reading `input.light` is said by the config check: no input has it any more.
 - **Fresh modes** (`session: fresh`) start a new session on every run and don't keep it:
   the issue stays in the mode it was in, and its next run continues its own session.
 - **A mode narrows, never widens**: the hosts, mounts and limits of every run of the repo

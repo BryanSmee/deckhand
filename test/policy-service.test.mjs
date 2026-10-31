@@ -125,6 +125,32 @@ test("the service: probes without a token, the rest by its table, an engine's an
   assert.deepEqual(await (await post("/check", { layer: "repo", files: [] })).json(), {
     errors: [],
   });
+  // The runner: a repository's grants only, of the operator's layer (#498).
+  const asRunner = (body) =>
+    fetch(`${url}/evaluate`, {
+      method: "POST",
+      headers: { authorization: bearer(key, "runner") },
+      body: JSON.stringify({ operatorDigest: engine.operatorDigest(), ...body }),
+    });
+  const grant = { decision: "grant", input: { grant: "docker", repo: { name: "org/repo" } } };
+  assert.equal((await asRunner(grant)).status, 200);
+  for (const body of [
+    { decision: "merge", input: { pr: { additions: 1 } } },
+    { ...grant, repo: [["a.rego", "package deckhand\n"]] },
+    { ...grant, repoAllow: true },
+  ]) {
+    const res = await asRunner(body);
+    assert.equal(res.status, 403, JSON.stringify(body));
+    assert.match((await res.json()).error, /the runner asks a repository's grants only/);
+  }
+  for (const path of ["/capabilities", "/check"]) {
+    const res = await fetch(`${url}${path}`, {
+      method: "POST",
+      headers: { authorization: bearer(key, "runner") },
+      body: "{}",
+    });
+    assert.equal(res.status, 403, path);
+  }
   // Draining: out of rotation for a readiness probe.
   server.draining();
   assert.equal((await get("/ready")).status, 503);

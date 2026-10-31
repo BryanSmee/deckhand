@@ -914,8 +914,15 @@ test("the errors whose message doesn't say how to fix them come with a fix", () 
   // A mode written before #498: what to do instead.
   assert.match(
     fixOf("modes:\n  docs: { instructions: a.md, light: true }\n", "modes.docs.light:"),
-    /^Remove modes\.docs\.light, and give the mode what its runs may do in \.deckhand\/policy\//,
+    /^Remove modes\.docs\.light, and narrow the mode in \.deckhand\/policy\/ .*`allow_capabilities` without `push`, and `allow_github` and `allow_push` rules that leave it out/,
   );
+  // `light: false`, what every repo mode is now: said, not an error.
+  const kept = parseRepoConfig("modes:\n  docs: { instructions: a.md, light: false }\n", config);
+  assert.deepEqual(kept.errors, []);
+  assert.deepEqual(kept.warnings, [
+    "modes.docs.light: gone, ignored: what a mode's runs get and write is decided by the policies now",
+  ]);
+  assert.ok(kept.settings.modes.docs);
   assert.match(
     fixOf(
       "modes:\n  docs: { instructions: a.md }\n  Docs: { instructions: b.md }\n",

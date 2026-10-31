@@ -468,7 +468,7 @@ test("gh pr update-branch refused: a rebase, no expected head, another field, a 
   assert.deepEqual(checked, []);
 });
 
-test("allow_workflows: a branch whose workflows fail merged with its base is neither opened, edited, readied nor drafted", async () => {
+test("the `workflows` grant: a branch whose workflows fail merged with its base is neither opened, edited, readied nor drafted", async () => {
   const why = "workflow files …: .github/workflows/ci.yml (merged with main): mentions `secrets`";
   const { rest, graphql, checked } = checks({ why });
   const work = run();

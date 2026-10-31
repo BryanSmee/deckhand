@@ -131,7 +131,8 @@ docs/         setup, per-repo config reference, security model, architecture
   never for fork pull requests. The yes-or-no grants are the operator's policies' (#498:
   `allow_grant`, asked per repository of the operator's layer alone, nothing granted by default,
   `listener/grants.mjs` GRANTS); `docker`, `workflows` and auto-merge only one repository at a
-  time. A repo's own rules never grant them.
+  time (a rule that would also give them to `*/*` or `<owner>/*` gives them to none). A repo's own
+  rules never grant them.
 - **Policies: a decision is allowed when an allow rule matches and no deny rule does** (a deny
   always wins; no allow, refused; a policy error, refused: `listener/policies.mjs`). The
   operator's layer (Deckhand's `policy/` under the grants folder's `policy/`, by file name) has

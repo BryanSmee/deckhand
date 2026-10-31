@@ -37,7 +37,7 @@ import {
   rulesOf,
 } from "../lib/policy-files.mjs";
 import { redact } from "../lib/redact.mjs";
-import { ANY_REPO, GRANTS, REPO_ONLY } from "./grants.mjs";
+import { ANY_REPO, GRANTS, ownerProbe, REPO_ONLY } from "./grants.mjs";
 
 // Where a repo's policies are, on its default branch.
 export const POLICY_DIR = ".deckhand/policy";
@@ -220,6 +220,9 @@ export const DEFAULTS_MS = 30_000;
 // check warns of it.
 const UNCONDITIONAL =
   /^allow_(github|push)\s*(?:(?::=|=)\s*true|if\s+true|if\s*\{\s*true\s*\})?\s*(?:#.*)?$/gm;
+
+// `input.light`, out of a comment: what a policy written before #498 reads of a run.
+const GONE_INPUT = /^[^#\n]*\binput\.light\b/m;
 
 // The line of `text` (1-based) where `rule` is first defined, null when none starts one.
 function lineOf(text, rule) {
@@ -652,7 +655,8 @@ export function createPolicies({
   // asked of `allow_grant` and `deny_grant` with { grant, repo: { name } }, the operator's layer
   // alone (OPERATOR_ONLY) → { granted: Set of names, files, denied } or { error }: `files`, those
   // defining `allow_grant`; `denied`, why a grant an allow rule gives is refused anyway ({ grant,
-  // reasons }): a deny rule, or a REPO_ONLY grant its rules give every repository (ANY_REPO). No
+  // reasons }): a deny rule, or a REPO_ONLY grant its rules give every repository (ANY_REPO) or
+  // every repository of its owner (ownerProbe()). No
   // file defining `allow_grant`: nothing granted, without a call. Asked for every run, push and
   // row of the dashboard's repository list: kept (`granted`).
   async function grants(repo) {
@@ -680,10 +684,14 @@ export function createPolicies({
         );
       const names = Object.keys(GRANTS);
       const said = await Promise.all(names.map((grant) => ask(grant, name)));
-      // Those every repository would get, for the grants given one at a time only.
+      // Those every repository, or every one of its owner's, would get, for the grants given one
+      // at a time only.
       const allowed = names.filter((_, i) => said[i].operator?.allow);
       const wide = allowed.filter((grant) => REPO_ONLY.has(grant));
-      const anyRepo = await Promise.all(wide.map((grant) => ask(grant, ANY_REPO)));
+      const probes = [ANY_REPO, ownerProbe(name)];
+      const anyRepo = await Promise.all(
+        wide.flatMap((grant) => probes.map((probe) => ask(grant, probe))),
+      );
       const failed = [...said, ...anyRepo].find((r) => r.error);
       if (failed?.mismatch && attempt === 0) {
         knownOwn = null;
@@ -699,12 +707,15 @@ export function createPolicies({
       names.forEach((grant, i) => {
         const { allow, denies } = said[i].operator;
         if (!allow) return;
-        const everyRepo = anyRepo[wide.indexOf(grant)]?.operator?.allow === true;
+        const at = wide.indexOf(grant) * probes.length;
+        const everyRepo = anyRepo
+          .slice(at, at + probes.length)
+          .some((r) => r.operator?.allow === true);
         const reasons = [
           ...messages(denies),
-          ...(everyRepo
+          ...(at >= 0 && everyRepo
             ? [
-                `\`${grant}\` is granted one repository at a time: a rule that gives it to every repository gives it to none (name input.repo.name)`,
+                `\`${grant}\` is granted one repository at a time: a rule that gives it to every repository, or to all of an owner's, gives it to none (name each input.repo.name)`,
               ]
             : []),
         ];
@@ -897,6 +908,13 @@ export function createPolicies({
             `${name}: \`allow_${decision}\` allows every ${decision === "push" ? "push" : "write to GitHub"} of every mode, whatever it reads: no built-in ceiling caps it any more (issue #496). Remove it, or narrow it to the modes it is for (Deckhand's mode-<mode>.rego allow each mode its own)`,
           );
         }
+      }
+      // Gone from every input (#498): a rule reading it now sees it undefined, without an
+      // error: `deny_… if input.light` denies nothing, `not input.light` holds for every run.
+      if (GONE_INPUT.test(text)) {
+        warnings.push(
+          `${name}: reads \`input.light\`, which no input has any more (issue #498): a rule on it now matches as if every run had none. Read what the run gets instead: its \`mode\`, or its capabilities in \`allow_capabilities\` (\`push\`)`,
+        );
       }
       for (const rule of rulesOf(text)) {
         if (!RULES.includes(rule)) {

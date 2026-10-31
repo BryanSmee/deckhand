@@ -265,7 +265,7 @@ async function fakeGitHub(files = {}) {
         const head = { ref: "issue-3-fix", repo: { full_name: "mallory/repo" } };
         return res.end(JSON.stringify({ number: 43, body: "Closes #3", head }));
       }
-      // A branch's open pull requests (the git gateway, for a repo granted allow_workflows).
+      // A branch's open pull requests (the git gateway, for a repo granted `workflows`).
       if (req.url.startsWith("/repos/org/repo/pulls?state=open&per_page=100&head=")) {
         return res.end("[]");
       }
@@ -280,7 +280,7 @@ async function fakeGitHub(files = {}) {
         const expires_at = new Date(Date.now() + 3600000).toISOString();
         return res.end(
           JSON.stringify({
-            // The git gateway's for a repo granted allow_workflows: told apart.
+            // The git gateway's for a repo granted `workflows`: told apart.
             token: !scoped
               ? "app-token"
               : body.includes("workflows")

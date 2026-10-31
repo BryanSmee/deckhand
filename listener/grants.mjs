@@ -84,8 +84,10 @@ export const GRANTS = {
 // input.repo.name): an engine runs that repo's code with more of the kernel exposed
 // (runner/engine.mjs), a workflow file a sandbox pushes runs with the repo's Actions secrets, and
 // an auto-merge puts model output on the default branch with no human reading it (reviews.mjs),
-// so every repo at once would be too broad by accident. Asked again for a repository no one has
-// (ANY_REPO): a rule that gives it there gives it nowhere (policies.mjs grants()).
+// so every repo at once would be too broad by accident. Asked again for repositories no one has,
+// anywhere (ANY_REPO) and under the asked one's owner (ownerProbe()): a rule that gives it there
+// (to every repository, or to all of an owner's: `startswith`, `glob.match`) gives it nowhere
+// (policies.mjs grants()). A rule listing names one by one passes.
 export const REPO_ONLY = new Set([
   "docker",
   "workflows",
@@ -97,6 +99,10 @@ export const REPO_ONLY = new Set([
 // A repository's name no repository has: what a rule that gives a grant to every repository
 // gives it to too.
 export const ANY_REPO = "*/*";
+
+// The same under `repo`'s owner ("acme/*": GitHub names have no `*`): what a rule that gives a
+// grant to all of an owner's repositories gives it to too.
+export const ownerProbe = (repo) => `${String(repo).toLowerCase().split("/")[0]}/*`;
 
 // Why the repository doesn't get the grant `name` (GRANTS), as replies and the config page say it.
 export const notGranted = (name) =>

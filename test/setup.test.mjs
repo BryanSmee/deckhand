@@ -64,7 +64,7 @@ test("the manifest asks for the App's permissions and events, webhook on /webhoo
   assert.equal(m.redirect_url, "https://hooks.example.com/setup/callback");
   assert.deepEqual(m.callback_urls, ["https://hooks.example.com/auth/callback"]);
   assert.deepEqual(m.default_permissions, APP_PERMISSIONS);
-  // For repos granted allow_workflows: each token is narrowed to what it's for.
+  // For repos granted `workflows`: each token is narrowed to what it's for.
   assert.equal(m.default_permissions.workflows, "write");
   assert.deepEqual(m.default_events, APP_EVENTS);
 });

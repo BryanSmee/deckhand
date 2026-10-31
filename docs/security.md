@@ -1563,10 +1563,11 @@ allow_grant if {
 - **One repository at a time**: `docker`, `workflows`, `auto_merge`, `auto_merge_public` and
   `acknowledge_automerge_and_preview_is_highly_dangerous` (an engine, workflow files run with
   the Actions secrets, merges nobody reviewed are too broad to grant every repository by
-  accident). The listener asks each of them again for a repository nobody has (`*/*`): a rule
-  that grants it there, so to every repository, gives it to none, and the listener logs why
-  (name `input.repo.name`). The others may go to every repository (a rule without
-  `input.repo.name`).
+  accident). The listener asks each of them again for two repositories nobody has: `*/*`, and
+  `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that grants
+  it there, so to every repository or to all of an owner's (`startswith`, `glob.match`), gives it
+  to none, and the listener logs why: list each `input.repo.name`. The others may go to every
+  repository (a rule without `input.repo.name`).
 - **Yours only**: only the operator's layer (Deckhand's `policy/` under the grants folder's
   `policy/`) is asked. A repository's own `.deckhand/policy/` `allow_grant` or `deny_grant` is
   ignored, and a config check error.

@@ -775,10 +775,10 @@ export const KEYS = {
   modes: {
     field: "modes",
     default: () => ({}),
-    parse: (value, { key, settings, config, fail }) => {
+    parse: (value, { key, settings, config, fail, warn }) => {
       if (!isMap(value)) return fail(key, "expected modes by name, each with its instructions");
       for (const [name, mode] of Object.entries(value)) {
-        parseMode(name, mode, settings, config, fail);
+        parseMode(name, mode, settings, config, fail, warn);
       }
     },
     display: ({ value, settings }) => Object.keys(value).map((name) => modeRow(settings, name)),
@@ -821,7 +821,7 @@ function previewText(preview) {
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise
 // change what the mode does without anyone noticing. Nothing here touches the repo's grants.
-function parseMode(name, mode, settings, config, fail) {
+function parseMode(name, mode, settings, config, fail, warn = () => {}) {
   const where = `modes.${name}`;
   const id = name.toLowerCase();
   if (id === "work" || id === "brainstorm") {
@@ -870,14 +870,21 @@ function parseMode(name, mode, settings, config, fail) {
     fail(`${where}.${key}`, what, fix);
   };
   for (const [key, value] of Object.entries(mode)) {
-    if (key === "light") {
+    if (key === "light" && value === false) {
+      // What every repo mode is now, a branch and its writes as its policies give them: nothing
+      // to stop a run for.
+      warn(
+        `${where}.light: gone, ignored: what a mode's runs get and write is decided by the policies now`,
+      );
+    } else if (key === "light") {
       // Gone (#498): what a mode's runs get and write is its policies', which a repo written
       // before kept as the trait. An error rather than ignored: its runs would get what
-      // Deckhand's defaults give the repo's modes, a branch and its writes.
+      // Deckhand's defaults give the repo's modes (mode-work.rego: a branch and work's writes),
+      // as far as the repo's own allow rules reach.
       bad(
         key,
         "gone: what a mode's runs get and write is decided by the policies now",
-        `Remove ${where}.light, and give the mode what its runs may do in .deckhand/policy/: \`allow_capabilities\` without \`push\` for a mode that only reads and answers (docs/repo-config.md#modes).`,
+        `Remove ${where}.light, and narrow the mode in .deckhand/policy/ so it only reads and answers: \`allow_capabilities\` without \`push\`, and \`allow_github\` and \`allow_push\` rules that leave it out (one on \`input.custom_mode\` alone gives it work's writes: docs/repo-config.md#modes).`,
       );
     } else if (!MODE_KEYS.includes(key)) {
       bad(key, `unknown key (expected ${MODE_KEYS.join(", ")})`);

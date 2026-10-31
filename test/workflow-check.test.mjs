@@ -1,4 +1,4 @@
-// The checks on a workflow file a sandbox pushes (allow_workflows): the YAML subset they
+// The checks on a workflow file a sandbox pushes (the `workflows` grant): the YAML subset they
 // read, and the rules.
 import assert from "node:assert/strict";
 import { test } from "node:test";

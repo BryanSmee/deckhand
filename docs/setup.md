@@ -1166,10 +1166,19 @@ allow_grant if {
 `compose.yaml` (or add an internal `policy-runner` network to your `runner` and `policy`
 services).
 
-A repository's `.deckhand.yaml` mode with `light:` is an error too: its runs get what its
-policies give them now ([Modes](repo-config.md#modes)). Its maintainers remove it, and give the
-mode an `allow_capabilities` rule without `push` in `.deckhand/policy/` for a mode that only
-reads and answers.
+A repository's `.deckhand.yaml` mode with `light: true` is an error too (`light: false` a
+warning): its runs get what its policies give them now ([Modes](repo-config.md#modes)), and
+Deckhand's `mode-work.rego` gives every repository mode work's writes as the ceiling. Its
+maintainers remove it, and in `.deckhand/policy/` give the mode an `allow_capabilities` rule
+without `push`, and `allow_github` and `allow_push` rules that leave it out: a rule on
+`input.custom_mode` alone now gives a former comment-only mode work's writes (issues, pull
+requests, labels, sub-issues).
+
+`light` is gone from every policy input too (`allow_run`, `allow_github`, `allow_push`,
+`allow_link_branch`, `allow_request_review`): a rule reading `input.light`, yours or a
+repository's, now sees it undefined without an error (`deny_… if input.light` denies nothing,
+`not input.light` holds for every run). The config check warns of each file that reads it;
+rewrite it on `input.mode`, or on what `allow_capabilities` gives.
 
 ## The broker service
 

@@ -873,6 +873,28 @@ test("check: an operator's allow_github or allow_push whatever the input is warn
   assert.deepEqual((await policies.check(builtInPolicies())).warnings, []);
 });
 
+test("check: a policy reading input.light, gone in #498, is said in either layer; a comment isn't", async (t) => {
+  const { policies } = setup(t);
+  const files = new Map([
+    ["old.rego", `${DENY}deny_github contains "x" if input.light\n`],
+    [
+      "modes.rego",
+      "package deckhand\n\nallow_push if {\n  input.custom_mode\n  not input.light\n}\n",
+    ],
+    ["note.rego", "package deckhand\n# input.light is gone\nallow_push if input.custom_mode\n"],
+  ]);
+  for (const layer of ["operator", "repo"]) {
+    const { warnings } = await policies.check(files, layer);
+    const said = warnings.filter((w) => w.includes("input.light"));
+    assert.deepEqual(
+      said.map((w) => w.split(":")[0]),
+      ["old.rego", "modes.rego"],
+      layer,
+    );
+    assert.match(said[0], /no input has any more \(issue #498\)/);
+  }
+});
+
 test("check: compile errors and rules nobody evaluates; nothing to check, no opa call", async (t) => {
   const opa = fakeOpa({
     checked: (files) =>
@@ -1663,21 +1685,37 @@ test(
       "research.rego": 'package deckhand\n\nallow_grant if input.grant == "research"\n',
       // Workflows for every repository: given one at a time only, so to none.
       "wide.rego": 'package deckhand\n\nallow_grant if input.grant == "workflows"\n',
+      // Auto-merge on a public repository for all of an owner's, by a prefix or a glob: to none
+      // either. A list of names one by one passes (grants.rego).
+      "owner.rego":
+        'package deckhand\n\nallow_grant if {\n  input.grant == "auto_merge_public"\n  startswith(input.repo.name, "org/")\n}\n\nallow_grant if {\n  input.grant == "acknowledge_automerge_and_preview_is_highly_dangerous"\n  glob.match("org/*", ["/"], input.repo.name)\n}\n',
+      // Research for all of an owner's: allowed, as it isn't one at a time.
+      "research-org.rego":
+        'package deckhand\n\nallow_grant if {\n  input.grant == "research"\n  startswith(input.repo.name, "org/")\n}\n',
       "deny.rego":
         'package deckhand\n\ndeny_grant contains "no preview here" if {\n  input.grant == "preview"\n  input.repo.name == "org/repo"\n}\n',
     };
     const { policies } = layered(t, { operator });
     const said = await policies.grants("Org/Repo");
     assert.deepEqual([...said.granted].sort(), ["auto_merge", "docker", "dockerfile", "research"]);
-    assert.deepEqual(said.files, ["grants.rego", "research.rego", "wide.rego"]);
+    assert.deepEqual([...said.files].sort(), [
+      "grants.rego",
+      "owner.rego",
+      "research-org.rego",
+      "research.rego",
+      "wide.rego",
+    ]);
+    const wide = (grant) => ({
+      grant,
+      reasons: [
+        `\`${grant}\` is granted one repository at a time: a rule that gives it to every repository, or to all of an owner's, gives it to none (name each input.repo.name)`,
+      ],
+    });
     assert.deepEqual(said.denied, [
       { grant: "preview", reasons: ["no preview here"] },
-      {
-        grant: "workflows",
-        reasons: [
-          "`workflows` is granted one repository at a time: a rule that gives it to every repository gives it to none (name input.repo.name)",
-        ],
-      },
+      wide("workflows"),
+      wide("auto_merge_public"),
+      wide("acknowledge_automerge_and_preview_is_highly_dangerous"),
     ]);
     // Another repository: what every one gets.
     assert.deepEqual([...(await policies.grants("org/other")).granted], ["research"]);
