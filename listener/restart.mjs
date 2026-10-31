@@ -528,7 +528,7 @@ export function createRestart(ctx) {
     delete task.live.task;
     task.running = true;
     ctx.running++;
-    ctx.broker.register(task.repo, permissionsFor(saved.mode, saved.light), {
+    ctx.broker.register(task.repo, permissionsFor(saved.mode), {
       // Fail closed: a saved run that doesn't say it was a work run doesn't push.
       push: saved.light === false,
       mode: saved.mode,

@@ -22,7 +22,8 @@ import { createRuns, runFields } from "../broker/runs.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyFolder, keyId } from "../lib/tokens.mjs";
-import { allowOnly, createEngine } from "../policy-service/engine.mjs";
+import { allowOnly, builtInPolicies, createEngine } from "../policy-service/engine.mjs";
+import { opaBinary } from "../policy-service/opa.mjs";
 import { createPolicyService, ROUTES } from "../policy-service/service.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { overlaps } from "../lib/subnets.mjs";
@@ -320,6 +321,38 @@ export function policyEngineOf(
   const engine = createEngine({ opa, readOperator, readBuiltIn, tmp: tempDir(t) });
   t.after(() => engine.stop());
   return engine;
+}
+
+// Policies that allow every GitHub write, read and push (policies.mjs's deny(), as the checks
+// call it): for the tests of what the built-in checks refuse before any policy is asked. What
+// Deckhand's own allow is the real opa's (defaultPolicies()).
+export const allowingPolicies = { deny: async () => [] };
+
+// Deckhand's default policies (policy/*.rego, or `builtIn`: name → text) as the operator's layer,
+// evaluated by the real `opa` (hasOpa()), and a repo's own (`repo`, name → text) as GitHub lists
+// them on its default branch: createPolicies()'s, stopped after `t`.
+export function defaultPolicies(t, { builtIn = builtInPolicies(), repo = {} } = {}) {
+  const files = Object.entries(repo);
+  const github = async (_repo, _method, url) => {
+    const path = url.split("?")[0];
+    if (path.endsWith("/contents/.deckhand/policy")) {
+      if (!files.length) return new Response("{}", { status: 404 });
+      return Response.json(
+        files.map(([name], i) => ({ type: "file", name, sha: `sha-${i}`, html_url: null })),
+      );
+    }
+    const blob = /\/git\/blobs\/sha-(\d+)$/.exec(path);
+    if (blob) {
+      const [, text] = files[Number(blob[1])];
+      return Response.json({ content: Buffer.from(text).toString("base64"), encoding: "base64" });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  return createPolicies({
+    config: {},
+    github,
+    service: localService(policyEngineOf(t, { opa: opaBinary(), readBuiltIn: () => builtIn })),
+  });
 }
 
 // The policy service over HTTP (../policy-service/service.mjs), checking the tokens of the keys

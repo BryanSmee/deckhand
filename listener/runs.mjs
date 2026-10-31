@@ -139,7 +139,7 @@ export function createRuns(ctx) {
     // Its tokens, which its sandbox holds instead of a GitHub token (the GitHub gateway swaps
     // them for one limited to this repo) or the operator's credential, name it by its id while
     // it lasts. Signed once its sandbox's network is known (sandbox-spec.mjs).
-    ctx.broker.register(task.repo, permissionsFor(mode, light), {
+    ctx.broker.register(task.repo, permissionsFor(mode), {
       id,
       push: !light,
       mode,

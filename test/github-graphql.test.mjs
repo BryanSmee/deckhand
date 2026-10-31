@@ -19,8 +19,8 @@ import {
   restName,
 } from "../listener/github-graphql.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
-import { classify, createWriteChecks } from "../listener/github-writes.mjs";
-import { policyEngine } from "./helpers.mjs";
+import { classify, createWriteChecks, MAX_REFUSED_LOOKUPS } from "../listener/github-writes.mjs";
+import { allowingPolicies, defaultPolicies, hasOpa, policyEngine } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
 const call = (query, variables, operationName) => json({ query, variables, operationName });
@@ -241,12 +241,13 @@ const run = (mode, issue = 1, { push = mode === "work", reason = null } = {}) =>
   reason,
 });
 
-// The checks, with the writes they held and the IDs they looked up. `policies`: their engine
-// (helpers.mjs policyEngine()), which sees each write's input.
+// The checks, with the writes they held and the IDs they looked up. `policies`: allowing every
+// write, for the built-in checks, else their engine (helpers.mjs policyEngine(), which sees each
+// write's input, or defaultPolicies(), Deckhand's own, for what each mode may write).
 function checks({
   checkWrite,
   needsInputLabel = () => null,
-  policies = null,
+  policies = allowingPolicies,
   projects = () => ["acme/3"],
 } = {}) {
   const writes = [];
@@ -270,6 +271,9 @@ function checks({
   });
   return { check, writes, asked, looked };
 }
+
+// The tests of what Deckhand's own policies let each mode write (defaultPolicies()): the real opa.
+const withOpa = { skip: !hasOpa() && "no opa on the PATH" };
 
 // gh's own calls (cli/cli: api/queries_issue.go, pkg/cmd/issue/…).
 const GH_CREATE =
@@ -442,12 +446,6 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
   );
   assert.equal(project.refused?.status, 403);
   assert.match(project.refused.message, /createIssue's projectIds/);
-  // Without its label, an idea run's create is above its ceiling.
-  const bare = await check(
-    idea,
-    call(GH_CREATE, { input: { repositoryId: "R_repo", title: "T" } }),
-  );
-  assert.match(bare.refused.message, /^createIssue: .*idea label/);
 
   const brainstorm = run("brainstorm");
   const comment = await check(
@@ -459,14 +457,6 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
   const edit = await check(brainstorm, call(GH_EDIT, { input: { id: "I_1", body: "New" } }));
   assert.equal(edit.write, true);
   assert.deepEqual(writes.at(-1).actions, ["edit"]);
-  // Someone else's issue, and a label set on its own: above a brainstorm's ceiling.
-  const other = await check(brainstorm, call(GH_EDIT, { input: { id: "I_3", body: "x" } }));
-  assert.match(other.refused.message, /can't edit on other_issue #3/);
-  const labelled = await check(
-    brainstorm,
-    call(GH_EDIT, { input: { id: "I_1", labelIds: ["L_bug"] } }),
-  );
-  assert.match(labelled.refused.message, /can't label/);
   // Another repository's issue, whatever the call says it is.
   const away = await check(
     run("work"),
@@ -480,6 +470,59 @@ test("gh issue create, comment and edit: classified from GitHub's nodes, checked
   );
   assert.match(elsewhere.refused.message, /repositoryId isn't in the run's repository/);
 });
+
+test(
+  "Deckhand's policies over GraphQL: an idea's issue without its label, a brainstorm's comment, another's issue, its own issue's labels, milestone and assignees",
+  withOpa,
+  async (t) => {
+    const { check } = checks({ policies: defaultPolicies(t) });
+    const idea = run("idea", null);
+    const create = (input) =>
+      call(GH_CREATE, { input: { repositoryId: "R_repo", title: "T", ...input } });
+    assert.equal((await check(idea, create({ labelIds: ["L_idea"] }))).write, true);
+    assert.match(
+      (await check(idea, create({}))).refused.message,
+      /^createIssue: the policies refuse it: idea entries' issues carry the idea label/,
+    );
+    const brainstorm = run("brainstorm");
+    // Its own issue's description; a follow-up in a milestone.
+    assert.equal(
+      (await check(brainstorm, call(GH_EDIT, { input: { id: "I_1", body: "New" } }))).write,
+      true,
+    );
+    assert.equal((await check(brainstorm, create({ milestoneId: "M_3" }))).write, true);
+    const refused = [
+      // The listener posts its replies.
+      [
+        call(GH_COMMENT, { input: { subjectId: "I_1", body: "x" } }),
+        /a brainstorm doesn't comment/,
+      ],
+      [
+        call(GH_EDIT, { input: { id: "I_3", body: "x" } }),
+        /no rule allows `edit` on `other_issue`/,
+      ],
+      // A label, a milestone or assignees on its own issue, set or cleared.
+      [call(GH_EDIT, { input: { id: "I_1", labelIds: ["L_bug"] } }), /`label` on `own_issue`/],
+      [call(GH_EDIT, { input: { id: "I_1", milestoneId: "M_3" } }), /`milestone` on `own_issue`/],
+      [call(GH_EDIT, { input: { id: "I_1", milestoneId: null } }), /`milestone` on `own_issue`/],
+      // Assigning: refused to every run (a deny says so).
+      [call(GH_EDIT, { input: { id: "I_1", assigneeIds: null } }), /doesn't assign people/],
+      [call(GH_EDIT, { input: { id: "I_1", labelIds: null } }), /`label` on `own_issue`/],
+      [
+        call(GH_ASSIGN, { input: { assignableId: "I_1", actorLogins: ["alice"] } }),
+        /doesn't assign people/,
+      ],
+    ];
+    for (const [body, why] of refused) {
+      const out = await check(brainstorm, body);
+      assert.equal(out.refused?.status, 403, body.toString());
+      assert.match(out.refused.message, why);
+    }
+    // A work run assigns no one either, unless the operator's policies let it.
+    const assign = call(GH_ASSIGN, { input: { assignableId: "I_1", actorLogins: ["alice"] } });
+    assert.match((await check(run("work"), assign)).refused.message, /doesn't assign people/);
+  },
+);
 
 // gh's own (GH_DEBUG=api, gh 2.103.3): `gh issue edit --add-assignee` and `gh issue create
 // --assignee` send every assignee by login.
@@ -570,18 +613,6 @@ test("assignees and milestones over GraphQL: looked up from their nodes, held to
     assert.match(out.refused.message, message, JSON.stringify(input));
   }
   assert.equal(evals.length, asks);
-  // Above a brainstorm's ceiling: assigning, its own issue's milestone.
-  const brainstorm = run("brainstorm");
-  const assign = { assignableId: "I_1", actorLogins: ["alice"] };
-  const own = { id: "I_1", milestoneId: "M_3" };
-  assert.match(
-    (await check(brainstorm, call(GH_ASSIGN, { input: assign }))).refused.message,
-    /can't assign/,
-  );
-  assert.match(
-    (await check(brainstorm, call(GH_EDIT, { input: own }))).refused.message,
-    /can't milestone on own_issue/,
-  );
 });
 
 test("fragments spreading each other many times over: each field once, quickly", async () => {
@@ -604,13 +635,14 @@ test("fragments spreading each other many times over: each field once, quickly",
 test("a field sent as null counts as set: clearing labels, a milestone or assignees", async () => {
   const { check, writes } = checks();
   const edit = (input) => call(GH_EDIT, { input: { id: "I_1", ...input } });
-  // Above a brainstorm's ceiling on its own issue (edit, comment, link only).
+  // Each one set: the policies see the action (Deckhand's refuse them to a brainstorm, above).
   for (const [input, action] of [
-    [{ milestoneId: null }, /can't milestone/],
-    [{ assigneeIds: null }, /can't assign/],
-    [{ labelIds: null }, /can't label/],
+    [{ milestoneId: null }, "milestone"],
+    [{ assigneeIds: null }, "assign"],
+    [{ labelIds: null }, "label"],
   ]) {
-    assert.match((await check(run("brainstorm"), edit(input))).refused.message, action);
+    assert.equal((await check(run("brainstorm"), edit(input))).write, true, action);
+    assert.deepEqual(writes.at(-1).actions, [action]);
   }
   // A work run labels its issue: labels set to null remove them all.
   assert.equal((await check(run("work"), edit({ labelIds: null }))).write, true);
@@ -630,7 +662,11 @@ test("a field sent as null counts as set: clearing labels, a milestone or assign
 });
 
 test("variables and inline IDs, aliases and fragments: each field is checked, one refusal refuses all", async () => {
-  const { check, writes } = checks();
+  // Policies that refuse any write to #3.
+  const policies = {
+    deny: async (_rule, _repo, _ref, input) => (input().target.number === 3 ? ["not #3"] : []),
+  };
+  const { check, writes } = checks({ policies });
   const work = run("work");
   // Two fields, one aliased, one inline and one from a variable, the second in a fragment.
   const doc = `mutation M($id: ID!) {
@@ -644,12 +680,12 @@ test("variables and inline IDs, aliases and fragments: each field is checked, on
     writes.map((w) => w.target),
     [{ number: 1 }, { number: 2 }],
   );
-  // The same with the variable naming another's issue: the fragment's field refuses the call.
+  // The same with the variable naming #3: the fragment's field refuses the call.
   const refused = await check(work, call(doc, { id: "I_3" }));
-  assert.match(refused.refused.message, /^b: .*can't comment on other_issue #3/);
+  assert.match(refused.refused.message, /^b: the policies refuse it: not #3/);
   // An inline fragment, and a field aliased as another one's name.
   const inline = `mutation { ... on Mutation { createIssue: addComment(input: { subjectId: "I_3", body: "x" }) { clientMutationId } } }`;
-  assert.match((await check(work, call(inline))).refused.message, /^createIssue: .*other_issue #3/);
+  assert.match((await check(work, call(inline))).refused.message, /^createIssue: .*not #3/);
   // Answers under a createIssue's own key name what it created; an alias is followed.
   const two = `mutation { x: createIssue(input: { repositoryId: "R_repo", title: "A" }) { issue { url } } createIssue(input: { repositoryId: "R_repo", title: "B" }) { issue { url } } c: addComment(input: { subjectId: "I_1", body: "x" }) { clientMutationId } }`;
   assert.deepEqual((await check(work, call(two))).creates, ["x", "createIssue"]);
@@ -773,19 +809,32 @@ test("gh issue comment --edit-last and --delete-last: a comment the run posted, 
     (await check(work, call(GH_COMMENT_DELETE, { input: { id: "IC_o" } }))).refused.message,
     /id isn't in the run's repository/,
   );
-  // Above a brainstorm's ceiling, its own or not.
-  const brainstorm = { ...run("brainstorm"), created: work.created };
-  assert.match(
-    (await check(brainstorm, call(GH_COMMENT_EDIT, { input: { id: "IC_own", body: "x" } }))).refused
-      .message,
-    /can't edit on created_comment #1 \(its ceiling\)/,
-  );
   // An issue isn't a comment.
   assert.match(
     (await check(work, call(GH_COMMENT_EDIT, { input: { id: "I_1", body: "x" } }))).refused.message,
     /updateIssueComment on a Issue/,
   );
 });
+
+test(
+  "Deckhand's policies over GraphQL: a work run edits and deletes the comments it posted, a brainstorm neither",
+  withOpa,
+  async (t) => {
+    const { check } = checks({ policies: defaultPolicies(t) });
+    const created = [{ comment: 3000000001, at: 0 }];
+    const edit = call(GH_COMMENT_EDIT, { input: { id: "IC_own", body: "x" } });
+    const remove = call(GH_COMMENT_DELETE, { input: { id: "IC_own" } });
+    const work = { ...run("work"), created };
+    assert.equal((await check(work, edit)).write, true);
+    // Deleting: refused unless the operator's policies let it.
+    assert.match((await check(work, remove)).refused.message, /doesn't delete its comments/);
+    const brainstorm = { ...run("brainstorm"), created };
+    assert.match(
+      (await check(brainstorm, edit)).refused.message,
+      /no rule allows `edit` on `created_comment` for a `brainstorm` run/,
+    );
+  },
+);
 
 test("an unknown mutation, or an input field Deckhand doesn't check, is refused before any look-up", async () => {
   const { check, asked, writes } = checks();
@@ -886,7 +935,7 @@ test("targets come from GitHub's nodes: a missing one, a wrong type, another rep
     ),
   );
   assert.equal(react.refused.status, 403);
-  assert.match(react.refused.message, /can't react here \(its ceiling\)/);
+  assert.match(react.refused.message, /^addReaction: a run can't react here$/);
   // A look-up that fails refuses the call.
   const { check: failing } = createGraphqlChecks({
     nodes: async () => {
@@ -992,16 +1041,6 @@ test("a blocked-by link: its blocker resolved from its node, an issue of the run
     (await check(work, link("addBlockedBy", "I_2", "PR_7"))).refused.message,
     /isn't an issue/,
   );
-  // The target goes through the ceiling: someone else's issue isn't a work run's to link.
-  assert.match(
-    (await check(work, link("addBlockedBy", "I_3", "I_2"))).refused.message,
-    /can't link on other_issue #3/,
-  );
-  // Nor is anything an analysis's.
-  assert.match(
-    (await check(run("analyze"), link("addBlockedBy", "I_2", "I_3"))).refused.message,
-    /its ceiling/,
-  );
   // Without its blocker: GitHub's schema requires it.
   assert.match(
     (
@@ -1013,6 +1052,27 @@ test("a blocked-by link: its blocker resolved from its node, an issue of the run
     /blockingIssueId/,
   );
 });
+
+test(
+  "Deckhand's policies over GraphQL: a blocked-by link on someone else's issue, or an analysis's, refused",
+  withOpa,
+  async (t) => {
+    const { check } = checks({ policies: defaultPolicies(t) });
+    const link = (issueId, blockingIssueId) =>
+      call(
+        `mutation { addBlockedBy(input: { issueId: "${issueId}", blockingIssueId: "${blockingIssueId}" }) { clientMutationId } }`,
+      );
+    assert.equal((await check(run("work"), link("I_2", "I_3"))).write, true);
+    assert.match(
+      (await check(run("work"), link("I_3", "I_2"))).refused.message,
+      /no rule allows `link` on `other_issue` for a `work` run/,
+    );
+    assert.match(
+      (await check(run("analyze"), link("I_2", "I_3"))).refused.message,
+      /no rule allows `link` on `sub_issue` for a `analyze` run/,
+    );
+  },
+);
 
 // gh's own (cli/cli: api/queries_pr.go UpdateProjectV2Items(), what `gh issue create --project`
 // sends; `gh project item-add` sends one field the same). `gh issue/pr edit --add-project` sends
@@ -1035,11 +1095,6 @@ test("a project item: its content one of the run's, its project one the grants l
   assert.deepEqual(writes.at(-1).actions, ["project"]);
   assert.deepEqual(writes.at(-1).change.fields, ["project_id"]);
   assert.deepEqual(writes.at(-1).project, { owner: "acme", number: 3, title: "Roadmap" });
-  // Someone else's issue: above the ceiling.
-  assert.match(
-    (await check(work, addItem("I_3"))).refused.message,
-    /can't project on other_issue #3 \(its ceiling\)/,
-  );
   // A project the grants don't list, or none granted at all: refused, whatever the policies.
   assert.match(
     (await check(work, addItem("I_1", "PV_9"))).refused.message,
@@ -1058,11 +1113,6 @@ test("a project item: its content one of the run's, its project one the grants l
   assert.deepEqual(unseen.needs, { organization_projects: "write" });
   // Another repository's issue.
   assert.match((await check(work, addItem("I_o"))).refused.message, /contentId isn't in the run's/);
-  // A brainstorm adds the issues it filed only; a repo's light mode, nothing.
-  const brainstorm = { ...run("brainstorm"), created: [{ number: 5, at: 0 }] };
-  assert.equal((await check(brainstorm, addItem("I_5"))).write, true);
-  assert.match((await check(brainstorm, addItem("I_1"))).refused.message, /its ceiling/);
-  assert.match((await check(run("ask"), addItem("I_1"))).refused.message, /its ceiling/);
   // Setting an item's field, removing or archiving one: the listener's, never a run's.
   for (const name of [
     "updateProjectV2ItemFieldValue",
@@ -1094,6 +1144,35 @@ test("a project item: its content one of the run's, its project one the grants l
 // Enterprise Server with classic projects, it could clear them. The prompt says so.
 const GH_PR_EDIT =
   "mutation PullRequestUpdate($input: UpdatePullRequestInput!) { updatePullRequest(input: $input) { __typename } }";
+
+test(
+  "Deckhand's policies over GraphQL: a work run's items, a brainstorm's of the issues it filed only, a repo's light mode's none",
+  withOpa,
+  async (t) => {
+    const { check } = checks({ policies: defaultPolicies(t) });
+    const work = run("work");
+    for (const id of ["I_1", "PR_7", "I_2"]) {
+      assert.equal((await check(work, addItem(id))).write, true, id);
+    }
+    assert.match(
+      (await check(work, addItem("I_3"))).refused.message,
+      /no rule allows `project` on `other_issue` for a `work` run/,
+    );
+    const brainstorm = { ...run("brainstorm"), created: [{ number: 5, at: 0 }] };
+    assert.equal((await check(brainstorm, addItem("I_5"))).write, true);
+    assert.match(
+      (await check(brainstorm, addItem("I_1"))).refused.message,
+      /no rule allows `project` on `own_issue` for a `brainstorm` run/,
+    );
+    // A repo's own light mode, even with the repo's allow: Deckhand's allow none of its writes.
+    const repo = { "ask.rego": 'package deckhand\n\nallow_github if input.mode == "ask"\n' };
+    const own = checks({ policies: defaultPolicies(t, { repo }) });
+    assert.match(
+      (await own.check(run("ask"), addItem("I_1"))).refused.message,
+      /no rule allows `project` on `own_issue` for a `ask` run/,
+    );
+  },
+);
 
 test("gh issue/pr edit --add-project: its update's projectIds refused, the item itself goes", async () => {
   const { check } = checks();
@@ -1263,7 +1342,7 @@ test("an argument graphql-js refuses after validation: the call refused, nothing
   assert.deepEqual(asked, []);
 });
 
-test("createLabel: a label of the run's repository, the same write as REST's, for the modes whose ceiling holds it", async () => {
+test("createLabel: a label of the run's repository, the same write as REST's", async () => {
   const { check, writes } = checks();
   const GH_LABEL =
     "mutation LabelCreate($input: CreateLabelInput!) { createLabel(input: $input) { label { id } } }";
@@ -1282,17 +1361,12 @@ test("createLabel: a label of the run's repository, the same write as REST's, fo
     assert.deepEqual(writes.at(-1), rest, r.mode);
   }
   assert.deepEqual(rest.change.labels_added, ["ui"]);
-  // Light modes, reviews and analyses write no label.
-  for (const mode of ["review", "analyze", "onboarding", "discussion", "plan"]) {
-    const out = await check(run(mode), call(GH_LABEL, { input }));
-    assert.match(out.refused?.message ?? "", /its ceiling/, mode);
-  }
   // Only in the run's repository.
   for (const repositoryId of ["R_other", "I_1", "R_404"]) {
     const out = await check(run("work"), call(GH_LABEL, { input: { ...input, repositoryId } }));
     assert.equal(out.refused?.status, 403, repositoryId);
   }
-  // A label's settings are in no ceiling: no mutation changes them.
+  // A label's settings aren't a run's: no mutation changes them.
   for (const name of ["updateLabel", "deleteLabel"]) {
     const out = await check(
       run("work"),
@@ -1302,27 +1376,56 @@ test("createLabel: a label of the run's repository, the same write as REST's, fo
   }
 });
 
-test("a work run labels its sub-issues and the issues it created over GraphQL as over REST, not another's issue", async () => {
-  const { check, writes } = checks();
-  const work = run("work");
-  const add =
-    'mutation { addLabelsToLabelable(input: { labelableId: "ID", labelIds: ["L_bug"] }) { clientMutationId } }';
-  const remove =
-    'mutation { removeLabelsFromLabelable(input: { labelableId: "ID", labelIds: ["L_idea"] }) { clientMutationId } }';
-  for (const query of [add, remove]) {
-    assert.equal((await check(work, call(query.replace("ID", "I_2")))).refused, undefined);
-    const other = await check(work, call(query.replace("ID", "I_3")));
-    assert.match(other.refused.message, /can't label on other_issue #3/);
-  }
-  // #5, once GitHub answered the run's create with it.
-  const filed = { ...work, created: [{ number: 5, at: Date.parse("2026-01-01T00:00:00Z") }] };
-  assert.equal((await check(work, call(add.replace("ID", "I_5")))).refused?.status, 403);
-  assert.equal((await check(filed, call(add.replace("ID", "I_5")))).refused, undefined);
-  assert.equal((await check(filed, call(remove.replace("ID", "I_5")))).refused, undefined);
-  const set = await check(work, call(GH_EDIT, { input: { id: "I_2", labelIds: ["L_bug"] } }));
-  assert.equal(set.refused, undefined);
-  assert.deepEqual(writes.at(-1).actions, ["label"]);
-});
+test(
+  "Deckhand's policies over GraphQL: the modes that create labels; light modes, reviews and analyses don't",
+  withOpa,
+  async (t) => {
+    // A repo's own mode that pushes, which its .deckhand/policy/ allows writes.
+    const repo = { "plan.rego": 'package deckhand\n\nallow_github if input.mode == "plan"\n' };
+    const { check } = checks({ policies: defaultPolicies(t, { repo }) });
+    const GH_LABEL =
+      "mutation LabelCreate($input: CreateLabelInput!) { createLabel(input: $input) { label { id } } }";
+    const label = call(GH_LABEL, { input: { repositoryId: "R_repo", name: "ui", color: "fff" } });
+    const plan = { ...run("plan"), push: true };
+    for (const r of [run("work"), plan, run("brainstorm"), run("idea", null), run("bug", null)]) {
+      const out = await check(r, label);
+      assert.equal(out.refused, undefined, `${r.mode}: ${out.refused?.message}`);
+    }
+    for (const mode of ["review", "analyze", "onboarding", "discussion", "plan"]) {
+      const out = await check(run(mode), label);
+      assert.match(out.refused?.message ?? "", /no rule allows `create` on `label`/, mode);
+    }
+  },
+);
+
+test(
+  "a work run labels its sub-issues and the issues it created over GraphQL as over REST, not another's issue",
+  withOpa,
+  async (t) => {
+    const { check, writes } = checks({ policies: defaultPolicies(t) });
+    const work = run("work");
+    const add =
+      'mutation { addLabelsToLabelable(input: { labelableId: "ID", labelIds: ["L_bug"] }) { clientMutationId } }';
+    const remove =
+      'mutation { removeLabelsFromLabelable(input: { labelableId: "ID", labelIds: ["L_idea"] }) { clientMutationId } }';
+    for (const query of [add, remove]) {
+      assert.equal((await check(work, call(query.replace("ID", "I_2")))).refused, undefined);
+      const other = await check(work, call(query.replace("ID", "I_3")));
+      assert.match(
+        other.refused.message,
+        /no rule allows `label` on `other_issue` for a `work` run/,
+      );
+    }
+    // #5, once GitHub answered the run's create with it.
+    const filed = { ...work, created: [{ number: 5, at: Date.parse("2026-01-01T00:00:00Z") }] };
+    assert.equal((await check(work, call(add.replace("ID", "I_5")))).refused?.status, 403);
+    assert.equal((await check(filed, call(add.replace("ID", "I_5")))).refused, undefined);
+    assert.equal((await check(filed, call(remove.replace("ID", "I_5")))).refused, undefined);
+    const set = await check(work, call(GH_EDIT, { input: { id: "I_2", labelIds: ["L_bug"] } }));
+    assert.equal(set.refused, undefined);
+    assert.deepEqual(writes.at(-1).actions, ["label"]);
+  },
+);
 
 test("the needs-input label of a sub-issue: neither removed nor added over GraphQL", async () => {
   const { check } = checks({ needsInputLabel: () => "needs-input" });
@@ -1365,11 +1468,11 @@ test("deny_github over GraphQL: the run's mode, whether it is the repo's own, li
     [evals.at(-1).custom_mode, evals.at(-1).light, evals.at(-1).reason],
     [false, true, null],
   );
-  // A repo's own mode, not light: a work run's ceiling, and the policies know it is one.
+  // A repo's own mode, not light: the policies know it is one.
   const plan = run("plan", 1, { push: true, reason: "conflict" });
   const refused = await check(plan, comment);
   assert.equal(refused.refused.status, 403);
-  assert.match(refused.refused.message, /the policies refuse it \(deny_github\): not in a rebase/);
+  assert.match(refused.refused.message, /the policies refuse it: not in a rebase/);
   assert.deepEqual(
     [evals.at(-1).mode, evals.at(-1).custom_mode, evals.at(-1).light],
     ["plan", true, false],
@@ -1416,8 +1519,9 @@ test("reactions over GraphQL: on the run's issues, pull requests and their comme
   assert.deepEqual((await check(work, add("IC_1", "HEART"))).reacts, [
     { key: "addReaction", subject: "issue_comment:11", content: "heart" },
   ]);
-  // Another's issue's comment: its issue's kind.
-  assert.match((await check(work, add("IC_3"))).refused.message, /can't react on other_issue #3/);
+  // Another's issue's comment: its issue's kind, for the policies (Deckhand's refuse it, below).
+  assert.equal((await check(work, add("IC_3"))).write, true);
+  assert.deepEqual(writes.at(-1).target, { reacted: { id: 13, type: "issue" } });
   // Removing: only a reaction the run added, by its subject and content.
   const listener = await check(work, remove("IC_1", "EYES"));
   assert.equal(listener.refused?.status, 403);
@@ -1435,13 +1539,37 @@ test("reactions over GraphQL: on the run's issues, pull requests and their comme
   assert.deepEqual(removed.reacts, []);
   assert.equal((await check(own, remove("IC_1", "EYES"))).refused?.status, 403);
   assert.equal((await check(own, remove("I_1", "HEART"))).refused?.status, 403);
-  // A brainstorm: on its issue and its comments only.
-  const brainstorm = run("brainstorm");
-  assert.equal((await check(brainstorm, add("I_1"))).refused, undefined);
-  assert.equal((await check(brainstorm, add("IC_1"))).refused, undefined);
-  assert.match((await check(brainstorm, add("PR_7"))).refused.message, /can't react on pr #7/);
-  assert.match((await check(brainstorm, add("RC_7"))).refused.message, /can't react on pr #7/);
 });
+
+test(
+  "Deckhand's policies over GraphQL: a work run reacts on its own issues and pull requests, a brainstorm on its issue and its comments only",
+  withOpa,
+  async (t) => {
+    const { check } = checks({ policies: defaultPolicies(t) });
+    const add = (subject) =>
+      call(
+        `mutation { addReaction(input: { subjectId: "${subject}", content: THUMBS_UP }) { reaction { content } } }`,
+      );
+    const work = run("work");
+    for (const subject of ["I_1", "PR_7", "IC_1", "RC_7"]) {
+      assert.equal((await check(work, add(subject))).refused, undefined, subject);
+    }
+    assert.match(
+      (await check(work, add("IC_3"))).refused.message,
+      /no rule allows `react` on `other_issue` for a `work` run/,
+    );
+    const brainstorm = run("brainstorm");
+    assert.equal((await check(brainstorm, add("I_1"))).refused, undefined);
+    assert.equal((await check(brainstorm, add("IC_1"))).refused, undefined);
+    for (const subject of ["PR_7", "RC_7"]) {
+      assert.match(
+        (await check(brainstorm, add(subject))).refused.message,
+        /no rule allows `react` on `pr` for a `brainstorm` run/,
+        subject,
+      );
+    }
+  },
+);
 
 test("reactions over GraphQL: those GitHub ran are the run's, kept with its issues", () => {
   const { answered } = createWriteChecks({
@@ -1513,7 +1641,7 @@ test("review threads: a work run replies to and resolves its pull request's, by 
     assert.deepEqual(writes.at(-1).thread, { comment: 40 });
   }
   const refused = [
-    // Into a pending review: reviews are in no ceiling.
+    // Into a pending review: a run sends no review.
     [
       run("work"),
       call(GH_REPLY, {
@@ -1521,12 +1649,6 @@ test("review threads: a work run replies to and resolves its pull request's, by 
       }),
       /doesn't let a run set addPullRequestReviewThreadReply's pullRequestReviewId/,
     ],
-    [
-      run("brainstorm"),
-      call(GH_REPLY, { input: { pullRequestReviewThreadId: "PRRT_d", body: "x" } }),
-      /a brainstorm run can't reply here \(its ceiling\)/,
-    ],
-    [run("review"), call(GH_RESOLVE, { input: { threadId: "PRRT_d" } }), /can't resolve here/],
     [
       run("work"),
       call(GH_RESOLVE, { input: { threadId: "PRRT_o" } }),
@@ -1561,6 +1683,30 @@ test("review threads: a work run replies to and resolves its pull request's, by 
     assert.match(out.refused.message, why);
   }
 });
+
+test(
+  "Deckhand's policies over GraphQL: a work run replies to its pull request's threads and resolves Deckhand's; a brainstorm or a review neither",
+  withOpa,
+  async (t) => {
+    const { check } = checks({ policies: defaultPolicies(t) });
+    const reply = (r, id) =>
+      check(r, call(GH_REPLY, { input: { pullRequestReviewThreadId: id, body: "x" } }));
+    const resolve = (r, id) => check(r, call(GH_RESOLVE, { input: { threadId: id } }));
+    const work = run("work");
+    assert.equal((await reply(work, "PRRT_h")).refused, undefined);
+    assert.equal((await resolve(work, "PRRT_d")).refused, undefined);
+    // A person's thread stays open for them to resolve.
+    assert.match((await resolve(work, "PRRT_h")).refused.message, /not @alice's: reply instead/);
+    assert.match(
+      (await reply(run("brainstorm"), "PRRT_d")).refused.message,
+      /no rule allows `reply` on `pr` for a `brainstorm` run/,
+    );
+    assert.match(
+      (await resolve(run("review"), "PRRT_d")).refused.message,
+      /no rule allows `resolve` on `pr` for a `review` run/,
+    );
+  },
+);
 
 // gh pr checks' query (cli/cli api/query_builder.go RequiredStatusCheckRollupGraphQL), on its
 // pull request's node.
@@ -1731,4 +1877,65 @@ test("checkSelections: where the check and status fields are in the answer, alia
   const { check } = checks();
   const out = await check(run("work"), call(GH_CHECKS, { id: "PR_1" }));
   assert.deepEqual(out.readPaths, paths(GH_CHECKS));
+});
+
+test("MAX_REFUSED_LOOKUPS: a refused GraphQL call's node look-up counts, and past it none is made", async () => {
+  const looked = [];
+  // The policies refuse comments on #3, as Deckhand's refuse a work run's on another issue.
+  const writes = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup: (repo, path) => (looked.push(path), lookup(repo, path)),
+    bot: () => "deckhand[bot]",
+    policies: {
+      deny: async (r, repo, ref, input) =>
+        input().target.number === 3 ? ["no rule allows it"] : [],
+    },
+  });
+  const asked = [];
+  const { check } = createGraphqlChecks({
+    nodes: async (repo, ids) => (asked.push(ids), ids.map((id) => NODES[id] ?? null)),
+    checkWrite: writes.checkWrite,
+    budget: writes.budget,
+  });
+  const work = run("work");
+  const comment = (id) => call(GH_COMMENT, { input: { subjectId: id, body: "x" } });
+  // Each refused call: its nodes, the issue and its parent.
+  let refused = 0;
+  while ((await check(work, comment("I_3"))).refused?.status === 403) refused++;
+  // 33 refused calls cost 99; the next one's nodes the 100th, its field refused for it.
+  assert.equal(refused, Math.floor(MAX_REFUSED_LOOKUPS / 3));
+  const [nodes, rest] = [asked.length, looked.length];
+  const spent = await check(work, comment("I_3"));
+  assert.equal(spent.refused.status, 429);
+  assert.match(spent.refused.message, /refused writes cost 100 look-ups/);
+  // Neither the nodes nor the targets looked up again, not even for its own issue.
+  assert.equal((await check(work, comment("I_1"))).refused.status, 429);
+  assert.deepEqual([asked.length, looked.length], [nodes, rest]);
+});
+
+test("MAX_REFUSED_LOOKUPS: a GraphQL call that goes on, or whose nodes GitHub fails, costs nothing", async () => {
+  const writes = createWriteChecks({
+    needsInputLabel: () => null,
+    lookup,
+    bot: () => "deckhand[bot]",
+    policies: allowingPolicies,
+  });
+  let down = false;
+  const { check } = createGraphqlChecks({
+    nodes: async (repo, ids) => {
+      if (down) throw new Error("GitHub is down");
+      return ids.map((id) => NODES[id] ?? null);
+    },
+    checkWrite: writes.checkWrite,
+    budget: writes.budget,
+  });
+  const work = run("work");
+  const comment = call(GH_COMMENT, { input: { subjectId: "I_1", body: "x" } });
+  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++)
+    assert.equal((await check(work, comment)).refused, undefined);
+  down = true;
+  for (let i = 0; i < MAX_REFUSED_LOOKUPS; i++)
+    assert.equal((await check(work, comment)).refused.status, 502);
+  down = false;
+  assert.equal((await check(work, comment)).refused, undefined);
 });

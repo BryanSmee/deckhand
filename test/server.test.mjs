@@ -27,6 +27,18 @@ import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
 import { evalResult, fakeOpa, servePolicies, tempDir, testKey } from "./helpers.mjs";
 
+// The policy service's opa allowing a brainstorm's GitHub writes on its own issue only, as
+// Deckhand's mode-brainstorm.rego does for an edit (github-writes.test.mjs evaluates the real
+// file): what these tests check is the wiring, the gateway asking the policies.
+const brainstormOpa = () =>
+  fakeOpa({
+    answer: (_files, input) =>
+      evalResult(
+        [],
+        !(input.mode === "brainstorm" && input.target && input.target.kind !== "own_issue"),
+      ),
+  });
+
 const SECRET = "webhook-secret";
 // The App's key, one for every listener: making one takes a while.
 const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
@@ -1877,7 +1889,8 @@ mounts:
     const ctx = await holding(t, "Deckhand\n/mode brainstorm\nWhat about dark mode?");
     const refused = [
       /^403 Deckhand: this run can't push/,
-      /^403 .*can't create on new_pr \(its ceiling\)/,
+      // It has no branch: refused before any policy.
+      /^403 .*issue-12-x is not this run's branch/,
     ];
     const check = async () => {
       const answers = await pushAndOpen(ctx);
@@ -1895,7 +1908,9 @@ mounts:
       "issue:12": JSON.stringify({ number: 12, user: { login: "alice" }, labels: [] }),
       "issue:3": JSON.stringify({ number: 3, user: { login: "bob" }, labels: [] }),
     };
-    const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}));
+    const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}), {
+      opa: brainstormOpa(),
+    });
     await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
     await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 10, "the run");
     const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
@@ -1910,7 +1925,10 @@ mounts:
       assert.equal(own.status, 200);
       const other = await patch(3);
       assert.equal(other.status, 403);
-      assert.match((await other.json()).message, /a brainstorm run can't edit on other_issue #3/);
+      assert.match(
+        (await other.json()).message,
+        /no rule allows `edit` on `other_issue` for a `brainstorm` run/,
+      );
     };
     await check();
     const edits = ctx.github.requests.filter((r) => r.method === "PATCH");
@@ -1940,7 +1958,9 @@ mounts:
       "issue:3": JSON.stringify({ number: 3, user: { login: "bob" }, labels: [] }),
       nodes: JSON.stringify({ data: { nodes: [issue(12), issue(3)] } }),
     };
-    const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}));
+    const ctx = await listen(t, files, (dir) => (writeFileSync(join(dir, "hold"), ""), {}), {
+      opa: brainstormOpa(),
+    });
     await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
     await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 10, "the run");
     const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
@@ -1956,7 +1976,10 @@ mounts:
       `mutation { a: updateIssue(input: {id: "I_12", body: "Hi"}) { clientMutationId } b: updateIssue(input: {id: "${second}", body: "Hi"}) { clientMutationId } }`;
     const refused = await graphql(both("I_3"));
     assert.equal(refused.status, 403);
-    assert.match((await refused.json()).message, /^Deckhand: b: .*can't edit on other_issue #3/);
+    assert.match(
+      (await refused.json()).message,
+      /^Deckhand: b: .*no rule allows `edit` on `other_issue` for a `brainstorm` run/,
+    );
     const relayed = () =>
       ctx.github.requests.filter((r) => r.path === "/graphql" && r.auth === "token repo-token");
     assert.deepEqual(relayed(), []);

@@ -463,9 +463,8 @@ test(
         for (const c of ["push", "setup", "docker", "image:branch", "preview"]) {
           assert.equal(has(c), !LIGHT.has(mode), `${mode}: ${c}`);
         }
-        // A token of the installation's own (undefined): every permission it has, Discussions too.
-        const token = permissionsFor(mode, LIGHT.has(mode));
-        const discussions = token === undefined || !!token?.discussions;
+        // A work run's, or a token that reads discussions (a discussion run's).
+        const discussions = !LIGHT.has(mode) || !!permissionsFor(mode)?.discussions;
         assert.equal(has("read:discussions"), discussions, mode);
       }
       assert.deepEqual(results[mode].operator.deny, [], mode);
@@ -650,7 +649,7 @@ test("a light mode's run doesn't get `push`, whatever the policies allow, nor wh
     });
     const push = said.capabilities.find((c) => c.name === "push");
     assert.equal(push.status, "denied", mode);
-    assert.match(push.reason, /is a light mode: its token can't push/, mode);
+    assert.match(push.reason, /is a light mode: it has no branch to push/, mode);
     assert.ok(!said.used.includes("push") && !said.used.includes("image:branch"), mode);
     assert.ok(said.used.includes("pull") && said.used.includes("setup"), mode);
     assert.deepEqual(said.errors, [], mode);
@@ -713,11 +712,11 @@ test("a read refused while the run has `pull`: said, since its token still has i
   });
   assert.ok(said.used.includes("pull") && !said.used.includes("read:actions"));
   assert.ok(said.warnings.some((w) => /^`read:actions` isn't given, but the run's token/.test(w)));
-  // A brainstorm's token has no Actions: nothing to say.
+  // A brainstorm's token reads no discussions: nothing to say.
   const brainstorm = outcomeOf({
     rules: {
       operator: layer(everything(), [
-        { capability: "read:actions", reason: "no logs", file: "mode.rego" },
+        { capability: "read:discussions", reason: "not here", file: "mode.rego" },
       ]),
     },
     custom: false,
@@ -726,7 +725,7 @@ test("a read refused while the run has `pull`: said, since its token still has i
     repo: { private: true },
     mode: "brainstorm",
   });
-  assert.ok(!brainstorm.warnings.some((w) => w.startsWith("`read:actions`")));
+  assert.ok(!brainstorm.warnings.some((w) => w.startsWith("`read:discussions`")));
   // What the page says enforces it.
   const entry = CAPABILITIES.find((c) => c.name === "read:actions");
   assert.match(entry.enforcedBy, /^not yet: the run's token follows its mode until #497/);

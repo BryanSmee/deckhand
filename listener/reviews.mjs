@@ -44,6 +44,7 @@ import {
   taskKey,
 } from "./events.mjs";
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
+import { pushInput } from "./git-gateway.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
 import {
@@ -999,7 +1000,7 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   const samples = results.filter((r) => r.sample);
   if (samples.length) {
     parts.push(
-      "The sample lines (`run`'s comments, `github`'s writes and read, `link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
+      "The sample lines (`run`'s comments, `github`'s writes and read, `link_branch`'s branch, `push`'s branch) are not decisions on this pull request: they aren't counted as denials.",
     );
   }
   parts.push(
@@ -1072,12 +1073,12 @@ export function githubSamples(repo, pr, modes = {}) {
     sample("a work run's comment on its pull request", "work", "own_pr", pr.number),
     sample("a brainstorm's comment on it", "brainstorm", "pr", null, { light: true }),
   ];
-  // A mode that may write: a light one's ceiling refuses the comment before any policy runs.
+  // A mode that may write: Deckhand's default allow rules give a light one no write.
   const names = Object.keys(modes ?? {});
   const own = names.find((name) => !modes[name].light) ?? names[0];
   if (own) {
     const light = !!modes[own].light;
-    const what = `a comment on it in the repository's mode ${own}${light ? " (light: its ceiling refuses it before any policy)" : ""}`;
+    const what = `a comment on it in the repository's mode ${own}${light ? " (light: Deckhand's default policies allow it no write)" : ""}`;
     samples.push(sample(what, own, "own_pr", pr.number, { custom_mode: true, light }));
   }
   const { target: _, change: __, ...work } = samples[0].input;
@@ -1107,6 +1108,26 @@ export function linkSample(repo, pr, issue = null) {
       base: pr.base?.ref ?? null,
       oid: pr.base?.sha ?? null,
     },
+  };
+}
+
+// The push a dry run asks `deny_push` about: the pull request's head, as the work run on `issue`
+// (GitHub's, the one it closes, else the pull request itself) would push it, the repo's default
+// branch being `base` (docs/repo-config.md#the-push-input: git-gateway.mjs pushInput()).
+// → { what, input }
+export function pushSample(repo, pr, issue = null, base = null) {
+  const branch = pr.head?.ref ?? null;
+  // An update of a branch that is there (neither created nor deleted): any oid but zeros.
+  const at = pr.head?.sha || "1".repeat(40);
+  const run = { repo: repo.toLowerCase(), mode: "work", push: true, reason: null };
+  const input = pushInput(
+    { ...run, issue: issue?.number ?? pr.number },
+    { ref: branch === null ? "" : `refs/heads/${branch}`, old: at, new: at },
+    base,
+  );
+  return {
+    what: `a work run's push to ${branch ?? "its branch"}`,
+    input: { ...input, ref: branch === null ? null : input.ref },
   };
 }
 
@@ -2557,6 +2578,14 @@ export function createReviews({
       // No branch to link either: one for the issue the pull request closes, by its work run.
       if (decision === "link_branch") {
         const sample = linkSample(repo, pr, found);
+        const said = await ask(decision, () => sample.input);
+        const input = { version: INPUT_VERSION, ...sample.input };
+        results.push({ ...said, sample: sample.what, input });
+        continue;
+      }
+      // No push either: one of its branch, by the work run of the issue it closes.
+      if (decision === "push") {
+        const sample = pushSample(repo, pr, found, info.default_branch ?? null);
         const said = await ask(decision, () => sample.input);
         const input = { version: INPUT_VERSION, ...sample.input };
         results.push({ ...said, sample: sample.what, input });

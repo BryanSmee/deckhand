@@ -6,7 +6,9 @@
 // come from there) or to a branch that isn't the run's own (broker.mjs allow(): its issue's,
 // its pull request's), and forwards the rest to GitHub with a token of its own that the sandbox never sees. Updates,
 // force-pushes and deletes alike: another task's branch, a maintainer's pull request or
-// gh-pages stay out of reach.
+// gh-pages stay out of reach. Then the policies decide each branch it updates (`allow_push`,
+// `deny_push`: pushInput(); Deckhand's default, ../policy/mode-work.rego, allows work runs' and
+// the repo's own modes that aren't light): a refusal refuses the whole push.
 //
 // That token writes contents only, so GitHub refuses a push that touches .github/workflows/,
 // unless the repo is granted `allow_workflows` (grants.mjs): then a push whose refs all pass
@@ -31,6 +33,7 @@ import { branchAllowed } from "./broker.mjs";
 import { createMirrors } from "./git-mirror.mjs";
 import { PUSH_PERMISSIONS, WORKFLOW_PUSH_PERMISSIONS } from "./github-app.mjs";
 import { FORK_RUN } from "./github-forks.mjs";
+import { runTraits } from "./github-writes.mjs";
 import { pkt, pktLines } from "./pkt-line.mjs";
 
 // The ref updates come first in a push: anything bigger than this before them is not git. A
@@ -243,9 +246,32 @@ export function refusal(ref, base, branches) {
   return null;
 }
 
+// What the policies' `allow_push` and `deny_push` read of a push's update of `ref` ({ ref, old,
+// new }: commandReader()'s) by `run` (the broker's), the repo's default branch being `base`
+// (docs/repo-config.md#the-push-input): the run as `allow_github` reads it, the branch, and
+// whether the push creates or deletes it.
+export function pushInput(run, { ref, old, new: next }, base) {
+  const zero = (oid) => /^0+$/.test(oid);
+  return {
+    repo: run.repo,
+    mode: run.mode ?? null,
+    ...runTraits(run),
+    issue: run.issue ?? null,
+    action: "push",
+    branch: ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : null,
+    ref,
+    created: zero(old),
+    deleted: zero(next),
+    default_branch: base,
+  };
+}
+
 export function createGitGateway({
   broker, // broker.mjs: the run a token belongs to
   app, // () => the GitHub App (github-app.mjs), or null before /setup
+  // policies.mjs's: `allow_push` and `deny_push` on each branch a push updates. None: every push
+  // is refused.
+  policies = null,
   allowWorkflows = () => false, // (repo) => whether its grant sets `allow_workflows`
   // github-forks.mjs createForkChecks(): whose pushes are checked for a fork's objects
   // (restricted()). None: nobody's.
@@ -417,6 +443,13 @@ export function createGitGateway({
       if (why) reasons.set(ref, why);
     }
     if (reasons.size) return refuse(req, res, repo, parsed, reasons);
+    // Then the policies, on each branch: one refused refuses the push, as GitHub would take the
+    // rest without it.
+    for (const update of parsed.updates) {
+      const why = await policyRefusal(run, repo, update, base);
+      if (why) reasons.set(update.ref, why);
+    }
+    if (reasons.size) return refuse(req, res, repo, parsed, reasons);
     // A work run that isn't a fork's: its push is read whole, and its branches may only reach
     // what it carries or the repository has (mirrors.connect()): GitHub keeps a fork network's
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
@@ -440,6 +473,14 @@ export function createGitGateway({
       return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])));
     }
     return checkSpooled(req, res, { repo, run, github }, parsed, base, token, strict);
+  }
+
+  // Why the policies refuse `run`'s update of a branch ({ ref, old, new }), or null.
+  async function policyRefusal(run, repo, update, base) {
+    if (!policies) return "no policy decides this run's pushes";
+    const input = pushInput({ ...run, repo }, update, base);
+    const messages = await policies.deny("deny_push", repo, base, () => input);
+    return messages.length ? oneLine(`the policies refuse it: ${messages.join("; ")}`) : null;
   }
 
   // A push read whole, forwarded from disk once it passes: with `strict` (a work run that isn't
