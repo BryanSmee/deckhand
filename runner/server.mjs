@@ -156,12 +156,13 @@ await lease.start();
 if (!lease.active()) log("Runner: another copy holds the lease, waiting for it");
 
 // An update stops this copy with SIGTERM: output streams end (their callers follow again from
-// the next copy), the calls in flight and the preview hooks running finish (those waiting are
-// dropped, logged), the lease goes. Sandboxes go on.
+// the next copy), the preview hooks waiting are dropped (logged), the calls in flight finish,
+// then the lease goes, and the other copy acts. The preview hooks running end after that, or
+// are cut (killed, removed) at the end of the grace period. Sandboxes go on.
 const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : DRAIN_MS;
 process.once("SIGTERM", async () => {
   log(
-    `Stopping: the calls in flight and the preview hooks running finish (${Math.round(graceMs / 1000)} s at most), then the lease goes`,
+    `Stopping: the calls in flight finish, then the lease goes; the preview hooks running end after it (${Math.round(graceMs / 1000)} s at most in all, cut past that)`,
   );
   const all = await service.stop({ graceMs });
   if (!all) log("Stopping: calls or preview hooks still going at the end of the grace period, cut");
