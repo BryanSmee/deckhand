@@ -226,6 +226,9 @@ function settle(t, q, b, w, input, aside = null) {
   t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
   t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
   t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
+  // Picked by the listener from its auto-pickup label (auto-pickup.mjs): queued so, or its last
+  // run was.
+  if (q?.autoPickup || last?.autoPickup) t.autoPickup = true;
   t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0, w?.since ?? 0);
   // What its next run waits for, whatever it is doing now.
   if (w) t.waitingFor = w.blockers;

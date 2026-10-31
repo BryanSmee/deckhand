@@ -87,6 +87,7 @@ import { createSetup } from "./setup.mjs";
 import { createStatus, serverInfo, serverSetup } from "./status.mjs";
 import { createSync } from "./sync.mjs";
 import { busyTask, createTasks } from "./tasks.mjs";
+import { createAutoPickup } from "./auto-pickup.mjs";
 import { createLanes, fetchParent } from "./lanes.mjs";
 import { createOrder } from "./order.mjs";
 import { createTitles } from "./titles.mjs";
@@ -825,6 +826,24 @@ ctx.workApi = createWorkApi({
   log,
 });
 
+// The issues labelled AUTO_PICKUP_LABEL, started by the listener itself in AUTO_PICKUP_SLOTS.
+ctx.autoPickup = createAutoPickup({
+  config,
+  github,
+  // None until the App is set up (setup.mjs).
+  repos: async () => (ctx.app ? repoList.autoPickup() : []),
+  repoSettings,
+  accept: (item) => ctx.accept(item),
+  reply: ctx.reply,
+  live: () => {
+    const keys = new Set([...http.liveKeys()].map((k) => k.toLowerCase()));
+    return (key) => taskBusy(key) || keys.has(key.toLowerCase());
+  },
+  taken: () => ctx.pickedCount(),
+  load: (repo) => ctx.repoLoad(repo),
+  log,
+});
+
 // Discussions started, read and answered from the dashboard, with the work area's checks.
 const discussionChecks = createRepoCheck({ config, github, repoSettings });
 ctx.discussionApi = createDiscussionApi({
@@ -964,6 +983,7 @@ const relinking = setInterval(ctx.relink, RELINK_MS);
 ctx.conflicts.start();
 ctx.waits.start();
 ctx.reviews.start();
+ctx.autoPickup.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
 // Once the logs kept here are at the runner: one removed before it arrives would arrive after
@@ -1025,6 +1045,7 @@ process.on("SIGTERM", () => {
   ctx.conflicts.stop();
   ctx.waits.stop();
   ctx.reviews.stop();
+  ctx.autoPickup.stop();
   history.stop();
   redeliveries.stop();
   runEvents.stop();

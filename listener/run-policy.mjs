@@ -14,8 +14,10 @@ import { denyKept, isPolicyError, unallowed } from "./policies.mjs";
 export const personStarted = (item) => !!item.author && !item.reason;
 
 // What started `item`: "inbox" (an idea or a bug entry), "discussion", "dashboard" (a button, a
-// drag, a message sent from there) or "comment" (on GitHub).
+// drag, a message sent from there), "auto-pickup" (the issue's label, added by the run's
+// sender: auto-pickup.mjs) or "comment" (on GitHub).
 export function runTrigger(item) {
+  if (item.autoPickup) return "auto-pickup";
   if (item.trigger === "idea" || item.trigger === "bug") return "inbox";
   if (item.trigger === "discussion") return "discussion";
   return item.dashboard ? "dashboard" : "comment";

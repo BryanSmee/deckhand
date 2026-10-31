@@ -1700,6 +1700,37 @@ GitHub may send a delivery again (by hand from the App's settings, or after a ti
 side): the listener remembers the last 500 delivery ids (`X-GitHub-Delivery`) and handles
 each once. A restart forgets them.
 
+### Auto-pickup
+
+With `AUTO_PICKUP_SLOTS` set and a repository's `auto_pickup: true`, a label starts a run
+with no comment: the listener picks the open issues labelled `AUTO_PICKUP_LABEL` by itself
+(`listener/auto-pickup.mjs`, [setup.md](setup.md#auto-pickup)). The label stands for an
+allowed user's trigger comment, so the listener checks what it would check of one, and what
+it couldn't see of a label:
+
+- the run is the work of whoever last added the label (the issue's `labeled` events): they
+  must be in `ALLOWED_USERS` and the repository's `users`, read from its default branch right
+  before the start, and not a bot. Anyone with triage access can add a label: one added by
+  someone else starts nothing. When the label's last event the issue lists took it off (a
+  picked run's), the labelling that put it back isn't listed yet: nothing starts until it is,
+  rather than as the earlier labeller's;
+- the label vouches for the issue as it was when it went on. A title changed (a `renamed`
+  event) or a description edited (GraphQL's `userContentEdits`) after it, or in the same
+  second, by anyone but an allowed user, holds the issue: on a public repository, an
+  outsider's issue rewritten once labelled would otherwise run as the labeller's. Every edit
+  since the label counts, not only the last one (an allowed user's typo fix doesn't vouch for
+  an outsider's rewrite before it). The issue's own last edit (`lastEditedAt`, `editor`) is
+  checked too, and a history longer than the 100 edits read holds the issue when the edits
+  not read may be since the label: GitHub doesn't document the order it lists them in, so
+  either end of the history may be the one left out. Edits by the App's own bot count as
+  anyone's (what a run writes may come from any comment): the label has to be added again;
+- the run's policies see it as `trigger: "auto-pickup"` with the labeller as `sender`, and a
+  `deny_run` rule can refuse it;
+- the label comes off before the run is queued, so a run that fails or is refused isn't
+  started again and again: a person adds it back. The App never adds it itself: its own
+  `labeled` event would make it the labeller, which nothing starts for. An issue held by its
+  labelling keeps the label, and the App's comment says why, once per labelling.
+
 ## The dashboard
 
 Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose tool output

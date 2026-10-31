@@ -129,6 +129,18 @@ test("a task waiting for a slot has its place in the run order; a brainstorm sta
   assert.equal(byKey["acme/api#3"].position, undefined);
 });
 
+test("auto-picked tasks are marked: queued so, or their last run was", () => {
+  const tasks = board({
+    runs: [run("acme/api#1", 10, { status: "running", autoPickup: true }), run("acme/api#2", 10)],
+    queued: [{ key: "acme/api#3", kind: "issue", repo: "acme/api", replyTo: 3, autoPickup: true }],
+    brainstorms: [],
+  });
+  const byKey = Object.fromEntries(tasks.map((t) => [t.key, t]));
+  assert.equal(byKey["acme/api#1"].autoPickup, true);
+  assert.equal(byKey["acme/api#2"].autoPickup, undefined);
+  assert.equal(byKey["acme/api#3"].autoPickup, true);
+});
+
 test("runPlaces: counted among the repos the user sees, which tell nothing of the others", () => {
   const queue = [
     { repo: "acme/api", id: "1" },

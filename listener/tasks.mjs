@@ -72,6 +72,12 @@ export function busyTask(tasks, key) {
   return false;
 }
 
+// Whether task `t` holds one of AUTO_PICKUP_SLOTS (auto-pickup.mjs): its run is an auto-picked
+// one, or, before it starts (or while run() reads its settings), its first queued item is.
+export function pickedTask(t) {
+  return t.live ? !!t.live.record?.autoPickup : !!t.pending?.[0]?.autoPickup;
+}
+
 // `ctx` (server.mjs): the listener's state and services, read at call time. Tasks are
 // `ctx.tasks`: key → { repo, id, kind, number, base, name, settings, pending: [], running,
 // ready, timer, dueAt, live, next }; live: the running sandbox's (runs.mjs), next: "/model" and
@@ -407,10 +413,45 @@ export function createTasks(ctx) {
     ctx.order?.keep(waiting.map((t) => taskKey(t.repo, t.id)));
     const ready = queued.filter((t) => t.ready);
     const perRepo = new Map();
+    let auto = 0;
     for (const t of tasks.values()) {
-      if (t.running) perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1);
+      if (!t.running) continue;
+      perRepo.set(t.repo, (perRepo.get(t.repo) ?? 0) + 1);
+      if (pickedTask(t)) auto++;
     }
-    for (const task of startable(ready, perRepo, ctx.running, config.maxParallel)) ctx.run(task);
+    const reserved = {
+      reserved: config.autoPickupSlots ?? 0,
+      auto,
+      waiting: queued.filter(pickedTask),
+      picked: pickedTask,
+    };
+    for (const task of startable(ready, perRepo, ctx.running, config.maxParallel, reserved)) {
+      ctx.run(task);
+    }
+  }
+
+  // How many of AUTO_PICKUP_SLOTS are taken: auto-picked tasks running, or queued with room in
+  // their repo's max_parallel. One its repo holds back leaves the sweep free to pick an issue
+  // of another repo, which can start now.
+  function pickedCount() {
+    const list = [...tasks.values()];
+    const runningIn = (repo) => list.filter((t) => t.running && t.repo === repo).length;
+    // A repo without a cap of its own below MAX_PARALLEL holds nothing back: every slot is
+    // busy then, and the task waits for the next one as any other.
+    const room = (t) => {
+      const cap = t.settings?.maxParallel ?? config.maxParallel;
+      return cap >= config.maxParallel || runningIn(t.repo) < cap;
+    };
+    return list.filter((t) => pickedTask(t) && (t.running || (t.pending.length && room(t)))).length;
+  }
+
+  // How many of `repo`'s tasks are running or queued: what its max_parallel is held against
+  // before the sweep picks one of its issues (auto-pickup.mjs).
+  function repoLoad(repo) {
+    const name = repo.toLowerCase();
+    return [...tasks.values()].filter(
+      (t) => t.repo.toLowerCase() === name && (t.running || t.pending.length),
+    ).length;
   }
 
   return {
@@ -423,5 +464,7 @@ export function createTasks(ctx) {
     startLater,
     schedule,
     queueOrder,
+    pickedCount,
+    repoLoad,
   };
 }
