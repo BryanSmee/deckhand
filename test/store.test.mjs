@@ -5,7 +5,7 @@ import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:f
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
-import { openStore } from "../lib/store.mjs";
+import { openStore, storable } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
@@ -194,4 +194,29 @@ test("openStore: a file: URL's escapes are its path's own characters", async (t)
   const dir = join(tempDir(t), "a store");
   await openStore(pathToFileURL(dir).href).set("a", 1);
   assert.deepEqual(readdirSync(dir).includes("state.json"), true);
+});
+
+test("storable: what it returns, the store always takes, whatever the text held", async () => {
+  const secret = "operator-secret-0123456789";
+  const store = openStore("memory:", { secrets: () => [secret] });
+  const key = "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----";
+  const token = `ghp_${"a".repeat(36)}`;
+  const values = [
+    { text: `use ${token}` },
+    { text: `${key} and after` },
+    { text: "-----BEGIN PRIVATE KEY-----\ncut short" },
+    { text: `a "quoted" ${secret} and \\ backslashes` },
+    { [`${token}`]: "a key holding one", nested: [[{ deep: `github_pat_${"b".repeat(40)}` }]] },
+    // A secret only once the strings are JSON: split across two of them.
+    ["operator-secret-", "0123456789"],
+    { n: 1, ok: true, none: null, text: "nothing to hide" },
+  ];
+  for (const value of values) {
+    const clean = storable(value, [secret]);
+    await store.set("v", clean);
+    assert.deepEqual(await store.get("v"), clean);
+  }
+  // Nothing to hide: as it was.
+  assert.deepEqual(storable(values.at(-1), [secret]), values.at(-1));
+  assert.equal(storable({ text: `use ${token}` }, []).text, "use [redacted]");
 });

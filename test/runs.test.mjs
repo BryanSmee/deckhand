@@ -549,17 +549,28 @@ test("an agent's line past RUN_LOG_MAX_MB starts no phase: the line isn't kept",
   assert.doesNotMatch(readFileSync(logPath, "utf8"), /"event":"phase"/);
 });
 
-test("a run's end whose queue couldn't be saved keeps its state for the next listener", async (t) => {
+test("a run's end whose queue couldn't be saved: its state goes, unless its task's queue can't be kept either", async (t) => {
   const { ctx, runs, task, logs } = setup(t);
   const path = ctx.livePath("run");
   writeFileSync(path, "{}");
   ctx.saveQueue = async () => false;
   const later = [];
   ctx.removeOnceSaved = (file) => later.push(file);
+  // Its task's queue in a file of its own (restart.mjs keepQueued()): the run is over.
+  ctx.keepQueued = () => true;
+  const live = task.live;
+  await runs.teardown(task);
+  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  assert.deepEqual(later, []);
+  // That file can't be written either: its state is kept, removed after the next write of the
+  // queue that succeeds.
+  writeFileSync(path, "{}");
+  Object.assign(task, { live: { ...live, over: false, saving: null }, running: true });
+  ctx.running = 1;
+  ctx.keepQueued = () => false;
   await runs.teardown(task);
   assert.equal(readFileSync(path, "utf8"), "{}");
   assert.ok(logs.some((line) => /its state is kept/.test(line)));
-  // Removed after the next write of the queue that succeeds (restart.mjs).
   assert.deepEqual(later, [path]);
 });
 

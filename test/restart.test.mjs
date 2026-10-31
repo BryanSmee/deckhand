@@ -1,6 +1,6 @@
 // Runs a previous listener left behind (restart.mjs): what the broker knows of them again.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
@@ -984,7 +984,9 @@ test("a comment holding a token or a private key: the queue is saved without the
   assert.match(ctx.tasks.get("org/repo#1").pending[0].text, /ghp_a{36}/);
 });
 
-test("a run's state kept as the queue couldn't be written: removed after the next write that succeeds", async (t) => {
+// A run ending (runs.mjs teardown()) while the store refuses every write, `item` put back in its
+// task's queue by its end, or not (`putBack`).
+async function endWhileStoreDown(t, { putBack }) {
   const dir = tempDir(t);
   const store = fileStore();
   const ctx = queueContext(t, dir, store, { real: true });
@@ -995,8 +997,8 @@ test("a run's state kept as the queue couldn't be written: removed after the nex
   });
   const { teardown } = createRuns(ctx);
   const set = store.set;
-  let down = true;
-  store.set = (...args) => (down ? Promise.reject(new Error("disk full")) : set(...args));
+  const down = { on: true };
+  store.set = (...args) => (down.on ? Promise.reject(new Error("disk full")) : set(...args));
   const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
   const item = queued("1", { queueId: "q-1", eyes: Promise.resolve(3) });
   task.live = {
@@ -1006,24 +1008,73 @@ test("a run's state kept as the queue couldn't be written: removed after the nex
     lines: { out: 0, err: 0 },
     handled: [item],
     unanswered: [],
+    replied: true,
   };
   task.running = true;
   ctx.running = 1;
   ctx.tasks.set("org/repo#1", task);
-  // Put back by its end (its agent exited without answering it).
-  task.pending.push(item);
-  const path = join(dir, "r1.live.json");
-  writeFileSync(path, "{}");
+  if (putBack) task.pending.push(item);
+  writeFileSync(join(dir, "r1.live.json"), "{}");
   await teardown(task);
-  assert.equal(readFileSync(path, "utf8"), "{}");
-  // The next write (any: a 👀, another comment) has what the run put back: its state goes.
-  down = false;
-  await ctx.saveQueue();
-  assert.throws(() => readFileSync(path), { code: "ENOENT" });
+  return { dir, store, ctx, down };
+}
+
+test("a run's end the queue couldn't be written for: over, its put-back comments kept apart until a write succeeds", async (t) => {
+  const { dir, store, down } = await endWhileStoreDown(t, { putBack: true });
+  // Its state goes: the next listener doesn't take it for a run going (its tokens, its follow).
+  assert.throws(() => readFileSync(join(dir, "r1.live.json")), { code: "ENOENT" });
+  const kept = join(dir, "r1.queued.json");
+  assert.equal(statSync(kept).mode & 0o777, 0o600);
+
+  // A listener killed now: the next one has the comment, once, and no run.
+  const next = queueContext(t, dir, store);
+  next.broker = createBroker({});
+  next.runner = { closed: () => false };
+  assert.deepEqual(next.restoreRuns(), []);
+  down.on = false;
+  await next.loadQueue();
+  assert.deepEqual(next.armed, [["1", undefined]]);
+  assert.deepEqual(
+    next.tasks.get("org/repo#1").pending.map((i) => i.queueId),
+    ["q-1"],
+  );
+  // In the store now: the kept file goes.
+  assert.throws(() => readFileSync(kept), { code: "ENOENT" });
   assert.deepEqual(
     (await store.get(QUEUE_KEY))["org/repo#1"].pending.map((i) => i.queueId),
     ["q-1"],
   );
+});
+
+test("a run's end the queue couldn't be written for, with nothing put back: nothing left", async (t) => {
+  const { dir, ctx, down } = await endWhileStoreDown(t, { putBack: false });
+  assert.deepEqual(
+    readdirSync(dir).filter((f) => /\.(live|queued)\.json$/.test(f)),
+    [],
+  );
+  down.on = false;
+  assert.equal(await ctx.saveQueue(), true);
+});
+
+test("a kept queue file written by this listener goes after its next write that succeeds", async (t) => {
+  const { dir, ctx, down } = await endWhileStoreDown(t, { putBack: true });
+  down.on = false;
+  await ctx.saveQueue();
+  assert.throws(() => readFileSync(join(dir, "r1.queued.json")), { code: "ENOENT" });
+});
+
+test("comments saved before queueIds get one as they come back", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  writeFileSync(
+    join(dir, "queue.json"),
+    JSON.stringify([{ ...queued("7"), pending: [queued("7")], next: {} }]),
+  );
+  const ctx = queueContext(t, dir, store);
+  await ctx.loadQueue();
+  const [item] = ctx.tasks.get("org/repo#7").pending;
+  assert.match(item.queueId, /^[0-9a-f-]{36}$/);
+  assert.equal((await store.get(QUEUE_KEY))["org/repo#7"].pending[0].queueId, item.queueId);
 });
 
 test("a queue.json the first write didn't take: removed after the next that succeeds", async (t) => {
@@ -1041,4 +1092,24 @@ test("a queue.json the first write didn't take: removed after the next that succ
   await ctx.saveQueue();
   assert.throws(() => readFileSync(path), { code: "ENOENT" });
   assert.deepEqual(Object.keys(await store.get(QUEUE_KEY)), ["org/repo#7"]);
+});
+
+test("tasks.mjs: a pause armed from a saved deadline ends at it, not after a pause of its own", async (t) => {
+  const dir = tempDir(t);
+  // A pause of a minute (queueContext()'s debounceMs): the deadline decides.
+  const ctx = queueContext(t, dir, fileStore(), { real: true });
+  const started = [];
+  ctx.run = (task) => started.push([task.id, Date.now()]);
+  const task = newTask(queued("7"));
+  task.pending.push(queued("7", { queueId: "q-1" }));
+  ctx.tasks.set("org/repo#7", task);
+  const dueAt = Date.now() + 80;
+  ctx.startLater(task, dueAt);
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.deepEqual(started, []);
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(started.length, 1);
+  assert.ok(started[0][1] >= dueAt - 5 && started[0][1] < dueAt + 150);
+  // Saved with it.
+  assert.equal((await ctx.store.get(QUEUE_KEY))["org/repo#7"].dueAt, dueAt);
 });

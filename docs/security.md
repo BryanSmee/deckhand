@@ -1400,16 +1400,17 @@ of them, keep `/status` from it.
 The data volume (`/data`) holds what the listener keeps; whoever reads it has the App. The
 files holding secrets are the owner's only (`0600`):
 
-| File                   | What                                                              |
-| ---------------------- | ----------------------------------------------------------------- |
-| `app.json`             | the App's private key, client and webhook secrets                 |
-| `session.key`          | signs dashboard sessions                                          |
-| `sessions.json`        | each login's session epoch                                        |
-| `run-token.key`        | signs the runs' tokens ([Run tokens](#run-tokens))                |
-| `logs/<run>.live.json` | a running run's state, with its agent token (gone once it's over) |
-| `store/state.json`     | the store's keys: the queued comments, with their authors         |
-| `waits.json`           | comments waiting for other issues (`/after`), with their authors  |
-| `credentials/`         | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)     |
+| File                     | What                                                              |
+| ------------------------ | ----------------------------------------------------------------- |
+| `app.json`               | the App's private key, client and webhook secrets                 |
+| `session.key`            | signs dashboard sessions                                          |
+| `sessions.json`          | each login's session epoch                                        |
+| `run-token.key`          | signs the runs' tokens ([Run tokens](#run-tokens))                |
+| `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over) |
+| `store/state.json`       | the store's keys: the queued comments, with their authors         |
+| `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes     |
+| `waits.json`             | comments waiting for other issues (`/after`), with their authors  |
+| `credentials/`           | the plans' logins, a host folder (`DECKHAND_CREDENTIALS_DIR`)     |
 
 `credentials/` is a folder on the host, mounted read-write (`./credentials` by default): its
 `codex-auth.json` and `agy-auth.json` (or the files `CODEX_AUTH_FILE` and `AGY_AUTH_FILE` point

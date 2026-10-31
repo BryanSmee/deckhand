@@ -13,7 +13,7 @@ import { permissionsFor } from "./modes.mjs";
 import { addRun, openLog, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
-import { redact, REDACTED } from "../lib/redact.mjs";
+import { storable } from "../lib/store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
@@ -46,23 +46,6 @@ function plainWith({ eyes: _, comment, ...item }, eyes) {
 // How long the lines a run's output adds wait to be saved with its state (saveLiveSoon()).
 const LIVE_SAVE_MS = 1000;
 
-// A private key, to its end (or the text's).
-const PRIVATE_KEY =
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g;
-
-// `value` as the store takes it (lib/store.mjs withoutSecrets() refuses a write holding a
-// secret): each of its strings without `secrets`, GitHub tokens or private keys. A comment
-// holding one (pasted by mistake) is saved without it, rather than keep the whole queue from
-// being written; the listener's own copy keeps it, for the run it waits for.
-export function storable(value, secrets = []) {
-  if (typeof value === "string") return redact(value, secrets).replace(PRIVATE_KEY, REDACTED);
-  if (Array.isArray(value)) return value.map((v) => storable(v, secrets));
-  if (value && typeof value === "object") {
-    return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, storable(v, secrets)]));
-  }
-  return value;
-}
-
 // The store's key of the queue: every task's comments waiting for a run, as one value. The
 // store lists no keys, and the next listener needs them all.
 export const QUEUE_KEY = "queue";
@@ -78,7 +61,8 @@ export function queueId() {
 const eyesKnown = new WeakMap();
 
 export function revive(item) {
-  const revived = { ...item, eyes: Promise.resolve(item.eyes) };
+  // Saved by a listener from before queueIds: one now, so that the next restart tells it apart.
+  const revived = { ...item, queueId: item.queueId ?? queueId(), eyes: Promise.resolve(item.eyes) };
   // Known already: the queue's next write keeps it (eyesOf()).
   eyesKnown.set(revived, item.eyes ?? null);
   return revived;
@@ -107,12 +91,41 @@ export function createRestart(ctx) {
   // The queue a previous listener left: the store's, and queue.json's from before it. Read once,
   // by unifySpellings() or loadQueue(), whichever comes first.
   let leftQueue = null;
+  // And the files keepQueued() left, a run's end the queue couldn't be written for.
+  const keptFiles = () =>
+    readdirSync(ctx.logDir)
+      .filter((f) => f.endsWith(".queued.json"))
+      .map((f) => join(ctx.logDir, f));
   function readQueue() {
     leftQueue ??= ctx.store.get(QUEUE_KEY).then((stored) => {
-      const legacy = readJson(queuePath);
-      return [...Object.values(stored ?? {}), ...(Array.isArray(legacy) ? legacy : [])];
+      const files = [queuePath, ...keptFiles()];
+      const legacy = files.flatMap((path) => {
+        const saved = readJson(path);
+        return Array.isArray(saved) ? saved : [];
+      });
+      return [...Object.values(stored ?? {}), ...legacy];
     });
     return leftQueue;
+  }
+
+  // A run's end whose queue write failed (runs.mjs teardown()): its task's queue in
+  // logs/<run>.queued.json, read with the queue at the next start, and removed after the next
+  // write of the queue that succeeds. False when it can't be written either.
+  function keepQueued(task, live) {
+    if (!task.pending.length) return true;
+    const path = join(ctx.logDir, `${live.id}.queued.json`);
+    const pending = task.pending.map((item) => plainWith(item, eyesOf(item)));
+    try {
+      const saved = storable([{ ...pick(task), pending, next: task.next }], ctx.storeSecrets?.());
+      // The comments' text and authors: the owner's only.
+      writeJsonAtomic(path, saved, { mode: 0o600 });
+    } catch (error) {
+      log(`${live.key}: keeping its queue: ${error.stack ?? error}`);
+      return false;
+    }
+    log(`${live.key}: its task's queue kept in ${path} until the queue is saved`);
+    removeOnceSaved(path);
+    return true;
   }
 
   // Every repo the runs, the runs going, the queue and `keys` (other state's task keys) have,
@@ -163,7 +176,13 @@ export function createRestart(ctx) {
   function saveQueue() {
     waiting ??= saving.then(() => {
       waiting = null;
-      const value = storable(queueState(), ctx.storeSecrets?.() ?? []);
+      let value;
+      try {
+        value = storable(queueState(), ctx.storeSecrets?.() ?? []);
+      } catch (error) {
+        log(`Saving the queue: ${error.stack ?? error}`);
+        return false;
+      }
       // Those this write's state makes useless, as it is now: one added meanwhile waits for
       // the next write, which has what made it so.
       const removing = [...removeOnSave];
@@ -277,7 +296,13 @@ export function createRestart(ctx) {
       t.repo = spell(t.repo);
       for (const item of t.pending) item.repo = spell(item.repo);
       const key = taskKey(t.repo, t.id);
-      t.pending = t.pending.filter((item) => !item.queueId || !taken.has(item.queueId));
+      // Once each: a comment in a kept file and in the store too, say.
+      t.pending = t.pending.filter((item) => {
+        if (!item.queueId) return true;
+        if (taken.has(item.queueId)) return false;
+        taken.add(item.queueId);
+        return true;
+      });
       // ALLOWED_REPOS or ALLOWED_USERS may have changed with the restart. The repo's own
       // users are checked when the run begins (runs.mjs), or below for a run still going.
       t.pending = t.pending.filter((item) => {
@@ -305,9 +330,9 @@ export function createRestart(ctx) {
       // Its run began before: these comments weren't checked against the repo's users then.
       else ctx.track(ctx.dropRefused(task).then(() => ctx.deliverLater(task, dueAt)));
     }
-    // In the store as it is now (one spelling, without what was dropped); queue.json no more,
-    // once its comments are there (this write, or the next that succeeds).
-    if (existsSync(queuePath)) removeOnceSaved(queuePath);
+    // In the store as it is now (one spelling, without what was dropped); queue.json and the
+    // kept files no more, once their comments are there (this write, or the next that succeeds).
+    for (const path of [queuePath, ...keptFiles()]) if (existsSync(path)) removeOnceSaved(path);
     await saveQueue();
   }
 
@@ -552,6 +577,7 @@ export function createRestart(ctx) {
     take,
     eyesSaved,
     removeOnceSaved,
+    keepQueued,
     livePath,
     saveLive,
     saveLiveSoon,

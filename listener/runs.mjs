@@ -787,9 +787,11 @@ export function createRuns(ctx) {
     await live.saving;
     // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
     // own state goes: a listener killed between the two finds them in both, and the run's win.
-    // Kept when the queue couldn't be written, until a write of it succeeds: a listener killed
-    // meanwhile finds them there.
-    if ((await ctx.saveQueue?.()) === false) {
+    // When the queue couldn't be written, what the task has queued goes in a file of its own
+    // until a write of the queue succeeds (restart.mjs keepQueued()): the run is over, and the
+    // next listener must not take it for one going. Its state is kept only when even that file
+    // can't be written.
+    if ((await ctx.saveQueue?.()) === false && ctx.keepQueued?.(task, live) === false) {
       log(`${live.key}: its state is kept until the queue is saved with what it put back`);
       ctx.removeOnceSaved?.(ctx.livePath(live.id));
     } else rmSync(ctx.livePath(live.id), { force: true });

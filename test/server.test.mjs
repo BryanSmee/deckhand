@@ -2186,6 +2186,8 @@ mounts:
       assert.ok(Number(line.match(/due in (\d+) ms/)[1]) <= PAUSE_MS);
       await ctx.listener.until("done (ok)");
       assert.ok(Date.now() - sent >= PAUSE_MS);
+      // Not after a pause of the next listener's own (a minute).
+      assert.ok(Date.now() - sent < 30_000);
       assert.equal(prompts(ctx.dir).length, 1);
       assert.equal(replies(ctx.github).length, 1);
       // Its 👀 from before the restart is replaced by the outcome.
