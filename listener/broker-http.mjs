@@ -260,7 +260,7 @@ export function createBrokerHttp(ctx) {
     // GitHub's content hosts only for a run the gateway checks (github-forks.mjs restricted()),
     // every one of them (egress.mjs githubContent()): the others reach them as plain hosts.
     const files = github && restricted(run) && githubContent(host) ? [host] : [];
-    // What its agent's calls need: hosts handed to the listener, hosts refused.
+    // What its agent's calls need: hosts handed to the models service, hosts refused.
     const agent = agentFor(live?.record?.agent);
     const answer = task
       ? egressPolicy(host, live.hosts, live.trusted, live.cached, live.uncached ?? [], {

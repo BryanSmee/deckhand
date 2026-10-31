@@ -54,7 +54,7 @@ export function createModelsService({
     }
   }
 
-  // The fingerprints' sets, the newest last: { at, salt, values, chunk, chunks }.
+  // The fingerprints' sets, the newest last: { at, salt, values, chunk, chunks, rolls }.
   let sets = [];
   async function readPrints() {
     try {
@@ -67,6 +67,7 @@ export function createModelsService({
       const hashes = new Set(fresh.map((v) => v.hash));
       const values = [...(before?.values ?? []).filter((v) => !hashes.has(v.hash)), ...fresh];
       const chunks = new Set([...(before?.chunks ?? []), ...(answer.chunks ?? [])]);
+      const rolls = new Set([...(before?.rolls ?? []), ...(answer.rolls ?? [])]);
       const kept = sets.filter((s) => now() - s.at < PRINTS_KEPT_MS && s.salt !== salt);
       sets = [
         ...kept,
@@ -76,6 +77,7 @@ export function createModelsService({
           chunk: answer.chunk,
           values: values.slice(-200),
           chunks: [...chunks].slice(-2000),
+          rolls: [...rolls].slice(-2000),
         },
       ];
       later(readPrints, PRINTS_EVERY_MS);

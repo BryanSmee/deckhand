@@ -8,7 +8,7 @@
 // The operator's file (CODEX_AUTH_FILE, AGY_AUTH_FILE) is only where a login starts: read, never
 // written, so it may be mounted read-only. The store's login is the one used until the file
 // changes (a new sign-in, by its content's hash), which then replaces it.
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, hkdfSync, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
@@ -43,6 +43,11 @@ export function loginKey(dir) {
 }
 
 export const loginSeal = (key) => sealWith(key, "models logins");
+
+// The credentials' fingerprints' salt (http.mjs fingerprints()), from the same key: every copy
+// has it, and it outlives a restart. Not secret (the listener holds it), and nothing of the key.
+export const fingerprintSalt = (key) =>
+  Buffer.from(hkdfSync("sha256", key, "deckhand", "models fingerprints salt", 16)).toString("hex");
 
 // Unusable until the operator acts: 401, a bad credential, for a fallback (agents/
 // providerError()). `refused`: an expired, reused or revoked refresh token, which signing in

@@ -19,7 +19,8 @@ import { createBrokerService } from "../listener/broker-service.mjs";
 import { loadConfig, withModelCredentials } from "../listener/config.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
-import { loginSeal } from "../models/logins.mjs";
+import { fingerprintSalt, loginSeal } from "../models/logins.mjs";
+import { fingerprints } from "../models/http.mjs";
 import { createModels, credentialNames } from "../models/server.mjs";
 import { RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
@@ -126,6 +127,7 @@ async function setup(t, { env = {}, copies = 1, clock = { now: Date.now() } } = 
   const config = loadConfig(fullEnv, undefined, { service: "models" });
   const store = openStore("memory:", { now: () => clock.now });
   const seal = loginSeal(Buffer.alloc(32, 7));
+  const salt = fingerprintSalt(Buffer.alloc(32, 7));
   const started = [];
   for (let i = 0; i < copies; i++) {
     const caller = callerOf("models", ["broker", "runner"]);
@@ -138,6 +140,7 @@ async function setup(t, { env = {}, copies = 1, clock = { now: Date.now() } } = 
       config,
       store,
       seal,
+      salt,
       keys: keyFolder(join(dir, "keys")),
       broker: brokerService,
       caller,
@@ -360,6 +363,33 @@ test("two copies: each sets only what its calls changed of a run's API state", a
   });
 });
 
+test("two copies changing the same field in turn: the last call's answer is what's kept", async (t) => {
+  const upstream = await fakeAnthropic(t);
+  const ctx = await setup(t, {
+    copies: 2,
+    env: {
+      CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-plan-0123456789",
+      ANTHROPIC_BASE_URL: upstream.url,
+    },
+  });
+  const [a, b] = ctx.copies;
+  const { agentToken } = await ctx.startRun("run-1", { provider: "anthropic" });
+  const limit = () =>
+    ctx.agentCall(a, "/anthropic/v1/messages", agentToken, { headers: { "x-limit": "1" } });
+  const api = async () => (await ctx.asOrchestrator(b, "GET", "/runs/run-1/api")).json;
+  assert.equal((await limit()).status, 429);
+  // An answer through the other copy clears the plan's reset.
+  const ok = await ctx.agentCall(b, "/anthropic/v1/models", agentToken, {
+    method: "GET",
+    body: "",
+  });
+  assert.equal(ok.status, 200);
+  assert.deepEqual([(await api()).apiStatus, (await api()).apiReset], [200, null]);
+  // The first copy's 429 again, the same values it had set before: written all the same.
+  assert.equal((await limit()).status, 429);
+  assert.deepEqual([(await api()).apiStatus, (await api()).apiReset], [429, 1_900_000_000_000]);
+});
+
 test("two copies: a streaming call in flight finishes while its copy drains, the other takes new ones", async (t) => {
   const upstream = await fakeAnthropic(t);
   const ctx = await setup(t, {
@@ -479,4 +509,30 @@ test("through the egress proxy: an agent's call on the broker's host goes to the
   });
   assert.equal(refused, 403);
   assert.equal(upstream.requests.length, 1);
+});
+
+test("two copies give the same fingerprints, the same after a restart: one set for the listener", async (t) => {
+  const ctx = await setup(t, { copies: 2, env: { ANTHROPIC_API_KEY: KEY } });
+  const [a, b] = await Promise.all(
+    ctx.copies.map(async (copy) => (await ctx.asOrchestrator(copy, "GET", "/fingerprints")).json),
+  );
+  assert.deepEqual(a, b);
+  // The salt comes from the key the logins are sealed with: the same for a copy started anew.
+  assert.equal(a.salt, fingerprintSalt(Buffer.alloc(32, 7)));
+  assert.notEqual(a.salt, fingerprintSalt(Buffer.alloc(32, 8)));
+});
+
+test("redacting with fingerprints stays cheap: a few windows hashed per MB, not each one", () => {
+  const prints = [fingerprints([KEY, "sk-proj-another-operator-key-0123456789abcdef"])];
+  // A megabyte and more of characters a credential is made of: base64, hashes, long paths.
+  const text = Array.from({ length: 30_000 }, (_, i) =>
+    Buffer.from(`line ${i} of output`).toString("base64").repeat(2),
+  ).join(" ");
+  assert.ok(text.length > 1_000_000);
+  const started = performance.now();
+  const out = redact(`${text} ${KEY.slice(2, 33)}`, prints);
+  const ms = performance.now() - started;
+  assert.ok(out.endsWith(" [redacted]"));
+  // What hashing every window took (#504's first fix): 500 ms and more per MB and set.
+  assert.ok(ms < 250, `${Math.round(ms)} ms`);
 });

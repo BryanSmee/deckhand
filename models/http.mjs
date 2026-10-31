@@ -15,6 +15,7 @@ import { createServer } from "node:http";
 import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER } from "../lib/broker-client.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
+import { rollOf } from "../lib/redact.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { STREAM } from "./runs.mjs";
 
@@ -62,16 +63,20 @@ export function fingerprints(values, salt = randomBytes(16).toString("hex")) {
     ...new Set(values.filter((v) => typeof v === "string" && v.length >= MIN_LENGTH)),
   ];
   const chunks = new Set();
+  const rolls = new Set();
   for (const value of unique) {
     const own = JWT_HEADER.exec(value)?.[0].length ?? 0;
-    for (let i = own; i + CHUNK <= value.length; i += CHUNK)
+    for (let i = own; i + CHUNK <= value.length; i += CHUNK) {
       chunks.add(hash(value.slice(i, i + CHUNK)));
+      rolls.add(rollOf(value.slice(i, i + CHUNK)));
+    }
   }
   return {
     salt,
     values: unique.map((value) => ({ length: value.length, hash: hash(value) })),
     chunk: CHUNK,
     chunks: [...chunks],
+    rolls: [...rolls],
   };
 }
 
@@ -90,10 +95,12 @@ export function createModelsHandler({
   draining = () => false,
   now = Date.now,
   sleep = realSleep,
+  // The fingerprints' salt: one for every copy, and the same after a restart (fingerprintSalt()),
+  // so that the listener holds one set, whichever copy it asks.
+  salt = randomBytes(16).toString("hex"),
   log = () => {},
 }) {
   const guard = serviceGuard({ service: "models", keys, routes: ROUTES, bound, now });
-  const salt = randomBytes(16).toString("hex");
 
   // The run's agent token back in the header the endpoint reads it from, in place of the
   // caller's service token, checked already.

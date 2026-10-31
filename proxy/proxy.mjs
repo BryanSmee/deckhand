@@ -356,7 +356,7 @@ export function createProxy({
 
   // The tunnel's TLS ends here, with a certificate for the host from Deckhand's CA: its
   // requests go through the cache like plain HTTP (relay()), and on to the host over TLS
-  // that is verified (send()), or to the listener when `relay`. A client that doesn't start
+  // that is verified (send()), or to the listener (or the models service) when `relay`. A client that doesn't start
   // with TLS, or a host the CA can't make a certificate for, gets the raw tunnel; never a
   // relayed host. `from`: the client's address, which a relayed request names. `relayed`: the
   // policy's decision for a relayed host, null for a cached one.
@@ -586,8 +586,10 @@ export function createProxy({
     );
   }
 
-  // A relayed host's request, to the listener as <relayUrl>/<host><path>: the listener checks
-  // the run's token and sends it on with the operator's credential (../listener/google.mjs).
+  // A relayed host's request, to the listener as <relayUrl>/<host><path>: GitHub's, whose
+  // gateway checks the run's token (../listener/github-gateway.mjs); an agent's, when no
+  // MODELS_SERVICE_URL is set, which the listener relays on to the models service
+  // (../models/google.mjs, the operator's credential in the token's place).
   // Only under <relayUrl>/<host>/: the URL parser resolves "..", so a path that climbs out
   // would reach the listener's other endpoints (/egress) from the proxy's address. `from`: the
   // client's address.

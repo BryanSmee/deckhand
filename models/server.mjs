@@ -46,7 +46,7 @@ import { createAntigravityLogin } from "./antigravity-login.mjs";
 import { createChatgptLogin } from "./chatgpt.mjs";
 import { createGoogleRelay } from "./google.mjs";
 import { createModelsServer } from "./http.mjs";
-import { loginKey, loginSeal } from "./logins.mjs";
+import { fingerprintSalt, loginKey, loginSeal } from "./logins.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { createRuns } from "./runs.mjs";
 
@@ -81,6 +81,8 @@ export function createModels({
   refresh = null,
   bound,
   holder = randomBytes(6).toString("hex"),
+  // The fingerprints' salt (logins.mjs fingerprintSalt()); none: one of this copy's own.
+  salt,
   now = Date.now,
   log = () => {},
 }) {
@@ -162,6 +164,7 @@ export function createModels({
     runs,
     store,
     credentials: credentialNames(env),
+    ...(salt && { salt }),
     // What runs' output is redacted of, by the orchestrator, from their fingerprints alone.
     secrets: () => [
       ...AGENT_SECRETS.map((name) => env[name]),
@@ -212,7 +215,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const broker = createBrokerService({ caller, log });
     const keyDir = env.KEY_DIR || "/keys";
     mkdirSync(keyDir, { recursive: true });
-    const seal = loginSeal(loginKey(keyDir));
+    const key = loginKey(keyDir);
+    const seal = loginSeal(key);
+    const salt = fingerprintSalt(key);
     // The credentials never go in the store: a value holding one is refused there.
     const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
       password: env.REDIS_PASSWORD,
@@ -229,6 +234,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       config,
       store,
       seal,
+      salt,
       keys: keyFolder(env.SERVICE_KEYS_DIR || "/service-keys"),
       broker,
       caller,

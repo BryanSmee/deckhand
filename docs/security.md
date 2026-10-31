@@ -953,7 +953,9 @@ the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`
 - **What the listener learns.** Which credentials are set, by name (its settings need them:
   which agents may run, `FALLBACKS`), and their **fingerprints** for redaction (`GET
 /fingerprints`: a salt, each value's length and salted SHA-256, and the salted SHA-256 of
-  each of its 16-character parts at fixed offsets), never a value. It reads them before it
+  each of its 16-character parts at fixed offsets, with a 32-bit rolling hash of each part that
+  picks the few windows of a run's output worth hashing), never a value. The salt comes from the
+  models service's key: every copy, and every restart, gives the same set. It reads them before it
   restores any run, and every minute after. It redacts a credential that shows whole in a run's
   output (whatever `.`, `/`, `=` are next to it), and a run of characters that holds one of its
   parts, whole: any part of a credential 31 characters long or more (a value cut off in an error

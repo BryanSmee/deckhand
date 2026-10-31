@@ -69,6 +69,7 @@ export function createRuns({
   async function setField(id, field, value) {
     for (;;) {
       const before = await store.get(stateKey(id));
+      if (before && before[field] === value) return;
       const after = { ...EMPTY, ...before, [field]: value };
       if (await store.compareAndSet(stateKey(id), before, after, { ttlMs: STATE_TTL_MS })) return;
     }
@@ -105,7 +106,8 @@ export function createRuns({
         enumerable: true,
         get: () => state[field],
         set: (value) => {
-          if (state[field] === value) return;
+          // Saved even when this copy's own value is the same: the other copy may have changed
+          // the stored one since (setField() skips the write when the store has it already).
           state[field] = value;
           save(field, value);
         },
