@@ -268,7 +268,15 @@ test("unallowed: what no allow rule matched, said from the input", () => {
     unallowed("request_review", { mode: null }, "operator"),
     "no rule allows requesting reviewers for a run Deckhand no longer knows's pull request",
   );
-  assert.deepEqual(RULES.slice(0, 2), ["allow_merge", "deny_merge"]);
+  assert.equal(
+    unallowed("run", { mode: "brainstorm", target: { kind: "pr" } }, "operator"),
+    "no rule allows a `brainstorm` run on a pull request",
+  );
+  assert.equal(
+    unallowed("run", { mode: "plan", target: { kind: "issue" } }, "repo"),
+    "no rule of .deckhand/policy/ allows a `plan` run on an issue",
+  );
+  assert.deepEqual(RULES.slice(0, 4), ["allow_run", "deny_run", "allow_merge", "deny_merge"]);
   assert.equal(RULES.length, 2 * DECISIONS.length);
 });
 
@@ -297,18 +305,20 @@ test("builtInPolicies: Deckhand's policy/*.rego, each in package deckhand; no fo
   const own = builtInPolicies();
   assert.ok(own.has("github.rego"));
   for (const [name, text] of own) {
-    assert.match(name, /^(allow|github|review|gh-[a-z0-9-]+)\.rego$/, name);
+    assert.match(name, /^(allow|github|review|run|gh-[a-z0-9-]+)\.rego$/, name);
     // A feature allowed everywhere (gh-checks.rego) ships its file for its docs and its name
     // alone: comments and the package, nothing else.
     const bare = text.replace(/^\s*#.*$/gm, "").trim() === "package deckhand";
     assert.ok(rulesOf(text).length || bare, `${name} defines a rule of package deckhand`);
   }
   // allow.rego allows each decision, whatever the input: the listener knows it without opa.
+  // All but `run`, which run.rego allows where each mode makes sense.
   const allow = own.get(ALLOW);
   assert.deepEqual(
     rulesOf(allow),
-    DECISIONS.map((d) => `allow_${d}`),
+    DECISIONS.filter((d) => d !== "run").map((d) => `allow_${d}`),
   );
+  assert.deepEqual(rulesOf(own.get("run.rego")), ["allow_run"]);
   assert.deepEqual([...allowOnly()], [[ALLOW, allow]]);
   assert.equal(BUILT_IN_DIR, join(import.meta.dirname, "..", "policy/"));
   const dir = tempDir(t);
@@ -880,7 +890,7 @@ test("check: compile errors and rules nobody evaluates; nothing to check, no opa
     ["bad.rego", "package deckhand\ndeny_merge contains x if { x := http.send({}) }\n"],
   ]);
   const rules =
-    "`allow_merge`, `deny_merge`, `allow_review`, `deny_review`, `allow_fix`, `deny_fix`, `allow_link_branch`, `deny_link_branch`, `allow_request_review`, `deny_request_review`, `allow_github`, `deny_github`";
+    "`allow_run`, `deny_run`, `allow_merge`, `deny_merge`, `allow_review`, `deny_review`, `allow_fix`, `deny_fix`, `allow_link_branch`, `deny_link_branch`, `allow_request_review`, `deny_request_review`, `allow_github`, `deny_github`";
   assert.deepEqual(await policies.check(files), {
     errors: ["policy error: bad.rego:2: undefined function http.send"],
     warnings: [
@@ -1026,7 +1036,7 @@ test("describe: each file with its source and rules, the check of them all", asy
       "deckhand",
       null,
       true,
-      DECISIONS.map((d) => `allow_${d}`),
+      DECISIONS.filter((d) => d !== "run").map((d) => `allow_${d}`),
       ALLOWING[ALLOW],
     ),
     // The operator's a.rego, evaluated beside the repo's of the same name.

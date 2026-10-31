@@ -683,7 +683,12 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
     runOf: (key, pr) =>
       key === "org/repo#12" && pr.number === 5 ? { taskMode: "plan", light: false } : null,
   });
-  const { text, denials } = await s.reviews.dryRun({ repo: "org/repo", base: "main", number: 5 });
+  const { text, denials } = await s.reviews.dryRun({
+    repo: "org/repo",
+    base: "main",
+    number: 5,
+    by: "alice",
+  });
   // The brainstorm sample's denial is no decision: not counted.
   assert.equal(denials, 1);
   assert.match(
@@ -714,6 +719,12 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
     /- `github` \(sample: a brainstorm's comment on it\): \*\*refused\*\*: `not on pull requests`\n {2}- operator: `allow_github` allows \(`allow\.rego`\); `deny_github` denies \(1\)/,
   );
   assert.match(text, /The sample lines .* are not decisions on this pull request/);
+  // run on sample comments: a trigger comment on it, and /mode brainstorm there.
+  assert.match(
+    text,
+    /- `run` \(sample: a trigger comment on it starting a work run\): allowed\n {2}- operator: `allow_run` allows/,
+  );
+  assert.match(text, /- `run` \(sample: `\/mode brainstorm` on it\): allowed\n/);
   // link_branch on the branch its work run would have had linked.
   assert.match(text, /- `link_branch` \(sample: a work run's branch linked to #12\): allowed\n/);
   assert.match(text, /<details><summary>The input/);
@@ -725,14 +736,25 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   assert.deepEqual(
     samples.map((x) => [x.sample, x.input.version, x.input.mode, x.input.target?.kind]),
     [
+      ["a trigger comment on it starting a work run", 1, "work", "pr"],
+      ["`/mode brainstorm` on it", 1, "brainstorm", "pr"],
       ["a work run's branch linked to #12", 1, "work", undefined],
       ["a work run's comment on its pull request", 1, "work", "own_pr"],
       ["a brainstorm's comment on it", 1, "brainstorm", "pr"],
       ["a work run's read of CI's checks", 1, "work", undefined],
     ],
   );
-  // The issue the pull request closes.
-  assert.equal(samples[0].input.issue, 12);
+  // The issue the pull request closes, and who asked.
+  assert.deepEqual([samples[0].input.issue, samples[0].input.sender], [12, "alice"]);
+  // With its time, as the real decision has it ("no runs on Fridays").
+  assert.match(samples[0].input.time, /^\d{4}-\d\d-\d\dT/);
+  // Built as the real decision's input (run-policy.mjs runInput()): its traits, the target.
+  assert.deepEqual(
+    [samples[1].input.light, samples[1].input.continues, samples[1].input.trigger],
+    [true, false, "comment"],
+  );
+  assert.deepEqual(samples[1].input.target.kind, "pr");
+  assert.equal(samples[2].input.issue, 12);
   assert.equal(json.version, 1);
   assert.equal(json.decision, "merge");
   assert.equal(json.pr.additions, 12);
@@ -746,6 +768,8 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   assert.deepEqual(
     operator.map((e) => [e.rule, e.decision, "checks" in e]),
     [
+      ["deny_run", "run", false],
+      ["deny_run", "run", false],
       ["deny_merge", "merge", true],
       ["deny_review", "review", false],
       ["deny_fix", "fix", false],
@@ -757,13 +781,13 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
     ],
   );
   // The reviewers as when it turns ready, by the run that opened it, as the listener would ask.
-  const request = operator[4];
+  const request = operator[6];
   assert.deepEqual(
     [request.reviewers, request.when, request.mode, request.custom_mode, "fixes" in request],
     [["alice"], "ready", "plan", true, false],
   );
   assert.deepEqual(
-    operator.slice(5).map((e) => [e.mode, e.action, e.target?.kind, e.target?.number]),
+    operator.slice(7).map((e) => [e.mode, e.action, e.target?.kind, e.target?.number]),
     [
       ["work", "comment", "own_pr", 5],
       ["brainstorm", "comment", "pr", 5],

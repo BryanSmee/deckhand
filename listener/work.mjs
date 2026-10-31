@@ -402,10 +402,46 @@ export function createWorkApi({
       author: user,
       base,
       settings,
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
     });
   }
 
   const inMode = (mode) => (mode === "work" ? "" : ` in \`${mode}\` mode`);
+
+  // accept() → its mode, null when it runs nothing. `key`: the task whose wait it replaces once
+  // it runs, held meanwhile (waits.mjs reserve()), `why` for the log. Refused by the policies
+  // (run-policy.mjs: `refused`, their reply posted), the App's comment `user` posted for it
+  // (item.comment) is edited to say nothing started, keeping what else it said (`also`: the
+  // answers typed in the drag's form, which nothing ran with), and the wait stays.
+  async function started(item, { key = null, why = null, user = null, also = "" } = {}) {
+    const held = key ? waits.reserve(key) : null;
+    let mode = null;
+    try {
+      mode = await accept(item);
+    } finally {
+      if (key) await waits.release(key, !!mode, why, held);
+    }
+    if (item.refused && user && item.comment?.id) {
+      const wait = key ? waits.get(key) : null;
+      const still = wait ? ` It still waits for ${waitsFor(wait)}.` : "";
+      const body = `Asked from the dashboard by @${user}: not started, the policies refuse it.${still}${also}\n\n${MARKER}`;
+      const path = `/repos/${item.repo}/issues/comments/${item.comment.id}`;
+      const res = await github(item.repo, "PATCH", path, { body }).catch((error) => {
+        log(`Work area: editing comment ${item.comment.id}: ${error.message ?? error}`);
+        return null;
+      });
+      if (res && !res.ok) log(`Work area: editing comment ${item.comment.id}: ${res.status}`);
+    }
+    return mode;
+  }
+
+  // started(), then the policies' refusal as the dashboard's answer: the action didn't start
+  // anything.
+  async function queued(item, options) {
+    await started(item, options);
+    if (item.refused) refuse(403, item.refused);
+  }
 
   // `answers`: the answers to its open questions (answersComment()), sent along from the form
   // the drag opened; they go in the App's comment and are the run's text. Without them, an
@@ -432,11 +468,10 @@ export function createWorkApi({
     if (answers) item.text = answers;
     const also = answers ? `\n\n${answers}` : "";
     if (action === "queue") {
-      const queued = await queueAfter(repo, user, { item, after, mode, wanted, wait, also });
-      if (queued) return queued;
+      const waiting = await queueAfter(repo, user, { item, after, mode, wanted, wait, also });
+      if (waiting) return waiting;
       // Done already: it starts now, as "/after" would.
     }
-    waits.cancel(key, `started from the dashboard by @${user}`);
     const why = action === "queue" ? `: #${after} is done already` : "";
     const was = wait && action === "start" ? ` It no longer waits for ${waitsFor(wait)}.` : "";
     item.comment = await comment(
@@ -444,7 +479,8 @@ export function createWorkApi({
       number,
       `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
-    await accept(item);
+    // Its wait goes once it runs: refused by the policies (a 403, after their reply), it stays.
+    await queued(item, { key, why: `started from the dashboard by @${user}`, user, also });
     return `#${number} started.`;
   }
 
@@ -499,9 +535,13 @@ export function createWorkApi({
     const waiting = order.filter((n) => planned.get(n).length);
     const steps = [...waiting, ...order.filter((n) => !planned.get(n).length)];
     const laid = [];
+    // Those the policies refused to start (their reply on each says why).
+    const refusedRuns = [];
     try {
       for (const n of steps) {
-        await layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers });
+        if (await layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers })) {
+          refusedRuns.push(n);
+        }
         laid.push(n);
       }
     } catch (error) {
@@ -518,7 +558,10 @@ export function createWorkApi({
     // Their lane is named after the parent.
     named(repo, number, laid);
     const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
-    return `#${number} laid out: ${planSummary(order, planned)}.${afterDone}${skipped}${away}`;
+    const refusals = refusedRuns.length
+      ? ` Refused by the policies, not started: ${issueList(refusedRuns)}.`
+      : "";
+    return `#${number} laid out: ${planSummary(order, planned)}.${refusals}${afterDone}${skipped}${away}`;
   }
 
   // The issues a plan laid out are the parent's lane. What is on GitHub stays whatever happens
@@ -552,13 +595,19 @@ export function createWorkApi({
       await waits.hold(item, blockers);
       return;
     }
-    waits.cancel(key, `started from the dashboard by @${user} as part of #${number}`);
     item.comment = await comment(
       repo,
       n,
       `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
     );
-    await accept(item);
+    // Refused by the policies (their reply says why, the comment is edited), its wait stays:
+    // true, for the plan's answer.
+    await started(item, {
+      key,
+      why: `started from the dashboard by @${user} as part of #${number}`,
+      user,
+    });
+    return !!item.refused;
   }
 
   // What each issue of `repo` waits for already (waits.mjs), by number.
@@ -619,7 +668,7 @@ export function createWorkApi({
       number,
       `Brainstorm stopped from the dashboard by @${user}: a summary and the issue's update follow.`,
     );
-    await accept(item);
+    await queued(item, { user });
     return `#${number}'s brainstorm wraps up.`;
   }
 
@@ -659,7 +708,8 @@ export function createWorkApi({
       ? questions.source === "run"
       : task.runs?.[0]?.status === "needs-input";
     if (fromRun) {
-      await accept({
+      // From the dashboard, a refusal is its answer; ticked on GitHub, the reply there says it.
+      await (where === "from the dashboard" ? queued : accept)({
         repo,
         id: pr ? prId(number) : String(number),
         kind: pr ? "pr" : "issue",
@@ -674,6 +724,8 @@ export function createWorkApi({
         base,
         settings,
         comment: posted,
+        // Ticked on GitHub, it is a GitHub action (ticked()): the policies' `input.trigger`.
+        dashboard: where === "from the dashboard",
       });
       return `Answers sent: #${number} continues.${left}`;
     }
@@ -769,18 +821,21 @@ export function createWorkApi({
       replyTo,
       `Rerun from the dashboard by @${user}${inMode(mode)}: its last run ${ended}.`,
     );
-    await accept({
-      ...itemOf(repo, issue, mode, user, base, settings),
-      id,
-      kind: pr ? "pr" : "issue",
-      // The comments it ran on, as begin() joins them; "/model" lines and all.
-      text: run.items
-        .map((i) => i.text)
-        .filter(Boolean)
-        .join("\n\n---\n\n"),
-      replyTo,
-      comment: posted,
-    });
+    await queued(
+      {
+        ...itemOf(repo, issue, mode, user, base, settings),
+        id,
+        kind: pr ? "pr" : "issue",
+        // The comments it ran on, as begin() joins them; "/model" lines and all.
+        text: run.items
+          .map((i) => i.text)
+          .filter(Boolean)
+          .join("\n\n---\n\n"),
+        replyTo,
+        comment: posted,
+      },
+      { user },
+    );
     return `Rerun of #${number} queued.`;
   }
 
@@ -840,8 +895,9 @@ export function createWorkApi({
       author: user,
       base,
       settings,
+      dashboard: true,
     };
-    await accept(issue ? linkTo(item, issue) : item);
+    await queued(issue ? linkTo(item, issue) : item, { user });
     return `Review of #${number} queued.`;
   }
 
@@ -936,11 +992,12 @@ export function createWorkApi({
     if (!sent.ok) throw new Error(`GitHub POST a comment on #${number}: ${sent.status}`);
     const c = await sent.json();
     const posted = { id: c.id, html_url: c.html_url, node_id: c.node_id };
-    await accept({
+    await queued({
       ...inboxItem(repo, issue, kind, posted, { login: user }, text),
       author: user,
       base,
       settings,
+      dashboard: true,
     });
     return { message: `Sent to #${number}.`, url: posted.html_url, task: taskKey(repo, number) };
   }

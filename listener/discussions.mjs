@@ -131,6 +131,13 @@ export function createDiscussionApi({
 
   const split = (repo) => repo.split("/");
 
+  // accept(), then the policies' refusal (run-policy.mjs: `refused`, already replied in the
+  // discussion) as the dashboard's answer.
+  async function queued(item) {
+    await accept(item);
+    if (item.refused) refuse(403, item.refused);
+  }
+
   // The repo's checks, and its discussions category: { settings, base, category }.
   async function checked(repo, user) {
     const { settings, base } = await checkedRepo(repo, user);
@@ -221,7 +228,7 @@ export function createDiscussionApi({
       },
     );
     const d = made.createDiscussion.discussion;
-    await accept({
+    const item = {
       ...discussionEntryItem(
         repo,
         { number: d.number, title: d.title, html_url: d.url, node_id: d.id, id: d.databaseId },
@@ -232,7 +239,22 @@ export function createDiscussionApi({
       author: user,
       base,
       settings,
-    });
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
+    };
+    await accept(item);
+    // Refused by the policies (their reply is in it): the discussion made for it is closed, as a
+    // refused Analyze's issue (analysis.mjs), and their reply is the form's answer.
+    if (item.refused) {
+      await graphql(
+        repo,
+        "mutation($id: ID!) { closeDiscussion(input: {discussionId: $id, reason: OUTDATED}) { discussion { id } } }",
+        { id: d.id },
+      ).catch((error) =>
+        log(`${repo}#discussion-${d.number}: closing it: ${error.message ?? error}`),
+      );
+      refuse(403, item.refused);
+    }
     return {
       message: `Discussion #${d.number} started.`,
       url: d.url,
@@ -261,7 +283,7 @@ export function createDiscussionApi({
     );
     // Shown on the next read, not in THREAD_MS.
     threads.delete(`${repo.toLowerCase()}#${number}`);
-    await accept({
+    await queued({
       ...discussionEntryItem(
         repo,
         { number: d.number, title: d.title, html_url: d.url, node_id: d.id, id: d.databaseId },
@@ -272,6 +294,8 @@ export function createDiscussionApi({
       author: user,
       base,
       settings,
+      // For the policies' `input.trigger` (run-policy.mjs).
+      dashboard: true,
     });
     return { message: `Sent to discussion #${number}.`, url: c.url };
   }

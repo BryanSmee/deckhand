@@ -114,10 +114,19 @@ export function createTasks(ctx) {
     // Only the comment's own issue, as the delivery has it: a pull request's labels are its own.
     const issue = event === "issue_comment" && !payload.issue?.pull_request ? payload.issue : null;
     if (!hasAnswer(item) && unanswered(item, issue)) return holdBack(item);
-    if (!item.after && (item.trigger === "work" || item.modeLine)) {
-      ctx.waits.cancel(taskKey(item.repo, item.id));
+    // A trigger or "/mode" comment replaces the issue's wait, once it runs: refused by the
+    // policies, it changes nothing. The wait is held meanwhile (waits.mjs reserve()): a blocker
+    // done during the decision doesn't start it beside the new comment.
+    const key = taskKey(item.repo, item.id);
+    // With "/after", only one that runs now (waits.mjs request() said false), the wait left.
+    const replaces = item.trigger === "work" || !!item.modeLine;
+    const held = replaces ? ctx.waits.reserve(key) : null;
+    let mode = null;
+    try {
+      mode = await accept(item);
+    } finally {
+      if (replaces) await ctx.waits.release(key, !!mode, "a new comment replaces it", held);
     }
-    await accept(item);
   }
 
   // A `/cancel` comment: the task's run stops (runs.mjs cancel()), or its queued comments are
@@ -222,8 +231,8 @@ export function createTasks(ctx) {
       log(`${key}: not started yet, its open questions aren't answered`);
       return "answers";
     }
-    await accept({ ...item, settings });
-    return true;
+    // Refused by the policies (their reply said why), or nothing to run: not started.
+    return !!(await accept({ ...item, settings }));
   }
 
   // Whether the issue of a comment that waited still has open questions (unanswered()), as
@@ -237,13 +246,28 @@ export function createTasks(ctx) {
     return !!issue && unanswered(item, issue);
   }
 
-  async function accept(item) {
+  // Task key → the accept() of its latest item, settled: the next waits for it.
+  const accepting = new Map();
+
+  // Queues `item` after the items of its task that came before: modeOf() awaits (the policies,
+  // a session look-up), and a follow-up mustn't pass the comment that creates the task. → its
+  // mode, or null when it runs nothing (refused by the policies, nothing to go on in…).
+  function accept(item) {
+    const key = taskKey(item.repo, item.id);
+    const queued = (accepting.get(key) ?? Promise.resolve()).then(() => queue(item));
+    const settled = queued.catch(() => {});
+    accepting.set(key, settled);
+    settled.then(() => accepting.get(key) === settled && accepting.delete(key));
+    return queued;
+  }
+
+  async function queue(item) {
     // Its default branch, as GitHub said: "main" when it didn't.
     item.base ||= "main";
     const name = await containerName(item.repo, item.id);
     const key = taskKey(item.repo, item.id);
     item.mode = await modeOf(item, key, name);
-    if (!item.mode) return;
+    if (!item.mode) return null;
     ctx.titles.set(key, item.title);
     let task = tasks.get(key);
     if (!task) {
@@ -267,6 +291,7 @@ export function createTasks(ctx) {
       log(`${key}: queued (${item.mode}, ${item.kind} ${item.number}, reply on #${item.replyTo})`);
       startLater(task);
     }
+    return item.mode;
   }
 
   // A light run is what the task's next run will be: it goes first, after a shorter pause.

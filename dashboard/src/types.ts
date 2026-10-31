@@ -112,17 +112,19 @@ export interface PullRequest {
 
 // What a repo's policies (Rego `allow_*` and `deny_*` rules, listener/policies.mjs) decided
 // about a task's pull request: its review, fix run or auto-merge (listener/reviews.mjs), or the
-// reviewers requested on it (listener/reviewers.mjs). `messages`: the reasons, capped and
+// reviewers requested on it (listener/reviewers.mjs); or a run a person asked for that they
+// refused (listener/run-policy.mjs: only refusals are kept). `messages`: the reasons, capped and
 // redacted (a deny rule's, or which layer no allow rule matched); a failure is one
 // "policy error: …". `rule`: its deny rule's name, as before allow rules.
 export interface PolicyDecision {
-  decision: "merge" | "review" | "fix" | "link_branch" | "request_review";
+  decision: "run" | "merge" | "review" | "fix" | "link_branch" | "request_review";
   rule: string;
   denied: boolean;
   messages: string[];
   // What each layer said; absent on decisions kept before allow rules (issue #494).
   layers?: PolicyLayer[];
-  // The pull request it was about; the issue, for a linked branch (listener/linked-branch.mjs).
+  // The pull request it was about; the issue, for a linked branch (listener/linked-branch.mjs);
+  // the issue, pull request or discussion the comment was on, for a run.
   pr: number;
   at: number;
   // The built-in gates checked before the policies, in order ("Checks green"…); absent on

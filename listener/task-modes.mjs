@@ -6,21 +6,26 @@ import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
 import { customMode, INBOX, sessionName } from "./modes.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
+import { createRunPolicy } from "./run-policy.mjs";
 
 // `ctx` (server.mjs): the listener's state and services, read at call time.
 export function createTaskModes(ctx) {
   const { log, skip, tasks } = ctx;
+  // The policies' `allow_run` and `deny_run` (run-policy.mjs): asked once the mode is known,
+  // after the built-in gates and before the mode changes the issue's state.
+  const allowed = createRunPolicy(ctx);
 
   // What a comment asks for: "work", "brainstorm", "stop" (wrap a brainstorm up) or one of the
   // repo's own modes (its config's `modes:`); null when it doesn't reach Claude. A "/mode"
   // line picks the mode, with or without a trigger line; without either, a comment goes on in
-  // the issue's current mode. Keeps the issue's brainstorm and mode state up to date.
+  // the issue's current mode. Keeps the issue's brainstorm and mode state up to date, once the
+  // policies allow the run (null when they don't).
   async function modeOf(item, key, name) {
     // The inbox issue or the discussion category is the trigger (workItem()), the dashboard's
     // Analyze (work.mjs analyze()), which no comment can ask for, or a pull request turning
-    // ready (reviews.mjs).
+    // ready (reviews.mjs, the listener's own: allowed() doesn't ask).
     if (INBOX.has(item.trigger) || ["analyze", "review"].includes(item.trigger)) {
-      return item.trigger;
+      return (await allowed(item, item.trigger, key)) ? item.trigger : null;
     }
     if (item.trigger === "stop") return stopBrainstorm(item, key);
     let wanted = item.trigger;
@@ -33,28 +38,29 @@ export function createTaskModes(ctx) {
     if (!wanted && current && !talks(item, key)) return goOn(item, key, current);
     if (wanted === "onboarding") return startOnboarding(item, key);
     if (wanted === "research") return startResearch(item, key);
-    if (wanted === "review") return startReview(item);
+    if (wanted === "review") return startReview(item, key);
     if (wanted === "policy") return policyDryRun(item);
-    const own = customMode(item.settings, wanted);
-    if (wanted === "work" || (own && !own.fresh)) {
-      // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
-      // separate sessions (sessionName()): work reads what was settled from the issue.
-      ctx.brainstorms.end(key);
-      ctx.issueModes.set(key, own ? wanted : null);
-      return wanted;
-    }
-    // A fresh mode runs once on its own session: the issue stays in the mode it was in.
-    if (own) return wanted;
     // A comment on the issue itself continues its brainstorm; one on its pull request is work.
     if (wanted === "brainstorm" || (!wanted && ctx.brainstorms.get(key) && onIssue(item))) {
       return brainstorm(item, key, wanted);
     }
     // Without a trigger line, a comment only continues work the agent already started (a
     // brainstorm's session is not work's: sessionName()).
-    if (!item.trigger && !(await hasSession(key, name, false))) {
+    if (!wanted && !(await hasSession(key, name, false))) {
       return skip(`#${item.replyTo} has no agent session and no trigger line`);
     }
-    return "work";
+    const mode = wanted ?? "work";
+    if (!(await allowed(item, mode, key))) return null;
+    const own = customMode(item.settings, mode);
+    if (mode === "work" || (own && !own.fresh)) {
+      // The work (or the repo's mode) takes over from the brainstorm. Light and work runs keep
+      // separate sessions (sessionName()): work reads what was settled from the issue.
+      ctx.brainstorms.end(key);
+      ctx.issueModes.set(key, own ? mode : null);
+      return mode;
+    }
+    // A fresh mode runs once on its own session: the issue stays in the mode it was in.
+    return mode;
   }
 
   // That of its work runs or of its light ones (either when `light` is undefined), of any
@@ -104,14 +110,17 @@ export function createTaskModes(ctx) {
   // The issue's current mode, if it is still there.
   async function goOn(item, key, current) {
     if (current === "research") return startResearch(item, key);
-    if (current === "onboarding" || customMode(item.settings, current)) return current;
+    if (current === "onboarding" || customMode(item.settings, current)) {
+      return (await allowed(item, current, key)) ? current : null;
+    }
     // Gone from the config: don't guess what to run instead (work could push).
     await unknownMode(item, `The mode \`${current}\` is no longer in \`${CONFIG_FILE}\`.`);
     return null;
   }
 
   // Like a brainstorm, kept in modes.json: comments go on in it until the trigger line.
-  function startOnboarding(item, key) {
+  async function startOnboarding(item, key) {
+    if (!(await allowed(item, "onboarding", key))) return null;
     ctx.brainstorms.end(key);
     ctx.issueModes.set(key, "onboarding");
     // Its work run gets the onboarding prompt and the config check (finish()); no
@@ -133,6 +142,7 @@ export function createTaskModes(ctx) {
       await ctx.reply(item.repo, item.replyTo, text).catch((error) => log(`${where}: ${error}`));
       return null;
     }
+    if (!(await allowed(item, "research", key))) return null;
     ctx.brainstorms.end(key);
     ctx.issueModes.set(key, "research");
     return "research";
@@ -140,8 +150,8 @@ export function createTaskModes(ctx) {
 
   // A review reads a pull request's diff: on an issue, a reply says where to ask. It runs once
   // on a session of its own (fresh): the issue stays in the mode it was in.
-  async function startReview(item) {
-    if (onPull(item)) return "review";
+  async function startReview(item, key) {
+    if (onPull(item)) return (await allowed(item, "review", key)) ? "review" : null;
     const where = taskKey(item.repo, item.id);
     log(`${where}: review refused: not a pull request`);
     const text =
@@ -164,8 +174,8 @@ export function createTaskModes(ctx) {
     } else {
       try {
         log(`${where}: policy dry run on #${item.replyTo}`);
-        const { repo, base, replyTo: number } = item;
-        ({ text, denials } = await ctx.reviews.dryRun({ repo, base, number }));
+        const { repo, base, replyTo: number, author: by = null } = item;
+        ({ text, denials } = await ctx.reviews.dryRun({ repo, base, number, by }));
       } catch (error) {
         log(`${where}: policy dry run: ${error.stack ?? error}`);
         text = `The policy dry run failed: GitHub couldn't be read (${error.message ?? error}).`;
@@ -186,18 +196,20 @@ export function createTaskModes(ctx) {
     return null;
   }
 
-  function brainstorm(item, key, wanted) {
+  async function brainstorm(item, key, wanted) {
     if (!wanted && ctx.brainstorms.get(key).status === "stopped") {
       return skip(`#${item.number}: brainstorm stopped and no trigger line`);
     }
+    if (!(await allowed(item, "brainstorm", key))) return null;
     ctx.issueModes.set(key, null);
     item.restored = ctx.brainstorms.activate(key, item);
     return "brainstorm";
   }
 
-  function stopBrainstorm(item, key) {
+  async function stopBrainstorm(item, key) {
     const b = ctx.brainstorms.get(key);
     if (!b || b.status === "stopped") return skip(`#${item.number} has no brainstorm to stop`);
+    if (!(await allowed(item, "stop", key))) return null;
     ctx.brainstorms.stop(key);
     return "stop";
   }

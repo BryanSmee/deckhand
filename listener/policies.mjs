@@ -1,8 +1,9 @@
-// Rules as code (issues #292, #494): Rego policies that allow and refuse what the listener asks
+// Rules as code (issues #292, #494, #488): Rego policies that allow and refuse what the listener asks
 // them, after its built-in gates, evaluated by the pinned `opa` binary (listener/Dockerfile).
 // Each decision has two rules of package `deckhand`: `allow_<decision>`, true when it allows, and
 // `deny_<decision>`, a set of strings, the reasons shown to the maintainer (or the run, for
-// `deny_github`). Decisions: `merge`, `review`, `fix`, `link_branch` for the branch the listener
+// `deny_github`). Decisions: `run` for a run a person starts (run-policy.mjs), `merge`,
+// `review`, `fix`, `link_branch` for the branch the listener
 // links to a work run's issue (linked-branch.mjs), `request_review` for the reviewers it
 // requests (reviewers.mjs), and `github` for a run's GitHub writes (github-writes.mjs). A
 // decision is allowed when an allow rule matches and no deny rule does: a deny always wins.
@@ -41,7 +42,15 @@ const OPERATOR_DIR = "policy";
 export const BUILT_IN_DIR = fileURLToPath(new URL("../policy/", import.meta.url));
 
 // The decisions the listener asks the policies about, each with its two rules.
-export const DECISIONS = ["merge", "review", "fix", "link_branch", "request_review", "github"];
+export const DECISIONS = [
+  "run",
+  "merge",
+  "review",
+  "fix",
+  "link_branch",
+  "request_review",
+  "github",
+];
 
 // The rules the listener evaluates: another `allow_*` or `deny_*` rule is a mistake the config
 // check says.
@@ -296,8 +305,11 @@ export function operatorPolicies(config, read = (path) => readFileSync(path, "ut
 }
 
 // Deckhand's allow rules (policy/allow.rego): every decision allowed unless a deny rule says
-// otherwise, as before allow rules. Its name, and the map createPolicies() gets by default.
+// otherwise, as before allow rules; all but `run`, which policy/run.rego allows where each mode
+// makes sense. Its name, and the map createPolicies() gets by default.
 export const ALLOW = "allow.rego";
+// Deckhand's allow rules for the runs people start (policy/run.rego).
+const RUN = "run.rego";
 export const allowOnly = (dir = BUILT_IN_DIR) =>
   new Map([[ALLOW, readFileSync(join(dir, ALLOW), "utf8")]]);
 
@@ -339,6 +351,11 @@ export function unallowed(decision, doc, layer) {
     case "github": {
       const on = doc.target?.kind ? ` on \`${doc.target.kind}\`` : "";
       return `no ${rules} allows \`${doc.action}\`${on} for ${run(doc.mode)}`;
+    }
+    case "run": {
+      const on = { issue: "an issue", pr: "a pull request", discussion: "a discussion" };
+      const where = on[doc.target?.kind] ? ` on ${on[doc.target.kind]}` : "";
+      return `no ${rules} allows ${run(doc.mode)}${where}`;
     }
     case "link_branch":
       return `no ${rules} allows linking a branch for ${run(doc.mode)}`;
@@ -453,6 +470,9 @@ export const MAX_TEXT = 20 * 1024;
 // How long a repo's listing of POLICY_DIR is kept: a push to its default branch forgets it
 // sooner (forget()), so this only bounds a push whose webhook never came.
 const LISTING_MS = 10 * 60_000;
+// How old a listing listing()'s `stale` may still give when GitHub can't list again: past it,
+// fail closed as every other decision does.
+export const STALE_LISTING_MS = 6 * LISTING_MS;
 
 // `github`: the App's calls; `run(args, { input, cwd })`: opaRunner()'s; `secrets()`: what
 // redaction hides of the messages (secrets.mjs); `readOperator()`: the operator's policies
@@ -480,29 +500,41 @@ export function createPolicies({
   let capabilities = null;
   // Deckhand's own policies, read once: they are part of the image.
   let builtIn = null;
+  // Deckhand's policy/run.rego as shipped, read once (deckhandOnly()).
+  let shippedRun = null;
   const ownDefaults = () => (builtIn ??= readBuiltIn());
   // The defaults under the operator's: name → text.
   const defaults = () => new Map([...ownDefaults(), ...readOperator()]);
 
-  async function listing(repo, ref, cached) {
+  // `stale`: when GitHub can't list it, the last listing of `ref` up to STALE_LISTING_MS old (a
+  // push forgot it: forget()), rather than a failure; run-policy.mjs's, so that a GitHub hiccup
+  // doesn't refuse the comments of a repo that had no policy.
+  async function listing(repo, ref, cached, stale = false) {
     const key = repo.toLowerCase();
     const kept = listings.get(key);
     if (cached && kept?.ref === ref && now() - kept.at < LISTING_MS) return kept.listed;
-    const listed = await getJson(
-      github,
-      repo,
-      `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`,
-      [404],
-    );
+    let listed;
+    try {
+      listed = await getJson(
+        github,
+        repo,
+        `/repos/${repo}/contents/${POLICY_DIR}?ref=${encodeURIComponent(ref)}`,
+        [404],
+      );
+    } catch (error) {
+      if (!stale || kept?.ref !== ref || now() - kept.at > STALE_LISTING_MS) throw error;
+      log(`${repo}: listing its policies: ${error.message ?? error}; the last listing kept`);
+      return kept.listed;
+    }
     if (cached) listings.set(key, { ref, at: now(), listed });
     return listed;
   }
 
   // A repo's policy files on `ref`, [{ name, url, text }]: its listing (`cached`: the default
   // branch's, kept until it moves), then the files not seen yet.
-  async function repoFiles(repo, ref, cached) {
+  async function repoFiles(repo, ref, cached, stale = false) {
     const files = [];
-    const listed = await listing(repo, ref, cached);
+    const listed = await listing(repo, ref, cached, stale);
     if (!Array.isArray(listed)) return files;
     for (const entry of listed) {
       if (entry.type !== "file" || !FILE.test(entry.name)) continue;
@@ -517,14 +549,15 @@ export function createPolicies({
   }
 
   // A repo's policies on `ref`, name → text.
-  async function repoPolicies(repo, ref, { cached = false } = {}) {
-    return new Map((await repoFiles(repo, ref, cached)).map((f) => [f.name, f.text]));
+  async function repoPolicies(repo, ref, { cached = false, stale = false } = {}) {
+    return new Map((await repoFiles(repo, ref, cached, stale)).map((f) => [f.name, f.text]));
   }
 
   // The layers a decision on `repo` evaluates, each name → text: `operator`, Deckhand's policies
   // and the operator's over them by file name; `repo`, the repo's on `ref`. Empty: none.
-  async function policiesFor(repo, ref) {
-    return { operator: defaults(), repo: await repoPolicies(repo, ref, { cached: true }) };
+  // `stale`: listing()'s.
+  async function policiesFor(repo, ref, { stale = false } = {}) {
+    return { operator: defaults(), repo: await repoPolicies(repo, ref, { cached: true, stale }) };
   }
 
   // Whether the operator's layer `files` is Deckhand's own policies only, none of them defining
@@ -539,6 +572,18 @@ export function createPolicies({
         ([name, text]) => own.get(name) === text && !rulesOf(text).includes(`deny_${decision}`),
       ) && [...files.values()].some((text) => always.test(text))
     );
+  }
+
+  // Whether the operator's layer `files` (name → text) is Deckhand's own policies, unchanged and
+  // with nothing added, its run.rego the one shipped (BUILT_IN_DIR): then `run` needs no opa,
+  // run-policy.mjs defaultRun() says what run.rego would.
+  function deckhandOnly(files) {
+    const own = ownDefaults();
+    if (files.size !== own.size || [...files].some(([name, text]) => own.get(name) !== text)) {
+      return false;
+    }
+    shippedRun ??= readFileSync(join(BUILT_IN_DIR, RUN), "utf8");
+    return files.get(RUN) === shippedRun;
   }
 
   async function capabilitiesFile() {
@@ -1019,6 +1064,7 @@ export function createPolicies({
     checkRepo,
     repoPolicies,
     policiesFor,
+    deckhandOnly,
     forget,
   };
 }

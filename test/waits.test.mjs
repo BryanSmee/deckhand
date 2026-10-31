@@ -250,7 +250,7 @@ test("/after again replaces the list; /after none and a new trigger cancel", asy
   assert.equal(w.waits.list().length, 0);
   assert.equal(await w.waits.request(item({ none: true }, { trigger: null })), true);
   assert.equal(w.replies.at(-1)[1], "Nothing waits here.");
-  // With a trigger line: cancelled, and it runs now.
+  // With a trigger line: cancelled whatever happens to the run, and it runs now.
   await w.waits.request(item({ numbers: [77] }));
   assert.equal(await w.waits.request(item({ none: true })), false);
   assert.equal(w.waits.list().length, 0);
