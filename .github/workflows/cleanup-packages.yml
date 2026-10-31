@@ -20,6 +20,7 @@ jobs:
       matrix:
         image:
           - deckhand-listener
+          - deckhand-broker
           - deckhand-egress
           - deckhand-sandbox
           - deckhand-engine
