@@ -534,9 +534,13 @@ export function createWorkApi({
     const waiting = order.filter((n) => planned.get(n).length);
     const steps = [...waiting, ...order.filter((n) => !planned.get(n).length)];
     const laid = [];
+    // Those the policies refused to start (their reply on each says why).
+    const refusedRuns = [];
     try {
       for (const n of steps) {
-        await layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers });
+        if (await layOut(repo, user, { number, n, tree, planned, mode, base, settings, answers })) {
+          refusedRuns.push(n);
+        }
         laid.push(n);
       }
     } catch (error) {
@@ -553,7 +557,10 @@ export function createWorkApi({
     // Their lane is named after the parent.
     named(repo, number, laid);
     const skipped = tree.done.length ? ` Done already: ${issueList(tree.done)}.` : "";
-    return `#${number} laid out: ${planSummary(order, planned)}.${afterDone}${skipped}${away}`;
+    const refusals = refusedRuns.length
+      ? ` Refused by the policies, not started: ${issueList(refusedRuns)}.`
+      : "";
+    return `#${number} laid out: ${planSummary(order, planned)}.${refusals}${afterDone}${skipped}${away}`;
   }
 
   // The issues a plan laid out are the parent's lane. What is on GitHub stays whatever happens
@@ -592,12 +599,14 @@ export function createWorkApi({
       n,
       `Started from the dashboard by @${user}${inMode(wanted)}${part}.${was}`,
     );
-    // Refused by the policies (their reply says why, the comment is edited), its wait stays.
+    // Refused by the policies (their reply says why, the comment is edited), its wait stays:
+    // true, for the plan's answer.
     await started(item, {
       key,
       why: `started from the dashboard by @${user} as part of #${number}`,
       user,
     });
+    return !!item.refused;
   }
 
   // What each issue of `repo` waits for already (waits.mjs), by number.

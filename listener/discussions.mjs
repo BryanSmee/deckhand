@@ -228,7 +228,7 @@ export function createDiscussionApi({
       },
     );
     const d = made.createDiscussion.discussion;
-    await queued({
+    const item = {
       ...discussionEntryItem(
         repo,
         { number: d.number, title: d.title, html_url: d.url, node_id: d.id, id: d.databaseId },
@@ -241,7 +241,20 @@ export function createDiscussionApi({
       settings,
       // For the policies' `input.trigger` (run-policy.mjs).
       dashboard: true,
-    });
+    };
+    await accept(item);
+    // Refused by the policies (their reply is in it): the discussion made for it is closed, as a
+    // refused Analyze's issue (analysis.mjs), and their reply is the form's answer.
+    if (item.refused) {
+      await graphql(
+        repo,
+        "mutation($id: ID!) { closeDiscussion(input: {discussionId: $id, reason: OUTDATED}) { discussion { id } } }",
+        { id: d.id },
+      ).catch((error) =>
+        log(`${repo}#discussion-${d.number}: closing it: ${error.message ?? error}`),
+      );
+      refuse(403, item.refused);
+    }
     return {
       message: `Discussion #${d.number} started.`,
       url: d.url,

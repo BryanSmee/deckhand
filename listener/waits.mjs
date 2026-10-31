@@ -83,16 +83,18 @@ export function createWaits({
 
   // A comment with an "/after" line (item.after: events.mjs parseAfter()). Resolves to true when
   // it is handled here (it waits, or is refused), false when it should run now: every issue it
-  // names is done already, or "/after none" came with a trigger line.
+  // names is done already, or "/after none" came with a trigger line. Then the task's wait
+  // stays: the caller drops it once the comment runs (tasks.mjs admit(): the policies may
+  // refuse it).
   async function request(item) {
     const key = keyOf(item);
     const { after } = item;
     const starts = item.trigger === "work" || !!item.modeLine;
     if (after.error) return answer(item, `${after.error} Nothing waits.`).then(() => true);
     if (after.none) {
+      if (starts) return false;
       const wait = drop(key);
       if (wait) log(`${key}: no longer waits for ${waitsFor(wait)}`);
-      if (starts) return false;
       const text = wait ? `No longer waiting for ${waitsFor(wait)}.` : "Nothing waits here.";
       return answer(item, text).then(() => true);
     }
@@ -122,11 +124,8 @@ export function createWaits({
       refused("not-done", "was closed without being done");
     if (why) return answer(item, why).then(() => true);
     const blockers = after.numbers.filter((_, i) => states[i] === "open");
-    if (!blockers.length) {
-      // A new "/after" replaces the list.
-      if (drop(key)) log(`${key}: its wait is replaced`);
-      return false;
-    }
+    // Every one done: it runs now, and replaces the wait once it does.
+    if (!blockers.length) return false;
     await hold(item, blockers);
     const they = blockers.length > 1 ? "they are" : "it is";
     await answer(

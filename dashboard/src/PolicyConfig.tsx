@@ -246,12 +246,11 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         </a>
       </p>
       <p class={styles.model}>
-        <code>deny_run</code> reads the run a person asks for, before it is queued: its{" "}
-        <code>mode</code>, <code>custom_mode</code>, <code>trigger</code> (<code>comment</code>,{" "}
-        <code>dashboard</code>, <code>inbox</code>, <code>discussion</code>), <code>sender</code>{" "}
-        and the <code>target</code> its comment is on (<code>kind</code>, <code>labels</code>,{" "}
-        <code>author</code>). Deckhand's <code>run.rego</code> keeps brainstorms and onboarding on
-        issues.{" "}
+        <code>allow_run</code> and <code>deny_run</code> read the run a person asks for, before it
+        is queued: its <code>mode</code>, <code>custom_mode</code>, <code>trigger</code> (
+        <code>comment</code>, <code>dashboard</code>, <code>inbox</code>, <code>discussion</code>),{" "}
+        <code>sender</code> and the <code>target</code> its comment is on (<code>kind</code>,{" "}
+        <code>labels</code>, <code>author</code>).{" "}
         <a href={RUN_INPUT} target="_blank" rel="noreferrer">
           The run input
         </a>

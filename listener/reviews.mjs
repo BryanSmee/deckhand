@@ -54,6 +54,7 @@ import {
   passed,
   pullInput,
 } from "./policies.mjs";
+import { readOf, runInput } from "./run-policy.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
@@ -1112,35 +1113,26 @@ export function linkSample(repo, pr, issue = null) {
 // What a dry run asks `deny_run` about, on pull request `pr` (GitHub's), whose task is `issue`'s
 // (the one it closes, GitHub's) or its own: a trigger comment on it, from `sender` (who asked
 // for the dry run), starting a work run, and one asking for a brainstorm there, which Deckhand's
-// policy/run.rego refuses. → [{ what, input }] (docs/repo-config.md#the-run-input, as
-// run-policy.mjs runInput() builds it).
-export function runSamples(repo, pr, issue = null, sender = null, now = Date.now) {
-  const sample = (what, mode, light) => ({
-    what,
-    input: {
-      decision: "run",
-      time: new Date(now()).toISOString(),
-      repo: repo.toLowerCase(),
-      mode,
-      custom_mode: false,
-      light,
-      fresh: false,
-      trigger: "comment",
-      continues: false,
-      sender,
-      target: {
-        kind: "pr",
-        number: pr.number,
-        labels: (pr.labels ?? []).map((l) => (typeof l === "string" ? l : l.name)),
-        author: pr.user?.login ?? null,
-      },
-      issue: issue?.number ?? null,
-      pr: { draft: !!pr.draft, base: pr.base?.ref ?? null, head: pr.head?.ref ?? null },
-    },
-  });
+// policy/run.rego refuses. Each input as run-policy.mjs runInput() builds the real decision's,
+// from the comment's item (`settings`: the repo's, for its modes' traits). → [{ what, input }]
+export function runSamples(repo, pr, issue = null, sender = null, now = Date.now, settings = null) {
+  const sample = (what, mode) => {
+    const item = {
+      repo,
+      ...(issue
+        ? { id: String(issue.number), kind: "issue", number: issue.number }
+        : { id: prId(pr.number), kind: "pr", number: pr.number }),
+      replyTo: pr.number,
+      trigger: "work",
+      modeLine: mode === "work" ? null : mode,
+      author: sender,
+      settings,
+    };
+    return { what, input: runInput(item, mode, readOf(pr, "pr"), now) };
+  };
   return [
-    sample("a trigger comment on it starting a work run", "work", false),
-    sample("`/mode brainstorm` on it", "brainstorm", true),
+    sample("a trigger comment on it starting a work run", "work"),
+    sample("`/mode brainstorm` on it", "brainstorm"),
   ];
 }
 
@@ -2545,7 +2537,7 @@ export function createReviews({
     for (const decision of DECISIONS) {
       // No run to start: a comment on this pull request asking for one, by whoever asked.
       if (decision === "run") {
-        for (const sample of runSamples(repo, pr, found, by, now)) {
+        for (const sample of runSamples(repo, pr, found, by, now, settings)) {
           const said = await ask(decision, () => sample.input);
           const input = { version: INPUT_VERSION, ...sample.input };
           results.push({ ...said, sample: sample.what, input });

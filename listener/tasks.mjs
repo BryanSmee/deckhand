@@ -118,7 +118,8 @@ export function createTasks(ctx) {
     // policies, it changes nothing. The wait is held meanwhile (waits.mjs reserve()): a blocker
     // done during the decision doesn't start it beside the new comment.
     const key = taskKey(item.repo, item.id);
-    const replaces = !item.after && (item.trigger === "work" || !!item.modeLine);
+    // With "/after", only one that runs now (waits.mjs request() said false), the wait left.
+    const replaces = item.trigger === "work" || !!item.modeLine;
     if (replaces) ctx.waits.reserve(key);
     let mode = null;
     try {

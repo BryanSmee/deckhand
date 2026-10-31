@@ -302,6 +302,9 @@ test("Deckhand's default files: under the operator's, which replace them by name
   const runInput = screen.getByRole("link", { name: "The run input" });
   expect(runInput.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-run-input$/);
   expect(runInput.closest("p")!.textContent).toMatch(/trigger.*sender.*target/);
+  // Both rules read it; what run.rego does is the card's to say, when it applies.
+  expect(runInput.closest("p")!.textContent).toMatch(/^allow_run and deny_run read/);
+  expect(runInput.closest("p")!.textContent).not.toMatch(/run\.rego/);
   // The same rule refuses reads of CI's checks too.
   expect(github.textContent).toContain("its reads of CI's checks (read_checks");
   // What deny_github reads of the run, and where its input is documented.

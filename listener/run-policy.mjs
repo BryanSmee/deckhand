@@ -37,8 +37,22 @@ const DISCUSSION =
 // What the input says of `target` in `repo`, read from GitHub now: { labels, author, pr }, `pr`
 // ({ draft, base, head }) on a pull request only. One call: no files, this decision is made
 // per comment. `github`, `graphql`: the App's calls (github.mjs createGitHub()).
+const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
+
+// An issue or pull request as GitHub's REST API gives it (`kind`: "issue" or "pr") → what
+// readTarget() says of it; the dry run's samples (reviews.mjs runSamples()) take it too.
+export function readOf(found, kind) {
+  return {
+    labels: names(found.labels),
+    author: found.user?.login ?? null,
+    pr:
+      kind === "pr"
+        ? { draft: !!found.draft, base: found.base?.ref ?? null, head: found.head?.ref ?? null }
+        : null,
+  };
+}
+
 export async function readTarget({ github, graphql }, repo, target) {
-  const names = (labels) => (labels ?? []).map((l) => (typeof l === "string" ? l : l?.name));
   if (target.kind === "discussion") {
     const [owner, name] = repo.split("/");
     const data = await graphql(repo, DISCUSSION, { owner, name, number: target.number });
@@ -47,15 +61,7 @@ export async function readTarget({ github, graphql }, repo, target) {
     return { labels: names(d.labels?.nodes), author: d.author?.login ?? null, pr: null };
   }
   const path = `/repos/${repo}/${target.kind === "pr" ? "pulls" : "issues"}/${target.number}`;
-  const found = await getJson(github, repo, path);
-  return {
-    labels: names(found.labels),
-    author: found.user?.login ?? null,
-    pr:
-      target.kind === "pr"
-        ? { draft: !!found.draft, base: found.base?.ref ?? null, head: found.head?.ref ?? null }
-        : null,
-  };
+  return readOf(await getJson(github, repo, path), target.kind);
 }
 
 // Whether `item` goes on in the issue's current mode, without a trigger or "/mode" line: a

@@ -590,6 +590,11 @@ test("Deckhand's defaults alone: GitHub failing to list the repo's policies agai
   assert.deepEqual(replies, []);
   // Other decisions don't take a stale listing: they fail closed.
   await assert.rejects(policies.policiesFor("Org/Repo", "main"), /502/);
+  // Nor run, past an hour without a listing: refused, saying to post the comment again.
+  clock = 61 * 60_000;
+  assert.equal(await allowed(work(), "work", "Org/Repo#12"), false);
+  assert.match(replies.at(-1), /policy error: the policies can't be read/);
+  replies.length = 0;
   // A listener that never listed it refuses, saying to post the comment again.
   const fresh = createRunPolicy({
     policies: createPolicies({
@@ -635,4 +640,39 @@ test("waits.mjs reserve(): a blocker done while a new comment is decided starts 
   await waits.release("Org/Repo#12", false);
   assert.deepEqual(resumed, ["After #7."]);
   assert.match(replies.at(-1), /^#7 is done: starting\./);
+});
+
+test("tasks.mjs: a refused comment whose /after issues are all done keeps the issue's earlier wait", async (t) => {
+  const { ctx, admit } = refusingTasks(["not today"]);
+  ctx.waits = createWaits({
+    path: join(tempDir(t), "waits.json"),
+    // #7 is done; anything else is open.
+    github: async (repo, method, path) =>
+      Response.json(
+        path.endsWith("/issues/7")
+          ? { state: "closed", state_reason: "completed" }
+          : { state: "open" },
+      ),
+    reply: async () => {},
+    received: () => {},
+    settle: async () => {},
+    resume: async () => true,
+  });
+  await ctx.waits.hold(itemOf({ trigger: "work", text: "After #9.", comment: { id: 1 } }), [9]);
+  const payload = {
+    action: "created",
+    installation: { id: 7 },
+    repository: { full_name: "Org/Repo", default_branch: "main" },
+    issue: { number: 12, title: "Twelve" },
+    comment: {
+      id: 99,
+      body: "Deckhand /after #7\nShip it.",
+      user: { login: "alice", type: "User" },
+    },
+    sender: { login: "alice" },
+  };
+  const first = { repo: "Org/Repo", base: "main", trigger: "work", replyTo: 12, kind: "issue" };
+  await admit(first, "issue_comment", payload);
+  assert.deepEqual(ctx.waits.get("Org/Repo#12").blockers, [9]);
+  assert.equal(ctx.tasks.size, 0);
 });

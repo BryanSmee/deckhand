@@ -470,6 +470,9 @@ export const MAX_TEXT = 20 * 1024;
 // How long a repo's listing of POLICY_DIR is kept: a push to its default branch forgets it
 // sooner (forget()), so this only bounds a push whose webhook never came.
 const LISTING_MS = 10 * 60_000;
+// How old a listing listing()'s `stale` may still give when GitHub can't list again: past it,
+// fail closed as every other decision does.
+export const STALE_LISTING_MS = 6 * LISTING_MS;
 
 // `github`: the App's calls; `run(args, { input, cwd })`: opaRunner()'s; `secrets()`: what
 // redaction hides of the messages (secrets.mjs); `readOperator()`: the operator's policies
@@ -503,9 +506,9 @@ export function createPolicies({
   // The defaults under the operator's: name → text.
   const defaults = () => new Map([...ownDefaults(), ...readOperator()]);
 
-  // `stale`: when GitHub can't list it, the last listing of `ref`, however old (a push forgot
-  // it: forget()), rather than a failure; run-policy.mjs's, so that a GitHub hiccup doesn't
-  // refuse the comments of a repo that had no policy.
+  // `stale`: when GitHub can't list it, the last listing of `ref` up to STALE_LISTING_MS old (a
+  // push forgot it: forget()), rather than a failure; run-policy.mjs's, so that a GitHub hiccup
+  // doesn't refuse the comments of a repo that had no policy.
   async function listing(repo, ref, cached, stale = false) {
     const key = repo.toLowerCase();
     const kept = listings.get(key);
@@ -519,7 +522,7 @@ export function createPolicies({
         [404],
       );
     } catch (error) {
-      if (!stale || kept?.ref !== ref) throw error;
+      if (!stale || kept?.ref !== ref || now() - kept.at > STALE_LISTING_MS) throw error;
       log(`${repo}: listing its policies: ${error.message ?? error}; the last listing kept`);
       return kept.listed;
     }

@@ -992,6 +992,24 @@ test("plan: the tree starts in order, from its sub-issues and their blockers", a
   for (const n of [10, 11, 12, 13]) assert.equal(w.lanes.get(`org/app#${n}`).plan, 10);
 });
 
+test("plan: the issues the policies refuse to start are named in its answer, their comments edited", async () => {
+  const w = setup({ issues: epic() });
+  w.refusing = "No `work` run: the policies refuse it: `not today`.";
+  const res = await post(w, { action: "plan", number: 10 });
+  assert.equal(res.status, 200);
+  assert.equal(
+    res.body.message,
+    "#10 laid out: #12 and #13 start; #10 waits for #11, #12 and #13; #11 waits for #12. Refused by the policies, not started: #12 and #13.",
+  );
+  assert.deepEqual(
+    w.edits.map(([, body]) => body),
+    [
+      "Asked from the dashboard by @alice: not started, the policies refuse it.\n\n<!-- deckhand -->",
+      "Asked from the dashboard by @alice: not started, the policies refuse it.\n\n<!-- deckhand -->",
+    ],
+  );
+});
+
 test("plan: nested sub-issues, blockers outside the tree or in another repo, done ones", async () => {
   const other = {
     number: 5,

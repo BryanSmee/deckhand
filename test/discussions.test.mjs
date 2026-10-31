@@ -506,6 +506,11 @@ test("refused by the policies: a 403 with their reply, for a new discussion and 
   w.refusing = "No `discussion` run: the policies refuse it: `not today`.";
   const sent = await start(w, { title: "Restarts", body: "Is the queue kept?" });
   assert.deepEqual([sent.status, sent.body.error ?? sent.body.message], [403, w.refusing]);
+  // The discussion made for it is closed, as a refused Analyze's issue.
+  assert.ok(
+    w.queries.some((q) => q.includes("closeDiscussion")),
+    w.queries.join("\n"),
+  );
   const said = await comment(w, { text: "And the waits?" });
   assert.deepEqual([said.status, said.body.error ?? said.body.message], [403, w.refusing]);
   assert.equal(w.accepted.length, 2);

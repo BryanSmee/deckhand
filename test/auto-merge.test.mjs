@@ -748,6 +748,12 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   assert.deepEqual([samples[0].input.issue, samples[0].input.sender], [12, "alice"]);
   // With its time, as the real decision has it ("no runs on Fridays").
   assert.match(samples[0].input.time, /^\d{4}-\d\d-\d\dT/);
+  // Built as the real decision's input (run-policy.mjs runInput()): its traits, the target.
+  assert.deepEqual(
+    [samples[1].input.light, samples[1].input.continues, samples[1].input.trigger],
+    [true, false, "comment"],
+  );
+  assert.deepEqual(samples[1].input.target.kind, "pr");
   assert.equal(samples[2].input.issue, 12);
   assert.equal(json.version, 1);
   assert.equal(json.decision, "merge");
