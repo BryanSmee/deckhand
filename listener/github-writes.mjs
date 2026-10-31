@@ -526,12 +526,14 @@ const MAX_HOPS = 5;
 // `lookup(repo, path)`: GitHub's JSON with the listener's token, null for a 404 (github.mjs
 // getJson()); `bot()`: the App's login (`slug[bot]`), null before /setup; `policies`:
 // policies.mjs's, null without; `pulls`: github-pulls.mjs's checks (its workflow check and
-// record, none by default); `needsInputLabel()`: NEEDS_INPUT_LABEL, null when unset;
+// record, none by default); `needsInputLabel(run)`: NEEDS_INPUT_LABEL, null when unset (the
+// github service has it on the run, from the orchestrator);
 // `listenerReacted(repo, subject, content)`: whether the listener added that reaction
 // (comments.mjs), which a run never removes;
 // `projects(repo)`: the projects the operator's grants let its runs write, ["acme/3"] (grants.mjs
-// allowProjects), none by default; `users(repo)`: the logins a run may assign there
-// (ALLOWED_USERS, narrowed by the repo's `users`), in lower case: none by default; `log`: the
+// allowProjects), none by default; `users(repo, run)`: the logins a run may assign there
+// (ALLOWED_USERS, narrowed by the repo's `users`: the github service has them on the run), in
+// lower case: none by default; `log`: the
 // listener's; `now`: the clock (MAX_REFUSED_LOOKUPS' window).
 export function createWriteChecks({
   lookup,
@@ -795,11 +797,11 @@ export function createWriteChecks({
 
   // Whether a run may assign `login`: an assignment notifies them, so one of the repo's allowed
   // users or the App's bot, never Copilot, which would start working on it.
-  function assignable(repo, login) {
+  function assignable(run, login) {
     const name = login.toLowerCase();
     if (COPILOT.has(name)) return false;
     if (name === bot()?.toLowerCase()) return true;
-    return users(repo).includes(name);
+    return users(run.repo, run).includes(name);
   }
 
   // A write's milestone → { number, title } (GraphQL's comes looked up), null when it clears
@@ -1124,7 +1126,7 @@ export function createWriteChecks({
     // The needs-input label stays the listener's on the issues a run labels besides its own:
     // taking it off answers their questions and starts what waited for them (questions.mjs
     // labelInput()), which only an allowed user does.
-    const waiting = needsInputLabel()?.toLowerCase();
+    const waiting = needsInputLabel(run)?.toLowerCase();
     if (waiting && OTHERS_LABELLED.has(target.kind)) {
       const has = (list) => list.some((l) => l.toLowerCase() === waiting);
       const removed = has(change.labels_removed) || change.labels_removed.includes("*");
@@ -1185,7 +1187,7 @@ export function createWriteChecks({
     }
     if (write.assignees) {
       const assignees = await assigneesOf(write, target, get);
-      const refused = assignees.added.find((login) => !assignable(run.repo, login));
+      const refused = assignees.added.find((login) => !assignable(run, login));
       if (refused !== undefined) {
         return refusal(
           403,

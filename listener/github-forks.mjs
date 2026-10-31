@@ -384,6 +384,11 @@ export function createForkChecks({
   // (repo, path, expected) → GitHub's JSON for a GET, with the App's token for `repo`, or null
   // for a status in `expected` (github.mjs getJson()).
   get,
+  // What GitHub advertised to a run's git, shared with the other copies of the github service
+  // (../github/runs.mjs): { save(run, repo, entries), load(run, repo) → entries }, each entry
+  // [oid, OWN_REF or the pull requests' numbers]. A fetch's pack request may reach another copy
+  // than its advertisement did. None: this process's memory only.
+  shared = null,
   log = () => {},
   now = Date.now,
 }) {
@@ -678,9 +683,14 @@ export function createForkChecks({
   // of blobs, refused without asking GitHub.
   function checkFetch(run, repo, { wants, refs }) {
     return checked(run, repo, async () => {
-      const unknown = [...new Set(wants)].filter(
-        (oid) => !advertised.get(run)?.get(repo)?.has(oid),
-      );
+      const missing = () =>
+        [...new Set(wants)].filter((oid) => !advertised.get(run)?.get(repo)?.has(oid));
+      let unknown = missing();
+      // Advertised through another copy, maybe.
+      if (unknown.length && shared) {
+        merge(run, repo, await shared.load(run, repo));
+        unknown = missing();
+      }
       if (unknown.length > MAX_LOOKUPS) {
         return `this fetch wants ${unknown.length} objects no ref of ${repo} points at, which may be a fork's (a blob or tree isn't fetched on its own here: the clone is whole); fetch a branch of ${repo} instead, or: ${FORK_RUN}`;
       }
@@ -699,19 +709,37 @@ export function createForkChecks({
   // What GitHub advertised to the run's git for `repo` (advertisementReader()'s refs), kept for
   // its wants: for each object, whether a ref of the repository's own named it, else the pull
   // requests whose refs did.
-  function remember(run, repo, refs) {
+  // Resolves once `shared` has it too.
+  async function remember(run, repo, refs) {
+    const changed = merge(
+      run,
+      repo,
+      refs.map(({ oid, ref }) => {
+        const { pull } = refKind(ref);
+        return [oid, pull === undefined ? OWN_REF : [pull]];
+      }),
+    );
+    if (shared && changed.length) await shared.save(run, repo, changed);
+  }
+
+  // Entries ([oid, OWN_REF or pull request numbers]) into the run's memory of `repo` → those
+  // that changed it, as they are now.
+  function merge(run, repo, entries) {
     const byRepo = advertised.get(run) ?? new Map();
     advertised.set(run, byRepo);
     const oids = byRepo.get(repo) ?? new Map();
     byRepo.set(repo, oids);
-    for (const { oid, ref } of refs) {
+    const changed = [];
+    for (const [oid, kind] of entries) {
       const before = oids.get(oid);
       if (before === OWN_REF) continue;
       if (before === undefined && oids.size >= MAX_REFS) oids.delete(oids.keys().next().value);
-      const { pull } = refKind(ref);
-      if (pull === undefined) oids.set(oid, OWN_REF);
-      else oids.set(oid, [...new Set([...(before ?? []), pull])]);
+      const now = kind === OWN_REF ? OWN_REF : [...new Set([...(before ?? []), ...kind])];
+      if (now !== OWN_REF && before?.length === now.length) continue;
+      oids.set(oid, now);
+      changed.push([oid, now]);
     }
+    return changed;
   }
 
   // A restricted run's GraphQL operation (graphqlReads()) → null when it may go on, else
