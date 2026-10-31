@@ -1218,7 +1218,9 @@ state in `/data` until the split.
   (a k3s cluster with more than one), where two copies of a service run on different nodes and
   a ReadWriteOnce volume can't be on both. `?prefix=` changes what goes before every key
   (`deckhand:`), for two deployments sharing one Redis. `REDIS_PASSWORD` gives the password
-  when it isn't in the URL (from a Kubernetes Secret, say).
+  when it isn't in the URL (from a Kubernetes Secret, say). With `rediss://`, Redis's
+  certificate is checked against Node's CAs: a private one (a cluster's own, a self-signed
+  certificate) is trusted through `NODE_EXTRA_CA_CERTS`, the path of its PEM file.
 
 The Redis backend speaks to Redis 7 or later (or Valkey) by itself, without a package. Its
 leases and keys expire on Redis's clock, so copies on nodes whose clocks drift agree. Each
@@ -1226,11 +1228,13 @@ call is one Lua script, so Redis Cluster isn't supported: run a single primary, 
 if you want one. Configure it as follows (`redis.conf`, or the server's arguments):
 
 ```conf
-# Kept on disk: a lease's epoch and the streams' events must outlive a restart of Redis. With
-# everysec, a crash loses at most the last second.
+# Kept on disk: the keys and the streams' events must outlive a restart of Redis. With
+# everysec, a crash loses at most the last second. A lease's epoch is at least Redis's time in
+# ms, so a lost write, or a failover to a replica behind (its clock in sync, NTP), never hands
+# one out twice.
 appendonly yes
 appendfsync everysec
-# Never evict: an evicted lease would start again at epoch 1, an evicted event would be lost.
+# Never evict: an evicted key or event would be lost.
 maxmemory-policy noeviction
 # No other network than the services' own, and a user allowed the store's commands and keys
 # only (those its scripts call included: Redis checks them too). REDIS_PASSWORD, with
@@ -1239,7 +1243,9 @@ user default off
 user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +getrange +set +append +select +ping +quit
 ```
 
-`requirepass <a long random password>` (the `default` user) works too, but leaves it every
+The user's key pattern follows the prefix: with `?prefix=team-a:`, it is `~team-a:*`, else
+every call is refused with `NOPERM`. `requirepass <a long random password>` (the `default`
+user) works too, but leaves it every
 command, `FLUSHALL` and `CONFIG` included. A call Redis doesn't answer within 5 seconds fails,
 and the next one connects again: a copy that loses Redis learns in time that it can't renew
 its lease.

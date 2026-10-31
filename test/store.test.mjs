@@ -1,7 +1,7 @@
 // The store (lib/store.mjs): the shared suite on each backend, then what the file backend
 // adds, everything kept across a restart.
 import assert from "node:assert/strict";
-import { appendFileSync, readdirSync, readFileSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { openStore } from "../lib/store.mjs";
@@ -43,6 +43,24 @@ test("file: keys, leases, streams, consumers and blobs outlive a restart", async
   assert.ok(Number(id) > Number(ids[2]), "ids go on increasing");
   await after.appendBlob("log", "b");
   assert.equal((await after.readBlob("log")).toString(), "ab");
+});
+
+test("file: a state file taken back to an older one still gives a new, higher epoch", async (t) => {
+  const dir = tempDir(t);
+  let at = 1_000_000;
+  const now = () => at;
+  const before = fileStore({ dir, now });
+  const first = await before.acquire("orchestrator", "copy-a", { ttlMs: 1000 });
+  await before.release("orchestrator", "copy-a", first.epoch);
+  const older = readFileSync(join(dir, "state.json"));
+  at += 10;
+  const second = await before.acquire("orchestrator", "copy-b", { ttlMs: 1000 });
+  // The disk lost copy b's lease: the next start reads the state from before it.
+  writeFileSync(join(dir, "state.json"), older);
+  at += 10;
+  const after = fileStore({ dir, now });
+  const third = await after.acquire("orchestrator", "copy-a", { ttlMs: 1000 });
+  assert.ok(third.epoch > second.epoch, `${third.epoch} after ${second.epoch}`);
 });
 
 test("file: an event cut short by a crash is dropped, and the stream goes on", async (t) => {

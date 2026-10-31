@@ -40,11 +40,10 @@ test("resp: replies parsed whatever the chunks they arrive in", () => {
   assert.equal(replies.length, 7);
 });
 
-test("resp: a large reply in many chunks is joined once", () => {
+// The bytes Buffer.concat() copies while `wire` is fed in `size`-byte chunks, and the replies.
+function feedInChunks(wire, size) {
   const replies = [];
   const feed = replyParser((reply) => replies.push(reply));
-  const body = Buffer.alloc(4 * 1024 * 1024, 7);
-  const wire = Buffer.concat([Buffer.from(`$${body.length}\r\n`), body, Buffer.from("\r\n:1\r\n")]);
   const concat = Buffer.concat;
   let copied = 0;
   Buffer.concat = (list, ...rest) => {
@@ -53,12 +52,40 @@ test("resp: a large reply in many chunks is joined once", () => {
     return joined;
   };
   try {
-    for (let i = 0; i < wire.length; i += 16 * 1024) feed(wire.subarray(i, i + 16 * 1024));
+    for (let i = 0; i < wire.length; i += size) feed(wire.subarray(i, i + size));
   } finally {
     Buffer.concat = concat;
   }
+  return { replies, copied };
+}
+
+test("resp: a large reply in many chunks is joined once", () => {
+  const body = Buffer.alloc(4 * 1024 * 1024, 7);
+  const wire = Buffer.concat([Buffer.from(`$${body.length}\r\n`), body, Buffer.from("\r\n:1\r\n")]);
+  const { replies, copied } = feedInChunks(wire, 16 * 1024);
   assert.deepEqual(replies, [body, 1]);
   assert.ok(copied < 2 * wire.length, `${copied} bytes copied for ${wire.length}`);
+});
+
+test("resp: a long array (a stream read) is read once, not again per chunk", () => {
+  // 200 elements of 16 KB in an array of id and event pairs, as the read script answers.
+  const events = Array.from({ length: 200 }, (_, i) => Buffer.alloc(16 * 1024, i));
+  const parts = [Buffer.from(`*${events.length * 2}\r\n`)];
+  events.forEach((event, i) => {
+    parts.push(Buffer.from(`$${String(i).length + 2}\r\n${i}-0\r\n$${event.length}\r\n`));
+    parts.push(event, Buffer.from("\r\n"));
+  });
+  parts.push(Buffer.from(":7\r\n+OK\r\n"));
+  const wire = Buffer.concat(parts);
+  const array = events.flatMap((event, i) => [Buffer.from(`${i}-0`), event]);
+  for (const size of [16 * 1024, 10_000, 7]) {
+    const { replies, copied } = feedInChunks(wire, size);
+    assert.deepEqual(replies, [array, 7, "OK"], `chunks of ${size}`);
+    assert.ok(
+      copied < 2 * wire.length,
+      `chunks of ${size}: ${copied} bytes copied for ${wire.length}`,
+    );
+  }
 });
 
 test("resp: what isn't a Redis reply throws", () => {
@@ -334,6 +361,29 @@ test(
     // 1-3 were pending and trimmed: gone, as is 4.
     assert.deepEqual(events(await store.read("progress", "edge", { count: 1 })), [5]);
     assert.deepEqual(events(await store.read("progress", "edge")), [5, 6]);
+  },
+);
+
+test(
+  "redis: a lease Redis lost the last writes of still gets a new, higher epoch",
+  { skip },
+  async (t) => {
+    const prefix = freshPrefix(t);
+    const store = redisStore({ url: redisUrl, prefix });
+    const client = redisClient(redisUrl);
+    t.after(() => Promise.all([store.close(), client.close()]));
+    const key = `${prefix}l:orchestrator`;
+    const first = await store.acquire("orchestrator", "copy-a", { ttlMs: 10_000 });
+    await store.release("orchestrator", "copy-a", first.epoch);
+    const saved = (await client.call("HGETALL", key)).map(String);
+    await sleep(5);
+    const second = await store.acquire("orchestrator", "copy-b", { ttlMs: 10_000 });
+    assert.ok(second.epoch > first.epoch);
+    // Redis crashed before copy b's lease was on disk: it is back to the released one.
+    await client.call("HSET", key, ...saved);
+    await sleep(5);
+    const third = await store.acquire("orchestrator", "copy-a", { ttlMs: 10_000 });
+    assert.ok(third.epoch > second.epoch, `${third.epoch} after ${second.epoch}`);
   },
 );
 
