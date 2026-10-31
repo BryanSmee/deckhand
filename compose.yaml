@@ -52,7 +52,12 @@ services:
     # as the orchestrator (and edge), the runner's, the github service's, the policy service's and
     # the models service's (docs/security.md#the-services-networks).
     networks:
-      [default, broker-orchestrator, runner, github-orchestrator, policy, models-orchestrator]
+      - default
+      - broker-orchestrator
+      - runner
+      - github-orchestrator
+      - policy
+      - models-orchestrator
     # How the runner finds it, to join it to each run's network (its gateways and the agents'
     # endpoints, BROKER_URL below).
     labels:

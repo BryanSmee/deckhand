@@ -109,9 +109,10 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   assert.deepEqual(runsNetworkPeers(compose.services), ["egress"]);
 });
 
-// The broker, the runner, the models service and the github service tell their callers apart by the network a call
-// arrives on (SERVICE_NETWORKS): each caller's subnet there has to be the one of a network it
-// shares with that service, and with no other, or another service's calls would count as its own.
+// The broker, the runner, the models service and the github service tell their callers apart by
+// the network a call arrives on (SERVICE_NETWORKS): each caller's subnet there has to be the one
+// of a network it shares with that service, and with no other, or another service's calls would
+// count as its own.
 for (const callee of ["broker", "runner", "models", "github"]) {
   test(`compose.yaml: the ${callee}'s SERVICE_NETWORKS names each caller's own network to it`, () => {
     const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
@@ -228,11 +229,12 @@ test("the check fails on a network that joins too much", () => {
       "cache: on default, which it doesn't call over",
     ],
   );
-  // The listener on a runs' network; the proxy on an internal network it calls nothing over.
+  // A service the proxy calls on a runs' network; the proxy on an internal network it calls
+  // nothing over.
   assert.deepEqual(
     problems({
       services: {
-        listener: { networks: ["runs", "outside"] },
+        github: { networks: ["runs", "outside"] },
         egress: { networks: ["runs", "lonely"] },
       },
       networks: {
@@ -242,7 +244,7 @@ test("the check fails on a network that joins too much", () => {
       },
     }),
     [
-      "listener: on the runs' network runs, which only the proxy may be on",
+      "github: on the runs' network runs, which only the proxy may be on",
       "egress: on lonely, which it doesn't call over",
     ],
   );

@@ -24,7 +24,6 @@ import { createCallers } from "../broker/callers.mjs";
 import { createAppHolder } from "../github/app.mjs";
 import { createGithubService } from "../github/service.mjs";
 import { signServiceToken } from "../lib/service-token.mjs";
-import { loadConfig } from "../listener/config.mjs";
 import { createGitHub } from "../listener/github.mjs";
 import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs";
 import { createPolicies } from "../listener/policies.mjs";
