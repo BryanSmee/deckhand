@@ -114,6 +114,13 @@ docs/         setup, per-repo config reference, security model, architecture
   any (issue #151). A repo's `dockerfile` is built only with `allow_dockerfile`, its `preview`
   hook runs only with `allow_preview`, branch Dockerfiles only with
   `allow_branch_docker_images` (all three in the grants folder), never for fork pull requests.
+- **Policies: a decision is allowed when an allow rule matches and no deny rule does** (a deny
+  always wins; no allow, refused; a policy error, refused: `listener/policies.mjs`). The
+  operator's layer (Deckhand's `policy/` under the grants folder's `policy/`, by file name) has
+  the allow rules that are the ceiling. A repo's `.deckhand/policy/` is a layer of its own, its
+  packages moved under `deckhand_repository` (`namespaced()`): it can only narrow that
+  ceiling (its deny rules apply to every run), except for its own modes, which need its allow
+  rules and the operator's.
 - **No GitHub token in a sandbox:** it holds only a run token (and its agent's token), signed
   by the broker, bound to its network or pod and dead with the run (`lib/tokens.mjs`,
   docs/security.md, Run tokens). The egress proxy relays its GitHub calls to the listener's GitHub gateway

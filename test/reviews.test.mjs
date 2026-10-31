@@ -5,7 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { ciState } from "../listener/ci.mjs";
-import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
+import { allowOnly, builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   CI_NEXT,
@@ -422,8 +422,9 @@ test("createReviews: off without review.on, and the repo's users narrow the oper
   assert.equal(narrowed.accepted[0].author, undefined);
 });
 
-// Deckhand's policy/review.rego, with the real opa, over the repo's `review` file if any.
-function reviewPolicies(t, repoFile = null) {
+// Deckhand's policy/review.rego, with the real opa, replaced by the operator's `operatorFile`
+// if any, and the repo's own review.rego, `repoFile`, if any.
+function reviewPolicies(t, operatorFile = null, repoFile = null) {
   const github = async (repo, method, path) => {
     if (path === "/repos/org/repo") return Response.json({ full_name: "org/repo" });
     if (path.startsWith("/repos/org/repo/pulls/5/files?")) return Response.json([]);
@@ -443,15 +444,16 @@ function reviewPolicies(t, repoFile = null) {
     config: {},
     github,
     run: opaRunner(),
-    readBuiltIn: () => new Map([["review.rego", builtInPolicies().get("review.rego")]]),
-    readOperator: () => new Map(),
+    readBuiltIn: () =>
+      new Map([...allowOnly(), ["review.rego", builtInPolicies().get("review.rego")]]),
+    readOperator: () => new Map(operatorFile === null ? [] : [["review.rego", operatorFile]]),
     tmp: tempDir(t),
   });
   return { github, policies };
 }
 
 test(
-  "the real opa: review.rego skips other bots' pull requests, unless the repo's file drops it",
+  "the real opa: review.rego skips other bots' pull requests, unless the operator's file drops it",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const dependabot = delivery("ready_for_review", {}, "dependabot[bot]");
@@ -460,16 +462,20 @@ test(
     await s.reviews.consider("pull_request", dependabot, (why) => skips.push(why));
     assert.equal(s.accepted.length, 0);
     assert.deepEqual(skips, [
-      "review: #5, the policies refuse it (`deny_review`): `dependabot[bot] is a bot: its pull requests aren't reviewed unless .deckhand/policy/review.rego lets them`",
+      "review: #5, the policies refuse it (`deny_review`): `dependabot[bot] is a bot: its pull requests aren't reviewed unless the operator's policy/review.rego lets them`",
     ]);
+    // A repo's review.rego with only its package replaces nothing: still skipped.
+    const repoOnly = setup(t, undefined, reviewPolicies(t, null, "package deckhand\n"));
+    await repoOnly.reviews.consider("pull_request", dependabot);
+    assert.equal(repoOnly.accepted.length, 0);
     // Deckhand's own and an allowed user's are reviewed.
     for (const login of ["deckhand-app[bot]", "alice"]) {
       const own = setup(t, undefined, reviewPolicies(t));
       await own.reviews.consider("pull_request", delivery("ready_for_review", {}, login));
       assert.equal(own.accepted.length, 1, login);
     }
-    // A repo's review.rego with only its package: the bot's pull request is reviewed, by nobody
-    // the allowlist checks again when it runs.
+    // The operator's review.rego with only its package: the bot's pull request is reviewed, by
+    // nobody the allowlist checks again when it runs.
     const broad = setup(t, undefined, reviewPolicies(t, "package deckhand\n"));
     await broad.reviews.consider("pull_request", dependabot);
     assert.equal(broad.accepted.length, 1);
@@ -490,7 +496,7 @@ test(
       }
       assert.deepEqual(got, reviewed, file);
       const { policies } = reviewPolicies(t, file);
-      assert.deepEqual(await policies.checkRepo("org/repo", "main"), { errors: [], warnings: [] });
+      assert.deepEqual(await policies.checkOperator(), { errors: [], warnings: [] });
     }
   },
 );

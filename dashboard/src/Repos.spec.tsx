@@ -144,11 +144,10 @@ beforeEach(() => {
       policies: {
         files: [
           makePolicyFile({ name: "size.rego", source: "operator", rules: ["deny_merge"] }),
-          makePolicyFile({ name: "base.rego", source: "operator", active: false }),
+          makePolicyFile({ name: "base.rego", source: "operator" }),
           makePolicyFile({
             name: "base.rego",
             source: "repo",
-            replaces: "operator",
             rules: ["deny_merge", "deny_review"],
             url: "https://github.com/org/policed/blob/main/.deckhand/policy/base.rego",
           }),
@@ -156,6 +155,7 @@ beforeEach(() => {
         ],
         errors: [
           {
+            layer: "repo",
             file: "base.rego",
             row: 4,
             message: "rego_parse_error: unexpected eof token",

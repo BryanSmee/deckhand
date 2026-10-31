@@ -88,6 +88,59 @@ test("the tab counts the decisions and lists them newest first; the newest denie
   expect(screen.queryByRole("region", { name: "Policy decisions, newest first" })).toBeNull();
 });
 
+test("what each layer said: its allow and deny rules, and the files that define them", () => {
+  const refused = decision({
+    decision: "link_branch",
+    rule: "deny_link_branch",
+    denied: true,
+    messages: ["no rule of .deckhand/policy/ allows linking a branch for a `plan` run"],
+    layers: [
+      {
+        layer: "operator",
+        allow: true,
+        denies: [],
+        allowFiles: ["allow.rego"],
+        denyFiles: ["gh-linked-branch.rego"],
+        error: null,
+      },
+      { layer: "repo", allow: false, denies: [], allowFiles: [], denyFiles: [], error: null },
+    ],
+  });
+  const merge = decision({
+    denied: true,
+    messages: ["too big"],
+    layers: [
+      { layer: "operator", allow: true, denies: [], allowFiles: [], denyFiles: [], error: null },
+      {
+        layer: "repo",
+        allow: null,
+        denies: ["too big"],
+        allowFiles: [],
+        denyFiles: ["size.rego"],
+        error: null,
+      },
+    ],
+    at: state.now - 120_000,
+  });
+  render(<Dashboard state={withTask({ decisions: [refused, merge] })} error={null} />);
+  openTab();
+  const [link, merged] = decisions();
+  expect(link.textContent).toContain("allow_link_branch · deny_link_branch · 1 reason");
+  const said = within(link).getByRole("list", { name: "What each layer said" });
+  const [operator, repo] = within(said).getAllByRole("listitem");
+  expect(operator.textContent).toBe(
+    "Operatorallow_link_branch matched (allow.rego)deny_link_branch nothing (gh-linked-branch.rego)",
+  );
+  expect(repo.textContent).toBe("Repoallow_link_branch no rule matcheddeny_link_branch nothing");
+  fireEvent.click(merged.querySelector("summary")!);
+  const [, own] = within(
+    within(merged).getByRole("list", { name: "What each layer said" }),
+  ).getAllByRole("listitem");
+  expect(own.textContent).toBe(
+    "Repoallow_merge not asked: not one of the repo's modesdeny_merge 1 reason (size.rego)",
+  );
+});
+
 test("the reviewers' decision, by its own name", () => {
   const request = decision({ decision: "request_review", rule: "deny_request_review" });
   render(<Dashboard state={withTask({ decisions: [request] })} error={null} />);

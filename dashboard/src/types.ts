@@ -110,15 +110,18 @@ export interface PullRequest {
   commits?: number;
 }
 
-// What a repo's policies (Rego `deny_*` rules, listener/policies.mjs) decided about a task's
-// pull request: its review, fix run or auto-merge (listener/reviews.mjs), or the reviewers
-// requested on it (listener/reviewers.mjs). `messages`: the reasons, capped and redacted; a
-// failure is one "policy error: …".
+// What a repo's policies (Rego `allow_*` and `deny_*` rules, listener/policies.mjs) decided
+// about a task's pull request: its review, fix run or auto-merge (listener/reviews.mjs), or the
+// reviewers requested on it (listener/reviewers.mjs). `messages`: the reasons, capped and
+// redacted (a deny rule's, or which layer no allow rule matched); a failure is one
+// "policy error: …". `rule`: its deny rule's name, as before allow rules.
 export interface PolicyDecision {
   decision: "merge" | "review" | "fix" | "link_branch" | "request_review";
   rule: string;
   denied: boolean;
   messages: string[];
+  // What each layer said; absent on decisions kept before allow rules (issue #494).
+  layers?: PolicyLayer[];
   // The pull request it was about; the issue, for a linked branch (listener/linked-branch.mjs).
   pr: number;
   at: number;
@@ -135,6 +138,21 @@ export interface PolicyDecision {
 export interface PolicyGate {
   name: string;
   passed: boolean;
+}
+
+// One layer's say on a decision (listener/policies.mjs evaluated()): the operator's (Deckhand's
+// defaults and the grants folder's policies) or the repo's (.deckhand/policy/), each evaluated
+// apart. `allow`: whether its `allow_<decision>` matched; null when it isn't asked (the repo's,
+// on a decision about a built-in mode's run). `denies`: its `deny_<decision>` messages.
+// `allowFiles`, `denyFiles`: its files that define each rule, which decided. `error`: why it
+// couldn't be evaluated ("policy error: …"), then nothing else counts.
+export interface PolicyLayer {
+  layer: "operator" | "repo";
+  allow: boolean | null;
+  denies: string[];
+  allowFiles: string[];
+  denyFiles: string[];
+  error: string | null;
 }
 
 // The task's last `/mode policy` dry run (listener/task-modes.mjs): never a decision.
@@ -599,16 +617,17 @@ export interface RepoConfig {
   readAt: number;
 }
 
-// A policy file: Deckhand's own defaults ("deckhand", in its image), the operator's, or the
-// repo's, each layer over the one before. `replaces`: the source of the file of a layer below
-// with its name, which it replaces (the nearest), null for none. That file is listed too, not
-// `active`: no decision evaluates it. `rules`: the
-// `deny_*` rules it defines. `url`: the repo's file on GitHub. `text`: its source, redacted, cut
-// at 20 KB (`truncated`); sent by the config endpoint only, never in api/state.
+// A policy file: Deckhand's own defaults ("deckhand", in its image) and the operator's, one
+// layer where the operator's file replaces Deckhand's of its name, or the repo's, a layer of its
+// own that replaces nothing. `replaces`: "deckhand" for an operator's file that replaces one,
+// null for none. The replaced file is listed too, not `active`: no decision evaluates it.
+// `rules`: the `allow_*` and `deny_*` rules it defines. `url`: the repo's file on GitHub. `text`:
+// its source, redacted, cut at 20 KB (`truncated`); sent by the config endpoint only, never in
+// api/state.
 export interface PolicyFile {
   name: string;
   source: "deckhand" | "operator" | "repo";
-  replaces: "deckhand" | "operator" | null;
+  replaces: "deckhand" | null;
   active: boolean;
   rules: string[];
   url: string | null;
@@ -616,9 +635,14 @@ export interface PolicyFile {
   truncated: boolean;
 }
 
-// An error of the config check: `file` and `row` where opa placed it (both null when it
-// didn't: a timeout, a folder that can't be read). `text`: the whole error on one line.
+// An error of the config check: `layer`, the one whose check said it (null: none, a folder that
+// can't be read), `file` and `row` where opa placed it (both null when it didn't: a timeout, a
+// folder that can't be read). `text`: the whole error on one line.
 export interface PolicyError {
+  layer?: "operator" | "repo" | null;
+  // A repo's allow rule for a decision none of its modes makes: an error of its config check,
+  // which refuses nothing, being ignored.
+  ignored?: boolean;
   file: string | null;
   row: number | null;
   message: string;
@@ -626,7 +650,9 @@ export interface PolicyError {
 }
 
 // `errors`: the config check's (compile errors, a folder that can't be read): every decision a
-// policy is asked for refuses until they are fixed. `warnings`: rules nobody evaluates.
+// policy is asked for refuses until they are fixed, but a repo's ignored allow rule (`ignored`),
+// which refuses nothing. `warnings`: rules nobody evaluates, a repo file named as one it no
+// longer replaces.
 export interface Policies {
   files: PolicyFile[];
   errors: PolicyError[];

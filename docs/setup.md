@@ -113,6 +113,17 @@ list (`not input.target.kind in {…}`) now refuses those reads too: guard it wi
 `input.action != "read_checks"` ([Reading CI's checks](repo-config.md#reading-cis-checks)).
 `/mode policy` on a pull request shows whether one does.
 
+Upgrading to allow rules ([Policies](repo-config.md#policies)): a decision is now allowed only
+when an `allow_*` rule matches, and Deckhand's `policy/allow.rego` allows each one, so nothing
+changes for the built-in modes. A `policy/allow.rego` of yours in the grants folder replaces
+it: keep its rules unless you mean to refuse. A repository's `.deckhand/policy/` is now a layer
+of its own: its files no longer replace yours or Deckhand's by name (one that did, to broaden a
+default, now only adds its deny rules: move the broadening to your grants folder), and its own
+`modes:` get nothing until it allows them (`allow_github`, `allow_link_branch`,
+`allow_request_review`). Rewrite the policies of repositories with their own modes in the same
+release; their onboarding check and Policies tab say what no longer applies, as they do a
+repository file that doesn't start with its `package` line (after comments only), now refused.
+
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
 starts at once when a pull request that closes the issue (`Closes #77`) is merged into the

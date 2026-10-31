@@ -173,6 +173,39 @@
   overflow-wrap: anywhere;
 }
 
+/* What each layer said: one line each, its name first. */
+.layers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.layer {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 2px 12px;
+  overflow-wrap: anywhere;
+}
+
+.layer > b {
+  grid-row: span 2;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.layer > span {
+  grid-column: 2;
+}
+
+.unallowed {
+  color: var(--err);
+}
+
 .gates {
   display: flex;
   flex-wrap: wrap;

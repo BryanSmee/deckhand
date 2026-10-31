@@ -3,7 +3,7 @@
 // `/mode policy` dry run, and a link to the repository's policies.
 import { dayTime, plural } from "./format";
 import { formatRoute } from "./route";
-import type { PolicyDecision, Task } from "./types";
+import type { PolicyDecision, PolicyLayer, Task } from "./types";
 import { buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { StatusBadge } from "./ui/Status";
@@ -157,6 +157,8 @@ function Decision({
 }) {
   const error = isPolicyError(d);
   const verdict = error ? "Policy error" : d.denied ? "Denied" : "Allowed";
+  // Its two rules, once allow rules are kept with it; its deny rule before.
+  const rule = d.layers ? `allow_${d.decision} · deny_${d.decision}` : d.rule;
   return (
     <details class={styles.decision} open={open}>
       <summary class={styles.summary}>
@@ -169,7 +171,7 @@ function Decision({
         </span>
         <StatusBadge tone={d.denied ? "err" : "done"} label={verdict} class={styles.verdict} />
         <span class={styles.rule}>
-          <code class={styles.key}>{d.rule}</code>
+          <code class={styles.key}>{rule}</code>
           {d.messages.length > 0 && !error && ` · ${plural(d.messages.length, "reason")}`}
           {error && ` · ${d.messages[0].replace(/^policy error:?\s*/i, "")}: denied, fail closed`}
         </span>
@@ -186,6 +188,13 @@ function Decision({
           </ul>
         )}
         {!d.messages.length && <p class={styles.note}>No rule denied it.</p>}
+        {!!d.layers?.length && (
+          <ul class={styles.layers} aria-label="What each layer said">
+            {d.layers.map((l) => (
+              <Layer key={l.layer} decision={d.decision} layer={l} />
+            ))}
+          </ul>
+        )}
         {!!d.gates?.length && (
           <div class={styles.gates}>
             <span class={styles.note}>Built-in gates first:</span>
@@ -204,6 +213,38 @@ function Decision({
         {d.input !== undefined && <Input decision={d} />}
       </div>
     </details>
+  );
+}
+
+// What a layer said of `decision`: its allow rule's result and its deny rule's, each with the
+// files that define it.
+function Layer({ decision, layer: l }: { decision: string; layer: PolicyLayer }) {
+  const from = (files: string[]) => (files.length ? ` (${files.join(", ")})` : "");
+  const allow =
+    l.allow === null
+      ? "not asked: not one of the repo's modes"
+      : l.allow
+        ? `matched${from(l.allowFiles)}`
+        : `no rule matched${from(l.allowFiles)}`;
+  const deny = l.denies.length
+    ? `${plural(l.denies.length, "reason")}${from(l.denyFiles)}`
+    : `nothing${from(l.denyFiles)}`;
+  return (
+    <li class={styles.layer}>
+      <b>{l.layer === "repo" ? "Repo" : "Operator"}</b>
+      {l.error ? (
+        <span class={styles.text}>{l.error}</span>
+      ) : (
+        <>
+          <span class={`${styles.text} ${l.allow === false ? styles.unallowed : ""}`}>
+            <code class={styles.key}>allow_{decision}</code> {allow}
+          </span>
+          <span class={styles.text}>
+            <code class={styles.key}>deny_{decision}</code> {deny}
+          </span>
+        </>
+      )}
+    </li>
   );
 }
 

@@ -46,7 +46,14 @@ import {
 import { autoMergeProblems, previewProblem } from "./grants.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
-import { denyKept, INPUT_VERSION, isPolicyError, passed, pullInput, RULES } from "./policies.mjs";
+import {
+  DECISIONS,
+  denyKept,
+  INPUT_VERSION,
+  isPolicyError,
+  passed,
+  pullInput,
+} from "./policies.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
@@ -957,13 +964,13 @@ const CI_GRACE_MS = 60_000;
 const SOURCES = { deckhand: "Deckhand's default", operator: "operator", repo: "repo" };
 const OWNERS = { deckhand: "Deckhand's", operator: "the operator's" };
 
-// The reply to `/mode policy` (reviews' dryRun()): which files apply, each rule's result, and
-// the input in a collapsed block. Messages are quoted as code, as policyWhy()'s. `files`: none,
-// no policy applies here.
-// `results[]`: { rule, defined, messages, sample, input, nobody }: `sample` names the sample
-// write a `deny_github` result is about (or the branch a `deny_link_branch` one is), `input`
-// its input, shown apart from the merge's (`input`); `nobody`, why `deny_request_review` would
-// request nobody whatever it says.
+// The reply to `/mode policy` (reviews' dryRun()): which files apply, each decision's result
+// and what each layer said, and the input in a collapsed block. Messages are quoted as code, as
+// policyWhy()'s. `files`: none, no policy applies here.
+// `results[]`: { decision, messages, layers, sample, input, nobody }: `layers`, policies.mjs
+// evaluated()'s; `sample` names the sample write a `github` result is about (or the branch a
+// `link_branch` one is), `input` its input, shown apart from the merge's (`input`); `nobody`,
+// why `request_review` would request nobody whatever the policies say.
 export function dryRunText({ number, sha = null, files, errors = [], results = [], input = null }) {
   const head = `**Policy dry run** on #${number}${sha ? ` at ${short(sha)}` : ""}: nothing was reviewed, fixed or merged.`;
   if (!files.length) {
@@ -971,27 +978,32 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
   }
   const source = (f) =>
     `${SOURCES[f.source]}${f.replaces ? `, replaces ${OWNERS[f.replaces]}` : ""}`;
-  const parts = [head, `Policies: ${files.map((f) => `\`${f.name}\` (${source(f)})`).join(", ")}.`];
+  const parts = [
+    head,
+    `Policies: ${files.map((f) => `\`${f.name}\` (${source(f)})`).join(", ")}.`,
+    "A decision is allowed when an `allow_*` rule of the operator's matches (and, for the repository's own modes, one of the repository's), and no `deny_*` rule does.",
+  ];
   if (errors.length) {
     parts.push(`The config check has errors:\n\n${errors.map((e) => `- ${quote(e)}`).join("\n")}`);
   }
-  const result = ({ rule, defined, messages, sample, nobody }) => {
-    const name = `\`${rule}\`${sample ? ` (sample: ${sample})` : ""}`;
-    if (messages.length) return `- ${name}: **denies**: ${messages.map(quote).join(", ")}`;
-    const allows = defined ? "allows" : "allows (no file defines it)";
-    // deny_request_review where the listener wouldn't ask (reviews' dryRun()).
-    return `- ${name}: ${allows}${nobody ? `, but nobody would be requested: ${nobody}` : ""}`;
+  const result = ({ decision, messages, layers = [], sample, nobody }) => {
+    const name = `\`${decision}\`${sample ? ` (sample: ${sample})` : ""}`;
+    const said = messages.length
+      ? `- ${name}: **refused**: ${messages.map(quote).join(", ")}`
+      : // request_review where the listener wouldn't ask (reviews' dryRun()).
+        `- ${name}: allowed${nobody ? `, but nobody would be requested: ${nobody}` : ""}`;
+    return [said, ...layers.map((l) => layerLine(decision, l))].join("\n");
   };
   parts.push(results.map(result).join("\n"));
   const samples = results.filter((r) => r.sample);
   if (samples.length) {
     parts.push(
-      "The sample lines (`deny_github`'s writes and read, `deny_link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
+      "The sample lines (`github`'s writes and read, `link_branch`'s branch) are not decisions on this pull request: they aren't counted as denials.",
     );
   }
   parts.push(
     details(
-      "The input (`deny_merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`, request_review its own: `reviewers`, `when` and the mode of the run that opened it; no review here)",
+      "The input (`merge`'s: review and fix get the same without `checks`, fix with its `round` and `rounds`, request_review its own: `reviewers`, `when` and the mode of the run that opened it; no review here)",
       input,
     ),
   );
@@ -1000,6 +1012,21 @@ export function dryRunText({ number, sha = null, files, errors = [], results = [
     parts.push(details("The samples' inputs", inputs));
   }
   return parts.join("\n\n");
+}
+
+// What a layer said of `decision` (policies.mjs evaluated()), as a line under its result: its
+// allow and deny rules, and the files that define each.
+function layerLine(decision, l) {
+  const name = l.layer === "repo" ? "repository" : "operator";
+  if (l.error) return `  - ${name}: ${quote(l.error)}`;
+  const from = (list) =>
+    list.length ? ` (${list.map((f) => `\`${f}\``).join(", ")})` : " (no file defines it)";
+  const allow =
+    l.allow === null
+      ? `\`allow_${decision}\` not asked (not one of its modes)`
+      : `\`allow_${decision}\` ${l.allow ? "allows" : "allows nothing"}${from(l.allowFiles)}`;
+  const deny = `\`deny_${decision}\` ${l.denies.length ? `denies (${l.denies.length})` : "denies nothing"}${from(l.denyFiles)}`;
+  return `  - ${name}: ${allow}; ${deny}`;
 }
 
 // `value` as JSON in a collapsed block under `summary`, cut at DRY_RUN_INPUT, fenced longer
@@ -2438,7 +2465,7 @@ export function createReviews({
   async function dryRun({ repo, base, number }) {
     if (!policies) return { text: dryRunText({ number, files: [] }), denials: 0 };
     const described = await policies.describe(repo, base);
-    // What deny() evaluates: a file another layer replaces isn't.
+    // What decide() evaluates: a file the operator's replaces isn't.
     const files = described.files.filter((f) => f.active);
     const errors = described.errors.map((e) => e.text);
     const texts = described.policies;
@@ -2475,27 +2502,30 @@ export function createReviews({
       now,
     });
     const results = [];
-    for (const rule of RULES) {
-      const defined = files.some((f) => f.rules.includes(rule));
+    // `decision` on the input `build()` gives → { messages, layers }.
+    const ask = async (decision, build) => {
+      const { messages, layers } = await policies.evaluated(decision, repo, texts, build);
+      return { decision, messages, layers };
+    };
+    for (const decision of DECISIONS) {
       // No write to decide on: a comment on this pull request, by a run whose own it is and
       // by a brainstorm elsewhere.
-      if (rule === "deny_github") {
+      if (decision === "github") {
         for (const sample of githubSamples(repo, pr, settings?.modes)) {
-          const messages = await policies.denied(rule, repo, texts, () => sample.input);
+          const said = await ask(decision, () => sample.input);
           const input = { version: INPUT_VERSION, ...sample.input };
-          results.push({ rule, defined, messages, sample: sample.what, input });
+          results.push({ ...said, sample: sample.what, input });
         }
         continue;
       }
       // No branch to link either: one for the issue the pull request closes, by its work run.
-      if (rule === "deny_link_branch") {
+      if (decision === "link_branch") {
         const sample = linkSample(repo, pr, found);
-        const messages = await policies.denied(rule, repo, texts, () => sample.input);
+        const said = await ask(decision, () => sample.input);
         const input = { version: INPUT_VERSION, ...sample.input };
-        results.push({ rule, defined, messages, sample: sample.what, input });
+        results.push({ ...said, sample: sample.what, input });
         continue;
       }
-      const decision = rule.replace(/^deny_/, "");
       // As the listener would ask when it turns ready, about the run that opened it.
       if (decision === "request_review") {
         const task = taskKey(repo, issue ?? prId(number));
@@ -2511,14 +2541,14 @@ export function createReviews({
           bot: config.bot,
           now,
         });
-        const messages = await policies.denied(rule, repo, texts, () => own);
-        // An "allows" the listener would never act on: it requests nobody here.
+        const said = await ask(decision, () => own);
+        // An "allowed" the listener would never act on: it requests nobody here.
         const nobody = !reviewers.length
           ? "`review.request` names no allowed user"
           : !ownReady(config, repo, pr)
             ? "not Deckhand's own ready pull request"
             : null;
-        results.push({ rule, defined, messages, ...(nobody && { nobody }) });
+        results.push({ ...said, ...(nobody && { nobody }) });
         continue;
       }
       const own = { ...input, decision };
@@ -2531,8 +2561,7 @@ export function createReviews({
           rounds: limitOf(settings, entry),
         });
       }
-      const messages = await policies.denied(rule, repo, texts, () => own);
-      results.push({ rule, defined, messages });
+      results.push(await ask(decision, () => own));
     }
     const text = dryRunText({
       number,

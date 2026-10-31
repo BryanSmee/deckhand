@@ -17,7 +17,7 @@ import {
   runTraits,
 } from "../listener/github-writes.mjs";
 import { ceilingOf, MODES } from "../listener/modes.mjs";
-import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
+import { allowOnly, builtInPolicies, createPolicies, opaRunner } from "../listener/policies.mjs";
 import { policyEngine, sandboxAt, serve, tempDir, hasOpa } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
@@ -897,13 +897,14 @@ test("a run edits and deletes the comments it posted, never the listener's, anot
 });
 
 test(
-  "the real opa: Deckhand's gh-own-comments.rego lets work runs edit their comments, and a repo's same-name file lets them delete",
+  "the real opa: Deckhand's gh-own-comments.rego lets work runs edit their comments, the operator's same-name file lets them delete",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     // Deckhand's own, as the image ships it.
     const rego = builtInPolicies().get("gh-own-comments.rego");
-    // The repo's own files (name → text) in its .deckhand/policy/.
+    // The repo's own files (name → text) in its .deckhand/policy/, and the operator's.
     let files = {};
+    let operator = {};
     const policies = createPolicies({
       config: {},
       github: async (repo, method, path) => {
@@ -920,8 +921,8 @@ test(
         return new Response("{}", { status: 404 });
       },
       run: opaRunner(),
-      readOperator: () => new Map(),
-      readBuiltIn: () => new Map([["gh-own-comments.rego", rego]]),
+      readOperator: () => new Map(Object.entries(operator)),
+      readBuiltIn: () => new Map([...allowOnly(), ["gh-own-comments.rego", rego]]),
       tmp: tempDir(t),
       now: (() => {
         let clock = 0;
@@ -942,28 +943,31 @@ test(
     };
     const edit = write("PATCH", "repos/org/repo/issues/comments/3000000001", { body: "x" });
     const remove = write("DELETE", "repos/org/repo/issues/comments/3000000001");
-    assert.equal(await check(posted("work"), edit), null);
-    assert.deepEqual(await check(posted("work"), remove), {
+    const deleting = {
       status: 403,
       message:
-        "the policies refuse it (deny_github): a run doesn't delete its comments unless .deckhand/policy/gh-own-comments.rego lets it: edit yours instead",
+        "the policies refuse it (deny_github): a run doesn't delete its comments unless the operator's policy/gh-own-comments.rego lets it: edit yours instead",
+    };
+    assert.equal(await check(posted("work"), edit), null);
+    assert.deepEqual(await check(posted("work"), remove), deleting);
+    // The repository's own modes: nothing, until the repository allows them.
+    assert.deepEqual(await check(posted("deploy"), edit), {
+      status: 403,
+      message:
+        "the policies refuse it (deny_github): no rule of .deckhand/policy/ allows `edit` on `created_comment` for a `deploy` run",
     });
-    // The repository's own modes: neither, unless it says so.
-    assert.match(
-      (await check(posted("deploy"), edit)).message,
-      /a deploy run doesn't change its comments unless/,
-    );
-    // Other writes aren't this file's.
-    assert.equal(
-      await check(posted("deploy"), write("POST", "repos/org/repo/issues/1/comments", {})),
-      null,
-    );
-    // A repository's same-name file replaces it: here, without the rule on deleting.
-    files = {
+    files = { "modes.rego": 'package deckhand\n\nallow_github if input.mode == "deploy"\n' };
+    assert.equal(await check(posted("deploy"), edit), null);
+    // The operator's deny still wins.
+    assert.deepEqual(await check(posted("deploy"), remove), deleting);
+    // A repository's same-name file replaces nothing: it only adds rules.
+    files = { "gh-own-comments.rego": "package deckhand\n" };
+    assert.deepEqual(await check(posted("work"), remove), deleting);
+    // The operator's does: here, without the rule on deleting.
+    operator = {
       "gh-own-comments.rego": rego.replace(/\n# A deleted comment[\s\S]*$/, "\n"),
     };
     assert.equal(await check(posted("work"), remove), null);
-    assert.match((await check(posted("deploy"), remove)).message, /a deploy run doesn't change/);
   },
 );
 
@@ -2178,7 +2182,7 @@ test(
       config: {},
       github: async () => new Response("{}", { status: 404 }),
       run: opaRunner(),
-      readBuiltIn: () => new Map([["github.rego", builtIn().get("github.rego")]]),
+      readBuiltIn: () => new Map([...allowOnly(), ["github.rego", builtIn().get("github.rego")]]),
       tmp: tempDir(t),
     });
     const ask = (mode, action, kind, labels_added = [], more = {}) =>
@@ -2235,17 +2239,20 @@ test(
     // Work runs and discussions: their ceilings, as they are.
     assert.deepEqual(await ask("work", "comment", "own_pr"), []);
     assert.deepEqual(await ask("work", "create", "label", ["a"]), []);
-    assert.deepEqual(await ask("plan", "create", "label", ["a"]), []);
     assert.deepEqual(await ask("work", "label", "sub_issue", ["a"]), []);
+    // The repository's own modes: nothing without its allow rules (none here).
+    assert.deepEqual(await ask("plan", "create", "label", ["a"]), [
+      "no rule of .deckhand/policy/ allows `create` on `label` for a `plan` run",
+    ]);
     assert.deepEqual(await ask("discussion", "create", "new_issue"), []);
   },
 );
 
 test(
-  "the real opa: Deckhand's gh-actions-rerun.rego allows a first rerun, in work runs only",
+  "the real opa: Deckhand's gh-actions-rerun.rego allows a first rerun, in work runs and the modes a repository allows",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
-    const rerunPolicies = (repo = {}) =>
+    const rerunPolicies = (repo = {}, operator = {}) =>
       createPolicies({
         config: {},
         github: async (_, method, path) => {
@@ -2264,6 +2271,7 @@ test(
         },
         run: opaRunner(),
         readBuiltIn: builtIn,
+        readOperator: () => new Map(Object.entries(operator)),
         tmp: tempDir(t),
       });
     const policies = rerunPolicies();
@@ -2284,7 +2292,9 @@ test(
     assert.deepEqual(await rerun("work", 2), [
       "a workflow run is rerun once: run 100 is on its attempt 2",
     ]);
-    assert.deepEqual(await rerun("plan", 1), ["plan runs don't rerun GitHub Actions jobs here"]);
+    assert.deepEqual(await rerun("plan", 1), [
+      "no rule of .deckhand/policy/ allows `rerun` on `own_pr` for a `plan` run",
+    ]);
     // Through the gateway's checks: a first rerun goes on, a second is refused.
     const { check } = createWriteChecks({
       needsInputLabel: () => null,
@@ -2301,8 +2311,12 @@ test(
         .message,
       /the policies refuse it \(deny_github\): a workflow run is rerun once/,
     );
-    // A repository broadens it with its own file of that name, up to the built-in bound.
-    const broader = rerunPolicies({ "gh-actions-rerun.rego": "package deckhand\n" });
+    // The operator broadens it with a file of that name, up to the built-in bound, and a
+    // repository allows its modes.
+    const broader = rerunPolicies(
+      { "modes.rego": 'package deckhand\n\nallow_github if input.mode == "plan"\n' },
+      { "gh-actions-rerun.rego": "package deckhand\n" },
+    );
     const { check: broad } = createWriteChecks({
       needsInputLabel: () => null,
       lookup: rerunLookup().lookup,
@@ -2317,7 +2331,7 @@ test(
 );
 
 test(
-  "the real opa: policy/gh-update-branch.rego, per mode, and a repository's file of the same name broadening or refusing it",
+  "the real opa: policy/gh-update-branch.rego, per mode, and a repository allowing its modes or refusing it",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const engine = (repoFiles = {}) =>
@@ -2360,13 +2374,12 @@ test(
     const { check } = checks(engine());
     // Work runs (fix and conflict runs are work runs): allowed.
     assert.equal(await check(work, update(7)), null);
-    // The repository's modes: refused, though their ceiling holds it.
+    // The repository's modes: refused, though their ceiling holds it, until it allows them.
     assert.match(
       (await check(deploy, update(7))).message,
-      /a deploy run doesn't update its pull request's branch unless \.deckhand\/policy\/gh-update-branch\.rego lets it/,
+      /no rule of \.deckhand\/policy\/ allows `update_branch` on `own_pr` for a `deploy` run/,
     );
-    // A repository's file of the same name replaces the default: its modes too…
-    const broad = checks(engine({ "gh-update-branch.rego": "package deckhand\n" }));
+    const broad = checks(engine({ "modes.rego": "package deckhand\n\nallow_github := true\n" }));
     assert.equal(await broad.check(deploy, update(7)), null);
     // …but never past the ceiling: a brainstorm, another pull request's branch.
     assert.match((await broad.check(run("brainstorm"), update(7))).message, /its ceiling/);
@@ -2378,13 +2391,13 @@ deny_github contains "this repository keeps a linear history: rebase and push in
   input.action == "update_branch"
 }
 `;
-    const none = checks(engine({ "gh-update-branch.rego": linear }));
+    const none = checks(engine({ "linear.rego": linear }));
     assert.match((await none.check(work, update(7))).message, /keeps a linear history/);
   },
 );
 
 test(
-  "the real opa: gh-projects.rego lets work runs and brainstorms add items, a repo's modes only once it broadens it",
+  "the real opa: gh-projects.rego lets work runs and brainstorms add items, a repo's modes only once it allows them",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const files = builtIn();
@@ -2438,27 +2451,38 @@ test(
     assert.deepEqual(await ask("brainstorm", "created_issue"), []);
     assert.deepEqual(await ask("stop", "created_issue"), []);
     assert.deepEqual(await ask("plan", "own_issue"), [
-      "mode plan doesn't add items to projects unless .deckhand/policy/gh-projects.rego allows it",
+      "no rule of .deckhand/policy/ allows `project` on `own_issue` for a `plan` run",
     ]);
-    // The repository's same-name file replaces it: its modes add items too.
-    const broadened = { "gh-projects.rego": "package deckhand\n" };
-    assert.deepEqual(await ask("plan", "own_issue", broadened), []);
-    // A file of another name leaves it in place.
-    const other = { "extra.rego": "package deckhand\n" };
-    assert.equal((await ask("plan", "own_issue", other)).length, 1);
+    // The repository allows its modes: they add items too.
+    const allowed = { "modes.rego": 'package deckhand\n\nallow_github if input.mode == "plan"\n' };
+    assert.deepEqual(await ask("plan", "own_issue", allowed), []);
+    // A file without an allow rule, of Deckhand's file's name or another, allows nothing.
+    for (const name of ["gh-projects.rego", "extra.rego"]) {
+      assert.equal((await ask("plan", "own_issue", { [name]: "package deckhand\n" })).length, 1);
+    }
   },
 );
 
 test(
-  "the real opa: Deckhand's defaults let every kind of run read checks; a same-name file refuses it",
+  "the real opa: Deckhand's defaults let every kind of run read checks (a repo's modes once it allows them); a same-name file refuses it",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const files = builtIn();
     assert.ok(files.has("gh-checks.rego"));
+    // The repository allows its own modes everything.
+    const allowing = "package deckhand\n\nallow_github := true\n";
     const engine = (operator = new Map()) =>
       createPolicies({
         config: {},
-        github: async () => new Response("{}", { status: 404 }),
+        github: async (repo, method, path) => {
+          if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+            return Response.json([{ type: "file", name: "modes.rego", sha: "modes" }]);
+          }
+          if (path === "/repos/org/repo/git/blobs/modes") {
+            return Response.json({ content: btoa(allowing), encoding: "base64" });
+          }
+          return new Response("{}", { status: 404 });
+        },
         run: opaRunner(),
         readBuiltIn: () => files,
         readOperator: () => operator,
@@ -2484,7 +2508,7 @@ test(
     for (const [mode, light] of kinds) {
       assert.equal(await read(defaults, mode, light), null, mode);
     }
-    // The operator's (or a repository's) gh-checks.rego replaces Deckhand's, for one mode or all.
+    // The operator's gh-checks.rego replaces Deckhand's, for one mode or all.
     const narrowed = engine(
       new Map([
         [
@@ -2513,6 +2537,8 @@ test(
   async (t) => {
     const rego = `package deckhand
 
+allow_github if input.mode == "plan"
+
 deny_github contains "only plan runs create labels" if {
   input.target.kind == "label"
   input.mode != "plan"
@@ -2520,9 +2546,17 @@ deny_github contains "only plan runs create labels" if {
 `;
     const policies = createPolicies({
       config: {},
-      github: async () => new Response("{}", { status: 404 }),
+      github: async (repo, method, path) => {
+        if (path === "/repos/org/repo/contents/.deckhand/policy?ref=main") {
+          return Response.json([{ type: "file", name: "labels.rego", sha: "labels" }]);
+        }
+        if (path === "/repos/org/repo/git/blobs/labels") {
+          return Response.json({ content: btoa(rego), encoding: "base64" });
+        }
+        return new Response("{}", { status: 404 });
+      },
       run: opaRunner(),
-      readOperator: () => new Map([["github.rego", rego]]),
+      readOperator: () => new Map(),
       tmp: tempDir(t),
     });
     const { check } = createWriteChecks({
@@ -2543,7 +2577,7 @@ deny_github contains "only plan runs create labels" if {
 );
 
 test(
-  "the real opa: policy/gh-reactions.rego lets work runs and brainstorms react, and a repo's same-name file its own modes",
+  "the real opa: policy/gh-reactions.rego lets work runs and brainstorms react, and a repo's allow rule its own modes",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     const rego = readFileSync(join(import.meta.dirname, "..", "policy", "gh-reactions.rego"));
@@ -2597,23 +2631,23 @@ test(
       assert.equal(await check(reacting(mode), react), null, mode);
       assert.equal(await check(reacting(mode), remove), null, mode);
     }
-    // The repository's own modes: neither, unless it says so.
+    // The repository's own modes: nothing, until it allows them.
     for (const w of [react, remove]) {
-      assert.deepEqual(await check(reacting("deploy"), w), {
-        status: 403,
-        message:
-          "the policies refuse it (deny_github): a deploy run doesn't react unless .deckhand/policy/gh-reactions.rego lets it",
-      });
+      assert.match(
+        (await check(reacting("deploy"), w)).message,
+        /^the policies refuse it \(deny_github\): no rule of \.deckhand\/policy\/ allows `(un)?react` on `\w+` for a `deploy` run$/,
+      );
     }
-    // Other writes aren't this file's.
-    const comment = write("POST", "repos/org/repo/issues/1/comments", { body: "x" });
-    assert.equal(await check(reacting("deploy"), comment), null);
-    // A repository's same-name file replaces it: here, one that allows them everywhere.
+    // A repository's same-name file replaces nothing: it allows nothing.
     files = { "gh-reactions.rego": "package deckhand\n" };
+    assert.match((await check(reacting("deploy"), react)).message, /no rule of/);
+    // Its allow rule does.
+    files = { "modes.rego": 'package deckhand\n\nallow_github if input.mode == "deploy"\n' };
     assert.equal(await check(reacting("deploy"), react), null);
-    // Or refuses them altogether.
+    assert.equal(await check(reacting("deploy"), remove), null);
+    // Its deny rule refuses them altogether.
     files = {
-      "gh-reactions.rego":
+      "reactions.rego":
         'package deckhand\n\ndeny_github contains "no reactions here" if input.action in {"react", "unreact"}\n',
     };
     assert.match((await check(reacting("work"), react)).message, /no reactions here/);
@@ -2621,15 +2655,14 @@ test(
 );
 
 test(
-  "the real opa: policy/gh-assign-milestone.rego, per mode, and a repository's file of the same name broadening it",
+  "the real opa: policy/gh-assign-milestone.rego, per mode, and the operator's file of the same name broadening it",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
-    // The repository's own, docs/repo-config.md's example: work runs assign the issue's author,
-    // and set milestones.
+    // The operator's own, docs/repo-config.md's example: work runs assign the issue's author.
     const docs = readFileSync(join(import.meta.dirname, "..", "docs", "repo-config.md"), "utf8");
     const [, broader] =
-      /```rego\n# \.deckhand\/policy\/gh-assign-milestone\.rego\n([\s\S]*?)```/.exec(docs);
-    const engine = (repoFiles = {}) =>
+      /```rego\n# grants folder: policy\/gh-assign-milestone\.rego\n([\s\S]*?)```/.exec(docs);
+    const engine = (repoFiles = {}, operator = {}) =>
       createPolicies({
         config: {},
         github: async (repo, method, path) => {
@@ -2649,6 +2682,7 @@ test(
         },
         run: opaRunner(),
         readBuiltIn: builtIn,
+        readOperator: () => new Map(Object.entries(operator)),
         tmp: tempDir(t),
       });
     const checks = (policies) =>
@@ -2669,19 +2703,23 @@ test(
     // sub-issue. They don't assign.
     for (const n of [1, 7, 2]) assert.equal(await check(work, milestone(n)), null, `#${n}`);
     const noAssign =
-      "the policies refuse it (deny_github): a run doesn't assign people unless .deckhand/policy/gh-assign-milestone.rego lets it";
+      "the policies refuse it (deny_github): a run doesn't assign people unless the operator's policy/gh-assign-milestone.rego lets it";
     assert.equal((await check(work, assign(1, "alice"))).message, noAssign);
     // A brainstorm sets the milestone of an issue it files.
     const create = write("POST", "repos/org/repo/issues", { title: "T", milestone: 3 });
     assert.equal(await check(run("brainstorm"), create), null);
-    // The repository's modes: refused, though their ceiling holds them.
+    // The repository's modes: refused, though their ceiling holds them, until it allows them.
     assert.equal(
       (await check(deploy, milestone(1))).message,
-      "the policies refuse it (deny_github): a deploy run doesn't set milestones unless .deckhand/policy/gh-assign-milestone.rego lets it",
+      "the policies refuse it (deny_github): no rule of .deckhand/policy/ allows `milestone` on `own_issue` for a `deploy` run",
     );
-    // A repository's file of the same name replaces the default: the issue's author assigned,
-    // and its modes' milestones.
-    const broad = checks(engine({ "gh-assign-milestone.rego": broader }));
+    const modes = { "modes.rego": 'package deckhand\n\nallow_github if input.mode == "deploy"\n' };
+    assert.equal(await checks(engine(modes))(deploy, milestone(1)), null);
+    // A repository's file of the same name replaces nothing: work runs still don't assign.
+    const same = checks(engine({ ...modes, "gh-assign-milestone.rego": broader }));
+    assert.equal((await same(work, assign(1, "alice"))).message, noAssign);
+    // The operator's does: the issue's author assigned.
+    const broad = checks(engine(modes, { "gh-assign-milestone.rego": broader }));
     assert.equal(await broad(work, assign(1, "alice")), null);
     assert.equal(await broad(deploy, milestone(1)), null);
     assert.match((await broad(work, assign(1, "deckhand[bot]"))).message, /the issue's author/);
@@ -2771,9 +2809,11 @@ const replyTo = (number, comment) =>
   write("POST", `repos/org/repo/pulls/${number}/comments/${comment}/replies`, { body: "Fixed." });
 
 test("review threads: a work run replies to and resolves its own pull request's, by their first comment", async (t) => {
-  // The operator's file of the default's name replaces it: the ceiling alone here.
+  // The operator's file of the default's name replaces it: the ceiling alone here, the
+  // repository allowing its own modes.
   const { engine: policies, evals } = policyEngine(t, {
     operator: { "gh-review-threads.rego": "package deckhand\n" },
+    files: { "modes.rego": "package deckhand\n\nallow_github := true\n" },
   });
   const { lookup, calls } = fakeLookup(GITHUB);
   const { check, checkWrite } = createWriteChecks({
@@ -2830,12 +2870,14 @@ test("review threads: a work run replies to and resolves its own pull request's,
 });
 
 test(
-  "the real opa: Deckhand's gh-review-threads.rego, per mode, and a file of the same name broadening it",
+  "the real opa: Deckhand's gh-review-threads.rego, per mode, and the operator's file of the same name broadening it",
   { skip: !hasOpa() && "no opa on the PATH" },
   async (t) => {
     assert.ok(builtIn().has("gh-review-threads.rego"));
-    // The repository's own: only the first rule, its modes kept out.
-    const broader = `package deckhand
+    // The repository's own: its modes allowed, but not on review threads.
+    const narrower = `package deckhand
+
+allow_github if input.custom_mode
 
 deny_github contains "only work runs answer review threads" if {
   input.action in {"reply", "resolve", "unresolve"}
@@ -2882,31 +2924,43 @@ deny_github contains "only work runs answer review threads" if {
       (await checkWrite(work, resolveWrite(41))).message,
       /resolves only Deckhand's own review threads, not @alice's/,
     );
-    // The repository's modes: refused, though their ceiling holds them.
+    // The repository's modes: refused, though their ceiling holds them, until it allows them.
     const deploy = run("deploy", { push: true });
     assert.match(
       (await check(deploy, replyTo(7, 40))).message,
-      /a deploy run doesn't answer review threads unless \.deckhand\/policy\/gh-review-threads\.rego lets it/,
+      /no rule of \.deckhand\/policy\/ allows `reply` on `own_pr` for a `deploy` run/,
     );
     assert.match(
       (await checkWrite(deploy, resolveWrite(40))).message,
-      /a deploy run doesn't answer/,
+      /no rule of \.deckhand\/policy\/ allows `resolve`/,
+    );
+    const allowing = { "modes.rego": "package deckhand\n\nallow_github := true\n" };
+    const allowed = checks(engine(allowing));
+    assert.equal(await allowed.check(deploy, replyTo(7, 40)), null);
+    assert.match(
+      (await allowed.checkWrite(deploy, resolveWrite(41))).message,
+      /resolves only Deckhand's own review threads/,
     );
     assert.equal(await checkWrite(work, unresolveWrite(41)), null);
     // A light repository mode: no ceiling, whatever the policy.
     assert.match((await check(run("ask", { push: false }), replyTo(7, 40))).message, /its ceiling/);
     // The operator's file of its name replaces Deckhand's, for every repository.
     const operator = new Map([["gh-review-threads.rego", "package deckhand\n"]]);
-    const open = checks(engine({}, operator));
+    const open = checks(engine(allowing, operator));
     assert.equal(await open.checkWrite(work, resolveWrite(41)), null);
-    assert.equal(await open.check(deploy, replyTo(7, 40)), null);
-    // A repository's file of the same name replaces the default: a person's thread resolved.
-    const broad = checks(engine({ "gh-review-threads.rego": broader }));
-    assert.equal(await broad.checkWrite(work, resolveWrite(41)), null);
+    assert.equal(await open.checkWrite(deploy, resolveWrite(41)), null);
+    // A repository's file of the same name replaces nothing: it adds its rules.
+    const narrow = checks(engine({ "gh-review-threads.rego": narrower }));
     assert.match(
-      (await broad.checkWrite(deploy, resolveWrite(41))).message,
+      (await narrow.checkWrite(work, resolveWrite(41))).message,
+      /resolves only Deckhand's own review threads/,
+    );
+    assert.equal(await narrow.check(work, replyTo(7, 41)), null);
+    assert.match(
+      (await narrow.check(deploy, replyTo(7, 40))).message,
       /only work runs answer review threads/,
     );
+    const broad = checks(engine(allowing, operator));
     // Never past the ceiling: a brainstorm still can't, nor another pull request's thread.
     assert.match((await broad.check(run("brainstorm"), replyTo(7, 40))).message, /its ceiling/);
     assert.match((await broad.check(work, replyTo(8, 43))).message, /can't reply on pr #8/);

@@ -727,7 +727,10 @@ test("deny_fix: GitHub failing to give the input starts nothing, keeps no pair, 
 test("deny_fix: a policy error refuses the rebase run too", async (t) => {
   const policy = policyEngine(t, {
     files: { "fix.rego": "package deckhand" },
-    failure: { code: 0, stdout: JSON.stringify({ result: [{ expressions: [{ value: 3 }] }] }) },
+    failure: {
+      code: 0,
+      stdout: JSON.stringify({ result: [{ expressions: [{ value: { repo: { deny: [3] } } }] }] }),
+    },
   });
   const w = setup({ policies: policy.engine });
   await w.conflicts.tick();
