@@ -16,13 +16,24 @@ const modeInstructions = Object.fromEntries(
     .map(([name, mode]) => [name, instructions(mode.prompt)]),
 );
 // The config's reference, in the image next to the prompts so the two can't drift apart. Its
-// tables without the padding prettier aligns their columns with, and without the comments that
-// tell which test checks a block: the prompt goes to the sandbox in TASK_PROMPT, and one
-// environment string holds 128 KiB at most (Linux's MAX_ARG_STRLEN: over it, the sandbox
-// doesn't start, E2BIG).
-const configReference = compactTables(
+// tables without the padding prettier aligns their columns with, without the policies' inputs
+// field by field (between the "onboarding: skip" and "onboarding: end" comments: a pointer to
+// Deckhand's source instead), and without the comments that tell which test checks a block: the
+// prompt goes to the sandbox in TASK_PROMPT, and one environment string holds 128 KiB at most
+// (Linux's MAX_ARG_STRLEN: over it, the sandbox doesn't start, E2BIG).
+const configReference = onboardingReference(
   readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8"),
-).replace(/^<!--[^\n]*-->\n\n/gm, "");
+);
+
+// docs/repo-config.md's `text` as the onboarding prompt has it (configReference).
+export function onboardingReference(text) {
+  return compactTables(text)
+    .replace(
+      /^<!-- onboarding: skip\b[^\n]*-->\n[^]*?^<!-- onboarding: end -->\n/gm,
+      "The policies' inputs, field by field, are in docs/repo-config.md in Deckhand's source.\n",
+    )
+    .replace(/^<!--[^\n]*-->\n\n/gm, "");
+}
 
 // Markdown's table rows with one space around each cell, and three dashes in each separator
 // cell: the same table, without its alignment.

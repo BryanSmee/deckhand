@@ -250,6 +250,11 @@ test("the onboarding prompt fits one environment string (TASK_PROMPT), its refer
   // start (E2BIG). Left room for a growing reference.
   assert.ok(Buffer.byteLength(`TASK_PROMPT=${text}`) < 120 * 1024, String(text.length));
   assert.match(text, /## Reference: `\.deckhand\.yaml`/);
+  // The policies' inputs left out, pointed to; what comes after them kept.
+  assert.doesNotMatch(text, /### The (run|merge|GitHub) input/);
+  assert.match(text, /The policies' inputs, field by field, are in docs\/repo-config\.md/);
+  assert.match(text, /### The default policies/);
+  assert.doesNotMatch(text, /onboarding: (skip|end)/);
   assert.equal(
     compactTables(
       "| Key   | Default |\n| ----- | ------- |\n| `users` | none    |\nprose  |  kept",

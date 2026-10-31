@@ -7,7 +7,7 @@
 // added before it starts changes nothing. Input: ../docs/repo-config.md#the-run-input.
 import { getJson } from "./github.mjs";
 import { BUILT_IN, isFresh, isLight } from "./modes.mjs";
-import { denyKept } from "./policies.mjs";
+import { denyKept, isPolicyError, unallowed } from "./policies.mjs";
 
 // Whether `item` is a run a person asked for: one with an author, not one of the listener's own
 // (`reason`: "review", "review-fix", "ci-fix", "conflict").
@@ -58,6 +58,11 @@ export async function readTarget({ github, graphql }, repo, target) {
   };
 }
 
+// Whether `item` goes on in the issue's current mode, without a trigger or "/mode" line: a
+// conversation started where it was allowed (the onboarding pull request's comments go on in
+// onboarding).
+export const continues = (item) => !item.trigger && !item.modeLine;
+
 // The input of `allow_run` and `deny_run` for `item` in `mode`, `read` being readTarget()'s.
 export function runInput(item, mode, read, now = Date.now) {
   const target = targetOf(item);
@@ -70,6 +75,7 @@ export function runInput(item, mode, read, now = Date.now) {
     light: isLight(item, mode),
     fresh: isFresh(item, mode),
     trigger: runTrigger(item),
+    continues: continues(item),
     sender: item.author ?? null,
     target: { ...target, labels: read.labels, author: read.author },
     // The issue whose task it is: the one a pull request closes, null for a pull request's own.
@@ -78,42 +84,81 @@ export function runInput(item, mode, read, now = Date.now) {
   };
 }
 
-// The reply to a run the policies refuse: their messages, quoted as code (they may repeat a
-// title, which mustn't mention anyone), as an unknown mode's reply (task-modes.mjs).
-export function runRefusedText(mode, messages) {
-  const quoted = messages.map((m) => `\`${m.replace(/`/g, "'")}\``).join(", ");
-  return `No \`${mode}\` run: the policies refuse it: ${quoted}.`;
+// The modes Deckhand's policy/run.rego keeps on issues, unless a comment goes on in them.
+const ISSUE_ONLY = new Set(["brainstorm", "stop", "onboarding"]);
+
+// What Deckhand's policy/run.rego, alone and with no repo file, says of `item` in `mode`: the
+// refusals, as opa's evaluation would give them (test/run-policy.test.mjs compares both). It
+// reads only the item: no GitHub call, no `opa`, nothing that can fail.
+export function defaultRun(item, mode) {
+  const doc = { mode, target: targetOf(item) };
+  // A repo's own mode needs the repo's allow, which a repo without files can't give.
+  if (!BUILT_IN.has(mode)) return [unallowed("run", doc, "repo")];
+  if (doc.target.kind === "issue" || continues(item) || !ISSUE_ONLY.has(mode)) return [];
+  return [unallowed("run", doc, "operator")];
 }
 
-// `ctx` (server.mjs): `policies`, `github`, `graphql`, `decisions`, `answer`, `log`. → allowed(item,
-// mode): whether `item` may run in `mode`; refused, it replies with the messages and keeps the
-// decision for the task's page. Without policies (some tests), nothing is asked.
+// The reply to a run the policies refuse: their messages, quoted as code (they may repeat a
+// title, which mustn't mention anyone), as an unknown mode's reply (task-modes.mjs). A policy
+// error isn't a rule's answer: the comment may be posted again.
+export function runRefusedText(mode, messages) {
+  const quoted = messages.map((m) => `\`${m.replace(/`/g, "'")}\``).join(", ");
+  const again = messages.some(isPolicyError) ? " Post the comment again once it is fixed." : "";
+  return `No \`${mode}\` run: the policies refuse it: ${quoted}.${again}`;
+}
+
+// `ctx` (server.mjs): `policies`, `github`, `graphql`, `decisions`, `answer`, `log`. →
+// allowed(item, mode, key): whether `item` may run in `mode`; refused, it replies with the
+// messages, keeps the decision for the task's page and marks the item (`refused`: the reply's
+// text, for the dashboard's answer: work.mjs). Without policies (some tests), nothing is asked.
 export function createRunPolicy(ctx, now = Date.now) {
-  return async function allowed(item, mode, key) {
-    if (!ctx.policies || !personStarted(item)) return true;
+  // The refusal kept for task `key`: the opa path's (denyKept()) or the defaults' own.
+  const keep = (key, entry) => {
+    if (!entry.denied) return;
+    try {
+      ctx.decisions?.record(key, entry);
+    } catch (error) {
+      ctx.log(`${key}: keeping its run decision: ${error.message ?? error}`);
+    }
+  };
+
+  async function decide(item, mode, key) {
+    const ref = item.base || "main";
     const target = targetOf(item);
+    let layers = null;
+    try {
+      layers = await ctx.policies.policiesFor(item.repo, ref);
+    } catch {
+      // decide() below says it, failing closed.
+    }
+    // Deckhand's files alone, and none of the repo's: run.rego's answer, without opa.
+    if (layers && !layers.repo.size && ctx.policies.deckhandOnly?.(layers.operator)) {
+      const messages = defaultRun(item, mode);
+      const entry = { decision: "run", rule: "deny_run", messages, pr: target.number, gates: [] };
+      keep(key, { ...entry, denied: messages.length > 0 });
+      return messages;
+    }
     const { messages } = await denyKept(
       ctx.policies,
       "deny_run",
       item.repo,
-      item.base || "main",
+      ref,
       async () => runInput(item, mode, await readTarget(ctx, item.repo, target), now),
-      {
-        pr: { number: target.number },
-        log: ctx.log,
-        // Its refusals only: every comment of a conversation asks, and its allowed runs would
-        // push the pull request's merge and review decisions out of the task's list.
-        keep: (entry) => {
-          if (entry.denied) ctx.decisions?.record(key, entry);
-        },
-      },
+      // Its refusals only: every comment of a conversation asks, and its allowed runs would
+      // push the pull request's merge and review decisions out of the task's list.
+      { pr: { number: target.number }, log: ctx.log, keep: (entry) => keep(key, entry) },
     );
+    return messages;
+  }
+
+  return async function allowed(item, mode, key) {
+    if (!ctx.policies || !personStarted(item)) return true;
+    const messages = await decide(item, mode, key);
     if (!messages.length) return true;
     ctx.log(`${key}: ${mode} run refused by the policies`);
+    item.refused = runRefusedText(mode, messages);
     // In the discussion, for a discussion's (comments.mjs answer()).
-    await ctx
-      .answer(item, runRefusedText(mode, messages))
-      .catch((error) => ctx.log(`${key}: ${error}`));
+    await ctx.answer(item, item.refused).catch((error) => ctx.log(`${key}: ${error}`));
     return false;
   };
 }

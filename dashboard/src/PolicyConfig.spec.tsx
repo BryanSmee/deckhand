@@ -418,3 +418,21 @@ test("try them: the command copied", async () => {
   await screen.findByRole("button", { name: "Copied" });
   expect(writeText).toHaveBeenCalledWith("Deckhand /mode policy");
 });
+
+test("the run decision with Deckhand's run.rego: no deny rule, but its allow rules still refuse some modes", async () => {
+  policies = {
+    ...POLICIES,
+    errors: [],
+    files: [
+      ...POLICIES.files,
+      makePolicyFile({ name: "run.rego", source: "deckhand", rules: ["allow_run"] }),
+    ],
+  };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  const run = card("Runs people start");
+  expect(within(run).getByText("No deny rule")).toBeTruthy();
+  expect(run.textContent).toContain(
+    "Deckhand's run.rego keeps brainstorms, /stop and onboarding on issues",
+  );
+});

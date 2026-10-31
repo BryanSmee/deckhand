@@ -746,6 +746,8 @@ test("/mode policy: every decision on the pull request now, nothing reviewed, fi
   );
   // The issue the pull request closes, and who asked.
   assert.deepEqual([samples[0].input.issue, samples[0].input.sender], [12, "alice"]);
+  // With its time, as the real decision has it ("no runs on Fridays").
+  assert.match(samples[0].input.time, /^\d{4}-\d\d-\d\dT/);
   assert.equal(samples[2].input.issue, 12);
   assert.equal(json.version, 1);
   assert.equal(json.decision, "merge");

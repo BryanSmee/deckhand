@@ -6,6 +6,7 @@ import { builtInPolicies, createPolicies, opaRunner } from "../listener/policies
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import {
   createRunPolicy,
+  defaultRun,
   personStarted,
   readTarget,
   runInput,
@@ -14,6 +15,7 @@ import {
   targetOf,
 } from "../listener/run-policy.mjs";
 import { createTaskModes } from "../listener/task-modes.mjs";
+import { createTasks } from "../listener/tasks.mjs";
 import { hasOpa, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig();
@@ -92,6 +94,7 @@ test("readTarget and runInput: the target's labels and author, a pull request's 
     light: false,
     fresh: false,
     trigger: "comment",
+    continues: false,
     sender: "alice",
     target: { kind: "issue", number: 12, labels: ["internal"], author: "bob" },
     issue: 12,
@@ -143,10 +146,13 @@ test("runRefusedText: the messages quoted as code", () => {
 
 // task-modes.mjs's modeOf() with `policies` (decide() as policies.mjs's), for a comment
 // `fields` on org/repo#12: the mode, the replies, the decisions kept and the issue's state.
-async function asked(fields, decide, { brainstorm = null } = {}) {
+async function asked(
+  fields,
+  decide,
+  { brainstorm = null, policies = { decide }, issueModes = new Map(), reads = [] } = {},
+) {
   const replies = [];
   const kept = [];
-  const issueModes = new Map();
   const ended = [];
   const ctx = {
     config,
@@ -162,15 +168,18 @@ async function asked(fields, decide, { brainstorm = null } = {}) {
     },
     answer: async (item, text) => replies.push([item.replyTo, text]),
     decisions: { record: (key, entry) => kept.push([key, entry]) },
-    policies: { decide },
-    github: async (repo, method, path) =>
-      Response.json({ labels: [], user: { login: "bob" }, base: { ref: "main" }, head: {} }),
+    policies,
+    github: async (repo, method, path) => {
+      reads.push(path);
+      return Response.json({ labels: [], user: { login: "bob" }, base: { ref: "main" }, head: {} });
+    },
     runner: { hasSession: async () => false },
     onboarded: { isIssue: () => true },
   };
   const { modeOf } = createTaskModes(ctx);
-  const mode = await modeOf(itemOf(fields), "Org/Repo#12", "deckhand-org-repo-12");
-  return { mode, replies, kept, issueModes, ended };
+  const item = itemOf(fields);
+  const mode = await modeOf(item, "Org/Repo#12", "deckhand-org-repo-12");
+  return { mode, replies, kept, issueModes, ended, item };
 }
 
 test("a run the policies refuse: no mode, nothing changed on the issue, a reply quoting them", async () => {
@@ -209,7 +218,10 @@ test("a run the policies refuse: no mode, nothing changed on the issue, a reply 
   const error = await asked({ trigger: "work", modeLine: "plan" }, failing);
   assert.equal(error.mode, null);
   assert.deepEqual(error.replies, [
-    [12, "No `plan` run: the policies refuse it: `policy error: x.rego:3: oops`."],
+    [
+      12,
+      "No `plan` run: the policies refuse it: `policy error: x.rego:3: oops`. Post the comment again once it is fixed.",
+    ],
   ]);
 });
 
@@ -236,6 +248,75 @@ test("a run the policies allow: its mode, nothing kept; the listener's own runs 
   // Without policies, nothing is asked.
   const allowed = createRunPolicy({ log: () => {} });
   assert.equal(await allowed(itemOf(), "work", "Org/Repo#12"), true);
+});
+
+// Deckhand's policies as shipped, an opa that records each call (none expected), and a repo
+// with no policy file (`repo`: name → text, else).
+function shipped(t, repo = {}) {
+  const opa = [];
+  const github = async (name, method, path) => {
+    if (path.startsWith("/repos/Org/Repo/contents/.deckhand/policy")) {
+      if (!Object.keys(repo).length) return new Response("{}", { status: 404 });
+      return Response.json(Object.keys(repo).map((n) => ({ type: "file", name: n, sha: n })));
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const policies = createPolicies({
+    config: {},
+    github,
+    run: async (args) => (opa.push(args[0]), { code: 2, stdout: "", stderr: "no opa here" }),
+    readOperator: () => new Map(),
+    readBuiltIn: () => builtInPolicies(),
+    tmp: tempDir(t),
+  });
+  return { policies, opa };
+}
+
+test("Deckhand's defaults alone: run.rego decided without opa or a GitHub read; a conversation goes on from a pull request", async (t) => {
+  const { policies, opa } = shipped(t);
+  const reads = [];
+  const decide = () => assert.fail("decide() isn't asked");
+  const options = (more = {}) => ({ policies, reads, ...more });
+  // A work run on the issue, and a work run from the pull request that closes it.
+  assert.equal((await asked({ trigger: "work" }, decide, options())).mode, "work");
+  assert.equal((await asked({ trigger: "work", replyTo: 30 }, decide, options())).mode, "work");
+  // /mode brainstorm on the pull request: refused, said, kept for the task's page.
+  const brainstorm = await asked(
+    { trigger: "work", modeLine: "brainstorm", replyTo: 30 },
+    decide,
+    options(),
+  );
+  assert.equal(brainstorm.mode, null);
+  assert.deepEqual(brainstorm.replies, [
+    [
+      30,
+      "No `brainstorm` run: the policies refuse it: `no rule allows a 'brainstorm' run on a pull request`.",
+    ],
+  ]);
+  assert.equal(brainstorm.item.refused, brainstorm.replies[0][1]);
+  assert.deepEqual(
+    [brainstorm.kept[0][1].decision, brainstorm.kept[0][1].denied, brainstorm.kept[0][1].pr],
+    ["run", true, 30],
+  );
+  // The issue in onboarding: a plain comment on its pull request goes on in it (`continues`),
+  // as before; `/mode onboarding` there doesn't start it.
+  const onboarding = () => new Map([["Org/Repo#12", "onboarding"]]);
+  const goesOn = await asked({ replyTo: 30 }, decide, options({ issueModes: onboarding() }));
+  assert.deepEqual([goesOn.mode, goesOn.replies], ["onboarding", []]);
+  const started = await asked(
+    { modeLine: "onboarding", replyTo: 30 },
+    decide,
+    options({ issueModes: onboarding() }),
+  );
+  assert.equal(started.mode, null);
+  // A repo's own mode, with no repo file to allow it.
+  const plan = await asked({ trigger: "work", modeLine: "plan" }, decide, options());
+  assert.match(
+    plan.replies[0][1],
+    /no rule of \.deckhand\/policy\/ allows a 'plan' run on an issue/,
+  );
+  // No opa started, no issue or pull request read.
+  assert.deepEqual([opa, reads], [[], []]);
 });
 
 // policy/run.rego's answer for `mode` (custom: one of the repo's) on a `kind` target, with
@@ -294,16 +375,30 @@ test(
       "idea",
       "bug",
     ];
-    for (const mode of builtIn) {
+    const items = {
+      issue: (more) => itemOf(more),
+      pr: (more) => itemOf({ replyTo: 30, ...more }),
+      discussion: (more) =>
+        itemOf({ kind: "discussion", id: "discussion-4", number: 4, replyTo: 4, ...more }),
+    };
+    for (const mode of [...builtIn, "plan"]) {
       for (const kind of ["issue", "pr", "discussion"]) {
-        const said = await policies.deny("deny_run", "org/repo", "main", runOf(mode, kind));
-        const refused = kind !== "issue" && issueOnly.has(mode);
-        const where = { pr: "a pull request", discussion: "a discussion" }[kind];
-        assert.deepEqual(
-          said,
-          refused ? [`no rule allows a \`${mode}\` run on ${where}`] : [],
-          `${mode} on ${kind}`,
-        );
+        for (const goesOn of [false, true]) {
+          const item = items[kind](goesOn ? {} : { trigger: "work" });
+          const input = () => runInput(item, mode, { labels: [], author: "alice", pr: null });
+          const said = await policies.deny("deny_run", "org/repo", "main", input);
+          const what = `${mode} on ${kind}${goesOn ? ", going on" : ""}`;
+          // What the listener decides without opa is what opa says of the file.
+          assert.deepEqual(said, defaultRun(item, mode), what);
+          if (mode === "plan") continue;
+          const refused = kind !== "issue" && !goesOn && issueOnly.has(mode);
+          const where = { pr: "a pull request", discussion: "a discussion" }[kind];
+          assert.deepEqual(
+            said,
+            refused ? [`no rule allows a \`${mode}\` run on ${where}`] : [],
+            what,
+          );
+        }
       }
     }
     assert.deepEqual(
@@ -352,3 +447,52 @@ deny_run contains "not on internal issues" if "internal" in input.target.labels
     ]);
   },
 );
+
+test("tasks.mjs accept(): a follow-up waits for the comment before it while the policies decide", async () => {
+  let release;
+  const slow = new Promise((resolve) => (release = resolve));
+  const asks = [];
+  const ctx = {
+    config: testConfig({ DEBOUNCE_MS: "0" }),
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    issueModes: new Map(),
+    brainstorms: { get: () => null, end: () => {} },
+    runs: [],
+    running: 0,
+    run: () => {},
+    titles: { set: () => {} },
+    received: () => {},
+    runner: { hasSession: async () => false },
+    answer: async () => {},
+    // The first comment's decision is slow; the follow-up's quick.
+    policies: {
+      decide: async (rule, repo, ref, input) => {
+        const { trigger } = await input();
+        asks.push(trigger);
+        if (asks.length === 1) await slow;
+        return { applied: false, messages: [] };
+      },
+    },
+    github: async () => Response.json({ labels: [], user: { login: "bob" } }),
+  };
+  const { accept } = createTasks(ctx);
+  const first = accept(itemOf({ trigger: "work", text: "Fix it." }));
+  // No trigger line: it only goes on in a task that exists, which the first creates.
+  const second = accept(itemOf({ trigger: null, text: "And the dates." }));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // Not asked yet: it waits for the first.
+  assert.equal(asks.length, 1);
+  release();
+  await Promise.all([first, second]);
+  const task = ctx.tasks.get("Org/Repo#12");
+  clearTimeout(task.timer);
+  assert.deepEqual(
+    task.pending.map((i) => [i.text, i.mode]),
+    [
+      ["Fix it.", "work"],
+      ["And the dates.", "work"],
+    ],
+  );
+});

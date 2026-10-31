@@ -409,6 +409,13 @@ export function createWorkApi({
 
   const inMode = (mode) => (mode === "work" ? "" : ` in \`${mode}\` mode`);
 
+  // accept(), then the policies' refusal (run-policy.mjs: `refused`, already replied on GitHub)
+  // as the dashboard's answer: the action didn't start anything.
+  async function queued(item) {
+    await accept(item);
+    if (item.refused) refuse(403, item.refused);
+  }
+
   // `answers`: the answers to its open questions (answersComment()), sent along from the form
   // the drag opened; they go in the App's comment and are the run's text. Without them, an
   // issue with open questions doesn't move: they are answered first, unless the repo's
@@ -446,7 +453,7 @@ export function createWorkApi({
       number,
       `Started from the dashboard by @${user}${inMode(wanted)}${why}.${was}${also}`,
     );
-    await accept(item);
+    await queued(item);
     return `#${number} started.`;
   }
 
@@ -621,7 +628,7 @@ export function createWorkApi({
       number,
       `Brainstorm stopped from the dashboard by @${user}: a summary and the issue's update follow.`,
     );
-    await accept(item);
+    await queued(item);
     return `#${number}'s brainstorm wraps up.`;
   }
 
@@ -661,7 +668,8 @@ export function createWorkApi({
       ? questions.source === "run"
       : task.runs?.[0]?.status === "needs-input";
     if (fromRun) {
-      await accept({
+      // From the dashboard, a refusal is its answer; ticked on GitHub, the reply there says it.
+      await (where === "from the dashboard" ? queued : accept)({
         repo,
         id: pr ? prId(number) : String(number),
         kind: pr ? "pr" : "issue",
@@ -676,6 +684,8 @@ export function createWorkApi({
         base,
         settings,
         comment: posted,
+        // Ticked on GitHub, it is a GitHub action (ticked()): the policies' `input.trigger`.
+        dashboard: where === "from the dashboard",
       });
       return `Answers sent: #${number} continues.${left}`;
     }
@@ -771,7 +781,7 @@ export function createWorkApi({
       replyTo,
       `Rerun from the dashboard by @${user}${inMode(mode)}: its last run ${ended}.`,
     );
-    await accept({
+    await queued({
       ...itemOf(repo, issue, mode, user, base, settings),
       id,
       kind: pr ? "pr" : "issue",
@@ -844,7 +854,7 @@ export function createWorkApi({
       settings,
       dashboard: true,
     };
-    await accept(issue ? linkTo(item, issue) : item);
+    await queued(issue ? linkTo(item, issue) : item);
     return `Review of #${number} queued.`;
   }
 
@@ -939,7 +949,7 @@ export function createWorkApi({
     if (!sent.ok) throw new Error(`GitHub POST a comment on #${number}: ${sent.status}`);
     const c = await sent.json();
     const posted = { id: c.id, html_url: c.html_url, node_id: c.node_id };
-    await accept({
+    await queued({
       ...inboxItem(repo, issue, kind, posted, { login: user }, text),
       author: user,
       base,

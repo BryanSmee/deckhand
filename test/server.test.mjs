@@ -3419,6 +3419,9 @@ modes:
       // An opa whose every deny rule says "not today", for this listener only.
       rmSync(join(dir, "opa"));
       symlinkSync(new URL("fixtures/refuse-opa.sh", import.meta.url).pathname, join(dir, "opa"));
+      // A file of the operator's: opa is asked (Deckhand's alone, the listener decides itself).
+      mkdirSync(join(dir, "grants", "policy"), { recursive: true });
+      writeFileSync(join(dir, "grants", "policy", "fridays.rego"), "package deckhand\n");
       return {};
     });
     await send(comment("alice", "Deckhand\nShip it."));

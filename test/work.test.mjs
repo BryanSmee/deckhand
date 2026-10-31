@@ -188,7 +188,11 @@ function setup({
     }),
     reply,
     waits: w.waits,
-    accept: async (item) => w.accepted.push(item),
+    // `w.refusing`: what the policies' refusal replied (run-policy.mjs marks the item).
+    accept: async (item) => {
+      w.accepted.push(item);
+      if (w.refusing) item.refused = w.refusing;
+    },
     boardKeys: () => new Set(board),
     liveKeys: () => new Set(live),
     busy: (key) => busy.includes(key),
@@ -803,6 +807,17 @@ test("start: the App comments, then the work is queued as a trigger comment woul
   assert.equal(item.title, "Five");
   // Its reactions go on the App's comment.
   assert.equal(item.comment.id, 501);
+});
+
+test("start refused by the policies (allow_run, deny_run): their reply is the answer, 403", async () => {
+  const w = setup({ issues: { 5: open("Five") } });
+  // Items from the dashboard say so, for the policies' input.trigger.
+  await post(w, { action: "start", number: 5 });
+  assert.equal(w.accepted[0].dashboard, true);
+  w.refusing = "No `work` run: the policies refuse it: `not today`.";
+  const res = await post(w, { action: "start", number: 5 });
+  assert.equal(res.status, 403);
+  assert.equal(res.body.error ?? res.body.message, w.refusing);
 });
 
 test("start in another mode: a /mode line's", async () => {
@@ -1453,6 +1468,8 @@ test("answer a run's questions: the comment is the reply that continues its sess
   assert.equal(item.author, "alice");
   assert.equal(item.comment.id, 501);
   assert.equal(item.base, "main");
+  // From the dashboard: the policies' input.trigger.
+  assert.equal(item.dashboard, true);
   // The run takes the label off as it starts (runs.mjs start()).
   assert.deepEqual(w.labels, []);
   // A pull request's own task.
@@ -2087,8 +2104,8 @@ test("ticked in a run's reply: the answers continue its session, once, for its l
   );
   const [item] = w.accepted;
   assert.deepEqual(
-    [item.id, item.trigger, item.author, item.text],
-    ["5", null, "alice", w.comments[0][1]],
+    [item.id, item.trigger, item.author, item.text, item.dashboard],
+    ["5", null, "alice", w.comments[0][1], false],
   );
   // On the pull request the issue's run replied on.
   await w.api.ticked("org/app", "alice", { number: 9, pr: true, items: edited });

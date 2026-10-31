@@ -1862,10 +1862,13 @@ rules: a built-in mode pays nothing extra), each in a namespace of its own:
   anything but `true` or `false`, or a deny rule anything but a set of strings, refuses the
   decision with a `policy error: …` reason, whatever the other layer says; so does a policy
   folder that can't be read (yours or GitHub's). For `run`, nothing starts (a reply quotes the
-  messages), and a run's input that GitHub can't give (the issue, pull request or discussion it
-  is on) refuses it too, so a broken policy or `opa` stops every run people start in that
-  repository (every repository, for yours): the listener's own runs (reviews, fix runs) aren't
-  asked. For `merge`, the pull request then waits for
+  messages and, for a policy error, says to post the comment again; from the dashboard, the
+  action is refused with them), and a run's input that GitHub can't give (the issue, pull
+  request or discussion it is on) refuses it too, so a broken policy or `opa` stops every run
+  people start in that repository (every repository, for yours): the listener's own runs
+  (reviews, fix runs) aren't asked. With Deckhand's files alone and no repository file, the
+  listener decides as `run.rego` would, from the comment alone: no `opa`, no GitHub call,
+  nothing to fail. For `merge`, the pull request then waits for
   a human, as with any refusal; for `review`, the review is skipped (the log says why); for
   `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
   sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says

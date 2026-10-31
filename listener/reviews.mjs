@@ -1114,17 +1114,19 @@ export function linkSample(repo, pr, issue = null) {
 // for the dry run), starting a work run, and one asking for a brainstorm there, which Deckhand's
 // policy/run.rego refuses. → [{ what, input }] (docs/repo-config.md#the-run-input, as
 // run-policy.mjs runInput() builds it).
-export function runSamples(repo, pr, issue = null, sender = null) {
+export function runSamples(repo, pr, issue = null, sender = null, now = Date.now) {
   const sample = (what, mode, light) => ({
     what,
     input: {
       decision: "run",
+      time: new Date(now()).toISOString(),
       repo: repo.toLowerCase(),
       mode,
       custom_mode: false,
       light,
       fresh: false,
       trigger: "comment",
+      continues: false,
       sender,
       target: {
         kind: "pr",
@@ -2543,7 +2545,7 @@ export function createReviews({
     for (const decision of DECISIONS) {
       // No run to start: a comment on this pull request asking for one, by whoever asked.
       if (decision === "run") {
-        for (const sample of runSamples(repo, pr, found, by)) {
+        for (const sample of runSamples(repo, pr, found, by, now)) {
           const said = await ask(decision, () => sample.input);
           const input = { version: INPUT_VERSION, ...sample.input };
           results.push({ ...said, sample: sample.what, input });

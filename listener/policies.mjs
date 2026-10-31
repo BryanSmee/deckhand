@@ -308,6 +308,8 @@ export function operatorPolicies(config, read = (path) => readFileSync(path, "ut
 // otherwise, as before allow rules; all but `run`, which policy/run.rego allows where each mode
 // makes sense. Its name, and the map createPolicies() gets by default.
 export const ALLOW = "allow.rego";
+// Deckhand's allow rules for the runs people start (policy/run.rego).
+const RUN = "run.rego";
 export const allowOnly = (dir = BUILT_IN_DIR) =>
   new Map([[ALLOW, readFileSync(join(dir, ALLOW), "utf8")]]);
 
@@ -495,6 +497,8 @@ export function createPolicies({
   let capabilities = null;
   // Deckhand's own policies, read once: they are part of the image.
   let builtIn = null;
+  // Deckhand's policy/run.rego as shipped, read once (deckhandOnly()).
+  let shippedRun = null;
   const ownDefaults = () => (builtIn ??= readBuiltIn());
   // The defaults under the operator's: name → text.
   const defaults = () => new Map([...ownDefaults(), ...readOperator()]);
@@ -554,6 +558,18 @@ export function createPolicies({
         ([name, text]) => own.get(name) === text && !rulesOf(text).includes(`deny_${decision}`),
       ) && [...files.values()].some((text) => always.test(text))
     );
+  }
+
+  // Whether the operator's layer `files` (name → text) is Deckhand's own policies, unchanged and
+  // with nothing added, its run.rego the one shipped (BUILT_IN_DIR): then `run` needs no opa,
+  // run-policy.mjs defaultRun() says what run.rego would.
+  function deckhandOnly(files) {
+    const own = ownDefaults();
+    if (files.size !== own.size || [...files].some(([name, text]) => own.get(name) !== text)) {
+      return false;
+    }
+    shippedRun ??= readFileSync(join(BUILT_IN_DIR, RUN), "utf8");
+    return files.get(RUN) === shippedRun;
   }
 
   async function capabilitiesFile() {
@@ -1034,6 +1050,7 @@ export function createPolicies({
     checkRepo,
     repoPolicies,
     policiesFor,
+    deckhandOnly,
     forget,
   };
 }

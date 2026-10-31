@@ -986,7 +986,8 @@ template strings (`$"…"`):
   error). Its file named as one of Deckhand's or the operator's replaces nothing (a warning).
 
 When only Deckhand's files apply, allowing the decision and none defining its deny rule, no
-`opa` runs (and the task's page keeps nothing): not for `run`. The repository's folder is listed once, then
+`opa` runs (and the task's page keeps nothing); for `run`, the listener decides as `run.rego`
+would. The repository's folder is listed once, then
 again after a push to its default branch (or 10 minutes).
 
 <!-- modes.rego: test/linked-branch.test.mjs evaluates this block with the real opa -->
@@ -1035,15 +1036,20 @@ policies and reports their errors.
 network or the listener's files (`opa.runtime`, `http.send`, `net.*`, `json.match_schema`,
 `json.verify_schema`) and `trace`: a policy decides from its input only. `time.now_ns()` works, so "not on Fridays" does.
 
+<!-- onboarding: skip (listener/prompts.mjs leaves the inputs out of the onboarding prompt) -->
+
 ### The run input
 
 `input` of `deny_run`, asked once per run a person asks for, before it is queued (not the
 listener's reviews and fix runs): `version`, `decision: "run"`, `time`, `repo` (`"owner/repo"`,
 lower case), `mode`, `custom_mode`, `light`, `fresh`, `trigger` (`comment`, `dashboard`,
-`inbox`, `discussion`), `sender` (a login), `target` (where the comment is: `kind`: `issue`,
+`inbox`, `discussion`), `continues` (`true` for a comment without a trigger or `/mode` line,
+going on in the issue's current mode), `sender` (a login), `target` (where the comment is: `kind`: `issue`,
 `pr` or `discussion`, `number`, `labels`, `author`), `issue` (the task's, or `null`) and `pr`
 (`draft`, `base`, `head`; else `null`). Deckhand's `run.rego` allows every mode on issues, all
-but `brainstorm`, `stop` and `onboarding` elsewhere.
+but `brainstorm`, `stop` and `onboarding` elsewhere unless the comment `continues` (the onboarding
+pull request's comments go on in onboarding). With Deckhand's files alone and no repository
+file, the listener decides as `run.rego` would, without `opa` or a GitHub call.
 
 ### The merge input
 
@@ -1427,6 +1433,8 @@ A repository's own mode its `allow_link_branch` lets link one ([example](#polici
 its branch checked out and its draft pull request opened by the sandbox, as a work run does,
 but only on the run that links it: the policies aren't asked about a branch that exists
 already, so its later runs get none.
+
+<!-- onboarding: end -->
 
 ### The default policies
 
