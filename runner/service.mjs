@@ -30,7 +30,14 @@ import { agentFor } from "../listener/agents/index.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { createEvents } from "./events.mjs";
 import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
-import { buildPlan, buildProblem, grantOrRefuse, previewJob, validRepo } from "./hooks.mjs";
+import {
+  buildPlan,
+  buildProblem,
+  grantOrRefuse,
+  previewEventProblem,
+  previewJob,
+  validRepo,
+} from "./hooks.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId } from "./logs.mjs";
 
@@ -95,6 +102,10 @@ const MAX_WAIT_MS = 30_000;
 
 // Fences: the newest orchestrator epoch seen, in the store, so both copies refuse the same.
 const EPOCH_KEY = "epoch/orchestrator";
+// How far ahead of this copy's clock an epoch may be: they are the orchestrator's clock until
+// #506 (lib/store.mjs nextEpoch()), so one further ahead is no clock's, and kept, it would refuse
+// every listener after it until its key were removed from the store by hand.
+const EPOCH_AHEAD_MS = 24 * 3600_000;
 
 // A sandbox's, a run's or a message's name, as Docker and the runs folder take them: never `.`
 // or `..` (a run's inbox folder is named after it), nor an option (`-…`).
@@ -203,6 +214,9 @@ export function createRunnerService({
   async function fence(req) {
     const epoch = Number(req.headers[EPOCH_HEADER]);
     if (!Number.isSafeInteger(epoch) || epoch < 1) throw new Refused(400, "no fencing epoch");
+    if (epoch > now() + EPOCH_AHEAD_MS) {
+      throw new Refused(400, `epoch ${epoch}: further ahead of the runner's clock than a day`);
+    }
     for (;;) {
       const newest = (await store.get(EPOCH_KEY)) ?? 0;
       if (epoch < newest) {
@@ -274,6 +288,15 @@ export function createRunnerService({
       result = await runner.start({
         ...spec,
         tokens: (sandbox) => broker.runTokens(run, sandbox),
+        // Its host paths resolved again once the waits are over (the orchestrator answers the
+        // tokens, as slowly as it likes): a sandbox may have swapped one for a symlink since.
+        recheck: () => {
+          const again = checkSpec(spec);
+          if (again.length) {
+            log(`${name}: not started: ${again.join("; ")}`);
+            throw new Refused(403, `the runner refuses its spec: ${again.join("; ")}`);
+          }
+        },
       });
     } catch (error) {
       await store.delete(key);
@@ -470,6 +493,9 @@ export function createRunnerService({
     "POST /previews": async ({ req, res }) => {
       // The repository and the event only: its command and image are read here (hooks.mjs).
       const { id, repo, event, payload } = await readJsonBody(req, MAX_JSON);
+      if (!validRepo(repo)) throw new Refused(400, "repo?");
+      const problem = previewEventProblem(repo, event, payload);
+      if (problem) throw new Refused(400, problem);
       // Refused now when the grants don't allow it; the config is read once queued.
       if (!previewsGranted(repo)) {
         throw new Refused(403, `the operator doesn't grant ${repo} \`allow_preview\``);

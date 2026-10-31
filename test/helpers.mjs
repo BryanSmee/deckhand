@@ -3,10 +3,19 @@
 // (everything under test/ matches its patterns), where it finds no test.
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { gitBlob } from "../listener/images.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { createRuns, runFields } from "../broker/runs.mjs";
@@ -375,6 +384,20 @@ export function policyEngine(
 
 // The Dockerfile's blob, as the runner's caller reads it and sends it (runner/client.mjs
 // imageFor()): `readFile(repo, path, ref)` → { sha } or null.
+// A repo's files for a build, as checkout() gives them: its Dockerfile, at the paths the tests
+// name, says `seed`, so that its blob, which images.mjs checks against the tag's, is
+// contextBlob(seed).
+const dockerfileOf = (seed) => `FROM deckhand-sandbox\n# ${seed}\n`;
+export const contextBlob = (seed) => gitBlob(Buffer.from(dockerfileOf(seed)));
+export function buildContext(t, seed) {
+  const dir = tempDir(t, "deckhand-ctx-");
+  for (const path of ["Dockerfile", "docker/Dockerfile"]) {
+    mkdirSync(dirname(join(dir, path)), { recursive: true });
+    writeFileSync(join(dir, path), dockerfileOf(seed));
+  }
+  return dir;
+}
+
 export function withBlobs(images, readFile) {
   return {
     ...images,

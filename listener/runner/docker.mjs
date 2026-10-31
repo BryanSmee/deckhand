@@ -132,10 +132,13 @@ export function createDockerRunner({
   // container engine, `cache` the base name of the repo's cache volume when it keeps one;
   // `ca`: the egress proxy's CA certificate (PEM), which the sandbox trusts, in its inbox
   // folder (DECKHAND_CA, where the sandbox fetches it); `digest`: a run analysis's digest of
-  // past runs (analysis.mjs), there too (TASK_DIGEST). → { engine: { backend, volume, cached } }
-  // when it has one.
+  // past runs (analysis.mjs), there too (TASK_DIGEST). `recheck()`: checks the spec again (the
+  // runner's spec-check.mjs) right before `docker run`, after the waits for the tokens and the
+  // engine, so that a host path swapped for a symlink meanwhile isn't mounted; throws to refuse.
+  // → { engine: { backend, volume, cached } } when it has one.
   async function start(spec) {
     const { run, name, image, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
+    const { recheck = () => {} } = spec;
     const args = sandboxArgs(spec);
     await inbox.write(run, ca, digest);
     // Its own last: a spec's labels never make a sandbox another deployment's or another run's.
@@ -164,6 +167,7 @@ export function createDockerRunner({
         ...(started ? engineEnv(started.backend) : {}),
         ...inbox.env(config.brokerUrl, ca, digest),
       };
+      await recheck();
       checked(
         await docker(runArgs({ run, name, image, labels: all, env, engineVars, args }), {
           env: cliEnv(env),

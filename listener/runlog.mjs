@@ -129,9 +129,11 @@ export const minutes = (ms) => Math.round(ms / 6000) / 10;
 // (logs/<run>.json, the orchestrator's), as the logs are the runner's (#503). A run still live
 // (its .live.json, restart.mjs) has none yet: restoreRuns() lists it, and it gets one when it
 // ends. Newest first. A summary that can't be read is left out, logged: none stops the start.
+// The run state (.live.json) and queues (.queued.json) restart.mjs keeps here aren't summaries.
+const NOT_SUMMARIES = [".live.json", ".queued.json"];
 export function loadRuns(logDir, { log = console.error } = {}) {
   return readdirSync(logDir)
-    .filter((f) => f.endsWith(".json") && !f.endsWith(".live.json"))
+    .filter((f) => f.endsWith(".json") && !NOT_SUMMARIES.some((end) => f.endsWith(end)))
     .map((file) => {
       const id = file.slice(0, -5);
       const saved = readJson(join(logDir, file));
@@ -146,51 +148,84 @@ export function loadRuns(logDir, { log = console.error } = {}) {
 // The logs a listener kept itself (logs/<run>.log), before the runner kept them (#503): each
 // summarized now when its run has no summary (a log from before summaries, or of a listener
 // that died mid-run) and isn't live, so that loadRuns() lists it; then sent to the runner
-// (`logs`: ../runner/client.mjs's) and removed, one after the other, while the listener goes on:
-// a runner away doesn't keep it from starting. A log the runner doesn't take stays, and is sent
-// at the next start. → { moving: run id → its move, done: all of them, how many moved }: a
-// live run's log is written on at the runner once its move is over (restart.mjs).
-export function moveLogs(logDir, logs, { max = READ_MAX, log = console.error } = {}) {
+// (`logs`: ../runner/client.mjs's) and removed, while the listener goes on: a runner away
+// doesn't keep it from starting. A log whose summary can't be written stays here, as does one
+// the runner doesn't take, and is sent at the next start.
+//
+// A live run's log (its .live.json) is written on at the runner once its move is over
+// (restart.mjs): those go first, on a chain of their own, so that a live run waits for its own
+// log, never the history's. A live run's move that fails is tried again until it is done: its
+// writer would otherwise go on after a part of it, and the rest, sent at the next start, land
+// after its new lines. Only a runner's copy longer than the file (which no try can fix) ends it.
+//
+// → { moving: run id → its move (true once moved), done: all of them, how many moved }.
+export function moveLogs(
+  logDir,
+  logs,
+  { max = READ_MAX, log = console.error, sleep = unrefSleep, retryMs = 5000 } = {},
+) {
   const files = readdirSync(logDir).filter((f) => f.endsWith(".log"));
   const moving = new Map();
   if (!files.length) return { moving, done: Promise.resolve(0) };
   log(`Run logs: ${files.length} kept here, sent to the runner`);
-  const sendable = [];
+  const notSent = (file, error) =>
+    log(`Run logs: ${file} not sent to the runner (${error.message}), again at the next start`);
+  const live = [];
+  const ended = [];
   for (const file of files) {
     const id = file.slice(0, -4);
     try {
-      const live = existsSync(join(logDir, `${id}.live.json`));
-      if (!live && readJson(summaryPath(logDir, id))?.id !== id) {
-        saveSummary(logDir, runOf(logDir, file, max, log), log);
+      const isLive = existsSync(join(logDir, `${id}.live.json`));
+      if (!isLive && readJson(summaryPath(logDir, id))?.id !== id) {
+        // Not saveSummary(), which logs a failure and goes on: without its summary, a log
+        // sent and removed would leave its run listed nowhere.
+        writeJsonAtomic(summaryPath(logDir, id), runOf(logDir, file, max, log));
       }
-      sendable.push(file);
+      (isLive ? live : ended).push(file);
     } catch (error) {
-      log(`Run logs: ${file} not sent to the runner (${error.message}), again at the next start`);
+      notSent(file, error);
     }
   }
-  let chain = Promise.resolve(0);
-  for (const file of sendable) {
+  let count = 0;
+  async function send(file, isLive) {
     const id = file.slice(0, -4);
     const path = join(logDir, file);
-    const moved = chain.then(async (count) => {
+    for (let wait = retryMs; ; wait = Math.min(wait * 2, 60_000)) {
       try {
         await logs.upload(id, path);
         rmSync(path, { force: true });
-        return count + 1;
+        count++;
+        return true;
       } catch (error) {
-        log(`Run logs: ${file} not sent to the runner (${error.message}), again at the next start`);
-        return count;
+        if (!isLive || error.code === "LOG_LONGER") {
+          notSent(file, error);
+          return false;
+        }
+        log(
+          `Run logs: ${file}, a live run's, not sent yet (${error.message}): again in ${wait / 1000} s`,
+        );
+        await sleep(wait);
       }
-    });
-    moving.set(id, moved);
-    chain = moved;
+    }
   }
-  const done = chain.then((count) => {
+  const chain = (list, isLive) => {
+    let last = Promise.resolve();
+    for (const file of list) {
+      const moved = last.then(() => send(file, isLive));
+      moving.set(file.slice(0, -4), moved);
+      last = moved;
+    }
+    return last;
+  };
+  const done = Promise.all([chain(live, true), chain(ended, false)]).then(() => {
     log(`Run logs: ${count} of ${files.length} sent to the runner`);
     return count;
   });
   return { moving, done };
 }
+
+// A wait that keeps no process up: a listener stopping doesn't wait for a retry.
+const unrefSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
 export const summaryPath = (logDir, id) => join(logDir, `${id}.json`);
 

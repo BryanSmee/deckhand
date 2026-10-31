@@ -354,7 +354,7 @@ export function createRunnerClient({
   // A run's whole log, as text (a digest of it, a summary of a run that has none).
   async function logText(id) {
     const parts = [];
-    for (let offset = 0; ;) {
+    for (let offset = 0; ; ) {
       const { size, data } = await readLog(id, { offset, caller: orchestrator });
       parts.push(data);
       offset += data.length;
@@ -478,11 +478,16 @@ export function createRunnerClient({
   }
 
   // A log written before the runner kept them (a file of the listener's): sent in parts, from
-  // where the runner's copy ends, should a previous try have sent some of it.
+  // where the runner's copy ends, should a previous try have sent some of it. A runner's copy
+  // longer than the file is no try's to fix: LOG_LONGER.
+  const longer = (id, file) =>
+    Object.assign(new Error(`the runner's log of ${id} is longer than ${file}`), {
+      code: "LOG_LONGER",
+    });
   async function upload(id, file) {
     const total = statSync(file).size;
     let at = (await readLog(id, { offset: 0, length: 1, caller: orchestrator })).size;
-    if (at > total) throw new Error(`the runner's log of ${id} is longer than ${file}`);
+    if (at > total) throw longer(id, file);
     const fd = openSync(file, "r");
     try {
       while (at < total) {
@@ -490,7 +495,7 @@ export function createRunnerClient({
         const n = readSync(fd, data, 0, data.length, at);
         const after = await append(id, at, data.subarray(0, n));
         const now = typeof after === "number" ? after : after.conflict;
-        if (now > total) throw new Error(`the runner's log of ${id} is longer than ${file}`);
+        if (now > total) throw longer(id, file);
         at = now;
       }
     } finally {

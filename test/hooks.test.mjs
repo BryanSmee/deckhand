@@ -42,7 +42,12 @@ test("a preview hook: its command and image from the default branch's config, it
   };
   const built = [];
   const imageFor = async (asked) => (built.push(asked), "dh-repo-org-repo:abc");
-  const job = { repo: "org/repo", event: "pull_request", payload: { action: "opened" } };
+  const payload = {
+    action: "opened",
+    repository: { full_name: "Org/Repo" },
+    pull_request: { number: 5 },
+  };
+  const job = { repo: "org/repo", event: "pull_request", payload };
   const both = grantsOf("allow_preview: true\nallow_dockerfile: true\n");
   files("preview:\n  command: ./up.sh\ndockerfile: Dockerfile\n");
   const found = await previewJob(config, job, { checkout, imageFor, grants: both });
@@ -63,6 +68,17 @@ test("a preview hook: its command and image from the default branch's config, it
     previewJob(config, { ...job, event: "push" }, { checkout, imageFor, grants: both }),
     /event\?/,
   );
+  // An event the runner can't tie to the repository asked: another's, or without its subject.
+  const event = (asked) =>
+    assert.rejects(previewJob(config, asked, { checkout, imageFor, grants: both }), (error) => {
+      assert.equal(error.status, 400);
+      return true;
+    });
+  await event({ ...job, payload: { ...payload, repository: { full_name: "org/other" } } });
+  await event({ ...job, payload: { ...payload, repository: undefined } });
+  await event({ ...job, event: "workflow_run" });
+  await event({ ...job, payload: null });
+  await event({ ...job, payload: [] });
 });
 
 test("a build's plan: the default branch unless a branch is asked (and granted), GitHub's blob, granted hosts only", async () => {

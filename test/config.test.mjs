@@ -820,3 +820,14 @@ test("SERVICE_NETWORKS: checked at start; none is the runner's, never the listen
   assert.throws(() => load("none"), /none is the runner's.*NetworkPolicy/);
   assert.throws(() => load("runner=nowhere"), /SERVICE_NETWORKS: expected service=subnet/);
 });
+
+test("RUNNER_URL: http(s) URLs only, each of its copies'", () => {
+  const ALLOWED_USERS = "alice";
+  assert.throws(() => loadConfig({ ALLOWED_USERS, RUNNER_URL: "runner:8080" }), /RUNNER_URL/);
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS, RUNNER_URL: "http://a:8080,b:8080" }),
+    /RUNNER_URL: b:8080/,
+  );
+  const both = "http://a:8080,http://b:8080";
+  assert.equal(loadConfig({ ALLOWED_USERS, RUNNER_URL: both }).runnerUrl, both);
+});

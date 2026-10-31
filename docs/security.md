@@ -421,12 +421,11 @@ any pod in the runner's namespace: only the runner service holds either (`runner
 does, it does for its callers, each endpoint naming which (`runner/service.mjs` `ROUTES`, checked
 with their service tokens first, below):
 
-| Caller       | May                                                                                                                                         |
-| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; queue preview hooks; write and remove logs |
-| edge         | read a run's log (the dashboard's live view)                                                                                                |
-| broker       | ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent; read a run's inbox and files                   |
-| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                     |
+| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; queue preview hooks; write and remove logs; and, for the egress policy and the runs from before tokens it still serves, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files (unfenced: a listener still draining answers the proxy) |
+| edge         | read a run's log (the dashboard's live view)                                                                                                                                                                                                                                                                                                                                                                   |
+| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                        |
 
 None can act on a container or a network that isn't one of this deployment's runs: the runner
 stops, follows and removes only the sandboxes it lists by their labels (`deckhand.owner`,
@@ -453,8 +452,26 @@ branch's is asked and granted, the Dockerfile's blob as the github service says 
 /blobs/…`), the hosts the grants give;
 and a preview hook, which runs as root with the socket, only with `allow_preview`: the runner
 reads its command and image itself, from the repository's default branch's config in its own
-checkout, and runs it in that checkout, never from the orchestrator's call (`runner/hooks.mjs`). A compromised listener can
-still start a run (it is the orchestrator until #506), never one that is root on the host. The runner holds no GitHub credential: a
+checkout, and runs it in that checkout, never from the orchestrator's call (`runner/hooks.mjs`).
+The hook's event comes from the orchestrator: the runner can't check the delivery's signature
+(the listener did), only that it is a `pull_request` or `workflow_run` event about that
+repository, with its pull request or workflow run. A compromised listener can still start a run
+(it is the orchestrator until #506), but not one it names as root on the host.
+
+**Until the github service leaves the listener (#502)**, the listener also serves the runner's
+tarballs and blobs, which the runner can't tell from GitHub's. So a compromised listener can
+still reach root on the host through the two grants that run a repository's own files there:
+
+- `allow_preview`: it serves a `.deckhand.yaml` whose hook is its own, which then runs as root
+  with the socket;
+- `allow_dockerfile`: it serves a Dockerfile, or other files the build copies, of its own. The
+  runner builds only when the files hold the Dockerfile whose blob the tag names (`images.mjs`
+  `buildImage()`), so such an image never takes the real Dockerfile's tag once the blobs come
+  from GitHub itself; but the rest of the build context isn't in the tag, so after a compromise
+  remove the repository's images (`deckhand-repo-…`) for them to build again.
+
+Grant those two, until then, only to repositories whose hook or image you would let the
+listener's host run as root. The runner holds no GitHub credential: a
 build's context and a preview hook start from the repository's tarball, which it gets from the
 github service (the listener's services port, `GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
 blob id, `GET /blobs/…`, the runner's only routes there, for an allowed repository, its names,

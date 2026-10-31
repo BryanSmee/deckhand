@@ -250,7 +250,8 @@ test("each caller gets its own endpoints only, from its own network, with a vali
 test("a preview hook sent again with its key is queued once", async (t) => {
   const store = fileStore();
   const { url, previewed } = await copy(t, { store, backend: host() });
-  const job = { id: "p1", repo: "org/repo", event: "pull_request", payload: {} };
+  const payload = { repository: { full_name: "org/repo" }, pull_request: { number: 1 } };
+  const job = { id: "p1", repo: "org/repo", event: "pull_request", payload };
   for (let i = 0; i < 2; i++) {
     assert.equal(
       (await call(url, "POST", "/previews", { sub: "orchestrator", body: job })).status,
@@ -266,7 +267,7 @@ test("a preview hook sent again with its key is queued once", async (t) => {
     {
       repo: "org/repo",
       event: "pull_request",
-      payload: {},
+      payload,
       ref: null,
       hook: {
         command: "./preview.sh",
@@ -277,11 +278,21 @@ test("a preview hook sent again with its key is queued once", async (t) => {
     },
   ]);
   // A repository its grants don't allow: refused now, nothing queued; a build likewise.
-  const other = { ...job, id: "p2", repo: "org/other" };
+  const other = {
+    ...job,
+    id: "p2",
+    repo: "org/other",
+    payload: { ...payload, repository: { full_name: "org/other" } },
+  };
   assert.equal(
     (await call(url, "POST", "/previews", { sub: "orchestrator", body: other })).status,
     403,
   );
+  // An event about another repository than the one named: refused before anything is queued.
+  const forged = { ...job, id: "p3", payload: { ...payload, repository: { full_name: "o/x" } } };
+  const answer = await call(url, "POST", "/previews", { sub: "orchestrator", body: forged });
+  assert.equal(answer.status, 400);
+  assert.match((await answer.json()).message, /isn't about org\/repo/);
   const build = { repo: "org/other", ref: "main", dockerfile: "Dockerfile", blob: "b" };
   const refused = await call(url, "POST", "/images", { sub: "orchestrator", body: build });
   assert.equal(refused.status, 403);
@@ -367,6 +378,12 @@ test("the orchestrator's fencing epoch: none refused, a stale one refused, the n
   assert.equal(backend.runs(), 0);
   // Other callers carry none.
   assert.equal((await call(b.url, "GET", "/logs/dh-o-a-1-1", { sub: "edge" })).status, 200);
+  // One no clock gives (they are the orchestrator's clock until #506): refused, not kept, so
+  // that it never locks every later listener out.
+  const far = Date.now() + 2 * 24 * 3600_000;
+  assert.equal(await status(b.url, far), 400);
+  assert.equal(await status(b.url, Number.MAX_SAFE_INTEGER), 400);
+  assert.equal(await status(b.url, 4), 200);
 });
 
 test("a run starts through the client, its first tokens from the broker; asked again, nothing starts", async (t) => {
@@ -835,4 +852,27 @@ test("only this deployment's sandboxes and runs' networks: never another contain
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-2"), 409);
   assert.equal(await status("POST", "/sandboxes/dh-o-a-1/kill"), 200);
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-1"), 200);
+});
+
+// Two copies during a handover (a lease that expired on a stalled one), both reading the log's
+// size before either appends: the same chunk, sent to each, lands once.
+test("logs: the same append through two copies at once is written once", async () => {
+  const store = fileStore();
+  let readers = 0;
+  let release;
+  const both = new Promise((resolve) => (release = resolve));
+  const shared = {
+    ...store,
+    blobSize: async (key) => {
+      const size = await store.blobSize(key);
+      if (++readers === 2) release();
+      await both;
+      return size;
+    },
+  };
+  const [a, b] = [createLogs({ store: shared }), createLogs({ store: shared })];
+  const id = "dh-a-1000";
+  const data = Buffer.from("one line\n");
+  assert.deepEqual(await Promise.all([a.append(id, 0, data), b.append(id, 0, data)]), [9, 9]);
+  assert.equal((await store.readBlob(`logs/${id}`)).toString(), "one line\n");
 });

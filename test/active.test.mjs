@@ -100,3 +100,22 @@ test("a holder whose store hangs stops acting by its own clock, before its next 
   clock += 60_000;
   assert.equal(lease.active(), false);
 });
+
+test("a stop while the lease is being taken gives it back: the other copy doesn't wait a lifetime", async (t) => {
+  const store = fileStore();
+  let open;
+  const gate = new Promise((resolve) => (open = resolve));
+  // Its acquire answers only once stop() was called.
+  const slow = { ...store, acquire: async (...args) => (await gate, store.acquire(...args)) };
+  const a = copy(t, slow, "a", 5000);
+  const b = copy(t, store, "b", 5000);
+  const starting = a.lease.start();
+  const stopping = a.lease.stop();
+  open();
+  await starting;
+  await stopping;
+  assert.equal(a.lease.active(), false);
+  await b.lease.start();
+  assert.equal(b.lease.active(), true);
+  assert.deepEqual(a.said, []);
+});

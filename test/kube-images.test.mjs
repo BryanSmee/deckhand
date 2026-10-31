@@ -23,7 +23,7 @@ import {
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { tempDir, withBlobs } from "./helpers.mjs";
+import { buildContext, contextBlob, tempDir, withBlobs } from "./helpers.mjs";
 
 const REGISTRY = "registry.example.com";
 const BASE = "ghcr.io/acme/deckhand-sandbox:1.2";
@@ -322,10 +322,10 @@ function setup(
       jobs: {},
       checkout: async (repo, ref) => {
         checkouts.push(ref);
-        return tempDir(t, "deckhand-ctx-");
+        return buildContext(t, `blob@${ref}`);
       },
     }),
-    async (repo, path, ref) => (path === "missing" ? null : { sha: `blob@${ref}` }),
+    async (repo, path, ref) => (path === "missing" ? null : { sha: contextBlob(`blob@${ref}`) }),
   );
   return { ...fake, registry, build, backend, images, checkouts, clock, logged };
 }

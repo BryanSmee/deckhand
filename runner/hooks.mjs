@@ -3,13 +3,14 @@
 // (and, for a build, its Dockerfile and ref); the runner reads the grants (GRANTS_DIR) and,
 // for a hook, the repository's config from its default branch's tarball, never from the
 // request: a preview hook runs as root on the host, with its Docker socket.
-import { createHash } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { Refused } from "../lib/http.mjs";
 import { grantFor, loadGrants, ungranted } from "../listener/grants.mjs";
 import { AGENTS } from "../listener/agents/index.mjs";
 import { operatorHosts } from "../listener/egress.mjs";
+import { sameRepo } from "../listener/events.mjs";
+import { gitBlob as blobOf } from "../listener/images.mjs";
 import { CONFIG_FILE, parseRepoConfig, repoPath } from "../listener/repo-config.mjs";
 
 const REPO = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
@@ -76,15 +77,28 @@ export async function buildPlan(config, asked, { grants, blobOf: lookup }) {
 
 // A file's git blob id: what GitHub's contents API says of it (its `sha`), which a repo image's
 // tag hashes (images.mjs imageTag()).
-export const blobOf = (data) =>
-  createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
+export { blobOf };
+
+// What is wrong with a preview hook's event, or null. The runner can't check its delivery's
+// signature (the listener took it): it checks at least that the event is one a hook gets, about
+// the repository asked, with its subject, so a hook granted to one repository never gets
+// another's events. The hook still judges the rest itself (docs/repo-config.md).
+export function previewEventProblem(repo, event, payload) {
+  if (!["pull_request", "workflow_run"].includes(event)) return "event?";
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return "payload?";
+  if (!sameRepo(payload.repository?.full_name, repo)) return `the event isn't about ${repo}`;
+  if (!payload[event] || typeof payload[event] !== "object")
+    return `a ${event} event without its ${event}`;
+  return null;
+}
 
 // A preview hook for `repo`'s `event`: its command and image from its default branch's config,
 // in the runner's own checkout (`checkout(repo, null)`: the default branch), which it then runs
 // in (`dir`): the command and the files of one commit. → the job for
 // previews.mjs run(), or a Refused saying why none runs. `imageFor`: images.mjs's.
 export async function previewJob(config, { repo, event, payload }, { checkout, imageFor, grants }) {
-  if (!["pull_request", "workflow_run"].includes(event)) throw new Refused(400, "event?");
+  const problem = previewEventProblem(repo, event, payload);
+  if (problem) throw new Refused(400, problem);
   const grant = grantOrRefuse(config, repo, grants);
   if (!grant.allowPreview) {
     throw new Refused(403, `the operator doesn't grant ${repo} \`allow_preview\``);

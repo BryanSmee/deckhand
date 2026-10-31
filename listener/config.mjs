@@ -17,6 +17,7 @@ import { GEMINI_URL, GOOGLE_CREDENTIALS } from "./google.mjs";
 import { OPENAI_CREDENTIALS } from "./openai.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
+import { urlProblem } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { PRIVATE_RANGES, parseCidr, privateRange } from "../lib/subnets.mjs";
 import {
@@ -308,6 +309,16 @@ function distinctPorts(ports) {
   }
 }
 
+// A service's URLs, comma-separated (its copies), each an http(s) URL: `runner:8080` would
+// otherwise be tried on every call until it times out.
+function serviceUrls(value, name) {
+  for (const url of value.split(",").map((u) => u.trim())) {
+    const problem = urlProblem(url);
+    if (problem) throw new ConfigError(`${name}: ${url} is ${problem} (http://host:port)`);
+  }
+  return value;
+}
+
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
 // `service`: "runner" for the runner service's (../runner/server.mjs), which starts no run of
 // its own: ALLOWED_USERS is the listener's to require.
@@ -334,7 +345,7 @@ export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
     servicesPort,
     // The runner service (../runner/): the only one with the Docker socket, or the Kubernetes
     // API. Several, comma-separated: its copies, tried in turn (lib/service-client.mjs).
-    runnerUrl: env.RUNNER_URL || "http://runner:8080",
+    runnerUrl: serviceUrls(env.RUNNER_URL || "http://runner:8080", "RUNNER_URL"),
     // Which network each service calling the listener's services port is on
     // (lib/service-token.mjs networkCallers()); none: no service may call it.
     serviceNetworks: serviceNetworks(env.SERVICE_NETWORKS),

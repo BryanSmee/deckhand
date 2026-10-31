@@ -966,7 +966,10 @@ a network of its own (`broker-runner`), and checks its callers' with the broker'
   newest one seen is in the runner's store, and an older one is refused (`409`), so a listener
   still draining once the next one started can't start or stop a run. Until the orchestrator has
   a lease (#506), the listener takes its epoch from the clock at start, above the last one
-  (`lib/store.mjs` `nextEpoch()`).
+  (`lib/store.mjs` `nextEpoch()`); the runner refuses one more than a day ahead of its own
+  clock (`400`). Should a listener's clock have run ahead anyway, the next one is refused until
+  that time: removing the `epoch/orchestrator` key from the runner's store (its file under
+  `runner-data`'s `store/`, or the key in Redis) with the runners stopped lets it in.
 
 **Two copies, active/passive** (`lib/active.mjs`): the one holding the runner's lease in the
 store answers; the other answers `503` (and `/ready` says so, the readiness probe's), which

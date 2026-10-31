@@ -103,3 +103,25 @@ test("a call cut once made is tried again, unless it mustn't be made twice", asy
   });
   assert.deepEqual(await refused.json("POST", "/x", { body: {}, once: true }), {});
 });
+
+test("a URL fetch() can't call fails at start, and an error of the call's own isn't waited on", async () => {
+  for (const urls of ["runner:8080", "ftp://runner", "http://runner:8080,nothing"]) {
+    assert.throws(
+      () => serviceClient({ service: "runner", urls, ...fast }),
+      /runner service's URL/,
+    );
+  }
+  // fetch()'s own TypeError for a call it can't make: thrown at once, not tried for minutes.
+  let calls = 0;
+  const client = serviceClient({
+    service: "runner",
+    urls: "http://runner:8080",
+    fetch: async () => {
+      calls++;
+      throw new TypeError("Failed to parse URL from http://runner:8080/x y");
+    },
+    ...fast,
+  });
+  await assert.rejects(client.json("GET", "/x"), /Failed to parse URL/);
+  assert.equal(calls, 1);
+});

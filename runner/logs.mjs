@@ -37,13 +37,16 @@ export function createLogs({ store, timers = globalThis }) {
     const previous = chains.get(id) ?? Promise.resolve();
     const done = previous.then(async () => {
       const size = await sizeOf(id);
-      if (at === size) {
-        if (data.length) await store.appendBlob(key(id), data);
-        wake(id);
-        return size + data.length;
-      }
       if (at + data.length === size && data.length) return size;
-      throw new LogConflict(size);
+      if (at !== size) throw new LogConflict(size);
+      if (!data.length) return size;
+      // In one step of the store's, not just of this copy's: two copies handing over (a lease
+      // that expired on a stalled one) may both have read this size. The second then finds
+      // the same bytes there and adds nothing.
+      const written = await store.appendBlobAt(key(id), at, data);
+      if (written.gap) throw new LogConflict(written.length);
+      wake(id);
+      return at + data.length;
     });
     const settled = done.catch(() => {});
     chains.set(id, settled);

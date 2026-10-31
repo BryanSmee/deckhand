@@ -490,6 +490,84 @@ test("runs: a log the runner doesn't take stays here, summarized, and goes at th
   assert.equal(existsSync(join(dir, `${id}.log`)), false);
 });
 
+test("runs: a log whose summary can't be written stays here, unsent: its run is never lost", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-12-1000";
+  const meta = { type: "listener", key: "org/repo#12", repo: "org/repo", startedAt: 1000 };
+  writeFileSync(join(dir, `${id}.log`), line(meta));
+  // Where its summary goes, a folder that isn't empty: no write replaces it.
+  mkdirSync(join(dir, `${id}.json`));
+  writeFileSync(join(dir, `${id}.json`, "x"), "");
+  const runner = fakeRunner();
+  const logs = [];
+  await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
+  assert.equal(runner.logs.size, 0);
+  assert.equal(existsSync(join(dir, `${id}.log`)), true);
+  assert.match(logs.join("\n"), new RegExp(`${id}\\.log not sent to the runner`));
+});
+
+test("runs: live runs' logs move first, on their own; a failed try is tried again, never left halfway", async (t) => {
+  const dir = tempDir(t);
+  const ids = ["deckhand-org-repo-1-1000", "deckhand-org-repo-2-1000", "deckhand-org-repo-3-1000"];
+  for (const id of ids) {
+    writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
+  }
+  // The last one is live.
+  const live = ids[2];
+  writeFileSync(join(dir, `${live}.live.json`), "{}");
+  const order = [];
+  let failures = 2;
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const runner = {
+    upload: async (id) => {
+      order.push(id);
+      if (id === live && failures-- > 0) throw new Error("the runner service didn't answer");
+      // The history's first log is slow: the live one doesn't wait for it.
+      if (id === ids[0]) await held;
+    },
+  };
+  const waits = [];
+  const moved = moveLogs(dir, runner, {
+    log: () => {},
+    sleep: async (ms) => waits.push(ms),
+    retryMs: 5000,
+  });
+  assert.equal(await moved.moving.get(live), true);
+  assert.deepEqual(waits, [5000, 10000]);
+  assert.equal(existsSync(join(dir, `${live}.log`)), false);
+  assert.ok(!order.includes(ids[1]), "the live log waited for no other");
+  release();
+  assert.equal(await moved.done, 3);
+});
+
+test("runs: a live run's log the runner holds more of is given up, not tried forever", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-9-1000";
+  writeFileSync(join(dir, `${id}.log`), line({ type: "listener", key: id, startedAt: 1000 }));
+  writeFileSync(join(dir, `${id}.live.json`), "{}");
+  let tries = 0;
+  const runner = {
+    upload: async () => {
+      tries++;
+      throw Object.assign(new Error("longer"), { code: "LOG_LONGER" });
+    },
+  };
+  const moved = moveLogs(dir, runner, { log: () => {}, sleep: async () => {} });
+  assert.equal(await moved.moving.get(id), false);
+  assert.equal(tries, 1);
+  assert.equal(await moved.done, 0);
+});
+
+test("runs: the run states and queues kept beside the summaries aren't listed, nor logged", (t) => {
+  const dir = tempDir(t);
+  writeFileSync(join(dir, "deckhand-org-repo-1-1000.live.json"), "{}");
+  writeFileSync(join(dir, "deckhand-org-repo-1-1000.queued.json"), "[]");
+  const logs = [];
+  assert.deepEqual(loadRuns(dir, { log: (l) => logs.push(l) }), []);
+  assert.deepEqual(logs, []);
+});
+
 test("runs: a live run gets no summary from its log, the one written when it ends wins", async (t) => {
   const dir = tempDir(t);
   const id = "deckhand-org-repo-7-1000";

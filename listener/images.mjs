@@ -12,7 +12,8 @@
 // default branch's runs and preview hooks never pick up what a branch built. Old tags are
 // pruned, keeping the default branch's newest and the most recent few.
 import { createHash } from "node:crypto";
-import { rmSync } from "node:fs";
+import { readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { sameRepo } from "./events.mjs";
 import { checked } from "./docker.mjs";
 import { cacheVolume, legacyRepoImage, repoImage } from "./repo-config.mjs";
@@ -49,6 +50,11 @@ export function imageTag(config, repo, baseId, dockerfile, blob, branchRef = nul
   const hash = createHash("sha256").update(parts.join("\0")).digest("hex");
   return `${repoImage(config, repo)}:${branchRef ? BRANCH : ""}${hash.slice(0, 16)}`;
 }
+
+// A file's git blob id, as GitHub names its contents (a Dockerfile's `sha`), which a repo image's
+// tag hashes.
+export const gitBlob = (data) =>
+  createHash("sha1").update(`blob ${data.length}\0`).update(data).digest("hex");
 
 export function createImages({
   config,
@@ -106,7 +112,7 @@ export function createImages({
     const tag = named(imageTag(config, repo, id, dockerfile, blob, branch ? ref : null));
     if ((await backend.id(tag)) !== null) return tag;
     if (!builds.has(tag)) {
-      const build = buildImage(repo, ref, dockerfile, tag, output, access).finally(() =>
+      const build = buildImage(repo, ref, dockerfile, blob, tag, output, access).finally(() =>
         builds.delete(tag),
       );
       builds.set(tag, build);
@@ -116,10 +122,25 @@ export function createImages({
     return tag;
   }
 
-  async function buildImage(repo, ref, dockerfile, tag, output, { hosts, trusted }) {
-    log(`${repo}: building ${tag} from ${dockerfile} at ${ref ?? "its default branch"}`);
+  // The tag hashes the Dockerfile's blob, which the caller read apart from the files it builds
+  // (the github service, #502): built only when the Dockerfile in those files is that blob, so
+  // that a tag always names what it was built from, whoever served the files.
+  async function buildImage(repo, ref, dockerfile, blob, tag, output, { hosts, trusted }) {
+    const at = ref ?? "its default branch";
+    log(`${repo}: building ${tag} from ${dockerfile} at ${at}`);
     const dir = await checkout(repo, ref);
     try {
+      let found = null;
+      try {
+        found = gitBlob(readFileSync(join(dir, dockerfile)));
+      } catch {
+        // None: refused below.
+      }
+      if (found !== blob) {
+        throw new Error(
+          `${dockerfile} of ${repo} at ${at}: not the Dockerfile its tag names (${found ?? "none"} in its files, ${blob} asked)`,
+        );
+      }
       const built = await backend.build({
         dir,
         dockerfile,

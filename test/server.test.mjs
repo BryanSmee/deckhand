@@ -23,6 +23,7 @@ import { describe, test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
+import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
 import { evalResult, fakeOpa, servePolicies, tempDir, testKey } from "./helpers.mjs";
 
@@ -106,7 +107,10 @@ async function fakeGitHub(files = {}) {
         const text = ref === "trunk" ? files[path] : files[`${ref}:${path}`];
         if (text === undefined) return res.writeHead(404).end("{}");
         const content = Buffer.from(text).toString("base64");
-        return res.end(JSON.stringify({ type: "file", sha: `blob-${text.length}`, content }));
+        // Its git blob id, as GitHub's: the runner builds only when the tarball's Dockerfile is
+        // that blob (images.mjs buildImage()).
+        const sha = gitBlob(Buffer.from(text));
+        return res.end(JSON.stringify({ type: "file", sha, content }));
       }
       // The default branch's, by name or without a ref (the runner's preview hooks).
       if (

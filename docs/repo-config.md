@@ -812,7 +812,8 @@ the Docker socket is root on the host. Without it, a `preview` key stops the rep
 runs (the reply says which grant is missing) and its hook never runs.
 
 On `pull_request` and `workflow_run` deliveries for the repository (whoever opened the pull
-request), the listener runs `preview.command`:
+request), the runner service (the only one with the Docker socket) runs `preview.command`, read
+from the default branch's `.deckhand.yaml`:
 
 - with `sh -c`, in a new container of `preview.image` (or the repo's image), as root;
 - in `/deckhand-checkout`, the repository's files at the default branch, never the pull
@@ -836,8 +837,8 @@ replaces it, so the hook may not see every event: have it bring the preview to t
 event describes (open, updated, closed) rather than react to each action. A hook is **busy** for as
 long as its command runs: the listener's `/status` lists it and isn't idle meanwhile, so a
 restart that waits for it doesn't cut a deployment short. A hook that starts something
-should wait until it is up before exiting. Its output is kept in the data volume, under
-`previews/`.
+should wait until it is up before exiting. Its output is kept in the runner's volume
+(`runner-data`), under `previews/`.
 
 ## Conflicts
 

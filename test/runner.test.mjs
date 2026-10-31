@@ -289,6 +289,28 @@ test("start: a sandbox that doesn't start leaves no network", async () => {
   assert.equal(nets.has("dh-a-1"), false);
 });
 
+test("start: checked again after the waits, right before docker run; refused, nothing runs and its network goes", async () => {
+  const order = [];
+  const { r, calls, nets } = runner();
+  const refused = new Error("the host path /srv/x: not as the operator grants it");
+  await assert.rejects(
+    r.start({
+      run: "dh-a-1",
+      name: "dh-a",
+      image: "i",
+      tokens: async () => (order.push("tokens"), {}),
+      recheck: () => {
+        order.push("recheck");
+        throw refused;
+      },
+    }),
+    refused,
+  );
+  assert.deepEqual(order, ["tokens", "recheck"]);
+  assert.equal(callOf(calls, "run"), undefined);
+  assert.equal(nets.has("dh-a-1"), false);
+});
+
 test("start: a spec without its user or limits starts nothing, not even its network", async () => {
   const { r, calls, nets } = runner();
   for (const missing of [{ user: undefined }, { limits: undefined }]) {
