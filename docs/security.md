@@ -55,7 +55,8 @@ that file asks for, so none can:
   run asks for nothing: no sandbox can create or link a branch through the GitHub gateway
   (`createLinkedBranch` isn't among its known mutations). Its first commit goes through the git
   gateway like any push. Policies may refuse it (`deny_link_branch`, Deckhand's default
-  `gh-linked-branch.rego`: work runs only); then, or if GitHub refuses, the sandbox creates
+  `gh-linked-branch.rego`: work runs only among the built-in modes, a repository's own modes
+  once it allows them with `allow_link_branch`); then, or if GitHub refuses, the sandbox creates
   its branch itself, as before.
 - The sandbox's `pre-push` hook only gives an earlier, clearer message: the gateway doesn't
   rely on it.
@@ -92,8 +93,8 @@ that file asks for, so none can:
   since the pull request's workflows then run from that merge with a base that may have
   changed since the last push. GitHub refuses an update with conflicts, which the run rebases
   locally as before. Deckhand's default policy for it, `policy/gh-update-branch.rego` (shipped
-  in the listener's image), allows it to work runs only: a repository's own modes are refused
-  unless its `.deckhand/policy/gh-update-branch.rego` lets them.
+  in the listener's image), refuses nothing: work runs update their branch, and a repository's
+  own modes once its `.deckhand/policy/` allows them (`allow_github`).
 
 This doesn't depend on GitHub: branch protection and rulesets aren't enforced on private
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
@@ -529,8 +530,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   `resolve`, and opening it again (`unresolveReviewThread`) an `unresolve`, all on the thread's
   pull request: the thread is looked up on GitHub by its first comment, must be on that pull
   request, and its first comment's author (and whether it is the App's bot) goes to the
-  policies. Their default (`policy/gh-review-threads.rego`: work runs only, and never resolving a
-  person's thread) ships in the listener's image like Deckhand's other default policies. A new review,
+  policies. Their default (`policy/gh-review-threads.rego`: never resolving a person's thread;
+  a repository's own modes only once it allows them) ships in the listener's image like Deckhand's other default policies. A new review,
   or a review comment that answers no thread, stays in no ceiling. A
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify, one outside the run's repository, and one above the **mode's
@@ -569,7 +570,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     an item's fields, removing or archiving it, and the project's settings, fields and views
     are in no ceiling: the listener moves the repository's issues itself, from its
     `projects:` ([Projects](repo-config.md#projects)), on granted projects only;
-  - then the policies' **`deny_github`** ([Policies](#policies)), which can only narrow it.
+  - then the policies' **`allow_github` and `deny_github`** ([Policies](#policies)), which can
+    only narrow it: the operator's allow, the repository's too for its own modes, and no deny.
 
   A **rerun** (`POST …/actions/runs/<id>/rerun-failed-jobs`, `…/actions/jobs/<id>/rerun`,
   issue #451; never a whole run's `…/rerun`, cancelling, dispatching, approving a fork's run
@@ -588,7 +590,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   refuses it or it never goes out, and counted from GitHub's answer (or from none at all: a
   call whose answer was lost may have gone out, so it counts, fail closed), with the run and commit its check
   resolved, never looked up again, and saved with the run across a restart), and Deckhand's
-  default policy narrows it to a first rerun of each workflow run, in work runs only ([repository config](repo-config.md#reruns)). Its token gets `actions: write` for that
+  default policy narrows it to a first rerun of each workflow run, in work runs and the
+  repository's own modes it allows ([repository config](repo-config.md#reruns)). Its token gets `actions: write` for that
   one call; the sandbox's own only reads Actions.
 
   A refusal (a look-up GitHub fails: `502`, fail closed) answers in GitHub's error shape
@@ -1788,35 +1791,51 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 
 ## Policies
 
-[Policies](repo-config.md#policies) are Rego rules that refuse a decision (`deny_merge`, the
-last gate of an auto-merge; `deny_review`, a review that starts by itself; `deny_fix`, a
-review's fix run, a CI fix run or a conflict's rebase run; `deny_link_branch`, the branch the listener links to a work run's issue
-([The default branch](#the-default-branch)); `deny_request_review`, the reviewers the listener
-requests on Deckhand's ready pull request (`review.request`, allowed users only, never a team,
-and never at a run's request); `deny_github`, a run's write to GitHub (REST, or a GraphQL mutation's field), under its mode's built-in
-ceiling: [The GitHub gateway](#the-github-gateway)). Deckhand ships its own in the listener's
-image ([the default policies](repo-config.md#the-default-policies): `github.rego`, a
-`gh-<feature>.rego` per `gh` feature, and `review.rego`), which hold without any setup. Yours are the `*.rego`
-files of `policy/` in the grants folder, read again at each decision: one with the same name as
-Deckhand's replaces it, others add to them; together, the defaults of every repository. A
-repository's own are in `.deckhand/policy/` on its default branch; one with the same name as a
-default replaces it, others add to them.
+[Policies](repo-config.md#policies) are Rego rules that allow and refuse a decision: `merge`,
+the last gate of an auto-merge; `review`, a review that starts by itself; `fix`, a review's fix
+run, a CI fix run or a conflict's rebase run; `link_branch`, the branch the listener links to a
+work run's issue ([The default branch](#the-default-branch)); `request_review`, the reviewers
+the listener requests on Deckhand's ready pull request (`review.request`, allowed users only,
+never a team, and never at a run's request); `github`, a run's write to GitHub (REST, or a
+GraphQL mutation's field), under its mode's built-in ceiling:
+[The GitHub gateway](#the-github-gateway). Each has two rules: `allow_<decision>` and
+`deny_<decision>`. **A decision is allowed when an allow rule matches and no deny rule does**:
+a deny always wins, and with no allow rule matching it is refused, so an empty or replaced file
+refuses rather than opens, and a new decision starts closed.
 
-- **They can't widen anything**: they run after every built-in gate and can only add refusals.
-  The grants (`allow_auto_merge` and the rest) and the built-in gates stay what they are, so
-  any repository may have policies, with no grant: overriding one of yours, or of Deckhand's
-  default files, by its file name only drops the refusals that file added, never a gate's or
-  a mode's ceiling (a light repository mode still writes nothing). If a rule must hold for every
-  repository whatever it says, it belongs in a grant or a built-in gate, not in a default
-  policy. One default stands where a gate was: `review.rego` skips other bots' pull requests,
-  which the review's allowlist (people only) used to stop. Replacing it is how a repository, or
-  the operator for all of them, has those reviewed: a `review.rego` that does without a word
-  on `author_type` gets a warning from the config check.
+They come in **two layers, each evaluated by an `opa` process of its own**:
+
+- **The operator's**: Deckhand ships its own in the listener's image
+  ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows each
+  decision, `github.rego`, a `gh-<feature>.rego` per `gh` feature, and `review.rego`), which
+  hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, read
+  again at each decision: one with the same name as Deckhand's replaces it, others add to
+  them. **Their allow rules are the ceiling** of every repository.
+- **A repository's**, in `.deckhand/policy/` on its default branch. Its deny rules apply to
+  every run of the repository. Its allow rules count only for its own `modes:`, whose runs need
+  your allow **and** its own: a repository mode does nothing until its repository allows it,
+  within what you allow. Its allow rule for a built-in mode's run is ignored (for `merge`,
+  `review` and `fix`, a config check error). A file of its with the name of one of yours, or of
+  Deckhand's, replaces nothing.
+
+- **A repository can only narrow your ceiling, except for its own modes within it**: its
+  policies run after every built-in gate and in an `opa` of their own, so they can neither
+  define nor read your rules or your libraries, nor break them (a helper or a package of the
+  same name is its own). The grants (`allow_auto_merge` and the rest: settings of yours, not
+  rules) and the built-in gates stay what they are, so any repository may have policies, with
+  no grant: they never drop one of your refusals, a gate's or a mode's ceiling (a light
+  repository mode still writes nothing). If a rule must hold for every repository whatever it
+  says, it belongs in your policies, a grant or a built-in gate. One default stands where a
+  gate was: `review.rego` skips other bots' pull requests, which the review's allowlist
+  (people only) used to stop. Replacing it in your grants folder is how you have those
+  reviewed: a `review.rego` that does without a word on `author_type` gets a warning from the
+  config check.
 - **A pull request can't change them for itself**: they are read from the default branch, and
   `.deckhand/` is among the files Deckhand trusts, so a pull request that changes a policy is
   never merged by itself.
 - **They run in the listener, isolated**: the pinned `opa` binary of the listener's image
-  (version and sha256 in `listener/Dockerfile`), one process per decision, with an empty
+  (version and sha256 in `listener/Dockerfile`), one process per layer and decision (a
+  repository without policy files costs none of its own), with an empty
   environment, a 2-second limit, and a capabilities file without `opa.runtime` (the
   environment), `http.send`, `net.*` (the network, DNS included), `json.match_schema` and
   `json.verify_schema` (a schema's `$ref` reads a local `file://` path, `allow_net` or not) and
@@ -1830,22 +1849,23 @@ default replaces it, others add to them.
 - **What they say is shown, not trusted**: each message is put on one line, cut to 200
   characters, redacted like the runs' output (the operator's secrets, GitHub token shapes),
   quoted as code (no mention, no formatting), and five at most are posted.
-- **Fail closed**: a policy that doesn't compile, takes too long, or gives anything but a set
-  of strings refuses the decision with a `policy error: …` reason; so does a policy folder
-  that can't be read (yours or GitHub's). For `deny_merge`, the pull request then waits for a
-  human, as with any refusal; for `deny_review`, the review is skipped (the log says why); for
-  `deny_fix`, no fix run starts and a comment says why; for `deny_link_branch`, no branch
-  is linked (the sandbox creates it, unlinked); for `deny_request_review`, nobody is asked to
-  review (the log says why); for `deny_github`, the run's write is
-  refused, so a broken policy stops every run's writes in that repository. Deckhand's own
-  `github.rego` defines `deny_github` everywhere, so every run's GitHub write starts an `opa`
-  process: an `opa` that is missing or fails (its temp folder unwritable, say) stops the runs'
-  writes in every repository. A refusal only
+- **Fail closed**: a decision no allow rule matches is refused, with a reason saying which
+  layer's is missing. A policy that doesn't compile, takes too long, or gives an allow rule
+  anything but `true` or `false`, or a deny rule anything but a set of strings, refuses the
+  decision with a `policy error: …` reason, whatever the other layer says; so does a policy
+  folder that can't be read (yours or GitHub's). For `merge`, the pull request then waits for
+  a human, as with any refusal; for `review`, the review is skipped (the log says why); for
+  `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
+  sandbox creates it, unlinked); for `request_review`, nobody is asked to review (the log says
+  why); for `github`, the run's write is refused, so a broken policy stops every run's writes
+  in that repository. Deckhand's own `github.rego` defines `deny_github` everywhere, so every
+  run's GitHub write starts an `opa` process: an `opa` that is missing or fails (its temp
+  folder unwritable, say) stops the runs' writes in every repository. A refusal only
   ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
   appear in its onboarding pull request's config check and its config panel on the dashboard.
 - **A dry run decides nothing**: `/mode policy` on a pull request, only from an allowed user
-  (like any comment that reaches Deckhand), evaluates the rules and replies with their results
-  and the input. Nothing is reviewed, fixed or merged; the task's page keeps who asked, when,
+  (like any comment that reaches Deckhand), evaluates the rules and replies with each
+  decision's result, what each layer's allow and deny rules said, and the input. Nothing is reviewed, fixed or merged; the task's page keeps who asked, when,
   the denial count and the reply's link, not the input. The input it posts is what GitHub
   already shows that user about the pull request. Your policies' file names and compile
   errors (redacted) appear in the reply and the config panel, not their text.

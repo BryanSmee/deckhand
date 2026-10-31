@@ -1,6 +1,7 @@
 // A repository's Policies tab against a fake api/repos/<repo>/config: a check that fails (the
-// banner, the decision cards and the file's row say so, the error links to its line), a
-// replaced operator file struck through next to the repo's, policies that compile, none at all.
+// banner, the decision cards and the file's row say so, the error links to its line), each
+// layer's allow and deny rules per decision, a Deckhand file the operator's replaces struck
+// through, policies that compile, none at all.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { ConfigPanel } from "./ConfigPanel";
@@ -20,14 +21,29 @@ deny_merge contains msg if {
 
 const blob = (name: string) => `https://github.com/acme/app/blob/main/.deckhand/policy/${name}`;
 
-// The reference's: the repo's size.rego replaces the operator's, payments.rego doesn't compile.
+// Deckhand's allow.rego, as the image ships it.
+const ALLOW_ALL = [
+  "package deckhand",
+  ...["merge", "review", "fix", "link_branch", "request_review", "github"].map(
+    (d) => `\nallow_${d} := true`,
+  ),
+].join("\n");
+const allowFile = makePolicyFile({
+  name: "allow.rego",
+  source: "deckhand",
+  rules: [...ALLOW_ALL.matchAll(/^allow_\w+/gm)].map((m) => m[0]),
+  text: ALLOW_ALL,
+});
+
+// The reference's: the operator's size.rego and the repo's, each in its layer; payments.rego
+// doesn't compile.
 const POLICIES: Policies = {
   files: [
+    allowFile,
     makePolicyFile({ name: "fridays.rego", source: "operator", rules: ["deny_merge"] }),
-    makePolicyFile({ name: "size.rego", source: "operator", active: false, rules: ["deny_merge"] }),
+    makePolicyFile({ name: "size.rego", source: "operator", rules: ["deny_merge"] }),
     makePolicyFile({
       name: "size.rego",
-      replaces: "operator",
       rules: ["deny_merge"],
       url: blob("size.rego"),
       text: 'package deckhand\n\ndeny_merge contains "too big" if input.pr.additions > 400\n',
@@ -42,6 +58,7 @@ const POLICIES: Policies = {
   ],
   errors: [
     {
+      layer: "repo",
       file: "payments.rego",
       row: 7,
       message: 'rego_parse_error: unexpected newline, expecting ")"',
@@ -128,15 +145,21 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   const merge = card("Auto-merge");
   expect(within(merge).getByText("Refused")).toBeTruthy();
   expect(merge.textContent).toContain("Every auto-merge is refused until payments.rego compiles.");
-  expect(merge.textContent).toContain("3 rules · fridays.rego, size.rego (repo), payments.rego");
+  // Each layer's rules: the operator's allow and denies, the repo's denies.
+  expect(merge.textContent).toContain(
+    "Operator: allow_merge ×1 (allow.rego) · deny_merge ×2 (fridays.rego, size.rego)",
+  );
+  expect(merge.textContent).toContain(
+    "Repo: no allow rule · deny_merge ×2 (size.rego, payments.rego)",
+  );
   expect(card("Automatic review").textContent).toContain("/mode review still runs");
   const fix = card("Fix run");
   expect(within(fix).getByText("Refused")).toBeTruthy();
-  expect(fix.textContent).toContain("No rule of its own, but refused too");
-  expect(fix.textContent).toContain("none in any file");
+  expect(fix.textContent).toContain("Every fix run is refused until payments.rego compiles.");
+  expect(fix.textContent).toContain("Operator: allow_fix ×1 (allow.rego) · no deny_fix");
   expect(within(card("GitHub writes and checks")).getByText("Refused")).toBeTruthy();
   expect(within(card("Linked branch")).getByText("Refused")).toBeTruthy();
-  expect(card("Reviewers").textContent).toContain("No rule of its own, but refused too");
+  expect(card("Reviewers").textContent).toContain("No reviewer is requested until");
   // Its row, and its source: open, the bad line marked with its error.
   const payments = rows().find((r) => r.textContent!.includes("payments.rego"))!;
   expect(within(payments).getByText("Error")).toBeTruthy();
@@ -154,33 +177,77 @@ test("a policy that doesn't compile: the badge, the banner, the cards and its ro
   await waitFor(() => expect(scrolled).toHaveBeenCalledWith("policy-repo-payments.rego-line-7"));
 });
 
-test("a replaced operator file: struck through, next to the repo file that replaces it", async () => {
+test("an operator's file and a repo's of the same name: both evaluated, each in its layer", async () => {
   panel("policies");
   await screen.findByRole("list", { name: "Policy files" });
   const names = rows().map((r) => r.querySelector("[class*=path]")!.textContent);
   expect(names).toEqual([
+    "deckhand/policy/allow.rego",
     "grants/policy/fridays.rego",
-    ".deckhand/policy/size.rego",
     "grants/policy/size.rego",
+    ".deckhand/policy/size.rego",
     ".deckhand/policy/payments.rego",
     ".deckhand/policy/wip.rego",
   ]);
-  const [fridays, size, replaced, payments] = rows();
+  const [allow, fridays, operator, size, payments] = rows();
+  expect(allow.textContent).toContain("allow_merge ×1, allow_review ×1");
   expect(fridays.textContent).toContain("Default, kept");
-  expect(size.textContent).toContain("Replaces the operator's");
+  expect(operator.querySelector("s")).toBeNull();
+  expect(size.textContent).toContain("Added");
   expect(size.textContent).toContain("deny_merge ×1");
-  expect(replaced.textContent).toContain("Replaced by the repo's");
-  expect(replaced.querySelector("s")!.textContent).toBe("size.rego");
-  expect(within(replaced).getByText("—")).toBeTruthy();
   expect(payments.textContent).toContain("Added");
-  expect(screen.getByText("5 files · 2 from the operator, 3 from the repo · merged by name"));
+  // The repo's error is its own file's, not the operator's of another name.
+  expect(within(operator).getByText("Yes")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "6 files · 1 from Deckhand, 2 from the operator, 3 from the repo · Deckhand's and the operator's merged by name, the repo's apart",
+    ),
+  );
 });
 
-test("Deckhand's default files: under the operator's and the repo's, each replacing the one below", async () => {
+test("an error placed in a file of the same name in the other layer: not this one's", async () => {
+  policies = {
+    ...POLICIES,
+    errors: [{ ...POLICIES.errors[0], layer: "operator", file: "size.rego", row: 2 }],
+  };
+  panel("policies");
+  await screen.findByRole("alert");
+  const [, , operator, repo] = rows();
+  expect(within(operator).getByText("Error")).toBeTruthy();
+  expect(within(repo).getByText("Yes")).toBeTruthy();
+});
+
+test("no allow rule of the operator's: the decision is never allowed", async () => {
+  policies = { files: POLICIES.files.slice(1, 3), errors: [], warnings: [] };
+  panel("policies");
+  await screen.findByRole("list", { name: "Policy files" });
+  const merge = card("Auto-merge");
+  expect(within(merge).getByText("Never allowed")).toBeTruthy();
+  expect(merge.textContent).toContain(
+    "Every auto-merge is refused while no allow rule of the operator's matches it.",
+  );
+  // A repo's allow rule: for its own modes, ignored for a decision none of them makes.
+  policies = {
+    files: [
+      ...POLICIES.files.slice(0, 1),
+      makePolicyFile({ name: "modes.rego", rules: ["allow_github", "allow_merge"] }),
+    ],
+    errors: [],
+    warnings: [],
+  };
+  panel("policies");
+  await waitFor(() =>
+    expect(screen.getAllByText(/modes\.rego\), for its own modes/).length).toBe(1),
+  );
+  expect(screen.getAllByText(/ignored, no mode of the repo's makes it/).length).toBe(1);
+});
+
+test("Deckhand's default files: under the operator's, which replace them by name; the repo's apart", async () => {
   const gh = 'package deckhand\n\ndeny_github contains "x" if input.custom_mode\n';
   const drop = "package deckhand\n";
   policies = {
     files: [
+      allowFile,
       makePolicyFile({ name: "github.rego", source: "deckhand", rules: ["deny_github"], text: gh }),
       makePolicyFile({
         name: "gh-a.rego",
@@ -195,18 +262,8 @@ test("Deckhand's default files: under the operator's and the repo's, each replac
         rules: ["deny_github"],
       }),
       makePolicyFile({ name: "gh-a.rego", source: "operator", replaces: "deckhand", text: drop }),
-      makePolicyFile({
-        name: "gh-b.rego",
-        source: "operator",
-        replaces: "deckhand",
-        active: false,
-      }),
-      makePolicyFile({
-        name: "gh-b.rego",
-        replaces: "operator",
-        url: blob("gh-b.rego"),
-        text: drop,
-      }),
+      makePolicyFile({ name: "gh-b.rego", source: "operator", replaces: "deckhand" }),
+      makePolicyFile({ name: "gh-b.rego", url: blob("gh-b.rego"), text: drop }),
     ],
     errors: [],
     warnings: [],
@@ -214,24 +271,26 @@ test("Deckhand's default files: under the operator's and the repo's, each replac
   panel("policies");
   await screen.findByRole("list", { name: "Policy files" });
   expect(rows().map((r) => r.querySelector("[class*=path]")!.textContent)).toEqual([
+    "deckhand/policy/allow.rego",
     "deckhand/policy/github.rego",
     "grants/policy/gh-a.rego",
     "deckhand/policy/gh-a.rego",
-    ".deckhand/policy/gh-b.rego",
     "grants/policy/gh-b.rego",
     "deckhand/policy/gh-b.rego",
+    ".deckhand/policy/gh-b.rego",
   ]);
   expect(rows().map((r) => r.querySelector("[class*=effect]")!.textContent)).toEqual([
     "Default, kept",
+    "Default, kept",
     "Replaces Deckhand's",
     "Replaced by the operator's",
-    "Replaces the operator's",
-    "Replaced by the repo's",
-    "Replaced by the repo's",
+    "Replaces Deckhand's",
+    "Replaced by the operator's",
+    "Added",
   ]);
   expect(
     screen.getByText(
-      "6 files · 3 from Deckhand, 2 from the operator, 1 from the repo · merged by name",
+      "7 files · 4 from Deckhand, 2 from the operator, 1 from the repo · Deckhand's and the operator's merged by name, the repo's apart",
     ),
   );
   const github = card("GitHub writes and checks");
@@ -246,9 +305,8 @@ test("Deckhand's default files: under the operator's and the repo's, each replac
   expect(source("deckhand/policy/gh-a.rego").textContent).toContain(
     "replaced by the operator's: not evaluated",
   );
-  expect(source(".deckhand/policy/gh-b.rego").textContent).toContain(
-    "replaces the operator's gh-b.rego",
-  );
+  expect(source("grants/policy/gh-b.rego").textContent).toContain("replaces Deckhand's gh-b.rego");
+  expect(source(".deckhand/policy/gh-b.rego").textContent).not.toContain("replace");
 });
 
 test("policies that compile: no banner, each decision active or without rules, warnings apart", async () => {
@@ -258,8 +316,8 @@ test("policies that compile: no banner, each decision active or without rules, w
   expect(screen.queryByRole("alert")).toBeNull();
   expect(screen.queryByText(/doesn't compile/)).toBeNull();
   expect(within(card("Auto-merge")).getByText("Active")).toBeTruthy();
-  expect(within(card("Fix run")).getByText("No rules")).toBeTruthy();
-  expect(within(card("Reviewers")).getByText("No rules")).toBeTruthy();
+  expect(within(card("Fix run")).getByText("No deny rule")).toBeTruthy();
+  expect(within(card("Reviewers")).getByText("No deny rule")).toBeTruthy();
   expect(rows().every((r) => /Yes|—/.test(r.textContent!))).toBe(true);
   expect(screen.getByLabelText("Policy warnings").textContent).toContain("deny_wip");
   // Every source folded.
