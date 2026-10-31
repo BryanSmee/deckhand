@@ -7,7 +7,7 @@ import { type RepoList, useRepos } from "./api";
 import { Dashboard } from "./App";
 import { Repos } from "./Repos";
 import { parseRoute } from "./route";
-import { makePolicyFile, makeState, makeTask, mockApi } from "./testUtils";
+import { makeCapabilities, makePolicyFile, makeState, makeTask, mockApi } from "./testUtils";
 import type { AppLinks, Repo, RepoConfig, ServerInfo, Task } from "./types";
 
 const repo = (name: string, extra: Partial<Repo> = {}): Repo => ({
@@ -95,6 +95,7 @@ const CONFIG: RepoConfig = {
     },
   },
   policies: { files: [], errors: [], warnings: [] },
+  capabilities: makeCapabilities(),
   readAt: Date.now(),
 };
 

@@ -4,7 +4,8 @@
 import { researchRefusal } from "./access.mjs";
 import { AGENTS } from "./agents/index.mjs";
 import { taskKey } from "./events.mjs";
-import { customMode, INBOX, sessionName } from "./modes.mjs";
+import { customMode, INBOX } from "./modes.mjs";
+import { sessionNames } from "./sandbox-spec.mjs";
 import { CONFIG_FILE, modeNames } from "./repo-config.mjs";
 import { createRunPolicy } from "./run-policy.mjs";
 
@@ -64,13 +65,13 @@ export function createTaskModes(ctx) {
   }
 
   // That of its work runs or of its light ones (either when `light` is undefined), of any
-  // agent: the repo may have picked another since.
+  // agent: the repo may have picked another since. In any volume such a run may have got: its
+  // capabilities decide which (sandbox-spec.mjs sessionNames()).
   async function hasSession(key, name, light) {
     if (tasks.has(key)) return true;
-    const kinds = light === undefined ? [false, true] : [light];
-    for (const l of kinds) {
+    for (const session of sessionNames(name, light)) {
       for (const agent of Object.values(AGENTS)) {
-        if (await ctx.runner.hasSession(sessionName(name, l), agent)) return true;
+        if (await ctx.runner.hasSession(session, agent)) return true;
       }
     }
     return false;

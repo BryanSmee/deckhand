@@ -8,8 +8,8 @@ import { RunError } from "../listener/access.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 import { createPreparation } from "../listener/preparation.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
-import { sandboxEnv, sandboxSpec } from "../listener/sandbox-spec.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { sandboxEnv, sandboxSpec, sessionOf } from "../listener/sandbox-spec.mjs";
+import { capabilityPolicies, tempDir, testConfig } from "./helpers.mjs";
 
 const REPO_YAML = `setup: npm ci
 instructions: AGENTS.md
@@ -43,7 +43,8 @@ function prepared(t, text, comments = [comment(1), comment(2)]) {
       caches: fail("the repo's caches"),
     },
     egressCa: fail("the egress CA"),
-    broker: { allow: fail("branches"), runOf: fail("its run") },
+    policies: capabilityPolicies(),
+    broker: { allow: fail("branches"), runOf: fail("its run"), grant: () => {} },
     github: async (repo, method, path) => {
       calls.push(`${method} ${path}`);
       const body = path.includes("/comments")
@@ -74,8 +75,9 @@ function prepared(t, text, comments = [comment(1), comment(2)]) {
     },
   };
   const { settings } = parseRepoConfig(REPO_YAML, config);
-  const run = () =>
-    createPreparation(ctx).prepareRun(task, [{}], { settings, message: "hi" }, (m) =>
+  // `extra`: more of runs.mjs begin()'s, its reopen() say.
+  const run = (extra = {}) =>
+    createPreparation(ctx).prepareRun(task, [{}], { settings, message: "hi", ...extra }, (m) =>
       notes.push(m),
     );
   return { run, task, config, calls, notes };
@@ -85,6 +87,8 @@ test("a research run: the base image, no mounts, caches, engine, CA, screenshots
   const { run, task, config, calls } = prepared(t, "allow_research: true\ncached_hosts: [x.org]\n");
   const parts = await run();
   assert.deepEqual(calls, [
+    // Its visibility, for its capabilities' input.
+    "GET /repos/org/repo",
     "install claude",
     "GET /repos/org/repo/issues/12",
     "GET /repos/org/repo/issues/12/comments?per_page=100&page=1",
@@ -149,13 +153,17 @@ test("a research run reads its issue's thread: title, description, the last 50 c
   assert.ok(notes.includes("Thread: #12, 50 of 120 comment(s)"));
 });
 
-test("a research run without allow_research stops before anything is asked for", async (t) => {
+test("a research run without allow_research stops before anything but its visibility is asked for", async (t) => {
   const { run, calls } = prepared(t, "hosts: [pypi.org]\n");
   await assert.rejects(
     run(),
-    (e) => e instanceof RunError && /allow_research: true/.test(e.message),
+    (e) =>
+      e instanceof RunError &&
+      /^Claude can't run here: the capabilities its policies give a `research` run don't hold\.\n\n- `internet`: the operator's grants don't set `allow_research: true` for this repository/.test(
+        e.message,
+      ),
   );
-  assert.deepEqual(calls, []);
+  assert.deepEqual(calls, ["GET /repos/org/repo"]);
 });
 
 // A work run on issue #12 asked from pull request #7, from `head` (a repo's full name), and
@@ -163,7 +171,9 @@ test("a research run without allow_research stops before anything is asked for",
 // `ca`: the egress proxy's CA certificate, or null.
 // `runner`: RUNNER; `grant`: the repo's file in the grants folder; `yaml`: its config;
 // `keepsCaches`, `noCaches`: the images'; `linkedBranches`: linked-branch.mjs's; `cancel`:
-// cancelled while its image is looked up; `env`: more of the operator's settings.
+// cancelled while its image is looked up; `env`: more of the operator's settings; `policies`:
+// what decides its capabilities (helpers.mjs capabilityPolicies()), Deckhand's defaults by
+// default; `mode`: its mode; `pullFails`: GitHub fails to give #7.
 async function workRun(
   t,
   head,
@@ -179,6 +189,11 @@ async function workRun(
     cancel = false,
     noCaches,
     env = {},
+    policies = capabilityPolicies(),
+    mode = "work",
+    pullFails = false,
+    reopen,
+    items = [{ replyTo: 7 }],
   } = {},
 ) {
   const dir = realpathSync(tempDir(t));
@@ -207,11 +222,19 @@ async function workRun(
     },
     egressCa: async () => ca,
     linkedBranches,
-    broker: { allow: () => {}, runOf: () => ({ push: true }) },
-    github: async () =>
-      new Response(JSON.stringify({ head: { ref: "feat", repo: { full_name: head } } }), {
-        status: 200,
-      }),
+    policies,
+    broker: {
+      allow: (id, branches, fork) =>
+        calls.push(`allow ${branches.join(" ")}${fork ? " (a fork's)" : ""}`),
+      runOf: () => ({ push: true }),
+      grant: (id, caps) => calls.push(`grant ${caps.join(" ")}`),
+    },
+    github: async (repo, method, path) =>
+      pullFails && path.includes("/pulls/")
+        ? new Response("{}", { status: 502 })
+        : new Response(JSON.stringify({ head: { ref: "feat", repo: { full_name: head } } }), {
+            status: 200,
+          }),
   };
   const notes = [];
   const task = {
@@ -223,7 +246,7 @@ async function workRun(
     live: {
       id: "deckhand-org-repo-12-1",
       key: "org/repo#12",
-      mode: "work",
+      mode,
       light: false,
       secret: "s".repeat(32),
       record: { agent: "claude", model: "opus", effort: "high" },
@@ -233,8 +256,8 @@ async function workRun(
   const { settings } = parseRepoConfig(yaml, config);
   const parts = await createPreparation(ctx).prepareRun(
     task,
-    [{ replyTo: 7 }],
-    { settings, message: "hi" },
+    items,
+    { settings, message: "hi", reopen: reopen && (() => reopen(task)) },
     (m) => notes.push(m),
   );
   return { parts, task, calls, notes };
@@ -244,7 +267,7 @@ test("a work run with a comment from a fork's pull request gets no caches, and s
   const { parts, task, calls, notes } = await workRun(t, "someone/repo");
   assert.equal(task.live.fork, true);
   assert.deepEqual(parts.prepared.caches, []);
-  assert.deepEqual(calls, []);
+  assert.ok(!calls.some((c) => c.startsWith("caches")));
   assert.ok(notes.includes("No caches: a pull request from a fork"));
   assert.deepEqual(task.live.branches, ["issue-12-*"]);
 });
@@ -253,7 +276,7 @@ test("a work run with a comment from the repo's own pull request keeps its cache
   const { parts, task, calls, notes } = await workRun(t, "org/repo");
   assert.equal(task.live.fork, false);
   assert.deepEqual(parts.prepared.caches, [{ name: "cache-npm", path: "/home/node/.npm" }]);
-  assert.deepEqual(calls, ["caches /home/node/.npm"]);
+  assert.ok(calls.includes("caches /home/node/.npm"));
   assert.ok(!notes.some((n) => /fork/.test(n)));
   assert.deepEqual(task.live.branches, ["issue-12-*", "feat"]);
 });
@@ -393,6 +416,178 @@ test("a run whose image is built already: no image phase", async (t) => {
   assert.equal(task.live.logPhase, "setup");
 });
 
+test("a work run's capabilities: decided once, in its tokens and log, its input the run's", async (t) => {
+  const policies = capabilityPolicies();
+  const { task, calls, notes } = await workRun(t, "someone/repo", { policies });
+  assert.deepEqual(policies.inputs, [
+    {
+      repo: { name: "org/repo", private: null },
+      mode: "work",
+      custom_mode: false,
+      issue: 12,
+      reason: null,
+      fork: true,
+      trigger: null,
+      command: null,
+    },
+  ]);
+  // The config asks for its setup and caches; no Dockerfile, engine or preview hook.
+  const used = [
+    "pull",
+    "push",
+    "setup",
+    "read:issues",
+    "read:pulls",
+    "read:discussions",
+    "read:actions",
+  ];
+  assert.deepEqual(task.live.capabilities, used);
+  assert.equal(calls[0], `grant ${used.join(" ")}`);
+  assert.ok(notes.includes(`Capabilities: ${used.join(", ")}`));
+});
+
+test("a work run its policies refuse `push`: no branch, nothing linked, no setup's branch", async (t) => {
+  const asked = [];
+  const linkedBranches = { link: async () => (asked.push("link"), "issue-12-a-title") };
+  const policies = capabilityPolicies({
+    denies: () => [{ capability: "push", reason: "this repository's runs only read" }],
+  });
+  const { task, calls } = await workRun(t, "org/repo", { policies, linkedBranches });
+  assert.ok(!task.live.capabilities.includes("push"));
+  assert.deepEqual(task.live.branches, []);
+  assert.ok(calls.includes("allow "));
+  assert.equal(task.live.linkedBranch, null);
+  assert.deepEqual(asked, []);
+  const env = sandboxEnv(
+    { config: testConfig(), task, agent: agentFor("claude"), bot: {} },
+    "prompt",
+    "hi",
+    { setup: "npm ci" },
+    null,
+  );
+  assert.equal(env.SANDBOX_LIGHT, "1");
+  assert.equal(env.TASK_ISSUE, "");
+  // Its setup still runs: a capability of its own.
+  assert.equal(env.SANDBOX_SETUP, "npm ci");
+});
+
+test("a pull request that can't be looked up: a fork's for the input; it stops only a run that pushes", async (t) => {
+  const policies = capabilityPolicies();
+  const { task } = await workRun(t, "org/repo", { mode: "brainstorm", pullFails: true, policies });
+  assert.equal(policies.inputs[0].fork, true);
+  assert.deepEqual(task.live.branches, []);
+  await assert.rejects(
+    workRun(t, "org/repo", { pullFails: true }),
+    (e) => e instanceof RunError && /pull request #7 couldn't be looked up/.test(e.message),
+  );
+});
+
+test("a work run on a fork's pull request its policies refuse `push`: a fork's run still, which may read the fork", async (t) => {
+  const policies = capabilityPolicies({
+    denies: ({ fork }) => (fork ? [{ capability: "push", reason: "forks don't push" }] : []),
+  });
+  const { task, calls, notes } = await workRun(t, "someone/repo", { policies });
+  assert.ok(!task.live.capabilities.includes("push"));
+  assert.ok(task.live.capabilities.includes("pull"));
+  // Its own clone, and the broker told it is a fork's (github-forks.mjs restricted()).
+  assert.equal(task.live.fork, true);
+  assert.ok(calls.includes("allow  (a fork's)"));
+  assert.ok(notes.includes("No caches: a pull request from a fork"));
+});
+
+test("without `pull`: an analysis keeps its runs' digest; a review or a discussion doesn't start", async (t) => {
+  const none = capabilityPolicies({ operator: () => [] });
+  const { parts, task } = await workRun(t, "org/repo", { mode: "analyze", policies: none });
+  assert.deepEqual(task.live.capabilities, []);
+  // Not the thread: runs.mjs reads the runs' digest (analysisDigest()) when there is none.
+  assert.equal(parts.digest, undefined);
+  for (const mode of ["review", "discussion"]) {
+    await assert.rejects(
+      workRun(t, "org/repo", { mode, policies: capabilityPolicies({ operator: () => [] }) }),
+      (e) =>
+        e instanceof RunError && new RegExp(`a \`${mode}\` run needs \`pull\``).test(e.message),
+    );
+  }
+});
+
+test("a light run on a fork's pull request: a fork's run, its clone and the broker alike", async (t) => {
+  const { task, calls } = await workRun(t, "someone/repo", { mode: "brainstorm" });
+  assert.equal(task.live.fork, true);
+  assert.ok(calls.includes("allow  (a fork's)"));
+});
+
+test("a light run on a pull request: the repository's image, not its branch's, and no caches", async (t) => {
+  const asked = [];
+  const imageFor = async (request) => (asked.push(request), "deckhand-repo:main");
+  const { task, parts, calls } = await workRun(t, "org/repo", {
+    mode: "brainstorm",
+    grant: "allow_dockerfile: true\nallow_branch_docker_images: true\n",
+    yaml: "dockerfile: Dockerfile\nsetup: npm ci\ncaches: [/home/node/.npm]\n",
+    imageFor,
+  });
+  assert.deepEqual(task.live.capabilities, [
+    "pull",
+    "image:repo",
+    "read:issues",
+    "read:pulls",
+    "read:actions",
+  ]);
+  assert.deepEqual(task.live.branches, []);
+  assert.equal(asked[0].ref, "main");
+  assert.equal(asked[0].branch, false);
+  assert.equal(asked[0].dockerfile, "Dockerfile");
+  assert.deepEqual(parts.prepared.caches, []);
+  assert.ok(!calls.some((c) => c.startsWith("caches")));
+});
+
+test("a run whose capabilities break a dependency, or whose policies fail, doesn't start", async (t) => {
+  // `setup` without `pull`: the clone it runs in is missing.
+  const broken = capabilityPolicies({ operator: () => ["setup", "push"] });
+  await assert.rejects(
+    workRun(t, "org/repo", { policies: broken }),
+    (e) =>
+      e instanceof RunError &&
+      /^Claude can't run here: the capabilities its policies give a `work` run don't hold\.\n\n- `push` needs `pull`, which the run doesn't get\n- `setup` needs `pull`, which the run doesn't get\n\nThe repository's config page/.test(
+        e.message,
+      ),
+  );
+  const failing = {
+    capabilityRules: async () => ({ error: "policy error: a.rego:3: var x is unsafe" }),
+  };
+  await assert.rejects(
+    workRun(t, "org/repo", { policies: failing }),
+    (e) =>
+      e instanceof RunError &&
+      /^Claude can't run here: its capabilities couldn't be decided \(policy error: a\.rego:3: var x is unsafe\)/.test(
+        e.message,
+      ),
+  );
+});
+
+test("`pull` with `internet` on a repository not known to be public: refused unless the operator names it", async (t) => {
+  const grant = "allow_research: true\n";
+  const open = capabilityPolicies({ operator: () => ["pull", "internet"] });
+  await assert.rejects(
+    workRun(t, "org/repo", { policies: open, grant }),
+    (e) =>
+      e instanceof RunError &&
+      /- `pull` with `internet`: a private repository's code next to the open internet: .+ Refused unless an allow rule of the operator's policies gives `pull\+internet`/.test(
+        e.message,
+      ),
+  );
+  const named = capabilityPolicies({ operator: () => ["pull", "internet", "pull+internet"] });
+  const { task, notes } = await workRun(t, "org/repo", { policies: named, grant });
+  assert.deepEqual(task.live.capabilities, ["pull", "internet"]);
+  assert.deepEqual(task.live.hosts, ["*"]);
+  assert.ok(
+    notes.some((n) =>
+      /^Capabilities: `pull` with `internet`: .+ \(the operator's `pull\+internet` allows it\)$/.test(
+        n,
+      ),
+    ),
+  );
+});
+
 // An analysis's digest: the full one only when the analysis was asked for on a private repo
 // that GitHub still says is private when it starts; anything else, the public one.
 test("an analysis's digest is the public one unless the repo was and still is private", async (t) => {
@@ -427,4 +622,130 @@ test("an analysis's digest is the public one unless the repo was and still is pr
     assert.equal(text, "digest");
     assert.deepEqual(seen, [{ isPublic: expected }], JSON.stringify({ asked, now }));
   }
+});
+
+test("once its capabilities are decided, a run's first message is made again for the volume they give it", async (t) => {
+  const { run, task, notes } = prepared(t, "allow_research: true\n");
+  const seen = [];
+  const parts = await run({
+    reopen: async (note) => {
+      // Asked once what the run gets is known: its volume (sandbox-spec.mjs sessionOf()) is.
+      seen.push(task.live.capabilities);
+      note("starts afresh");
+      return { message: "hi, afresh", handoff: false };
+    },
+  });
+  assert.deepEqual(seen, [["internet"]]);
+  assert.equal(parts.message, "hi, afresh");
+  assert.ok(notes.includes("starts afresh"));
+  // Nothing changed: its message as begin() made it.
+  assert.equal((await run({ reopen: async () => null })).message, "hi");
+});
+
+test("a fork's run looks for its session in the volume it mounts: whether it is a fork's is known first", async (t) => {
+  const seen = [];
+  const { task } = await workRun(t, "someone/repo", {
+    // Its `push` denied: a fork's work run that only reads.
+    policies: capabilityPolicies({ operator: () => ["pull", "read:issues"] }),
+    reopen: async (task) => {
+      seen.push(sessionOf(task.name, task.live));
+      return null;
+    },
+  });
+  // Unchecked by the gateways (a fork's): not the `-trusted` volumes.
+  assert.deepEqual(seen, ["deckhand-org-repo-12-readonly"]);
+  assert.equal(sessionOf(task.name, task.live), seen[0]);
+});
+
+test("the capabilities' input says what started the run as the run input does, its command apart", async (t) => {
+  const cases = [
+    // A comment's, its first line a command.
+    [
+      { replyTo: 7, author: "alice", trigger: "work" },
+      { trigger: "comment", command: "work" },
+    ],
+    // The dashboard's.
+    [
+      { replyTo: 7, author: "alice", dashboard: true },
+      { trigger: "dashboard", command: null },
+    ],
+    // An inbox entry.
+    [
+      { replyTo: 7, author: "alice", trigger: "idea" },
+      { trigger: "inbox", command: "idea" },
+    ],
+    // The listener's own (a fix run): no person's trigger.
+    [
+      { replyTo: 7, author: "alice", reason: "review-fix" },
+      { trigger: null, command: null },
+    ],
+  ];
+  for (const [item, want] of cases) {
+    const policies = capabilityPolicies();
+    await workRun(t, "org/repo", { policies, items: [item] });
+    const [input] = policies.inputs;
+    assert.deepEqual(
+      { trigger: input.trigger, command: input.command },
+      want,
+      JSON.stringify(item),
+    );
+  }
+});
+
+test("a pull request that can't be looked up, with a policy denying forks `push`: refused, not a read-only run", async (t) => {
+  const forksDontPush = () =>
+    capabilityPolicies({
+      denies: ({ fork }) => (fork ? [{ capability: "push", reason: "forks don't push" }] : []),
+    });
+  // A maintainer's work run would push if the pull request is its repository's: asked again.
+  await assert.rejects(
+    workRun(t, "org/repo", { pullFails: true, policies: forksDontPush() }),
+    (e) => e instanceof RunError && /pull request #7 couldn't be looked up/.test(e.message),
+  );
+  // A brainstorm wouldn't push either way: it starts, as a fork's.
+  const policies = forksDontPush();
+  const { task } = await workRun(t, "org/repo", { mode: "brainstorm", pullFails: true, policies });
+  assert.equal(task.live.fork, true);
+  // Asked as a fork's and not, in one call.
+  assert.deepEqual(
+    policies.inputs.map((i) => i.fork),
+    [true, false],
+  );
+});
+
+test("a run with the open internet gets no host mount, which says so", async (t) => {
+  const nfs = join(realpathSync(tempDir(t)), "nfs");
+  mkdirSync(join(nfs, "data"), { recursive: true });
+  const grant = `allow_research: true\nmounts: [${nfs}]\n`;
+  const yaml = `mounts:\n  - ${nfs}/data\n`;
+  // The operator gives work runs the open internet, the risky combination named too.
+  const internet = capabilityPolicies({
+    operator: () => ["pull", "push", "internet", "pull+internet"],
+  });
+  const { parts, notes } = await workRun(t, "org/repo", { grant, yaml, policies: internet });
+  assert.deepEqual(parts.access.mounts, []);
+  assert.deepEqual(parts.access.hosts, ["*"]);
+  assert.ok(notes.some((n) => /^No host mounts: this run reaches the open internet/.test(n)));
+  // Without it, the mount as granted.
+  const plain = await workRun(t, "org/repo", { grant, yaml });
+  assert.deepEqual(
+    plain.parts.access.mounts.map((m) => m.target),
+    [`${nfs}/data`],
+  );
+});
+
+test("a run with the open internet gets no caches, which later runs trust, and says so", async (t) => {
+  const internet = capabilityPolicies({
+    operator: () => ["pull", "push", "setup", "internet", "pull+internet"],
+  });
+  const { parts, calls, notes } = await workRun(t, "org/repo", {
+    grant: "allow_research: true\n",
+    policies: internet,
+  });
+  assert.deepEqual(parts.prepared.caches, []);
+  assert.ok(!calls.some((c) => c.startsWith("caches")));
+  assert.ok(notes.includes("No caches: this run reaches the open internet"));
+  // Without it, the repo's caches.
+  const plain = await workRun(t, "org/repo");
+  assert.equal(plain.parts.prepared.caches.length, 1);
 });

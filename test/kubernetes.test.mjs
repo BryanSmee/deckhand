@@ -1083,21 +1083,31 @@ test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming
   const settings = { docker: {}, dockerfile: "Dockerfile", preview: { command: "x" } };
   const mounts = [{ source: "/srv", target: "/srv" }];
   const engine = { limits: {}, cache: null };
-  assert.equal(runnerRefusal({ runner: "docker" }, settings, { grant, mounts }, engine), null);
+  // Its capabilities (capabilities.mjs): the repo's image is built with `image:repo`.
+  const caps = new Set(["pull", "image:repo"]);
   assert.equal(
-    runnerRefusal(config, settings, { grant, mounts }, engine),
+    runnerRefusal({ runner: "docker" }, settings, { grant, mounts }, engine, caps),
+    null,
+  );
+  assert.equal(
+    runnerRefusal(config, settings, { grant, mounts }, engine, caps),
     "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`) without a registry (`KUBERNETES_REGISTRY`), a preview hook (`preview`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
   );
   // No engine for this run (a light run, a fork's, no SANDBOX_ENGINE): it goes without one,
   // as under Docker.
   assert.match(
-    runnerRefusal(config, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null),
+    runnerRefusal(config, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null, caps),
     /support its own image \(`dockerfile`\) without a registry \(`KUBERNETES_REGISTRY`\) yet\. The repository can remove it from/,
   );
   // With a registry, its image is built (kube-images.mjs).
   const registry = { ...config, kubernetes: { ...config.kubernetes, registry: "r.example.com" } };
   assert.equal(
-    runnerRefusal(registry, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null),
+    runnerRefusal(registry, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null, caps),
+    null,
+  );
+  // Nor without `image:repo`: the run builds none.
+  assert.equal(
+    runnerRefusal(config, { dockerfile: "D" }, { grant, mounts: [] }, null, new Set(["pull"])),
     null,
   );
   assert.equal(runnerRefusal(config, { docker: {} }, { grant, mounts: [] }, null), null);

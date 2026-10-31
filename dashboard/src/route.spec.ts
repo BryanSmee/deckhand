@@ -50,6 +50,9 @@ test("settings: the repositories, and one's config", () => {
   const policies = { ...config, configTab: "policies" as const };
   expect(formatRoute(policies)).toBe("#/settings/repositories/org/app/policies");
   expect(parseRoute("#/settings/repositories/org/app/policies")).toEqual(policies);
+  const capabilities = { ...config, configTab: "capabilities" as const };
+  expect(formatRoute(capabilities)).toBe("#/settings/repositories/org/app/capabilities");
+  expect(parseRoute("#/settings/repositories/org/app/capabilities")).toEqual(capabilities);
   // A tab without a repository: the list.
   expect(formatRoute({ ...list, configTab: "policies" })).toBe("#/settings/repositories");
 });

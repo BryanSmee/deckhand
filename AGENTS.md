@@ -132,6 +132,12 @@ docs/         setup, per-repo config reference, security model, architecture
   packages moved under `deckhand_repository` (`namespaced()`): it can only narrow that
   ceiling (its deny rules apply to every run), except for its own modes, which need its allow
   rules and the operator's.
+- **Capabilities: what a run's sandbox gets is decided at its start** by the policies
+  (`allow_capabilities`, `deny_capabilities`), greedily, and checked in code whatever they say
+  (`listener/capabilities.mjs`): each capability's dependencies, and `pull` of a private
+  repository with `internet` refused unless the operator's allow rule gives `pull+internet`. A
+  run that fails them, or whose policies fail, doesn't start. Every run gets only its sandbox,
+  the agent's API, its own endpoints and its prompt beyond them.
 - **No GitHub token in a sandbox:** it holds only a run token (and its agent's token), signed
   by the broker service, which alone holds the key, bound to its network or pod and dead with
   the run (`lib/tokens.mjs`,

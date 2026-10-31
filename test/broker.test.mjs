@@ -79,6 +79,20 @@ test("a run's branches: none until allowed, and never for a run that can't push"
   const light = broker.register("org/a");
   broker.allow(light, ["issue-1-*"]);
   assert.deepEqual(broker.runOf(light).branches, []);
+  // Unless its capabilities (capabilities.mjs) give it `push`.
+  broker.grant(light, ["pull", "push"]);
+  broker.allow(light, ["issue-1-*"]);
+  assert.deepEqual(broker.runOf(light).branches, ["issue-1-*"]);
+  assert.deepEqual(broker.runOf(light).extra, undefined);
+  // Without `pull`, no GitHub token at all, whatever its mode gave it; restored the same way.
+  const bare = broker.register("org/a", { pull_requests: "read" });
+  broker.grant(bare, ["read:issues"]);
+  assert.equal(broker.runOf(bare).extra, NO_TOKEN);
+  const restored = broker.register("org/a", { pull_requests: "read" }, { caps: [] });
+  assert.equal(broker.runOf(restored).extra, NO_TOKEN);
+  // A run saved before capabilities keeps its mode's.
+  const older = broker.register("org/a", { pull_requests: "read" }, { caps: null });
+  assert.deepEqual(broker.runOf(older).extra, { pull_requests: "read" });
   // A finished run stays finished.
   broker.revoke(work);
   broker.allow(work, ["x"]);
@@ -102,6 +116,7 @@ test("a run's tokens name it from its own sandbox's network alone", async () => 
   const { broker, service } = tokenBroker();
   const id = broker.register("Org/A", undefined, { id: "run-a", mode: "work", push: true });
   assert.equal(id, "run-a");
+  broker.grant(id, ["pull", "push"]);
   broker.allow(id, ["issue-1-*"]);
   const { token, agentToken } = await broker.issue(id, "net-a", "0123456789abcdef01234567");
   const claims = JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
@@ -116,7 +131,8 @@ test("a run's tokens name it from its own sandbox's network alone", async () => 
       fork: false,
       branches: ["issue-1-*"],
       sandbox: "net-a",
-      caps: [],
+      // Its capabilities, as its start decided them.
+      caps: ["pull", "push"],
       aud: "deckhand:broker",
       iat: 0,
       exp: 0,

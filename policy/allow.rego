@@ -4,7 +4,8 @@
 # decide, as before allow rules existed. All but `allow_run`: run.rego allows each mode where it
 # makes sense. A grants folder's policy/allow.rego replaces it (one
 # without `allow_merge` refuses every auto-merge, say), and its other files add allow rules. A
-# repository's own modes also need an allow rule of the repository's (.deckhand/policy/).
+# repository's own modes also need an allow rule of the repository's (.deckhand/policy/). What
+# a run gets as it starts (`allow_capabilities`) is each mode's file's: mode-<mode>.rego.
 package deckhand
 
 allow_merge := true

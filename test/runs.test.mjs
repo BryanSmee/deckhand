@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createComments } from "../listener/comments.mjs";
 import { RunError } from "../listener/access.mjs";
-import { createRuns } from "../listener/runs.mjs";
+import { createRuns, reopenedMode } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
 
@@ -595,4 +595,25 @@ test("a restored run's grace: a line read before the follow caught up keeps its 
   assert.equal(runner.kills, 0);
   await followed;
   assert.equal(runner.kills, 1);
+});
+
+test("reopenedMode: a run's record once the volume its capabilities give it is known", () => {
+  // The same answer as its mode's volume: nothing to make again.
+  for (const started of [true, false]) {
+    assert.equal(reopenedMode({ mode: "work", restored: false, started, now: started }), null);
+  }
+  assert.equal(
+    reopenedMode({ mode: "work", restored: false, started: false, now: true }),
+    "continue",
+  );
+  assert.equal(reopenedMode({ mode: "work", restored: false, started: true, now: false }), "start");
+  // A wrap-up and a restored run say so whatever the volume holds.
+  assert.equal(
+    reopenedMode({ mode: "stop", restored: false, started: true, now: false }),
+    "wrap-up",
+  );
+  assert.equal(
+    reopenedMode({ mode: "work", restored: true, started: false, now: true }),
+    "restore",
+  );
 });

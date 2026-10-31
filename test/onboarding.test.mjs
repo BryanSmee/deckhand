@@ -266,3 +266,43 @@ test("the issue says who started it: the installer, or someone on the dashboard"
     /^@bob started Deckhand's setup for this repository from the dashboard\./,
   );
 });
+
+test("the onboarding branch's policies: a capability's name nobody knows is said, once", async () => {
+  const branch = "issue-30-deckhand-config";
+  const { request } = fakeRequest({
+    "GET /repos/org/app/pulls?state=open&per_page=100": PULLS,
+    [`GET /repos/org/app/contents/.deckhand.yaml?ref=${branch}`]: file("setup: npm ci\n"),
+  });
+  const asked = [];
+  const policies = {
+    checkRepo: async () => ({ errors: [], warnings: [] }),
+    // The repo's files deny `intenet` (misspelled) in every mode, the operator's allow `pul`.
+    capabilityRules: async (repo, ref, inputs) => {
+      asked.push([repo, ref, Object.keys(inputs)]);
+      return {
+        results: Object.fromEntries(
+          Object.keys(inputs).map((mode) => [
+            mode,
+            {
+              operator: { allow: new Map([["pul", ["x.rego"]]]), deny: [] },
+              repo: {
+                allow: new Map(),
+                deny: [{ capability: "intenet", reason: "no", file: "net.rego" }],
+              },
+            },
+          ]),
+        ),
+      };
+    },
+  };
+  const report = await branchConfigReport(request, config, "org/app", 30, policies);
+  // Every mode the repository may run in, on the branch checked; reviews and research too.
+  const [[repo, ref, modes]] = asked;
+  assert.deepEqual([repo, ref], ["org/app", branch]);
+  assert.ok(modes.includes("work") && modes.includes("review") && modes.includes("research"));
+  const lines = report.split("\n").filter((l) => l.includes("names `intenet`"));
+  assert.equal(lines.length, 1);
+  assert.match(lines[0], /^- ⚠️ `\.deckhand\/policy\/`: `deny_capabilities` of the repository's/);
+  // The operator's layer isn't this repository's to fix.
+  assert.doesNotMatch(report, /`pul`/);
+});
