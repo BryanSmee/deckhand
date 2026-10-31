@@ -464,3 +464,45 @@ test("sessionOf: a run that stashes and one that doesn't never share a clone", (
   );
   assert.equal(new Set(workspaces).size, 3);
 });
+
+test("sessionOf: a run that reaches the open internet never shares volumes with one that doesn't", () => {
+  // A work run with `internet` beside the issue's next ordinary one; two light runs with
+  // `setup`, one with `internet` (both checked by the gateways); a light run without `pull`.
+  const pairs = [
+    [
+      { mode: "work", light: false, capabilities: ["pull", "push", "internet"] },
+      { mode: "work", light: false, capabilities: ["pull", "push"] },
+    ],
+    [
+      { mode: "audit", light: true, capabilities: ["pull", "setup", "internet"] },
+      { mode: "audit", light: true, capabilities: ["pull", "setup"] },
+    ],
+    [
+      { mode: "brainstorm", light: true, capabilities: ["internet"] },
+      { mode: "brainstorm", light: true, capabilities: [] },
+    ],
+  ];
+  for (const [open, closed] of pairs) {
+    const [a, b] = [open, closed].map((live) =>
+      workspaceOf(sandboxSpec(runOf(live), "p", "m", parts)),
+    );
+    assert.ok(
+      a.every((v) => !b.includes(v)),
+      `${open.mode}: ${a} / ${b}`,
+    );
+    assert.ok(
+      a.every((v) => v.includes("-open-")),
+      String(a),
+    );
+  }
+  assert.equal(sessionOf("n", pairs[0][0]), "n-open");
+  assert.equal(sessionOf("n", pairs[1][0]), "n-light-trusted-open");
+  // Each among the names a comment without a trigger line looks in, and the runner takes.
+  assert.ok(sessionNames("n", false).includes("n-open"));
+  assert.ok(sessionNames("n", true).includes("n-light-trusted-open"));
+  // Research keeps its own.
+  assert.equal(
+    sessionOf("n", { mode: "research", light: true, capabilities: ["internet"] }),
+    "n-research",
+  );
+});

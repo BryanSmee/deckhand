@@ -2154,7 +2154,9 @@ a run that fails them doesn't start, and its reply says why:
 - **The open internet, whatever the mode**: a run with `internet` gets no host mount (what you
   mount may be private, whatever the repository is; its log says what was left out), no caches
   and no engine cache (later runs, other issues' work runs included, run what is there: what a
-  page had it write would run with their token, as for a fork's run), and is
+  page had it write would run with their token, as for a fork's run), session volumes of its own
+  (`-open`: whatever a page gets it to write in its clone or the agent's home, hooks or settings,
+  never runs in a run without the open internet, nor does its transcript reach one), and is
   never in an analysis's digest, as research runs aren't: what a page made it say would reach a
   run that has the code and a token. Its record keeps its capabilities for that.
 
