@@ -227,6 +227,9 @@ function backendFetch(root, seen, received = [], down = new Set()) {
         GIT_PROTOCOL: headers["git-protocol"] ?? "",
       },
     });
+    // It may answer and exit before reading all it was sent (a refused push): its answer is
+    // what counts, not a write to a pipe it closed.
+    child.stdin.on("error", () => {});
     child.stdin.end(Buffer.concat(chunks));
     const out = [];
     for await (const chunk of child.stdout) out.push(chunk);
