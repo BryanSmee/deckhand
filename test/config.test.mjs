@@ -786,6 +786,15 @@ test("FALLBACKS: an unknown entry, or one without its credential, stops the list
   );
 });
 
+test("FALLBACKS: the runner checks the entries, not their credentials, which it never holds", () => {
+  const runner = (env, text) => loadConfig(env, file(text), { service: "runner" });
+  assert.deepEqual(runner({}, "fallbacks: [claude@anthropic:key, codex]").fallbacks, [
+    "claude@anthropic:key",
+    "codex@openai",
+  ]);
+  assert.throws(() => runner({}, "fallbacks: [gemini]"), /fallbacks: expected agent@provider/);
+});
+
 test("FALLBACKS: a plan, then its API key; the plan runs first, config.yaml keeps the suffix", () => {
   const env = { ALLOWED_USERS: "a", CLAUDE_CODE_OAUTH_TOKEN: "t", ANTHROPIC_API_KEY: "k" };
   const config = loadConfig({ ...env, FALLBACKS: "claude@anthropic:key, claude@anthropic:key" });

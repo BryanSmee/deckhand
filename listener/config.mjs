@@ -717,6 +717,10 @@ const RUNNER_SETTINGS = {
   ...SETTINGS,
   SANDBOX_AGENT: { ...SETTINGS.SANDBOX_AGENT, parse: knownAgent },
   BRAINSTORM_AGENT: { ...SETTINGS.BRAINSTORM_AGENT, parse: knownAgent },
+  FALLBACKS: {
+    ...SETTINGS.FALLBACKS,
+    parse: (text, { label }) => fallbacks(text, { label, env: {}, known: true }),
+  },
 };
 
 // The agents the operator configured: those it has a credential for (each agent's `secrets`),
@@ -751,8 +755,8 @@ function namedCredentials(env, claudeCredential) {
 // FALLBACKS: where a run goes when its provider fails, in order ("claude@openrouter, codex"
 // → ["claude@openrouter", "codex@openai"]), "claude@anthropic:key" on a credential of the
 // provider's. Each needs its credential: a fallback that can't run would only show when the
-// first one fails.
-function fallbacks(text, { label, env }) {
+// first one fails. `known`: the runner's, which checks the entries only (as knownAgent()).
+function fallbacks(text, { label, env, known = false }) {
   const names = [];
   for (const item of list(text)) {
     const entry = entryOf(item);
@@ -766,7 +770,7 @@ function fallbacks(text, { label, env }) {
     const secrets = entry.credential
       ? [credentials[entry.credential].variable]
       : AGENTS[entry.agent].providers[entry.provider].secrets;
-    if (!secrets.some((secret) => env[secret])) {
+    if (!known && !secrets.some((secret) => env[secret])) {
       throw new ConfigError(`${label}: ${name} needs ${secrets.join(" or ")} in the environment`);
     }
     if (!names.includes(name)) names.push(name);
