@@ -227,6 +227,8 @@ function backendFetch(root, seen, received = [], down = new Set()) {
         GIT_PROTOCOL: headers["git-protocol"] ?? "",
       },
     });
+    // git answers without reading all of a request it refuses: its stdin may close first.
+    child.stdin.on("error", () => {});
     child.stdin.end(Buffer.concat(chunks));
     const out = [];
     for await (const chunk of child.stdout) out.push(chunk);
