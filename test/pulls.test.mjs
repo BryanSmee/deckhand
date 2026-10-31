@@ -433,6 +433,18 @@ test("a redelivered pull_request delivery: as the pull request is now", () => {
   assert.equal(replay("converted_to_draft", {}), "edited");
   assert.equal(replay("reopened", { state: "closed" }), "edited");
   assert.equal(replay("closed", {}), "edited");
+  // A label: kept while the pull request still has it (labeled) or still hasn't (unlabeled).
+  const label = (action, labels) =>
+    replayedPull({ ...delivery(action), label: { name: "needs-input" } }, now({ labels })).action;
+  assert.equal(label("labeled", [{ name: "Needs-Input" }]), "labeled");
+  assert.equal(label("labeled", []), "edited");
+  assert.equal(label("unlabeled", []), "unlabeled");
+  assert.equal(label("unlabeled", [{ name: "needs-input" }]), "edited");
+  // The payload's own updated_at, when it happened: the current one is newer.
+  const then = delivery("unlabeled", { updated_at: "2026-10-30T09:00:00Z" });
+  const replayed = replayedPull(then, now({ updated_at: "2026-10-31T09:00:00Z" }));
+  assert.equal(replayed.replayed_updated_at, "2026-10-30T09:00:00Z");
+  assert.equal(replayed.pull_request.updated_at, "2026-10-31T09:00:00Z");
   const merged = replayedPull(delivery("ready_for_review"), now({ state: "closed", merged: true }));
   assert.deepEqual(pullRequest(config, "pull_request", merged, NOW).pr, {
     number: 31,

@@ -288,6 +288,11 @@ async function fakeGitHub(files = {}) {
       if (req.url.startsWith("/installation/repositories?")) {
         return res.end(files.installed ?? JSON.stringify({ repositories: [] }));
       }
+      // The repo's open issues with the needs-input label (inputs.mjs sync()), when the test
+      // sets them.
+      if (req.url.startsWith("/repos/org/repo/issues?labels=") && files.labelled) {
+        return res.end(files.labelled);
+      }
       // The repo's open issues (the backlog), as JSON, when the test sets them.
       if (req.url.startsWith("/repos/org/repo/issues?state=open&") && files.backlog) {
         return res.end(files.backlog);
@@ -4405,6 +4410,321 @@ mounts:
     assert.equal(dismissed.by, "alice");
     const kept = JSON.parse(readFileSync(join(dir, "dismissed.json"), "utf8"));
     assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
+  });
+
+  test("api/state: a run's questions stop waiting once its issue closes, its pull request merges, or a pull request's label comes off", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const { port, send, listener } = await listen(t, {}, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      for (const [id, key] of [
+        ["org-repo-5-1000", "org/repo#5"],
+        ["org-repo-pr-6-1000", "org/repo#pr-6"],
+        ["org-repo-9-1000", "org/repo#9"],
+        ["org-repo-12-1000", "org/repo#12"],
+        ["org-repo-13-1000", "org/repo#13"],
+      ]) {
+        writeFileSync(
+          join(dir, "logs", `${id}.log`),
+          [
+            { type: "listener", key, repo: "org/repo", taskMode: "work", startedAt: 1000 },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+      }
+      return { GITHUB_URL: github.url };
+    });
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const states = async () =>
+      Object.fromEntries(
+        (await (await get("/api/state", session)).json()).tasks.map((x) => [x.key, x.state]),
+      );
+    assert.deepEqual(await states(), {
+      "org/repo#5": "needs-input",
+      "org/repo#pr-6": "needs-input",
+      "org/repo#9": "needs-input",
+      "org/repo#12": "needs-input",
+      "org/repo#13": "needs-input",
+    });
+    const repository = { full_name: "org/repo", default_branch: "main" };
+    const installation = { id: 7 };
+    const sender = { login: "bob", type: "User" };
+    // Issue #5 closed, the label taken off pull request #6, and pull request #19, which closes
+    // #9, merged with #9 left open.
+    const closed = { number: 5, title: "An idea", state: "closed", state_reason: "completed" };
+    await send({ action: "closed", installation, repository, sender, issue: closed }, "issues");
+    const merged = {
+      number: 19,
+      title: "Nine",
+      state: "closed",
+      merged: true,
+      // After the runs asked (their logs' time): a close from before says nothing of them.
+      merged_at: new Date(Date.now() + 60_000).toISOString(),
+      body: "Closes #9",
+      html_url: "https://github.com/org/repo/pull/19",
+      head: { ref: "issue-9-nine", repo: { full_name: "org/repo" } },
+    };
+    await send(
+      { action: "closed", installation, repository, sender, pull_request: merged },
+      "pull_request",
+    );
+    await listener.until("org/repo#9: closed, its last run's questions set aside");
+    // Pull request #22, which would close #12, closed without merging: #12 still asks. Issue
+    // #13's `closed`, redelivered from before its run asked: #13 still asks.
+    await send(
+      {
+        action: "closed",
+        installation,
+        repository,
+        sender,
+        pull_request: {
+          ...merged,
+          number: 22,
+          merged: false,
+          merged_at: null,
+          closed_at: new Date(Date.now() + 60_000).toISOString(),
+          body: "Closes #12",
+        },
+      },
+      "pull_request",
+    );
+    const stale = { number: 13, state: "closed", closed_at: "2000-01-01T00:00:00Z" };
+    await send({ action: "closed", installation, repository, sender, issue: stale }, "issues");
+    const pull = { number: 6, title: "A change", state: "open", labels: [] };
+    const label = { name: "needs-input" };
+    await send(
+      { action: "unlabeled", installation, repository, sender, pull_request: pull, label },
+      "pull_request",
+    );
+    await listener.until("org/repo#pr-6: label removed, its last run's questions set aside");
+    assert.deepEqual(await states(), {
+      "org/repo#5": "done",
+      "org/repo#pr-6": "done",
+      "org/repo#9": "done",
+      "org/repo#12": "needs-input",
+      "org/repo#13": "needs-input",
+    });
+    // The label put back on #6: its questions ask again.
+    await send(
+      { action: "labeled", installation, repository, sender, pull_request: pull, label },
+      "pull_request",
+    );
+    await listener.until("org/repo#pr-6: label put back, its last run's questions wait again");
+    assert.equal((await states())["org/repo#pr-6"], "needs-input");
+  });
+
+  test("a pull request's unlabeled delivery redelivered after a newer run asked sets nothing aside", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const at = (minutes) => new Date(Date.now() - minutes * 60_000).toISOString();
+    // The person's `unlabeled` on #7 failed (503); a newer run on #7 asked since, and labelled
+    // it again: GitHub has #7 labelled now.
+    const deliveries = JSON.stringify([
+      { id: 0, guid: "g-un", delivered_at: at(30), status_code: 503, event: "pull_request" },
+    ]);
+    const now = { number: 7, state: "open", draft: false, merged: false, updated_at: at(0) };
+    now.labels = [{ name: "needs-input" }];
+    const { dir, listener, send } = await listen(
+      t,
+      { deliveries, "pull:7": JSON.stringify(now) },
+      (dir, github) => {
+        mkdirSync(join(dir, "logs"));
+        writeFileSync(
+          join(dir, "logs", "org-repo-pr-7-1000.log"),
+          [
+            {
+              type: "listener",
+              key: "org/repo#pr-7",
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+        return { GITHUB_URL: github.url };
+      },
+    );
+    await listener.until("Redelivered g-un (pull_request");
+    // GitHub sends it again, as it was then.
+    const then = {
+      action: "unlabeled",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      pull_request: { ...now, labels: [], updated_at: at(30) },
+      label: { name: "needs-input" },
+      sender: { login: "bob", type: "User" },
+    };
+    await send(then, "pull_request", "g-un");
+    await listener.until("Delivery pull_request unlabeled: redelivered, as org/repo#7 is now");
+    // Handled as the pull request is now, labelled: an edit, which sets nothing aside.
+    const handled = await listener.until(/Delivery: pull_request \w+ from bob/);
+    assert.match(handled, /Delivery: pull_request edited from bob/);
+    assert.doesNotMatch(listener.output(), /label removed, its last run's questions set aside/);
+    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /pr-7/);
+  });
+
+  test("an issue's unlabeled delivery redelivered after the label was put back sets nothing aside", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const at = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
+    // The person's `unlabeled` on #5 failed (503); they put the label back since: GitHub has
+    // #5 labelled now.
+    const deliveries = JSON.stringify([
+      { id: 0, guid: "g-iu", delivered_at: at(-1), status_code: 503, event: "issues" },
+    ]);
+    const now = { number: 5, title: "Five", state: "open", labels: [{ name: "needs-input" }] };
+    const { dir, listener, send } = await listen(
+      t,
+      { deliveries, "issue:5": JSON.stringify({ ...now, updated_at: at(2) }) },
+      (dir, github) => {
+        mkdirSync(join(dir, "logs"));
+        writeFileSync(
+          join(dir, "logs", "org-repo-5-1000.log"),
+          [
+            {
+              type: "listener",
+              key: "org/repo#5",
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+        return { GITHUB_URL: github.url };
+      },
+    );
+    await listener.until("Redelivered g-iu (issues");
+    // GitHub sends it again, as it was then: after the run asked, before the label came back.
+    const then = {
+      action: "unlabeled",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue: { ...now, labels: [], updated_at: at(1) },
+      label: { name: "needs-input" },
+      sender: { login: "bob", type: "User" },
+    };
+    await send(then, "issues", "g-iu");
+    // Handled as the issue is now, labelled: an edit, which sets nothing aside.
+    const handled = await listener.until(/Delivery: issues \w+ from bob/);
+    assert.match(handled, /Delivery issues unlabeled: redelivered, as org\/repo#5 is now/);
+    assert.match(handled, /Delivery: issues edited from bob/);
+    assert.doesNotMatch(listener.output(), /label removed, its last run's questions set aside/);
+    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
+  });
+
+  test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const files = {};
+    const { port, listener } = await listen(t, files, (dir, github) => {
+      mkdirSync(join(dir, "logs"));
+      for (const n of [5, 8, 11, 14]) {
+        writeFileSync(
+          join(dir, "logs", `org-repo-${n}-1000.log`),
+          [
+            {
+              type: "listener",
+              key: `org/repo#${n}`,
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+      }
+      // Both known closed. #5 closed after its run asked; #8 before (a comment on a closed issue
+      // started its run), so its questions still wait.
+      writeFileSync(
+        join(dir, "closed.json"),
+        JSON.stringify({ "org/repo#5": "completed", "org/repo#8": "completed" }),
+      );
+      const closedAt = (ms) => ({
+        state: "closed",
+        state_reason: "completed",
+        closed_at: new Date(ms).toISOString(),
+      });
+      files["issue:5"] = JSON.stringify({
+        number: 5,
+        title: "Five",
+        ...closedAt(Date.now() + 60_000),
+      });
+      files["issue:8"] = JSON.stringify({
+        number: 8,
+        title: "Eight",
+        ...closedAt(Date.now() - 3_600_000),
+      });
+      // #11 was labelled when the listener last heard of it; the label's listing no longer has
+      // it (inputs.mjs sync()).
+      // #14 too, but GitHub still has it labelled: the listing missed it.
+      writeFileSync(
+        join(dir, "inputs.json"),
+        JSON.stringify({
+          "org/repo#11": { since: 1000, questions: null },
+          "org/repo#14": { since: 1000, questions: null },
+        }),
+      );
+      const after = new Date(Date.now() + 60_000).toISOString();
+      files["issue:11"] = JSON.stringify({
+        number: 11,
+        state: "open",
+        labels: [],
+        updated_at: after,
+      });
+      files["issue:14"] = JSON.stringify({
+        number: 14,
+        state: "open",
+        labels: [{ name: "needs-input" }],
+        updated_at: after,
+      });
+      files.installed = JSON.stringify({
+        repositories: [{ full_name: "org/repo", default_branch: "main" }],
+      });
+      files.labelled = "[]";
+      return { GITHUB_URL: github.url };
+    });
+    await listener.until("Closed since their run asked: org/repo#5");
+    await listener.until(
+      "org/repo#11: label removed meanwhile, its last run's questions set aside",
+    );
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const tasks = (await (await get("/api/state", session)).json()).tasks;
+    assert.deepEqual(Object.fromEntries(tasks.map((x) => [x.key, x.state])), {
+      "org/repo#5": "done",
+      "org/repo#8": "needs-input",
+      "org/repo#11": "done",
+      "org/repo#14": "needs-input",
+    });
   });
 
   test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {
