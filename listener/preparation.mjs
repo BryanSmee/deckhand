@@ -90,7 +90,7 @@ export function createPreparation(ctx) {
     }
     // Never where a fork's code may run, whether the run pushes or not.
     const engine = caps.has("docker")
-      ? engineFor(config, task, settings, access, fork, note)
+      ? engineFor(config, task, settings, access, fork, note, caps.has("internet"))
       : null;
     const refused = runnerRefusal(config, settings, access, engine, caps);
     if (refused) throw new RunError(`${cantRun(agent)}: ${refused}`);
@@ -396,14 +396,20 @@ export function createPreparation(ctx) {
       await ctx.images.installAgent(agentOf(task), output);
       // A run without `setup` runs none: no caches, which work runs trust. Nor a run whose
       // comments came from a fork's pull request: its code would write into what every later
-      // run uses. What the runner keeps (the runner service's GET /info, ../runner/client.mjs).
+      // run uses; nor one that reaches the open internet, which a page may have it write there.
+      // What the runner keeps (the runner service's GET /info, ../runner/client.mjs).
       const { keepsCaches, noCaches } = (await ctx.images.info?.()) ?? ctx.images;
       const setup = caps.has("setup");
+      const internet = caps.has("internet");
       if (fork && setup && settings.caches?.length) note("No caches: a pull request from a fork");
+      else if (internet && setup && settings.caches?.length)
+        note("No caches: this run reaches the open internet");
       else if (setup && settings.caches?.length && keepsCaches === false)
         note(`No caches: ${noCaches ?? `the ${config.runner} runner keeps none`}`);
       const caches =
-        !setup || fork ? [] : await ctx.images.caches(task.repo, settings.caches, image);
+        !setup || fork || internet
+          ? []
+          : await ctx.images.caches(task.repo, settings.caches, image);
       return { image, caches, settings };
     } catch (error) {
       // What a failed build printed last (flushing again writes nothing).

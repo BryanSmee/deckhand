@@ -209,6 +209,11 @@ test("engineFor: the repo's `docker` with its grant and the operator's SANDBOX_E
     "No container engine: the operator hasn't set SANDBOX_ENGINE",
     "No container engine: a pull request from a fork",
   ]);
+  // A run that reaches the open internet: an engine, without the cache later runs' engines trust.
+  notes.length = 0;
+  const open = engineFor(config, task({}), docker, access, false, (m) => notes.push(m), true);
+  assert.deepEqual(open, { limits: { cpus: 3 }, cache: null });
+  assert.deepEqual(notes, ["No engine cache: this run reaches the open internet"]);
 });
 
 test("research: refused without allow_research, naming the grant; a broken grant file too", (t) => {

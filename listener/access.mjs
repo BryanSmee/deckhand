@@ -155,8 +155,10 @@ export async function egressCache(grant, egressCa, note, agent, config = {}, git
 // The container engine (runner/engine.mjs) a run with `docker` (capabilities.mjs) gets, or
 // null: only with the operator's SANDBOX_ENGINE, the repo's `docker` and its grant
 // (grantedAccess() stopped the run when that is missing), for runs whose comments came from no
-// fork's pull request: a fork's code never runs in one.
-export function engineFor(config, task, settings, { grant, limits }, fork, note) {
+// fork's pull request: a fork's code never runs in one. `internet`: the run reaches the open
+// internet, so it gets no engine cache, which later runs' engines trust (as caches,
+// preparation.mjs).
+export function engineFor(config, task, settings, { grant, limits }, fork, note, internet = false) {
   if (!settings.docker || !grant.allowDocker) return null;
   if (!config.engine) {
     note("No container engine: the operator hasn't set SANDBOX_ENGINE");
@@ -165,6 +167,10 @@ export function engineFor(config, task, settings, { grant, limits }, fork, note)
   if (fork) {
     note("No container engine: a pull request from a fork");
     return null;
+  }
+  if (settings.docker.cache && internet) {
+    note("No engine cache: this run reaches the open internet");
+    return { limits, cache: null };
   }
   const cache = settings.docker.cache ? engineCacheVolume(config, task.repo) : null;
   return { limits, cache };

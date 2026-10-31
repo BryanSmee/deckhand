@@ -2152,7 +2152,9 @@ a run that fails them doesn't start, and its reply says why:
   Refused unless an allow rule of **yours** gives `pull+internet` (a repository's can't), and
   said as a warning on its config page even then.
 - **The open internet, whatever the mode**: a run with `internet` gets no host mount (what you
-  mount may be private, whatever the repository is; its log says what was left out), and is
+  mount may be private, whatever the repository is; its log says what was left out), no caches
+  and no engine cache (later runs, other issues' work runs included, run what is there: what a
+  page had it write would run with their token, as for a fork's run), and is
   never in an analysis's digest, as research runs aren't: what a page made it say would reach a
   run that has the code and a token. Its record keeps its capabilities for that.
 

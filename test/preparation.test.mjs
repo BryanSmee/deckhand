@@ -733,3 +733,19 @@ test("a run with the open internet gets no host mount, which says so", async (t)
     [`${nfs}/data`],
   );
 });
+
+test("a run with the open internet gets no caches, which later runs trust, and says so", async (t) => {
+  const internet = capabilityPolicies({
+    operator: () => ["pull", "push", "setup", "internet", "pull+internet"],
+  });
+  const { parts, calls, notes } = await workRun(t, "org/repo", {
+    grant: "allow_research: true\n",
+    policies: internet,
+  });
+  assert.deepEqual(parts.prepared.caches, []);
+  assert.ok(!calls.some((c) => c.startsWith("caches")));
+  assert.ok(notes.includes("No caches: this run reaches the open internet"));
+  // Without it, the repo's caches.
+  const plain = await workRun(t, "org/repo");
+  assert.equal(plain.parts.prepared.caches.length, 1);
+});
