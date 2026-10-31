@@ -13,6 +13,7 @@ import {
   MARKER,
   parseAfter,
   parseKey,
+  replayedIssue,
   prId,
   splitTrigger,
   saysMore,
@@ -695,4 +696,27 @@ test("saysMore: only text besides the trigger and command lines answers open que
   assert.equal(saysMore(config, "The first one"), true);
   // Not the trigger line: the whole comment is text.
   assert.equal(saysMore(config, "Deckhand please"), true);
+});
+
+test("a redelivered issues delivery: its label or close action kept only while the issue matches it", () => {
+  const delivery = (action) => ({
+    action,
+    issue: { number: 5, state: "open", labels: [], updated_at: "2026-10-30T09:00:00Z" },
+    label: { name: "needs-input" },
+  });
+  const now = (more) => ({ number: 5, state: "open", labels: [], ...more });
+  const replay = (action, current) => replayedIssue(delivery(action), now(current)).action;
+  const labelled = { labels: [{ name: "Needs-Input" }] };
+  assert.equal(replay("unlabeled", {}), "unlabeled");
+  assert.equal(replay("unlabeled", labelled), "edited");
+  assert.equal(replay("labeled", labelled), "labeled");
+  assert.equal(replay("labeled", {}), "edited");
+  assert.equal(replay("closed", { state: "closed" }), "closed");
+  assert.equal(replay("closed", {}), "edited");
+  assert.equal(replay("reopened", {}), "reopened");
+  assert.equal(replay("reopened", { state: "closed" }), "edited");
+  assert.equal(replay("edited", { state: "closed" }), "edited");
+  // Its own payload, with when it happened.
+  const kept = replayedIssue(delivery("unlabeled"), now(labelled));
+  assert.equal(kept.issue.updated_at, "2026-10-30T09:00:00Z");
 });

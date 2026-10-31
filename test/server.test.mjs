@@ -4578,13 +4578,65 @@ mounts:
     assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /pr-7/);
   });
 
+  test("an issue's unlabeled delivery redelivered after the label was put back sets nothing aside", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const at = (minutes) => new Date(Date.now() + minutes * 60_000).toISOString();
+    // The person's `unlabeled` on #5 failed (503); they put the label back since: GitHub has
+    // #5 labelled now.
+    const deliveries = JSON.stringify([
+      { id: 0, guid: "g-iu", delivered_at: at(-1), status_code: 503, event: "issues" },
+    ]);
+    const now = { number: 5, title: "Five", state: "open", labels: [{ name: "needs-input" }] };
+    const { dir, listener, send } = await listen(
+      t,
+      { deliveries, "issue:5": JSON.stringify({ ...now, updated_at: at(2) }) },
+      (dir, github) => {
+        mkdirSync(join(dir, "logs"));
+        writeFileSync(
+          join(dir, "logs", "org-repo-5-1000.log"),
+          [
+            {
+              type: "listener",
+              key: "org/repo#5",
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+        return { GITHUB_URL: github.url };
+      },
+    );
+    await listener.until("Redelivered g-iu (issues");
+    // GitHub sends it again, as it was then: after the run asked, before the label came back.
+    const then = {
+      action: "unlabeled",
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue: { ...now, labels: [], updated_at: at(1) },
+      label: { name: "needs-input" },
+      sender: { login: "bob", type: "User" },
+    };
+    await send(then, "issues", "g-iu");
+    // Handled as the issue is now, labelled: an edit, which sets nothing aside.
+    const handled = await listener.until(/Delivery: issues \w+ from bob/);
+    assert.match(handled, /Delivery issues unlabeled: redelivered, as org\/repo#5 is now/);
+    assert.match(handled, /Delivery: issues edited from bob/);
+    assert.doesNotMatch(listener.output(), /label removed, its last run's questions set aside/);
+    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
+  });
+
   test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const files = {};
     const { port, listener } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
-      for (const n of [5, 8, 11]) {
+      for (const n of [5, 8, 11, 14]) {
         writeFileSync(
           join(dir, "logs", `org-repo-${n}-1000.log`),
           [
@@ -4624,10 +4676,27 @@ mounts:
       });
       // #11 was labelled when the listener last heard of it; the label's listing no longer has
       // it (inputs.mjs sync()).
+      // #14 too, but GitHub still has it labelled: the listing missed it.
       writeFileSync(
         join(dir, "inputs.json"),
-        JSON.stringify({ "org/repo#11": { since: 1000, questions: null } }),
+        JSON.stringify({
+          "org/repo#11": { since: 1000, questions: null },
+          "org/repo#14": { since: 1000, questions: null },
+        }),
       );
+      const after = new Date(Date.now() + 60_000).toISOString();
+      files["issue:11"] = JSON.stringify({
+        number: 11,
+        state: "open",
+        labels: [],
+        updated_at: after,
+      });
+      files["issue:14"] = JSON.stringify({
+        number: 14,
+        state: "open",
+        labels: [{ name: "needs-input" }],
+        updated_at: after,
+      });
       files.installed = JSON.stringify({
         repositories: [{ full_name: "org/repo", default_branch: "main" }],
       });
@@ -4654,6 +4723,7 @@ mounts:
       "org/repo#5": "done",
       "org/repo#8": "needs-input",
       "org/repo#11": "done",
+      "org/repo#14": "needs-input",
     });
   });
 

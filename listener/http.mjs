@@ -14,6 +14,7 @@ import {
   previewEvent,
   prId,
   pullRequest,
+  replayedIssue,
   replayedPull,
   taskKey,
   touchedItems,
@@ -21,7 +22,7 @@ import {
   workItem,
 } from "./events.mjs";
 import { UNREAD_EVENTS } from "./github-app.mjs";
-import { fetchPull } from "./github.mjs";
+import { fetchPull, getJson } from "./github.mjs";
 import { isLight, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { previewHook } from "./previews.mjs";
@@ -112,6 +113,9 @@ export function loopStep(pending) {
 
 // `ctx` (server.mjs): the listener's state and services, read at call time. `dashboardDir`:
 // the dashboard's build (../dashboard/, `npm run build`), copied there by the image.
+// The `issues` actions a redelivery replays as the issue is now (replayIssue()).
+const ISSUE_REPLAYS = ["labeled", "unlabeled", "closed", "reopened"];
+
 export function createHttp(ctx, { dashboardDir }) {
   const { config, log, skip, tasks } = ctx;
 
@@ -405,6 +409,9 @@ export function createHttp(ctx, { dashboardDir }) {
   function guarded(event, payload, id) {
     try {
       if (event === "pull_request" && ctx.redelivered?.(id)) return replay(event, payload);
+      if (event === "issues" && ISSUE_REPLAYS.includes(payload?.action) && ctx.redelivered?.(id)) {
+        return replayIssue(event, payload);
+      }
       dispatch(event, payload);
     } catch (error) {
       log(`Delivery ${event} ${payload?.action ?? ""} failed: ${error.stack ?? error}`);
@@ -437,6 +444,23 @@ export function createHttp(ctx, { dashboardDir }) {
       const aside = ctx.dismissals.setAsideOn(ctx.runs, key, null, at);
       if (aside) log(`${aside}: closed, its last run's questions set aside`);
     }
+  }
+
+  // A redelivered `issues` delivery that moves a run's questions or closes something, handled
+  // only if the issue still matches it (events.mjs replayedIssue()).
+  function replayIssue(event, payload) {
+    const repo = payload?.repository?.full_name;
+    const number = payload?.issue?.number;
+    if (!repo || !number) return dispatch(event, payload);
+    const path = `/repos/${repo}/issues/${number}`;
+    admitted(
+      getJson(ctx.github, repo, path, [404, 410]).then((current) => {
+        if (!current) return log(`Delivery ${event} ${payload.action}: ${repo}#${number} is gone`);
+        const now = replayedIssue(payload, current);
+        log(`Delivery ${event} ${payload.action}: redelivered, as ${repo}#${number} is now`);
+        dispatch(event, now);
+      }),
+    );
   }
 
   // A verified delivery: onboarding, a pull request's state, a preview hook or a comment.

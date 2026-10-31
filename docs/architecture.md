@@ -147,8 +147,10 @@ aside in `dismissed.json` while that run is the task's last:
 
 - someone other than the App's bot takes the label off the task's issue or pull request: an
   `issues` or `pull_request` `unlabeled` delivery, or, for an issue's label taken off while the
-  listener was down, the label's listing at start (every page of it; it lists issues only, so a
-  pull request's task keeps asking until its next run or its close). The listing takes an issue
+  listener was down, the label's listing at start (every page of it, and the issue itself
+  asked once more before anything is set aside, since a listing read page by page can miss one
+  that moved; it lists issues only, so a pull request's task keeps asking until its next run or
+  its close). The listing takes an issue
   missing from it for one whose label came off: renaming `NEEDS_INPUT_LABEL` sets aside the
   questions of the runs that asked under the old name. The bot's own removals don't count: a
   run starting, or a comment that takes the label off and starts nothing, answers none of the
@@ -160,11 +162,12 @@ aside in `dismissed.json` while that run is the task's last:
   pull request closed without merging sets aside only its own task's questions, not those of
   the issue it would have closed. A run that asks after the close (a comment on a closed issue
   starts one) still waits, and so does one that asked after a redelivered delivery's own time
-  (`closed_at`, `merged_at`, or `updated_at` for a label). A pull request's redelivery is
-  replayed as the pull request is now (`replayedPull()`): a label action it no longer matches
-  (the label put back since, or taken off) is an edit, which moves nothing, and its time is the
-  original payload's (`replayed_updated_at`). A label put back on a closed pull request takes
-  nothing back. An issue left open when its pull
+  (`closed_at`, `merged_at`, or `updated_at` for a label). A redelivery is also checked
+  against the issue or pull request as it is now (`replayedIssue()`, `replayedPull()`): a label
+  or close action it no longer matches (the label put back since, or taken off; reopened since,
+  or closed) is an edit, which moves nothing. A pull request's is replayed with the pull request
+  as it is now, so its time is the original payload's (`replayed_updated_at`). A label put back
+  on a closed pull request takes nothing back. An issue left open when its pull
   request merges keeps the label its run put, which then no longer holds the task; open
   questions in the issue's body still do.
 

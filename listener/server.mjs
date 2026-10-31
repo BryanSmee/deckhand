@@ -41,7 +41,7 @@ import {
   loadCredentials,
   saveCredentials,
 } from "./github-app.mjs";
-import { pullEntry, taskKey } from "./events.mjs";
+import { hasLabel, pullEntry, taskKey } from "./events.mjs";
 import {
   createGitHub,
   fetchPull,
@@ -75,7 +75,7 @@ import { createRunnerClient } from "../runner/client.mjs";
 import { createServicesHttp } from "./services-http.mjs";
 import { createRunEvents } from "./run-events.mjs";
 import { createDiscussionApi, fromKey } from "./discussions.mjs";
-import { closedTasks, createDismissals, setAsideClosed } from "./dismissals.mjs";
+import { askedOn, closedTasks, createDismissals, setAsideClosed } from "./dismissals.mjs";
 import { operatorSecrets } from "./secrets.mjs";
 import { createRuns } from "./runs.mjs";
 import { createSetup } from "./setup.mjs";
@@ -360,14 +360,24 @@ const pulls = createPulls({
 const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
-// One whose label came off meanwhile sets its run's questions aside, as the delivery would.
+// One whose label came off meanwhile sets its run's questions aside, as the delivery would,
+// once the issue itself says so: a listing read page by page can miss one that moved between
+// pages. Its `updated_at` is when, at the latest: a run that asked since still waits.
 const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
   dropped: (repo, number) => {
-    const aside = dismissals.setAsideOn(ctx.runs, taskKey(repo, number), null);
-    if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);
+    const key = taskKey(repo, number);
+    if (!askedOn(ctx.runs, key)) return;
+    lookup(repo, `/repos/${repo}/issues/${number}`)
+      .then((issue) => {
+        if (issue?.state === "open" && hasLabel(issue.labels, config.needsInputLabel)) return;
+        const at = Date.parse(issue?.updated_at) || null;
+        const aside = dismissals.setAsideOn(ctx.runs, key, null, at);
+        if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);
+      })
+      .catch((error) => log(`${key}: its label: ${error.message ?? error}`));
   },
 });
 

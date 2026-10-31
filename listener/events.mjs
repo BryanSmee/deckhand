@@ -513,6 +513,24 @@ export function replayedPull(payload, current) {
   };
 }
 
+// A redelivered `issues` delivery (redeliveries.mjs), checked against the issue as GitHub has
+// it now (`current`): its label or close action, when the issue no longer matches it (the label
+// put back since it came off or taken off since, reopened since it closed or closed since),
+// becomes `edited`, which sets no run's questions aside (questions.mjs) and closes nothing. Its
+// own payload stays: when it happened is what it says (`updated_at`, `closed_at`).
+export function replayedIssue(payload, current) {
+  const open = current.state !== "closed";
+  const labelled = () => hasLabel(current.labels, payload.label?.name);
+  const still =
+    {
+      labeled: labelled,
+      unlabeled: () => !labelled(),
+      closed: () => !open,
+      reopened: () => open,
+    }[payload.action]?.() ?? true;
+  return still ? payload : { ...payload, action: "edited" };
+}
+
 // Whether `labels` (an issue's or pull request's, as GitHub has them: names or { name }) hold
 // `name`. GitHub's label names are case-insensitive: a "Needs-Input" set by hand is the same
 // label.
