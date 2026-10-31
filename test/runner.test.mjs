@@ -194,7 +194,7 @@ test("start: the run's own internal network, with the listener and the proxy on 
   assert.deepEqual([...nets.get("dh-b-1")].sort(), ["dh-b", "egress-id", "me"]);
 });
 
-test("start: without LISTENER_CONTAINER, the runner joins the one labelled as the broker, in its own project", async () => {
+test("start: without LISTENER_CONTAINER, the runner joins those labelled as the broker, in its own project", async () => {
   const { r, calls, nets, containers } = runner({ listener: "" });
   // The runner's own container (its host name) says which compose project it is in.
   containers.set(hostname(), { project: "deckhand", ip: "10.0.0.2" });
@@ -205,11 +205,22 @@ test("start: without LISTENER_CONTAINER, the runner joins the one labelled as th
     /^ps --filter label=deckhand\.role=broker --filter label=com\.docker\.compose\.project=deckhand/m,
   );
   assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id", "listener-id"]);
+  // The orchestrator's two copies (#506): both, the one waiting for the lease too, so that
+  // either acts on the run's network under its name.
+  containers.set("waiting-id", { project: "deckhand", ip: "10.0.0.5", role: "broker" });
+  await r.start({ run: "dh-c-1", name: "dh-c", image: "i" });
+  assert.deepEqual([...nets.get("dh-c-1")].sort(), [
+    "dh-c",
+    "egress-id",
+    "listener-id",
+    "waiting-id",
+  ]);
   // None labelled so: no run starts, saying what to set.
   containers.delete("listener-id");
+  containers.delete("waiting-id");
   await assert.rejects(
     r.start({ run: "dh-b-1", name: "dh-b", image: "i" }),
-    /the listener's container wasn't found \(0 labelled deckhand\.role=broker\): set LISTENER_CONTAINER/,
+    /the orchestrator's container wasn't found \(0 labelled deckhand\.role=broker\): set LISTENER_CONTAINER/,
   );
 });
 

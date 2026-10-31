@@ -119,3 +119,23 @@ test("a stop while the lease is being taken gives it back: the other copy doesn'
   assert.equal(b.lease.active(), true);
   assert.deepEqual(a.said, []);
 });
+
+test("a lease not renewed by its end is lost then (onPassive), not at the next look (#506)", async (t) => {
+  const store = fileStore();
+  let frozen = false;
+  const flaky = {
+    ...store,
+    renew: (...args) => (frozen ? new Promise(() => {}) : store.renew(...args)),
+  };
+  // A long life (its look gives up after half of it), a hung renewal: lost at its end (1 s), not
+  // at the look that fails past it (1.67 s here).
+  const a = copy(t, flaky, "a", 1000);
+  await a.lease.start();
+  frozen = true;
+  const at = Date.now();
+  while (!a.said.includes("passive") && Date.now() - at < 5000) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  assert.ok(a.said.includes("passive"), "a's loss");
+  assert.ok(Date.now() - at < 1400, `${Date.now() - at} ms`);
+});

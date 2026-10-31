@@ -62,22 +62,25 @@ operator, across as many repositories as the App is installed on.
 ## How it works
 
 ```
-GitHub ──webhook──▶ listener ──▶ runner ──docker──▶ sandbox (one per issue, Claude Code inside)
-                     │  ▲                              │
-                     │  └─ GitHub gateway ◀────────────┤  the run's token, which the listener swaps
-                     │                                 │  for a token for that repo only
-                     │                                 └──▶ egress proxy ──▶ allowed hosts only
-                     └── dashboard
+GitHub ──webhook──▶ edge ──▶ orchestrator ──▶ runner ──docker──▶ sandbox (one per issue, Claude Code inside)
+                     │            │                                │
+                     └ dashboard  └──▶ github service ◀────────────┤  the run's token, swapped there
+                                       (GitHub gateway)            │  for a token for that repo only
+                                                                   └──▶ egress proxy ──▶ allowed hosts only
 ```
 
-- The **listener** (`listener/`) checks each webhook's signature, the allowlist and the
-  trigger line, queues the work and has the runner start one sandbox container per run.
+- **Edge** (`edge/`) is the only service the internet reaches: it checks each webhook's
+  signature and hands the delivery on, runs `/setup` and the sign-in, and serves the
+  dashboard. It holds the webhook secret, the OAuth client's and the session key, nothing else.
+- The **orchestrator** (`orchestrator/`, with the modules in `listener/`) checks the
+  allowlist and the trigger line, queues the work and has the runner start one sandbox
+  container per run. It holds no secret.
 - The **github service** (`github/`) is the only one holding the App's private key: it makes
-  the listener's GitHub calls, and the sandboxes' through its GitHub and git gateways, with
+  the orchestrator's GitHub calls, and the sandboxes' through its GitHub and git gateways, with
   tokens no sandbox gets.
 - The **runner** (`runner/`) is the only service with the Docker socket: it starts, follows
   and removes the sandboxes, builds repository images and keeps the runs' logs, for the
-  listener alone, checking each sandbox against your grants again.
+  orchestrator alone, checking each sandbox against your grants again.
 - The **models service** (`models/`) is the only one holding your Claude (or OpenAI, Google)
   credential: the sandboxes' agents call their API through it, with their run's token in its
   place.
@@ -94,8 +97,8 @@ GitHub ──webhook──▶ listener ──▶ runner ──docker──▶ sa
 You need:
 
 - a server with Docker Engine 26 or later and the compose plugin;
-- an HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to the
-  listener's port (8080);
+- an HTTPS address GitHub can reach (your reverse proxy, or a tunnel), forwarding to
+  edge's port (8080);
 - a GitHub account (or organization) to own the App, and the repositories to use it on;
 - a Claude credential: a token from `claude setup-token` (your Claude plan) or an
   `ANTHROPIC_API_KEY`; or an Anthropic-compatible gateway such as OpenRouter and its token
@@ -119,12 +122,13 @@ folder you keep in git and `compose.yaml` mounts, `.env` overriding its settings
 cp -r server.example server
 docker compose pull
 docker compose up -d
-docker compose logs listener
+docker compose logs edge
 ```
 
-This pulls the released images (the listener, the runner, which alone holds the Docker socket,
-the broker, which alone signs the runs' tokens, the policy service, the egress proxy and the base
-sandbox image, at `DECKHAND_VERSION`, by default `latest`) and starts the first five; `docker compose up -d
+This pulls the released images (edge, which alone the internet reaches, the orchestrator, the
+runner, which alone holds the Docker socket, the broker, which alone signs the runs' tokens, the
+github service, the models service, the policy service, the egress proxy and the base sandbox
+image, at `DECKHAND_VERSION`, by default `latest`) and starts all but the last; `docker compose up -d
 --build` builds them from your checkout instead. The logs print a one-time setup link,
 `…/setup?token=…`.
 
@@ -140,7 +144,7 @@ Deckhand
 ```
 
 The comment gets a 👀. The first run installs Claude Code (once, into a volume), then
-works: open the listener's address to follow it on the dashboard. When it is done, the issue
+works: open edge's address to follow it on the dashboard. When it is done, the issue
 has a reply, and the branch `issue-<n>-<slug>` a draft pull request.
 
 [docs/setup.md](docs/setup.md) has the details: what the App asks for, the dashboard's
@@ -185,10 +189,10 @@ Out of the box, without any configuration:
 - **Privileges:** containers run as `node` with `--cap-drop ALL`, `no-new-privileges`, and
   CPU, memory and pids limits (2 CPUs, `4g`, 2048 processes; `limits` in the grants folder).
 - **GitHub:** no token or SSH key in a sandbox. Its GitHub calls carry a secret that dies
-  with the run; the egress proxy relays them to the listener's GitHub gateway, which sends
+  with the run; the egress proxy relays them to the github service's GitHub gateway, which sends
   them on with an installation token limited to the run's repository, redacts secrets from
   what they write, and keeps a review from reading outsiders' comments. That token only
-  reads the code: pushes go through the listener, which refuses the default branch, where
+  reads the code: pushes go through its git gateway, which refuses the default branch, where
   Deckhand reads its config.
 
 ## Security model
@@ -224,10 +228,13 @@ docker compose pull
 docker compose up -d
 ```
 
-Runs in progress keep going while the listener restarts: their sandboxes run detached, and
-the new listener finds them by their Docker labels, delivers the comments that arrive
-meanwhile and posts each final reply once. Comments still waiting for a run and brainstorms
-between replies are kept. Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
+Runs in progress keep going while the orchestrator restarts: their sandboxes run detached, and
+the new orchestrator finds them by their Docker labels, delivers the comments that arrive
+meanwhile and posts each final reply once. Webhooks wait in edge's store meanwhile; comments
+still waiting for a run and brainstorms between replies are kept. From a release that ran the
+listener, add `--remove-orphans` once ([From the listener](docs/setup.md#from-the-listener)).
+With two copies of edge and of the orchestrator, an update stops nothing
+([Two copies](docs/setup.md#two-copies)). Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
 leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 
 Claude Code's version is pinned by `CLAUDE_CODE_VERSION`: change it in `.env` (or
@@ -239,7 +246,7 @@ Antigravity CLI's `AGY_VERSION`, with the sha256 of its tarballs in `AGY_SHA256`
 
 - Deckhand runs Claude Code; it is not made by or affiliated with Anthropic. Its name,
   images and logo don't use "Claude" or "Anthropic".
-- Claude Code is not bundled in any image: the listener installs it on first start, at the
+- Claude Code is not bundled in any image: the runner installs it on first start, at the
   pinned version, into a Docker volume. So are Codex and the Antigravity CLI, when they run.
 - Each operator uses their own `ANTHROPIC_API_KEY` or their own Claude login (a token from
   `claude setup-token`), under their own agreement with Anthropic, and follows Anthropic's
@@ -247,12 +254,13 @@ Antigravity CLI's `AGY_VERSION`, with the sha256 of its tarballs in `AGY_SHA256`
 
 ## Development
 
-Node 26; the listener has no dependencies. Tests: `node --test --test-force-exit`; syntax: `node --check
-listener/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and the tests' fake docker, and `node --check
+Node 26; no runtime dependencies but graphql-js, bundled into the github service's image. Tests: `node --test --test-force-exit`; syntax: `node --check
+edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs`, `bash -n` on `sandbox/`'s shell scripts and the tests' fake docker, and `node --check
 sandbox/deckhand-inbox sandbox/deckhand-files` (the list: [AGENTS.md](AGENTS.md#commands)); format: `npx --yes prettier@3 --check .`.
-The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into the listener's image;
-locally: `cd dashboard && npm ci && npm test && npm run build`, or `npm run dev` against a
-listener on port 8080. See [AGENTS.md](AGENTS.md) for the conventions and security rules.
+The dashboard (`dashboard/`, Preact + Vite + TypeScript) is built into edge's image;
+locally: `cd dashboard && npm ci && npm test && npm run build`, or `npm run dev` against
+edge on port 8080.
+See [AGENTS.md](AGENTS.md) for the conventions and security rules.
 
 ## Licence
 

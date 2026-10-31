@@ -214,8 +214,8 @@ test("each route takes its callers only: edge reads, the runner gets tarballs, t
     (await call(a, "orchestrator", "POST", "/graphql/org/repo", { body: mutation })).status,
     200,
   );
-  // As the App, the orchestrator redelivers a delivery, and nothing else: no token minted, no
-  // webhook changed, no installation removed.
+  // As the App, edge redelivers a delivery (#506), and nothing else: no token minted, no
+  // webhook changed, no installation removed; the orchestrator, not even that.
   const asApp = (method, path) =>
     github.calls.filter((c) => c.method === method && c.url === `/api/v3${path}`);
   for (const [method, path] of [
@@ -226,16 +226,17 @@ test("each route takes its callers only: edge reads, the runner gets tarballs, t
   ]) {
     // The service mints its own installation tokens there: none more for this call.
     const before = asApp(method, path).length;
-    const res = await call(a, "orchestrator", method, `/as-app${path}`, { body: {} });
-    assert.equal(res.status, 403, `${method} ${path}`);
+    for (const caller of ["edge", "orchestrator"]) {
+      const res = await call(a, caller, method, `/as-app${path}`, { body: {} });
+      assert.equal(res.status, 403, `${caller}: ${method} ${path}`);
+    }
     assert.equal(asApp(method, path).length, before, `${method} ${path} reached GitHub`);
   }
-  const redelivered = await call(
-    a,
-    "orchestrator",
-    "POST",
-    "/as-app/app/hook/deliveries/1/attempts",
+  assert.equal(
+    (await call(a, "orchestrator", "POST", "/as-app/app/hook/deliveries/1/attempts")).status,
+    403,
   );
+  const redelivered = await call(a, "edge", "POST", "/as-app/app/hook/deliveries/1/attempts");
   assert.equal(redelivered.headers.get(GITHUB_STATUS), "200");
   assert.equal(asApp("POST", "/app/hook/deliveries/1/attempts").length, 1);
 });
@@ -459,12 +460,16 @@ test("the App: a listener's key handed over once, never another App's; a setup o
   const saved = JSON.parse(readFileSync(join(copy.dir, "app.json"), "utf8"));
   assert.equal(saved.pem, PEM);
   assert.equal(saved.webhook_secret, undefined);
-  const manifest = await fetch(`${copy.url}/app/manifest`, {
-    method: "POST",
-    headers: { authorization: as, [EPOCH_HEADER]: "5", "content-type": "application/json" },
-    body: JSON.stringify({ code: "abc" }),
-  });
-  assert.equal(manifest.status, 409);
+  // /setup's conversion is edge's (#506): the orchestrator's refused, edge's with an App held.
+  const manifest = (authorization) =>
+    fetch(`${copy.url}/app/manifest`, {
+      method: "POST",
+      headers: { authorization, [EPOCH_HEADER]: "5", "content-type": "application/json" },
+      body: JSON.stringify({ code: "abc" }),
+    });
+  assert.equal((await manifest(as)).status, 403);
+  const asEdge = `Bearer ${signServiceToken({ sub: "edge", aud: "github" }, key)}`;
+  assert.equal((await manifest(asEdge)).status, 409);
 });
 
 test("tarballs: the runner's, of an allowed repo, streamed from GitHub; nothing else of it", async (t) => {

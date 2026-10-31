@@ -213,11 +213,13 @@ test("each caller gets its own endpoints only, from its own network, with a vali
     headers: { authorization: `Bearer ${forged}`, [EPOCH_HEADER]: "1" },
   });
   assert.equal(res.status, 401);
-  // The orchestrator drives runs; edge reads a run's log, nothing else.
+  // The orchestrator drives runs and reads their logs (the dashboard's, which edge passes on,
+  // #506); edge calls the runner for nothing.
   assert.equal(await status("GET", "/sandboxes", { sub: "orchestrator" }), 200);
   assert.equal(await status("GET", "/sandboxes", { sub: "edge" }), 403);
   assert.equal(await status("POST", "/sandboxes", { sub: "edge", body: SPEC }), 403);
-  assert.equal(await status("GET", "/logs/dh-o-a-1-1", { sub: "edge" }), 200);
+  assert.equal(await status("GET", "/logs/dh-o-a-1-1", { sub: "edge" }), 403);
+  assert.equal(await status("GET", "/logs/dh-o-a-1-1", { sub: "orchestrator" }), 200);
   assert.equal(await status("DELETE", "/logs/dh-o-a-1-1", { sub: "edge" }), 403);
   // The egress policy's lookups, the orchestrator's: without its epoch (UNFENCED), so a
   // listener draining still answers them; nothing else of its goes without one.
@@ -250,7 +252,7 @@ test("each caller gets its own endpoints only, from its own network, with a vali
   assert.equal(await status("POST", "/sandboxes", { sub: "orchestrator", body: dots }), 400);
   // Every endpoint names its callers: none takes the proxy or the policy service.
   for (const callers of Object.values(ROUTES)) {
-    assert.ok(callers.every((c) => ["orchestrator", "edge", "models"].includes(c)));
+    assert.ok(callers.every((c) => ["orchestrator", "models"].includes(c)));
   }
 });
 
@@ -354,11 +356,15 @@ test("a cache is prepared in the base image or the repository's own, at plain pa
 
 test("a caller's token from another network is refused", async (t) => {
   const store = fileStore();
-  // The orchestrator's network is elsewhere: 127.0.0.1 is edge's alone.
-  const bound = networkCallers("edge=127.0.0.0/8,orchestrator=10.9.0.0/16");
+  // The orchestrator's network is elsewhere: 127.0.0.1 is the models service's alone.
+  const bound = networkCallers("models=127.0.0.0/8,orchestrator=10.9.0.0/16");
   const { url } = await copy(t, { store, backend: host(), bound });
   assert.equal((await call(url, "GET", "/sandboxes", { sub: "orchestrator" })).status, 403);
-  assert.equal((await call(url, "GET", "/logs/dh-o-a-1-1", { sub: "edge" })).status, 200);
+  const refresh = await call(url, "POST", "/logins/antigravity/refresh", {
+    sub: "models",
+    body: {},
+  });
+  assert.equal(refresh.status, 501);
 });
 
 test("the orchestrator's fencing epoch: none refused, a stale one refused, the newest kept by both copies", async (t) => {
@@ -383,8 +389,10 @@ test("the orchestrator's fencing epoch: none refused, a stale one refused, the n
   });
   assert.match((await refused.json()).message, /epoch 2 is stale: 3 is the orchestrator's now/);
   assert.equal(backend.runs(), 0);
-  // Other callers carry none.
-  assert.equal((await call(b.url, "GET", "/logs/dh-o-a-1-1", { sub: "edge" })).status, 200);
+  // A log's read changes nothing: not fenced, a stale epoch's included.
+  const read = (epoch) => call(b.url, "GET", "/logs/dh-o-a-1-1", { sub: "orchestrator", epoch });
+  assert.equal((await read(null)).status, 200);
+  assert.equal((await read(1)).status, 200);
   // One no clock gives (they are the orchestrator's clock until #506): refused, not kept, so
   // that it never locks every later listener out.
   const far = Date.now() + 2 * 24 * 3600_000;
@@ -558,7 +566,7 @@ test("a run's log: appends in order through the client, one sent twice taken onc
   assert.equal(reopened.size, 27);
   reopened.write("line 3\n");
   assert.equal(await reopened.flushed(), true);
-  // Read by edge from an offset, waiting for more.
+  // Read from an offset, waiting for more (the dashboard's live view).
   const waiting = logs.read("dh-o-a-1-1", { offset: 34, wait: 2000 });
   reopened.write("line 4\n");
   assert.equal((await waiting).data.toString(), "line 4\n");
@@ -603,7 +611,7 @@ test("a log's append whose answer was lost is taken once; a stale epoch's is ref
   await new Promise((resolve) => setTimeout(resolve, 100));
   assert.ok(appends <= 7, `${appends} appends`);
   assert.match(said.join("\n"), /409 .*epoch 1 is stale/);
-  // As edge reads it (no epoch): nothing of the stale writer's.
+  // Read (a stale epoch reads too): nothing of the stale writer's.
   assert.equal((await logs.read("dh-o-a-1-1")).data.toString(), "one\ntwo\n");
 });
 

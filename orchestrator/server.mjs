@@ -1,23 +1,34 @@
-// Deckhand's listener: receives the GitHub App's webhooks, runs Claude Code in a sandbox
-// container (../sandbox/) for issue, pull request and discussion comments, one container and
-// one set of volumes per issue, and posts Claude's final message back as a comment.
+// The orchestrator's entry point (#506): the queue and the runs' lives. It takes the verified
+// deliveries edge puts on its stream (../edge/), runs Claude Code in a sandbox container
+// (../sandbox/) through the runner for issue, pull request and discussion comments, one
+// container and one set of volumes per issue, and posts the final message back through the
+// github service. It answers the dashboard's API, which edge passes on with the signed-in user.
+// It holds no secret: the App's key is the github service's, the webhook secret and the
+// sessions' edge's, the agents' credentials the models service's, the Docker socket the
+// runner's.
 //
-// This file only wires the listener together: its settings, the GitHub App, the shared state
-// (`ctx`) and the modules that act on it, then starts the servers and picks up what a
-// previous listener left. How a comment becomes a run, and which module does what:
-// ../docs/architecture.md. No dependencies: node:http, node:crypto. Sandboxes, images and
-// preview hooks are the runner service's (../runner/), the only one with the Docker socket.
-import { createHash } from "node:crypto";
-import { mkdirSync } from "node:fs";
+// Two copies, active/passive (../lib/active.mjs): the one holding the orchestrator's lease in
+// the store acts (consumes the streams, arms the timers, starts runs), with the lease's epoch on
+// every call to the github service, the runner and the broker, which refuse an older one. The
+// other waits for the lease, and takes it at once when the first releases it on SIGTERM (or
+// once it expires after a crash), then rebuilds its state from the store and the files it
+// shares (the data volume). A copy that loses its lease without stopping exits: it never acts
+// on a stale epoch.
+//
+// This file only wires it together: its settings, the shared state (`ctx`) and the modules
+// that act on it, then the servers, and what a previous copy left. How a comment becomes a
+// run, and which module does what: ../docs/architecture.md. No dependencies: node:http,
+// node:crypto.
+import { createHash, randomUUID } from "node:crypto";
+import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
-import { createAnalysis } from "./analysis.mjs";
-import { createAuth, sessionKey } from "./auth.mjs";
-import { planWarning } from "./agents/credentials.mjs";
-import { AGENT_SECRETS } from "./agents/index.mjs";
-import { createModelsService } from "./models-service.mjs";
-import { createBroker } from "./broker.mjs";
-import { createBrokerService, legacyKey } from "./broker-service.mjs";
+import { createAnalysis } from "../listener/analysis.mjs";
+import { planWarning } from "../listener/agents/credentials.mjs";
+import { AGENT_SECRETS } from "../listener/agents/index.mjs";
+import { createModelsService } from "../listener/models-service.mjs";
+import { createBroker } from "../listener/broker.mjs";
+import { createBrokerService, legacyKey } from "../listener/broker-service.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import {
   clientAddress,
@@ -25,12 +36,12 @@ import {
   relayToGithub,
   runAt,
   sandboxAt,
-} from "./broker-http.mjs";
+} from "../listener/broker-http.mjs";
 import { createGithubClient } from "../github/client.mjs";
-import { createProjects } from "./projects.mjs";
-import { createBrainstorms, createIssueModes } from "./brainstorms.mjs";
-import { createComments } from "./comments.mjs";
-import { createConflicts, intoDefaultBranch } from "./conflicts.mjs";
+import { createProjects } from "../listener/projects.mjs";
+import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
+import { createComments } from "../listener/comments.mjs";
+import { createConflicts, intoDefaultBranch } from "../listener/conflicts.mjs";
 import {
   brokerServiceUrl,
   ConfigError,
@@ -38,12 +49,15 @@ import {
   modelsServiceUrl,
   readConfigFile,
   withModelCredentials,
-} from "./config.mjs";
+} from "../listener/config.mjs";
+import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
-import { nextEpoch, openStore } from "../lib/store.mjs";
-import { checkAppSettings, loadCredentials, saveCredentials } from "./github-app.mjs";
-import { hasLabel, pullEntry, taskKey } from "./events.mjs";
+import { openStore } from "../lib/store.mjs";
+import { readJson } from "../lib/files.mjs";
+import { createEdgeClient } from "../edge/client.mjs";
+import { checkAppSettings, loadCredentials, saveCredentials } from "../listener/github-app.mjs";
+import { hasLabel, pullEntry, taskKey } from "../listener/events.mjs";
 import {
   createGitHub,
   fetchPull,
@@ -51,46 +65,51 @@ import {
   fetchTitle,
   listLabelled,
   listPulls,
-} from "./github.mjs";
-import { autoMergeFiles, grantErrors, grantFor, grantOf, grantsBy, loadGrants } from "./grants.mjs";
-import { createHttp } from "./http.mjs";
-import { createHistory } from "./history.mjs";
-import { createInputs } from "./inputs.mjs";
-import { createOnboarding, createOnboardingStore } from "./onboarding.mjs";
-import { createLinkedBranches } from "./linked-branch.mjs";
-import { createPolicies } from "./policies.mjs";
+} from "../listener/github.mjs";
+import {
+  autoMergeFiles,
+  grantErrors,
+  grantFor,
+  grantOf,
+  grantsBy,
+  loadGrants,
+} from "../listener/grants.mjs";
+import { createHttp } from "../listener/http.mjs";
+import { createHistory } from "../listener/history.mjs";
+import { createInputs } from "../listener/inputs.mjs";
+import { createOnboarding, createOnboardingStore } from "../listener/onboarding.mjs";
+import { createLinkedBranches } from "../listener/linked-branch.mjs";
+import { createPolicies } from "../listener/policies.mjs";
 import { operatorPolicies } from "../lib/policy-files.mjs";
-import { policyClient } from "./policy-client.mjs";
-import { createPulls } from "./pulls.mjs";
-import { createDecisions } from "./decisions.mjs";
-import { createRedeliveries } from "./redeliveries.mjs";
-import { fetchEgressCa } from "./egress.mjs";
-import { createRepoCheck } from "./repo-check.mjs";
-import { readRepoFile } from "./repo-config.mjs";
-import { createRepoSettings } from "./repo-settings.mjs";
-import { createRepoApi, createRepoList } from "./repos.mjs";
-import { createRestart } from "./restart.mjs";
-import { createReviewers, openerOf } from "./reviewers.mjs";
-import { createReviews, stepsGoing } from "./reviews.mjs";
-import { loadRuns, moveLogs, saveSummary } from "./runlog.mjs";
+import { policyClient } from "../listener/policy-client.mjs";
+import { createPulls } from "../listener/pulls.mjs";
+import { createDecisions } from "../listener/decisions.mjs";
+import { fetchEgressCa } from "../listener/egress.mjs";
+import { createRepoCheck } from "../listener/repo-check.mjs";
+import { readRepoFile } from "../listener/repo-config.mjs";
+import { createRepoSettings } from "../listener/repo-settings.mjs";
+import { createRepoApi, createRepoList } from "../listener/repos.mjs";
+import { createRestart } from "../listener/restart.mjs";
+import { createReviewers, openerOf } from "../listener/reviewers.mjs";
+import { createReviews, stepsGoing } from "../listener/reviews.mjs";
+import { loadRuns, moveLogs, saveSummary } from "../listener/runlog.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
-import { createServicesHttp } from "./services-http.mjs";
-import { createRunEvents } from "./run-events.mjs";
-import { createDiscussionApi, fromKey } from "./discussions.mjs";
-import { askedOn, closedTasks, createDismissals, setAsideClosed } from "./dismissals.mjs";
-import { operatorSecrets } from "./secrets.mjs";
-import { createRuns } from "./runs.mjs";
-import { createSetup } from "./setup.mjs";
-import { createStatus, serverInfo, serverSetup } from "./status.mjs";
-import { createSync } from "./sync.mjs";
-import { busyTask, createTasks } from "./tasks.mjs";
-import { createAutoPickup } from "./auto-pickup.mjs";
-import { createLanes, fetchParent } from "./lanes.mjs";
-import { createOrder } from "./order.mjs";
-import { createTitles } from "./titles.mjs";
-import { createWaits } from "./waits.mjs";
-import { createWorkApi } from "./work.mjs";
+import { createServicesHttp } from "../listener/services-http.mjs";
+import { createRunEvents } from "../listener/run-events.mjs";
+import { createDiscussionApi } from "../listener/discussions.mjs";
+import { askedOn, closedTasks, createDismissals, setAsideClosed } from "../listener/dismissals.mjs";
+import { operatorSecrets } from "../listener/secrets.mjs";
+import { createRuns } from "../listener/runs.mjs";
+import { createStatus, serverInfo, serverSetup } from "../listener/status.mjs";
+import { createSync } from "../listener/sync.mjs";
+import { busyTask, createTasks } from "../listener/tasks.mjs";
+import { createAutoPickup } from "../listener/auto-pickup.mjs";
+import { createLanes, fetchParent } from "../listener/lanes.mjs";
+import { createOrder } from "../listener/order.mjs";
+import { createTitles } from "../listener/titles.mjs";
+import { createWaits } from "../listener/waits.mjs";
+import { createWorkApi } from "../listener/work.mjs";
 
 // How long the egress policy's answers in flight get once the broker drained: they are quick.
 const POLICY_DRAIN_MS = 5000;
@@ -110,6 +129,11 @@ const RECONCILE_MS = 60 * 60_000;
 // How often the preview hooks the runner runs are asked again, for /status and the dashboard.
 const PREVIEWS_MS = 5000;
 
+// How often the App's public parts are asked of edge again (another App set up there), and
+// how soon while it has none.
+const APP_MS = 60_000;
+const NO_APP_MS = 5000;
+
 const env = process.env;
 
 function log(...args) {
@@ -119,15 +143,15 @@ function log(...args) {
 // The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
 // its stream of their events. The key the listener signed tokens with before it moves out of
 // the data volume, but for its public part (legacyKey()).
-// Its calls carry the listener's service tokens, as the orchestrator: for the broker, the policy
-// service, the runner, the models service and the github service.
+// Its calls carry the orchestrator's service tokens: for the broker, the policy service, the
+// runner, the models service, the github service and edge.
 let brokerCaller;
 let models;
 try {
   brokerCaller = createBrokerCaller({
     url: brokerServiceUrl(env),
     service: "orchestrator",
-    audiences: ["broker", "policy", "runner", "models", "github"],
+    audiences: ["broker", "policy", "runner", "models", "github", "edge"],
     podTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
     log,
   });
@@ -150,7 +174,7 @@ await models.start();
 const stray = AGENT_SECRETS.filter((name) => env[name]);
 if (stray.length) {
   log(
-    `Warning: the listener's environment holds ${stray.join(", ")}, which it no longer uses: the models service holds the agents' credentials (docs/setup.md). Remove them from the listener's.`,
+    `Warning: the orchestrator's environment holds ${stray.join(", ")}, which it doesn't use: the models service holds the agents' credentials (docs/setup.md). Remove them from the orchestrator's.`,
   );
 }
 let config;
@@ -183,55 +207,127 @@ const logDir = join(config.dataDir, "logs");
 const shotsDir = join(config.dataDir, "shots");
 for (const dir of [logDir, shotsDir]) mkdirSync(dir, { recursive: true });
 
+// The orchestrator's state through the store's interface (lib/store.mjs), in the data volume:
+// the queue (restart.mjs), its lease, the deliveries it handled, the rest as the services take
+// it over (#499). Its two copies share it. The operator's secrets are refused in it
+// (lib/store.mjs), once `ctx` can say them.
+let storeSecrets = () => [];
+const store = openStore(env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href, {
+  password: env.REDIS_PASSWORD,
+  secrets: () => storeSecrets(),
+});
+
+// Its fencing epoch, once it holds the lease (below).
+let epoch = null;
+
 const brokerService = createBrokerService({
   caller: brokerCaller,
   legacy: legacyKey(config.dataDir, { log }),
+  epoch: () => epoch,
   log,
 });
-
-// The orchestrator's fencing epoch (#506 makes it its lease's): higher at each start, sent with
-// every call to the runner, which refuses an older one. A listener still draining once the next
-// one started can't start or stop a run. From the clock, and above the last one: a data volume
-// made anew (the store with it) doesn't start again below what the runner has seen.
-// The listener's state through the store's interface (lib/store.mjs), in the data volume: the
-// queue for now (restart.mjs), the epoch, the rest as the services take it over (#499). The
-// operator's secrets are refused in it (lib/store.mjs), once `ctx` can say them.
-let storeSecrets = () => [];
-const store = openStore(env.STORE_URL || pathToFileURL(join(config.dataDir, "store")).href, {
-  secrets: () => storeSecrets(),
-});
-const epoch = await nextEpoch(store);
-
-// The services the listener still is, each with its own token for the runner, from the broker
-// service: the orchestrator drives runs (and the egress policy asks where a sandbox is), edge
-// reads their logs (runner/service.mjs ROUTES).
-const callers = {
-  orchestrator: brokerCaller,
-  ...Object.fromEntries(
-    ["edge"].map((service) => [
-      service,
-      createBrokerCaller({
-        url: config.brokerServiceUrl,
-        service,
-        audiences: ["runner"],
-        podTokenFile: config.serviceAccountTokenFile,
-        log,
-      }),
-    ]),
-  ),
-};
-// Asked for until the broker answers; a call waits for its token (lib/broker-client.mjs).
-callers.edge.start();
 
 // The runs being started: the first tokens the runner asks for once their network or pod
 // exists (services-http.mjs).
 const pendingTokens = new Map();
 
+// A port another copy holds (two copies on one host, the tests'; the one acting, or the one that
+// held the lease before, as it drains): taken once free, however long that takes.
+async function listenWhenFree(server, port, host) {
+  for (let tries = 0; ; tries++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(port, host, () => (server.off("error", reject), resolve()));
+      });
+    } catch (error) {
+      if (error.code !== "EADDRINUSE") throw error;
+      if (tries === 100) log(`Port ${port}: another process holds it, waiting for it`);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+}
+
+// The runner's calls, before anything waits on it: a run's first tokens; and edge's, once the
+// state is back (`edgeReady`): the dashboard's API (services-http.mjs).
+let edgeReady = null;
+// Whether this copy acts: from the lease's taking until SIGTERM.
+let acting = false;
+const services = createServicesHttp({
+  // The broker service's own keys: never the listener's from before it.
+  keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
+  bound: networkCallers(config.serviceNetworks),
+  pendingTokens,
+  edge: () => edgeReady,
+  active: () => acting,
+  allowed: (login) => config.users.includes(login),
+  log,
+});
+// While it waits too, for its probes: a waiting copy answers 503 to the rest.
+const servicesListening = listenWhenFree(services, config.servicesPort).then(() =>
+  log(`Services on :${services.address().port}`),
+);
+
+// One copy acts: the one holding the lease (lib/active.mjs). This one waits for it, doing
+// nothing else meanwhile: no timer, no stream read, and of its servers only the services port,
+// which answers its probes and 503 to every call (`acting`). Its epoch fences every call it
+// makes to the runner, the github service and the broker: higher at each new holder, above
+// what they have seen (lib/store.mjs acquire()), so a copy that lost the lease can't start or
+// stop a run, nor post a reply. Losing it while acting, this copy exits: the restart makes it
+// the waiting one.
+let leaseLost = () => {};
+let sigterm = () => process.exit(0);
+process.on("SIGTERM", () => sigterm());
+const lease = await new Promise((resolve) => {
+  // The lease's timers don't keep a process alive: this does, while it waits.
+  const alive = setInterval(() => {}, 60_000);
+  const waiting = setTimeout(
+    () => log("Waiting for the orchestrator's lease: another copy acts"),
+    1000,
+  );
+  waiting.unref();
+  const leased = activePassive({
+    store,
+    name: "orchestrator",
+    holder: `orchestrator-${randomUUID()}`,
+    // LEASE_SECONDS (15): how long a crashed copy's lease lasts before the other takes it.
+    ...(Number(env.LEASE_SECONDS) > 0 && { ttlMs: Number(env.LEASE_SECONDS) * 1000 }),
+    onActive: (held) => {
+      clearTimeout(waiting);
+      clearInterval(alive);
+      resolve({ ...held, control: leased });
+    },
+    onPassive: () => leaseLost(),
+    log,
+  });
+  leased.start();
+});
+epoch = lease.epoch;
+acting = true;
+// Stopped before it is up: its lease given back, for the other copy to take at once.
+sigterm = () => {
+  leaseLost = () => {};
+  lease.control.stop().finally(() => process.exit(0));
+};
+await servicesListening;
+leaseLost = () => {
+  console.error("The orchestrator's lease is lost: another copy acts now. Exiting.");
+  process.exit(1);
+};
+
+// Edge (../edge/, #506): the verified deliveries' stream, the App's public parts, the
+// dashboard's "from" tags, the redeliveries' scan.
+const edge = createEdgeClient({
+  urls: env.EDGE_URL || "http://edge:8083",
+  token: () => brokerCaller.header("edge"),
+  log,
+});
+
 // Where sandboxes, images, preview hooks and the runs' logs are: the runner service (RUNNER is
 // its setting).
 const runnerClient = createRunnerClient({
   urls: config.runnerUrl,
-  token: (sub) => callers[sub].header("runner"),
+  token: () => brokerCaller.header("runner"),
   epoch: () => epoch,
   pendingTokens,
   log,
@@ -321,30 +417,60 @@ storeSecrets = () => operatorSecrets(ctx);
 
 // --- GitHub ----------------------------------------------------------------------------
 
-// The App's credentials the listener keeps (app.json in its data volume): its names, its
-// webhook secret, its OAuth client's. Never its key, which the github service alone holds: its
-// calls go there (../github/client.mjs app()).
-function useApp(credentials) {
-  ctx.app = githubService.app(credentials);
+// The App as edge holds it (../edge/app.mjs): its public parts only (its names, its owner,
+// where the dashboard is), never its webhook secret nor its OAuth client's, which are edge's.
+// Its key is the github service's alone, where its calls go (../github/client.mjs app()).
+function useApp(parts) {
+  ctx.app = githubService.app(parts);
   // The App's own login: its pull requests are Claude's (events.mjs linkedIssue()).
   config.bot = ctx.app.identity().name;
 }
 
-// Kept by a listener from before the github service: handed over to it, then removed here. The
-// first GitHub calls at start wait for it a while (below).
+// What edge says of the App now: used once it has one, and again when another one is set up
+// there. Resolves to whether it has one.
+async function refreshApp() {
+  const { configured, ...parts } = (await edge.app({ waitMs: 10_000 })) ?? {};
+  if (!configured) return false;
+  if (JSON.stringify(ctx.app?.credentials) === JSON.stringify(parts)) return true;
+  const first = !ctx.app;
+  useApp(parts);
+  ctx.appInfo = null;
+  if (!first) log(`GitHub App ${parts.slug}: set up at edge`);
+  checkApp();
+  return true;
+}
+
+// `fn()` until it resolves, again every few seconds while it fails (`what` in the log).
+async function persist(what, fn) {
+  for (let said = false; !ctx.stopping; said = true) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (!said) log(`${what}: ${error.message ?? error}, trying again`);
+      await new Promise((resolve) => setTimeout(resolve, 5000).unref());
+    }
+  }
+}
+
+// A listener's App, kept in the data volume this orchestrator took over: its key handed to the
+// github service, then the rest (the webhook secret, the OAuth client's) to edge with the
+// sessions' key and sign-outs; then removed here, where nothing secret stays. The first GitHub
+// calls at start wait for the key a while (below).
 let handedOver = Promise.resolve();
 {
   const credentials = loadCredentials(config.dataDir);
   if (credentials) {
     const { pem, ...kept } = credentials;
-    useApp(kept);
-    if (pem) {
-      let taken = false;
-      handedOver = githubService
-        .persist("handing over the App's key", async () => {
+    // As edge gives them (../edge/app.mjs publicPart()): its names, nothing secret.
+    const names = ["id", "slug", "owner", "html_url", "bot_id", "public_url"];
+    useApp(Object.fromEntries(names.filter((k) => kept[k] != null).map((k) => [k, kept[k]])));
+    let keyTaken = !pem;
+    const key = !pem
+      ? Promise.resolve()
+      : githubService.persist("handing over the App's key", async () => {
           try {
             await githubService.setup.handOver(credentials);
-            taken = true;
+            keyTaken = true;
           } catch (error) {
             // Refused for good, another App's key there (409) or none in what it was sent (400):
             // asking again changes nothing. Anything else (a service not up yet, its keys not
@@ -354,14 +480,50 @@ let handedOver = Promise.resolve();
               `The GitHub App's key: the github service refused it (${error.message}). It stays in /data/app.json until resolved by hand: remove the github service's app.json (its github-key volume) to take this App's, or this one's key from /data/app.json to keep the service's (docs/setup.md#the-github-service)`,
             );
           }
-        })
-        .then(() => {
-          if (!taken || !loadCredentials(config.dataDir)?.pem) return;
-          saveCredentials(config.dataDir, kept);
-          log("The GitHub App's key: handed over to the github service, removed from app.json");
         });
-    }
+    handedOver = key.then(async () => {
+      if (!keyTaken) return;
+      if (pem) {
+        saveCredentials(config.dataDir, kept);
+        log("The GitHub App's key: handed over to the github service, removed from app.json");
+      }
+      await handOverToEdge(kept);
+    });
   }
+}
+
+// The listener's webhook secret, OAuth client and sessions, to edge (#506): once it took them,
+// none of them stays in the orchestrator's volume.
+async function handOverToEdge(kept) {
+  const read = (name) => {
+    try {
+      return readFileSync(join(config.dataDir, name));
+    } catch {
+      return null;
+    }
+  };
+  const sessionKey = read("session.key");
+  const taken = await persist("Edge: handing over the App's credentials", async () => {
+    try {
+      await edge.handOver({
+        credentials: kept,
+        sessionKey: sessionKey?.toString("base64") ?? null,
+        epochs: readJson(join(config.dataDir, "sessions.json"), null),
+      });
+      return true;
+    } catch (error) {
+      if (error.status !== 409 && error.status !== 400) throw error;
+      console.error(
+        `The GitHub App's credentials: edge refused them (${error.message}). They stay in /data/app.json until resolved by hand: remove edge's app.json (its edge-data volume) to take this App's, or /data/app.json to keep edge's (docs/setup.md#from-the-listener)`,
+      );
+      return false;
+    }
+  });
+  if (!taken) return;
+  for (const name of ["app.json", "session.key", "sessions.json", "redeliveries.json"]) {
+    rmSync(join(config.dataDir, name), { force: true });
+  }
+  log("The GitHub App's credentials and the sessions: handed over to edge, removed from /data");
 }
 
 // Events and permissions the App's settings miss (without `issues`, open questions get no
@@ -386,32 +548,21 @@ function checkApp() {
     .catch((error) => (log(`The GitHub App's settings: ${error.message ?? error}`), null));
 }
 
-// The App as the dashboard links to it: the stored credentials' public parts (never its
-// secrets), with what GET /app said. Null before /setup.
+// The App as the dashboard links to it: its public parts, with what GitHub's GET /app said.
+// Null before /setup.
 function appSummary() {
   if (!ctx.app) return null;
   const { slug, owner, html_url } = ctx.app.credentials;
   return { slug, owner, html_url, ...ctx.appInfo };
 }
 
-// PUBLIC_URL, or the one /setup stored with the App.
+// PUBLIC_URL, or the one /setup stored with the App (at edge).
 function publicUrl() {
   return config.publicUrl ?? ctx.app?.credentials.public_url ?? `http://localhost:${config.port}`;
 }
 
 // The App's calls as the repo's installation, REST and GraphQL (github.mjs).
 const { github, graphql } = createGitHub(() => ctx.app);
-
-// The runner's calls, before anything waits on it: a run's first tokens (services-http.mjs).
-const services = createServicesHttp({
-  // The broker service's own keys: never the listener's from before it.
-  keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
-  bound: networkCallers(config.serviceNetworks),
-  pendingTokens,
-  log,
-});
-await new Promise((resolve) => services.listen(config.servicesPort, resolve));
-log(`Services on :${services.address().port}`);
 
 // The logs this listener kept before the runner kept them go to it, while it goes on; the runs
 // are listed from their summaries (runlog.mjs).
@@ -421,30 +572,6 @@ ctx.logsMoving = moved.moving;
 ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
 ctx.runs = loadRuns(logDir, { log });
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
-
-const setup = createSetup({
-  config,
-  configured: () => ctx.app !== null,
-  // The github service converts the manifest's code, and keeps the App's key: the listener gets
-  // the rest.
-  convert: (code) => githubService.setup.convert(code),
-  onConfigured: (credentials) => {
-    saveCredentials(config.dataDir, credentials);
-    useApp(credentials);
-    ctx.appInfo = null;
-    checkApp();
-  },
-  log,
-});
-
-const auth = createAuth({
-  config,
-  app: () => ctx.app,
-  publicUrl,
-  key: sessionKey(config.dataDir),
-  epochsPath: join(config.dataDir, "sessions.json"),
-  log,
-});
 
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
 const titles = createTitles({
@@ -563,8 +690,6 @@ Object.assign(ctx, {
   policies,
   ...repoReads,
   repoFile,
-  setup,
-  auth,
   titles,
   lanes,
   pulls,
@@ -765,8 +890,8 @@ ctx.analysis = createAnalysis({
 });
 
 // What signs the dashboard's posts as their users' (discussions.mjs fromLine()): a run posts
-// as the App too, and can't make one.
-const dashboardKey = () => fromKey(ctx.app?.credentials?.webhook_secret);
+// as the App too, and can't make one. Edge's, which holds the webhook secret the key comes from.
+const fromTags = (items) => edge.tags(items);
 
 // The graph's work area: the backlog, starting or queueing issues by dragging them, and the
 // answers to open questions sent from a task's page.
@@ -793,7 +918,7 @@ ctx.workApi = createWorkApi({
   reviews: ctx.reviews,
   granted: grantsBy(policies),
   publicUrl,
-  fromKey: dashboardKey,
+  fromTags,
   log,
 });
 
@@ -824,11 +949,28 @@ ctx.discussionApi = createDiscussionApi({
   nameOf: discussionChecks.nameOf,
   accept: (item) => ctx.accept(item),
   publicUrl,
-  key: dashboardKey,
+  tags: fromTags,
   log,
 });
 
 // --- Servers -------------------------------------------------------------------------------
+
+// The App as edge has it, before what needs it at start. Edge away a while: the start goes on
+// without it (or with a listener's from the data volume), and it comes with the next ask.
+const appAsked = refreshApp().catch((error) => log(`Edge: the App (${error.message ?? error})`));
+await Promise.race([appAsked, new Promise((resolve) => setTimeout(resolve, 15_000).unref())]);
+let appTimer = null;
+function askApp() {
+  appTimer = setTimeout(
+    () =>
+      refreshApp()
+        .catch((error) => log(`Edge: the App (${error.message ?? error})`))
+        .finally(() => !ctx.stopping && askApp()),
+    ctx.app ? APP_MS : NO_APP_MS,
+  );
+  appTimer.unref();
+}
+askApp();
 
 // Before any request is served, as restoreRuns() wants: one spelling per repo in the state
 // (GitHub's for one it has under two, restart.mjs), the task keys of the rest too.
@@ -883,30 +1025,21 @@ ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // order.json otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 
-const http = createHttp(ctx, {
-  dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
-});
-const web = http.listen();
+// The dashboard's API and the deliveries, both edge's to pass on: answered from here on.
+const http = createHttp(ctx);
+edgeReady = http.handle;
+const bind = (server, port, done) => listenWhenFree(server, port).then(done);
 const brokerHttp = createBrokerHttp(ctx);
-const broker = brokerHttp.listen();
-// Not drained: the egress proxy asks it about every sandbox connection until the listener exits.
-const policy = brokerHttp.listenPolicy();
+const broker = brokerHttp.listen(bind);
+// Not drained: the egress proxy asks it about every sandbox connection until the orchestrator
+// exits.
+const policy = brokerHttp.listenPolicy(bind);
 
-// Deliveries GitHub couldn't hand over (the listener down, restarting, unreachable), asked for
-// again at start and every few minutes (redeliveries.mjs).
-const redeliveries = createRedeliveries({
-  path: join(config.dataDir, "redeliveries.json"),
-  app: () => ctx.app,
-  handled: http.handled,
-  log,
-});
-// A pull request delivery the listener asked for again is handled as it is now (http.mjs).
-ctx.redelivered = redeliveries.redelivered;
-// At start and from the dashboard's Sync: the same now, and the open pull requests' states
-// asked again; from Sync, their conflicts checked now. The last one's result goes in api/state
-// (sync.mjs).
+// At start and from the dashboard's Sync: the deliveries GitHub couldn't hand over, asked for
+// again by edge (redeliveries.mjs), and the open pull requests' states asked again; from Sync,
+// their conflicts checked now. The last one's result goes in api/state (sync.mjs).
 const syncs = createSync({
-  scan: redeliveries.scan,
+  scan: () => edge.scan(),
   resync: pulls.resync,
   check: ctx.conflicts.check,
   log,
@@ -929,7 +1062,7 @@ for (const name of [claudeCredential, config.openaiCredential, config.agyCredent
   const plan = planWarning(name);
   if (plan) log(plan);
 }
-if (!ctx.app) log(`No GitHub App yet. Set it up at ${setup.link()}`);
+if (!ctx.app) log("No GitHub App yet: set it up with the /setup link in edge's logs");
 
 // The broker service's keys first: the restored runs' tokens are checked with them.
 brokerService
@@ -1025,75 +1158,113 @@ runEvents.start();
 runnerClient.previews.refresh();
 const previewing = setInterval(() => runnerClient.previews.refresh(), PREVIEWS_MS);
 previewing.unref();
-// The App's key at the github service first, should this listener be the one handing it over.
-await Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).unref())]);
-redeliveries.start();
-if (ctx.app) checkApp();
-// Pull requests that changed while the listener was down, or whose delivery was lost. After
-// redeliveries.start(): its first scan is shared, and counted in the last sync.
-if (ctx.app) ctx.sync(null);
-if (ctx.app) {
-  // The repositories listed at start (without their configs): the listing also warns about
-  // the permissions an installation hasn't accepted (repos.mjs).
-  const listed = repoList.names();
-  // Labels added or removed while the listener was down.
-  if (config.needsInputLabel) {
-    listed
-      .then((repos) => inputs.sync(repos))
-      .then((found) => titles.seed(found))
-      .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
-  } else listed.catch((error) => log(`Listing the repositories: ${error.message ?? error}`));
-}
+// The App's key at the github service first, should this copy be the one handing it over (30 s
+// at most): what follows needs it there. Not waited for here: the SIGTERM handler below is.
+Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).unref())]).then(
+  () => {
+    if (ctx.stopping || !ctx.app) return;
+    checkApp();
+    // Pull requests that changed while no copy acted, or whose delivery was lost; the
+    // deliveries GitHub couldn't hand over, asked again by edge.
+    ctx.sync(null);
+    // The repositories listed at start (without their configs): the listing also warns about
+    // the permissions an installation hasn't accepted (repos.mjs).
+    const listed = repoList.names();
+    // Labels added or removed while no copy acted.
+    if (config.needsInputLabel) {
+      listed
+        .then((repos) => inputs.sync(repos))
+        .then((found) => titles.seed(found))
+        .catch((error) => log(`Issues waiting for input: ${error.message ?? error}`));
+    } else listed.catch((error) => log(`Listing the repositories: ${error.message ?? error}`));
+  },
+);
 
-// `docker compose up`, `restart` or an update stops the listener with SIGTERM, and kills it
-// after the stop grace period. Sandboxes go on: no run starts any more, and the next listener
-// carries on from what is saved as it changes (the queue with its deadlines and 👀 ids, the
-// runs' state): here, only the writes under way are waited for, and the lines of output read
-// in the last second. The
+// `docker compose up`, `restart` or an update stops the orchestrator with SIGTERM, and kills it
+// after the stop grace period. Sandboxes go on: no run starts any more, edge's requests and
+// deliveries wait for the next copy, which carries on from what is saved as it changes (the
+// queue with its deadlines and 👀 ids, the runs' state): here, only the writes under way are
+// waited for, the delivery being handled, and the lines of output read in the last second.
+// Then the lease is released, and the waiting copy takes it at once (a second, about). The
 // broker drains meanwhile: it takes no new connection (the egress proxy waits for the next
-// listener, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
+// copy, proxy/wait.mjs) and the sandboxes' calls in flight finish (agents' streams, pushes,
 // inbox polls) before it exits (lib/drain.mjs). The egress policy's port answers until then.
-process.on("SIGTERM", () => {
+sigterm = () => {
+  if (ctx.stopping) return;
   ctx.stopping = true;
+  // Edge's and the runner's calls are refused from now on (503): they ask the next copy.
+  edgeReady = null;
+  acting = false;
   ctx.conflicts.stop();
   ctx.waits.stop();
   ctx.reviews.stop();
   ctx.autoPickup.stop();
   history.stop();
-  redeliveries.stop();
   runEvents.stop();
   clearInterval(previewing);
   clearInterval(relinking);
   clearInterval(reconciling);
   clearInterval(printing);
-  // What it read of the broker's stream and didn't acknowledge, the next listener reads again.
+  clearTimeout(appTimer);
+  // What it read of the streams and didn't acknowledge, the next copy reads again; the delivery
+  // being handled is acknowledged first.
+  const delivered = edge.stop();
   brokerService.stop();
   githubService.stop();
   models.stop();
-  log("Stopping: running sandboxes go on, the next listener picks them up");
-  // Webhooks go to the next listener (GitHub's redelivery if it isn't up yet, redeliveries.mjs).
-  web.close();
+  log("Stopping: running sandboxes go on, the next copy picks them up");
   const drained = drain(broker).then((all) => {
     if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
   });
   // Replies being posted and comments being admitted first, then what they leave.
   // The 👀 still on their way too, for a while (the drain's grace bounds it anyway).
-  const saved = Promise.allSettled([...ctx.ending, ...http.admitting])
+  // The dashboard's posts edge passed on, still being answered (30 s at most): what they
+  // change is saved before the lease goes.
+  const posted = Promise.race([
+    Promise.allSettled(services.posting()),
+    new Promise((resolve) => setTimeout(resolve, 30_000).unref()),
+  ]);
+  const saved = Promise.allSettled([...ctx.ending, ...http.admitting, delivered, posted])
     .then(() => ctx.eyesSaved(EYES_WAIT_MS))
     .then(ctx.saveQueue)
     .then(() => {
       const queued = [...ctx.tasks.values()].filter((t) => t.pending.length).length;
-      log(`Stopping: ${queued} task(s) with queued comments left to the next listener`);
+      log(`Stopping: ${queued} task(s) with queued comments left to the next copy`);
     })
     .then(() => Promise.all([...ctx.tasks.values()].map((t) => t.live && ctx.saveLive(t))))
-    .then(() => ctx.store.close())
     .catch((error) => log(`Saving the queue: ${error.stack ?? error}`))
-    // The dashboard's streams: its page reconnects to the next listener.
-    .finally(() => web.closeAllConnections());
+    // Everything is in the store: the lease goes to the next copy now, rather than in 15 s.
+    .then(() => {
+      leaseLost = () => {};
+      return lease.control.stop();
+    })
+    .catch((error) => log(`Releasing the lease: ${error.stack ?? error}`))
+    .then(() => ctx.store.close())
+    .catch((error) => log(`Closing the store: ${error.stack ?? error}`))
+    // The dashboard's streams: its page reconnects, through edge, to the next copy.
+    .finally(() => services.closeAllConnections());
   // Last, the egress policy: closed, so that the proxy's next questions are refused and wait for
-  // the next listener, and its answers in flight are sent, rather than cut by the exit (which
+  // the next copy, and its answers in flight are sent, rather than cut by the exit (which
   // the proxy would take for a refusal).
   Promise.all([saved, drained])
     .then(() => drain(policy, { graceMs: POLICY_DRAIN_MS }))
     .finally(() => process.exit(0));
-});
+};
+
+// Verified deliveries, from edge's stream, each acknowledged once handled (http.mjs deliver()):
+// none is lost while this copy hands over. One handled already whose acknowledgement was lost
+// (edge away, this copy stopped in between) is read again: taken once, by its GUID, kept an hour
+// (an acknowledgement isn't lost for longer: edge's stream keeps the delivery until then).
+const handledKey = (id) => `deliveries/handled/${id}`;
+const HANDLED_TTL_MS = 3600_000;
+edge.consume(
+  async (entry) => {
+    if (entry?.id && (await store.get(handledKey(entry.id)))) return;
+    // Edge took it with an App this copy hasn't heard of yet (set up a moment ago): asked now,
+    // and the delivery read again later without one.
+    if (!ctx.app && !(await refreshApp())) throw new Error("no GitHub App known yet");
+    await http.deliver(entry ?? {});
+    if (entry?.id) await store.set(handledKey(entry.id), 1, { ttlMs: HANDLED_TTL_MS });
+  },
+  { active: () => !ctx.stopping },
+);

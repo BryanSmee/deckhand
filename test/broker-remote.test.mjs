@@ -44,6 +44,7 @@ function remote(t, broker, { legacy = null, logged = [] } = {}) {
   const made = createBrokerService({
     caller: createBrokerCaller({ url: `http://127.0.0.1:${broker.port}` }),
     legacy,
+    epoch: () => 1,
     log: (line) => logged.push(line),
   });
   t.after(() => made.stop());

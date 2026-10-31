@@ -1,6 +1,7 @@
-// The listener end to end, without Docker or GitHub: the runner service beside it (runner/), a
-// fake `docker` on the runner's PATH plays the sandbox (asks the broker for a token, prints a
-// result), a local server plays GitHub.
+// The orchestrator end to end, without Docker or GitHub: edge in front of it (edge/), which takes
+// the webhooks, the runner service beside it (runner/), a fake `docker` on the runner's PATH
+// plays the sandbox (asks the broker for a token, prints a result), a local server plays GitHub.
+// The tests still say "listener" for the pair, edge and the orchestrator, that took its place.
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, createHmac, generateKeyPairSync } from "node:crypto";
@@ -16,7 +17,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer, request } from "node:http";
+import { createServer } from "node:http";
 import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
@@ -407,9 +408,10 @@ function tarOf(files) {
   return execFileSync("tar", ["-czf", "-", "-C", dir, "org-repo-abc"]);
 }
 
-// `script`: the listener's or the runner's; `also()`: more output its until() and output() read
-// (the runner's, for the listener's: what a run does is logged on both sides).
-function start(env, { script = "listener/server.mjs", also = () => "" } = {}) {
+// `script`: the orchestrator's, edge's or the runner's; `also()`: more output its until() and
+// output() read (edge's and the runner's, for the orchestrator's: what a run does is logged on
+// every side).
+function start(env, { script = "orchestrator/server.mjs", also = () => "" } = {}) {
   const child = spawn(process.execPath, [script], {
     cwd: new URL("..", import.meta.url).pathname,
     env,
@@ -612,6 +614,12 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       pem: PEM,
     };
     writeFileSync(join(dir, "app.json"), JSON.stringify(credentials));
+    // Edge holds the same App, but its key: the orchestrator hands the listener's over to it all
+    // the same, which edge takes (the same App), and removes it from its volume.
+    const edgeDir = join(dir, "edge");
+    mkdirSync(edgeDir);
+    const { pem: _pem, ...edgeApp } = credentials;
+    writeFileSync(join(edgeDir, "app.json"), JSON.stringify(edgeApp));
     const more = typeof extra === "function" ? extra(dir, github) : extra;
     const githubService = await startGithubService(dir, github, credentials, {
       key: brokerKey,
@@ -631,6 +639,9 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // are picked first: the runner calls the one, the sandboxes it starts the other.
     const runnerPort = await freePort();
     const firstBrokerPort = await freePort();
+    // Edge's internal port and the orchestrator's services port: each calls the other.
+    const edgeInternalPort = await freePort();
+    const servicesPortFixed = await freePort();
     const settings = {
       BROKER_SERVICE_URL: `http://127.0.0.1:${brokerService.address().port}`,
       PATH: `${dir}:${process.env.PATH}`,
@@ -639,11 +650,14 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       PORT: "0",
       BROKER_PORT: String(firstBrokerPort),
       POLICY_PORT: "0",
-      SERVICES_PORT: "0",
+      SERVICES_PORT: String(servicesPortFixed),
+      // A copy killed leaves its lease for this long: the next one waits it out.
+      LEASE_SECONDS: "2",
+      EDGE_URL: `http://127.0.0.1:${edgeInternalPort}`,
       BROKER_URL: `http://127.0.0.1:${firstBrokerPort}`,
       RUNNER_URL: `http://127.0.0.1:${runnerPort}`,
-      // Everything the runner calls from, and is called from, is this host's.
-      SERVICE_NETWORKS: "runner=127.0.0.0/8",
+      // Everything the runner and edge call from, and are called from, is this host's.
+      SERVICE_NETWORKS: "runner+edge=127.0.0.0/8",
       GITHUB_API: github.url,
       PUBLIC_URL: "https://hooks.example.com",
       DEBOUNCE_MS: "0",
@@ -674,9 +688,23 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       runner = start({ ...runnerSettings, ...more }, { script: "runner/server.mjs" });
       return runner.until(/Deckhand runner \(\w+\) on :\d+/);
     };
-    let listener = start(listenerEnv(settings), { also: runnerOut });
+    // Edge, in front: its own data folder (the App but its key) and store, the orchestrator's
+    // services port to pass the dashboard's API on to, its internal port for the orchestrator.
+    const edgeEnv = (env) => ({
+      ...listenerEnv(env),
+      PORT: env.EDGE_PORT ?? "0",
+      INTERNAL_PORT: String(edgeInternalPort),
+      DATA_DIR: edgeDir,
+      ORCHESTRATOR_URL: `http://127.0.0.1:${servicesPortFixed}`,
+      SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
+    });
+    let edge = start(edgeEnv(settings), { script: "edge/server.mjs" });
+    const edgeOut = () => edge.own();
+    const others = () => edgeOut() + runnerOut();
+    let listener = start(listenerEnv(settings), { also: others });
     t.after(() => {
       listener.child.kill("SIGKILL");
+      edge.child.kill("SIGKILL");
       runner?.child.kill("SIGKILL");
       github.server.close();
       githubService.server.closeAllConnections();
@@ -730,10 +758,31 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       const { child } = old;
       const exited = new Promise((resolve) => child.on("exit", resolve));
       const code = child.exitCode ?? (child.signalCode || (child.kill(signal), await exited));
-      listener = start(listenerEnv({ ...settings, ...more }), { also: runnerOut });
+      listener = start(listenerEnv({ ...settings, ...more }), { also: others });
       await ports(listener);
       return { code, output: old.output() };
     };
+    // A handover (#506): the next copy started first, waiting for the lease, then this one
+    // stopped (SIGTERM, or SIGKILL: a crash, its lease left to expire). → the old copy's
+    // output and epoch, and the new one's epoch, once it acts.
+    const handOver = async ({ signal = "SIGTERM", between = async () => {} } = {}) => {
+      const old = listener;
+      const epochOf = (out) => Number(/orchestrator: lease taken \(epoch (\d+)\)/.exec(out)?.[1]);
+      const next = start(listenerEnv(settings), { also: others });
+      await next.until("Waiting for the orchestrator's lease");
+      const exited = new Promise((resolve) => old.child.on("exit", resolve));
+      const killed = Date.now();
+      old.child.kill(signal);
+      await between();
+      listener = next;
+      await next.until("orchestrator: lease taken");
+      const took = Date.now() - killed;
+      await ports(next);
+      await exited;
+      return { output: old.output(), epoch: epochOf(old.own()), next: epochOf(next.own()), took };
+    };
+    // A service token the broker would sign `sub` for `aud`: the old copy's calls, after it.
+    const serviceToken = (sub, aud) => `Bearer ${signServiceToken({ sub, aud }, brokerKey)}`;
     // The runner stopped (SIGTERM unless said otherwise) and another started on the same store,
     // with `more` settings: the listener carries on with it.
     const restartRunner = async ({ signal = "SIGTERM", ...more } = {}) => {
@@ -749,6 +798,9 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       get listener() {
         return listener;
       },
+      get edge() {
+        return edge;
+      },
       get runner() {
         return runner;
       },
@@ -758,6 +810,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       send,
       restart,
       restartRunner,
+      handOver,
+      serviceToken,
+      urls: {
+        github: githubService.url,
+        runner: settings.RUNNER_URL,
+        broker: settings.BROKER_SERVICE_URL,
+      },
     };
   }
 
@@ -772,78 +831,17 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     };
   }
 
-  // 127.0.0.1, not localhost: a runner whose localhost is ::1 would log another client address
-  // than the one awaited below, and the test would wait forever (GitHub's, #540).
-  const host = "127.0.0.1";
-
-  // Sends a delivery's headers and holds its body back: the answer comes from the headers alone.
-  function headersOnly(port, headers) {
-    return new Promise((resolve, reject) => {
-      const req = request({ host, port, method: "POST", path: "/webhook", headers }, (res) => {
-        resolve(res.statusCode);
-        res.resume();
-        req.destroy();
-      });
-      req.on("error", reject);
-      req.flushHeaders();
-    });
-  }
-
-  test("unsigned or oversized deliveries are refused unread; one client gets only its share of places", async (t) => {
-    const { port, listener } = await listen(t);
-    const signed = { "x-github-event": "issue_comment", "x-hub-signature-256": "sha256=00" };
-    assert.equal(
-      await headersOnly(port, { "x-github-event": "issue_comment", "content-length": "100" }),
-      401,
-    );
-    assert.equal(
-      await headersOnly(port, { ...signed, "content-length": String(6 * 1024 * 1024) }),
-      413,
-    );
-    await listener.until("Rejected a delivery: over 5242880 bytes");
-    assert.match(listener.output(), /Rejected a delivery: no signature/);
-    // One client holds its share of the places, 4, with stalled bodies: its 5th is refused...
-    const held = [];
-    for (let i = 0; i < 4; i++) {
-      const req = request({ host, port, method: "POST", path: "/webhook", headers: signed });
-      req.on("error", () => {});
-      req.write("{");
-      held.push(req);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(await headersOnly(port, signed), 503);
-    await listener.until("no place to read a delivery from 127.0.0.1");
-    // ...while a signed delivery from another address gets through.
-    const body = JSON.stringify(comment("mallory"));
-    const delivered = await new Promise((resolve, reject) => {
-      const req = request(
-        {
-          host,
-          port,
-          method: "POST",
-          path: "/webhook",
-          localAddress: "127.0.0.2",
-          headers: {
-            "x-github-event": "issue_comment",
-            "x-hub-signature-256": `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`,
-          },
-        },
-        (res) => (res.resume(), resolve(res.statusCode)),
-      );
-      req.on("error", reject);
-      req.end(body);
-    });
-    assert.equal(delivered, 202);
-    // Stalled bodies are dropped after a while: readDelivery() in deliveries.test.mjs.
-    for (const req of held) req.destroy();
-  });
-
-  test("the App's key: handed over to the github service by a listener that held it, then removed", async (t) => {
+  test("a listener's App: its key to the github service, the rest to edge, nothing left in its volume", async (t) => {
     const { dir, listener } = await listen(t);
     await listener.until("handed over to the github service, removed from app.json");
-    const kept = JSON.parse(readFileSync(join(dir, "app.json"), "utf8"));
+    await listener.until("handed over to edge, removed from /data");
+    // The orchestrator keeps none of it.
+    for (const name of ["app.json", "session.key", "sessions.json"]) {
+      assert.equal(existsSync(join(dir, name)), false, name);
+    }
+    // What edge keeps: the webhook secret, the OAuth client's; never the key.
+    const kept = JSON.parse(readFileSync(join(dir, "edge", "app.json"), "utf8"));
     assert.equal(kept.pem, undefined);
-    // What edge keeps: the webhook secret, the OAuth client's.
     assert.equal(kept.webhook_secret, SECRET);
     assert.equal(kept.client_secret, "cs");
     const held = JSON.parse(readFileSync(join(dir, "github-service", "app.json"), "utf8"));
@@ -901,14 +899,16 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await listener.until("org/repo#12: pull request #13 merged");
     assert.match(listener.output(), /Delivery pull_request ready_for_review: redelivered, as/);
     assert.doesNotMatch(listener.output(), /pull request #13 ready/);
-    // Asked once: a restart remembers it.
+    // Asked once: the orchestrator restarted, edge scans again for its Sync at start, and asks
+    // for none again.
     const scans = () =>
       github.requests.filter((r) => r.path.startsWith("/app/hook/deliveries?")).length;
+    const before = scans();
     await restart();
-    for (let i = 0; i < 200 && scans() < 2; i++) {
+    for (let i = 0; i < 200 && scans() <= before; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    assert.equal(scans(), 2);
+    assert.equal(scans(), before + 1);
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(attempts().length, 2);
   });
@@ -2432,7 +2432,7 @@ mounts:
 
     const exited = new Promise((resolve) => listener.child.on("exit", resolve));
     listener.child.kill("SIGTERM");
-    await listener.until("0 task(s) with queued comments left to the next listener");
+    await listener.until("0 task(s) with queued comments left to the next copy");
     // A new call is refused: the egress proxy waits for the next listener (proxy/wait.mjs).
     await assert.rejects(
       fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
@@ -2546,7 +2546,7 @@ mounts:
     // Meanwhile, the repo's users leave bob out.
     files[".deckhand.yaml"] = "users: [alice]\n";
     const { output } = await ctx.restart({ DEBOUNCE_MS: "0" });
-    assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
+    assert.match(output, /1 task\(s\) with queued comments left to the next copy/);
     await ctx.listener.until("a queued comment dropped: bob is no longer an allowed user");
     await new Promise((resolve) => setTimeout(resolve, 200));
     const [run] = readdirSync(join(dir, "runs"));
@@ -2554,6 +2554,89 @@ mounts:
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");
   });
+
+  // The orchestrator's handover (#506), with its two copies: issue 12's run held, a comment on
+  // issue 13 queued behind it (one run at a time), the next copy waiting for the lease.
+  async function handingOver(t) {
+    // A lease far longer than a handover: taking it at once shows it was released.
+    const ctx = await holding(t, "Deckhand", () => ({ MAX_PARALLEL: "1", LEASE_SECONDS: "8" }));
+    const queued = comment("alice");
+    queued.issue = { number: 13 };
+    queued.comment = { ...queued.comment, id: 130 };
+    await ctx.send(queued);
+    for (let i = 0; ; i++) {
+      const status = await (await fetch(`http://127.0.0.1:${ctx.port}/status`)).json();
+      if (status.queued === 1) break;
+      if (i > 400) throw new Error("timed out waiting for the queued comment");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    return ctx;
+  }
+
+  const posted = (github, number) =>
+    github.requests.filter(
+      (r) => r.method === "POST" && r.path === `/repos/org/repo/issues/${number}/comments`,
+    );
+
+  // Its epoch refused by every service it called: the github service, the runner, the broker.
+  async function staleEverywhere(ctx, epoch) {
+    const headers = (aud) => ({
+      authorization: ctx.serviceToken("orchestrator", aud),
+      "x-deckhand-epoch": String(epoch),
+      "content-type": "application/json",
+    });
+    const github = await fetch(`${ctx.urls.github}/reactions`, {
+      method: "PUT",
+      headers: headers("github"),
+      body: JSON.stringify({ repo: "org/repo", subject: "comment:1", content: "eyes" }),
+    });
+    assert.equal(github.status, 409, await github.text());
+    const runner = await fetch(`${ctx.urls.runner}/sandboxes/deckhand-org-repo-12-x/kill`, {
+      method: "POST",
+      headers: headers("runner"),
+      body: "{}",
+    });
+    assert.equal(runner.status, 409, await runner.text());
+    const broker = await fetch(`${ctx.urls.broker}/runs/nothing`, {
+      method: "DELETE",
+      headers: headers("broker"),
+    });
+    assert.equal(broker.status, 409, await broker.text());
+  }
+
+  for (const [signal, how] of [
+    ["SIGTERM", "on SIGTERM: the lease released, taken at once"],
+    ["SIGKILL", "after a crash: the lease taken once it expired"],
+  ]) {
+    test(`a handover ${how}; a queued comment runs once, a run's end gets one reply, the old epoch is refused`, async (t) => {
+      const ctx = await handingOver(t);
+      const { dir, github } = ctx;
+      const { output, epoch, next, took } = await ctx.handOver({
+        signal,
+        // Claude answers issue 12 while the copies hand over.
+        between: async () => writeFileSync(join(dir, "go"), ""),
+      });
+      if (signal === "SIGTERM") {
+        assert.match(output, /orchestrator: lease released/);
+        // Not a lease's life (8 s here, 15 by default): the waiting copy took it at once.
+        assert.ok(took < 3000, `${took} ms`);
+      } else {
+        // Its lease left to expire: at least what was left of it, its last renewal 8/3 s ago
+        // at most.
+        assert.ok(took > 4000, `${took} ms`);
+      }
+      assert.ok(next > epoch, `${next} after ${epoch}`);
+      // Issue 12's run ended across the handover: one reply. Then 13's, from the queue: one run.
+      await settled(github, [99, 130]);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      assert.equal(posted(github, 12).length, 1);
+      assert.equal(posted(github, 13).length, 1);
+      const runs = ctx.listener.output().match(/org\/repo#13: done/g) ?? [];
+      assert.equal(runs.length, 1, ctx.listener.output());
+      // The copy that stopped could no longer act, had it gone on.
+      await staleEverywhere(ctx, epoch);
+    });
+  }
 
   test("a listener killed mid-run: Claude answers meanwhile, the next one replies once", async (t) => {
     const ctx = await holding(t);
@@ -3144,7 +3227,7 @@ mounts:
       await ctx.send(entry(100, "Keyboard shortcuts"));
       await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/comments/100/reactions");
       const { output } = await ctx.restart({ BRAINSTORM_DEBOUNCE_MS: "0" });
-      assert.match(output, /1 task\(s\) with queued comments left to the next listener/);
+      assert.match(output, /1 task\(s\) with queued comments left to the next copy/);
       await settled(ctx.github, [99, 100]);
       await until(() => prompts(ctx.dir).length === 2, "two runs");
       // Each its own run, side by side: which sandbox starts first is the broker's answers' order.

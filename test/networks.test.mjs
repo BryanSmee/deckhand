@@ -18,10 +18,10 @@ import { parseYaml } from "../lib/yaml.mjs";
 
 const root = join(import.meta.dirname, "..");
 
-// compose.yaml's services → the services of lib/services.mjs each one runs. The listener runs
-// those that haven't moved out yet (#499): each one gets its own entry then.
+// compose.yaml's services → the services of lib/services.mjs each one runs.
 const RUNS = {
-  listener: ["edge", "orchestrator"],
+  edge: ["edge"],
+  orchestrator: ["orchestrator"],
   broker: ["broker"],
   github: ["github"],
   models: ["models"],
@@ -52,7 +52,7 @@ function networksOf(service) {
 
 // Calls without a service token, so not in lib/services.mjs: the egress proxy asks the
 // orchestrator's egress policy about each connection (POLICY_URL), and hands it what it relays
-// there (RELAY_URL), which the listener tells apart by the caller's address.
+// there (RELAY_URL), which the orchestrator tells apart by the caller's address.
 const UNTOKENED = [["proxy", "orchestrator"]];
 const untokened = (x, y) =>
   UNTOKENED.some(([a, b]) => (a === x && b === y) || (a === y && b === x));
@@ -104,7 +104,8 @@ function problems(compose) {
 }
 
 // The compose services the runner joins to each run's network: the one labelled as the proxy
-// (runner/networks.mjs). The listener joins them too, for its broker, until it moves out (#505).
+// (runner/networks.mjs). The orchestrator joins them too (deckhand.role=broker), for the gateways
+// sandboxes from before the services call it for.
 function runsNetworkPeers(services) {
   return Object.entries(services)
     .filter(([, s]) => s.labels?.["deckhand.role"] === "egress")
@@ -121,7 +122,7 @@ test("compose.yaml: each network joins services that call each other, the runs' 
 // the network a call arrives on (SERVICE_NETWORKS): each caller's subnet there has to be the one
 // of a network it shares with that service, and with no other, or another service's calls would
 // count as its own.
-for (const callee of ["broker", "runner", "models", "github"]) {
+for (const callee of ["broker", "runner", "models", "github", "edge", "orchestrator"]) {
   test(`compose.yaml: the ${callee}'s SERVICE_NETWORKS names each caller's own network to it`, () => {
     const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
     const subnet = (net) =>
@@ -171,13 +172,46 @@ test("compose.yaml: only the github service holds the App's key", () => {
     .filter(([, s]) => (s.volumes ?? []).some((v) => String(v).startsWith("github-key:")))
     .map(([name]) => name);
   assert.deepEqual(holders, ["github"]);
-  // It gets none of the listener's other secrets.
-  const { github, listener } = compose.services;
-  const secrets = Object.keys(listener.environment).filter(
+  // It gets none of the other services' secrets.
+  const { github, models } = compose.services;
+  const secrets = Object.keys(models.environment).filter(
     (name) => /TOKEN|KEY|SECRET|AUTH_FILE/.test(name) && !name.startsWith("KUBERNETES_"),
   );
   for (const name of secrets)
     assert.ok(!(name in github.environment), `${name} on the github service`);
+});
+
+// Edge holds the webhook secret, the session key and the OAuth client's (#506), in its own volume
+// and nowhere else; the orchestrator holds no secret: none in its settings, no secret's volume.
+test("compose.yaml: edge holds its three secrets alone, the orchestrator none", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const { edge, orchestrator } = compose.services;
+  const secretLike = (name) =>
+    /TOKEN|KEY|SECRET|AUTH_FILE|PASSWORD|PEM/.test(name) && !name.startsWith("KUBERNETES_");
+  for (const [service, { environment = {} }] of Object.entries({ edge, orchestrator })) {
+    assert.deepEqual(Object.keys(environment).filter(secretLike), [], `${service}'s settings`);
+  }
+  const holders = Object.entries(compose.services)
+    .filter(([, s]) => (s.volumes ?? []).some((v) => String(v).startsWith("edge-data:")))
+    .map(([name]) => name);
+  assert.deepEqual(holders, ["edge"]);
+  // Edge: its volume and the configuration folder, read only; nothing of another service's.
+  assert.deepEqual(
+    edge.volumes.map((v) => String(v).split(":")[0]),
+    ["edge-data", "${DECKHAND_SERVER_DIR"],
+  );
+  for (const volume of orchestrator.volumes) {
+    assert.doesNotMatch(String(volume), /key|credentials|docker\.sock|edge-data/, volume);
+  }
+  // Only edge is published, and only edge is on a network with a way out.
+  const published = Object.entries(compose.services)
+    .filter(([, s]) => s.ports?.length)
+    .map(([name]) => name);
+  assert.deepEqual(published, ["edge"]);
+  assert.ok(
+    networksOf(orchestrator).every((n) => compose.networks[n]?.internal === true),
+    `the orchestrator's networks: ${networksOf(orchestrator).join(", ")}`,
+  );
 });
 
 // The Docker socket is root on the host: only the runner holds it (#503), and the runner holds
@@ -203,12 +237,12 @@ test("compose.yaml: only the runner mounts the Docker socket, only the models se
   assert.ok(models.volumes.some((v) => /:\/data\/credentials:ro$/.test(String(v))));
 });
 
-// The runner checks again what the listener decided (the grants, the names it gives Docker
+// The runner checks again what the orchestrator decided (the grants, the names it gives Docker
 // objects, the agents' volumes): given other values, it refuses every run, or checks against
-// other grants than the listener built the spec from.
-test("compose.yaml: the runner gets every setting its checks read, as the listener has it", () => {
+// other grants than the orchestrator built the spec from.
+test("compose.yaml: the runner gets every setting its checks read, as the orchestrator has it", () => {
   const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
-  const { runner, listener } = compose.services;
+  const { runner, orchestrator: listener } = compose.services;
   for (const name of [
     "GRANTS_DIR",
     "NAME_PREFIX",
@@ -218,7 +252,7 @@ test("compose.yaml: the runner gets every setting its checks read, as the listen
     "CODEX_VOLUME",
     "AGY_VOLUME",
   ]) {
-    assert.ok(name in listener.environment, `${name}: not the listener's`);
+    assert.ok(name in listener.environment, `${name}: not the orchestrator's`);
     assert.equal(runner.environment[name], listener.environment[name], `${name} on the runner`);
   }
   // The same configuration folder, for what config.yaml and grants/ say.
@@ -230,10 +264,10 @@ test("compose.yaml: the runner gets every setting its checks read, as the listen
 test("the check fails on a network that joins too much", () => {
   // A service compose.yaml would add without saying what it runs.
   assert.deepEqual(
-    problems({ services: { listener: {}, cache: {}, sandbox: { network_mode: "none" } } }),
+    problems({ services: { edge: {}, cache: {}, sandbox: { network_mode: "none" } } }),
     [
       "cache: not in RUNS, and on a network",
-      "cache and listener share default, and neither calls the other",
+      "cache and edge share default, and neither calls the other",
       "cache: on default, which it doesn't call over",
     ],
   );
@@ -256,10 +290,9 @@ test("the check fails on a network that joins too much", () => {
       "egress: on lonely, which it doesn't call over",
     ],
   );
-  assert.deepEqual(
-    problems({ services: { listener: { labels: { "deckhand.role": "egress" } } } }),
-    ["deckhand.role=egress names a service that isn't the proxy"],
-  );
+  assert.deepEqual(problems({ services: { edge: { labels: { "deckhand.role": "egress" } } } }), [
+    "deckhand.role=egress names a service that isn't the proxy",
+  ]);
 });
 
 test("a run's network: the runner joins the proxy to it, and the listener until its broker moves out", async () => {

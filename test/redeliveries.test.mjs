@@ -1,10 +1,10 @@
 // Deliveries GitHub couldn't hand over, asked for again once: listed with the App's JWT, the
 // failed ones redelivered, the rest left alone.
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createRedeliveries, failedDeliveries, nextCursor } from "../listener/redeliveries.mjs";
-import { recordingFetch, tempDir } from "./helpers.mjs";
+import { openStore } from "../lib/store.mjs";
+import { recordingFetch } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-21T15:00:00Z");
 const MIN = 60_000;
@@ -99,8 +99,8 @@ test("the Link header's next cursor, none on the last page", () => {
   assert.equal(nextCursor(null), null);
 });
 
-test("a failed delivery is redelivered once; one that succeeded or was handled isn't", async (t) => {
-  const path = join(tempDir(t), "redeliveries.json");
+test("a failed delivery is redelivered once; one that succeeded or was handled isn't", async () => {
+  const store = openStore("memory:");
   const github = fakeApp({
     "": [
       delivery(5, "ok-later", 1, 202, { redelivery: true }),
@@ -113,9 +113,9 @@ test("a failed delivery is redelivered once; one that succeeded or was handled i
   const logs = [];
   const make = () =>
     createRedeliveries({
-      path,
+      store,
       app: github.app,
-      handled: (guid) => guid === "handled",
+      handled: async (guid) => guid === "handled",
       now: () => NOW,
       log: (line) => logs.push(line),
     });
@@ -123,7 +123,7 @@ test("a failed delivery is redelivered once; one that succeeded or was handled i
   assert.equal(await first.scan(), 1);
   assert.deepEqual(github.redelivered(), ["3"]);
   assert.match(logs[0], /^Redelivered lost \(issue_comment created, .*: Couldn't connect\)$/);
-  // Again, and after a restart: not twice.
+  // Again, and after a restart or on edge's other copy (the same store): not twice.
   assert.equal(await first.scan(), 0);
   assert.equal(await make().scan(), 0);
   assert.deepEqual(github.redelivered(), ["3"]);
@@ -142,8 +142,7 @@ test("a redelivery GitHub refuses is asked again at the next scan", async () => 
   assert.deepEqual(github.redelivered(), ["1", "1"]);
 });
 
-test("the scan pages back to the last one (3 days at most), then only as far as that", async (t) => {
-  const path = join(tempDir(t), "redeliveries.json");
+test("the scan pages back to the last one (3 days at most), then only as far as that", async () => {
   let now = NOW;
   const github = fakeApp({
     "": [delivery(3, "c", 1, 0), delivery(2, "b", 60, 0)],
@@ -151,7 +150,7 @@ test("the scan pages back to the last one (3 days at most), then only as far as 
     // Past the 3 days: read, the listing stops there, and not asked for.
     v1_3: [delivery(0, "old", 4 * 24 * 60, 0)],
   });
-  const redeliveries = createRedeliveries({ path, app: github.app, now: () => now });
+  const redeliveries = createRedeliveries({ app: github.app, now: () => now });
   assert.equal(await redeliveries.scan(), 3);
   assert.deepEqual(github.redelivered(), ["1", "2", "3"]);
   assert.deepEqual(github.listed(), [
@@ -183,8 +182,8 @@ test("a listing that fails throws, and the next scan still looks back as far", a
   assert.equal(await redeliveries.scan(), 1);
 });
 
-test("a redelivery request that fails outright doesn't lose the others asked in that scan", async (t) => {
-  const path = join(tempDir(t), "redeliveries.json");
+test("a redelivery request that fails outright doesn't lose the others asked in that scan", async () => {
+  const store = openStore("memory:");
   let down = true;
   const github = fakeApp(
     { "": [delivery(2, "second", 1, 0), delivery(1, "first", 2, 0)] },
@@ -197,15 +196,15 @@ test("a redelivery request that fails outright doesn't lose the others asked in 
   );
   const logs = [];
   const make = () =>
-    createRedeliveries({ path, app: github.app, now: () => NOW, log: (l) => logs.push(l) });
+    createRedeliveries({ store, app: github.app, now: () => NOW, log: (l) => logs.push(l) });
   const first = make();
   assert.equal(await first.scan(), 1);
   assert.ok(logs.includes("Redeliveries: second: socket hang up"));
-  // Kept for the next listener: only the failed one is asked again.
+  // Kept for the next copy: only the failed one is asked again.
   down = false;
   const next = make();
-  assert.equal(next.redelivered("first"), true);
-  assert.equal(next.redelivered("second"), false);
+  assert.equal(await next.redelivered("first"), true);
+  assert.equal(await next.redelivered("second"), false);
   assert.equal(await next.scan(), 1);
   assert.deepEqual(github.redelivered(), ["1", "2", "2"]);
 });

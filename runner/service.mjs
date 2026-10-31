@@ -7,8 +7,9 @@
 //
 // Each endpoint names the callers it takes (ROUTES, lib/service-token.mjs serviceGuard()): the
 // orchestrator drives runs, and asks for its egress policy where an address is (what binds a
-// run's tokens to its sandbox) and for the inbox of a run from before tokens; edge reads a run's
-// log for the dashboard's live view; models has the Antigravity login refreshed. Every
+// run's tokens to its sandbox) and for the inbox of a run from before tokens, and reads a run's
+// log, for the dashboard's live view too (edge passes it on, #506); models has the Antigravity
+// login refreshed. Every
 // orchestrator call but those lookups (UNFENCED) carries its fencing epoch
 // (lib/service-client.mjs EPOCH_HEADER): one older than the newest seen is refused (409), so a
 // copy of it that lost its lease can't start or stop a run.
@@ -68,7 +69,7 @@ export const ROUTES = {
   "POST /caches": ["orchestrator"],
   "POST /previews": ["orchestrator"],
   "GET /previews": ["orchestrator"],
-  "GET /logs/:id": ["orchestrator", "edge"],
+  "GET /logs/:id": ["orchestrator"],
   "POST /logs/:id": ["orchestrator"],
   "DELETE /logs/:id": ["orchestrator"],
   "GET /events": ["orchestrator"],
@@ -87,6 +88,8 @@ const UNFENCED = new Set([
   "GET /addresses/:ip",
   "GET /proxy-addresses",
   "GET /egress",
+  // A run's log, read for the dashboard's live view: nothing written.
+  "GET /logs/:id",
 ]);
 
 // The most a call's JSON may be: a sandbox spec holds its prompt, the proxy's CA and a run

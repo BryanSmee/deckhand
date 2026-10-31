@@ -232,3 +232,61 @@ test("nextEpoch: the clock's, above the last one, whatever the clock says", asyn
   now = 9000;
   assert.equal(await nextEpoch(openStore("memory:"), { now: () => now }), 9000);
 });
+
+// Two processes on one folder (#506): a service's two copies on one node, one acting and one
+// waiting for its lease, each its own fileStore().
+test("file: two copies on one folder see each other's keys, leases and streams at once", async (t) => {
+  const dir = tempDir(t);
+  const a = fileStore({ dir });
+  const b = fileStore({ dir });
+  await a.set("k", 1);
+  assert.equal(await b.get("k"), 1);
+  assert.equal(await a.setIfAbsent("delivery/g", 1), true);
+  assert.equal(await b.setIfAbsent("delivery/g", 1), false);
+  // A lease is one copy's; released, the other takes it at once, with a higher epoch.
+  const held = await a.acquire("orchestrator", "a", { ttlMs: 60_000 });
+  assert.equal(await b.acquire("orchestrator", "b", { ttlMs: 60_000 }), null);
+  assert.equal(await a.release("orchestrator", "a", held.epoch), true);
+  const taken = await b.acquire("orchestrator", "b", { ttlMs: 60_000 });
+  assert.ok(taken.epoch > held.epoch);
+  assert.equal(await a.renew("orchestrator", "a", held.epoch, { ttlMs: 60_000 }), null);
+  // One appends, the other reads and acknowledges: the first sees it acknowledged.
+  const id = await a.append("deliveries", { n: 1 });
+  assert.deepEqual(await b.read("deliveries", "orchestrator"), [{ id, event: { n: 1 } }]);
+  assert.equal(await b.ack("deliveries", "orchestrator", [id]), 1);
+  assert.deepEqual(await a.read("deliveries", "orchestrator"), []);
+  const next = await b.append("deliveries", { n: 2 });
+  assert.ok(Number(next) > Number(id));
+  assert.deepEqual(await a.read("deliveries", "orchestrator"), [{ id: next, event: { n: 2 } }]);
+  // A stream one rewrote (a trim) is read again whole by the other.
+  for (let n = 3; n < 10; n++) await a.append("short", { n }, { maxLength: 2 });
+  assert.deepEqual(
+    (await b.read("short", "c")).map((e) => e.event.n),
+    [8, 9],
+  );
+});
+
+test("file: two processes' increments on one folder are never lost; a crashed one's lock is taken over", async (t) => {
+  const dir = tempDir(t);
+  const script = `
+    import { fileStore } from ${JSON.stringify(new URL("../lib/store-file.mjs", import.meta.url).href)};
+    const store = fileStore({ dir: process.argv[1] });
+    for (let i = 0; i < 100; i++) await store.increment("n");
+  `;
+  const { spawn } = await import("node:child_process");
+  const run = () =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir], {
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+    });
+  await Promise.all([run(), run()]);
+  assert.equal(await fileStore({ dir }).get("n"), 200);
+  // A lock left behind, old enough: not waited for forever.
+  writeFileSync(join(dir, "state.lock"), "12345");
+  const { utimesSync } = await import("node:fs");
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(join(dir, "state.lock"), old, old);
+  assert.equal(await fileStore({ dir }).increment("n"), 201);
+});

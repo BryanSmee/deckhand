@@ -99,13 +99,18 @@ async function tokenOf(broker, as) {
 }
 
 // A client of the broker for `as`: (method, path, options) → call() with its service token,
-// asked for each time (the tests' clock moves past a token's life).
-async function client(broker, as) {
+// asked for each time (the tests' clock moves past a token's life). The orchestrator's carry
+// its fencing epoch (`epoch`).
+async function client(broker, as, { epoch = 1 } = {}) {
   return async (method, path, { headers = {}, ...rest } = {}) => {
     const token = await tokenOf(broker, as);
     return call(broker, as, method, path, {
       ...rest,
-      headers: { authorization: `Bearer ${token}`, ...headers },
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(as === "orchestrator" && epoch != null && { "x-deckhand-epoch": String(epoch) }),
+        ...headers,
+      },
     });
   };
 }
@@ -680,4 +685,23 @@ test("an old key is taken in the broker's first days only; an expired run's file
   const pem = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
   const late = await orchestrator("POST", "/keys", { body: { pem } });
   assert.equal(late.status, 409);
+});
+
+test("the orchestrator's fencing epoch: none or a stale one changes nothing, on either copy (#506)", async (t) => {
+  const { copies, clock } = await brokers(t, { copies: 2 });
+  const [one, two] = copies;
+  const now = clock.now;
+  // The copy that holds the lease now, and the one that lost it without noticing.
+  const current = await client(one, "orchestrator", { epoch: now });
+  const stale = await client(two, "orchestrator", { epoch: now - 1000 });
+  const unfenced = await client(two, "orchestrator", { epoch: null });
+  await started(current);
+  assert.equal((await started(stale, "run-b").catch((error) => error)).actual, 409);
+  assert.equal((await stale("DELETE", "/runs/run-a")).status, 409);
+  assert.equal((await unfenced("DELETE", "/runs/run-a")).status, 400);
+  // Reads aren't fenced: a stale copy still sees the run, which goes on.
+  const listed = await stale("GET", "/runs");
+  assert.equal(listed.status, 200);
+  assert.deepEqual(listed.json.runs, ["run-a"]);
+  assert.deepEqual((await current("DELETE", "/runs/run-a")).json, { ended: true });
 });
