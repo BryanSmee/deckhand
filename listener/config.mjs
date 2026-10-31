@@ -188,7 +188,7 @@ export const SETTINGS = {
   KUBERNETES_CACHE_SIZE: { default: "10Gi", parse: storageSize },
   KUBERNETES_AGENT_STORAGE_CLASS: { default: (s) => s.KUBERNETES_CACHE_STORAGE_CLASS },
   KUBERNETES_AGENT_SIZE: { default: "5Gi", parse: storageSize },
-  // The container engine sidecar of runs whose repo is granted allow_docker
+  // The container engine sidecar of runs whose repo is granted `docker`
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
   // Where the runs' networks take their subnets from (runner/docker.mjs, lib/subnets.mjs).

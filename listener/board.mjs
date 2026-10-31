@@ -260,7 +260,8 @@ function settle(t, q, b, w, input, aside = null) {
     t.deadline = b.deadline;
   }
   // Its place in the run order (tasks.mjs queueOrder()), 1 next to start, while it waits for
-  // a slot; `startsFirst`: a brainstorm or a light mode, which goes before any work run.
+  // a slot; `startsFirst`: a brainstorm or another mode apart from work (modes.mjs `volumes`),
+  // which goes before any work run.
   if (t.state === "queued" && q?.position) {
     t.position = q.position;
     if (q.startsFirst) t.startsFirst = true;

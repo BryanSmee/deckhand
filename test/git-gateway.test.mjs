@@ -542,7 +542,7 @@ test("allow_workflows without the App's permission: refused, naming the grant an
   });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
   assert.equal(res.ok, false);
-  assert.match(res.stderr, /\[remote rejected\] .*`allow_workflows` is granted but the App/);
+  assert.match(res.stderr, /\[remote rejected\] .*`workflows` is granted but the App/);
   assert.match(res.stderr, /Workflows: read and write/);
   assert.equal(upstream("refs/"), "");
   // Never pushed without it.

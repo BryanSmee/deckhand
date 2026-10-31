@@ -126,9 +126,12 @@ docs/         setup, per-repo config reference, security model, architecture
   operator's settings (users, parallel runs), never widen them. What would widen them is a
   request the operator's grants folder must grant: `mounts` only under a granted root. Hosts
   are the grants folder's only (`default.yaml`, `<owner>/<repo>.yaml`): a repo can't add
-  any (issue #151). A repo's `dockerfile` is built only with `allow_dockerfile`, its `preview`
-  hook runs only with `allow_preview`, branch Dockerfiles only with
-  `allow_branch_docker_images` (all three in the grants folder), never for fork pull requests.
+  any (issue #151). A repo's `dockerfile` is built only with the `dockerfile` grant, its
+  `preview` hook runs only with `preview`, branch Dockerfiles only with `branch_docker_images`,
+  never for fork pull requests. The yes-or-no grants are the operator's policies' (#498:
+  `allow_grant`, asked per repository of the operator's layer alone, nothing granted by default,
+  `listener/grants.mjs` GRANTS); `docker`, `workflows` and auto-merge only one repository at a
+  time. A repo's own rules never grant them.
 - **Policies: a decision is allowed when an allow rule matches and no deny rule does** (a deny
   always wins; no allow, refused; a policy error, refused: `listener/policies.mjs`). The
   operator's layer (Deckhand's `policy/` under the grants folder's `policy/`, by file name) has
@@ -156,7 +159,10 @@ docs/         setup, per-repo config reference, security model, architecture
 - **Network restricted by default** through the egress proxy; containers run with
   `--cap-drop ALL` and `no-new-privileges`. The Docker socket (and the Kubernetes API's
   credentials) stays in the runner service, never in the listener; the runner checks every
-  sandbox spec against the grants again (`runner/spec-check.mjs`).
+  sandbox spec against the grants again (`runner/spec-check.mjs`), asking the policy service
+  for the operator's grants itself.
+- **A mode says nothing of what its runs may do** (`listener/modes.mjs`: its volumes, agent
+  defaults, trigger, prompt): their capabilities, writes and pushes are the policies' alone.
 - Verify every webhook's HMAC with a constant-time comparison.
 
 ## Testing

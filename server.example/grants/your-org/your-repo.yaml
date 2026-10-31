@@ -6,19 +6,8 @@
 # hosts: ["*.example.com", registry.npmjs.org]
 # Of those, the ones whose answers the egress proxy keeps, besides default.yaml's.
 # cached_hosts: [registry.npmjs.org]
-# Its .deckhand.yaml's `dockerfile` is built on the host's Docker.
-# allow_dockerfile: true
-# Its .deckhand.yaml's `preview` hook runs, with the Docker socket: root on the host.
-# allow_preview: true
-# `/mode research` runs: any public host, without its code or a GitHub token.
-# allow_research: true
-# UNSAFE: its .deckhand.yaml's `review.merge` merges Deckhand's pull requests after a clean
-# review, with no human reading them (docs/security.md#auto-merge). `public`: on a public
-# repository too.
-# allow_auto_merge: true
-# EVEN MORE UNSAFE: auto-merge while allow_preview's hook runs the default branch as root on
-# the host. Don't.
-# acknowledge_automerge_and_preview_is_highly_dangerous: true
+# Its Dockerfile, preview hook, engine, research runs, workflow pushes and auto-merge:
+# ../policy/grants.rego, the operator's policies.
 # Organization projects (v2), <organization>/<number> as in their URL: its runs add their
 # issues and pull requests there, and the listener moves its issues on them from its
 # .deckhand.yaml's `projects:` (docs/repo-config.md#projects). Needs the App's Organization

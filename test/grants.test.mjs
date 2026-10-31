@@ -33,7 +33,9 @@ import {
   ungranted,
   withGrants,
 } from "../listener/grants.mjs";
-import { grantedOf, tempDir, testConfig } from "./helpers.mjs";
+import { defaultPolicies, grantedOf, hasOpa, tempDir, testConfig } from "./helpers.mjs";
+import { operatorPolicies, rulesOf } from "../lib/policy-files.mjs";
+import { builtInPolicies } from "../policy-service/engine.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a" });
 
@@ -757,4 +759,35 @@ test("server.example/grants is a valid grants folder that grants nothing", () =>
   const grant = grantFor(grants, config, "your-org/your-repo");
   assert.deepEqual(grant.hosts, []);
   assert.equal(grant.allowPreview, false);
+  // Its policy/grants.rego: comments and the package, no rule.
+  const policies = operatorPolicies(dir);
+  assert.deepEqual([...policies.keys()], ["grants.rego"]);
+  assert.deepEqual(rulesOf(policies.get("grants.rego")), []);
 });
+
+test(
+  "the real opa: server.example's grants.rego, uncommented, grants its repository what it says",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const text = readFileSync(
+      new URL("../server.example/grants/policy/grants.rego", import.meta.url),
+      "utf8",
+    );
+    const uncommented = text.replace(/^# (allow_grant|  |\})/gm, "$1");
+    assert.deepEqual(rulesOf(uncommented), ["allow_grant"]);
+    const policies = defaultPolicies(t, {
+      builtIn: new Map([...builtInPolicies(), ["grants.rego", uncommented]]),
+    });
+    const said = await policies.grants("Your-Org/Your-Repo");
+    assert.deepEqual([...said.granted].sort(), [
+      "branch_docker_images",
+      "docker",
+      "dockerfile",
+      "preview",
+      "research",
+      "workflows",
+    ]);
+    assert.deepEqual(said.denied, []);
+    assert.deepEqual([...(await policies.grants("your-org/other")).granted], []);
+  },
+);

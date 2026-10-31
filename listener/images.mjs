@@ -5,8 +5,8 @@
 // BuildKit, a registry and claims): this module decides which image, which tag and which
 // volumes.
 //
-// A repo image is built from the default branch (or, when the operator's grants set
-// allow_branch_docker_images for the repo, from a pull request's own branch, never a fork's)
+// A repo image is built from the default branch (or, when the operator's policies grant the repo
+// `branch_docker_images`, from a pull request's own branch, never a fork's)
 // and tagged with a hash of the base image's id and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
 // ones reuse it. A branch's image is tagged apart (`branch-…`, its commit in the hash): the
 // default branch's runs and preview hooks never pick up what a branch built. Old tags are

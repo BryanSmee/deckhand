@@ -169,10 +169,10 @@ export const CATALOGUE: CapabilityInfo[] = [
     "the image built from the repository's Dockerfile",
     ["pull"],
     ["dockerfile"],
-    "allow_dockerfile",
+    "dockerfile",
   ],
-  ["docker", "a container engine next to the sandbox", ["pull"], ["docker"], "allow_docker"],
-  ["internet", "any public host, beyond the hosts the operator grants", [], [], "allow_research"],
+  ["docker", "a container engine next to the sandbox", ["pull"], ["docker"], "docker"],
+  ["internet", "any public host, beyond the hosts the operator grants", [], [], "research"],
   ["read:issues", "the repository's issues", [], [], null],
 ].map(([name, what, needs, config, grant]) => ({
   name: name as string,

@@ -322,7 +322,7 @@ test("Deckhand's default files: under the operator's, which replace them by name
   const push = screen.getByRole("link", { name: "The push input" });
   expect(push.getAttribute("href")).toMatch(/docs\/repo-config\.md#the-push-input$/);
   expect(push.closest("p")!.textContent).toMatch(/^allow_push and deny_push read each branch/);
-  expect(input.closest("p")!.textContent).toMatch(/custom_mode.*light.*reason/);
+  expect(input.closest("p")!.textContent).toMatch(/custom_mode.*\) and reason/);
   expect(source("deckhand/policy/gh-a.rego").textContent).toContain(
     "replaced by the operator's: not evaluated",
   );

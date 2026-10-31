@@ -21,7 +21,7 @@ name: deckhand
 # The base image sandboxes run from: the `sandbox` service below pulls or builds it, the
 # listener starts runs from it.
 x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-sandbox:${DECKHAND_VERSION:-latest}
-# The container engines runs of repositories granted allow_docker get (SANDBOX_ENGINE): the
+# The container engines runs of repositories granted `docker` get (SANDBOX_ENGINE): the
 # `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/setup.md.
 x-engine-image: &engine-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine:${DECKHAND_VERSION:-latest}
 x-engine-podman-image: &engine-podman-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine-podman:${DECKHAND_VERSION:-latest}
@@ -38,7 +38,7 @@ services:
     # relays (GitHub's) wait for the next listener; those sent to it directly (agents' APIs,
     # pushes) are refused until then, #511 (docs/architecture.md#restarts).
     stop_grace_period: 5m
-    # Pushes of repositories granted allow_workflows are saved in /tmp while checked (up to
+    # Pushes of repositories granted `workflows` are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
     # (docs/security.md#github-actions-on-deckhands-branches).
     # tmpfs:
@@ -132,7 +132,7 @@ services:
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-}
       # What every sandbox may reach and its limits: grants/default.yaml, below.
-      # A container engine for repos granted allow_docker: sysbox, podman or auto. Empty: none.
+      # A container engine for repos granted `docker`: sysbox, podman or auto. Empty: none.
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
       # A range for the runs' networks (10.200.0.0/16), in blocks of SANDBOX_SUBNET_SIZE
       # (28). Empty: Docker's default address pools.

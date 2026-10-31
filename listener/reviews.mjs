@@ -18,7 +18,7 @@
 // and N reviews after them, kept across restarts. Once it is over, a maintainer's Fix on the
 // dashboard (work.mjs) grants one more round at a time (`grantedTo`), counted the same way.
 //
-// Auto-merge (`review.merge`, with the operator's per-repo `allow_auto_merge`): the listener,
+// Auto-merge (`review.merge`, with the operator's `auto_merge` grant): the listener,
 // never a sandbox, merges Deckhand's pull request after a review with nothing blocking, at the
 // reviewed head commit, once its gates pass (mergeRefusal()). The review that ends the fix
 // loop decides it: the merge or a comment saying why not (mergeAt), once per pull request.

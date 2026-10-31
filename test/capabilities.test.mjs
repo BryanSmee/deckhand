@@ -13,6 +13,14 @@ import {
   outcomeOf,
   RISKY,
 } from "../listener/capabilities.mjs";
+import {
+  autoMergeProblems,
+  GRANTS,
+  grantOf,
+  grantsBy,
+  grantsFrom,
+  previewProblem,
+} from "../listener/grants.mjs";
 import { APART, MODES, RESEARCH } from "../listener/modes.mjs";
 import { readsOf } from "../listener/github-app.mjs";
 import { createPolicies } from "../listener/policies.mjs";
@@ -24,6 +32,7 @@ import {
   hasOpa,
   localService,
   policyEngineOf,
+  testConfig,
   WORK_CAPABILITIES,
 } from "./helpers.mjs";
 
@@ -813,3 +822,76 @@ test("a review without read:pulls doesn't start: it reads its pull request with 
   ]);
   assert.deepEqual(said(["pull", "read:pulls"]).errors, []);
 });
+
+test(
+  "the real opa: each yes-or-no grant is an allow rule of the operator's: what it gates is refused without it (#498)",
+  { skip: !hasOpa() && "no opa on the PATH" },
+  async (t) => {
+    const names = Object.keys(GRANTS);
+    // What a repository lacks to show each grant missing: the grant, and for auto-merge on a
+    // private repository its public variant too, which covers it.
+    const lacks = (name) => (name === "auto_merge" ? [name, "auto_merge_public"] : [name]);
+    const rule = (repo, given) =>
+      `allow_grant if {\n  input.repo.name == "${repo}"\n  input.grant in {${given.map((n) => `"${n}"`).join(", ")}}\n}\n`;
+    // org/all gets every grant; org/no-<name> every one but <name>.
+    const text = [
+      "package deckhand\n",
+      rule("org/all", names),
+      ...names.map((n) =>
+        rule(
+          `org/no-${n}`,
+          names.filter((m) => !lacks(n).includes(m)),
+        ),
+      ),
+    ].join("\n");
+    const policies = realPolicies(t, { operator: { "grants.rego": text } });
+    const config = testConfig();
+    const grantFor = (repo) =>
+      grantOf(config, repo, { load: () => grantsFrom({}, config), granted: grantsBy(policies) });
+    // Deckhand's defaults' capabilities for a work run and a research run (the repository's name
+    // doesn't change them).
+    const inputs = {
+      work: capabilitiesInput({ repo: { name: "org/repo" }, mode: "work" }),
+      research: capabilitiesInput({ repo: { name: "org/repo" }, mode: "research" }),
+    };
+    const { results } = await policies.capabilityRules("org/repo", "main", inputs);
+    const merge = { review: { on: "ready", merge: true } };
+    const settings = { ...full, ...merge };
+    const used = (grant, mode, capability) =>
+      outcomeOf({
+        rules: results[mode],
+        custom: false,
+        settings,
+        grant,
+        repo: { private: true },
+        mode,
+      }).used.includes(capability);
+    // Each grant's gate: whether what it allows goes through.
+    const gates = {
+      dockerfile: (g) => used(g, "work", "image:repo"),
+      branch_docker_images: (g) => used(g, "work", "image:branch"),
+      docker: (g) => used(g, "work", "docker"),
+      preview: (g) => used(g, "work", "preview"),
+      research: (g) => used(g, "research", "internet"),
+      // The git gateway's: a push changing .github/workflows/ (git-gateway.test.mjs).
+      workflows: (g) => g.allowWorkflows === true,
+      auto_merge: (g) => !autoMergeProblems(g, merge, true).length,
+      auto_merge_public: (g) => !autoMergeProblems(g, merge, false).length,
+      // Auto-merge beside a preview hook that runs: without the hook, nothing to acknowledge.
+      acknowledge_automerge_and_preview_is_highly_dangerous: (g) =>
+        g.allowPreview && previewProblem(g, { ...merge, preview: full.preview }) === null,
+    };
+    assert.deepEqual(Object.keys(gates).sort(), [...names].sort());
+    const all = await grantFor("org/all");
+    for (const name of names) {
+      assert.equal(gates[name](all), true, `${name}: granted`);
+      assert.equal(gates[name](await grantFor(`org/no-${name}`)), false, `${name}: not granted`);
+    }
+    // Nothing granted without the operator's rules: Deckhand's defaults give none.
+    const none = await grantOf(config, "org/all", {
+      load: () => grantsFrom({}, config),
+      granted: grantsBy(realPolicies(t)),
+    });
+    for (const name of names) assert.equal(gates[name](none), false, `${name}: by default`);
+  },
+);

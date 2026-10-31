@@ -54,6 +54,7 @@ flowchart LR
   proxy --> hosts
   github --> policy
   broker --> policy
+  runner -. grants .-> policy
   github --> gh
   models --> ai
   models -. refresh .-> runner
@@ -67,7 +68,7 @@ flowchart LR
 | broker       | the tokens' signing key                   | live runs, run files                    | orchestrator (a run's first tokens, for the runner), runner (the runs' inboxes and files), proxy (sandboxes), every service that calls another (its own service token) |
 | github       | the App's key, installation tokens        | each run's issues, reactions, pushes    | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts and previews)                                                                                |
 | models       | the operator's agent credentials          | plan logins                             | proxy                                                                                                                                                                  |
-| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker                                                                                                                                           |
+| policy       | nothing secret                            | nothing (reads the policy folders)      | github, orchestrator, broker, runner (the operator's grants for a repository)                                                                                          |
 | proxy        | Deckhand's CA                             | the egress cache                        | sandboxes                                                                                                                                                              |
 
 The broker also serves the endpoints a sandbox calls about its own run: its token's renewal, its
@@ -81,7 +82,10 @@ diagram leaves out; the policy service calls none, and checks the tokens it gets
 arrows are narrow: the runner fetches a repository's tarball from the github service for build
 contexts and preview hooks (the App's key stays there), edge reads a run's log from the runner for
 the dashboard's live view, models has the runner start the plan logins' refresh, and the runner copies each run's inbox and
-files to the broker as they change (`listener/runner/inbox.mjs` `mirror`).
+files to the broker as they change (`listener/runner/inbox.mjs` `mirror`), and the runner asks the
+policy service what the operator's policies [grant](security.md#the-grants) a repository
+(`GET /policies`, `POST /evaluate`, the operator's layer only), to check every sandbox spec,
+image build and preview hook against it again.
 
 ## Upgrades without downtime
 
@@ -135,7 +139,10 @@ copy takes the connections the old one no longer accepts.
 The first service out of the listener (#501): long-lived `opa` servers behind a small HTTP service
 (`policy-service/`), with no network but its callers', no secret and no state. Its callers send
 a repository's policy files with each decision (it can't read GitHub); it reads the operator's
-from the grants folder, mounted read-only. Any copy answers any decision the same way, so two copies
+from the grants folder, mounted read-only. With Docker Compose, the listener and the runner each
+reach it on an internal network of their own (`policy`, `policy-runner`); the runner may only ask
+decisions (`GET /policies`, `POST /evaluate`: the operator's grants), never `/capabilities` or
+`/check`. Any copy answers any decision the same way, so two copies
 on Kubernetes are a Deployment with a readiness probe on `/ready` and `maxUnavailable: 0`: the new
 copy starts, the old one drains (25 s) with its decisions in flight
 (`test/policy-service.test.mjs`). With Docker Compose it is one copy, and the listener waits up

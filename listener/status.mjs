@@ -20,7 +20,7 @@ export function serverInfo(env, now = Date.now) {
 }
 
 // How this Deckhand is set up, for the dashboard's Settings › Server (GET api/server): the
-// container engine of runs granted allow_docker (SANDBOX_ENGINE as set, "auto" unresolved),
+// container engine of runs granted `docker` (SANDBOX_ENGINE as set, "auto" unresolved),
 // the egress proxy and how many hosts the grants folder grants in all, whether that folder
 // reads without errors, which Claude credentials are set and which one runs use first
 // (claudeSetup()), and who may sign in on which repos. Nothing secret: every signed-in
