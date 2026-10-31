@@ -19,14 +19,15 @@ jobs:
       fail-fast: false
       matrix:
         image:
-          - deckhand-listener
           - deckhand-broker
-          - deckhand-runner
           - deckhand-egress
-          - deckhand-policy
-          - deckhand-sandbox
           - deckhand-engine
           - deckhand-engine-podman
+          - deckhand-listener
+          - deckhand-models
+          - deckhand-policy
+          - deckhand-runner
+          - deckhand-sandbox
     steps:
       # Not delete-only-untagged-versions: a multi-platform image's manifests are untagged
       # versions too, and deleting them breaks the tag that points at them.
