@@ -10,7 +10,7 @@ import { existsSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
-import { permissionsFor } from "./modes.mjs";
+import { OPEN } from "./modes.mjs";
 import { addRun, writeEvent } from "./runlog.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
@@ -528,7 +528,7 @@ export function createRestart(ctx) {
     delete task.live.task;
     task.running = true;
     ctx.running++;
-    ctx.broker.register(task.repo, permissionsFor(saved.mode), {
+    ctx.broker.register(task.repo, {
       // Fail closed: a saved run that doesn't say it was a work run doesn't push.
       push: saved.light === false,
       mode: saved.mode,
@@ -544,9 +544,8 @@ export function createRestart(ctx) {
       agentToken: saved.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
       issued: saved.runTokens ?? [],
-      // Its tokens' `caps` (and no token without `pull`); none decided for a run saved before
-      // capabilities.
-      caps: saved.capabilities ?? null,
+      // Its tokens' `caps`, which its token reads with (and no token without `pull`).
+      caps: savedCapabilities(saved),
     });
     // State saved before runs had branches: none, rather than any; before they kept whether they
     // were a fork's, not one: what it fetches is checked (github-forks.mjs).
@@ -655,4 +654,20 @@ export function createRestart(ctx) {
     reattach,
     relink,
   };
+}
+
+// A restored run's capabilities: as saved, else (a run saved before capabilities, #495) what
+// its mode's token read then, so that it reads the same after the restart (github-app.mjs
+// readsOf()): nothing for research, the code, issues, pull requests and CI for the rest, and
+// discussions for a discussion run.
+// A run saved before #497 with `read:discussions` outside a discussion run (the old
+// mode-work.rego gave it): dropped, as its token would now need a permission its App may lack.
+export function savedCapabilities(saved) {
+  if (Array.isArray(saved.capabilities)) {
+    if (saved.mode === "discussion") return saved.capabilities;
+    return saved.capabilities.filter((c) => c !== "read:discussions");
+  }
+  if (OPEN.has(saved.mode)) return [];
+  const reads = ["pull", "read:issues", "read:pulls", "read:actions"];
+  return saved.mode === "discussion" ? [...reads, "read:discussions"] : reads;
 }

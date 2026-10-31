@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { board } from "../listener/board.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { createRestart, QUEUE_KEY } from "../listener/restart.mjs";
+import { createRestart, QUEUE_KEY, savedCapabilities } from "../listener/restart.mjs";
 import { createTasks, newTask } from "../listener/tasks.mjs";
 import { ambiguous, respellMap, respelled, spellings } from "../listener/spelling.mjs";
 import { loadRuns, openLog } from "../listener/runlog.mjs";
@@ -496,7 +496,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
   };
   // The first listener: a run with tokens, saved as saveLive() writes it.
   const first = make();
-  first.broker.register("org/repo", undefined, { id: "new", push: true, mode: "work" });
+  first.broker.register("org/repo", { id: "new", push: true, mode: "work" });
   first.broker.allow("new", ["issue-1-*"]);
   const { token, agentToken } = await first.broker.issue("new", "net-new");
   writeFileSync(
@@ -1157,4 +1157,23 @@ test("tasks.mjs: a pause armed from a saved deadline ends at it, not after a pau
   assert.ok(started[0][1] >= dueAt - 5 && started[0][1] < dueAt + 150);
   // Saved with it.
   assert.equal((await ctx.store.get(QUEUE_KEY))["org/repo#7"].dueAt, dueAt);
+});
+
+test("a run saved before capabilities reads after a restart what its mode's token read", () => {
+  assert.deepEqual(savedCapabilities({ mode: "work", capabilities: ["pull", "push"] }), [
+    "pull",
+    "push",
+  ]);
+  assert.deepEqual(savedCapabilities({ mode: "research" }), []);
+  // read:discussions, which mode-work.rego gave before #497, only for a discussion run.
+  const saved = ["pull", "read:issues", "read:discussions"];
+  assert.deepEqual(savedCapabilities({ mode: "work", capabilities: saved }), [
+    "pull",
+    "read:issues",
+  ]);
+  assert.deepEqual(savedCapabilities({ mode: "discussion", capabilities: saved }), saved);
+  const reads = ["pull", "read:issues", "read:pulls", "read:actions"];
+  assert.deepEqual(savedCapabilities({ mode: "work" }), reads);
+  assert.deepEqual(savedCapabilities({ mode: "brainstorm" }), reads);
+  assert.deepEqual(savedCapabilities({ mode: "discussion" }), [...reads, "read:discussions"]);
 });

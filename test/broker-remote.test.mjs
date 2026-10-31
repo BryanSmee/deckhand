@@ -173,7 +173,7 @@ test("a token signed with a key the listener doesn't have yet: the keys read aga
     unknownKey: listener.unknownKey,
     sandboxOf: async () => "net-a",
   });
-  listenerBroker.register("org/a", undefined, { id: "run-a" });
+  listenerBroker.register("org/a", { id: "run-a" });
   const { token } = await listenerBroker.issue("run-a", "net-a");
   assert.equal(listener.keys().has(broker.key.kid), false);
   assert.equal((await listenerBroker.check(token, "10.0.0.2")).run.id, "run-a");

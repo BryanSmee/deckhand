@@ -731,7 +731,6 @@ export const WORK_CAPABILITIES = [
   "preview",
   "read:issues",
   "read:pulls",
-  "read:discussions",
   "read:actions",
 ];
 export function defaultCapabilities({ mode, custom_mode }) {

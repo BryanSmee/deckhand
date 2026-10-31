@@ -41,7 +41,7 @@ function twoRuns() {
     repo,
     live: {
       id: name,
-      secret: broker.register(repo, undefined, { id: name, secret: `${name}-secret` }),
+      secret: broker.register(repo, { id: name, secret: `${name}-secret` }),
       hosts: ["github.com"],
       sandbox: `net-${name}`,
     },
@@ -154,7 +154,7 @@ test("sandboxAt: a token binds to its run's sandbox or engine, never the listene
   // A's token, as the listener's broker checks it (server.mjs): from the proxy's own address on
   // A's network (a call it made itself, naming no client), refused.
   const broker = createBroker({ ...localBroker(), sandboxOf: (ip) => sandboxAt(ctx, ip) });
-  broker.register("org/a", undefined, { id: "a" });
+  broker.register("org/a", { id: "a" });
   ctx.broker = broker;
   const { token } = await broker.issue("a", "net-a");
   assert.equal((await broker.check(token, "10.1.0.2")).run.id, "a");

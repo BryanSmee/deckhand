@@ -6,11 +6,15 @@
 // - the call's run is found by the run token it sent in place of a GitHub token (`GH_TOKEN`,
 //   git's credential helper: ../sandbox/), checked offline (broker.mjs check()), or by its
 //   sandbox's address when it sent none (git's first request, a download with curl); the token
-//   only works from its own sandbox, and a finished run's, another sandbox's or a research
-//   run's (NO_TOKEN) get nothing;
+//   only works from its own sandbox, and a finished run's, another sandbox's or one without
+//   `pull` (a research run: github-app.mjs readsGitHub()) get nothing;
 // - pushes are refused: they go to the git gateway (git-gateway.mjs, pushInsteadOf);
 // - a review's reads of its thread (comments, reviews, review comments) are refused: it reads
 //   only what allowed users wrote, from TASK_DIGEST (reviews.mjs);
+// - a run without `read:issues` reads its own issue only (issue #497): its REST paths
+//   (ownIssuePath()) and, in GraphQL, `repository(owner:, name:) { issue(number:) }` naming it
+//   (github-graphql.mjs issueReads()), each with a token minted with `issues: read` for that
+//   call alone; any other read of issues is refused;
 // - every REST write is checked (github-writes.mjs): classified, its target's kind resolved from
 //   GitHub, then held to the policies' `allow_github` and `deny_github`; every GraphQL call
 //   is parsed and validated, and each of its mutations checked the same way (github-graphql.mjs),
@@ -26,18 +30,18 @@
 // - every write's body is redacted (the run's tokens, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
 //   says so: what a run posts itself would otherwise skip the redaction of its reply and log;
-// - the call goes on with a token minted for the run's repo, which only reads (github-app.mjs
-//   readsOf(): its mode's reads, modes.mjs permissionsFor()), so nothing unchecked can write: a
-//   write that passed its checks gets one with only the write permission it needs besides
-//   (github-writes.mjs writePermissions(): `issues: write` for an issue's, `pull_requests:
-//   write` for `gh pr create` or `edit`, `contents: write` for `ready`…); the answer
+// - the call goes on with a token minted for the run's repo, which only reads what its
+//   capabilities give (github-app.mjs readsOf(): GitHub enforces them), so nothing unchecked can
+//   write: a write that passed its checks gets one with only the write permission it needs
+//   besides (github-writes.mjs writePermissions(): `issues: write` for an issue's,
+//   `pull_requests: write` for `gh pr create` or `edit`, `contents: write` for `ready`…); the answer
 //   streams back (upstream.mjs forward()), an Actions log's from where GitHub redirects
 //   (ACTIONS_LOGS).
 //
 // Served on the broker's port, which only the runs' networks reach.
 import { addressOf } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
-import { NO_TOKEN, PROJECT_READ, readsOf } from "./github-app.mjs";
+import { PROJECT_READ, READ_PERMISSIONS, readsGitHub, readsOf } from "./github-app.mjs";
 import { advertisementReader, fetchBody, fetchRequest, MAX_FETCH } from "./github-forks.mjs";
 import { pullOf } from "./github-pulls.mjs";
 import { pkt } from "./pkt-line.mjs";
@@ -59,12 +63,13 @@ const REPO = String.raw`(?:repos\/[^/]+\/[^/]+|repositories\/\d+)`;
 // comments, reviews and review comments, the timeline that holds them, commit comments, and the
 // event feeds, whose comment and review events carry their bodies (a repository's, a network's,
 // a user's, an organization's, the public one).
+const EVENT_FEEDS = String.raw`^(?:(?:${REPO}|networks\/[^/]+\/[^/]+|users\/[^/]+|orgs\/[^/]+)\/)?(?:received_)?events(?:\/|$)`;
 const THREAD_READS = [
   String.raw`^${REPO}\/(?:issues|pulls)\/comments(?:\/|$)`,
   String.raw`^${REPO}\/issues\/[^/]+\/(?:comments|timeline)(?:\/|$)`,
   String.raw`^${REPO}\/pulls\/[^/]+\/(?:comments|reviews)(?:\/|$)`,
   String.raw`^${REPO}\/(?:commits\/[^/]+\/)?comments(?:\/|$)`,
-  String.raw`^(?:(?:${REPO}|networks\/[^/]+\/[^/]+|users\/[^/]+|orgs\/[^/]+)\/)?(?:received_)?events(?:\/|$)`,
+  EVENT_FEEDS,
   // Issue search: `in:comments` matches comment text, and its text matches quote it.
   String.raw`^search\/issues(?:\/|$)`,
 ].map((re) => new RegExp(re, "i"));
@@ -75,6 +80,47 @@ const THREAD_READS = [
 // text matches quote what they matched. It refuses more than it must (`reviewDecision`): a
 // review reads its pull request over REST.
 const THREAD_FIELDS = /comment|review|timeline|contentedit|search|textmatch/i;
+// The REST reads of issues (paths under the API's base): a repository's, by name or id, lists,
+// comments and events included, issue search, and the event feeds, whose issue and comment
+// events carry them (THREAD_READS'). A run without `read:issues` is refused them
+// but for its own issue's (ownIssuePath()): its token couldn't read them anyway, and this says
+// why.
+const ISSUE_READS = [
+  new RegExp(String.raw`^${REPO}\/issues(?:\/|$)`, "i"),
+  /^search\/issues(?:\/|$)/i,
+  new RegExp(EVENT_FEEDS, "i"),
+];
+// Whether a REST path (under the API's base) is the run's own issue or its comments, by its
+// repository's name: what a run without `read:issues` reads of issues. By its id
+// (`repositories/<id>/…`, GitHub's pagination links): ownIssueId().
+export function ownIssuePath(path, run) {
+  const match = /^repos\/([^/]+\/[^/]+)\/issues\/(\d+)(?:\/comments)?\/?$/i.exec(path);
+  return (
+    !!match &&
+    Number.isInteger(run.issue) &&
+    match[1].toLowerCase() === run.repo &&
+    Number(match[2]) === run.issue
+  );
+}
+// The same path by its repository's id → the id it names, or null when it isn't the run's
+// issue's path under some id (whether the id is its repository's is the gateway's to look up).
+export function ownIssueId(path, run) {
+  const match = /^repositories\/(\d+)\/issues\/(\d+)(?:\/comments)?\/?$/i.exec(path);
+  if (!match || !Number.isInteger(run.issue) || Number(match[2]) !== run.issue) return null;
+  return Number(match[1]);
+}
+// What a run is told when it reads issues beyond its own without `read:issues`.
+export const ownIssueOnly = (run) =>
+  `this run's capabilities don't give \`read:issues\`: it reads ${Number.isInteger(run.issue) ? `its own issue (#${run.issue}) only` : "no issue"}`;
+// The read capability that gives a token permission (github-app.mjs READ_PERMISSIONS).
+const CAPABILITY_OF = Object.fromEntries(
+  Object.entries(READ_PERMISSIONS).flatMap(([cap, names]) => names.map((name) => [name, cap])),
+);
+// What a run is told when a read needs permissions its capabilities don't give.
+export function unreadable(permissions) {
+  const caps = [...new Set(permissions.map((p) => CAPABILITY_OF[p] ?? p))];
+  return `this run's capabilities don't give ${caps.map((c) => `\`${c}\``).join(", ")}, which this reads with (${permissions.join(", ")})`;
+}
 // An Actions run's or job's logs (paths under the API's base): GitHub answers with a redirect
 // to a storage host of its own (Azure blobs, behind a signed URL), which the egress proxy
 // doesn't let a sandbox reach. The gateway follows it (proxied()), once, without any
@@ -321,6 +367,10 @@ export function createGithubGateway({
   // it one (grants.mjs allowProjects), which `gh project item-add` looks up before it adds an
   // item. None: they don't.
   readsProjects = () => false,
+  // repo → its id on GitHub, or null: what GitHub's pagination links name it by
+  // (`repositories/<id>/…`), for a run's own issue's next page (ownIssueId()). None: such a
+  // path is refused to a run without `read:issues`.
+  repoId = async () => null,
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   maxWrite = MAX_WRITE,
@@ -448,6 +498,18 @@ export function createGithubGateway({
     const review = run.mode === "review";
     // Files aren't the thread: a review reads them as before.
     if (review && !where.file && refusedToReview(where)) return refuseThread(run, res, call);
+    // What its capabilities read, which its token gets (proxied()).
+    const reads = readsOf(run.caps);
+    // Issues without `read:issues`: its own only, with a token that reads issues for that call.
+    let ownIssue = false;
+    if (where.api && !write && !isGraphql(where.path) && !reads.issues) {
+      ownIssue =
+        ownIssuePath(where.path, run) || (await ownRepoId(run, ownIssueId(where.path, run)));
+      if (!ownIssue && ISSUE_READS.some((re) => re.test(where.path))) {
+        req.resume();
+        return refuse(run, res, call, false, { status: 403, message: ownIssueOnly(run) });
+      }
+    }
     const github = app();
     if (!github) return fail(res, 503, "the GitHub App is not set up");
     // A file host's call holds no token, and was a plain host's before: not counted, so a setup
@@ -470,7 +532,13 @@ export function createGithubGateway({
       // A path's optional permission first: what checks a work run's call for a fork's code
       // (forkCheck()) reads GitHub with the same permission, and would fail without a word.
       if (where.api && !isGraphql(where.path)) {
-        const lacks = await unaccepted(github, run, needed(where.path, {}, run.repo));
+        const wanted = needed(where.path, {}, run.repo);
+        // A read its capabilities don't give: its token goes without, and GitHub wouldn't say why.
+        const ungiven = Object.keys(wanted).filter((name) => !reads[name]);
+        const lacks =
+          !write && ungiven.length
+            ? { status: 403, message: unreadable(ungiven) }
+            : await unaccepted(github, run, wanted);
         if (lacks) {
           req.resume();
           return refuse(run, res, call, write, lacks);
@@ -533,7 +601,7 @@ export function createGithubGateway({
       let writing = false;
       let permissions = {};
       // What a read needs of the optional permissions (CI's results, over GraphQL).
-      let reads = {};
+      let checkFields = {};
       // Where those fields are in its answer (explained()).
       let readPaths = null;
       // Whether a GraphQL call writes, once the GraphQL checks parsed it.
@@ -567,8 +635,9 @@ export function createGithubGateway({
           writing = checked.write;
           parsedWrite = checked.write;
           permissions = checked.permissions ?? {};
-          reads = checked.reads ?? {};
+          checkFields = checked.reads ?? {};
           readPaths = checked.readPaths ?? null;
+          ownIssue = checked.ownIssue === true;
           const pulls = checked.pulls ?? [];
           const comments = checked.comments ?? [];
           const reacts = checked.reacts ?? [];
@@ -612,15 +681,19 @@ export function createGithubGateway({
       // CI's results beyond Actions: the policies' answer, once per run (a REST read's
       // permission was checked above).
       const checks = graphqlCall
-        ? "checks" in reads || "statuses" in reads
+        ? "checks" in checkFields || "statuses" in checkFields
         : where.api && !write && readsChecks(where.path);
       if (!refused && checks) refused = await checkRead(run, "read_checks");
       // A GraphQL read of CI's checks the installation lacks a permission for goes on without
       // it: GitHub answers the rest (`gh pr view` selects the rollup, on commits without any
       // check too), and its refusal of those fields is explained (explained()).
       let lacks = null;
-      if (!refused && graphqlCall && Object.keys(reads).length) {
-        lacks = await unaccepted(github, run, reads);
+      if (!refused && graphqlCall && Object.keys(checkFields).length) {
+        // Fields its capabilities don't read: refused by GitHub, which the answer explains.
+        const ungiven = Object.keys(checkFields).filter((name) => !reads[name]);
+        lacks = ungiven.length
+          ? { message: unreadable(ungiven) }
+          : await unaccepted(github, run, checkFields);
       }
       // A GraphQL call is a POST whatever it does: a write once parsed only if it mutates (a
       // refused read of checks is a call, not a write).
@@ -628,12 +701,29 @@ export function createGithubGateway({
       await proxied(req, res, run, github, where, body, watched, writing && permissions, {
         advertised,
         inflated,
+        ownIssue,
         lacks: lacks && { message: lacks.message, paths: readPaths },
       });
     } finally {
       slot?.release?.();
       if (counted) inFlight.set(run, inFlight.get(run) - 1);
     }
+  }
+
+  // repo → its id, once GitHub said it: a repository's id never changes.
+  const repoIds = new Map();
+  // Whether `id` (null: none) is the run's repository's: a lookup that fails says no.
+  async function ownRepoId(run, id) {
+    if (id === null) return false;
+    if (!repoIds.has(run.repo)) {
+      try {
+        const found = await repoId(run.repo);
+        if (Number.isInteger(found)) repoIds.set(run.repo, found);
+      } catch (error) {
+        log(`GitHub gateway: ${run.repo}'s id: ${error.message ?? error}`);
+      }
+    }
+    return repoIds.get(run.repo) === id;
   }
 
   // A call refused by the gateway's checks: noted in the run's log and the listener's.
@@ -679,8 +769,8 @@ export function createGithubGateway({
       if (!checked.run) return (fail(res, checked.status, checked.message), null);
       run = checked.run;
     }
-    if (run.extra === NO_TOKEN) {
-      return (fail(res, 403, "this run gets nothing from GitHub"), null);
+    if (!readsGitHub(run)) {
+      return (fail(res, 403, "this run gets nothing from GitHub: it doesn't have `pull`"), null);
     }
     return run;
   }
@@ -823,23 +913,24 @@ export function createGithubGateway({
     body,
     watched,
     writing,
-    { advertised = null, inflated = false, lacks = null } = {},
+    { advertised = null, inflated = false, lacks = null, ownIssue = false } = {},
   ) {
     let token;
-    let extra = run.extra;
+    // What its capabilities read, and its own issue for a call that reads only that.
+    let reads = { ...readsOf(run.caps), ...(ownIssue && { issues: "read" }) };
     try {
       // Only a run the policies let read them (`read_projects`: Deckhand's defaults, the modes
       // that add items) reads the organization's projects: a review, an inbox entry or a
       // discussion reads outsiders' text, and nothing narrows the read to the granted projects.
       if ((await readsProjects(run.repo)) && !(await checkRead(run, "read_projects"))) {
-        extra = { ...extra, ...PROJECT_READ };
+        reads = { ...reads, ...PROJECT_READ };
       }
     } catch (error) {
       // Its token reads no project: what needs one fails at GitHub, the rest goes on.
       log(`GitHub gateway: ${run.repo}: its grants: ${error.message ?? error}`);
     }
     // Its reads, and a checked write's own permission: never another write.
-    const permissions = writing ? { ...readsOf(extra), ...writing } : readsOf(extra);
+    const permissions = writing ? { ...reads, ...writing } : reads;
     try {
       ({ token } = await github.repoToken(run.repo, permissions));
     } catch (error) {

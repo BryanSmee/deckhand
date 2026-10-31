@@ -72,7 +72,7 @@ async function listener(t, { service, runsDir, shotsDir, ips, tokens = null }) {
   };
   const issued = tokens ?? {};
   const task = async (name, id, net, shots) => {
-    broker.register("org/repo", null, { id });
+    broker.register("org/repo", { id });
     if (!tokens) issued[name] = (await broker.issue(id, net, shots)).token;
     return [name, { name: id, repo: "org/repo", live: { id, shots, sandbox: net, hosts: [] } }];
   };

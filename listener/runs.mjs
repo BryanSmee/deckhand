@@ -9,7 +9,7 @@ import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
-import { customMode, entryRun, isFresh, isLight, permissionsFor, sessionName } from "./modes.mjs";
+import { customMode, entryRun, isFresh, isLight, sessionName } from "./modes.mjs";
 import { branchConfigReport } from "./onboarding.mjs";
 import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
@@ -139,7 +139,7 @@ export function createRuns(ctx) {
     // Its tokens, which its sandbox holds instead of a GitHub token (the GitHub gateway swaps
     // them for one limited to this repo) or the operator's credential, name it by its id while
     // it lasts. Signed once its sandbox's network is known (sandbox-spec.mjs).
-    ctx.broker.register(task.repo, permissionsFor(mode), {
+    ctx.broker.register(task.repo, {
       id,
       push: !light,
       mode,
