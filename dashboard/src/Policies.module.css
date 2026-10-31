@@ -184,18 +184,22 @@
 }
 
 .layer {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
   align-items: baseline;
-  gap: 4px 14px;
+  gap: 2px 12px;
   overflow-wrap: anywhere;
 }
 
 .layer > b {
-  min-width: 64px;
+  grid-row: span 2;
   color: var(--text-2);
   font-size: 12px;
   font-weight: 600;
+}
+
+.layer > span {
+  grid-column: 2;
 }
 
 .unallowed {

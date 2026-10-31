@@ -56,8 +56,7 @@ const OWNERS = { deckhand: "Deckhand's", operator: "the operator's", repo: "the 
 const replacedBy = (files: PolicyFile[], f: PolicyFile) =>
   f.active
     ? null
-    : (files.find((o) => o.active && o.source === "operator" && o.name === f.name)?.source ??
-      null);
+    : (files.find((o) => o.active && o.source === "operator" && o.name === f.name)?.source ?? null);
 const keyOf = (f: PolicyFile) => `${f.source}/${f.name}`;
 const foldId = (f: PolicyFile) => `policy-${f.source}-${f.name}`;
 const lineId = (f: PolicyFile) => (n: number) => `${foldId(f)}-line-${n}`;
@@ -194,9 +193,9 @@ export function PolicyConfig({ config }: { config: RepoConfig }) {
         After Deckhand's own gates, a decision is allowed when an <b>allow</b> rule matches and no{" "}
         <b>deny</b> rule does: a deny always wins. Deckhand's and the operator's files are one
         layer, the operator's replacing Deckhand's of the same name: their allow rules are the
-        ceiling. The repo's files, read from <code>{config.base}</code>, are evaluated apart:
-        their deny rules apply to every run, their allow rules only to the repo's own{" "}
-        <code>modes:</code>, which need the operator's allow too.
+        ceiling. The repo's files, read from <code>{config.base}</code>, are evaluated apart: their
+        deny rules apply to every run, their allow rules only to the repo's own <code>modes:</code>,
+        which need the operator's allow too.
       </p>
       <p class={styles.model}>
         <code>deny_github</code> reads the write (<code>action</code>, <code>target</code>,{" "}
@@ -305,9 +304,9 @@ function Banner({
         </b>
         <span>
           Policies fail closed, and each layer's files are checked together. Until{" "}
-          {one ? "it's" : "they're"}{" "}
-          fixed, auto-merges, automatic reviews, fix runs and runs' writes to GitHub here are all
-          refused with “policy error”. Runs started by a comment still start.
+          {one ? "it's" : "they're"} fixed, auto-merges, automatic reviews, fix runs and runs'
+          writes to GitHub here are all refused with “policy error”. Runs started by a comment still
+          start.
         </span>
         {one && first.file ? (
           lineLink(first, `Line ${first.row} ↓`)

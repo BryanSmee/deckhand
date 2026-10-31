@@ -303,9 +303,8 @@ test(
     assert.equal((await deny("plan", true)).length, 1);
     // Its allow rule lets its mode link one: docs/repo-config.md's example.
     const docs = readFileSync(new URL("../docs/repo-config.md", import.meta.url), "utf8");
-    const [, example] =
-      /```rego\n# \.deckhand\/policy\/gh-linked-branch\.rego[^\n]*\n([\s\S]*?)```/.exec(docs);
-    repo = { "branches.rego": example };
+    const [, example] = /```rego\n# \.deckhand\/policy\/modes\.rego\n([\s\S]*?)```/.exec(docs);
+    repo = { "modes.rego": example };
     policies.forget("org/repo");
     assert.deepEqual(await deny("plan", true), []);
     assert.equal((await deny("deploy", true)).length, 1);
