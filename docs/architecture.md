@@ -146,8 +146,9 @@ waiting earlier when nobody will answer them. `dismissals.mjs` `setAside()` then
 aside in `dismissed.json` while that run is the task's last:
 
 - someone other than the App's bot takes the label off the task's issue or pull request: an
-  `issues` or `pull_request` `unlabeled` delivery, or, while the listener was down, the label's
-  listing at start. The bot's own removals don't count: a run starting, or a comment that takes
+  `issues` or `pull_request` `unlabeled` delivery, or, for an issue's label taken off while the
+  listener was down, the label's listing at start (it lists issues only: a pull request's task
+  keeps asking until its next run or its close). The bot's own removals don't count: a run starting, or a comment that takes
   the label off and starts nothing, answers none of the questions. Putting the label back asks
   again;
 - the issue or its pull request closes or merges: its `closed` delivery, or, for one the

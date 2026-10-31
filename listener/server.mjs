@@ -864,8 +864,9 @@ if (ctx.app) {
     runs: ctx.runs,
     dismissals,
     tasks: closedTasks(ctx.runs, titles.closed, (key) => pulls.get(key)),
+    // Gone (404) or deleted (410): null, as never closed.
     closedAt: async (repo, number) => {
-      const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404]);
+      const issue = await lookup(repo, `/repos/${repo}/issues/${number}`);
       return issue?.closed_at ? Date.parse(issue.closed_at) : null;
     },
     log,

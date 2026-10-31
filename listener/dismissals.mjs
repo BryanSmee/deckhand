@@ -108,7 +108,8 @@ export function closedTasks(runs, closed, pr) {
 // would have (http.mjs). `tasks`: [{ key, repo, numbers }], the tasks known closed or merged,
 // with the issues and pull requests that are; `closedAt(repo, number)`: when GitHub says it
 // closed, in ms, or null. A run that asked after the close (a comment on a closed issue starts
-// one) still waits. Resolves to the keys set aside.
+// one) still waits, and is asked about again at each start while it is its task's last: one
+// call for each, which isn't worth keeping a mark for. Resolves to the keys set aside.
 export async function setAsideClosed({ runs, dismissals, tasks, closedAt, log = () => {} }) {
   const aside = [];
   for (const { key, repo, numbers } of tasks) {

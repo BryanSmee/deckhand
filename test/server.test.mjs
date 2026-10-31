@@ -4407,16 +4407,15 @@ mounts:
     assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
   });
 
-  test("api/state: a run's questions stop waiting once its issue closes or its pull request's label comes off", async (t) => {
+  test("api/state: a run's questions stop waiting once its issue closes, its pull request merges, or a pull request's label comes off", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
-    // What GitHub says of issue #5 when the dashboard looks its title up (titles.mjs).
-    const files = {};
-    const { port, send, listener } = await listen(t, files, (dir, github) => {
+    const { port, send, listener } = await listen(t, {}, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       for (const [id, key] of [
         ["org-repo-5-1000", "org/repo#5"],
         ["org-repo-pr-6-1000", "org/repo#pr-6"],
+        ["org-repo-9-1000", "org/repo#9"],
       ]) {
         writeFileSync(
           join(dir, "logs", `${id}.log`),
@@ -4448,14 +4447,30 @@ mounts:
     assert.deepEqual(await states(), {
       "org/repo#5": "needs-input",
       "org/repo#pr-6": "needs-input",
+      "org/repo#9": "needs-input",
     });
     const repository = { full_name: "org/repo", default_branch: "main" };
     const installation = { id: 7 };
     const sender = { login: "bob", type: "User" };
-    // Issue #5 closed (titles.mjs), the label taken off pull request #6 (dismissals.mjs).
+    // Issue #5 closed, the label taken off pull request #6, and pull request #19, which closes
+    // #9, merged with #9 left open.
     const closed = { number: 5, title: "An idea", state: "closed", state_reason: "completed" };
-    files["issue:5"] = JSON.stringify(closed);
     await send({ action: "closed", installation, repository, sender, issue: closed }, "issues");
+    const merged = {
+      number: 19,
+      title: "Nine",
+      state: "closed",
+      merged: true,
+      merged_at: "2026-10-31T12:00:00Z",
+      body: "Closes #9",
+      html_url: "https://github.com/org/repo/pull/19",
+      head: { ref: "issue-9-nine", repo: { full_name: "org/repo" } },
+    };
+    await send(
+      { action: "closed", installation, repository, sender, pull_request: merged },
+      "pull_request",
+    );
+    await listener.until("org/repo#9: closed, its last run's questions set aside");
     const pull = { number: 6, title: "A change", state: "open", labels: [] };
     const label = { name: "needs-input" };
     await send(
@@ -4463,14 +4478,11 @@ mounts:
       "pull_request",
     );
     await listener.until("org/repo#pr-6: label removed, its last run's questions set aside");
-    // The title lookup the first poll started may answer after the delivery: polled again.
-    const done = { "org/repo#5": "done", "org/repo#pr-6": "done" };
-    let now = await states();
-    for (let i = 0; i < 80 && JSON.stringify(now) !== JSON.stringify(done); i++) {
-      await new Promise((resolve) => setTimeout(resolve, 25));
-      now = await states();
-    }
-    assert.deepEqual(now, done);
+    assert.deepEqual(await states(), {
+      "org/repo#5": "done",
+      "org/repo#pr-6": "done",
+      "org/repo#9": "done",
+    });
   });
 
   test("at start: an issue closed while no listener heard it sets its run's questions aside, after GitHub's closed_at", async (t) => {
