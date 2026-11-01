@@ -522,9 +522,24 @@ async function startGithubService(dir, github, credentials, { key, policyService
       header: async () => `Bearer ${signServiceToken({ sub: "github", aud: "policy" }, key)}`,
     }),
   });
+  // Its events the orchestrator took (handled, then acknowledged), by type: what a test waits
+  // for rather than a while.
+  const store = openStore("memory:");
+  const types = new Map();
+  const taken = new Map();
+  const { append, ack } = store;
+  store.append = async (stream, event, options) => {
+    const id = await append(stream, event, options);
+    types.set(id, event.type);
+    return id;
+  };
+  store.ack = async (stream, consumer, ids, options) => {
+    for (const id of ids) taken.set(types.get(id), (taken.get(types.get(id)) ?? 0) + 1);
+    return ack(stream, consumer, ids, options);
+  };
   const made = createGithubService({
     config,
-    store: openStore("memory:"),
+    store,
     app,
     broker: { keys, serviceKeys: keys, unknownKey: async () => {} },
     bound: null,
@@ -539,7 +554,8 @@ async function startGithubService(dir, github, credentials, { key, policyService
   });
   await new Promise((resolve) => made.server.listen(0, "127.0.0.1", resolve));
   made.server.unref();
-  return { ...made, url: `http://127.0.0.1:${made.server.address().port}` };
+  const url = `http://127.0.0.1:${made.server.address().port}`;
+  return { ...made, url, taken: (type) => taken.get(type) ?? 0 };
 }
 
 // The egress proxy as the sandboxes reach it, played by the test: the fake sandbox (and the
@@ -895,6 +911,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       restartRunner,
       handOver,
       serviceToken,
+      githubService,
       urls: {
         github: githubService.url,
         runner: settings.RUNNER_URL,
@@ -2095,9 +2112,10 @@ mounts:
     assert.equal(stops.length, 2);
     assert.equal(replies(github).length, 1);
     assert.match(JSON.parse(replies(github)[0].body).body, /^Stopped by @alice\./);
+    // Removed once the run is torn down, after its end is logged (runs.mjs teardown()).
+    await until(() => !readdirSync(join(dir, "containers")).length, "the sandbox's removal");
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.doesNotMatch(ctx.listener.output(), /queued again|interrupted|queued \(work/);
-    assert.deepEqual(readdirSync(join(dir, "containers")), []);
   });
 
   test("a listener restarted after a run's output passed RUN_LOG_MAX_MB: stopped again, failed, nothing requeued", async (t) => {
@@ -2118,9 +2136,10 @@ mounts:
       JSON.parse(replies(github)[0].body).body,
       /^Claude was stopped as failed: its output passed RUN_LOG_MAX_MB \(1 MB\)/,
     );
+    // Removed once the run is torn down, after its end is logged (runs.mjs teardown()).
+    await until(() => !readdirSync(join(dir, "containers")).length, "the sandbox's removal");
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.doesNotMatch(ctx.listener.output(), /queued again|interrupted|queued \(work/);
-    assert.deepEqual(readdirSync(join(dir, "containers")), []);
   });
 
   test("/cancel on a run that answered but didn't exit, after a restart: its answer is posted", async (t) => {
@@ -2414,8 +2433,8 @@ mounts:
     });
     assert.equal(read.status, 200);
     assert.ok(ctx.github.requests.some((r) => r.auth === `token ${used}`));
-    // Its fingerprint reaches the listener as an event: given a moment.
-    await new Promise((resolve) => setTimeout(resolve, 1500));
+    // Its fingerprint reaches the listener as an event, once the orchestrator took it.
+    await until(() => ctx.githubService.taken("token"), "the token's fingerprint");
     writeFileSync(join(ctx.dir, "result"), `The token is ${used}.`);
     writeFileSync(join(ctx.dir, "go"), "");
     await ctx.listener.until("done (ok)");
@@ -2556,8 +2575,8 @@ mounts:
     await settled(github, [99, 100]);
     assert.equal(replies(github).length, 1);
     assert.match(JSON.parse(replies(github)[0].body).body, /^Answered\./);
-    // The sandbox, its inbox and the run's saved state are gone.
-    assert.deepEqual(readdirSync(join(dir, "containers")), []);
+    // The sandbox, its inbox and the run's saved state are gone, once the run is torn down.
+    await until(() => !readdirSync(join(dir, "containers")).length, "the sandbox's removal");
     assert.deepEqual(readdirSync(join(dir, "runs")), []);
     assert.deepEqual(
       readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".live.json")),
