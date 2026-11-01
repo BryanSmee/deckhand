@@ -1191,9 +1191,8 @@ refused, and the orchestrator's log says why at start.
 service of its own, `runner` in `compose.yaml`, with its own image (`deckhand-runner`), volume
 (`runner-data`), a network it shares with the listener alone (`runner`, `RUNNER_SUBNET`) and one
 of its own to the broker (`broker-runner`, `BROKER_RUNNER_SUBNET`). Take the new `compose.yaml`
-(or add the `runner` service, those two networks, the listener's `deckhand.role: broker` label,
-`RUNNER_URL` and `SERVICE_NETWORKS`, and the broker's `runner=` caller to yours, as the current
-`compose.yaml` writes them), then the same two commands. The `runs` volume moves to the runner as it is: sandboxes running through the update
+(or add the `runner` service, those two networks, `RUNNER_URL` and `SERVICE_NETWORKS`, and the
+broker's `runner=` caller to yours, as the current `compose.yaml` writes them), then the same two commands. The `runs` volume moves to the runner as it is: sandboxes running through the update
 keep their inbox. At its first start the orchestrator (the listener, then) sends the runs' logs it kept (`/data/logs/*.log`)
 to the runner and removes them; their summaries stay. Mount roots you grant go on the runner
 too, read-only at the same paths: it resolves the sandboxes' host paths again before Docker
@@ -1888,9 +1887,9 @@ runs next to the sandbox rather than in it. See [Security model](security.md): t
 mounts, the mandatory hosts, and what isn't covered.
 
 Upgrading from a version where all sandboxes shared the `deckhand-sandboxes` network: runs
-started before the update go on (the proxy is joined to that network again). Once they are
-over, `docker network rm deckhand-sandboxes`: compose no longer creates it, and
-`SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label of
+started before the update don't survive it, so let them finish first (`docker ps --filter
+label=deckhand.run`). Then `docker network rm deckhand-sandboxes`: compose no longer creates
+it, and `SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label of
 `compose.yaml`'s `egress` service if you copied the file: the runner finds the proxy by it.
 
 Upgrading from a version where `compose.yaml` mounted `config.yaml` and `grants/` one by

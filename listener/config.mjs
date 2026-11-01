@@ -672,8 +672,8 @@ function onOff(text, { label }) {
   throw new ConfigError(`${label}: expected on or off, got ${value}`);
 }
 
-// A /29 is the smallest block that holds a sandbox, the listener, the proxy and a container
-// engine besides the gateway.
+// A /29 is the smallest block that holds a sandbox, the proxy and a container engine besides
+// the gateway.
 function subnetSize(text, { label }) {
   const size = wholeNumber(
     text,

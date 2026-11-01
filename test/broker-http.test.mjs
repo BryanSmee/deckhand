@@ -64,7 +64,7 @@ test("runAt: a run's record from its own sandbox or engine, not from another san
   assert.equal(await runAt(ctx, a, "10.2.0.2"), false);
   assert.equal(await runAt(ctx, runOf("org/b#2"), "10.2.0.2"), true);
   assert.equal(await runAt(ctx, runOf("org/b#2"), "10.1.0.2"), false);
-  // Another container on A's network (the listener, the proxy) isn't A's.
+  // Another container on A's network (the proxy) isn't A's.
   assert.equal(await runAt(ctx, a, "10.1.0.9"), false);
   // A record no running task holds (revoked, unknown): nobody's.
   assert.equal(await runAt(ctx, { repo: "org/a" }, "10.1.0.2"), false);

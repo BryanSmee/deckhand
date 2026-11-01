@@ -99,8 +99,8 @@ async function sandboxOfTask(ctx, task) {
 
 // The running task a connection from `ip` belongs to, by the ID of the network (or pod) the
 // address is on, as the runner tells now (runner.locate()), with whether it is the task's
-// sandbox or its container engine; null for any other container there (the listener's, the
-// proxy's) or none. Nothing per run is kept: a run whose engine starts before its sandbox, or
+// sandbox or its container engine; null for any other container there (the proxy's) or
+// none. Nothing per run is kept: a run whose engine starts before its sandbox, or
 // another run's starting meanwhile, changes nothing for the others (#517).
 export async function taskWhere(ctx, ip) {
   const at = ip ? await ctx.runner.locate?.(ip) : null;

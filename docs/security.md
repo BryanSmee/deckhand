@@ -2288,7 +2288,7 @@ in the engine only:
   [Not covered](#not-covered).
 - **Its limits** are the repository's (`limits` in its grants, else the built-in ones), on top of
   the sandbox's: a run can use twice its limits, half in each container.
-- **Its network** is the run's: internal, with the sandbox, the orchestrator and the proxy. Its
+- **Its network** is the run's: internal, with the sandbox and the proxy. Its
   address counts as the sandbox's for the egress proxy, so its pulls, its builds' steps and
   its containers reach only the run's hosts, through the proxy (by address: its containers
   can't resolve names on the run's network). Its containers have no other route out.
