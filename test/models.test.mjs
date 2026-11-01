@@ -644,12 +644,17 @@ test("redacting with fingerprints stays cheap: a few windows hashed per MB, not 
     Buffer.from(`line ${i} of output`).toString("base64").repeat(2),
   ).join(" ");
   assert.ok(text.length > 1_000_000);
-  const started = performance.now();
-  const out = redact(`${text} ${KEY.slice(2, 33)}`, prints);
-  const ms = performance.now() - started;
-  assert.ok(out.endsWith(" [redacted]"));
-  // What hashing every window took (#504's first fix): 500 ms and more per MB and set. Below
-  // that by enough for a busy CI runner (256 ms seen), not by half.
+  // The fastest of three: a busy CI runner pauses a test now and then (256 ms seen), rarely
+  // the same one three times over.
+  let ms = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const started = performance.now();
+    const out = redact(`${text} ${KEY.slice(2, 33)}`, prints);
+    ms = Math.min(ms, performance.now() - started);
+    assert.ok(out.endsWith(" [redacted]"));
+  }
+  // What hashing every window took (#504's first fix): 500 ms and more per MB and set; this
+  // takes some 40.
   assert.ok(ms < 400, `${Math.round(ms)} ms`);
 });
 
