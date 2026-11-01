@@ -1,0 +1,49 @@
+name: Flaky hunt
+
+# Temporary (#563): the tests 20 times in a row, then 5 times on one core, on the self-hosted
+# runners whose shared machine the flaky failures showed on. Removed once its results are in
+# the pull request.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  loop:
+    runs-on: [self-hosted, Linux]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+      - name: Install opa
+        run: |
+          dockerfile=policy-service/Dockerfile
+          version=$(sed -n 's/^ARG OPA_VERSION=//p' "$dockerfile")
+          sum=$(sed -n 's/^ *amd64) sum=\([0-9a-f]*\) ;;.*/\1/p' "$dockerfile")
+          test -n "$version" && test -n "$sum"
+          curl -fsSLo "$RUNNER_TEMP/opa" "https://github.com/open-policy-agent/opa/releases/download/v${version}/opa_linux_amd64_static"
+          echo "$sum  $RUNNER_TEMP/opa" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/bin"
+          install -m 755 "$RUNNER_TEMP/opa" "$RUNNER_TEMP/bin/opa"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Bundle graphql-js
+        working-directory: listener/vendor
+        run: npm ci --no-audit --no-fund && npm run build
+      # Each run's counts on one line; the first failure stops the loop, its log shown.
+      - name: 20 runs, then 5 on one core
+        run: |
+          run() {
+            "$@" node --test --test-force-exit --import ./test/blocking-stdout.mjs \
+              --test-timeout=120000 --test-reporter=spec > "$RUNNER_TEMP/run.log" 2>&1
+            code=$?
+            echo "$label $i: exit $code $(grep -E '^ℹ (tests|pass|fail|cancelled|skipped)' "$RUNNER_TEMP/run.log" | tr '\n' ' ')"
+            if [ "$code" != 0 ]; then cat "$RUNNER_TEMP/run.log"; exit 1; fi
+          }
+          nproc
+          label=all
+          for i in $(seq 20); do run; done
+          label=one-core
+          for i in $(seq 5); do run taskset -c 0; done

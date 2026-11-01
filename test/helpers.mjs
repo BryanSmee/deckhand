@@ -84,13 +84,25 @@ const EPHEMERAL = (() => {
   }
 })();
 
-// Listens on a port the OS never hands out by itself, for a server the test closes and listens
-// on again where it was (a service that restarts, refusing connections meanwhile): one it picked
-// for port 0 may be another server's or a connection's by then, which then answers in its place
-// or keeps it (#563). Picked at random, tried until one is free. → that port.
+// The ports the OS never hands out by itself, from 10000 to EPHEMERAL, for what a test closes and
+// listens on again (or never listened on): one it picked for port 0 may be another server's or
+// a connection's by then, which then answers in its place or keeps it (#563). Handed out in
+// turn, from where this process's id says: two test files meet only once one has gone through
+// some 22,000 ports to reach the other's, rather than once in so many draws each. Not
+// guaranteed across processes, then, only far less likely than a port 0's reuse.
+const ASIDE = EPHEMERAL - 10_000;
+let nextAside = (process.pid * 97) % ASIDE;
+export function asidePort() {
+  const port = 10_000 + nextAside;
+  nextAside = (nextAside + 1) % ASIDE;
+  return port;
+}
+
+// Listens on asidePort()'s next free one, for a server the test closes and listens on again
+// where it was (a service that restarts, refusing connections meanwhile). → that port.
 export async function listenToRestart(server, host = "127.0.0.1") {
   for (;;) {
-    const port = 10_000 + Math.floor(Math.random() * (EPHEMERAL - 10_000));
+    const port = asidePort();
     const error = await new Promise((resolve) => {
       server.once("error", resolve);
       server.listen(port, host, () => (server.off("error", resolve), resolve(null)));
@@ -98,6 +110,14 @@ export async function listenToRestart(server, host = "127.0.0.1") {
     if (!error) return port;
     if (error.code !== "EADDRINUSE") throw error;
   }
+}
+
+// A port nothing listens on, where a connection is refused: one listenToRestart() had, closed.
+export async function closedPort() {
+  const server = createServer();
+  const port = await listenToRestart(server);
+  await new Promise((resolve) => server.close(resolve));
+  return port;
 }
 
 // A port of the test's own, bound once and held until it ends, passing each connection on to the

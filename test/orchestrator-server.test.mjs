@@ -743,7 +743,11 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     let edge = null;
     let listener = null;
     let runner = null;
-    const portOf = (copy, re) => Number([...(copy?.own() ?? "").matchAll(re)].at(-1)?.[1] ?? 0);
+    // None while the copy has exited: its port, from port 0, may be another process's already.
+    const portOf = (copy, re) =>
+      !copy || copy.child.exitCode !== null || copy.child.signalCode
+        ? 0
+        : Number([...copy.own().matchAll(re)].at(-1)?.[1] ?? 0);
     const runnerPort = await forwarder(t, () =>
       portOf(runner, /Deckhand runner \(\w+\) on :(\d+)/g),
     );

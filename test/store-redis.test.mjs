@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { encode, parseRedisUrl, RedisError, redisClient, replyParser } from "../lib/resp.mjs";
 import { openStore } from "../lib/store.mjs";
 import { redisStore } from "../lib/store-redis.mjs";
-import { listening } from "./helpers.mjs";
+import { asidePort, listening } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
 test("resp: commands encoded as bulk strings, bytes kept", () => {
@@ -254,27 +254,31 @@ async function realRedis() {
   } catch {
     return null;
   }
-  const probe = createServer();
-  const port = await listening(probe);
-  await new Promise((resolve) => probe.close(resolve));
-  const server = spawn(
-    "redis-server",
-    ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no"],
-    { stdio: "ignore" },
-  );
-  server.unref();
-  process.once("exit", () => server.kill());
-  const url = `redis://127.0.0.1:${port}`;
-  for (let i = 0; i < 50; i++) {
-    const client = redisClient(url);
-    try {
-      await client.call("PING");
-      return url;
-    } catch {
-      await sleep(100);
-    } finally {
-      await client.close();
+  // On a port the OS never hands out by itself, not one probed free first (#563): another one
+  // when something else has it already, which this redis-server's process id tells apart.
+  for (let tries = 0; tries < 20; tries++) {
+    const port = asidePort();
+    const server = spawn(
+      "redis-server",
+      ["--port", String(port), "--bind", "127.0.0.1", "--save", "", "--appendonly", "no"],
+      { stdio: "ignore" },
+    );
+    server.unref();
+    process.once("exit", () => server.kill());
+    const url = `redis://127.0.0.1:${port}`;
+    for (let i = 0; i < 50 && server.exitCode === null; i++) {
+      const client = redisClient(url);
+      try {
+        const info = String(await client.call("INFO", "server"));
+        if (info.includes(`process_id:${server.pid}\r\n`)) return url;
+        break;
+      } catch {
+        await sleep(100);
+      } finally {
+        await client.close();
+      }
     }
+    server.kill();
   }
   throw new Error("redis-server didn't start");
 }

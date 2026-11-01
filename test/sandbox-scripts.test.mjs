@@ -114,7 +114,7 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   const written = () => n >= 3 && readFileSync(file, "utf8") === `${jwt(n)}\n`;
   for (let i = 0; i < 100 && !written(); i++) await new Promise((r) => setTimeout(r, 50));
   renew.kill();
-  await exited;
+  assert.equal(await exited, 0);
   assert.ok(n >= 3, "renewed twice");
   assert.equal(asked[0], `POST /run/token Bearer ${jwt(0)}`);
   assert.equal(asked[1], `POST /run/token Bearer ${jwt(0)}`);
@@ -156,6 +156,60 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   assert.deepEqual([outsideRun.status, outsideRun.stdout], [1, ""]);
   assert.match(outsideRun.stderr, /not a Deckhand run: no run token/);
 });
+
+test(
+  "deckhand-token --renew: stopped while it waits, at once, exit 0, its sleep with it",
+  { timeout: 20_000 },
+  async (t) => {
+    const dir = tempDir(t);
+    const file = join(dir, "run-token");
+    writeFileSync(file, `${jwt(0)}\n`);
+    // A `sleep` that says its process id, then is the real one.
+    const fakes = join(dir, "bin");
+    mkdirSync(fakes);
+    const real = spawnSync("bash", ["-c", "command -v sleep"], { encoding: "utf8" }).stdout.trim();
+    const sleeps = join(dir, "sleeps");
+    writeFileSync(join(fakes, "sleep"), `#!/bin/bash\necho $$ >> "${sleeps}"\nexec ${real} "$@"\n`);
+    chmodSync(join(fakes, "sleep"), 0o755);
+    const renew = spawn(`${bin}deckhand-token`, ["--renew"], {
+      stdio: "ignore",
+      env: {
+        PATH: `${fakes}:${bin}:${process.env.PATH}`,
+        DECKHAND_TOKEN_FILE: file,
+        DECKHAND_BROKER_URL: "http://127.0.0.1:1",
+        DECKHAND_TOKEN_RENEW: "300",
+      },
+    });
+    const exited = new Promise((resolve) =>
+      renew.on("exit", (code, signal) => resolve({ code, signal })),
+    );
+    t.after(() => renew.kill("SIGKILL"));
+    for (let i = 0; i < 400 && !existsSync(sleeps); i++)
+      await new Promise((r) => setTimeout(r, 25));
+    const pid = Number(readFileSync(sleeps, "utf8").trim());
+    t.after(() => {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch {
+        // Gone, as it should be.
+      }
+    });
+    // Its 300 s wait cut short: a script that waited it out would time the test out.
+    renew.kill("SIGTERM");
+    assert.deepEqual(await exited, { code: 0, signal: null });
+    // The sleep is gone too (a zombie until its new parent reaps it), not orphaned for 300 s.
+    const gone = () => {
+      try {
+        return readFileSync(`/proc/${pid}/stat`, "utf8").split(") ")[1][0] === "Z";
+      } catch {
+        return true;
+      }
+    };
+    for (let i = 0; i < 200 && !gone(); i++) await new Promise((r) => setTimeout(r, 25));
+    assert.ok(gone(), "its sleep outlived it");
+    assert.deepEqual(readdirSync(dir).sort(), ["bin", "run-token", "sleeps"]);
+  },
+);
 
 test("deckhand-token --renew: after a failed --now, its first renewal comes after the retry delay", async (t) => {
   const dir = tempDir(t);

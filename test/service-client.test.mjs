@@ -1,19 +1,15 @@
 // Calling another service (lib/service-client.mjs): its token and the orchestrator's epoch on
 // each call, a copy that refuses or is away tried again (its other copy next), for a while.
 import assert from "node:assert/strict";
-import { createServer } from "node:http";
 import { test } from "node:test";
 import { EPOCH_HEADER, serviceClient, Unavailable } from "../lib/service-client.mjs";
-import { listening, serve } from "./helpers.mjs";
+import { closedPort, serve } from "./helpers.mjs";
 
 const fast = { sleep: async () => {}, retryMs: 1, maxRetryMs: 1 };
 
 // An address nothing listens on: a call there is refused before it is made.
 async function nobody() {
-  const server = createServer();
-  const port = await listening(server);
-  await new Promise((resolve) => server.close(resolve));
-  return `http://127.0.0.1:${port}`;
+  return `http://127.0.0.1:${await closedPort()}`;
 }
 
 test("each call carries the caller's token and epoch, JSON both ways", async (t) => {

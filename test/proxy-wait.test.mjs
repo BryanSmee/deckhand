@@ -9,7 +9,7 @@ import { DRAIN_MS } from "../lib/drain.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createProxy, EARLY_MAX, egressPolicy } from "../proxy/proxy.mjs";
 import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
-import { listening, listenToRestart, serve } from "./helpers.mjs";
+import { closedPort, listening, listenToRestart, serve } from "./helpers.mjs";
 
 // A clock that only moves when the code sleeps.
 function fakeClock() {
@@ -136,8 +136,7 @@ test("the policy waits for the listener rather than refusing every host", async 
 });
 
 test("a client that left stops the policy's wait: no question for nobody", async (t) => {
-  const { server, port } = await serve(t, () => {});
-  await new Promise((resolve) => server.close(resolve));
+  const port = await closedPort();
   const url = `http://127.0.0.1:${port}/egress`;
   const clock = fakeClock();
   const policy = egressPolicy(url, 5000, clock);
@@ -165,8 +164,7 @@ test("a client that left stops the policy's wait: no question for nobody", async
 });
 
 test("what a CONNECT's client sends before its answer is capped while the policy waits", async (t) => {
-  const { server, port } = await serve(t, () => {});
-  await new Promise((resolve) => server.close(resolve));
+  const port = await closedPort();
   const proxy = createProxy({
     policy: egressPolicy(`http://127.0.0.1:${port}/egress`, 5000, {
       sleep: () => new Promise((resolve) => setTimeout(resolve, 10)),
