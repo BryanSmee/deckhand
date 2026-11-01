@@ -879,8 +879,7 @@ test("auto-merge: the row's badge and the config's warnings follow the grant and
     (await call(api, "GET", `/api/repos/${repo}/config`)).body.warnings.map(
       (w) => `${w.key ? `${w.key}: ` : ""}${w.message}`,
     );
-  for (const repo of ["org/priv", "org/pubok"])
-    assert.deepEqual(await warnings(repo), [], repo);
+  for (const repo of ["org/priv", "org/pubok"]) assert.deepEqual(await warnings(repo), [], repo);
   assert.match((await warnings("org/none"))[0], /don't grant `auto_merge`/);
   assert.match(
     (await warnings("org/pub"))[0],

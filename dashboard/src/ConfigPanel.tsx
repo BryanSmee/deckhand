@@ -306,9 +306,7 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
   return (
     <div class={styles.layout}>
       <main class={styles.main}>
-        {config.repo.autoMerge && (
-          <AutoMergeBox isPrivate={config.repo.private} />
-        )}
+        {config.repo.autoMerge && <AutoMergeBox isPrivate={config.repo.private} />}
         {problems.length > 0 && (
           <section id={anchor("problems")} class={styles.problems} role="alert">
             <h2>

@@ -134,12 +134,9 @@ test("broken grants: the defaults, and no grant shown", () => {
 });
 
 test("broken grants: what needs a grant is unknown, not refused", () => {
-  const yaml = [
-    "dockerfile: Dockerfile",
-    "docker: true",
-    "mounts:",
-    "  - path: /srv/data",
-  ].join("\n");
+  const yaml = ["dockerfile: Dockerfile", "docker: true", "mounts:", "  - path: /srv/data"].join(
+    "\n",
+  );
   const { settings, errors } = parseRepoConfig(yaml, config);
   assert.deepEqual(errors, []);
   const v = effectiveView(config, "org/app", settings, null);

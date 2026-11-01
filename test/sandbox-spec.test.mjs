@@ -43,15 +43,7 @@ function runOf({
       capabilities ??
       (light
         ? ["pull", "image:repo", "read:issues", "read:pulls", "read:actions"]
-        : [
-            "pull",
-            "push",
-            "setup",
-            "image:repo",
-            "image:branch",
-            "docker",
-            "read:issues",
-          ]),
+        : ["pull", "push", "setup", "image:repo", "image:branch", "docker", "read:issues"]),
     fork,
     shots: "f".repeat(24),
     handoff: false,

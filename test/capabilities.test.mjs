@@ -14,13 +14,7 @@ import {
   outcomeOf,
   RISKY,
 } from "../listener/capabilities.mjs";
-import {
-  autoMergeProblems,
-  GRANTS,
-  grantOf,
-  grantsBy,
-  grantsFrom,
-} from "../listener/grants.mjs";
+import { autoMergeProblems, GRANTS, grantOf, grantsBy, grantsFrom } from "../listener/grants.mjs";
 import { APART, MODES, RESEARCH } from "../listener/modes.mjs";
 import { readsOf } from "../listener/github-app.mjs";
 import { createPolicies } from "../listener/policies.mjs";
