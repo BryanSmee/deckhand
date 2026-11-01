@@ -315,3 +315,26 @@ test("file: acknowledged with drop, a stream's events leave its memory and, past
   const id = await again.append("deliveries", { n: 250 });
   assert.equal(Number(id), 251);
 });
+
+test("file: a stream whose file was rewritten empty (every event dropped) goes on from its next id", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  // Opened before the rewrite: edge's other copy.
+  const other = fileStore({ dir });
+  await other.read("deliveries", "orchestrator");
+  for (let n = 1; n <= 100; n++) {
+    const id = await store.append("deliveries", { n });
+    await store.read("deliveries", "orchestrator");
+    await store.ack("deliveries", "orchestrator", [id], { drop: true });
+  }
+  assert.equal(readFileSync(join(dir, "streams", "deliveries.jsonl"), "utf8"), "");
+  // The other copy appends next, then a store opened anew (a restart): ids go on, and the
+  // orchestrator reads both.
+  assert.equal(await other.append("deliveries", { n: 101 }), "101");
+  const restarted = fileStore({ dir });
+  assert.equal(await restarted.append("deliveries", { n: 102 }), "102");
+  assert.deepEqual(
+    (await restarted.read("deliveries", "orchestrator")).map((e) => e.event.n),
+    [101, 102],
+  );
+});

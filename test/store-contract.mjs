@@ -192,6 +192,11 @@ export function storeContract(name, open) {
       (await store.read("deliveries", "another")).map((e) => e.event.n),
       [3],
     );
+    // One acknowledged already (an ack sent again, after a cut connection): dropped all the same.
+    const [{ id }] = await store.read("deliveries", "orchestrator");
+    assert.equal(await store.ack("deliveries", "orchestrator", [id]), 1);
+    assert.equal(await store.ack("deliveries", "orchestrator", [id], { drop: true }), 0);
+    assert.deepEqual(await store.read("deliveries", "another"), []);
   });
 
   test(`${name}: a stream keeps its last maxLength events`, async (t) => {
