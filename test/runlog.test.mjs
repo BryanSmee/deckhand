@@ -508,6 +508,68 @@ test("runs: a log whose summary can't be written stays here, unsent: its run is 
   assert.match(logs.join("\n"), new RegExp(`${id}\\.log not sent to the runner`));
 });
 
+test("runs: a log holding a token goes redacted, whole, its bytes otherwise as they were", async (t) => {
+  const dir = tempDir(t);
+  const [dirty, clean] = ["deckhand-org-repo-13-1000", "deckhand-org-repo-14-1000"];
+  const meta = (id) => line({ type: "listener", key: id, repo: "org/repo", startedAt: 1000 });
+  const token = `ghs_${"a1".repeat(18)}`;
+  const runToken = `eyJ2ZXIiOjEsInN1YiI6InJ1biJ9.${"x".repeat(43)}`;
+  // A byte that isn't UTF-8 stays that byte; a line with no newline at the end is read too.
+  const tail = Buffer.from([0xff, 0x0a]);
+  writeFileSync(
+    join(dir, `${dirty}.log`),
+    Buffer.concat([
+      Buffer.from(`${meta(dirty)}\n{"text":"token ${token} here"}\n`),
+      tail,
+      Buffer.from(`{"text":"${runToken}"}`),
+    ]),
+  );
+  writeFileSync(join(dir, `${clean}.log`), `${meta(clean)}\n`);
+  const calls = [];
+  const runner = {
+    logs: new Map(),
+    // A part a try before sent of the file as it was.
+    remove: async (id) => calls.push(`remove ${id}`),
+    upload: async (id, path) => {
+      calls.push(`upload ${id}`);
+      runner.logs.set(id, readFileSync(path));
+    },
+  };
+  await moveLogs(dir, runner, { log: () => {} }).done;
+  assert.deepEqual(calls.sort(), [`remove ${dirty}`, `upload ${dirty}`, `upload ${clean}`]);
+  assert.deepEqual(
+    runner.logs.get(dirty),
+    Buffer.concat([
+      Buffer.from(`${meta(dirty)}\n{"text":"token [redacted] here"}\n`),
+      tail,
+      Buffer.from(`{"text":"[redacted]"}`),
+    ]),
+  );
+  assert.equal(runner.logs.get(clean).toString(), `${meta(clean)}\n`);
+  for (const id of [dirty, clean]) {
+    assert.equal(existsSync(join(dir, `${id}.log`)), false);
+    assert.equal(existsSync(join(dir, `${id}.log.redacted`)), false);
+  }
+});
+
+test("runs: a log to redact whose runner copy can't be removed stays as it was, for the next start", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-15-1000";
+  const text = `${line({ type: "listener", key: id, startedAt: 1000 })}\nghp_${"b".repeat(36)}\n`;
+  writeFileSync(join(dir, `${id}.log`), text);
+  const runner = {
+    remove: async () => {
+      throw new Error("the runner service didn't answer");
+    },
+    upload: async () => assert.fail("not sent before its runner copy is removed"),
+  };
+  const logs = [];
+  await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
+  assert.equal(readFileSync(join(dir, `${id}.log`), "utf8"), text);
+  assert.equal(existsSync(join(dir, `${id}.log.redacted`)), false);
+  assert.match(logs.join("\n"), /not sent to the runner \(the runner service didn't answer\)/);
+});
+
 test("runs: live runs' logs move first, on their own; a failed try is tried again, never left halfway", async (t) => {
   const dir = tempDir(t);
   const ids = ["deckhand-org-repo-1-1000", "deckhand-org-repo-2-1000", "deckhand-org-repo-3-1000"];

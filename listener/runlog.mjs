@@ -11,8 +11,10 @@ import {
   readdirSync,
   readFileSync,
   readSync,
+  renameSync,
   rmSync,
   statSync,
+  writeSync,
 } from "node:fs";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
@@ -22,6 +24,7 @@ import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { redact } from "../lib/redact.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
@@ -192,6 +195,18 @@ export function moveLogs(
     const path = join(logDir, file);
     for (let wait = retryMs; ; wait = Math.min(wait * 2, 60_000)) {
       try {
+        const clean = redactedCopy(path);
+        if (clean) {
+          // What the runner holds of it, from an earlier try, is of the file as it was: the
+          // file is sent again whole.
+          try {
+            await logs.remove(id);
+          } catch (error) {
+            rmSync(clean, { force: true });
+            throw error;
+          }
+          renameSync(clean, path);
+        }
         await logs.upload(id, path);
         rmSync(path, { force: true });
         count++;
@@ -222,6 +237,56 @@ export function moveLogs(
     return count;
   });
   return { moving, done };
+}
+
+// A log a listener kept may hold a GitHub token or a run token: it was written before
+// lib/redact.mjs knew their every shape. The runner refuses an append holding one rather than
+// redact it (its offsets are the writer's, lib/store.mjs appendBlobAt), so such a log would be
+// refused at every start. Redacted here first, line by line as runs.mjs redacts a run's output
+// (no secrets: the runner's store knows none, only their shapes), into `<file>.redacted`: its
+// path, or null when nothing was. Bytes as latin1, as the store's blobs: one character per
+// byte, so the bytes around a token come back as they were.
+const REDACT_CHUNK = 4 * 1024 * 1024;
+// A line longer than this is redacted in parts: a string can't hold a log's every byte.
+const REDACT_LINE_MAX = 64 * 1024 * 1024;
+function redactedCopy(path) {
+  const out = `${path}.redacted`;
+  let changed = false;
+  const input = openSync(path, "r");
+  try {
+    const output = openSync(out, "w");
+    try {
+      const write = (text) => {
+        const clean = redact(text, []);
+        if (clean !== text) changed = true;
+        writeSync(output, Buffer.from(clean, "latin1"));
+      };
+      const buffer = Buffer.alloc(REDACT_CHUNK);
+      let pending = "";
+      for (let n; (n = readSync(input, buffer, 0, buffer.length, null));) {
+        pending += buffer.toString("latin1", 0, n);
+        const end = pending.lastIndexOf("\n") + 1;
+        if (end) {
+          for (const one of pending.slice(0, end).split(/(?<=\n)/)) write(one);
+          pending = pending.slice(end);
+        } else if (pending.length > REDACT_LINE_MAX) {
+          write(pending);
+          pending = "";
+        }
+      }
+      if (pending) write(pending);
+    } finally {
+      closeSync(output);
+    }
+  } catch (error) {
+    rmSync(out, { force: true });
+    throw error;
+  } finally {
+    closeSync(input);
+  }
+  if (changed) return out;
+  rmSync(out, { force: true });
+  return null;
 }
 
 // A wait that keeps no process up: a listener stopping doesn't wait for a retry.
