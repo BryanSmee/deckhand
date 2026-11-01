@@ -142,6 +142,11 @@
   margin: 2px 0;
 }
 
+.plans {
+  max-width: 320px;
+  margin: 2px 0;
+}
+
 /* GitHub App: a term and its value per row. */
 .kv {
   margin: 0;

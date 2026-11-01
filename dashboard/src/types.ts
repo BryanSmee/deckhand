@@ -422,8 +422,35 @@ export interface State {
   server: ServerInfo;
   // The last catch-up with GitHub, null before the first one.
   lastSync: SyncResult | null;
+  // How much of each plan the runs used (listener/models-service.mjs plans()): only when a
+  // plan's credential is set, absent otherwise (and from a listener from before it).
+  plans?: PlanUsage[];
   // The server's clock: run times are compared with it.
   now: number;
+}
+
+// A plan's limits as last read (models/usage.mjs): from its answers to the runs' calls, and its
+// usage call while a dashboard is open. Numbers and times only.
+export interface PlanUsage {
+  plan: "claude" | "codex" | "antigravity" | string;
+  label: string;
+  // The main ones first ("5h", "7d"), then a model's (Claude's "7d_opus", the Antigravity
+  // CLI's per model, with its `label`); none before the first reading.
+  windows: PlanWindow[];
+  updatedAt: number | null;
+  // A 429 from the plan, until limitedUntil.
+  limited: boolean;
+  limitedUntil: number | null;
+}
+
+export interface PlanWindow {
+  name: string;
+  label?: string;
+  // 0–1.
+  used: number;
+  resetsAt: number | null;
+  // When this window was read.
+  at: number | null;
 }
 
 // The parts of a run, each its own section of its log (listener/runlog.mjs PHASES). A phase

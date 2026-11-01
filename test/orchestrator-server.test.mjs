@@ -5644,7 +5644,7 @@ mounts:
       "lastSync",
       "now",
     ],
-    ["inboxes", "lanes"],
+    ["inboxes", "lanes", "plans"],
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const SYNC_KEYS = [["at", "by", "redelivered", "pulls", "conflicts"], ["error"]];

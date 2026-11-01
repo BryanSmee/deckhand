@@ -1145,13 +1145,23 @@ its own). Its API (`models/http.mjs` `ROUTES`) names the callers of each endpoin
 proxy the sandboxes' agent calls (`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with
 the network it vouches they came from, and the orchestrator the credentials' names (`GET /credentials`,
 before its settings are read) and fingerprints (`GET /fingerprints`, for redaction), a run's API
-state (`GET /runs/:id/api`, for its reply and fallbacks at its end) and the `models` stream (the
-calls it refused a run, a line each in its log).
+state (`GET /runs/:id/api`, for its reply and fallbacks at its end), the plans' usage (`GET
+/usage`, the dashboard's bars, below) and the `models` stream (the calls it refused a run, a line
+each in its log).
 
 - **A call** carries the run's agent token, checked offline with the broker's public keys
   (`models/runs.mjs`): its `agent` claim (a run never gets another agent's credential), from its
   own sandbox, for a run the broker says still goes (`GET /runs/:id`, every 30 s at most per
   run). The service swaps it for the operator's credential and streams the answer back.
+- **The plans' usage** (`models/usage.mjs`, #486) is read from the plan's answers to the runs'
+  calls (their rate limit headers; never an API key's, a gateway's or OpenRouter's) and, while a
+  dashboard is open, from the plans' own usage calls: the orchestrator asks `GET /usage?poll=1`
+  every 15 s at most while api/state is read (`listener/models-service.mjs` `plans()`), and the
+  models service asks a plan no run read lately, every 5 minutes at most for every copy (a lease
+  in the store), 30 minutes after a failed call, which is only logged. Readings are in the store,
+  `usage:<plan>`, written when a percent, a reset or a limit changes, or once a minute. A 429
+  marks its window full until its reset. api/state's `plans` has only their numbers and times,
+  and only when a plan is set; they update only when runs use the plan or a dashboard is open.
 - **Two copies** may run on one store, both active: a plan's refresh token is single-use, so a
   refresh is a lease in the store (one copy refreshes, the other waits for its result), and a
   run's API state is there by the run's id. A run has 16 calls in flight at most per copy.

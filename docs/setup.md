@@ -971,6 +971,32 @@ above; the models service reads the new file without a restart. `GEMINI_API_KEY`
 The egress proxy needs its CA for these runs, cache on or off (it makes it at its first
 start, in its volume): a run stops when the proxy has none.
 
+### Plan usage
+
+With a plan (`CLAUDE_CODE_OAUTH_TOKEN`, `CODEX_AUTH_FILE`, `AGY_AUTH_FILE`), the dashboard shows
+how much of it the runs have used: a thin bar per limit window (a Claude plan's 5-hour and
+weekly limits, a ChatGPT plan's, the Antigravity CLI's per model), at the right of the page
+header on a wide screen, each plan's most used window in the phone's top bar, and all of them,
+with their resets, in the phone's repositories sheet and Settings › Server. A bar turns orange
+from 75 %, red at 100 % or while the plan's limit is reached (a 429, until its reset), and
+hatched when it was read before its window reset (its number no longer holds). Nothing shows
+without a plan, nor before the first reading.
+
+The numbers come from the models service, which holds the plans (`models/usage.mjs`):
+
+- **From the runs' own calls**, at no cost: the rate limit headers of the plan's answers
+  (`anthropic-ratelimit-unified-*` for Claude, `x-codex-primary-*` and `x-codex-secondary-*`
+  for Codex). Only the plan's: runs on an API key, a gateway or OpenRouter change nothing.
+- **By asking the plan, while a dashboard is open**: Claude's OAuth usage call, ChatGPT's and
+  the Antigravity CLI's quota calls (the only source for the Antigravity CLI, whose answers carry
+  none), each plan at most every 5 minutes, and only when no run read it lately. These calls
+  aren't documented and may change: one that fails is only logged in the models service's log,
+  the bars keep their last reading, and it is asked again 30 minutes later.
+
+So the bars stay as they were while no run uses the plan and no dashboard is open: a reading
+older than 15 minutes says when it was taken. Only percentages and times reach the dashboard,
+nothing of the credential.
+
 ### Fallbacks
 
 When the model's API fails, a run can go on elsewhere instead of ending with "Claude stopped

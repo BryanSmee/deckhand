@@ -1,0 +1,121 @@
+/* Plan usage: a thin bar per limit window, labelled; the bar's tone rises with it. */
+.plans {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-width: 0;
+}
+
+.plan {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.planName {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.item {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 64px;
+}
+
+.itemLabel {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.value {
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+
+.bar {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+
+.bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--run-solid);
+}
+
+.warn > span {
+  background: var(--input-solid);
+}
+
+.danger > span {
+  background: var(--err-solid);
+}
+
+/* Read before its reset: what it says no longer holds. */
+.stale > span {
+  background: repeating-linear-gradient(135deg, var(--idle-solid) 0 3px, transparent 3px 6px);
+}
+
+/* The phone's top bar: one short bar per plan, next to the switcher. */
+.phone {
+  gap: 8px;
+  flex: none;
+}
+
+.phone .item {
+  width: auto;
+  min-width: 48px;
+}
+
+/* Every window, with its reset: the repositories sheet, Settings › Server. */
+.full {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 14px;
+}
+
+.full .plan {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+
+.limited {
+  margin-left: 8px;
+  font-weight: 500;
+  color: var(--err);
+}
+
+.row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.rowHead {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.full .bar {
+  height: 6px;
+  border-radius: 3px;
+}
+
+.note {
+  font-size: 11.5px;
+  color: var(--text-3);
+}

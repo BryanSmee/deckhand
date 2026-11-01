@@ -155,6 +155,7 @@ async function setup(t, { env = {}, copies = 1, clock = { now: Date.now() } } = 
       caller,
       bound: networkCallers("proxy=127.0.0.3/32,orchestrator=127.0.0.2/32"),
       holder: `copy-${i}`,
+      fetch: plainFetch,
       now: () => clock.now,
       log: (line) => logs.push(line),
     });
@@ -356,6 +357,66 @@ test("a run's API state and the calls refused it reach the orchestrator", async 
   while (!notes.length) await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(notes[0].run, "run-1");
   assert.match(notes[0].message, /refused the agent's call POST \/anthropic\/v1\/files/);
+});
+
+test("a plan's usage, from its answers and its usage call, reaches the orchestrator", async (t) => {
+  const asked = [];
+  const { url } = await serve(t, (req, res) => {
+    asked.push({ url: req.url, headers: req.headers });
+    req.resume().on("end", () => {
+      if (req.url === "/api/oauth/usage") {
+        return res.end(JSON.stringify({ seven_day_opus: { utilization: 60, resets_at: null } }));
+      }
+      res.writeHead(200, {
+        "anthropic-ratelimit-unified-5h-utilization": "0.25",
+        "anthropic-ratelimit-unified-5h-reset": "1900000000",
+      });
+      res.end("{}");
+    });
+  });
+  const ctx = await setup(t, {
+    env: { CLAUDE_CODE_OAUTH_TOKEN: "sk-ant-oat01-plan-0123456789", ANTHROPIC_BASE_URL: url },
+  });
+  const [copy] = ctx.copies;
+  const { agentToken } = await ctx.startRun("run-1", { provider: "anthropic" });
+  await ctx.agentCall(copy, "/anthropic/v1/messages", agentToken);
+  await copy.usage.settled();
+  const models = createModelsService({
+    urls: `http://${AT.orchestrator}:${copy.port}`,
+    token: async () => `Bearer ${await ctx.tokenFor("orchestrator", "models")}`,
+    fetch: plainFetch,
+  });
+  t.after(() => models.stop());
+  // The first read is under way: none yet, then the plan's.
+  assert.deepEqual(models.plans(), []);
+  await models.usageRead();
+  const [claude] = models.plans();
+  assert.equal(claude.plan, "claude");
+  assert.deepEqual(
+    claude.windows.map((w) => [w.name, w.used, w.resetsAt]),
+    [["5h", 0.25, 1_900_000_000_000]],
+  );
+  // Read just now by a run: not polled.
+  assert.ok(!asked.some((a) => a.url === "/api/oauth/usage"));
+  // Long after, with a dashboard open: the plan's usage call, with its token.
+  ctx.clock.now += 10 * 60_000;
+  const read = await ctx.asOrchestrator(copy, "GET", "/usage?poll=1");
+  assert.equal(read.status, 200);
+  await copy.usage.settled();
+  const polled = asked.find((a) => a.url === "/api/oauth/usage");
+  assert.equal(polled.headers.authorization, "Bearer sk-ant-oat01-plan-0123456789");
+  const again = await ctx.asOrchestrator(copy, "GET", "/usage");
+  assert.deepEqual(
+    again.json.plans[0].windows.map((w) => w.name),
+    ["7d_opus", "5h"],
+  );
+  assert.ok(!again.text.includes("oat01"));
+  // The proxy may not read it.
+  const proxyToken = await ctx.tokenFor("proxy", "models");
+  const fromProxy = await call(copy.port, "proxy", "GET", "/usage", {
+    headers: { authorization: `Bearer ${proxyToken}` },
+  });
+  assert.equal(fromProxy.status, 403);
 });
 
 test("two copies: each sets only what its calls changed of a run's API state", async (t) => {

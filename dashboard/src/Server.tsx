@@ -11,6 +11,7 @@ import type { AppLinks, Auth, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { Meter } from "./ui/Meter";
+import { PlanBars } from "./ui/PlanUsage";
 import { Card } from "./ui/Surface";
 import styles from "./Server.module.css";
 
@@ -142,6 +143,12 @@ function Runs({
             {state ? `${state.running} running · ${state.queued} queued` : "…"}
           </span>
         </div>
+        {state?.plans?.some((p) => p.windows.length) && (
+          <div class={styles.fact}>
+            <span class={styles.label}>Plans</span>
+            <PlanBars plans={state.plans} now={state.now} class={styles.plans} />
+          </div>
+        )}
         <div class={styles.fact}>
           <span class={styles.label}>Container engine</span>
           <span class={styles.value}>
