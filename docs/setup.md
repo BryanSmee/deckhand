@@ -1677,7 +1677,7 @@ reads.
 
 - **`file:///data/store`**, a folder in the service's volume: on Docker Compose, and on one
   node. Several processes on that node may share it (two copies of a service, or one starting
-  while the last drains): each call holds the folder's lock (`state.lock`, taken over once 5 s
+  while the last drains): each call holds the folder's lock (`state.lock`, taken over once 10 s
   stale) and reads again what another process wrote.
 - **`redis://[user:password@]host:6379[/db]`**, or **`rediss://`** over TLS: on several nodes
   (a k3s cluster with more than one), where two copies of a service run on different nodes and

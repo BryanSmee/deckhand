@@ -1995,7 +1995,7 @@ session key. What people wrote (a delivery's payload, a queued comment) is kept 
 redacted (`storable()`), rather than refused whole. The file backend (`lib/store-file.mjs`) may
 be shared by several processes on one node: two copies of a service on one volume
 (`docker compose up -d --scale orchestrator=2`, or edge), or one starting while the last
-drains. Each call holds the folder's lock (`state.lock`, taken over once 5 seconds stale), reads
+drains. Each call holds the folder's lock (`state.lock`, taken over once 10 seconds stale, one process at a time), reads
 `state.json` again when another process wrote it, and a stream's new lines. Copies on several
 nodes need Redis.
 

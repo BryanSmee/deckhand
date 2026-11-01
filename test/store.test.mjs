@@ -1,7 +1,14 @@
 // The store (lib/store.mjs): the shared suite on each backend, then what the file backend
 // adds, everything kept across a restart.
 import assert from "node:assert/strict";
-import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  linkSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -364,5 +371,37 @@ test("file: an earlier event still pending while later ones are dropped: ids nev
   assert.deepEqual(
     (await restarted.read("deliveries", "orchestrator")).map((e) => e.event.n),
     [102, 103],
+  );
+});
+
+test("file: a stream rewritten twice by another copy is read again whole, its inode reused or not", async (t) => {
+  const dir = tempDir(t);
+  const a = fileStore({ dir });
+  const b = fileStore({ dir });
+  for (let n = 1; n <= 3; n++) await a.append("deliveries", { n });
+  // B has the stream cached: three events, their bytes.
+  assert.equal((await b.read("deliveries", "orchestrator")).length, 3);
+  // Its file's inode, kept aside by a second name.
+  const kept = join(dir, "kept-inode");
+  linkSync(join(dir, "streams", "deliveries.jsonl"), kept);
+  await b.ack("deliveries", "orchestrator", ["1", "2", "3"], { drop: true });
+  // A handles 200 more, two rewrites (a rename may hand the second the first's inode), then 5.
+  for (let n = 4; n <= 203; n++) {
+    const id = await a.append("deliveries", { n });
+    await a.read("deliveries", "orchestrator");
+    await a.ack("deliveries", "orchestrator", [id], { drop: true });
+  }
+  for (let n = 204; n <= 208; n++) await a.append("deliveries", { n, text: "x".repeat(50) });
+  // The inode B cached handed back to the file, as a rename may: the file as A left it, under it.
+  const path = join(dir, "streams", "deliveries.jsonl");
+  const now = readFileSync(path);
+  writeFileSync(kept, now);
+  renameSync(kept, path);
+  // B's next append follows A's, and the orchestrator reads all six.
+  assert.equal(await b.append("deliveries", { n: 209 }), "209");
+  assert.equal(await a.append("deliveries", { n: 210 }), "210");
+  assert.deepEqual(
+    (await a.read("deliveries", "orchestrator")).map((e) => e.event.n),
+    [204, 205, 206, 207, 208, 209, 210],
   );
 });
