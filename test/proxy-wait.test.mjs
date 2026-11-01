@@ -2,14 +2,14 @@
 // connection that wasn't made is tried again, with an injected clock, for up to 5 minutes; any
 // other failure, a request already sent among them, is not.
 import assert from "node:assert/strict";
-import { request } from "node:http";
+import { createServer, request } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
 import { DRAIN_MS } from "../lib/drain.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createProxy, EARLY_MAX, egressPolicy } from "../proxy/proxy.mjs";
 import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
-import { listening, serve } from "./helpers.mjs";
+import { listening, listenToRestart, serve } from "./helpers.mjs";
 
 // A clock that only moves when the code sleeps.
 function fakeClock() {
@@ -99,10 +99,12 @@ test("what counts as not reached: refused, reset while connecting, no such host;
 test("the policy waits for the listener rather than refusing every host", async (t) => {
   // The listener's port, closed: it listens again at the second wait.
   const asked = [];
-  const { server, port } = await serve(t, (req, res) => {
+  const server = createServer((req, res) => {
     asked.push(req.url);
     res.end(JSON.stringify({ allowed: true, relay: true }));
   });
+  const port = await listenToRestart(server);
+  t.after(() => server.close());
   await new Promise((resolve) => server.close(resolve));
   const clock = fakeClock();
   const sleep = clock.sleep;
@@ -205,7 +207,7 @@ function viaProxy(proxyPort, url, { method = "GET", headers = {}, body } = {}) {
 test("sandboxes' calls to a service's name go to it through the proxy, waiting for a restarting service", async (t) => {
   // The github service's port, closed until the second wait (an injected clock).
   const got = [];
-  const { server: service, url } = await serve(t, (req, res) => {
+  const service = createServer((req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", () => {
@@ -215,7 +217,9 @@ test("sandboxes' calls to a service's name go to it through the proxy, waiting f
       res.end("done");
     });
   });
-  const port = Number(new URL(url).port);
+  const port = await listenToRestart(service);
+  const url = `http://127.0.0.1:${port}`;
+  t.after(() => service.close());
   await new Promise((resolve) => service.close(resolve));
   const clock = fakeClock();
   const sleep = clock.sleep;

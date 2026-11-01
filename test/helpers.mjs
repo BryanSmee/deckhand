@@ -74,6 +74,32 @@ export async function serve(t, handle) {
   return { url: `http://127.0.0.1:${port}`, server, port };
 }
 
+// The first port the OS hands out by itself (Linux's ip_local_port_range): to a server listening
+// on port 0, to an outgoing connection.
+const EPHEMERAL = (() => {
+  try {
+    return Number(readFileSync("/proc/sys/net/ipv4/ip_local_port_range", "utf8").split(/\s+/)[0]);
+  } catch {
+    return 32768;
+  }
+})();
+
+// Listens on a port the OS never hands out by itself, for a server the test closes and listens
+// on again where it was (a service that restarts, refusing connections meanwhile): one it picked
+// for port 0 may be another server's or a connection's by then, which then answers in its place
+// or keeps it (#563). Picked at random, tried until one is free. → that port.
+export async function listenToRestart(server, host = "127.0.0.1") {
+  for (;;) {
+    const port = 10_000 + Math.floor(Math.random() * (EPHEMERAL - 10_000));
+    const error = await new Promise((resolve) => {
+      server.once("error", resolve);
+      server.listen(port, host, () => (server.off("error", resolve), resolve(null)));
+    });
+    if (!error) return port;
+    if (error.code !== "EADDRINUSE") throw error;
+  }
+}
+
 // A port of the test's own, bound once and held until it ends, passing each connection on to the
 // port `target()` names then: a service's current copy, which listens on a port the OS picks. A
 // service that restarts, or another copy that takes over, is still at the same URL, and no port

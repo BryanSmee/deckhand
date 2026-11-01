@@ -15,7 +15,7 @@ import { createInbox } from "../listener/runner/inbox.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
-import { tempDir, testKey } from "./helpers.mjs";
+import { listenToRestart, tempDir, testKey } from "./helpers.mjs";
 
 const FOLDER = "0123456789abcdef01234567";
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
@@ -23,15 +23,16 @@ const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 // Where each caller reaches the broker: the address a call arrives at tells them apart.
 const AT = { orchestrator: "127.0.0.1", runner: "127.0.0.2" };
 
-// The broker service on loopback, called as the orchestrator and as the runner; on `port` (0:
-// one the OS picks), so a test can stop it and start it again where it was.
-async function service(t, { store = openStore("memory:"), key = testKey(), port = 0 } = {}) {
+// The broker service on loopback, called as the orchestrator and as the runner; on `port` (none:
+// listenToRestart()'s), so a test can stop it and start it again where it was.
+async function service(t, { store = openStore("memory:"), key = testKey(), port = null } = {}) {
   const broker = createBroker({
     store,
     key,
     callers: createCallers({ networks: "orchestrator=127.0.0.1/32,runner=127.0.0.2/32" }),
   });
-  await new Promise((resolve) => broker.server.listen(port, "0.0.0.0", resolve));
+  if (port === null) await listenToRestart(broker.server, "0.0.0.0");
+  else await new Promise((resolve) => broker.server.listen(port, "0.0.0.0", resolve));
   broker.server.unref();
   const stop = () =>
     new Promise((resolve) => {
