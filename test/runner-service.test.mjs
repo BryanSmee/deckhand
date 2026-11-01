@@ -811,8 +811,6 @@ test("only this deployment's sandboxes and runs' networks: never another contain
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-1"), 200);
 });
 
-// Two copies during a handover (a lease that expired on a stalled one), both reading the log's
-// size before either appends: the same chunk, sent to each, lands once.
 test("a log file uploaded: parts end where its redaction's did, so the store finds no token it didn't", async (t) => {
   // The runner's store, refusing a part holding a token's shape (lib/store.mjs).
   const store = withoutSecrets(fileStore(), () => []);
@@ -828,6 +826,8 @@ test("a log file uploaded: parts end where its redaction's did, so the store fin
   assert.equal(await logs.text("dh-o-a-1-1"), text);
 });
 
+// Two copies during a handover (a lease that expired on a stalled one), both reading the log's
+// size before either appends: the same chunk, sent to each, lands once.
 test("logs: the same append through two copies at once is written once", async () => {
   const store = fileStore();
   let readers = 0;

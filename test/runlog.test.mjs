@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -41,6 +49,9 @@ function fakeRunner(refuse = []) {
     },
   };
 }
+
+// The redacted copies moveLogs() left in `dir` (runlog.mjs redactedCopy()).
+const redactedCopies = (dir) => readdirSync(dir).filter((f) => f.endsWith(".redacted"));
 
 // A start: the logs a listener kept itself go to the runner, then the runs are listed.
 async function started(dir, options) {
@@ -558,10 +569,18 @@ test("runs: a log holding a token goes redacted, whole, its bytes otherwise as t
     ]),
   );
   assert.equal(runner.logs.get(clean).toString(), `${meta(clean)}\n`);
-  for (const id of [dirty, clean]) {
-    assert.equal(existsSync(join(dir, `${id}.log`)), false);
-    assert.equal(existsSync(join(dir, `${id}.log.redacted`)), false);
-  }
+  for (const id of [dirty, clean]) assert.equal(existsSync(join(dir, `${id}.log`)), false);
+  assert.deepEqual(redactedCopies(dir), []);
+});
+
+test("runs: a redacted copy a stopped start left goes once an hour old, a newer one stays", async (t) => {
+  const dir = tempDir(t);
+  const [old, recent] = ["a.log.1.redacted", "b.log.2.redacted"];
+  for (const f of [old, recent]) writeFileSync(join(dir, f), "x");
+  const hours = (n) => new Date(Date.now() - n * 60 * 60_000);
+  utimesSync(join(dir, old), hours(2), hours(2));
+  await moveLogs(dir, fakeRunner(), { log: () => {} }).done;
+  assert.deepEqual(redactedCopies(dir), [recent]);
 });
 
 test("runs: a log longer than a read, a token across two of them and in a long line, goes redacted", async (t) => {
@@ -600,7 +619,7 @@ test("runs: a log to redact whose runner copy can't be removed stays as it was, 
   const logs = [];
   await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
   assert.equal(readFileSync(join(dir, `${id}.log`), "utf8"), text);
-  assert.equal(existsSync(join(dir, `${id}.log.redacted`)), false);
+  assert.deepEqual(redactedCopies(dir), []);
   assert.match(logs.join("\n"), /not sent to the runner \(the runner service didn't answer\)/);
 });
 

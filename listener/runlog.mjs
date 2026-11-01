@@ -16,6 +16,7 @@ import {
   statSync,
 } from "node:fs";
 import { open } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { idOf } from "./agents/common.mjs";
@@ -167,7 +168,18 @@ export function moveLogs(
   logs,
   { max = READ_MAX, log = console.error, sleep = unrefSleep, retryMs = 5000 } = {},
 ) {
-  const files = readdirSync(logDir).filter((f) => f.endsWith(".log"));
+  const all = readdirSync(logDir);
+  // The copies a start that stopped midway left (redactedCopy()): an hour old, no other copy
+  // moving the same log still writes them.
+  for (const f of all.filter((f) => f.endsWith(".redacted"))) {
+    try {
+      const at = join(logDir, f);
+      if (Date.now() - statSync(at).mtimeMs > 60 * 60_000) rmSync(at, { force: true });
+    } catch {
+      // Gone already, or left for the next start.
+    }
+  }
+  const files = all.filter((f) => f.endsWith(".log"));
   const moving = new Map();
   if (!files.length) return { moving, done: Promise.resolve(0) };
   log(`Run logs: ${files.length} kept here, sent to the runner`);
@@ -246,16 +258,20 @@ export function moveLogs(
 // start. Redacted here first, with no secrets (the runner's store knows none, only their
 // shapes), line by line as runs.mjs redacts a run's output, a line longer than a read in parts
 // that end where upload()'s do (partEnd()). Read a part at a time, between which the listener
-// goes on. A copy, `<file>.redacted`, is written only from the first token found, the bytes
+// goes on. A copy, `<file>.<uuid>.redacted`, is written only from the first token found, the bytes
 // before it copied then: → its path, or null when the log holds none (most do). Bytes as
 // latin1, as the store's blobs: one character per byte, so the bytes around a token come back
 // as they were.
 const REDACT_READ = 4 * 1024 * 1024;
 // A run of token bytes longer than this, with no place to end a part, is redacted in parts
-// anyway: a string can't hold a log's every byte.
+// anyway: a string can't hold a log's every byte. A token across such a cut stays, and the
+// runner may refuse the log (upload() cuts a run over 4 MB elsewhere, and a part of it that
+// starts at a run token's `eyJ…` matches): a base64url run of megabytes with no separator,
+// which no agent's output has, accepted.
 const REDACT_PART_MAX = 64 * 1024 * 1024;
 async function redactedCopy(path) {
-  const out = `${path}.redacted`;
+  // Its own name: the copy that stops during a handover may still be moving the same log.
+  const out = `${path}.${randomUUID()}.redacted`;
   const input = await open(path, "r");
   let output = null;
   try {
