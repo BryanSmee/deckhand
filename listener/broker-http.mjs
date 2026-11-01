@@ -157,7 +157,7 @@ export async function clientAddress(ctx, req) {
 
 // The ID of the network (or pod) a call from `ip` binds it to (broker.mjs `sandboxOf`), or
 // null: only from a running task's sandbox or its engine, never from another container on that
-// network, the listener's or the egress proxy's (a call the proxy made itself, with no client
+// network, the egress proxy's (a call the proxy made itself, with no client
 // to name, to a host the operator named that leads back here).
 export async function sandboxAt(ctx, ip) {
   const where = await taskWhere(ctx, ip);

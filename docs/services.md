@@ -1,7 +1,7 @@
 # Services
 
-The listener, split (#499, its parts #500 to #509): edge and the orchestrator (#506,
-[Edge and the orchestrator](#edge-and-the-orchestrator)) took its place, beside the policy
+Deckhand runs as services (#499, its parts #500 to #509): edge and the orchestrator (#506,
+[Edge and the orchestrator](#edge-and-the-orchestrator)), beside the policy
 service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505,
 [architecture.md](architecture.md#the-broker-service)), the
 runner (#503, [architecture.md](architecture.md#the-runner-service)), the github service (#502,
@@ -145,8 +145,7 @@ copy takes the connections the old one no longer accepts.
 
 ### Edge and the orchestrator
 
-What the listener was, in two (#506): the part the internet reaches, and the queue and the runs'
-logic.
+Two services (#506): the part the internet reaches, and the queue and the runs' logic.
 
 **Edge** (`edge/`) takes GitHub's webhooks (their HMAC checked), `/setup`, sign-in and sessions,
 and serves the dashboard's files. It holds the webhook secret, the session key and the OAuth
@@ -212,7 +211,7 @@ the old one released it.
 
 ### The models service
 
-Out of the listener with the operator's agent credentials (#504, `models/`): the agents' API
+The only service with the operator's agent credentials (#504, `models/`): the agents' API
 endpoints (`models/upstream.mjs`, `anthropic.mjs`, `openai.mjs`, `google.mjs`) and the plans'
 logins (`chatgpt.mjs`, `antigravity-login.mjs`). The egress proxy sends the sandboxes' agent
 calls there, with their agent token and the network it vouches they came from; the service
@@ -236,12 +235,11 @@ a Deployment with two replicas, `maxUnavailable: 0`, a readiness probe on `/read
 `terminationGracePeriodSeconds` of 630. With Docker Compose, one copy (above).
 
 **Sandboxes outlive the update**: their agents keep the base URL they started with (the
-broker's host), which the new proxy sends on to the models service; a proxy from before it sends
-them to the orchestrator, which relays them there, streaming (`listener/models-service.mjs`).
+broker's host), which the proxy sends on to the models service.
 
 ### The policy service
 
-The first service out of the listener (#501): long-lived `opa` servers behind a small HTTP service
+The policy decisions' service (#501): long-lived `opa` servers behind a small HTTP service
 (`policy-service/`), with no network but its callers', no secret and no state. Its callers send
 a repository's policy files with each decision (it can't read GitHub); it reads the operator's
 from the grants folder, mounted read-only. With Docker Compose, the orchestrator and the runner each

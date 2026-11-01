@@ -236,9 +236,7 @@ docker compose up -d
 Runs in progress keep going while the orchestrator restarts: their sandboxes run detached, and
 the new orchestrator finds them by their Docker labels, delivers the comments that arrive
 meanwhile and posts each final reply once. Webhooks wait in edge's store meanwhile; comments
-still waiting for a run and brainstorms between replies are kept. From a release that ran the
-listener, add `--remove-orphans` once ([From the listener](docs/setup.md#from-the-listener)).
-With two copies of edge and of the orchestrator, an update stops nothing
+still waiting for a run and brainstorms between replies are kept. With two copies of edge and of the orchestrator, an update stops nothing
 ([Two copies](docs/setup.md#two-copies)). Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
 leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 

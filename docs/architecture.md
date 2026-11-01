@@ -3,7 +3,7 @@
 Deckhand receives the GitHub App's webhooks, runs an agent (Claude Code, Codex or the
 Antigravity CLI, see [Agents](#agents)) in a sandbox container (`sandbox/`) for issue, pull
 request and discussion comments, one container and one set of volumes per issue, and posts the
-agent's final message back as a comment. Two services do what the listener did before #506:
+agent's final message back as a comment. Two services share the work:
 **edge** (`edge/`), the only one the internet reaches, takes the webhooks, `/setup`, sign-in and
 the dashboard's files, and passes the dashboard's API on; **the orchestrator**
 (`orchestrator/server.mjs`) does the rest: the queue, the runs' lives, what the dashboard shows.
@@ -39,7 +39,6 @@ Both run modules of `listener/`, which has no entry point of its own any more.
 How a delivery goes from one to the other, the orchestrator's two copies and their handover:
 [services.md](services.md#edge-and-the-orchestrator). What each holds and may call:
 [Edge](security.md#edge) and [The orchestrator](security.md#the-orchestrator) in security.md.
-Updating from a release that ran the listener: [setup.md](setup.md#from-the-listener).
 
 ## From a comment to a reply
 
@@ -502,8 +501,7 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   `writePermissions()`), streaming the
   answer back (`lib/upstream.mjs` `forward()`). The CA certifies GitHub for this
   (`proxy/authority.mjs` `EXCLUDED` keeps only the agents' providers): no sandbox's GitHub
-  traffic carries a token any more, so a leaked CA key opens none, and a CA from before,
-  whose name constraints excluded GitHub, is made again on the proxy's next start. Those
+  traffic carries a token any more, so a leaked CA key opens none. Those
   tokens only read the code: pushes go
   through the git gateway, the github service's too (the sandboxes push to the orchestrator's broker
   address, which the proxy sends there), which only lets through the run's own branches,
@@ -804,7 +802,7 @@ again; the dashboard's list reads it from the log's `cancelled` line. A cancelle
 ## The policy service
 
 Every policy decision goes to the policy service (`policy-service/`, #501), a container of its
-own beside the orchestrator, the first part split from the listener ([services.md](services.md)):
+own beside the orchestrator ([services.md](services.md)):
 the orchestrator starts no `opa`. `listener/policies.mjs` keeps what a decision means (its input, which layers
 are asked, what a refusal says) and reads a repository's `.deckhand/policy/` from GitHub, which
 it sends with each call; the service reads Deckhand's policies (its image) and the operator's
@@ -869,8 +867,7 @@ killed at any moment leaves the next one the same as one that stopped:
   its running session) is `dueAt`, saved with the queue; a run's silent-end grace
   (`ANSWER_GRACE_MS`) is `graceUntil`, saved with the run (re-armed once the follow has skipped the lines read before, its whole grace until then: the runner's `onCaughtUp()`, unless a new line pushed it back first; one that passed while no copy acted gets 10 s more for what the sandbox wrote meanwhile, which pushes it back); a brainstorm's idle time was
   already `deadline` (`brainstorms.json`). The `setTimeout`s stay, and are re-armed from the
-  deadline at start: what was left of it, or at once when it passed (a deadline saved by a
-  listener from before them, none: the pause starts again). The waits' checks
+  deadline at start: what was left of it, or at once when it passed. The waits' checks
   (`WAITS_CHECK_MINUTES`) run at every start anyway, and the reviews' waits for CI or a merge
   keep when they began (`reviews.json`), from which their next tick decides;
 - **the rest** (waits, open questions' inputs, the run order, reviews in progress, decisions,
@@ -898,9 +895,7 @@ writes under way, then **releases the lease**: the waiting copy takes it at once
 second). After a crash the lease expires (15 s, `LEASE_SECONDS`) and the waiting copy takes it
 then; with one copy (Compose's default), the next one takes it as it starts. A copy that loses
 its lease while acting exits. Each holder's epoch fences the copy before it (Fencing in
-[services.md](services.md#edge-and-the-orchestrator)). A `queue.json`, which listeners from
-before #508 wrote on SIGTERM, is read once and moved to the store (removed after the first write
-of it that succeeds).
+[services.md](services.md#edge-and-the-orchestrator)).
 
 The next copy finds the sandboxes by their labels, follows their output from where the
 previous one stopped (a copy killed within a second of reading some lines reads them again,
@@ -935,7 +930,7 @@ answers `503`.
 
 A restart delays the runs' calls rather than failing them (#507, #511). Everything a sandbox
 calls during a run reaches the orchestrator's broker port (`BROKER_URL`, `http://listener:8081`:
-the name sandboxes call it by, unchanged since the listener) through the egress proxy, two
+the name sandboxes call it by) through the egress proxy, two
 ways:
 
 - **relayed**: GitHub's API and git's fetches (`gh`, `git clone`), and the hosts an agent has
@@ -947,8 +942,7 @@ ways:
   inbox and the run's files. The proxy recognises the broker's origin (its own `BROKER_URL`,
   by default `RELAY_URL`'s), asks the policy whether that client may reach the broker (a
   running sandbox or its engine: `broker=1`), and sends the request on as it is, naming
-  the sandbox in `x-deckhand-client` as for a relayed one; the runs' tokens (and the secrets of
-  runs from before them) are bound to that address's network (`broker.mjs` `check()`, through
+  the sandbox in `x-deckhand-client` as for a relayed one; the runs' tokens are bound to that address's network (`broker.mjs` `check()`, through
   `broker-http.mjs` `clientAddress()`). It
   refuses `/egress` there (`403`): the broker answers it to the proxy alone, which would
   otherwise ask on the sandbox's behalf.
@@ -958,9 +952,7 @@ The agents' calls among them don't reach the orchestrator (#504): the proxy send
 `models: true`), to the models service (`MODELS_SERVICE_URL`), with the agent token moved to
 `x-deckhand-run-token` and the network the policy gave for the sandbox in
 `x-deckhand-sandbox`. The orchestrator's restart doesn't touch them, and the models service drains for
-as long as an agent call lasts, 10 minutes ([services.md](services.md#the-models-service)). A
-proxy from before it still sends them to the broker port, where the orchestrator relays them
-there as they stream (`models-service.mjs` `relay()`). The orchestrator asks the models service
+as long as an agent call lasts, 10 minutes ([services.md](services.md#the-models-service)). The orchestrator asks the models service
 which credentials it holds before it reads its settings: it waits for it at start.
 
 On SIGTERM the orchestrator answers edge's and the runner's calls on its services port with
@@ -974,8 +966,7 @@ ends. The egress policy, which the proxy asks about every sandbox connection (to
 a port of its own (`POLICY_PORT`, 8082), which stays open until the broker has drained: the
 sandboxes' other traffic goes on during the drain. It closes last, its answers in flight sent (5 s
 at most), so that the proxy's next questions are refused and waited for rather than cut. Compose's `POLICY_URL` names it; the broker's
-port answers `/egress` too, as the proxy's default `POLICY_URL` (unchanged, so a deployment that
-relied on it keeps working), but a proxy asking there makes every new connection wait while the
+port answers `/egress` too, as the proxy's default `POLICY_URL`, but a proxy asking there makes every new connection wait while the
 broker drains.
 
 The egress proxy waits for the next copy meanwhile (`proxy/wait.mjs`): a connection the
@@ -991,12 +982,6 @@ that dies with it gives the sandbox a `502`). Every agent's CLI sends an
 `http://` base URL through `HTTP_PROXY` (checked against Claude Code 2.1.300, Codex 0.162.1 and
 agy 1.4.0), as do git and Node's `fetch` (with `NODE_USE_ENV_PROXY`).
 
-Sandboxes started before #511 keep their environment, the broker in their `NO_PROXY`, and call
-it directly until they end; the broker still answers them, from their own address. Their direct
-calls aren't waited for, and the drain makes them fail for longer: the broker's port refuses
-them from SIGTERM until the next copy of the orchestrator acts. The run's files (`deckhand-files`,
-`deckhand-inbox`) try again on their own; an agent's call is up to its CLI, and a push fails.
-
 The egress proxy drains on SIGTERM too, for 25 s (compose's `stop_grace_period` for it is 30 s):
 no new tunnel, the requests in flight finish, and the decrypted tunnels close once their
 requests are answered. Its grace is short on purpose: the next proxy only starts once it exited,
@@ -1007,9 +992,7 @@ image may fail a turn, where the orchestrator's update only delays it.
 
 Running sandboxes outlive an update: they keep their image, and its scripts, until they end.
 So an endpoint that sandboxes call is never just removed: for a while it answers with what to
-do instead, which the old scripts print. The broker's old `/pr/` routes (gone in #407) answer
-410 with the `gh` command that works now (`broker-http.mjs`, until no sandbox from before
-#407 can still run).
+do instead, which the old scripts print.
 
 A run's tokens outlive a restart: the broker service (`broker/`) signs them, with a key only it
 holds, and keeps the live runs in its store; they name the run by its id, which
@@ -1022,21 +1005,6 @@ through the egress proxy to the broker service, which the orchestrator's restart
 one after 30 s (`curl --max-time 30`) and asks again every 30 s; a token that expired meanwhile
 still renews, from its own sandbox, for 7 days (`RENEW_GRACE_MS`), and the renewed one is bound
 where it was.
-
-**From a listener that signed the tokens itself** (before #505): its `run-token.key` was in
-its data volume (the orchestrator's `data` now). The first orchestrator after the update keeps its public part
-(`run-token.pub`), removes the private one, and hands the public one to the broker service
-(`POST /keys`, `broker-service.mjs` `legacyKey()`), which takes it for run tokens only (never a
-service's) for 7 days: the running sandboxes' tokens and their agents' still check, and renew
-into the broker's own. The orchestrator's broker port, which a proxy from before the broker
-service (or a sandbox from before #511) still sends `/run/…` to, relays those calls to the
-broker service, vouching for the sandbox it found as the proxy does
-(`broker-service.mjs` `relay()`), so they work whichever came up first.
-
-Runs started before run
-tokens (#493) keep the random secret they started with and no renewal loop: the orchestrator
-keeps accepting it (by hash, from its own sandbox's network, `broker.mjs` `sentBy()`) until
-those runs end. That path goes in a later release, once no such run can still be going.
 
 ### The broker service
 
@@ -1067,7 +1035,7 @@ offset through the other.
 
 The runner (`runner/`, #503) is the only service with the host's Docker socket, or the
 Kubernetes API's credentials: neither edge nor the orchestrator has them. It runs the backends
-that were the listener's (`listener/runner/`: Docker or Kubernetes, the runs' networks, inboxes and engines),
+(`listener/runner/`: Docker or Kubernetes, the runs' networks, inboxes and engines),
 builds repo images and installs agents (`listener/images.mjs`), runs preview hooks
 (`listener/previews.mjs`) and the Antigravity login's refresh, and keeps the runs' logs and
 events. What decides a sandbox's spec (`sandbox-spec.mjs`: image, environment, limits, volumes,
@@ -1079,16 +1047,14 @@ files), for an engine (`docker`), an image build (`dockerfile`, `branch_docker_i
 preview hook (`preview`); a preview hook's command and image the runner reads itself, from the default branch's config (`hooks.mjs`); the runner holds no GitHub credential: a build context or a preview hook starts from the
 repo's tarball, which it gets from the github service (`GET /tarballs/…`), and an image's tag
 hashes the Dockerfile's blob the github service read (`GET /blobs/…`). The
-orchestrator talks to it through `runner/client.mjs`, the same interfaces the listener had in
-process.
+orchestrator talks to it through `runner/client.mjs`.
 
 Its API (`runner/service.mjs`) names the callers of each endpoint (`ROUTES`), each with its own
 service token (docs/security.md, Service tokens): the orchestrator starts, follows, talks to
 and removes sandboxes and writes and reads their logs (`GET /logs/<run>`, `stream()` reading it
 from an offset, for the dashboard's live view, which the orchestrator relays to edge as it
 streams); it also asks, for the egress policy that stays with it, where an address is, the
-egress proxy's addresses and a sandbox's install, and reads the inbox of a run from before
-tokens: reads that aren't fenced (`UNFENCED`, `GET /logs/:id` among them: they write nothing),
+egress proxy's addresses and a sandbox's install,: reads that aren't fenced (`UNFENCED`, `GET /logs/:id` among them: they write nothing),
 so a copy still draining answers them; the models service (#504) has the Antigravity login
 refreshed, sending the token file, never a container's spec, over a network of its own
 (`runner-models`). Edge calls none of it. The runner takes its callers from the network each
@@ -1121,8 +1087,7 @@ a network of its own (`broker-runner`), and checks its callers' with the broker'
   its lease's (`lib/active.mjs`, `lib/store.mjs` `acquire()`): each new holder's is higher than
   every one before it, and at least the time in ms. The github service and the broker check
   it the same way (the broker since #506, on every orchestrator call but a GET). The runner
-  refuses one more than a day ahead of its own clock (`400`). Should an epoch have run ahead anyway (a clock, or a
-  listener from before #506, which took it from its own clock at start), the next one is
+  refuses one more than a day ahead of its own clock (`400`). Should an epoch have run ahead anyway (a clock), the next one is
   refused until that time: removing the `epoch/orchestrator` key from the runner's store (its file under
   `runner-data`'s `store/`, or the key in Redis) with the runners stopped lets it in.
 
@@ -1146,11 +1111,11 @@ answer, for the egress policy's questions about a sandbox's address).
 
 The github service (`github/`, #502) is the only one holding the GitHub App's key: edge keeps
 the webhook secret and the OAuth client's, the orchestrator only the App's public parts (which
-it reads from edge, `GET /app`), never the key. It runs the gateways that were the listener's
+it reads from edge, `GET /app`), never the key. It runs the gateways
 (`listener/github-gateway.mjs`, `git-gateway.mjs`, `github-writes.mjs`, `github-graphql.mjs`,
 `github-forks.mjs`, `github-pulls.mjs`, with `github-app.mjs`'s installation tokens), and makes
 edge's and the orchestrator's own GitHub calls. Its API (`github/service.mjs`) names the callers
-of each endpoint (`ROUTES`): the proxy (and the orchestrator, relaying for an old proxy) the
+of each endpoint (`ROUTES`): the proxy the
 sandboxes' calls, `/relay/<host>/…` and `/git/…`, with the network they came from
 vouched for; the orchestrator its calls as a repository's installation (`/as/<owner>/<repo>/<GitHub's
 path>`, GitHub's answer passed on with its status in `X-GitHub-Status`), GraphQL, as the App and
@@ -1158,13 +1123,13 @@ one installation, the runs and their end, its reactions and the service's events
 reads, never a write (a GraphQL mutation refused), but /setup's conversion of a manifest code
 (`POST /app/manifest`) and the redeliveries (`POST /as-app/app/hook/deliveries/:id/attempts`);
 the runner a repository's tarball and a file's
-blob id. The orchestrator calls through `github/client.mjs`, whose `app()` is what its modules took
-from `github-app.mjs` before (`request()`, `asApp()`, `asInstallation()`, `identity()`).
+blob id. The orchestrator calls through `github/client.mjs` (`app()`: `request()`, `asApp()`,
+`asInstallation()`, `identity()`).
 
 - **A run** is told to the service once its sandbox's network or pod is known (`broker.mjs`
   `issue()`, `restore()`: `gateway.put()`), with what its gateways check (its repository, mode,
   issue, branches, capabilities, the network its tokens are bound to, whom its writes may
-  assign, a run from before tokens' secret's hash), and its end (`revoke()`). What it does there
+  assign), and its end (`revoke()`). What it does there
   is the service's, in its store (`github/runs.mjs`): the issues it created, the comments it
   posted, its reactions and reruns, changed with compare-and-set, kept before GitHub's answer
   ends for the sandbox (`upstream.mjs` `forward()`'s `settle`), read by the orchestrator at the run's
@@ -1177,12 +1142,8 @@ from `github-app.mjs` before (`request()`, `asApp()`, `asInstallation()`, `ident
   orchestrator call that changes something carries its epoch (`lib/fence.mjs`, as the
   runner's), and a write may carry an idempotency key, made once however often it is asked: a
   run's reply carries `<run>:reply` (`comments.mjs` `reply()`).
-- **Sandboxes outlive the update**: a proxy from before it relays GitHub's hosts and the
-  pushes to the broker port, where the orchestrator relays them on (`broker-http.mjs`
-  `relayToGithub()`), naming the network they came from as the proxy would. A listener's key,
-  found in the `data` volume, goes to the service at the orchestrator's first start (`PUT
-/app`), and leaves `app.json`; edge's /setup has the service convert a new App's manifest code
-  (`POST /app/manifest`), so a new key never reaches edge or the orchestrator.
+- **The App's key**: edge's /setup has the service convert a new App's manifest code
+  (`POST /app/manifest`), so a key never reaches edge or the orchestrator.
 
 ### The models service
 
@@ -1238,18 +1199,15 @@ step of the store (`appendBlobAt()`: a Lua script on Redis, under the file backe
 which skips what the blob already has and refuses a write past its end, so a retry, a lost
 answer or two copies taking writes out of order never lose, repeat or reorder a line, and a
 write the store failed leaves nothing. The blob is the file byte for byte: the runner redacts
-a token's shape in a message before it writes it (a run from before the broker service has
-its file redacted in place once, when it is copied over), and the store refuses an append it
+a token's shape in a message before it writes it, and the store refuses an append it
 would redact rather than make the two differ: the broker's own key (its own part, not the PEM
 armour every key shares, so a message quoting `-----BEGIN PRIVATE KEY-----` goes through), which
 holds up that run's inbox from there, as it should never be in a comment. The same bytes sent again add nothing, a broker away gets them once it is back, and a restarted runner sends what the
-broker doesn't have (all of it, for a run from before the broker service). So either copy of
+broker doesn't have. So either copy of
 the broker, or one restarted, answers from the same offset, and the agent gets every line once.
 A screenshot goes on the broker's `runs` stream, which the orchestrator reads and acknowledges
 (`GET /events`, `consume()`): it copies the file into `shots/<token>/`, written whole then
-renamed, and deletes it at the broker, whose count of the run's bytes stays. Runs from before
-tokens, whose secret the broker doesn't know, are still answered by the orchestrator from its own
-files (`run-files.mjs`). The sandbox keeps `SCREENSHOT_DIR` (`/tmp/screenshots`) in its own
+renamed, and deletes it at the broker, whose count of the run's bytes stays. The sandbox keeps `SCREENSHOT_DIR` (`/tmp/screenshots`) in its own
 filesystem. The agent's CLI replaces the entrypoint, which has no step after it: the agents'
 Stop hook (`sandbox-draft-pr hook`, after each turn, before its result line) is the last
 upload, and the 3 s watcher covers what saves files outside a turn. A refusal for the file
@@ -1261,20 +1219,9 @@ Uploads in flight reserve their size, so parallel ones can't pass the run's cap 
 and a name has one at a time: a second gets `409`, tried again later. The hooks upload last
 (an `EXIT` trap in `draft-pr.sh`, which sets `DECKHAND_SHOTS_SKIP` so its own `gh` calls
 don't), and every caller within 20 s: opening the draft pull request keeps the hook's 60 s.
-Sandboxes from before #393 still mount the `runs` and `screenshots` volumes, which is why
-compose keeps them at the same paths.
 
 The dashboard's run list comes back from the runs' summaries (`logs/<run>.json`, the
-orchestrator's, written when a run ends); a run still live is listed from its saved state. The
-logs a listener from before #503 kept itself (`logs/<run>.log`) go to the runner at the first
-start after the update (`runlog.mjs` `moveLogs()`, in parts, from where a try cut short left
-off), each read first when its run has no summary (from before summaries, or a listener that
-died mid-run), which then gets one: in full up to 64 MB, else its first line and its last
-4 MB, with a warning in the orchestrator's log. They go while the orchestrator starts and serves (a
-runner away doesn't keep it down): a digest or the dashboard's live view of a run whose log is
-on its way reads it once it arrived, and a live run's log is written on at the runner once its
-own arrived. One the runner doesn't take, or that can't be read, stays, logged, and goes at the
-next start. Likewise a restored run takes comments once the runner says its inbox is still open,
+orchestrator's, written when a run ends); a run still live is listed from its saved state. A restored run takes comments once the runner says its inbox is still open,
 waited for 10 s at start, later if the runner is away. The list is held newest first with an index by id,
 and both lose the runs `history.mjs` removes, at start and daily: those older than
 `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued, in a
@@ -1498,7 +1445,7 @@ tests fake it.
 | `../edge/server.mjs`                                                                        | Edge's entry point: settings, its store, the App's credentials but the key, sign-in, the redeliveries' poller under its lease (`edge/redeliveries`); starts its public and internal ports, drains on SIGTERM.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `../edge/http.mjs`                                                                          | Edge's public server: webhooks (their HMAC, each GUID taken once in its store, put on the `deliveries` stream before `202`), `/setup`, sign-in, the dashboard's files, `/health`; the rest passed on to the orchestrator.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `../edge/forward.mjs`                                                                       | The dashboard's API, `/status` and the screenshots, passed on to the orchestrator's services port under `/edge/`, with edge's service token, the signed-in user and the browser's Host and Origin; the answer streamed back; an orchestrator handing over waited for, up to 15 s.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `../edge/internal.mjs`                                                                      | Edge's internal port, the orchestrator's alone: the `deliveries` stream (read, acknowledged), the App's public parts, a listener's App handed over (`PUT /app`), the "From the dashboard by" tags, a redeliveries' scan.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `../edge/internal.mjs`                                                                      | Edge's internal port, the orchestrator's alone: the `deliveries` stream (read, acknowledged), the App's public parts, the "From the dashboard by" tags, a redeliveries' scan.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `../edge/app.mjs`                                                                           | The App's credentials edge holds (`app.json`: the webhook secret, the OAuth client's, never the key), and the public parts the orchestrator may read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `../edge/client.mjs`                                                                        | Edge as the orchestrator calls it: its stream consumed and acknowledged, the App, the tags, the scan, the handover.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `services-http.mjs`                                                                         | The orchestrator's services port: the runner's (a run's first tokens, which the broker service signs) and edge's (`/edge/…`: what edge passes on, answered by `http.mjs`), each route for its callers' service tokens alone.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -1508,7 +1455,7 @@ tests fake it.
 | `http.mjs`, `deliveries.mjs`                                                                | The orchestrator's: the dashboard's API, `/status` and the screenshots, as edge passes them on with the signed-in user, and the deliveries from edge's stream (`deliver()`); edge's: the places for unverified bodies (`deliveries.mjs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `redeliveries.mjs`                                                                          | Edge's: deliveries GitHub couldn't hand over, found in the App's delivery list and redelivered once, by the copy holding the `edge/redeliveries` lease; its state in edge's store.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `sync.mjs`                                                                                  | The last catch-up with GitHub (a redeliveries' scan asked of edge, pull requests, conflicts), for `api/state`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `broker-http.mjs`                                                                           | The orchestrator's broker port (8081) for sandboxes, through the egress proxy (as `listener`): egress answers (with the sandbox's network for the broker service), GitHub, git, ready for review, the agents' API calls; the `/run/…` calls that still come here relayed to the broker service, but a run's from before tokens (`run-files.mjs`); the sandbox the proxy names.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `broker-http.mjs`                                                                           | The orchestrator's broker port (8081) for sandboxes, through the egress proxy (as `listener`): egress answers (with the sandbox's network for the broker service), GitHub, git, ready for review, the agents' API calls; the sandbox the proxy names.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `broker-service.mjs`, `lib/broker-client.mjs`                                               | The calls to the broker service, with a service token for each service the caller is (edge, the orchestrator, the runner): the runs' first tokens and their end, its public keys, the inboxes and files the runner copies there (`mirror`, from the runner service), the `runs` stream read and acknowledged (screenshots copied into `shots/`), the old `run-token.key` handed over as a public key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `../broker/` (`server.mjs`, `runs.mjs`, `files.mjs`, `http.mjs`, `callers.mjs`, `seal.mjs`) | The broker service, its own image: the signing key; the live runs and their tokens in its store, renewed for their own sandbox only; their inbox, CA, digest and screenshots as blobs; the `runs` stream; the services' tokens, to the caller its network (or pod's service account) proves; one table of what each caller may call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `status.mjs`                                                                                | `/status`: running runs, reaction updates in flight (`track()`), preview hooks; whether the orchestrator is idle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
@@ -1539,7 +1486,7 @@ tests fake it.
 | `repo-check.mjs`                                                                            | The checks a dashboard action makes on a repo and user before acting as a comment would.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `grants.mjs`, `egress.mjs`, `lib/subnets.mjs`                                               | The operator's grants (hosts, mounts, limits, projects; the yes-or-no ones, `GRANTS`, asked of their policies' `allow_grant`), the egress policy and the proxy's CA; the runs' subnets.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `github-app.mjs`, `github.mjs`                                                              | The App's tokens and calls (the github service's: `../github/`, edge's and the orchestrator's through `github/client.mjs`); `createGitHub()`, `getJson`, `paginate`, `graphql` and the stores' lookups on top.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `broker.mjs`, `lib/tokens.mjs`, `git-gateway.mjs`                                           | The runs' tokens (Ed25519 JWTs, signed by the broker service, checked here offline, each bound to its sandbox's network or pod) and the secrets of runs from before them; their pushes, to the run's own branches only, each branch then asked of the policies' `allow_push` and `deny_push`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `broker.mjs`, `lib/tokens.mjs`, `git-gateway.mjs`                                           | The runs' tokens (Ed25519 JWTs, signed by the broker service, checked here offline, each bound to its sandbox's network or pod); their pushes, to the run's own branches only, each branch then asked of the policies' `allow_push` and `deny_push`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `github-forks.mjs`                                                                          | What a work run that isn't a fork's may fetch through the GitHub gateway: no fork's repository, pull request head or commit, by git, the API, an archive, a page, a raw file, a workflow's artifacts or logs, or GraphQL (`Blob`, a fork's repository, an unnamed one's files), nor, through the git gateway, a branch pushed to reach a fork's objects (`git-mirror.mjs` `connect()`); a fork's run gets a clone of its own.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | `github-gateway.mjs`                                                                        | The sandboxes' GitHub calls, relayed by the egress proxy: the GitHub token in place of the run token, writes redacted, a review's thread reads refused.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `github-writes.mjs`                                                                         | The REST writes the GitHub gateway relays: classified, their target's kind read from GitHub, held to the built-in checks and the policies' `allow_github` and `deny_github`; the write permission each one's token needs (`writePermissions()`); the reads the policies decide (`read_checks`, `read_projects`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -1547,7 +1494,7 @@ tests fake it.
 | `github-graphql.mjs`, `github-graphql-worker.mjs`, `vendor/`                                | The GraphQL the GitHub gateway relays: parsed with graphql-js (bundled at image build), validated against GitHub's pinned schema in a worker (`github-graphql-worker.mjs`), each mutation field a write for `github-writes.mjs`, printed again.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `git-mirror.mjs`, `workflow-check.mjs`                                                      | The git gateway's mirrors of the repositories granted `workflows` or whose work runs push: the connectivity check of a work run's push against the repository's own objects, and the checks on the workflow files a granted repository's pushes change (a strict YAML subset).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | `github-pulls.mjs`                                                                          | A run's own pull requests' writes (`gh pr create`, `edit`, `ready`): from its branches, their workflow files and conflicts checked, the token they need, the dashboard's record.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
-| `models-service.mjs`, `../models/` (`server.mjs`, `http.mjs`, `runs.mjs`, `logins.mjs`)     | The models service (#504), its own image, the only one holding the agents' credentials: the sandboxes' agent calls, from the egress proxy, their agent token checked offline (its `agent` claim, from its own sandbox, for a run the broker says goes) and swapped for the operator's credential; the plans' logins refreshed once for every copy, kept sealed in its store. The orchestrator.s calls to it: the credentials' names (before its settings are read) and fingerprints (for redaction), a run's API state at its end, its `models` stream, and the agents' calls of a proxy from before it, relayed (`relay()`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `models-service.mjs`, `../models/` (`server.mjs`, `http.mjs`, `runs.mjs`, `logins.mjs`)     | The models service (#504), its own image, the only one holding the agents' credentials: the sandboxes' agent calls, from the egress proxy, their agent token checked offline (its `agent` claim, from its own sandbox, for a run the broker says goes) and swapped for the operator's credential; the plans' logins refreshed once for every copy, kept sealed in its store. The orchestrator.s calls to it: the credentials' names (before its settings are read) and fingerprints (for redaction), a run's API state at its end, its `models` stream.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `../models/anthropic.mjs`, `openai.mjs`, `upstream.mjs`, `lib/upstream.mjs`                 | The sandboxes' Claude and OpenAI API calls, with the operator's credential; what both endpoints share (`createApiProxy()`), and what every service that forwards a call as it streams does (`forward()`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `../models/chatgpt.mjs`, `agents/credentials.mjs`                                           | A ChatGPT plan's login for Codex, held and refreshed by the models service alone; the credentials' names, which the orchestrator's settings read.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `../models/google.mjs`, `antigravity-login.mjs`                                             | The Antigravity CLI's calls (`/google/` with `GEMINI_API_KEY`, or `/relay/` from the egress proxy with the plan's access token); its Google AI plan login, held by the models service and refreshed by `agy` in a container the runner starts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |

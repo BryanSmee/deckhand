@@ -38,8 +38,7 @@ networks, see [Security model](security.md)), and the base sandbox image runs st
 (`PORT` to change it), on a network of its own (`edge-out`); point your reverse proxy at it.
 
 To build the images from this checkout instead: `docker compose up -d --build`. Updating is
-`docker compose pull` and `docker compose up -d` again ([Updating](#updating)); from a release
-that ran the listener, add `--remove-orphans` once ([From the listener](#from-the-listener)).
+`docker compose pull` and `docker compose up -d` again ([Updating](#updating)).
 
 **A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, for Codex
 a ChatGPT plan's login from `codex login`, or for the Antigravity CLI a Google AI plan's login,
@@ -142,8 +141,8 @@ default, now only adds its deny rules: move the broadening to your grants folder
 release; their onboarding check and Policies tab say what no longer applies, as they do a
 repository file that doesn't start with its `package` line (after comments only), now refused.
 
-Upgrading to per-mode policies (issue #496): the modes' write ceilings built into the listener
-(as it was then) are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
+Upgrading to per-mode policies (issue #496): the modes' write ceilings built into Deckhand's
+code are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
 decision, `push`: [the push input](repo-config.md#the-push-input)) now need an allow rule
 (`allow_github`, `allow_push`), which Deckhand's `policy/mode-<mode>.rego` files give each
 mode as its ceiling did, with the refusals of the old per-feature files
@@ -498,8 +497,7 @@ A file there, under its name, turns that login on at start: no setting needed.
 service must be able to read. The models service never writes it: each refresh's new tokens go
 in its store, sealed with a key of its own (see [The models service](#the-models-service)), and
 it uses them until the file changes. To sign in again, replace the file: the next call takes the
-new login. Only the models service mounts the folder (#504): a login a listener from before
-refreshed is the file's content, which the models service starts from.
+new login. Only the models service mounts the folder.
 
 ## Settings
 
@@ -1097,9 +1095,8 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `ORCHESTRATOR_URL` (runner)                                                                                                        | none                             | `http://listener:8083`                                                                                          | the orchestrator's services port, where the runner gets a run's first tokens; compose sets `http://orchestrator:8083`                                                                                                                                                                                                                                                                                                                          |
 | `GITHUB_SERVICE_URL` (runner)                                                                                                      | none                             | `http://github:8080`                                                                                            | where the runner gets the repos' tarballs: the github service                                                                                                                                                                                                                                                                                                                                                                                  |
 | `DRAIN_SECONDS` (runner)                                                                                                           | none                             | `280`                                                                                                           | how long a stopping runner lets its calls in flight finish (an image's build) before it releases its lease; its output streams end at once                                                                                                                                                                                                                                                                                                     |
-| `BROKER_URL`                                                                                                                       | none                             | `http://listener:<BROKER_PORT>`                                                                                 | the broker, as sandboxes reach it: the orchestrator's `BROKER_PORT`, which the egress proxy reaches as `listener`, so sandboxes from before keep their address; compose sets it                                                                                                                                                                                                                                                                |
+| `BROKER_URL`                                                                                                                       | none                             | `http://listener:<BROKER_PORT>`                                                                                 | the broker, as sandboxes reach it: the orchestrator's `BROKER_PORT`, which the egress proxy reaches as `listener`; compose sets it                                                                                                                                                                                                                                                                                                             |
 | `EGRESS_PROXY`                                                                                                                     | none                             | `http://egress:3128`                                                                                            | the egress proxy, as sandboxes reach it; compose sets it                                                                                                                                                                                                                                                                                                                                                                                       |
-| `EGRESS_CONTAINER`                                                                                                                 | none                             | labelled `deckhand.role=egress`                                                                                 | the egress proxy's container, which joins each run's network; by default, the one in the orchestrator's compose project                                                                                                                                                                                                                                                                                                                        |
 | `POLICY_SERVICE_URL`                                                                                                               | none                             | `http://policy:8181`                                                                                            | the [policy service](services.md), which evaluates every policy decision, the config checks and the Policies tab; compose sets it. A decision waits up to 30 s for a service that refuses its connection (restarting), then refuses                                                                                                                                                                                                            |
 | `SERVICE_KEYS_DIR` (broker, policy service, runner)                                                                                | none                             | broker: none, not published; policy service: `/keys`; runner: `/service-keys`                                   | where the broker writes its public key (`<kid>.pem`) and the policy service and the runner read it, to check their callers' service tokens offline (the `service-keys` volume); compose sets it                                                                                                                                                                                                                                                |
 | `GRANTS_DIR` (policy service)                                                                                                      | none                             | `/etc/deckhand/grants`                                                                                          | where the policy service reads your policies (`policy/*.rego`), found as the orchestrator finds it: the environment's, else `config.yaml`'s `grants_dir`, else the default. Both must read the same files there: the orchestrator reads its own and refuses every policy decision when the service's are others (none included), and logs why at start                                                                                         |
@@ -1182,21 +1179,9 @@ The policy service restarts in a few seconds and holds nothing: the decisions th
 asks meanwhile (a run's GitHub write, a merge) wait for it, up to 30 seconds, rather than being
 refused.
 
-**Updating to the policy service** (#501): it reads your server folder as the `node` user (uid
-1000), where the listener read it as root. Your grants folder and its `policy/` must be readable
-by that user (the usual `0644` files and `0755` folders are): otherwise every policy decision is
-refused, and the orchestrator's log says why at start.
-
-**From before the runner service (#503).** The Docker socket moved from the listener to a
-service of its own, `runner` in `compose.yaml`, with its own image (`deckhand-runner`), volume
-(`runner-data`), a network it shares with the listener alone (`runner`, `RUNNER_SUBNET`) and one
-of its own to the broker (`broker-runner`, `BROKER_RUNNER_SUBNET`). Take the new `compose.yaml`
-(or add the `runner` service, those two networks, `RUNNER_URL` and `SERVICE_NETWORKS`, and the
-broker's `runner=` caller to yours, as the current `compose.yaml` writes them), then the same two commands. The `runs` volume moves to the runner as it is: sandboxes running through the update
-keep their inbox. At its first start the orchestrator (the listener, then) sends the runs' logs it kept (`/data/logs/*.log`)
-to the runner and removes them; their summaries stay. Mount roots you grant go on the runner
-too, read-only at the same paths: it resolves the sandboxes' host paths again before Docker
-mounts them.
+The policy service reads your server folder as the `node` user (uid 1000): your grants folder and
+its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
+every policy decision is refused, and the orchestrator's log says why at start.
 
 ### Upgrading the grants (#498)
 
@@ -1264,60 +1249,6 @@ repository's, now sees it undefined without an error (`deny_… if input.light` 
 `not input.light` holds for every run). The config check warns of each file that reads it;
 rewrite it on `input.mode`, or on what `allow_capabilities` gives.
 
-**From before the github service (#502).** The GitHub App's key moved from the listener to a
-service of its own, `github` in `compose.yaml`, with its own image (`deckhand-github`), volumes
-(`github-key` for the key, `github-data` for its store and git mirrors) and networks (one per
-caller, `github-orchestrator`, `github-proxy`, `github-runner`, its own to the broker and the
-policy service, and `github-out`, its way to GitHub). Take the new `compose.yaml` (or add the
-`github` service, its networks and volumes, the broker's `github=` caller, and
-`GITHUB_SERVICE_URL` on the listener, the runner and the egress proxy), then the same two
-commands. At its first start the orchestrator (the listener, then) hands the key it kept in
-`/data/app.json` over to the github service, then removes it there: the log says "handed over to
-the github service". The running sandboxes keep their GitHub and git access through the update:
-a proxy that still sends their calls to the listener has them relayed to the github service by
-the orchestrator, which answers under that name, and their pushes too. The listener's git
-mirrors (`/data/git-mirrors`) are a cache the github service makes again in its own volume:
-remove them from the `data` volume once updated.
-
-### From the listener
-
-The listener (`deckhand-listener`) is gone (#506): edge and the orchestrator, two services with
-images of their own (`deckhand-edge`, `deckhand-orchestrator`), do what it did. Take the new
-`compose.yaml` (its `edge` and `orchestrator` services, the `edge-data` volume, the networks
-`edge-out`, `edge-orchestrator`, `broker-edge`, `github-edge` and `orchestrator-proxy`, and
-`SERVICE_NETWORKS` that name `edge=` and `orchestrator=` apart), then, once:
-
-```sh
-docker compose pull
-docker compose up -d --remove-orphans
-```
-
-`--remove-orphans` removes the old `listener` container, which would hold the published port
-otherwise; edge and the orchestrator start in its place.
-
-- **The `data` volume** is the orchestrator's now, under the same name: the queue, the runs'
-  state and its store stay where they were.
-- **The App's credentials** leave it. At its first start the orchestrator hands the App's key
-  in `/data/app.json` to the github service (if it is still there, as
-  [above](#updating)), then the rest, once, to edge: the webhook secret, the OAuth client's,
-  the session key and the sign-outs. Then it removes `app.json`, `session.key`, `sessions.json`
-  and `redeliveries.json` from `/data`, and its log says "handed over to edge, removed from
-  /data". Edge keeps them in its own volume, `edge-data`. Signed-in sessions survive the update
-  when edge took the listener's session key (only when it had no App yet).
-- **Running sandboxes go on**, if they started after #511: they reach the orchestrator through
-  the egress proxy, which calls it `listener`, so their address (`BROKER_URL`) doesn't change.
-  Sandboxes from before #511 call it directly and don't survive the update: check that none is
-  running first (`docker ps --filter label=deckhand.run`).
-- **Edge refusing.** Edge already holding another App (a `/setup` done before the update)
-  refuses the listener's: the orchestrator's log says so, and the credentials stay in
-  `/data/app.json` until you choose. To take the listener's App, remove `app.json` from the
-  `edge-data` volume; to keep edge's, remove `/data/app.json` from the `data` volume. Then
-  restart edge and the orchestrator.
-
-Releases no longer publish `deckhand-listener`: its tags already pulled get no update (`edge`
-ends on a placeholder that only says to move to edge and the orchestrator). Once updated,
-remove its image (`docker image rm` it).
-
 ### Two copies
 
 Edge and the orchestrator can each run two copies, so an update stops nothing.
@@ -1348,7 +1279,7 @@ With Compose, one copy of each runs, and an update is a stop then a start. Two c
 node work as well: the store's file backend is shared by the processes on one node (each call
 holds the folder's lock, `state.lock`), so `docker compose up -d --scale orchestrator=2` gets
 the handover above. Both copies answer to the same names there (`orchestrator`, and `listener` on
-the runs' networks): a call that reaches the waiting one is refused, and tried again until it
+the proxy's network): a call that reaches the waiting one is refused, and tried again until it
 reaches the one acting. Copies on several nodes need Redis ([The store](#the-store)).
 
 ## The github service
@@ -1384,13 +1315,6 @@ github service have theirs, `broker-models` (`BROKER_MODELS_SUBNET`, `10.231.250
 `broker-github` (`BROKER_GITHUB_SUBNET`, `10.231.250.176/28`). Each of the orchestrator's calls
 but a GET carries its lease's epoch, and the broker refuses one older than the newest it has
 seen ([Two copies](#two-copies)).
-
-**From a listener that signed the tokens itself.** The first listener (or orchestrator) started
-after the update finds its old `run-token.key` in its data volume, keeps its public part
-(`run-token.pub`) for the tokens the running sandboxes still hold, removes the private one, and
-hands the public one to the broker, which renews those tokens with its own key from then on.
-The running sandboxes go on; after 7 days, when none of the old tokens can still be presented,
-`run-token.pub` goes too.
 
 ## The models service
 
@@ -1430,20 +1354,6 @@ callers apart there.
 Stopping it lets the agents' calls in flight finish, for up to 10 minutes (`DRAIN_SECONDS`,
 600; compose's `stop_grace_period` is 630 s): an update waits for the turns going, and new calls
 wait at the proxy, 5 minutes at most ([services](services.md#the-models-service)).
-
-**From a listener that held the credentials.** Move the credentials from the listener's
-environment to the models service's (the new `compose.yaml` does), and leave the credentials
-folder where it is: the models service mounts it. The listener read it as root and rewrote the
-plans' logins at each refresh, owner-only: root's. The models service reads it as the `node`
-user (uid 1000), so give it the folder and its files before you update, or every run on a plan
-fails (its log says which file it can't read, at start):
-
-```sh
-sudo chown -R 1000 credentials
-```
-
-An orchestrator that still has one in its environment warns about it at start, and uses none
-of them.
 
 ## Kubernetes runner
 
@@ -1527,13 +1437,9 @@ be allowed to reach them, and every run would be refused.
     egress:
       - to: [{ podSelector: { matchLabels: { app: deckhand-egress } } }]
         ports: [{ port: 3128 }]
-      - to: [{ podSelector: { matchLabels: { app: deckhand-orchestrator } } }]
-        ports: [{ port: 8081 }]
   ```
 
-Sandboxes reach the orchestrator through the proxy (#511); the second rule is for those started
-before, which still call it directly, and can go once none of them runs. The proxy
-recognises their calls by its own `BROKER_URL`, which must be the orchestrator's (same scheme,
+Sandboxes reach the orchestrator through the proxy. The proxy recognises their calls by its own `BROKER_URL`, which must be the orchestrator's (same scheme,
 host and port): its default, `RELAY_URL`'s origin, is only right when both name the same
 Service. Set it in the proxy's Deployment otherwise; with another value, the runs' agent
 calls, pushes and files are refused, and the orchestrator logs that the proxy's `BROKER_URL`
@@ -1885,17 +1791,6 @@ unless you grant one, and reach only Anthropic, GitHub and the hosts you grant i
 folder, through the egress proxy. A [container engine](#container-engine), when you grant one,
 runs next to the sandbox rather than in it. See [Security model](security.md): the grants folder, host
 mounts, the mandatory hosts, and what isn't covered.
-
-Upgrading from a version where all sandboxes shared the `deckhand-sandboxes` network: runs
-started before the update don't survive it, so let them finish first (`docker ps --filter
-label=deckhand.run`). Then `docker network rm deckhand-sandboxes`: compose no longer creates
-it, and `SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label of
-`compose.yaml`'s `egress` service if you copied the file: the runner finds the proxy by it.
-
-Upgrading from a version where `compose.yaml` mounted `config.yaml` and `grants/` one by
-one: move them into the server folder (`mkdir -p server && mv config.yaml grants server/`),
-and drop their lines from your `compose.yaml` or `compose.override.yaml` if you added them
-there; the new `compose.yaml` mounts the folder.
 
 Upgrading from a version with a single grants file (`GRANTS_FILE`, `grants.yaml`): the
 orchestrator reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.
