@@ -132,6 +132,19 @@ test("a delivery the store can't keep: 503, and its GUID free for GitHub's next 
   assert.equal((await store.read(DELIVERIES, "orchestrator")).length, 1);
 });
 
+test("a delivery on the stream is answered 202 though its mark couldn't be kept", async (t) => {
+  const store = openStore("memory:");
+  const copy = await edgeCopy(t, { store });
+  const set = store.set;
+  store.set = async (key, ...rest) => {
+    if (key === "deliveries/m") throw new Error("the store is away");
+    return set(key, ...rest);
+  };
+  assert.equal((await deliver(copy.url, comment, { id: "m" })).status, 202);
+  assert.equal((await store.read(DELIVERIES, "orchestrator")).length, 1);
+  assert.ok(copy.logs.some((line) => /Delivery m: its mark/.test(line)));
+});
+
 test("a delivery a copy died taking is taken again a minute on; one being taken, or kept, isn't", async (t) => {
   const store = openStore("memory:");
   const copy = await edgeCopy(t, { store });

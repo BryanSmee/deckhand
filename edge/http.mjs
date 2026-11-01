@@ -175,7 +175,15 @@ export function createEdgeHttp({
       if (id) await store.delete(deliveryKey(id)).catch(() => false);
       throw error;
     }
-    if (id) await store.set(deliveryKey(id), { kept: now() }, { ttlMs: DELIVERY_TTL_MS });
+    // On the stream: taken, whatever this write does. Refused now, GitHub would send it again,
+    // and its mark, left "taking", would let that second one through a minute on.
+    if (id) {
+      await store
+        .set(deliveryKey(id), { kept: now() }, { ttlMs: DELIVERY_TTL_MS })
+        .catch((error) =>
+          log(`Delivery ${id}: its mark (${error.message ?? error}), kept as taking`),
+        );
+    }
     log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
     res.writeHead(202).end();
   }

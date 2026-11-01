@@ -338,3 +338,31 @@ test("file: a stream whose file was rewritten empty (every event dropped) goes o
     [101, 102],
   );
 });
+
+test("file: an earlier event still pending while later ones are dropped: ids never handed out twice", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  const other = fileStore({ dir });
+  await other.read("deliveries", "orchestrator");
+  const ids = [];
+  for (let n = 1; n <= 101; n++) ids.push(await store.append("deliveries", { n }));
+  await store.read("deliveries", "orchestrator", { count: 200 });
+  // The first still handled (retried, say) while the 100 after it are done.
+  for (const id of ids.slice(1))
+    await store.ack("deliveries", "orchestrator", [id], { drop: true });
+  assert.equal(
+    readFileSync(join(dir, "streams", "deliveries.jsonl"), "utf8")
+      .trim()
+      .split("\n").length,
+    1,
+  );
+  // The other copy, and a store opened anew, append next: their ids follow the last one.
+  assert.equal(await other.append("deliveries", { n: 102 }), "102");
+  const restarted = fileStore({ dir });
+  assert.equal(await restarted.append("deliveries", { n: 103 }), "103");
+  await restarted.ack("deliveries", "orchestrator", [ids[0]], { drop: true });
+  assert.deepEqual(
+    (await restarted.read("deliveries", "orchestrator")).map((e) => e.event.n),
+    [102, 103],
+  );
+});
