@@ -208,7 +208,7 @@ export function createProxy({
   policy, // (client ip, host) → { allowed, private, cache, decrypt, relay }
   lookup = (host) => dnsLookup(host, { all: true }),
   blocked = blockedAddress,
-  // The subnets of the networks it is on, read at each connection: the listener attaches it to
+  // The subnets of the networks it is on, read at each connection: the runner attaches it to
   // each run's network as the run starts.
   subnets = () => ownSubnets(networkInterfaces()),
   cache = null, // createCache()'s, or none

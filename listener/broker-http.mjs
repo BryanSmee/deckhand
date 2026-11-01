@@ -1,5 +1,5 @@
-// The listener's port for sandboxes, on the runs' networks only (compose.yaml doesn't publish
-// it): the egress proxy's questions (may this sandbox reach this host?, on a port of their own
+// The orchestrator's port for sandboxes, which they reach through the egress proxy (compose.yaml
+// doesn't publish it): the egress proxy's questions (may this sandbox reach this host?, on a port of their own
 // too, listenPolicy()), the GitHub gateway (github-gateway.mjs), which the proxy sends the
 // sandboxes' GitHub calls to, and the git gateway (git-gateway.mjs). The agents' API calls are
 // the models service's (../models/, #504): a proxy from before it still sends them here, and

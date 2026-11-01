@@ -22,7 +22,7 @@
 // for the dashboard.
 //
 // Only the smart HTTP push service: fetches go straight to GitHub with the read token.
-// Served on the broker's port, which only the runs' networks reach.
+// Served on the broker's port, which sandboxes reach through the egress proxy alone.
 import { createReadStream } from "node:fs";
 import { open } from "node:fs/promises";
 import { tmpdir } from "node:os";

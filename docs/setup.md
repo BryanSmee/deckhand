@@ -1305,9 +1305,10 @@ otherwise; edge and the orchestrator start in its place.
   and `redeliveries.json` from `/data`, and its log says "handed over to edge, removed from
   /data". Edge keeps them in its own volume, `edge-data`. Signed-in sessions survive the update
   when edge took the listener's session key (only when it had no App yet).
-- **Running sandboxes go on.** The orchestrator is joined to their networks under the name
-  `listener`, and the egress proxy reaches it under that name too: their address
-  (`BROKER_URL`) doesn't change.
+- **Running sandboxes go on**, if they started after #511: they reach the orchestrator through
+  the egress proxy, which calls it `listener`, so their address (`BROKER_URL`) doesn't change.
+  Sandboxes from before #511 call it directly and don't survive the update: check that none is
+  running first (`docker ps --filter label=deckhand.run`).
 - **Edge refusing.** Edge already holding another App (a `/setup` done before the update)
   refuses the listener's: the orchestrator's log says so, and the credentials stay in
   `/data/app.json` until you choose. To take the listener's App, remove `app.json` from the
@@ -1887,11 +1888,10 @@ runs next to the sandbox rather than in it. See [Security model](security.md): t
 mounts, the mandatory hosts, and what isn't covered.
 
 Upgrading from a version where all sandboxes shared the `deckhand-sandboxes` network: runs
-started before the update go on (the orchestrator and the proxy are joined to that network
-again). Once they are over, `docker network rm deckhand-sandboxes`: compose no longer
-creates it, and `SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label
-of `compose.yaml`'s `egress` service if you copied the file: the runner finds the proxy
-by it.
+started before the update go on (the proxy is joined to that network again). Once they are
+over, `docker network rm deckhand-sandboxes`: compose no longer creates it, and
+`SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label of
+`compose.yaml`'s `egress` service if you copied the file: the runner finds the proxy by it.
 
 Upgrading from a version where `compose.yaml` mounted `config.yaml` and `grants/` one by
 one: move them into the server folder (`mkdir -p server && mv config.yaml grants server/`),
