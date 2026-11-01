@@ -5,8 +5,7 @@
 //     (/git/…, ../listener/git-gateway.mjs), which the egress proxy sends a sandbox's calls to,
 //     vouching for the network (or pod) they came from (`x-deckhand-sandbox`, as the listener's
 //     egress policy told it) and passing the sandbox's own Authorization on in
-//     `x-deckhand-run-authorization`: its own is the proxy's service token. The listener relays
-//     those of sandboxes that still reach it (a proxy from before this service), the same way;
+//     `x-deckhand-run-authorization`: its own is the proxy's service token;
 //   - the orchestrator's and edge's own GitHub calls, made with an installation token they never
 //     get: as a repo's installation (/as/:owner/:repo/<GitHub's path>), GraphQL
 //     (/graphql/:owner/:repo), as the App (/as-app/…) and as one installation (/as-installation/
@@ -70,7 +69,7 @@ function printSets(sets) {
     .slice(-MAX_SETS);
 }
 
-const SANDBOX = ["proxy", "orchestrator"];
+const SANDBOX = ["proxy"];
 const READERS = ["edge", "orchestrator"];
 const WRITER = ["orchestrator"];
 const each = (methods, path, callers) =>
@@ -78,8 +77,7 @@ const each = (methods, path, callers) =>
 const WRITES = ["POST", "PUT", "PATCH", "DELETE"];
 
 export const ROUTES = {
-  // The sandboxes', through the egress proxy; the orchestrator's relay of those that still
-  // reach the listener.
+  // The sandboxes', through the egress proxy.
   ...each(["GET", "HEAD", ...WRITES], "/relay/*", SANDBOX),
   ...each(["GET", "POST"], "/git/*", SANDBOX),
   // The listener's own GitHub calls: edge reads, the orchestrator writes too.
@@ -305,7 +303,7 @@ export function createGithubService({
     // fingerprints the orchestrator sends (docs/security.md, The GitHub gateway): the models
     // service's sets here, the others through scrub().
     secrets: () => sets,
-    scrub: (run) => (text) => run.scrubSecret(redactor(text)),
+    scrub: () => (text) => redactor(text),
     checkWrite: writeChecks.check,
     checkGraphql: graphqlChecks.check,
     checkRead: createReadChecks({ policies }).checkRead,

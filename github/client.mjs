@@ -1,11 +1,8 @@
 // The github service (#502) as the listener calls it: its GitHub calls (the App's, which the
 // listener's modules take as they took ../listener/github-app.mjs's: request(), asApp(),
 // asInstallation()), the runs it tells the service of, its reactions, /setup's conversion and
-// the key it held before, the service's events, and the relay of the sandboxes' calls that
-// still reach the listener. Every call carries the orchestrator's service token, and its epoch.
-import { request as httpRequest } from "node:http";
-import { request as httpsRequest } from "node:https";
-import { RUN_AUTH_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+// the key it held before, and the service's events. Every call carries the orchestrator's
+// service token, and its epoch.
 import { serviceClient, WAIT_MS } from "../lib/service-client.mjs";
 
 // The same as service.mjs's: the client is copied into the listener's image without it.
@@ -32,10 +29,6 @@ export function createGithubClient({
   clearTimer = clearTimeout,
 }) {
   const client = serviceClient({ service: "github", urls, token, epoch, fetch, waitMs, log });
-  const bases = String(urls)
-    .split(",")
-    .map((u) => u.trim().replace(/\/$/, ""))
-    .filter(Boolean);
 
   // GitHub's answer as fetch() would give it, from the service's: its status in GITHUB_STATUS.
   // Any other answer is the service's own refusal: thrown, with its status.
@@ -186,58 +179,6 @@ export function createGithubClient({
     });
   }
 
-  // --- Sandboxes that reach the listener rather than the service ----------------------------
-
-  // A sandbox's GitHub or git call (`path`: /relay/<host>/… or /git/…, as checked), on to the
-  // service with the network (or pod) `sandbox` the listener found it came from, as the proxy
-  // would. Sent once connected: a service restarting is waited for (WAIT_MS), the body read
-  // only then.
-  async function relay(req, res, { sandbox, path }) {
-    const authorization = await token();
-    const headers = { ...req.headers };
-    for (const name of ["host", "connection", "keep-alive", "proxy-authorization"]) {
-      delete headers[name];
-    }
-    delete headers[SANDBOX_HEADER];
-    delete headers[RUN_AUTH_HEADER];
-    if (req.headers.authorization) headers[RUN_AUTH_HEADER] = req.headers.authorization;
-    Object.assign(headers, { authorization, [SANDBOX_HEADER]: sandbox ?? "" });
-    const started = Date.now();
-    for (let i = 0; ; i++) {
-      const url = new URL(path, `${bases[i % bases.length]}/`);
-      const sent = await new Promise((resolve) => {
-        const send = url.protocol === "https:" ? httpsRequest : httpRequest;
-        const out = send(url, { method: req.method, headers, agent: false }, (answer) => {
-          res.writeHead(answer.statusCode, answer.headers);
-          answer.pipe(res);
-          answer.on("end", () => resolve(true));
-          answer.on("error", () => (res.destroy(), resolve(true)));
-        });
-        let connected = false;
-        out.on("socket", (socket) =>
-          socket.once("connect", () => {
-            connected = true;
-            req.pipe(out);
-          }),
-        );
-        out.on("error", (error) => {
-          if (!connected) return resolve(error);
-          if (!res.headersSent) res.writeHead(502).end();
-          else res.destroy();
-          resolve(true);
-        });
-        res.on("close", () => !res.writableFinished && out.destroy());
-      });
-      if (sent === true) return;
-      if (res.destroyed || Date.now() - started >= waitMs) {
-        log(`GitHub service: a sandbox's call not relayed (${sent.code ?? sent.message})`);
-        if (!res.headersSent) res.writeHead(502, { "content-type": "text/plain" });
-        return res.end("Deckhand: the github service can't be reached\n");
-      }
-      await sleep(Math.min(500 * 2 ** i, RETRY_MS));
-    }
-  }
-
   return {
     app,
     runs,
@@ -246,7 +187,6 @@ export function createGithubClient({
     setup,
     consume,
     persist,
-    relay,
     stop() {
       stopped = true;
       for (const timer of timers) clearTimer(timer);

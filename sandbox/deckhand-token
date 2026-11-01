@@ -6,8 +6,7 @@
 # sandbox never sees, while the run lasts. The git credential helper and the gh wrapper call it
 # each time: the token changes, so nothing may keep it.
 #
-#   deckhand-token          prints the token, from DECKHAND_TOKEN_FILE (a run's secret from
-#                           before tokens, DECKHAND_RUN_SECRET, when there is no file)
+#   deckhand-token          prints the token, from DECKHAND_TOKEN_FILE
 #   deckhand-token --header  the `Authorization` header's value for the broker's own endpoints
 #                           (`Bearer <token>`, deckhand-files and deckhand-inbox): empty after
 #                           `Bearer` outside a run, which the broker refuses
@@ -80,12 +79,11 @@ case "${1:-}" in
     done
     ;;
   "")
-    if [ -f "$file" ]; then
-      printf '%s\n' "$(< "$file")"
-    else
-      : "${DECKHAND_RUN_SECRET:?not a Deckhand run: no run token}"
-      printf '%s\n' "$DECKHAND_RUN_SECRET"
+    if [ ! -f "$file" ]; then
+      echo "deckhand-token: not a Deckhand run: no run token" >&2
+      exit 1
     fi
+    printf '%s\n' "$(< "$file")"
     ;;
   *)
     echo "usage: deckhand-token [--header | --init | --now | --renew]" >&2

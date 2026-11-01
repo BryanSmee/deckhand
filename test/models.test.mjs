@@ -18,6 +18,7 @@ import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
+import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { loadConfig, withModelCredentials } from "../listener/config.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
@@ -489,15 +490,14 @@ test("the Antigravity login's refresh is asked of the runner, with the models se
   assert.equal(claims.aud, "deckhand:service:runner");
 });
 
-test("through the egress proxy: an agent's call on the broker's host goes to the models service, vouched for by the proxy", async (t) => {
+test("through the egress proxy: an agent's call to the models service's name goes there, vouched for by the proxy", async (t) => {
   const upstream = await fakeAnthropic(t);
   const ctx = await setup(t, { env: { ANTHROPIC_API_KEY: KEY, ANTHROPIC_BASE_URL: upstream.url } });
   const { agentToken } = await ctx.startRun("run-1", { provider: "anthropic" });
-  // The listener's broker port, which the agent's base URL names: nothing reaches it.
-  const listener = await serve(t, (req, res) => res.writeHead(418).end());
+  // The name the agent's base URL has (lib/services.mjs): the proxy alone reads it.
+  const named = `${SANDBOX_URLS.models}/anthropic/v1/messages`;
   const proxy = createProxy({
-    policy: async (ip, host, { broker } = {}) => ({ allowed: broker === true, sandbox: "net-1" }),
-    brokerUrl: listener.url,
+    policy: async (ip, host, { forward } = {}) => ({ allowed: forward === true, sandbox: "net-1" }),
     modelsService: {
       url: `http://${AT.proxy}:${ctx.copies[0].port}`,
       header: async () => `Bearer ${await ctx.tokenFor("proxy", "models")}`,
@@ -512,7 +512,7 @@ test("through the egress proxy: an agent's call on the broker's host goes to the
           host: "127.0.0.1",
           port: proxyPort,
           method: "POST",
-          path: `${listener.url}/anthropic/v1/messages`,
+          path: named,
           headers: { "content-type": "application/json", ...headers },
         },
         (res) => {
@@ -531,7 +531,6 @@ test("through the egress proxy: an agent's call on the broker's host goes to the
   // From a network the token isn't bound to, as the proxy says: refused.
   const other = createProxy({
     policy: async () => ({ allowed: true, sandbox: "net-2" }),
-    brokerUrl: listener.url,
     modelsService: {
       url: `http://${AT.proxy}:${ctx.copies[0].port}`,
       header: async () => `Bearer ${await ctx.tokenFor("proxy", "models")}`,
@@ -545,7 +544,7 @@ test("through the egress proxy: an agent's call on the broker's host goes to the
         host: "127.0.0.1",
         port: otherPort,
         method: "POST",
-        path: `${listener.url}/anthropic/v1/messages`,
+        path: named,
         headers: { authorization: `Bearer ${agentToken}` },
       },
       (res) => (res.resume(), res.on("end", () => resolve(res.statusCode))),
@@ -627,23 +626,6 @@ test("the listener's first fingerprints: start() resolves once they are read, no
   await models.start();
   assert.equal(models.prints().length, 1);
   assert.equal(redact(KEY, models.prints()), "[redacted]");
-});
-
-test("the listener's relay: a copy it can't reach fails that call, the next ones go to the next copy", async (t) => {
-  const heard = [];
-  const { url: second } = await serve(t, (req, res) => (heard.push(req.url), res.end("ok")));
-  const models = createModelsService({
-    urls: `http://127.0.0.1:1,${second}`,
-    token: async () => "Bearer s",
-  });
-  const { url } = await serve(t, (req, res) =>
-    models.relay(req, res, { sandbox: "net-1", token: "agent", path: req.url }),
-  );
-  const call = () => fetch(`${url}/anthropic/v1/messages`, { method: "POST", body: "{}" });
-  assert.equal((await call()).status, 502);
-  const res = await call();
-  assert.equal(res.status, 200);
-  assert.deepEqual(heard, ["/anthropic/v1/messages"]);
 });
 
 test("loginKey(): two copies starting together on an empty volume keep the first one's key", () => {

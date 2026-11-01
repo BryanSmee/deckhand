@@ -6,8 +6,7 @@
 //
 // Each endpoint names the callers it takes (ROUTES, lib/service-token.mjs serviceGuard()): the
 // orchestrator drives runs, and asks for its egress policy where an address is (what binds a
-// run's tokens to its sandbox) and for the inbox of a run from before tokens, and reads a run's
-// log, for the dashboard's live view too (edge passes it on, #506); models has the Antigravity
+// run's tokens to its sandbox), and reads a run's log, for the dashboard's live view too (edge passes it on, #506); models has the Antigravity
 // login refreshed. Every
 // orchestrator call but those lookups (UNFENCED) carries its fencing epoch
 // (lib/service-client.mjs EPOCH_HEADER): one older than the newest seen is refused (409), so a
@@ -43,14 +42,11 @@ export const ROUTES = {
   "GET /sandboxes/:name/output": ["orchestrator"],
   "POST /sandboxes/:name/kill": ["orchestrator"],
   "DELETE /sandboxes/:name": ["orchestrator"],
-  "GET /sandboxes/:name/network": ["orchestrator"],
   "GET /sandboxes/:name/installing": ["orchestrator"],
   "GET /sessions/:name": ["orchestrator"],
   "POST /runs/:run/messages": ["orchestrator"],
   "POST /runs/:run/close": ["orchestrator"],
   "GET /runs/:run/closed": ["orchestrator"],
-  "GET /runs/:run/inbox": ["orchestrator"],
-  "GET /runs/:run/files/:name": ["orchestrator"],
   "GET /addresses/:ip": ["orchestrator"],
   "GET /proxy-addresses": ["orchestrator"],
   "GET /egress": ["orchestrator"],
@@ -66,14 +62,11 @@ export const ROUTES = {
   "POST /logins/antigravity/refresh": ["models"],
 };
 
-// What the listener's egress policy asks, and the files of runs from before tokens it serves
-// (../listener/broker-http.mjs, run-files.mjs): reads that must answer while a listener drains
-// after the next one started, so not fenced. They start, stop and change nothing.
+// What the orchestrator's egress policy asks (../listener/egress-http.mjs): reads that must
+// answer while a copy drains after the next one started, so not fenced. They start, stop and
+// change nothing.
 const UNFENCED = new Set([
-  "GET /sandboxes/:name/network",
   "GET /sandboxes/:name/installing",
-  "GET /runs/:run/inbox",
-  "GET /runs/:run/files/:name",
   "GET /addresses/:ip",
   "GET /proxy-addresses",
   "GET /egress",
@@ -359,11 +352,6 @@ export function createRunnerService({
       await runner.remove(name, run ?? undefined);
       return {};
     },
-    "GET /sandboxes/:name/network": async ({ params, url }) => ({
-      id:
-        (await runner.sandboxIdOf?.(named(params.name, "name"), url.searchParams.get("run"))) ??
-        null,
-    }),
     "GET /sandboxes/:name/installing": async ({ params }) => ({
       installing: runner.installing ? await runner.installing(named(params.name, "name")) : false,
     }),
@@ -398,24 +386,6 @@ export function createRunnerService({
     "GET /runs/:run/closed": async ({ params }) => ({
       closed: runner.closed(named(params.run, "run")),
     }),
-    "GET /runs/:run/inbox": async ({ params, url, res }) => {
-      const from = Number(url.searchParams.get("from") ?? 0);
-      if (!Number.isSafeInteger(from) || from < 0) throw new Refused(400, "from: a byte offset");
-      const timeout = Math.min(Number(url.searchParams.get("timeout")) || 0, MAX_WAIT_MS);
-      const gone = new AbortController();
-      res.on("close", () => gone.abort());
-      const lines = await runner.poll(named(params.run, "run"), from, {
-        timeout,
-        signal: gone.signal,
-      });
-      if (lines === null) throw new Refused(404, "no inbox");
-      res.writeHead(200, { "content-type": "application/x-ndjson" }).end(lines);
-    },
-    "GET /runs/:run/files/:name": async ({ params, res }) => {
-      const data = runner.file(named(params.run, "run"), params.name);
-      if (data === null) throw new Refused(404, `no ${params.name}`);
-      res.writeHead(200, { "content-type": "application/octet-stream" }).end(data);
-    },
     "GET /addresses/:ip": async ({ params }) => ({
       at: (await runner.locate?.(params.ip)) ?? null,
     }),

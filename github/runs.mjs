@@ -10,8 +10,8 @@
 // broker gave it (../listener/broker.mjs): check() and bySandbox() give them the same object
 // for the same run in this copy (their per-run memories are by object), its fields and state
 // read again from the store on each call.
-import { createHash, randomUUID } from "node:crypto";
-import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
+import { randomUUID } from "node:crypto";
+import { fingerprint } from "../lib/fingerprints.mjs";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 import { NOT_ITS_SANDBOX } from "../listener/broker.mjs";
 
@@ -26,8 +26,6 @@ const STREAM_MAX = 10_000;
 // How long a call's slot counts once its copy stops renewing it, and how often it is renewed.
 export const SLOT_MS = 60_000;
 const SLOT_RENEW_MS = SLOT_MS / 3;
-
-const hash = (value) => createHash("sha256").update(String(value)).digest("hex");
 
 // What the orchestrator says of a run (PUT /runs/:id), checked: anything else is dropped.
 export function runFields(body) {
@@ -51,16 +49,6 @@ export function runFields(body) {
     // and the label its questions wait under: the orchestrator's settings, as the run started.
     users: strings(body.users).map((u) => u.toLowerCase()),
     needsInputLabel: string(body.needsInputLabel),
-    // A run from before tokens: its secret's hash, never the secret, and its fingerprints, which
-    // its writes are redacted by (lib/fingerprints.mjs).
-    secretHash: /^[0-9a-f]{64}$/.test(body.secretHash ?? "") ? body.secretHash : null,
-    secretPrints:
-      typeof body.secretPrints?.salt === "string" && Array.isArray(body.secretPrints.prints)
-        ? {
-            salt: body.secretPrints.salt,
-            prints: body.secretPrints.prints.filter((p) => typeof p === "string").slice(0, 1000),
-          }
-        : null,
   };
 }
 
@@ -85,8 +73,7 @@ export function createRuns({
       .append(STREAM, { ...fields, at: fields.at ?? now() }, { maxLength: STREAM_MAX })
       .catch((error) => log(`GitHub service: an event (${fields.type}): ${error.message}`));
 
-  // The orchestrator's: `created`, `reruns`, a restored run's from before this service, taken
-  // only when the store has none.
+  // The orchestrator's: `created` and `reruns`, taken only when the store has none.
   async function put(id, body) {
     const fields = runFields(body);
     if (!fields) return false;
@@ -96,9 +83,6 @@ export function createRuns({
       await store.delete(`sandboxes/${before.sandbox}`);
     }
     if (fields.sandbox) await store.set(`sandboxes/${fields.sandbox}`, id, { ttlMs: RUN_TTL_MS });
-    if (fields.secretHash) {
-      await store.set(`secrets/${fields.secretHash}`, id, { ttlMs: RUN_TTL_MS });
-    }
     const list = (value) =>
       Array.isArray(value) ? value.filter((v) => v && typeof v === "object") : [];
     await store.setIfAbsent(
@@ -124,7 +108,6 @@ export function createRuns({
     if (fields?.sandbox && (await store.get(`sandboxes/${fields.sandbox}`)) === id) {
       await store.delete(`sandboxes/${fields.sandbox}`);
     }
-    if (fields?.secretHash) await store.delete(`secrets/${fields.secretHash}`);
     objects.delete(id);
     return last;
   }
@@ -161,15 +144,10 @@ export function createRuns({
         note: (message) => void event({ type: "note", run: id, message }),
         pushed: ({ branch, at }) => void event({ type: "pushed", run: id, branch, at }),
         update: (fn) => update(run, fn),
-        scrubSecret: (text) => text,
       };
       objects.set(id, run);
     }
-    if (run.secretPrints !== JSON.stringify(fields.secretPrints)) {
-      run.scrubSecret = fingerprintRedactor(fields.secretPrints);
-    }
     Object.assign(run, fields, {
-      secretPrints: JSON.stringify(fields.secretPrints),
       created: found?.created ?? [],
       reruns: found?.reruns ?? [],
     });
@@ -198,19 +176,13 @@ export function createRuns({
     }
   }
 
-  // The run a credential names, once checked against the network (or pod) the call came from,
-  // as the egress proxy vouches for it (or the listener, relaying): { run, claims } or
-  // { status, message }, as the listener's broker answers (broker.mjs check()).
+  // The run a run token names, once checked against the network (or pod) the call came from,
+  // as the egress proxy vouches for it: { run, claims } or { status, message }, as the
+  // listener's broker answers (broker.mjs check()).
   async function check(credential, sandbox) {
     const unknown = { status: 401, message: "unknown or finished run" };
-    if (!credential) return unknown;
+    if (!credential || !isToken(credential)) return unknown;
     const from = typeof sandbox === "string" ? sandbox : "";
-    if (!isToken(credential)) {
-      const run = await load(await store.get(`secrets/${hash(credential)}`));
-      if (!run) return unknown;
-      if (!from || run.sandbox !== from) return { status: 403, message: NOT_ITS_SANDBOX };
-      return { run, claims: null };
-    }
     const verify = () =>
       verifyToken(credential, { keys: keys(), audience: RUN_AUDIENCE, now: now() });
     let claims;

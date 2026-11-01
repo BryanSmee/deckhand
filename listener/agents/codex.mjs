@@ -4,6 +4,7 @@
 // event that holds both the last message and whether the turn worked.
 import { OPENAI_CREDENTIALS } from "./credentials.mjs";
 import { cutOutput, EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
+import { SANDBOX_URLS } from "../../lib/services.mjs";
 
 // Deckhand's model tiers → the pinned Codex's own catalog (`codex` lists it as best: frontier,
 // balanced: the default workhorse, fast: for easier tasks). The operator can point them
@@ -96,7 +97,7 @@ export const codex = {
   // The run's agent token as its key, and the listener (openai.mjs) as its provider.
   env: (config, secret) => ({
     OPENAI_API_KEY: secret,
-    OPENAI_BASE_URL: `${config.brokerUrl}/openai`,
+    OPENAI_BASE_URL: `${SANDBOX_URLS.models}/openai`,
   }),
   secrets: OPENAI_CREDENTIALS,
   providers: { openai: { secrets: OPENAI_CREDENTIALS } },

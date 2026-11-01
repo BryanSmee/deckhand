@@ -2,8 +2,8 @@
 // checked first against one table of what each caller may do (../lib/service-token.mjs
 // serviceGuard()):
 //
-//   the sandboxes' agent calls, through the egress proxy (or the listener, relaying those of a
-//   proxy from before this service): /anthropic/…, /openai/…, /google/…, /relay/<host>/…, with
+//   the sandboxes' agent calls, through the egress proxy: /anthropic/…, /openai/…, /google/…,
+//   /relay/<host>/…, with
 //   the run's agent token in `x-deckhand-run-token` and the network (or pod) the caller vouches
 //   they came from in `x-deckhand-sandbox` (lib/broker-client.mjs);
 //   the orchestrator's: which credentials the operator set (GET /credentials, names only), what
@@ -19,7 +19,7 @@ import { fingerprints } from "../lib/redact.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { STREAM } from "./runs.mjs";
 
-const SANDBOX = ["proxy", "orchestrator"];
+const SANDBOX = ["proxy"];
 const AGENT_PREFIXES = ["anthropic", "openai", "google", "relay"];
 
 export const ROUTES = {

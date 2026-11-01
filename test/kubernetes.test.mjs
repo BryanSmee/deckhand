@@ -31,7 +31,6 @@ const config = {
   prefix: "dh",
   image: "dh-sandbox",
   runner: "kubernetes",
-  brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
   kubernetes: { pendingMs: 600000, storageClass: "fast", sessionSize: "10Gi" },
 };
@@ -44,13 +43,11 @@ const POLICY = {
     policyTypes: ["Ingress", "Egress"],
     egress: [
       { to: [{ podSelector: { matchLabels: { app: "egress" } } }], ports: [{ port: 3128 }] },
-      { to: [{ podSelector: { matchLabels: { app: "listener" } } }], ports: [{ port: 8081 }] },
     ],
   },
 };
 
 const SERVICES = {
-  listener: { metadata: { name: "listener" }, spec: { clusterIP: "10.96.0.10" } },
   egress: { metadata: { name: "egress" }, spec: { clusterIP: "10.96.0.11" } },
 };
 
@@ -182,7 +179,7 @@ const spec = (over = {}) => ({
   name: "dh-org-repo-12-abc",
   image: "dh-sandbox",
   labels: { "deckhand.task": "org/repo#12" },
-  env: { DECKHAND_RUN_SECRET: "s3cret", TASK_PROMPT: "do it", SANDBOX_MODEL: undefined },
+  env: { DECKHAND_RUN_TOKEN: "s3cret", TASK_PROMPT: "do it", SANDBOX_MODEL: undefined },
   user: SANDBOX_USER,
   limits: { cpus: "2", memory: "4g", pids: 2048 },
   caps: [],
@@ -207,7 +204,7 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
   assert.deepEqual(bound, [uid]);
   assert.deepEqual(secret.stringData, {
     DECKHAND_RUN_TOKEN: `token-for-${uid}`,
-    DECKHAND_RUN_SECRET: "s3cret",
+    DECKHAND_RUN_TOKEN: "s3cret",
     TASK_PROMPT: "do it",
   });
   assert.equal(secret.metadata.annotations["deckhand.run"], "dh-org-repo-12-abc-1730000000");
@@ -217,15 +214,13 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
   assert.deepEqual(c.envFrom, [{ secretRef: { name: "dh-org-repo-12-abc-1730000000-env" } }]);
   // Where the run's files are: values, from the broker.
   assert.deepEqual(c.env, [
-    { name: "TASK_INBOX", value: "http://listener:8081/run/inbox" },
-    { name: "DECKHAND_CA", value: "http://listener:8081/run/ca" },
+    { name: "TASK_INBOX", value: "http://broker:8081/run/inbox" },
+    { name: "DECKHAND_CA", value: "http://broker:8081/run/ca" },
     // Its stderr lines tagged: the pod log has both streams in one.
     { name: "SANDBOX_TAG_STDERR", value: "1" },
   ]);
-  assert.deepEqual(pod.spec.hostAliases, [
-    { ip: "10.96.0.10", hostnames: ["listener"] },
-    { ip: "10.96.0.11", hostnames: ["egress"] },
-  ]);
+  // The proxy's name alone: the services' names sandboxes call are the proxy's to read.
+  assert.deepEqual(pod.spec.hostAliases, [{ ip: "10.96.0.11", hostnames: ["egress"] }]);
   assert.deepEqual(pod.metadata.labels, {
     "deckhand.owner": "dh",
     "deckhand.run": "dh-org-repo-12-abc-1730000000",
@@ -258,10 +253,9 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
   assert.match(calls[0], /networkpolicies$/);
   assert.match(calls.at(-2), /^POST \/api\/v1\/namespaces\/runs\/pods$/);
   assert.match(calls.at(-1), /^POST \/api\/v1\/namespaces\/runs\/secrets$/);
-  // The inbox is the listener's: the next run's claims are already there.
+  // The inbox is the runner's: the next run's claims are already there.
   runner.send("dh-org-repo-12-abc-1730000000", "more", claude);
   assert.equal(runner.closed("dh-org-repo-12-abc-1730000000"), false);
-  assert.equal((await runner.file("dh-org-repo-12-abc-1730000000", "ca")).toString(), "PEM");
   objects.pods.clear();
   calls.length = 0;
   await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
@@ -463,22 +457,24 @@ test("isolationProblem: any policy that widens what a sandbox may reach or what 
     const spec = {
       ...all,
       policyTypes: ["Egress"],
-      egress: [{ to: [{ podSelector }], ports: [{ port: 8081 }] }],
+      egress: [{ to: [{ podSelector }], ports: [{ port: 3128 }] }],
     };
     assert.equal(isolationProblem(add(spec), labels), null, JSON.stringify(podSelector));
   }
-  // Their other ports (the listener's services port gives the runner's tokens): each rule names
-  // its ports, the proxy's and the broker's only.
-  const listener = { podSelector: { matchLabels: { app: "listener" } } };
+  // Their other ports (the orchestrator's services port gives the runner's tokens; the broker's
+  // port, which sandboxes once reached directly, #567): each rule names its ports, the proxy's
+  // only.
+  const orchestrator = { podSelector: { matchLabels: { app: "orchestrator" } } };
   for (const [ports, open] of [
     [undefined, "every port"],
     [[{ port: 8083 }], "port 8083"],
-    [[{ port: 8081, endPort: 8090 }], "port 8081"],
+    [[{ port: 8081 }], "port 8081"],
+    [[{ port: 3128, endPort: 3140 }], "port 3128"],
     [[{ port: "http" }], "port http"],
     [[{ protocol: "TCP" }], "every port"],
-    [[{ port: 8081 }, { protocol: "TCP" }], "every port"],
+    [[{ port: 3128 }, { protocol: "TCP" }], "every port"],
   ]) {
-    const spec = { ...all, policyTypes: ["Egress"], egress: [{ to: [listener], ports }] };
+    const spec = { ...all, policyTypes: ["Egress"], egress: [{ to: [orchestrator], ports }] };
     assert.match(
       isolationProblem(add(spec), labels),
       new RegExp(`extra lets sandbox pods reach ${open} `),
@@ -1005,8 +1001,6 @@ test("hasSession, address and proxyAddresses", async (t) => {
   assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
   const { uid } = objects.pods.get("dh-org-repo-12-abc").metadata;
   assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
-  assert.equal(await runner.sandboxIdOf("dh-org-repo-12-abc"), uid);
-  assert.equal(await runner.sandboxIdOf("dh-gone"), null);
   assert.deepEqual(await runner.proxyAddresses(), ["10.244.2.3", "10.244.3.4"]);
   assert.ok(
     calls.at(-1).endsWith("endpointslices?labelSelector=kubernetes.io%2Fservice-name%3Degress"),

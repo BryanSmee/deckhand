@@ -352,7 +352,8 @@ export function createPreparation(ctx) {
   // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
   function shotsFolder() {
     const shots = randomBytes(12).toString("hex");
-    // The listener writes it, from the sandbox's uploads (run-files.mjs).
+    // The listener writes it, from the sandbox's uploads to the broker (broker-service.mjs
+    // copyShot()).
     mkdirSync(join(ctx.shotsDir, shots), { recursive: true });
     return shots;
   }

@@ -1,5 +1,5 @@
-// The sandbox's scripts: git's credential helper and the gh wrapper hand out the run's secret
-// (the listener's GitHub gateway swaps it for a token), the entrypoint, the agents' scripts.
+// The sandbox's scripts: git's credential helper and the gh wrapper hand out the run token
+// (the GitHub gateway swaps it for a token), the entrypoint, the agents' scripts.
 import assert from "node:assert/strict";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
@@ -14,11 +14,17 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createBroker } from "../listener/broker.mjs";
 import { liveMessage } from "../listener/prompts.mjs";
-import { sandboxAt, serve, tempDir } from "./helpers.mjs";
+import { serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
+
+// A run token's file, as entrypoint.sh writes it (deckhand-token --init), holding `token`.
+function tokenFile(token) {
+  const file = join(tempDir(null, "deckhand-token-"), "run-token");
+  writeFileSync(file, `${token}\n`, { mode: 0o600 });
+  return file;
+}
 
 // A PATH whose `id -u` says 1000, the sandbox's user, whoever runs the tests.
 function sandboxUid(t) {
@@ -40,24 +46,27 @@ function helper(env, input) {
   });
 }
 
-test("git gets the run's secret for the repo's host, which the GitHub gateway takes", async () => {
+test("git gets the run token for the repo's host, which the GitHub gateway takes", async () => {
   const env = {
-    DECKHAND_BROKER_URL: "http://listener:8081",
-    DECKHAND_RUN_SECRET: "the-secret",
+    DECKHAND_BROKER_URL: "http://broker:8081",
+    DECKHAND_GIT_URL: "http://github:8080",
+    DECKHAND_TOKEN_FILE: tokenFile("the-token"),
     REPO_URL: "https://github.com/org/repo.git",
   };
   const ask = "protocol=https\nhost=github.com\n\n";
-  assert.equal((await helper(env, ask)).stdout, "username=x-access-token\npassword=the-secret\n");
+  assert.equal((await helper(env, ask)).stdout, "username=x-access-token\npassword=the-token\n");
   // Another host never sees it.
   assert.equal((await helper(env, "protocol=https\nhost=evil.example\n\n")).stdout, "");
-  // Outside a run, or without a secret: nothing, and git asks elsewhere.
-  const { DECKHAND_RUN_SECRET, ...noSecret } = env;
-  for (const without of [{ ...env, DECKHAND_BROKER_URL: "" }, noSecret]) {
+  // Outside a run, or without a token: nothing, and git asks elsewhere.
+  const none = join(tempDir(null), "none");
+  for (const without of [
+    { ...env, DECKHAND_BROKER_URL: "" },
+    { ...env, DECKHAND_TOKEN_FILE: none },
+  ]) {
     const res = await helper(without, ask);
     assert.equal(res.status, 0);
     assert.equal(res.stdout, "");
   }
-  assert.ok(DECKHAND_RUN_SECRET);
 });
 
 // The run token as the broker signs them: three base64url parts.
@@ -94,8 +103,6 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   assert.equal(statSync(file).mode & 0o777, 0o600);
   assert.equal(statSync(join(dir, "deckhand")).mode & 0o777, 0o700);
   assert.equal(token().stdout, `${jwt(0)}\n`);
-  // The file wins over a secret from before tokens, which is only for runs without one.
-  assert.equal(token({ DECKHAND_RUN_SECRET: "old" }).stdout, `${jwt(0)}\n`);
   // Renewed in the background, presenting the current one, the file replaced whole.
   const renew = execFile(`${bin}deckhand-token`, ["--renew"], { env });
   let err = "";
@@ -136,12 +143,13 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   assert.match(header(env).stdout, /^Bearer eyJ.*\n$/);
   const outside = header({ PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") });
   assert.deepEqual([outside.status, outside.stdout], [0, "Bearer \n"]);
-  // A sandbox from before tokens: its secret.
-  const old = spawnSync(`${bin}deckhand-token`, [], {
-    env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none"), DECKHAND_RUN_SECRET: "s" },
+  // Outside a run: no token, a failure, said.
+  const outsideRun = spawnSync(`${bin}deckhand-token`, [], {
+    env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") },
     encoding: "utf8",
   });
-  assert.equal(old.stdout, "s\n");
+  assert.deepEqual([outsideRun.status, outsideRun.stdout], [1, ""]);
+  assert.match(outsideRun.stderr, /not a Deckhand run: no run token/);
 });
 
 test("deckhand-token --renew: after a failed --now, its first renewal comes after the retry delay", async (t) => {
@@ -587,13 +595,13 @@ test("Codex's home: its provider the listener, no analytics or plugins, hooks an
      codex_home
      agent_mcp playwright playwright-mcp --headless --proxy-server "http://egress:3128"
      cat "$CODEX_HOME/config.toml"; echo ---; cat "$CODEX_HOME/hooks.json"`,
-    { OPENAI_BASE_URL: "http://listener:8081/openai" },
+    { OPENAI_BASE_URL: "http://models:8080/openai" },
   );
   const [config, hooks] = stdout.split("---\n");
   // Written again on every start: one provider, one MCP server.
   assert.equal(config.match(/\[model_providers\.deckhand\]/g).length, 1);
   assert.match(config, /^model_provider = "deckhand"$/m);
-  assert.match(config, /^base_url = "http:\/\/listener:8081\/openai"$/m);
+  assert.match(config, /^base_url = "http:\/\/models:8080\/openai"$/m);
   assert.match(config, /^env_key = "OPENAI_API_KEY"$/m);
   assert.match(config, /^check_for_update_on_startup = false$/m);
   assert.match(config, /\[analytics\]\nenabled = false/);
@@ -996,24 +1004,24 @@ test("the entrypoint fetches the CA and digest from the broker, and stops when i
       { env: { PATH: `${fake}:${process.env.PATH}`, DIR: dir, ...env }, encoding: "utf8" },
     );
   const both = run({
-    DECKHAND_CA: "http://listener:8081/run/ca",
-    TASK_DIGEST: "https://listener:8081/run/digest",
+    DECKHAND_CA: "http://broker:8081/run/ca",
+    TASK_DIGEST: "https://broker:8081/run/digest",
   });
   assert.equal(both.status, 0, both.stderr);
   assert.equal(both.stdout, `CA=${dir}/egress-ca.crt DIGEST=${dir}/digest.md\n`);
   assert.equal(
     readFileSync(join(dir, "egress-ca.crt"), "utf8"),
-    "from http://listener:8081/run/ca\n",
+    "from http://broker:8081/run/ca\n",
   );
   assert.equal(
     readFileSync(join(dir, "digest.md"), "utf8"),
-    "from https://listener:8081/run/digest\n",
+    "from https://broker:8081/run/digest\n",
   );
   // A path (a sandbox started by hand) and an unset variable are left as they are.
   const byHand = run({ DECKHAND_CA: "/etc/my-ca.crt" });
   assert.equal(byHand.stdout, "CA=/etc/my-ca.crt DIGEST=\n");
   // A fetch that fails stops the run before anything else.
-  const failed = run({ TASK_DIGEST: "http://listener:8081/run/fail" });
+  const failed = run({ TASK_DIGEST: "http://broker:8081/run/fail" });
   assert.notEqual(failed.status, 0);
   assert.equal(failed.stdout, "");
 });
@@ -1068,8 +1076,8 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
       // The image's gh wrapper (sandbox/gh), in front of a fake real gh.
       PATH: `${fake}:${bin}:${process.env.PATH}`,
       DECKHAND_REAL_GH: join(fake, "real-gh"),
-      DECKHAND_BROKER_URL: "http://listener:8081",
-      DECKHAND_RUN_SECRET: "s",
+      DECKHAND_BROKER_URL: "http://broker:8081",
+      DECKHAND_TOKEN_FILE: tokenFile("s"),
       TASK_ISSUE: "5",
     },
     encoding: "utf8",
@@ -1091,7 +1099,7 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
       ...env,
       DECKHAND_REAL_GH: join(fake, "real-gh"),
       DECKHAND_BROKER_URL: "http://x",
-      DECKHAND_RUN_SECRET: "s",
+      DECKHAND_TOKEN_FILE: tokenFile("s"),
       PATH: `${fake}:${bin}:${process.env.PATH}`,
     },
   });
@@ -1174,14 +1182,17 @@ test("installing Claude Code refuses to run as the sandbox's user", (t) => {
   assert.match(result.stderr, /not as the sandbox's user/);
 });
 
-test("for the broker's host, git gets the run's secret: what the git gateway takes", async () => {
+test("for the git gateway's host, git gets the run token: what the git gateway takes", async () => {
   const env = {
-    DECKHAND_BROKER_URL: "http://listener:8081",
-    DECKHAND_RUN_SECRET: "the-secret",
+    DECKHAND_BROKER_URL: "http://broker:8081",
+    DECKHAND_GIT_URL: "http://github:8080",
+    DECKHAND_TOKEN_FILE: tokenFile("the-token"),
     REPO_URL: "https://github.com/org/repo.git",
   };
-  const res = await helper(env, "protocol=http\nhost=listener:8081\n\n");
-  assert.equal(res.stdout, "username=deckhand\npassword=the-secret\n");
+  const res = await helper(env, "protocol=http\nhost=github:8080\n\n");
+  assert.equal(res.stdout, "username=deckhand\npassword=the-token\n");
+  // The broker's host isn't the git gateway's: no token for it.
+  assert.equal((await helper(env, "protocol=http\nhost=broker:8081\n\n")).stdout, "");
 });
 
 // --- gh, through the GitHub gateway --------------------------------------------------------------
@@ -1208,11 +1219,11 @@ function gh(env, ...args) {
 }
 
 // `gh pr create`, `edit` and `ready` too: the gateway checks their writes (github-pulls.mjs).
-test("every gh command goes to the real gh, with the run's secret as its token", async (t) => {
+test("every gh command goes to the real gh, with the run token as its token", async (t) => {
   const real = fakeGh(t);
   const env = {
-    DECKHAND_BROKER_URL: "http://listener:8081",
-    DECKHAND_RUN_SECRET: "the-secret",
+    DECKHAND_BROKER_URL: "http://broker:8081",
+    DECKHAND_TOKEN_FILE: tokenFile("the-token"),
     DECKHAND_REAL_GH: real.path,
   };
   const commands = [
@@ -1228,9 +1239,9 @@ test("every gh command goes to the real gh, with the run's secret as its token",
   }
   assert.deepEqual(
     real.calls(),
-    commands.map((args) => `the-secret ${args.join(" ")}`),
+    commands.map((args) => `the-token ${args.join(" ")}`),
   );
-  // Outside a run, gh as it is: no secret.
+  // Outside a run, gh as it is: no run token.
   const outside = await gh({ DECKHAND_REAL_GH: real.path, GH_TOKEN: "mine" }, "pr", "ready");
   assert.equal(outside.status, 0);
   assert.equal(real.calls().at(-1), "mine pr ready");

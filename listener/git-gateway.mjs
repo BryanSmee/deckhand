@@ -370,17 +370,14 @@ export function createGitGateway({
       const challenge = status === 401 ? { "www-authenticate": 'Basic realm="Deckhand"' } : {};
       return fail(res, status, `Deckhand: ${message}`, challenge);
     }
-    // What it may push, from its token's claims, which the broker signed (a run from before
-    // tokens: its record): its repo and branches. A run that can't push has none (broker.mjs
-    // allow()).
-    const may = claims
-      ? {
-          repo: claims.repo,
-          branches: Array.isArray(claims.branches) ? claims.branches : [],
-          push: Array.isArray(claims.branches) && claims.branches.length > 0,
-          fork: claims.fork === true,
-        }
-      : { repo: run.repo, branches: run.branches, push: run.push, fork: run.fork };
+    // What it may push, from its token's claims, which the broker signed: its repo and
+    // branches. A run that can't push has none (broker.mjs allow()).
+    const may = {
+      repo: claims.repo,
+      branches: Array.isArray(claims.branches) ? claims.branches : [],
+      push: Array.isArray(claims.branches) && claims.branches.length > 0,
+      fork: claims.fork === true,
+    };
     if (may.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${may.repo}`);
     if (!may.push) return fail(res, 403, "Deckhand: this run can't push");
 

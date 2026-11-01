@@ -312,7 +312,6 @@ test("a run's network: the runner joins the proxy to it, and nothing else", asyn
       prefix: "deckhand",
       subnets: null,
       egressContainer: "egress-container",
-      brokerUrl: "http://listener:8081",
       egressProxy: "http://egress:3128",
     },
     docker,

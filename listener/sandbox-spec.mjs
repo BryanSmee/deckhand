@@ -8,6 +8,7 @@ import { restricted } from "./github-forks.mjs";
 import { isApart, isFresh, RESEARCH } from "./modes.mjs";
 import { ENGINE_HOST } from "./runner/engine.mjs";
 import { SCREENSHOT_DIR } from "./runner/inbox.mjs";
+import { SANDBOX_URLS } from "../lib/services.mjs";
 
 // The sandbox's user: the base image's `node`.
 export const SANDBOX_USER = { uid: 1000, gid: 1000 };
@@ -105,7 +106,7 @@ export async function tokenEnv({ config, task, agent, broker }, sandbox) {
   const { live } = task;
   const { token, agentToken } = await broker.issue(live.id, sandbox, live.shots ?? null);
   live.agentToken = agentToken;
-  // What the egress policy and its anonymous GitHub calls find the run by (broker-http.mjs).
+  // What the egress policy and its anonymous GitHub calls find the run by (egress-http.mjs).
   live.sandbox = String(sandbox);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
@@ -200,7 +201,10 @@ export function sandboxEnv(
   const install = agent.install(config);
   const provider = live.record.provider ?? agent.defaultProvider;
   return {
-    DECKHAND_BROKER_URL: config.brokerUrl,
+    // The services it calls by their names, through the egress proxy (lib/services.mjs): the
+    // broker for its run token and files, the github service for its pushes.
+    DECKHAND_BROKER_URL: SANDBOX_URLS.broker,
+    DECKHAND_GIT_URL: SANDBOX_URLS.github,
     // Which of ../sandbox/agents/ runs, and its version.
     SANDBOX_AGENT: agent.name,
     SANDBOX_PROVIDER: provider,
@@ -241,8 +245,7 @@ export function sandboxEnv(
     SANDBOX_EFFORT: live.record.effort,
     // "fast": the agent's fast mode, already checked against the settings (agents/select.mjs).
     SANDBOX_SPEED: live.record.speed ?? "normal",
-    // A folder of its own, which ../sandbox/deckhand-files uploads to the broker
-    // (run-files.mjs). None for a research run, whose only output is its reply: the folder is
+    // A folder of its own, which ../sandbox/deckhand-files uploads to the broker service. None for a research run, whose only output is its reply: the folder is
     // publicly served.
     SCREENSHOT_DIR: live.shots ? SCREENSHOT_DIR : "",
     SCREENSHOT_URL: live.shots ? `${publicUrl}/shots/${live.shots}` : "",

@@ -3,17 +3,19 @@ import { request } from "node:http";
 import { test } from "node:test";
 import { createAnthropicProxy, resetOf } from "../models/anthropic.mjs";
 import { credentialName, planWarning } from "../listener/agents/credentials.mjs";
-import { createBroker } from "../listener/broker.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { operatorSecrets, redact } from "../listener/secrets.mjs";
-import { sandboxAt, serve } from "./helpers.mjs";
+import { serve, tokenBroker } from "./helpers.mjs";
 
-// A run of Claude Code's, on its provider as runs.mjs registers it.
+// A run of Claude Code's, on its provider as runs.mjs registers it: its agent token.
 function claudeRun(broker, provider = "anthropic") {
-  const secret = broker.register("org/repo");
-  broker.provide(secret, provider);
-  return secret;
+  const id = broker.register("org/repo");
+  broker.provide(id, provider);
+  return broker.agentToken(id);
 }
+
+// A run's agent token, the run registered for `repo` first.
+const agentRun = (broker) => broker.agentToken(broker.register("org/repo"));
 
 // A fake Anthropic that records each request and streams two events, the second one only
 // once the test lets it (`release`), so streaming shows: the first arrives before.
@@ -40,11 +42,11 @@ async function serveProxy(
   {
     name = "CLAUDE_CODE_OAUTH_TOKEN",
     credential = "sk-ant-oat01-real",
-    sentFrom = sandboxAt(),
+    address = "127.0.0.1",
   } = {},
 ) {
   const upstream = await fakeAnthropic(t);
-  const broker = createBroker({ sentFrom });
+  const broker = tokenBroker({ address });
   const proxy = createAnthropicProxy({ runs: broker, name, credential, upstream: upstream.url });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   return { url, broker, upstream };
@@ -139,7 +141,7 @@ test("an API key run's secret is swapped for the key", async (t) => {
 test("a gateway's token goes as a bearer, under the gateway's own path", async (t) => {
   const upstream = await fakeAnthropic(t);
   upstream.release();
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
     name: "ANTHROPIC_AUTH_TOKEN",
@@ -170,7 +172,7 @@ async function serveBoth(t, limited = false) {
       res.end('{"type":"error","error":{"type":"rate_limit_error"}}');
     });
   });
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -184,11 +186,11 @@ async function serveBoth(t, limited = false) {
 
 test("a plan and a key: the plan's run sends its bearer, the key's run its x-api-key", async (t) => {
   const { url, broker, requests } = await serveBoth(t);
-  const plan = broker.register("org/repo");
+  const plan = agentRun(broker);
   broker.provide(plan, "anthropic");
-  const key = broker.register("org/repo");
+  const key = agentRun(broker);
   broker.provide(key, "anthropic", null, "key");
-  const named = broker.register("org/repo");
+  const named = agentRun(broker);
   broker.provide(named, "anthropic", null, "plan");
   for (const [secret, header] of [
     [plan, "authorization"],
@@ -211,9 +213,9 @@ test("a plan and a key: the plan's run sends its bearer, the key's run its x-api
 
 test("a plan's 429: the run learns when its limit resets; a key's doesn't", async (t) => {
   const { url, broker, limit } = await serveBoth(t, true);
-  const plan = broker.register("org/repo");
+  const plan = agentRun(broker);
   broker.provide(plan, "anthropic");
-  const key = broker.register("org/repo");
+  const key = agentRun(broker);
   broker.provide(key, "anthropic", null, "key");
   await (await ask(url, { authorization: `Bearer ${plan}` })).text();
   await (await ask(url, { "x-api-key": key })).text();
@@ -232,7 +234,7 @@ test("a plan's 429: the run learns when its limit resets; a key's doesn't", asyn
 
 test("a run naming a credential the operator didn't set gets none, and says which", async (t) => {
   const upstream = await fakeAnthropic(t);
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -241,7 +243,7 @@ test("a run naming a credential the operator didn't set gets none, and says whic
     upstream: upstream.url,
   });
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
-  const secret = broker.register("org/repo");
+  const secret = agentRun(broker);
   broker.provide(secret, "anthropic", null, "key");
   const res = await ask(url, { "x-api-key": secret });
   assert.equal(res.status, 503);
@@ -292,7 +294,7 @@ test("only Claude Code's calls go on: not files, batches or another method", asy
   });
   upstream.release();
   const notes = [];
-  const secret = broker.register("org/repo");
+  const secret = agentRun(broker);
   broker.provide(secret, "anthropic", (message) => notes.push(message));
   for (const [method, path] of [
     ["GET", "/anthropic/v1/files"],
@@ -345,9 +347,8 @@ test("no secret, a wrong one or a finished run's: refused, and Anthropic never a
   assert.equal(upstream.requests.length, 0);
 });
 
-test("a run's secret sent from another sandbox's address: 403, and Anthropic never asked", async (t) => {
-  const sentFrom = sandboxAt("10.9.0.5");
-  const { url, broker, upstream } = await serveProxy(t, { sentFrom });
+test("a run's token sent from another sandbox's address: 403, and Anthropic never asked", async (t) => {
+  const { url, broker, upstream } = await serveProxy(t, { address: "10.9.0.5" });
   const secret = claudeRun(broker);
   for (const headers of [{ authorization: `Bearer ${secret}` }, { "x-api-key": secret }]) {
     const res = await ask(url, headers);
@@ -357,10 +358,6 @@ test("a run's secret sent from another sandbox's address: 403, and Anthropic nev
       message: "Deckhand: this run's token only works from its own sandbox",
     });
   }
-  assert.deepEqual(sentFrom.asked, [
-    { run: broker.runOf(secret), ip: "127.0.0.1" },
-    { run: broker.runOf(secret), ip: "127.0.0.1" },
-  ]);
   assert.equal(upstream.requests.length, 0);
   // What the leaked run's reply says is left alone.
   assert.equal(broker.runOf(secret).apiError, undefined);
@@ -374,7 +371,7 @@ test("without a credential set, a live run gets an error rather than an empty he
 });
 
 test("Anthropic out of reach: a 502 in Anthropic's error shape", async (t) => {
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
     name: "ANTHROPIC_API_KEY",
@@ -411,7 +408,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
   const anthropic = await fakeAnthropic(t);
   const openrouter = await fakeAnthropic(t);
   openrouter.release();
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
     name: "CLAUDE_CODE_OAUTH_TOKEN",
@@ -448,7 +445,7 @@ test("a run on another provider goes to its URL with its key; the provider's sta
 });
 
 test("a provider that can't be reached counts as a 502", async (t) => {
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
     name: "ANTHROPIC_API_KEY",

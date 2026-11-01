@@ -2,7 +2,7 @@
 // port under /edge/: the dashboard's API, /status and the runs' screenshots, each with the user
 // edge signed in; and the verified deliveries edge puts on its stream (deliver()). The public
 // server (webhooks, /setup, sign-in, the dashboard's files) is edge's (../edge/http.mjs); the
-// broker's, which sandboxes reach through the egress proxy, is broker-http.mjs.
+// egress policy, which the egress proxy asks, is egress-http.mjs.
 import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { pipeline } from "node:stream";
@@ -33,7 +33,7 @@ import { send, sendJson } from "../lib/http.mjs";
 import { apiRoute } from "./web.mjs";
 import { SHOT_NAME } from "../lib/shots.mjs";
 
-// /shots/<folder>/<file>: the names the sandboxes may upload (run-files.mjs), nothing else.
+// /shots/<folder>/<file>: the names the sandboxes may upload (../lib/shots.mjs), nothing else.
 const SHOT_PATH = new RegExp(`^/shots/([0-9a-f]{24})/(${SHOT_NAME.source.slice(1, -1)})$`);
 
 const imageTypes = {

@@ -3,7 +3,7 @@
 // Two copies on one store are two servers here, on the same memory store: what one of them
 // does, the other sees.
 import assert from "node:assert/strict";
-import { createHash, generateKeyPairSync } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Agent, request } from "node:http";
 import { test } from "node:test";
 import { accountCallers, createCallers } from "../broker/callers.mjs";
@@ -13,7 +13,7 @@ import { createBroker } from "../broker/server.mjs";
 import { createSeal } from "../broker/seal.mjs";
 import { MAX_SHOT, MAX_SHOTS } from "../lib/shots.mjs";
 import { openStore } from "../lib/store.mjs";
-import { keyId, signToken, TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
+import { TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
 import { testKey } from "./helpers.mjs";
 
 // Each caller reaches the broker at an address of its own, as over a network of its own with
@@ -23,6 +23,8 @@ const AT = {
   proxy: "127.0.0.3",
   edge: "127.0.0.4",
   shared: "127.0.0.5",
+  // The runner, on the network it shares (below): it says which service it is.
+  runner: "127.0.0.5",
 };
 // Services may share one network (here the runner and the models service, at `shared`).
 const NETWORKS =
@@ -92,7 +94,7 @@ function call(broker, as, method, path, { body, headers = {} } = {}) {
 // `as`'s service token for the broker, asked for as a service asks.
 async function tokenOf(broker, as) {
   const res = await call(broker, as, "POST", "/service-tokens", {
-    body: { audiences: ["broker"] },
+    body: { audiences: ["broker"], ...(as === "runner" && { service: "runner" }) },
   });
   assert.equal(res.status, 200, res.text);
   return res.json.tokens.broker;
@@ -217,6 +219,10 @@ test("each endpoint takes its callers only, from their own network", async (t) =
   });
   assert.equal(minted.status, 403);
   assert.equal((await orchestrator("GET", "/runs")).status, 200);
+  // The inboxes and files are the runner's to copy, never the orchestrator's.
+  const write = { body: Buffer.from("x\n") };
+  assert.equal((await orchestrator("POST", "/runs/run-a/inbox?offset=0", write)).status, 403);
+  assert.equal((await orchestrator("PUT", "/runs/run-a/files/ca", write)).status, 403);
   // A token replayed from another caller's network.
   const stolen = await tokenOf(broker, "proxy");
   const replayed = await call(broker, "orchestrator", "GET", "/runs", {
@@ -289,14 +295,16 @@ test("two copies on one store: a run ended on one renews on neither, an inbox re
   const orchestratorTwo = await client(two, "orchestrator");
   const proxyOne = await client(one, "proxy");
   const proxyTwo = await client(two, "proxy");
+  const runnerOne = await client(one, "runner");
+  const runnerTwo = await client(two, "runner");
   const { token } = await started(orchestratorOne);
   // Either copy renews it, the other one's token too.
   const renewed = await renewOn(proxyTwo, token);
   assert.ok(renewed.token);
   // The inbox: appended through one, read from either, each line once.
-  const append = (orchestrator, offset, text) =>
-    orchestrator("POST", `/runs/run-a/inbox?offset=${offset}`, { body: Buffer.from(text) });
-  assert.deepEqual((await append(orchestratorOne, 0, "one\n")).json, { length: 4 });
+  const append = (runner, offset, text) =>
+    runner("POST", `/runs/run-a/inbox?offset=${offset}`, { body: Buffer.from(text) });
+  assert.deepEqual((await append(runnerOne, 0, "one\n")).json, { length: 4 });
   const read = (proxy, from) =>
     sandboxCall(proxy, "GET", `/run/inbox?from=${from}`, token, "net-a");
   const first = await read(proxyOne, 0);
@@ -304,12 +312,12 @@ test("two copies on one store: a run ended on one renews on neither, an inbox re
   // A long poll on the other copy, woken by a line appended through the first.
   const waiting = read(proxyTwo, 4);
   await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.deepEqual((await append(orchestratorOne, 0, "one\ntwo\n")).json, { length: 8 });
+  assert.deepEqual((await append(runnerOne, 0, "one\ntwo\n")).json, { length: 8 });
   const second = await waiting;
   assert.deepEqual([second.status, second.text], [200, "two\n"]);
   // The same bytes sent again add nothing; a gap is said, for the runner to send from there.
-  assert.deepEqual((await append(orchestratorTwo, 4, "two\n")).json, { length: 8 });
-  const gap = await append(orchestratorTwo, 20, "late\n");
+  assert.deepEqual((await append(runnerTwo, 4, "two\n")).json, { length: 8 });
+  const gap = await append(runnerTwo, 20, "late\n");
   assert.deepEqual([gap.status, gap.json], [409, { length: 8, gap: true }]);
   // Ended through the second copy: the first renews it no more, nor serves its inbox.
   await orchestratorTwo("DELETE", "/runs/run-a");
@@ -323,9 +331,10 @@ test("the inbox: whole lines only, a bad offset refused, a run without one 404",
   const orchestrator = await client(broker, "orchestrator");
   const proxy = await client(broker, "proxy");
   const { token } = await started(orchestrator);
+  const runner = await client(broker, "runner");
   const read = (from) => sandboxCall(proxy, "GET", `/run/inbox?from=${from}`, token, "net-a");
   assert.equal((await read(0)).status, 404);
-  await orchestrator("POST", "/runs/run-a/inbox?offset=0", { body: Buffer.from("a\nhalf") });
+  await runner("POST", "/runs/run-a/inbox?offset=0", { body: Buffer.from("a\nhalf") });
   assert.equal((await read(0)).text, "a\n");
   assert.equal((await read("x")).status, 400);
   assert.equal((await read(-1)).status, 400);
@@ -342,12 +351,13 @@ test("the CA and digest: the run's own, put before its sandbox starts", async (t
   const proxy = await client(broker, "proxy");
   const a = await started(orchestrator, "run-a");
   const b = await started(orchestrator, "run-b", { sandbox: "net-b" });
+  const runner = await client(broker, "runner");
   assert.equal(
-    (await orchestrator("PUT", "/runs/run-a/files/ca", { body: Buffer.from("CA") })).status,
+    (await runner("PUT", "/runs/run-a/files/ca", { body: Buffer.from("CA") })).status,
     204,
   );
   assert.equal(
-    (await orchestrator("PUT", "/runs/run-a/files/app.json", { body: Buffer.from("x") })).status,
+    (await runner("PUT", "/runs/run-a/files/app.json", { body: Buffer.from("x") })).status,
     404,
   );
   const ca = await sandboxCall(proxy, "GET", "/run/ca", a.token, "net-a");
@@ -484,55 +494,6 @@ test("past its expiry, only the token the sandbox holds renews, not an older one
   assert.match((await renewOn(proxy, c)).message, /expired/);
 });
 
-test("a key of the listener's from before the broker service: its run tokens renew, never a service's", async (t) => {
-  const { copies, clock } = await brokers(t);
-  const [broker] = copies;
-  const orchestrator = await client(broker, "orchestrator");
-  const proxy = await client(broker, "proxy");
-  // A run the listener started and signed before the update, picked up after it.
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  const old = { privateKey, publicKey, kid: keyId(publicKey) };
-  const claims = {
-    ver: TOKEN_VERSION,
-    jti: "old-run",
-    repo: "org/a",
-    mode: "work",
-    issue: 7,
-    fork: false,
-    branches: ["issue-7-*"],
-    sandbox: "net-o",
-    caps: [],
-  };
-  const sign = (audience, c = claims) =>
-    signToken(c, { ...old, audience, ttlMs: 15 * 60_000, now: clock.now });
-  const token = sign("deckhand:broker");
-  await orchestrator("PUT", "/runs/old-run", {
-    body: { repo: "org/a", mode: "work", issue: 7, branches: ["issue-7-*"], sandbox: "net-o" },
-  });
-  assert.match((await renewOn(proxy, token, "net-o")).message, /unknown key/);
-  const pem = publicKey.export({ type: "spki", format: "pem" });
-  assert.deepEqual((await proxy("POST", "/keys", { body: { pem } })).status, 403);
-  assert.deepEqual((await orchestrator("POST", "/keys", { body: { pem } })).json, { kid: old.kid });
-  assert.equal((await orchestrator("POST", "/keys", { body: { pem: "nope" } })).status, 400);
-  const renewed = await renewOn(proxy, token, "net-o");
-  assert.ok(renewed.token, renewed.message);
-  // Renewed with the broker's own key, the same claims.
-  const header = JSON.parse(Buffer.from(renewed.token.split(".")[0], "base64url"));
-  assert.notEqual(header.kid, old.kid);
-  const keys = (await call(broker, "edge", "GET", "/keys")).json;
-  assert.ok(keys.run.some((k) => k.kid === old.kid));
-  assert.ok(!keys.service.some((k) => k.kid === old.kid));
-  // A service token signed with it is refused: the old key opens no service.
-  const forged = signToken(
-    { ver: TOKEN_VERSION, sub: "orchestrator" },
-    { ...old, audience: "deckhand:service:broker", ttlMs: 60_000, now: clock.now },
-  );
-  const refused = await call(broker, "orchestrator", "GET", "/runs", {
-    headers: { authorization: `Bearer ${forged}` },
-  });
-  assert.equal(refused.status, 401);
-});
-
 test("the live runs: the orchestrator's list, what it ended gone, a restored run's tokens kept", async (t) => {
   const { copies } = await brokers(t);
   const [broker] = copies;
@@ -619,11 +580,12 @@ test("the inbox: the runner's file byte for byte, a token's shape refused rather
   const [broker] = copies;
   const orchestrator = await client(broker, "orchestrator");
   const proxy = await client(broker, "proxy");
+  const runner = await client(broker, "runner");
   const { token } = await started(orchestrator);
   // Redacted, the blob would be shorter than the runner's file, and their offsets apart: the
   // runner redacts its lines itself (runner/inbox.mjs), the store refuses what it would change.
   const ghp = `ghp_${"a".repeat(36)}`;
-  const refused = await orchestrator("POST", "/runs/run-a/inbox?offset=0", {
+  const refused = await runner("POST", "/runs/run-a/inbox?offset=0", {
     body: Buffer.from(`{"text":"${ghp} is revoked"}\n`),
   });
   assert.equal(refused.status, 500);
@@ -634,7 +596,7 @@ test("the inbox: the runner's file byte for byte, a token's shape refused rather
   let synced = 0;
   for (const line of lines) {
     file = Buffer.concat([file, Buffer.from(line)]);
-    const res = await orchestrator("POST", `/runs/run-a/inbox?offset=${synced}`, {
+    const res = await runner("POST", `/runs/run-a/inbox?offset=${synced}`, {
       body: file.subarray(synced),
     });
     assert.deepEqual(res.json, { length: file.length });
@@ -673,22 +635,19 @@ test("the inbox: a write the store failed leaves nothing behind, and the same on
   });
 });
 
-test("an old key is taken in the broker's first days only; an expired run's files go with its record", async (t) => {
+test("an expired run's files go with its record", async (t) => {
   const { copies, clock, store } = await brokers(t);
   const [broker] = copies;
   const orchestrator = await client(broker, "orchestrator");
+  const runner = await client(broker, "runner");
   await started(orchestrator, "run-a");
-  await orchestrator("POST", "/runs/run-a/inbox?offset=0", { body: Buffer.from("x\n") });
-  await orchestrator("PUT", "/runs/run-a/files/ca", { body: Buffer.from("CA") });
+  await runner("POST", "/runs/run-a/inbox?offset=0", { body: Buffer.from("x\n") });
+  await runner("PUT", "/runs/run-a/files/ca", { body: Buffer.from("CA") });
   // Its end never came: the record expires, and the next listing drops its files.
   clock.now += 9 * 24 * 60 * 60_000;
   assert.deepEqual((await orchestrator("GET", "/runs")).json.runs, []);
   assert.equal(await store.readBlob("inbox:run-a"), null);
   assert.equal(await store.readBlob("file:run-a:ca"), null);
-  // Past the migration's days, no key is imported any more.
-  const pem = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
-  const late = await orchestrator("POST", "/keys", { body: { pem } });
-  assert.equal(late.status, 409);
 });
 
 test("the orchestrator's fencing epoch: none or a stale one changes nothing, on either copy (#506)", async (t) => {

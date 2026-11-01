@@ -25,7 +25,7 @@ import { createGithubGateway, FILES, ROUTING_HEADERS } from "../listener/github-
 import { createGraphqlChecks, githubSchema } from "../listener/github-graphql.mjs";
 import { pkt, pktLines } from "../listener/pkt-line.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
-import { sandboxAt, serve, tempDir } from "./helpers.mjs";
+import { serve, tempDir, tokenBroker } from "./helpers.mjs";
 
 const OWN = "a".repeat(40); // on the default branch
 const HEAD = "b".repeat(40); // a branch's head, not on the default one
@@ -785,7 +785,7 @@ async function gateway(t, { maxInFlight } = {}) {
   const github = await serve(t, upstream);
   const files = await serve(t, upstream);
   const at = `http://localhost:${files.port}`;
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const forks = createForkChecks({ get: fakeGithub().get });
   const gw = createGithubGateway({
     broker,
@@ -804,12 +804,13 @@ async function gateway(t, { maxInFlight } = {}) {
     maxInFlight,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
+  // A run, its log's notes beside it. `secret`: its run token.
   const register = (fork) => {
-    const secret = broker.register("Org/Repo", { push: true, caps: ["pull"] });
+    const id = broker.register("Org/Repo", { push: true, caps: ["pull"] });
     const notes = [];
-    broker.provide(secret, "anthropic", (line) => notes.push(line));
-    broker.allow(secret, ["issue-1-*"], fork);
-    return { secret, notes };
+    broker.provide(id, "anthropic", (line) => notes.push(line));
+    broker.allow(id, ["issue-1-*"], fork);
+    return { secret: broker.token(id), notes };
   };
   const call = (host, path, secret, { method = "GET", body, headers = {} } = {}) =>
     fetch(`${url}/relay/${host}${path}`, {
@@ -1050,7 +1051,7 @@ test("real git through the gateway: a whole clone goes, a fork's head and lone b
     }
     return /branches-where-head/.test(path) ? [] : null;
   };
-  const broker = createBroker({ sentFrom: async () => true });
+  const broker = createBroker({});
   let current = null;
   const gw = createGithubGateway({
     broker,
@@ -1058,7 +1059,7 @@ test("real git through the gateway: a whole clone goes, a fork's head and lone b
     api: `${github.url}/api/v3`,
     web: github.url,
     forks: createForkChecks({ get }),
-    // git's calls carry no secret: the run whose sandbox sent them.
+    // git's calls carry no token: the run whose sandbox sent them.
     runFrom: async () => current,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
@@ -1216,7 +1217,7 @@ test("git's paths in any case are a fetch's, checked as one; another spelling is
 // refuses are made, refused before anything leaves: none reaches GitHub. Sent through node:http,
 // exactly as written (fetch() would resolve an encoded dot segment itself).
 async function realGateway(t) {
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const gw = createGithubGateway({
     broker,
     // A call that passed every check would get no token: it fails here, never reaching GitHub.
@@ -1230,8 +1231,9 @@ async function realGateway(t) {
     forks: createForkChecks({ get: fakeGithub().get }),
   });
   const { port } = await serve(t, (req, res) => gw.handle(req, res));
-  const secret = broker.register("Org/Repo", { push: true, caps: ["pull"] });
-  broker.allow(secret, ["issue-1-*"], false);
+  const id = broker.register("Org/Repo", { push: true, caps: ["pull"] });
+  broker.allow(id, ["issue-1-*"], false);
+  const secret = broker.token(id);
   return (host, path, { method = "GET", body } = {}) =>
     new Promise((resolve, reject) => {
       const headers = { authorization: `token ${secret}` };

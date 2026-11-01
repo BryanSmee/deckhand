@@ -607,7 +607,7 @@ export function createKubernetesImages({
     return found;
   }
 
-  // The egress proxy's answer for a caller that isn't a sandbox (broker-http.mjs), or null:
+  // The egress proxy's answer for a caller that isn't a sandbox (egress-http.mjs), or null:
   // the BuildKit daemon while builds run (their hosts), an install pod (its agent's install
   // hosts). Tunnelled only, never decrypted, cached or relayed: neither trusts Deckhand's CA,
   // and neither gets a token.

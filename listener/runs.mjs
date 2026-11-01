@@ -167,7 +167,7 @@ export function createRuns(ctx) {
       // after a restart.
       agentToken: null,
       // The ID of its network (or pod), once its sandbox has one: what the egress policy and its
-      // anonymous GitHub calls find it by (broker-http.mjs sandboxOfTask()).
+      // anonymous GitHub calls find it by (egress-http.mjs sandboxOfTask()).
       sandbox: null,
       asked: replyTo, // where errors go
       replyTo, // where the reply goes: the issue or pull request of the last comment it took
@@ -465,11 +465,11 @@ export function createRuns(ctx) {
     return scrubs.reduce((text, scrub) => scrub(text), redact(line, secretValues(live)));
   }
 
-  // Its own tokens (or secret), the operator's credentials, and any GitHub token the listener's
-  // broker lists for it (none since the github service: hidden() has their fingerprints).
+  // Its own tokens, the operator's credentials, and any GitHub token the listener's broker lists
+  // for it (none since the github service: hidden() has their fingerprints).
   function secretValues(live) {
     const tokens = ctx.broker.runOf(live.id)?.tokens ?? [];
-    return [live.secret, ...ctx.broker.secretsOf(live.id), ...operatorSecrets(ctx), ...tokens];
+    return [...ctx.broker.secretsOf(live.id), ...operatorSecrets(ctx), ...tokens];
   }
 
   // `at`: when the sandbox wrote it (runner.follow()), null when Docker didn't say.

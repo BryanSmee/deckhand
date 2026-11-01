@@ -17,7 +17,6 @@ const config = {
   claudeCodeVersion: "2.0.0",
   codexVolume: "deckhand-codex",
   codexVersion: "0.50.0",
-  brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
   githubUrl: "https://github.com",
 };
@@ -87,7 +86,7 @@ test("sandboxSpec: as uid 1000, no capabilities, no shots volume, the agent read
   assert.deepEqual(spec.user, SANDBOX_USER);
   assert.deepEqual(spec.limits, limits);
   assert.deepEqual(spec.caps, []);
-  // Its screenshots go to the broker (run-files.mjs), not into a volume of the listener's.
+  // Its screenshots go to the broker service, not into a volume of the orchestrator's.
   assert.deepEqual(spec.volumes, [
     {
       kind: "agent",
@@ -211,7 +210,7 @@ test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a 
   const env = await spec.tokens("net-1");
   assert.equal(env.DECKHAND_RUN_TOKEN, "run-deckhand-org-app-12-1@net-1");
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "agent-deckhand-org-app-12-1@net-1");
-  assert.equal(env.ANTHROPIC_BASE_URL, "http://listener:8081/anthropic");
+  assert.equal(env.ANTHROPIC_BASE_URL, "http://models:8080/anthropic");
   // Kept on the live run, for its output's redaction after a restart.
   assert.equal(run.task.live.agentToken, "agent-deckhand-org-app-12-1@net-1");
   const codex = sandboxSpec(runOf({ agent: AGENTS.codex }), "p", "m", {
@@ -224,7 +223,7 @@ test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a 
 
 test("sandboxEnv: its prompt, mode and setup", () => {
   const env = sandboxEnv(runOf(), "the prompt", "the message", parts.settings, null);
-  assert.equal(env.DECKHAND_RUN_SECRET, undefined);
+  assert.equal(env.DECKHAND_RUN_TOKEN, undefined);
   assert.equal(env.SANDBOX_AGENT, "claude");
   assert.equal(env.SANDBOX_PROVIDER, "anthropic");
   assert.equal(env.CLAUDE_CODE_VERSION, "2.0.0");

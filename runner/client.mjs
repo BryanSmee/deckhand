@@ -3,11 +3,11 @@
 // over its API (service.mjs), plus the runs' logs and events
 // it keeps. Each part calls as the service it is for, with that service's token: the
 // orchestrator drives runs (with its fencing epoch), reads their logs (the dashboard's live view,
-// which edge passes on, #506) and asks where addresses are, for its broker port and egress
-// policy (without its epoch); models has the Antigravity login refreshed.
+// which edge passes on, #506) and asks where addresses are, for its egress policy (without its
+// epoch); models has the Antigravity login refreshed.
 //
 // The runner away (updating, handing over to its other copy) is waited for, not taken for a
-// failure: lib/service-client.mjs tries again. The broker port's questions wait less, and fall
+// failure: lib/service-client.mjs tries again. The egress policy's questions wait less, and fall
 // back on the runner's last answer: a sandbox's calls go on while the runner updates.
 import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
@@ -218,15 +218,6 @@ export function createRunnerClient({
     return proxy;
   }
 
-  const sandboxIdOf = async (name, run) => {
-    try {
-      const query = run ? `?run=${encodeURIComponent(run)}` : "";
-      return (await broker.json("GET", `/sandboxes/${path(name)}/network${query}`)).id;
-    } catch {
-      return null;
-    }
-  };
-
   // null: the runner couldn't tell (the egress policy then allows what both may reach).
   const installing = async (name) => {
     try {
@@ -235,26 +226,6 @@ export function createRunnerClient({
       return null;
     }
   };
-
-  // The inbox's whole lines after byte `from`, waiting up to `timeout` ms (the sandbox's long
-  // poll, ../listener/run-files.mjs), or null without an inbox.
-  async function poll(run, from, { timeout = 25_000, signal } = {}) {
-    const res = await broker.request(
-      "GET",
-      `/runs/${path(run)}/inbox?from=${from}&timeout=${timeout}`,
-      { signal },
-    );
-    if (res.status === 404) return null;
-    if (!res.ok) throw await failure(res, "its inbox");
-    return Buffer.from(await res.arrayBuffer());
-  }
-
-  async function file(run, name) {
-    const res = await broker.request("GET", `/runs/${path(run)}/files/${path(name)}`);
-    if (res.status === 404) return null;
-    if (!res.ok) throw await failure(res, `its ${name}`);
-    return Buffer.from(await res.arrayBuffer());
-  }
 
   async function egressFor(ip, host) {
     try {
@@ -504,8 +475,6 @@ export function createRunnerClient({
       send,
       close,
       closed,
-      poll,
-      file,
       wait,
       kill,
       remove,
@@ -513,7 +482,6 @@ export function createRunnerClient({
       relink,
       proxyAddresses,
       locate,
-      sandboxIdOf,
       installing,
     },
     images: {

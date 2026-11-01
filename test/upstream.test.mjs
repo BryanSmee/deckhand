@@ -3,10 +3,9 @@
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
-import { createBroker } from "../listener/broker.mjs";
 import { baseOf, createApiProxy, MAX_IN_FLIGHT, MAX_NOTED } from "../models/upstream.mjs";
 import { forward } from "../lib/upstream.mjs";
-import { sandboxAt, serve } from "./helpers.mjs";
+import { serve, tokenBroker } from "./helpers.mjs";
 
 // A provider that answers each call's headers and a first event, then holds the rest until
 // the test lets it (`release`), or forever (`stall`).
@@ -50,7 +49,7 @@ function fakeClock() {
 }
 
 async function proxyTo(t, upstream, options = {}) {
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const logs = [];
   const proxy = createApiProxy({
     runs: broker,
@@ -75,7 +74,9 @@ async function proxyTo(t, upstream, options = {}) {
   const { url } = await serve(t, (req, res) => proxy.handle(req, res));
   const call = (secret) =>
     fetch(`${url}/api/call`, { method: "POST", headers: { "x-key": secret }, body: "{}" });
-  return { url, broker, call, logs };
+  // A run's agent token, the run registered for `repo` first.
+  const run = (repo = "org/repo") => broker.agentToken(broker.register(repo));
+  return { url, broker, call, logs, run };
 }
 
 const until = async (check) => {
@@ -84,8 +85,8 @@ const until = async (check) => {
 
 test(`a run's call past ${MAX_IN_FLIGHT} in flight answers 429; other runs aren't held`, async (t) => {
   const upstream = await slowProvider(t);
-  const { broker, call } = await proxyTo(t, upstream);
-  const secret = broker.register("org/repo");
+  const { call, run } = await proxyTo(t, upstream);
+  const secret = run();
   const open = await Promise.all(Array.from({ length: MAX_IN_FLIGHT }, () => call(secret)));
   assert.ok(open.every((res) => res.status === 200));
   await until(() => upstream.held.size === MAX_IN_FLIGHT);
@@ -97,7 +98,7 @@ test(`a run's call past ${MAX_IN_FLIGHT} in flight answers 429; other runs aren'
   });
   assert.equal(upstream.requests.length, MAX_IN_FLIGHT);
   // Another run's calls still go on.
-  const other = await call(broker.register("org/other"));
+  const other = await call(run("org/other"));
   assert.equal(other.status, 200);
 
   // Once its calls end, the run may call again.
@@ -112,8 +113,8 @@ test(`a run's call past ${MAX_IN_FLIGHT} in flight answers 429; other runs aren'
 test("a provider that stops sending is cut off once the idle timer fires", async (t) => {
   const upstream = await slowProvider(t);
   const clock = fakeClock();
-  const { broker, call, logs } = await proxyTo(t, upstream, { clock, idleMs: 600_000 });
-  const res = await call(broker.register("org/repo"));
+  const { call, logs, run } = await proxyTo(t, upstream, { clock, idleMs: 600_000 });
+  const res = await call(run());
   assert.equal(res.status, 200);
   const reader = res.body.getReader();
   assert.match(new TextDecoder().decode((await reader.read()).value), /first/);
@@ -131,8 +132,8 @@ test("a provider that stops sending is cut off once the idle timer fires", async
 test("a provider that never answers: a 502 once the idle timer fires", async (t) => {
   const upstream = await slowProvider(t, { headers: false });
   const clock = fakeClock();
-  const { broker, call } = await proxyTo(t, upstream, { clock });
-  const secret = broker.register("org/repo");
+  const { broker, call, run } = await proxyTo(t, upstream, { clock });
+  const secret = run();
   const pending = call(secret);
   await until(() => upstream.held.size === 1);
   clock.fire();
@@ -145,9 +146,9 @@ test("a provider that never answers: a 502 once the idle timer fires", async (t)
 
 test("refused calls: each noted once in the run's log, and only so many", async (t) => {
   const upstream = await slowProvider(t);
-  const { url, broker, logs } = await proxyTo(t, upstream);
+  const { url, broker, logs, run } = await proxyTo(t, upstream);
   const notes = [];
-  const secret = broker.register("org/repo");
+  const secret = run();
   broker.provide(secret, "test", (message) => notes.push(message));
   const refuse = async (path) => {
     const res = await fetch(`${url}/api/${path}`, { headers: { "x-key": secret } });
@@ -170,8 +171,8 @@ test("a request still uploading after the provider answered starts no timer", as
   // Answers at once, without reading the body: a 413, say.
   const { url: early } = await serve(t, (req, res) => res.writeHead(413).end());
   const clock = fakeClock();
-  const { url, broker } = await proxyTo(t, { url: early }, { clock });
-  const secret = broker.register("org/repo");
+  const { url, run } = await proxyTo(t, { url: early }, { clock });
+  const secret = run();
   const req = request(`${url}/api/call`, { method: "POST", headers: { "x-key": secret } });
   req.on("error", () => {});
   req.write("first");
@@ -188,11 +189,11 @@ test("a request still uploading after the provider answered starts no timer", as
 
 test("a refused call's path is redacted, and doesn't hide a provider's failure", async (t) => {
   const upstream = await slowProvider(t);
-  const { url, broker, logs } = await proxyTo(t, upstream, {
+  const { url, broker, logs, run } = await proxyTo(t, upstream, {
     pathRe: /^\/api\/([A-Za-z0-9_]+)$/,
   });
   const notes = [];
-  const secret = broker.register("org/repo", { secret: "s".repeat(40) });
+  const secret = run();
   broker.provide(secret, "test", (message) => notes.push(message));
   const token = `ghs_${"A".repeat(36)}`;
   broker.runOf(secret).apiError = "Provider answered 529";

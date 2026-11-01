@@ -326,8 +326,8 @@ export function withModelCredentials(env, names) {
   return out;
 }
 
-// The listener's ports, each its own (0: one the OS picks, in the tests). POLICY_PORT came
-// after the others: a BROKER_PORT set to its default must say so, not fail to bind.
+// The listener's ports, each its own (0: one the OS picks, in the tests): one set to another's
+// must say so, not fail to bind.
 function distinctPorts(ports) {
   const seen = new Map();
   for (const [name, port] of Object.entries(ports)) {
@@ -365,12 +365,10 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
   registryCredentials(s);
   pickupSlots(s);
   const port = wholeNumber(env.PORT, 8080, "PORT", "a port");
-  const brokerPort = wholeNumber(env.BROKER_PORT, 8081, "BROKER_PORT", "a port");
   const policyPort = wholeNumber(env.POLICY_PORT, 8082, "POLICY_PORT", "a port");
   const servicesPort = wholeNumber(env.SERVICES_PORT, 8083, "SERVICES_PORT", "a port");
   distinctPorts({
     PORT: port,
-    BROKER_PORT: brokerPort,
     POLICY_PORT: policyPort,
     SERVICES_PORT: servicesPort,
   });
@@ -385,13 +383,9 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
     // Which network each service calling the listener's services port is on
     // (lib/service-token.mjs networkCallers()); none: no service may call it.
     serviceNetworks: service === "github" ? null : serviceNetworks(env.SERVICE_NETWORKS),
-    // Internal only: sandboxes ask it for tokens. Not published by compose.yaml.
-    brokerPort,
-    // The egress proxy's questions (/egress), on a port of their own: open until the listener
-    // exits, while the broker's drains (docs/architecture.md#restarts).
+    // The egress proxy's questions (/egress), on a port of their own: open until the
+    // orchestrator exits (docs/architecture.md#restarts). Not published by compose.yaml.
     policyPort,
-    // How sandboxes reach the broker on their network (compose service name by default).
-    brokerUrl: (env.BROKER_URL || `http://listener:${brokerPort}`).replace(/\/$/, ""),
     // The broker service (../broker/, #505), which signs the runs' tokens: where the listener
     // asks for them, and for its own service tokens. On Kubernetes, the pod's token projected
     // for it, which proves who calls.

@@ -2,7 +2,7 @@
 // Prints the lines the listener appends to a run's inbox as they come, until its close line:
 // the agent's input (deckhand_messages in entrypoint.sh; Claude Code's stream-json). Fed
 // through the inbox rather than stdin so that it survives a restart of the listener
-// (runner/docker.mjs). TASK_INBOX is the broker's URL for it (../listener/run-files.mjs),
+// (runner/docker.mjs). TASK_INBOX is the broker's URL for it (../broker/http.mjs),
 // asked with the run token (deckhand-token) for what follows the bytes already read: a listener that
 // restarts meanwhile is asked again, from the same offset, so no line is lost or printed
 // twice. A file path (a sandbox started by hand) is followed instead.

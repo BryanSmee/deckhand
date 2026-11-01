@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { branchAllowed, createBroker } from "../listener/broker.mjs";
+import { isToken } from "../lib/tokens.mjs";
 import {
   acceptedRefs,
   commandReader,
@@ -33,7 +34,6 @@ import {
   defaultPolicies,
   hasOpa,
   localBroker,
-  sandboxAt,
   serve,
   tempDir,
 } from "./helpers.mjs";
@@ -263,11 +263,11 @@ const gitEnv = {
   GIT_COMMITTER_EMAIL: "t@t",
 };
 
-// A work run on issue 1 by default.
+// A work run on issue 1 by default: its handle, whose token setup() has signed.
 function issueRun(b, branches = ["issue-1-*"]) {
-  const secret = b.register("org/repo", { push: true });
-  b.allow(secret, branches);
-  return secret;
+  const id = b.register("org/repo", { push: true });
+  b.allow(id, branches);
+  return id;
 }
 
 // A work run with tokens on issue 1 (broker.mjs issue()): its token, bound to net-1, the network
@@ -288,7 +288,6 @@ async function setup(
     app = true,
     headMs,
     drainMs,
-    sentFrom = sandboxAt(),
     // address → the ID of its network, which a run's token is bound to.
     sandboxOf = async (ip) => (ip === "127.0.0.1" ? "net-1" : null),
     allowWorkflows,
@@ -343,8 +342,11 @@ async function setup(
       return Response.json({ default_branch: "main" });
     },
   };
-  const broker = createBroker({ ...localBroker(), sentFrom, sandboxOf });
-  const secret = await register(broker);
+  const broker = createBroker({ ...localBroker(), sandboxOf });
+  // The run's token, signed once `register` said what it may push, bound to net-1; or the one
+  // `register` gave.
+  const handle = await register(broker);
+  const secret = isToken(handle) ? handle : (await broker.issue(handle, "net-1")).token;
   const logs = [];
   const mirrorDir = join(dir, "mirrors");
   const spoolDir = join(dir, "pushes");
@@ -561,17 +563,6 @@ test("the `workflows` grant without the App's permission: refused, naming the gr
   assert.match(again.stderr, /couldn't get a token for this push/);
 });
 
-test("a run's secret sent from another sandbox's address pushes nothing", async (t) => {
-  const { work, remote, seen, minted, upstream } = await setup(t, {
-    sentFrom: sandboxAt("10.9.0.5"),
-  });
-  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
-  assert.equal(res.ok, false);
-  assert.match(res.stderr, /403|only works from its own sandbox/);
-  assert.equal(upstream("refs/"), "");
-  assert.deepEqual([seen, minted], [[], []]);
-});
-
 test("a push to the default branch is refused, even with --no-verify, and says why", async (t) => {
   const { work, remote, seen, logs, upstream } = await setup(t);
   for (const args of [
@@ -663,8 +654,8 @@ test("a run with no branch can't push any", async (t) => {
   const { work, remote, seen } = await setup(t, { register: (b) => issueRun(b, []) });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
   assert.equal(res.ok, false);
-  assert.match(res.stderr, /no branch to push/);
-  assert.ok(seen.every((s) => s.method === "GET"));
+  assert.match(res.stderr, /this run can't push/);
+  assert.deepEqual(seen, []);
 });
 
 test("deleting the default branch is refused too", async (t) => {
@@ -675,7 +666,7 @@ test("deleting the default branch is refused too", async (t) => {
   assert.equal(upstream("refs/heads/issue-1-topic"), "refs/heads/issue-1-topic");
 });
 
-test("no secret, another run's repo or a finished run: no push", async (t) => {
+test("no token, another run's repo or a finished run: no push", async (t) => {
   const { work, remote, seen, port } = await setup(t);
   const bare = `http://127.0.0.1:${port}/git/org/repo.git`;
   for (const url of [bare, remote("guess"), remote(undefined, "org/other")]) {
@@ -1310,7 +1301,7 @@ test("saved pushes a stopped listener left are swept, never a check's in progres
   mkdirSync(join(spoolDir, "push-new"));
   const old = new Date(Date.now() - 3 * 3600_000);
   utimesSync(join(spoolDir, "push-old"), old, old);
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = createBroker({});
   const gateway = createGitGateway({
     broker,
     app: () => null,

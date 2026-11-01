@@ -31,10 +31,9 @@ Both run modules of `listener/`, which has no entry point of its own any more.
 - **The orchestrator** (`orchestrator/server.mjs`, image `deckhand-orchestrator`): the other
   modules this page names, but those the runner and github services run. It reads the verified deliveries from edge's stream
   (`listener/http.mjs` `deliver()`), answers what edge passes on on its services port
-  (`listener/services-http.mjs`, `/edge/…`), the sandboxes' calls on the broker port
-  (`broker-http.mjs`, 8081) and the proxy's questions on the egress policy's (8082). It holds no
-  secret, keeps the `data` volume (its state, its store: the queue, its lease), and is on no
-  run's network: the egress proxy reaches it under the name `listener`, as sandboxes call it.
+  (`listener/services-http.mjs`, `/edge/…`) and the proxy's questions on the egress policy's port
+  (`egress-http.mjs`, 8082). It holds no secret, keeps the `data` volume (its state, its store:
+  the queue, its lease), and is on no run's network: no sandbox calls it.
 
 How a delivery goes from one to the other, the orchestrator's two copies and their handover:
 [services.md](services.md#edge-and-the-orchestrator). What each holds and may call:
@@ -539,8 +538,7 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   errors stops runs, and the reply says why.
 - **Isolation**: sandboxes run with no capabilities, `no-new-privileges` and CPU, memory and
   pids limits, each on an internal network of its own (created with the run, checked, and
-  removed with it), shared only with the orchestrator (joined as `listener`) and the egress proxy
-  (`proxy/proxy.mjs`), its only way out: the proxy asks the orchestrator's egress policy, for each connection, whether the
+  removed with it), shared only with the egress proxy (`proxy/proxy.mjs`), its only way out: the proxy asks the orchestrator's egress policy, for each connection, whether the
   sandbox at that address may reach that host. Sandboxes can't reach each other. Host mounts only happen under roots the
   operator grants the repo (`GRANTS_DIR`, one file per repo).
 - **Container engine**: a run with the `docker` capability, of a repo granted `docker` (with `docker` in its
@@ -899,8 +897,8 @@ its lease while acting exits. Each holder's epoch fences the copy before it (Fen
 The next copy finds the sandboxes by their labels, follows their output from where the
 previous one stopped (a copy killed within a second of reading some lines reads them again,
 and its log has them twice), and posts each reply once. A recreated container isn't on the networks the old one was joined
-to: the new copy has the runner join it (under the name `listener`) and the egress proxy to the
-running sandboxes' networks first (`runner.relink()`), and again every minute, for a proxy
+to: the new copy has the runner join the egress proxy to the running sandboxes' networks first
+(`runner.relink()`), and again every minute, for a proxy
 recreated on its own; the networks, container engines and engine volumes of runs that are gone
 are removed then. A sandbox the orchestrator started itself while it was still finding the
 previous copy's is its own, never taken for a leftover. Queued comments whose author or
@@ -927,71 +925,67 @@ requests: a rolling update starts the new one first ([setup.md](setup.md#two-cop
 orchestrator away (handing over), edge waits for it up to 15 s on each call it passes on, then
 answers `503`.
 
-A restart delays the runs' calls rather than failing them (#507, #511). Everything a sandbox
-calls during a run reaches the orchestrator's broker port (`BROKER_URL`, `http://listener:8081`:
-the name sandboxes call it by) through the egress proxy, two
-ways:
+A restart delays the runs' calls rather than failing them (#507, #511). Nothing a sandbox calls
+during a run reaches the orchestrator: it calls the services by their own names
+(`lib/services.mjs` `SANDBOX_URLS`: `http://broker:8081`, `http://github:8080`,
+`http://models:8080`), which only the egress proxy reads (a sandbox resolves none), two ways:
 
 - **relayed**: GitHub's API and git's fetches (`gh`, `git clone`), and the hosts an agent has
   relayed (`relayed` in `agents/`, Antigravity's Google endpoints), whose HTTPS the proxy
-  decrypts and sends to the broker's `/relay/<host>/`;
-- **forwarded**: plain HTTP to the broker itself (`BROKER_URL`, no longer in the sandbox's
-  `NO_PROXY`): the agents' APIs set to the broker (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
-  `GOOGLE_GEMINI_BASE_URL`), pushes (the git gateway, `pushInsteadOf` in `entrypoint.sh`), the
-  inbox and the run's files. The proxy recognises the broker's origin (its own `BROKER_URL`,
-  by default `RELAY_URL`'s), asks the policy whether that client may reach the broker (a
-  running sandbox or its engine: `broker=1`), and sends the request on as it is, naming
-  the sandbox in `x-deckhand-client` as for a relayed one; the runs' tokens are bound to that address's network (`broker.mjs` `check()`, through
-  `broker-http.mjs` `clientAddress()`). It
-  refuses `/egress` there (`403`): the broker answers it to the proxy alone, which would
-  otherwise ask on the sandbox's behalf.
+  decrypts and sends to the github service's `/relay/<host>/` (GitHub's, the policy's
+  `service: "github"`) or the models service's (an agent's, `models: true`);
+- **forwarded**: plain HTTP to a service's name (none is in the sandbox's `NO_PROXY`): the
+  agents' APIs set to the models service's (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
+  `GOOGLE_GEMINI_BASE_URL`), pushes to the github service's git gateway (`DECKHAND_GIT_URL`,
+  `pushInsteadOf` in `entrypoint.sh`), the run token's renewal, the inbox and the run's files to
+  the broker's (`DECKHAND_BROKER_URL`). The proxy asks the policy whether that client may reach
+  the name (a running sandbox or its engine: `forward=1`; never as a tunnel), and sends the
+  request to its own URL for that service (`BROKER_SERVICE_URL`, `GITHUB_SERVICE_URL`,
+  `MODELS_SERVICE_URL`), on the paths that service takes from sandboxes only (`/run/`, `/git/`;
+  `/anthropic/`, `/openai/`, `/google/`).
 
-The agents' calls among them don't reach the orchestrator (#504): the proxy sends the broker's
-`/anthropic/`, `/openai/` and `/google/` paths, and the hosts relayed for an agent (the policy's
-`models: true`), to the models service (`MODELS_SERVICE_URL`), with the agent token moved to
-`x-deckhand-run-token` and the network the policy gave for the sandbox in
-`x-deckhand-sandbox`. The orchestrator's restart doesn't touch them, and the models service drains for
-as long as an agent call lasts, 10 minutes ([services.md](services.md#the-models-service)). The orchestrator asks the models service
-which credentials it holds before it reads its settings: it waits for it at start.
+Either way the proxy's own service token goes with the call, the sandbox's credential moved to
+`x-deckhand-run-token` (the broker's, the models service's) or `x-deckhand-run-authorization`
+(the github service's), and the network the policy gave for the sandbox in `x-deckhand-sandbox`,
+which the run's tokens are bound to. The orchestrator's restart doesn't touch these calls, and
+the models service drains for as long as an agent call lasts, 10 minutes
+([services.md](services.md#the-models-service)). The orchestrator asks the models service which
+credentials it holds before it reads its settings: it waits for it at start.
 
-On SIGTERM the orchestrator answers edge's and the runner's calls on its services port with
-`503` (they ask the next copy), while the broker port still takes the sandboxes' calls. Once
-its lease is released, it ends the dashboard's open streams (their pages reconnect, through
-edge, to the next copy) and drains the broker port (`lib/drain.mjs`): it takes no new connection, the calls in flight finish (agents' streams,
-pushes, `gh` calls, inbox long polls), each connection closing as soon as its answer is sent (a
-kept-alive one included, so that no request follows it), and the copy exits once
-they are all done, or after 280 s, a little before compose's `stop_grace_period` (5 minutes)
-ends. The egress policy, which the proxy asks about every sandbox connection (to any host), has
-a port of its own (`POLICY_PORT`, 8082), which stays open until the broker has drained: the
-sandboxes' other traffic goes on during the drain. It closes last, its answers in flight sent (5 s
-at most), so that the proxy's next questions are refused and waited for rather than cut. Compose's `POLICY_URL` names it; the broker's
-port answers `/egress` too, as the proxy's default `POLICY_URL`, but a proxy asking there makes every new connection wait while the
-broker drains.
+The egress policy, which the proxy asks about every sandbox connection (to any host), has a port
+of its own (`POLICY_PORT`, 8082). On SIGTERM the orchestrator answers edge's and the runner's
+calls on its services port with `503` (they ask the next copy); once its lease is released, it
+ends the dashboard's open streams (their pages reconnect, through edge, to the next copy), and
+closes the egress policy's port last, its answers in flight sent (5 s at most), so that the
+proxy's next questions are refused and waited for rather than cut.
 
 The egress proxy waits for the next copy meanwhile (`proxy/wait.mjs`): a connection the
-orchestrator refused (a waiting copy refuses them all), or that failed before it was made (reset while connecting, its name unknown
-while its container is gone), never reached it, so the proxy tries again, with a growing delay
-(0.25 s doubling up to 5 s), for up to 5 minutes before it answers `502` (or, for the policy,
-refuses the host). That is as long as the drain and the next copy's start: with one copy of
-each (compose), the next orchestrator only starts once the previous one has exited; with two,
-both are on the proxy's network under the name `listener`, and the proxy
-tries the address Docker's DNS gives until the acting copy takes it. It holds for any method, a
-POST included: a request is only sent once a connection is made, and never sent again (a copy
-that dies with it gives the sandbox a `502`). Every agent's CLI sends an
-`http://` base URL through `HTTP_PROXY` (checked against Claude Code 2.1.300, Codex 0.162.1 and
-agy 1.4.0), as do git and Node's `fetch` (with `NODE_USE_ENV_PROXY`).
+orchestrator refused (a waiting copy refuses them all), or that failed before it was made (reset
+while connecting, its name unknown while its container is gone), never reached it, so the proxy
+tries again, with a growing delay (0.25 s doubling up to 5 s), for up to 5 minutes before it
+refuses the host. With one copy of each (compose), the next orchestrator only starts once the
+previous one has exited; with two, both are on the proxy's network under the name
+`orchestrator`, and the proxy tries the address Docker's DNS gives until the acting copy takes
+it. A service it forwards to is waited for the same way, for any method, a POST included: a
+request is only sent once a connection is made, and never sent again (a copy that dies with it
+gives the sandbox a `502`). Every agent's CLI sends an `http://` base URL through `HTTP_PROXY`
+(checked against Claude Code 2.1.300, Codex 0.162.1 and agy 1.4.0), as do git and Node's `fetch`
+(with `NODE_USE_ENV_PROXY`).
 
 The egress proxy drains on SIGTERM too, for 25 s (compose's `stop_grace_period` for it is 30 s):
 no new tunnel, the requests in flight finish, and the decrypted tunnels close once their
 requests are answered. Its grace is short on purpose: the next proxy only starts once it exited,
 and the sandboxes' new connections are refused meanwhile, with nothing to try them again. A raw
 tunnel is never known to be idle, so one still open at the end is cut, and so is an agent's
-answer still streaming through the proxy to the broker after 25 s: an update to the proxy's
-image may fail a turn, where the orchestrator's update only delays it.
+answer still streaming through the proxy to the models service after 25 s: an update to the
+proxy's image may fail a turn, where the orchestrator's update only delays it.
 
 Running sandboxes outlive an update: they keep their image, and its scripts, until they end.
-So an endpoint that sandboxes call is never just removed: for a while it answers with what to
-do instead, which the old scripts print.
+So an endpoint that sandboxes call is kept across one update: the sandboxes in flight while it
+happens still find what they call after it. Once a release no longer calls an endpoint, the
+next one may remove it: its last callers were started before the release that stopped calling
+it, and none of them may still run when the next one is deployed (`docker ps --filter
+label=deckhand.run` on the server lists the running sandboxes).
 
 A run's tokens outlive a restart: the broker service (`broker/`) signs them, with a key only it
 holds, and keeps the live runs in its store; they name the run by its id, which
@@ -1149,8 +1143,7 @@ endpoints (`models/upstream.mjs`, `anthropic.mjs`, `openai.mjs`, `google.mjs`) a
 logins (`chatgpt.mjs`, `antigravity-login.mjs`, whose refresh the runner runs in a container of
 its own). Its API (`models/http.mjs` `ROUTES`) names the callers of each endpoint: the egress
 proxy the sandboxes' agent calls (`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with
-the network it vouches they came from, and the orchestrator the same (relaying for a proxy from
-before the service, `models-service.mjs` `relay()`), the credentials' names (`GET /credentials`,
+the network it vouches they came from, and the orchestrator the credentials' names (`GET /credentials`,
 before its settings are read) and fingerprints (`GET /fingerprints`, for redaction), a run's API
 state (`GET /runs/:id/api`, for its reply and fallbacks at its end) and the `models` stream (the
 calls it refused a run, a line each in its log).
@@ -1450,8 +1443,8 @@ tests fake it.
 | `http.mjs`, `deliveries.mjs`                                                                | The orchestrator's: the dashboard's API, `/status` and the screenshots, as edge passes them on with the signed-in user, and the deliveries from edge's stream (`deliver()`); edge's: the places for unverified bodies (`deliveries.mjs`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | `redeliveries.mjs`                                                                          | Edge's: deliveries GitHub couldn't hand over, found in the App's delivery list and redelivered once, by the copy holding the `edge/redeliveries` lease; its state in edge's store.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `sync.mjs`                                                                                  | The last catch-up with GitHub (a redeliveries' scan asked of edge, pull requests, conflicts), for `api/state`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `broker-http.mjs`                                                                           | The orchestrator's broker port (8081) for sandboxes, through the egress proxy (as `listener`): egress answers (with the sandbox's network for the broker service), GitHub, git, ready for review, the agents' API calls; the sandbox the proxy names.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `broker-service.mjs`, `lib/broker-client.mjs`                                               | The calls to the broker service, with a service token for each service the caller is (edge, the orchestrator, the runner): the runs' first tokens and their end, its public keys, the inboxes and files the runner copies there (`mirror`, from the runner service), the `runs` stream read and acknowledged (screenshots copied into `shots/`), the old `run-token.key` handed over as a public key.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `egress-http.mjs`                                                                           | The orchestrator's egress policy (8082), which the egress proxy asks about each connection: its answers, with the sandbox's network for the services the proxy relays or forwards to.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `broker-service.mjs`, `lib/broker-client.mjs`                                               | The calls to the broker service, with a service token for each service the caller is (edge, the orchestrator, the runner): the runs' first tokens and their end, its public keys, the inboxes and files the runner copies there (`mirror`, from the runner service), the `runs` stream read and acknowledged (screenshots copied into `shots/`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `../broker/` (`server.mjs`, `runs.mjs`, `files.mjs`, `http.mjs`, `callers.mjs`, `seal.mjs`) | The broker service, its own image: the signing key; the live runs and their tokens in its store, renewed for their own sandbox only; their inbox, CA, digest and screenshots as blobs; the `runs` stream; the services' tokens, to the caller its network (or pod's service account) proves; one table of what each caller may call.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `status.mjs`                                                                                | `/status`: running runs, reaction updates in flight (`track()`); whether the orchestrator is idle.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `tasks.mjs`                                                                                 | One queue per issue: admission (`admit()`, `resume()`, open questions), the pause, delivery to a running session.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |

@@ -25,7 +25,7 @@
 //   a fork's repository, a fork's pull request's head, a commit that isn't its repository's,
 //   in a fetch, an archive, the API, a page or a file of GitHub's file hosts (FILES:
 //   raw.githubusercontent.com, media.githubusercontent.com, patch-diff.githubusercontent.com),
-//   relayed here for such a run only (broker-http.mjs), and sent on anonymously: they never get
+//   relayed here for such a run only (egress-http.mjs), and sent on anonymously: they never get
 //   a token, nor count towards its calls in flight, as when they were plain hosts;
 // - every write's body is redacted (the run's tokens, the operator's credentials, the tokens
 //   used for it, anything shaped like a GitHub token) before GitHub gets it, and the run's log
@@ -213,7 +213,7 @@ export const ROUTING_HEADERS = [
   "x-method-override",
 ];
 
-// The run token (or a run's secret from before tokens) a call sent in place of a GitHub token:
+// The run token a call sent in place of a GitHub token:
 // `token <token>` (gh), `Bearer <token>` or Basic with it as the password (git). Undefined without an Authorization header; "" for one that
 // holds none.
 export function secretOf(header) {
@@ -354,18 +354,16 @@ export function createGithubGateway({
   // github-forks.mjs createForkChecks(): what a work run that isn't a fork's may fetch. None:
   // nothing is checked.
   forks = null,
-  // req → the address of the sandbox that sent it: the one the egress proxy names when it
-  // relayed the call (broker-http.mjs clientAddress()).
+  // req → where the call came from: the network (or pod) the egress proxy vouched for, in the
+  // github service (../github/service.mjs).
   clientOf = async (req) => addressOf(req),
-  // address → the live run whose sandbox has it (never its engine), or null: a call without a
-  // secret (broker-http.mjs runFrom()).
+  // that → the live run whose sandbox it is (never its engine), or null: a call without a token.
   runFrom = async () => null,
-  // run → the secrets its writes must not carry, besides its GitHub tokens: its own tokens (or secret) and the
-  // operator's credentials (secrets.mjs operatorSecrets()).
+  // run → the secrets its writes must not carry, besides its GitHub tokens: its own tokens and
+  // the operator's credentials (secrets.mjs operatorSecrets()).
   secrets = () => [],
-  // run → (text) → the text without what `secrets` can't list: the operator's credentials (and
-  // a run from before tokens' secret), by their fingerprints, where they aren't held (the github
-  // service's, lib/fingerprints.mjs).
+  // run → (text) → the text without what `secrets` can't list: the operator's credentials, by
+  // their fingerprints, where they aren't held (the github service's, lib/fingerprints.mjs).
   scrub = () => (text) => text,
   // (run, { method, path, body }) → null when a REST write may go on, else { status, message }
   // (github-writes.mjs createWriteChecks()). None: every REST write is refused.

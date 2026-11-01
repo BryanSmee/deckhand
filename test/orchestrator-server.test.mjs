@@ -17,7 +17,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { createServer } from "node:http";
+import { createServer, request as httpRequest } from "node:http";
 import { availableParallelism } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, test } from "node:test";
@@ -30,7 +30,16 @@ import { grantFor, grantOf, grantsBy, loadGrants } from "../listener/grants.mjs"
 import { createPolicies } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createBroker as createBrokerService } from "../broker/server.mjs";
-import { createBrokerCaller } from "../lib/broker-client.mjs";
+import {
+  AGENT_TOKEN_HEADERS,
+  agentTokenOf,
+  createBrokerCaller,
+  RUN_AUTH_HEADER,
+  RUN_TOKEN_HEADER,
+  SANDBOX_HEADER,
+} from "../lib/broker-client.mjs";
+import { SANDBOX_URLS } from "../lib/services.mjs";
+import { createProxy, egressPolicy, relayTarget } from "../proxy/proxy.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
@@ -544,16 +553,88 @@ async function startGithubService(dir, github, credentials, { key, policyService
   return { ...made, url: `http://127.0.0.1:${made.server.address().port}` };
 }
 
+// The egress proxy as the sandboxes reach it, played by the test: the fake sandbox (and the
+// tests) call it in origin-form, as plain HTTP (`/run/…`, `/git/…`, `/anthropic/…`, `/relay/
+// <host>/…`, `/egress?…`). The services' names go to a real proxy (../proxy/proxy.mjs), which
+// asks the orchestrator's egress policy and forwards them; a relayed host's calls, which a sandbox
+// makes over HTTPS the proxy decrypts, go to the service the policy names, as the proxy sends
+// them (with its service token, the sandbox's credential apart, the network vouched for); the
+// policy's questions are the proxy's own. `policyPort()`: the orchestrator's, once it listens.
+async function sandboxProxy({ policyPort, token, urls }) {
+  const policyUrl = () => `http://127.0.0.1:${policyPort()}/egress`;
+  const policy = (ip, host, options) => egressPolicy(policyUrl())(ip, host, options);
+  const service = (name) => ({ url: urls[name], header: async () => token(name) });
+  const services = {
+    broker: service("broker"),
+    github: service("github"),
+    models: service("models"),
+  };
+  const proxy = createProxy({
+    policy,
+    brokerService: services.broker,
+    githubService: services.github,
+    modelsService: services.models,
+  });
+  // A relayed host's request, to its service: `/relay/<host><path>` there.
+  async function relay(req, res, host, path) {
+    const answer = await policy("127.0.0.1", host);
+    const name =
+      answer.relay && (answer.service === "github" ? "github" : answer.models && "models");
+    const url = name && relayTarget(`${urls[name]}/relay`, host, path);
+    if (!url) return res.writeHead(name ? 400 : 403).end("Deckhand's egress proxy refused it\n");
+    const headers = { ...req.headers, host: url.host };
+    for (const drop of ["connection", "keep-alive", RUN_AUTH_HEADER, RUN_TOKEN_HEADER]) {
+      delete headers[drop];
+    }
+    if (name === "models") {
+      headers[RUN_TOKEN_HEADER] = agentTokenOf(req.headers);
+      for (const drop of AGENT_TOKEN_HEADERS) delete headers[drop];
+    } else headers[RUN_AUTH_HEADER] = req.headers.authorization ?? "";
+    Object.assign(headers, {
+      authorization: await services[name].header(),
+      [SANDBOX_HEADER]: answer.sandbox ?? "",
+    });
+    const out = httpRequest(url, { method: req.method, headers, agent: false }, (answered) => {
+      res.writeHead(answered.statusCode, answered.headers);
+      answered.pipe(res);
+    });
+    out.on("error", () => (res.headersSent ? res.destroy() : res.writeHead(502).end()));
+    req.pipe(out);
+  }
+  const server = createServer((req, res) => {
+    const done = (error) => {
+      if (!res.headersSent) res.writeHead(500).end(String(error));
+    };
+    if (req.url.startsWith("/egress?")) {
+      return fetch(`${policyUrl()}${req.url.slice("/egress".length)}`)
+        .then(async (answer) => res.writeHead(answer.status).end(await answer.text()))
+        .catch(done);
+    }
+    const relayed = /^\/relay\/([^/]+)(\/.*)$/.exec(req.url);
+    if (relayed) return relay(req, res, relayed[1], relayed[2]).catch(done);
+    const name = /^\/run\//.test(req.url)
+      ? "broker"
+      : /^\/git\//.test(req.url)
+        ? "github"
+        : "models";
+    req.url = `${SANDBOX_URLS[name]}${req.url}`;
+    proxy.emit("request", req, res);
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  server.unref();
+  return { server, port: server.address().port };
+}
+
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
 describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, () => {
-  // The ports a listener bound, from its log: its own, its broker's, its egress policy's.
+  // The ports a listener bound, from its log: its own, its egress policy's.
   async function ports(listener) {
     const bound = async (name) => {
       const re = new RegExp(`${name} on :(\\d+)\n`);
       return Number((await listener.until(re)).match(re)[1]);
     };
-    return [await bound("Listening"), await bound("Token broker"), await bound("Egress policy")];
+    return [await bound("Listening"), await bound("Egress policy")];
   }
 
   // A listener with an App, a fake Docker and a fake GitHub serving `files`; `extra`: more
@@ -590,7 +671,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const brokerService = createBrokerService({
       store: openStore("memory:"),
       key: brokerKey,
-      callers: createCallers({ networks: "edge+orchestrator+models+runner=127.0.0.0/8" }),
+      callers: createCallers({ networks: "edge+orchestrator+models+runner+proxy=127.0.0.0/8" }),
       keysDir: join(dir, "keys"),
     }).server;
     await new Promise((resolve) => brokerService.listen(0, "127.0.0.1", resolve));
@@ -635,26 +716,37 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
     await new Promise((resolve) => modelsServer.listen(0, "127.0.0.1", resolve));
     modelsServer.unref();
-    // Port 0: the OS picks free ports, which the listener logs. The runner's and the broker's
-    // are picked first: the runner calls the one, the sandboxes it starts the other.
+    // The egress proxy, played by the test: the fake sandbox calls the services through it.
+    let policyPortNow = 0;
+    const brokerUrl = `http://127.0.0.1:${brokerService.address().port}`;
+    const standIn = await sandboxProxy({
+      policyPort: () => policyPortNow,
+      token: (aud) => `Bearer ${signServiceToken({ sub: "proxy", aud }, brokerKey)}`,
+      urls: {
+        broker: brokerUrl,
+        github: githubService.url,
+        models: `http://127.0.0.1:${modelsServer.address().port}`,
+      },
+    });
+    // Port 0: the OS picks free ports, which the listener logs. The runner's is picked first:
+    // the listener calls it.
     const runnerPort = await freePort();
-    const firstBrokerPort = await freePort();
     // Edge's internal port and the orchestrator's services port: each calls the other.
     const edgeInternalPort = await freePort();
     const servicesPortFixed = await freePort();
     const settings = {
-      BROKER_SERVICE_URL: `http://127.0.0.1:${brokerService.address().port}`,
+      BROKER_SERVICE_URL: brokerUrl,
       PATH: `${dir}:${process.env.PATH}`,
       DATA_DIR: dir,
       ALLOWED_USERS: "alice,bob",
       PORT: "0",
-      BROKER_PORT: String(firstBrokerPort),
       POLICY_PORT: "0",
       SERVICES_PORT: String(servicesPortFixed),
       // A copy killed leaves its lease for this long: the next one waits it out.
       LEASE_SECONDS: "2",
       EDGE_URL: `http://127.0.0.1:${edgeInternalPort}`,
-      BROKER_URL: `http://127.0.0.1:${firstBrokerPort}`,
+      // Where the fake sandbox reaches the services' names (fixtures/fake-docker.sh).
+      DECKHAND_TEST_PROXY: `http://127.0.0.1:${standIn.port}`,
       RUNNER_URL: `http://127.0.0.1:${runnerPort}`,
       // Everything the runner and edge call from, and are called from, is this host's.
       SERVICE_NETWORKS: "runner+edge=127.0.0.0/8",
@@ -710,6 +802,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       githubService.server.closeAllConnections();
       githubService.server.close();
       egress.close();
+      standIn.server.close();
       brokerService.closeAllConnections();
       brokerService.close();
       models?.stop();
@@ -729,14 +822,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       SERVICE_KEYS_DIR: join(dir, "keys"),
     };
     await startRunner();
-    const [port, brokerPort, policyPort] = await ports(listener);
-    // Restarts keep them: the sandboxes still running talk to the broker at a fixed URL.
+    const [port, policyPort] = await ports(listener);
+    policyPortNow = policyPort;
+    // Restarts keep them: the egress proxy asks the policy at a fixed URL.
     Object.assign(settings, {
       PORT: String(port),
-      BROKER_PORT: String(brokerPort),
       POLICY_PORT: String(policyPort),
       SERVICES_PORT: String(servicesPort),
-      BROKER_URL: `http://127.0.0.1:${brokerPort}`,
     });
     // `id`: its GUID (X-GitHub-Delivery), for a redelivery.
     const send = (payload, event = "issue_comment", id) => {
@@ -805,7 +897,8 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         return runner;
       },
       port,
-      brokerPort,
+      // The egress proxy the test plays (sandboxProxy()).
+      proxyPort: standIn.port,
       policyPort,
       send,
       restart,
@@ -930,12 +1023,12 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     );
 
     // The sandbox has the run's secret where the credential would be, and the listener's URL.
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(credential));
     const agentToken = agentTokenIn(runEnv, "CLAUDE_CODE_OAUTH_TOKEN", secret);
     assert.doesNotMatch(runEnv, /^ANTHROPIC_API_KEY=/m);
-    assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/anthropic$/m);
+    assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/models:8080\/anthropic$/m);
 
     // Its API call reached "Anthropic" with the operator's credential, not the secret.
     const call = await github.waitFor((r) => r.path === "/v1/messages?beta=true");
@@ -980,7 +1073,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await send(comment("alice"));
     await listener.until("done (ok)");
 
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(credential));
     agentTokenIn(runEnv, "ANTHROPIC_AUTH_TOKEN", secret);
@@ -988,7 +1081,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const passed = readFileSync(join(dir, "run-args"), "utf8").split("\n");
     assert.ok(passed.includes("ANTHROPIC_AUTH_TOKEN"));
     assert.ok(!passed.includes("ANTHROPIC_API_KEY") && !passed.includes("CLAUDE_CODE_OAUTH_TOKEN"));
-    assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/anthropic$/m);
+    assert.match(runEnv, /^ANTHROPIC_BASE_URL=http:\/\/models:8080\/anthropic$/m);
     assert.match(runEnv, /^ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic\/claude-opus-4\.1$/m);
     assert.doesNotMatch(runEnv, /^ANTHROPIC_DEFAULT_SONNET_MODEL=/m);
     assert.match(runEnv, /^SANDBOX_MODEL=openai\/gpt-5$/m);
@@ -1013,13 +1106,13 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
 
     // Codex, installed into its own volume, with its session volume and the run's secret.
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(key));
     assert.match(runEnv, /^SANDBOX_AGENT=codex$/m);
     assert.match(runEnv, /^CODEX_VERSION=0\.162\.1$/m);
     agentTokenIn(runEnv, "OPENAI_API_KEY", secret);
-    assert.match(runEnv, /^OPENAI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/openai$/m);
+    assert.match(runEnv, /^OPENAI_BASE_URL=http:\/\/models:8080\/openai$/m);
     assert.match(runEnv, /^SANDBOX_MODEL=gpt-6-astra$/m);
     assert.doesNotMatch(runEnv, /^(ANTHROPIC_|CLAUDE_CODE_VERSION=)/m);
     const args = readFileSync(join(dir, "run-args"), "utf8").split("\n");
@@ -1080,7 +1173,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await new Promise((resolve) => proxy.listen(0, "127.0.0.1", resolve));
     t.after(() => proxy.close());
     const access = "ya29.operator-plan-access-token";
-    const { dir, github, send, brokerPort, listener } = await listen(t, {}, (dir) => {
+    const { dir, github, send, proxyPort, listener } = await listen(t, {}, (dir) => {
       // In the credentials folder, under its fixed name: no AGY_AUTH_FILE needed.
       mkdirSync(join(dir, "credentials"));
       const file = join(dir, "credentials", "agy-auth.json");
@@ -1139,13 +1232,14 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     assert.equal(answers["play.googleapis.com"].allowed, false);
     assert.equal(answers["lh3.googleusercontent.com"].allowed, true);
     assert.equal(answers["lh3.googleusercontent.com"].relay, false);
-    // The listener's relay knew the run's secret, and refused a path agy doesn't call.
+    // The models service's relay knew the run's token, and refused a path agy doesn't call.
     assert.equal(readFileSync(join(dir, "relay-answer"), "utf8"), "404");
+    // Its run over, its sandbox's address reaches nothing there.
     const stranger = await fetch(
-      `http://127.0.0.1:${brokerPort}/relay/www.googleapis.com/oauth2/v2/userinfo`,
+      `http://127.0.0.1:${proxyPort}/relay/www.googleapis.com/oauth2/v2/userinfo`,
       { headers: { authorization: "Bearer not-a-run" } },
     );
-    assert.equal(stranger.status, 401);
+    assert.equal(stranger.status, 403);
 
     // A login that can't be refreshed fails agy's model list: the reply says why, not only
     // agy's model error (#224).
@@ -1187,11 +1281,11 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     await send(comment("alice"));
     await listener.until("done (ok)");
 
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
     assert.ok(!runEnv.includes(key));
     agentTokenIn(runEnv, "GEMINI_API_KEY", secret);
-    assert.match(runEnv, /^GOOGLE_GEMINI_BASE_URL=http:\/\/127\.0\.0\.1:\d+\/google$/m);
+    assert.match(runEnv, /^GOOGLE_GEMINI_BASE_URL=http:\/\/models:8080\/google$/m);
     // The proxy's CA, which its GitHub calls need, if not its own.
     assert.match(readFileSync(join(dir, "run-args"), "utf8"), /^DECKHAND_CA=/m);
 
@@ -1373,7 +1467,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
   });
 
   test("a webhook from the App runs a sandbox whose GitHub calls get its repo's token at the gateway", async (t) => {
-    const { dir, github, listener, port, brokerPort } = await listen(t);
+    const { dir, github, listener, port, proxyPort } = await listen(t);
     const payload = JSON.stringify(comment("alice"));
     const deliver = (signature) =>
       fetch(`http://127.0.0.1:${port}/webhook`, {
@@ -1477,25 +1571,21 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     ]);
     assert.match(listener.output(), /Egress: refused evil\.example for org\/repo#12/);
 
-    // Once the run is over, its secret gets nothing.
+    // Once the run is over, its sandbox reaches nothing: the egress proxy refuses its calls,
+    // GitHub's and its pushes (git-gateway.mjs) alike.
     await listener.until("done (ok)");
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
-    const after = await fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
+    const after = await fetch(`http://127.0.0.1:${proxyPort}/relay/127.0.0.1/repos/org/repo`, {
       headers: { authorization: `token ${secret}` },
     });
-    assert.equal(after.status, 401);
-    // Nor does /token, gone: no sandbox gets a GitHub token.
-    assert.equal((await fetch(`http://127.0.0.1:${brokerPort}/token`)).status, 404);
-    // Its pushes went through the broker's port too (git-gateway.mjs): now refused, with the
-    // challenge git needs to ask its credential helper.
+    assert.equal(after.status, 403);
     const push = await fetch(
-      `http://127.0.0.1:${brokerPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
+      `http://127.0.0.1:${proxyPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
       {
         headers: { authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}` },
       },
     );
-    assert.equal(push.status, 401);
-    assert.match(push.headers.get("www-authenticate"), /^Basic/);
+    assert.equal(push.status, 403);
   });
 
   // The agent's token in `name` of the sandbox's environment (sandbox-spec.mjs tokenEnv()),
@@ -1785,14 +1875,14 @@ mounts:
   });
 
   test("once its sandbox exits, a run's hosts no longer answer for its address", async (t) => {
-    const { github, brokerPort, send } = await listen(t, {});
+    const { github, proxyPort, send } = await listen(t, {});
     // The reply takes its time: Docker could give the address to another sandbox meanwhile.
     const reply = (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments";
     const release = github.hold(reply);
     t.after(release);
     assert.equal((await send(comment("alice"))).status, 202);
     await github.waitFor(reply);
-    const asked = await fetch(`http://127.0.0.1:${brokerPort}/egress?ip=10.9.0.5&host=github.com`);
+    const asked = await fetch(`http://127.0.0.1:${proxyPort}/egress?ip=10.9.0.5&host=github.com`);
     assert.deepEqual(await asked.json(), {
       allowed: false,
       private: false,
@@ -1902,15 +1992,15 @@ mounts:
 
   // What the running sandbox's secret gets from the git gateway and from opening its pull
   // request through the GitHub gateway (`gh pr create`'s write, over REST).
-  async function pushAndOpen({ dir, brokerPort }) {
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+  async function pushAndOpen({ dir, proxyPort }) {
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     const basic = Buffer.from(`deckhand:${secret}`).toString("base64");
     const push = await fetch(
-      `http://127.0.0.1:${brokerPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
+      `http://127.0.0.1:${proxyPort}/git/org/repo.git/info/refs?service=git-receive-pack`,
       { headers: { authorization: `Basic ${basic}` } },
     );
     const opened = await fetch(
-      `http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo/pulls`,
+      `http://127.0.0.1:${proxyPort}/relay/127.0.0.1/repos/org/repo/pulls`,
       {
         method: "POST",
         headers: { authorization: `token ${secret}` },
@@ -2096,9 +2186,9 @@ mounts:
     });
     await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
     await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 10, "the run");
-    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
     const patch = (number) =>
-      fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/issues/${number}`, {
+      fetch(`http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/repos/org/repo/issues/${number}`, {
         method: "PATCH",
         headers: { authorization: `token ${secret}` },
         body: JSON.stringify({ body: "Updated." }),
@@ -2146,9 +2236,9 @@ mounts:
     });
     await ctx.send(comment("alice", "Deckhand\n/mode brainstorm\nWhat about dark mode?"));
     await until(() => exists(join(ctx.dir, "egress"))?.trim().split("\n").length === 10, "the run");
-    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
     const graphql = (query) =>
-      fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/graphql`, {
+      fetch(`http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/graphql`, {
         method: "POST",
         headers: { authorization: `token ${secret}` },
         body: JSON.stringify({ query }),
@@ -2188,7 +2278,7 @@ mounts:
       '{ repository(owner: "org", name: "repo") { pullRequest(number: 1) { commits(last: 1) { nodes { commit { statusCheckRollup { state } } } } } } }';
     assert.equal((await graphql(rollup)).status, 200);
     await fetch(
-      `http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/commits/abc/check-runs`,
+      `http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/repos/org/repo/commits/abc/check-runs`,
       {
         headers: { authorization: `token ${secret}` },
       },
@@ -2257,10 +2347,10 @@ mounts:
     });
     await ctx.listener.until("org/repo#12: projects: acme/3: In progress (start)");
     // The run adds its issue to the granted project, never to another.
-    await until(() => exists(join(ctx.dir, "run-secret")), "the run");
-    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+    await until(() => exists(join(ctx.dir, "run-token")), "the run");
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
     const add = (project) =>
-      fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/graphql`, {
+      fetch(`http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/graphql`, {
         method: "POST",
         headers: { authorization: `token ${secret}` },
         body: JSON.stringify({
@@ -2328,8 +2418,8 @@ mounts:
     await until(() => exists(egress)?.trim().split("\n").length === 10, "the sandbox");
     // The run's call, relayed through the listener to the in-process github service, which mints
     // the token and sends its fingerprint to the listener.
-    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
-    const read = await fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
+    const read = await fetch(`http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/repos/org/repo`, {
       headers: { authorization: `token ${secret}` },
     });
     assert.equal(read.status, 200);
@@ -2349,7 +2439,7 @@ mounts:
     for (const reply of replies) assert.ok(!reply.body.includes(used), "the token in the reply");
   });
 
-  test("a run's secret sent from another address: no GitHub, push or ready", async (t) => {
+  test("a run's token sent from another address: the egress proxy lets none of it through", async (t) => {
     const ctx = await holding(t, undefined, (dir, github) => ({ GITHUB_URL: github.url }));
     // The sandbox no longer has the address the requests come from; a restarted runner looks
     // its addresses up again.
@@ -2357,14 +2447,15 @@ mounts:
     await ctx.restartRunner();
     await ctx.restart();
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
-    const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
-    const token = await fetch(`http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
+    const token = await fetch(`http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/repos/org/repo`, {
       headers: { authorization: `token ${secret}` },
     });
     assert.equal(token.status, 403);
-    for (const answer of [`${token.status} ${await token.text()}`, ...(await pushAndOpen(ctx))]) {
-      assert.match(answer, /^403 [^]*only works from its own sandbox/);
-    }
+    // That address is no running sandbox's: no GitHub, push or ready, refused before any service.
+    const [push, opened] = await pushAndOpen(ctx);
+    assert.match(push, /^403 [^]*only a running sandbox reaches the github service/);
+    assert.match(opened, /^403 /);
   });
 
   test("a work run still pushes and opens its pull request, before and after a restart", async (t) => {
@@ -2376,9 +2467,9 @@ mounts:
         assert.doesNotMatch(answer, /^40[13]|can't push|its ceiling/);
       }
       // Not a fork's run: a fork's pull request's head is refused it (github-forks.mjs).
-      const secret = readFileSync(join(ctx.dir, "run-secret"), "utf8").trim();
+      const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
       const archive = await fetch(
-        `http://127.0.0.1:${ctx.brokerPort}/relay/127.0.0.1/repos/org/repo/tarball/refs/pull/41/head`,
+        `http://127.0.0.1:${ctx.proxyPort}/relay/127.0.0.1/repos/org/repo/tarball/refs/pull/41/head`,
         { headers: { authorization: `token ${secret}` } },
       );
       assert.equal(archive.status, 403);
@@ -2421,59 +2512,44 @@ mounts:
     );
   });
 
-  test("on SIGTERM the broker takes no new call, one in flight finishes, then the listener exits", async (t) => {
+  test("on SIGTERM the orchestrator holds none of the sandboxes' calls: one in flight goes on as it exits", async (t) => {
     const ctx = await holding(t);
-    const { dir, github, brokerPort, policyPort, listener } = ctx;
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const { dir, github, proxyPort, policyPort, listener } = ctx;
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     // A sandbox's call the GitHub gateway relays, left unanswered (an agent's stream, a push).
     const slow = (r) => r.method === "GET" && r.path === "/repos/org/repo/commits/held";
     const release = github.hold(slow);
     t.after(release);
     const inFlight = fetch(
-      `http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo/commits/held`,
-      {
-        headers: { authorization: `token ${secret}` },
-      },
+      `http://127.0.0.1:${proxyPort}/relay/127.0.0.1/repos/org/repo/commits/held`,
+      { headers: { authorization: `token ${secret}` } },
     );
     await github.waitFor(slow);
 
+    // The egress policy answers on its own port: the sandboxes' connections go on.
+    const asked = await fetch(`http://127.0.0.1:${policyPort}/egress?ip=10.9.0.5&host=github.com`);
+    assert.equal((await asked.json()).allowed, true);
+    // The orchestrator exits without waiting for the call, which is the github service's.
     const exited = new Promise((resolve) => listener.child.on("exit", resolve));
     listener.child.kill("SIGTERM");
-    await listener.until("0 task(s) with queued comments left to the next copy");
-    // Its lease released, the broker port drains: the next copy takes the new calls.
-    await listener.until("orchestrator: lease released");
-    // A new call is refused: the egress proxy waits for the next listener (proxy/wait.mjs).
-    await assert.rejects(
-      fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
-        headers: { authorization: `token ${secret}` },
-      }),
-      (error) => error.cause?.code === "ECONNREFUSED",
-    );
-    // The egress policy still answers on its own port: the sandboxes' other connections go on.
-    const asked = await fetch(`http://127.0.0.1:${policyPort}/egress?ip=10.9.0.5&host=github.com`);
-    assert.equal(asked.status, 200);
-    assert.equal((await asked.json()).allowed, true);
-    // The queue and the runs are saved, but the listener waits for the call in flight.
-    await new Promise((resolve) => setTimeout(resolve, 200));
-    assert.equal(listener.child.exitCode, null);
+    assert.equal(await exited, 0);
     release();
     const answer = await inFlight;
     assert.equal(answer.status, 200);
     await answer.text();
-    assert.equal(await exited, 0);
   });
 
   test("a restart during a run: it goes on, a new comment reaches it, one reply", async (t) => {
     const ctx = await holding(t);
-    const { dir, github, send, brokerPort } = ctx;
+    const { dir, github, send, proxyPort } = ctx;
     const { code, output } = await ctx.restart();
     assert.equal(code, 0);
     assert.match(output, /Stopping: running sandboxes go on/);
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
 
-    // Its GitHub calls still go through, at the new listener's gateway.
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
-    const token = await fetch(`http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo`, {
+    // Its GitHub calls still go through, at the github service's gateway.
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
+    const token = await fetch(`http://127.0.0.1:${proxyPort}/relay/127.0.0.1/repos/org/repo`, {
       headers: { authorization: `token ${secret}` },
     });
     assert.equal(token.status, 200);
@@ -5692,14 +5768,14 @@ mounts:
 
   // A push of `ref` by hand: by default with a real commit and its pack; `carries: false`, to a
   // commit nobody has, without one.
-  async function pushProbe(brokerPort, secret, ref, { carries = true } = {}) {
+  async function pushProbe(proxyPort, secret, ref, { carries = true } = {}) {
     const { sha, pack } = carries ? commitPack() : { sha: "a".repeat(40), pack: Buffer.alloc(0) };
     const line = `${"0".repeat(40)} ${sha} ${ref}\0report-status\n`;
     const body = Buffer.concat([
       Buffer.from(`${(line.length + 4).toString(16).padStart(4, "0")}${line}0000`),
       pack,
     ]);
-    const res = await fetch(`http://127.0.0.1:${brokerPort}/git/org/repo.git/git-receive-pack`, {
+    const res = await fetch(`http://127.0.0.1:${proxyPort}/git/org/repo.git/git-receive-pack`, {
       method: "POST",
       headers: { authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}` },
       body,
@@ -5723,24 +5799,24 @@ mounts:
       writeFileSync(join(dir, "hold"), "");
       return { GITHUB_URL: github.url };
     });
-    const { dir, github, brokerPort } = ctx;
+    const { dir, github, proxyPort } = ctx;
     await ctx.send(comment("alice"));
     await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
     assert.deepEqual(await savedBranches(dir), ["issue-12-*"]);
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     const forwarded = () =>
       github.requests.filter((r) => r.path === "/org/repo.git/git-receive-pack").length;
 
     for (const round of ["before", "after"]) {
       for (const ref of ["refs/heads/issue-13-x", "refs/heads/gh-pages"]) {
         assert.match(
-          await pushProbe(brokerPort, secret, ref),
+          await pushProbe(proxyPort, secret, ref),
           /ng refs\/heads\/[\w-]+ Deckhand: this run can only push issue-12-\*/,
           `${round}: ${ref}`,
         );
       }
       assert.equal(forwarded(), round === "before" ? 0 : 1);
-      await pushProbe(brokerPort, secret, `refs/heads/issue-12-${round}`);
+      await pushProbe(proxyPort, secret, `refs/heads/issue-12-${round}`);
       assert.equal(forwarded(), round === "before" ? 1 : 2);
       // GitHub took it: the run's last push, on its saved record.
       const record = () => {
@@ -5771,10 +5847,10 @@ mounts:
       writeGrants(dir, ["workflows"]);
       return { GITHUB_URL: github.url };
     });
-    const { dir, github, brokerPort } = ctx;
+    const { dir, github, proxyPort } = ctx;
     await ctx.send(comment("alice"));
     await until(() => exists(join(dir, "egress"))?.trim().split("\n").length === 10, "the sandbox");
-    const secret = readFileSync(join(dir, "run-secret"), "utf8").trim();
+    const secret = readFileSync(join(dir, "run-token"), "utf8").trim();
     // The token each push reached GitHub with.
     const pushedWith = () =>
       github.requests
@@ -5784,7 +5860,7 @@ mounts:
     // serves no git: an empty one): a branch pointed at a commit the push doesn't carry and the
     // repository doesn't have is refused, never forwarded (a work run that isn't a fork's).
     assert.match(
-      await pushProbe(brokerPort, secret, "refs/heads/issue-12-x", { carries: false }),
+      await pushProbe(proxyPort, secret, "refs/heads/issue-12-x", { carries: false }),
       /ng refs\/heads\/issue-12-x Deckhand: this push points refs\/heads\/issue-12-x at a{12}, which it doesn't carry and org\/repo doesn't have/,
     );
     // The github service's, a cache of its own.
@@ -5802,7 +5878,7 @@ mounts:
       github.requests.filter((r) => r.path.startsWith("/org/repo.git/info/refs")).length;
     const before = mirrorFetches();
     const opened = await fetch(
-      `http://127.0.0.1:${brokerPort}/relay/127.0.0.1/repos/org/repo/pulls`,
+      `http://127.0.0.1:${proxyPort}/relay/127.0.0.1/repos/org/repo/pulls`,
       {
         method: "POST",
         headers: { authorization: `token ${secret}` },
@@ -5823,7 +5899,7 @@ mounts:
     // Taken back: the next push goes through without it, no restart, read for what it carries
     // alone.
     writeGrants(dir, []);
-    await pushProbe(brokerPort, secret, "refs/heads/issue-12-x");
+    await pushProbe(proxyPort, secret, "refs/heads/issue-12-x");
     assert.deepEqual(pushedWith(), ["repo-token"]);
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");

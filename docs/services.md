@@ -202,7 +202,7 @@ On one node, the store's file backend is shared by the processes using its folde
 (`lib/store-file.mjs`: a lock file, and `state.json` read again once another process wrote it),
 so two copies of the orchestrator on one volume work with Compose too (`docker compose up -d
 --scale orchestrator=2`); Redis, on several nodes. Both copies are on the proxy's network
-under the name `listener`, and Docker's DNS answers it with either: the waiting
+under the name `orchestrator`, and Docker's DNS answers it with either: the waiting
 copy refuses those connections, and the proxy tries them again until the acting one takes them
 (Kubernetes keeps the waiting copy out of its Service by `/ready` instead). With one copy
 (Compose's default), an update is a stop, then a start: the next copy takes the lease at once, as
