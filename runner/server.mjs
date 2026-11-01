@@ -16,7 +16,6 @@ import { createBrokerService } from "../listener/broker-service.mjs";
 import { checkout } from "../listener/checkout.mjs";
 import { ConfigError, loadConfig, readConfigFile } from "../listener/config.mjs";
 import { createImages } from "../listener/images.mjs";
-import { createPreviews } from "../listener/previews.mjs";
 import { grantsBy } from "../listener/grants.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createPolicies } from "../listener/policies.mjs";
@@ -104,13 +103,6 @@ const images = createImages({
   checkout: fetchCheckout,
   log,
 });
-const previews = createPreviews({
-  config,
-  containers: backend.jobs.preview,
-  checkout: fetchCheckout,
-  logDir: join(config.dataDir, "previews"),
-  log,
-});
 
 const holder = `${hostname()}-${process.pid}-${randomBytes(4).toString("hex")}`;
 let service = null;
@@ -123,9 +115,9 @@ const lease = activePassive({
   log,
 });
 
-// What the operator's policies grant each repository (a container engine, its Dockerfile, a
-// preview hook…), asked of the policy service as the listener asks it: the runner checks every
-// spec, build and hook against them again, whatever the orchestrator says (#498). Only the
+// What the operator's policies grant each repository (a container engine, its Dockerfile…),
+// asked of the policy service as the listener asks it: the runner checks every spec and build
+// against them again, whatever the orchestrator says (#498). Only the
 // operator's layer: no repository's policies, so no GitHub read.
 const policies = createPolicies({
   config,
@@ -142,7 +134,6 @@ service = createRunnerService({
   granted: grantsBy(policies),
   runner: backend.runner,
   images,
-  previews,
   logs: createLogs({ store }),
   store,
   broker: {
@@ -154,7 +145,6 @@ service = createRunnerService({
       ).env,
   },
   refresh: loginRefresh({ config, images, jobs: backend.jobs }),
-  checkout: fetchCheckout,
   blobOf,
   keys: () => keys,
   bound,
@@ -174,16 +164,15 @@ await lease.start();
 if (!lease.active()) log("Runner: another copy holds the lease, waiting for it");
 
 // An update stops this copy with SIGTERM: output streams end (their callers follow again from
-// the next copy), the preview hooks waiting are dropped (logged), the calls in flight finish,
-// then the lease goes, and the other copy acts. The preview hooks running end after that, or
-// are cut (killed, removed) at the end of the grace period. Sandboxes go on.
+// the next copy), the calls in flight finish, then the lease goes, and the other copy acts.
+// Sandboxes go on.
 const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : DRAIN_MS;
 process.once("SIGTERM", async () => {
   log(
-    `Stopping: the calls in flight finish, then the lease goes; the preview hooks running end after it (${Math.round(graceMs / 1000)} s at most in all, cut past that)`,
+    `Stopping: the calls in flight finish, then the lease goes (${Math.round(graceMs / 1000)} s at most, cut past that)`,
   );
   const all = await service.stop({ graceMs });
-  if (!all) log("Stopping: calls or preview hooks still going at the end of the grace period, cut");
+  if (!all) log("Stopping: calls still going at the end of the grace period, cut");
   brokerCaller.stop();
   await store.close();
   process.exit(0);

@@ -20,7 +20,6 @@ import {
   grantOf,
   grantsBy,
   grantsFrom,
-  previewProblem,
 } from "../listener/grants.mjs";
 import { APART, MODES, RESEARCH } from "../listener/modes.mjs";
 import { readsOf } from "../listener/github-app.mjs";
@@ -45,13 +44,11 @@ const full = {
   setup: "npm ci",
   dockerfile: "Dockerfile",
   docker: { cache: false },
-  preview: { command: "x" },
 };
 const granted = {
   allowDockerfile: true,
   allowBranchDockerImages: true,
   allowDocker: true,
-  allowPreview: true,
   allowResearch: true,
 };
 const outcome = ({
@@ -82,7 +79,6 @@ test("the catalogue: its names, dependencies and config sides", () => {
       "image:repo",
       "image:branch",
       "docker",
-      "preview",
       "internet",
       "read:issues",
       "read:pulls",
@@ -234,7 +230,6 @@ test("forks don't push: a work run with branch images granted keeps its code, wi
     "setup",
     "image:repo",
     "docker",
-    "preview",
     "read:issues",
     "read:pulls",
     "read:actions",
@@ -470,7 +465,7 @@ test(
       if (RESEARCH.has(mode)) assert.deepEqual(allowed, ["internet"], mode);
       else {
         assert.ok(has("pull") && !has("internet"), mode);
-        for (const c of ["push", "setup", "docker", "image:branch", "preview"]) {
+        for (const c of ["push", "setup", "docker", "image:branch"]) {
           assert.equal(has(c), !APART.has(mode), `${mode}: ${c}`);
         }
         // Discussions for discussion runs only, as their token had.
@@ -772,26 +767,6 @@ test("Deckhand's defaults give each built-in mode's token what it read before ca
   }
 });
 
-test("a deny of `preview`: said not to stop the hook yet, which runs on pull request events", () => {
-  const preview = (settings, grant) =>
-    outcomeOf({
-      rules: {
-        operator: layer(everything(), [
-          { capability: "preview", reason: "no previews", file: "mode.rego" },
-        ]),
-      },
-      custom: false,
-      settings,
-      grant,
-      repo: { private: true },
-      mode: "work",
-    }).warnings.some((w) => w.startsWith("`preview` is denied, but the repository's preview hook"));
-  assert.equal(preview(full, granted), true);
-  // No hook asked for, or none granted: none runs, nothing to say.
-  assert.equal(preview({ ...full, preview: null }, granted), false);
-  assert.equal(preview(full, { ...granted, allowPreview: false }), false);
-});
-
 test("a discussion run without read:discussions doesn't start: it reads its thread with its token", () => {
   const said = (caps) =>
     outcomeOf({
@@ -872,15 +847,11 @@ test(
       dockerfile: (g) => used(g, "work", "image:repo"),
       branch_docker_images: (g) => used(g, "work", "image:branch"),
       docker: (g) => used(g, "work", "docker"),
-      preview: (g) => used(g, "work", "preview"),
       research: (g) => used(g, "research", "internet"),
       // The git gateway's: a push changing .github/workflows/ (git-gateway.test.mjs).
       workflows: (g) => g.allowWorkflows === true,
       auto_merge: (g) => !autoMergeProblems(g, merge, true).length,
       auto_merge_public: (g) => !autoMergeProblems(g, merge, false).length,
-      // Auto-merge beside a preview hook that runs: without the hook, nothing to acknowledge.
-      acknowledge_automerge_and_preview_is_highly_dangerous: (g) =>
-        g.allowPreview && previewProblem(g, { ...merge, preview: full.preview }) === null,
     };
     assert.deepEqual(Object.keys(gates).sort(), [...names].sort());
     const all = await grantFor("org/all");

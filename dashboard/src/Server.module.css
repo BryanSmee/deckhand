@@ -1,5 +1,5 @@
 /* Settings › Server (docs/design/dashboard-redesign.md › Pages › Settings › Server): the status,
-   Runs, Preview hooks and GitHub App cards. */
+   Runs and GitHub App cards. */
 .page {
   display: flex;
   flex-direction: column;
@@ -142,58 +142,6 @@
   margin: 2px 0;
 }
 
-/* Preview hooks. */
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  table-layout: fixed;
-  font-size: 13px;
-}
-
-.table th,
-.table td {
-  padding: 10px 12px;
-  border-top: 1px solid var(--border);
-  text-align: left;
-  vertical-align: middle;
-}
-
-.table th {
-  padding-top: 6px;
-  padding-bottom: 6px;
-  color: var(--text-3);
-  font-size: 12px;
-  font-weight: 400;
-}
-
-.table th:first-child,
-.table td:first-child {
-  width: 34%;
-  padding-left: 18px;
-}
-
-.table th:nth-child(4),
-.table td:nth-child(4) {
-  width: 110px;
-}
-
-.table th:last-child,
-.table td:last-child {
-  width: 70px;
-  padding-right: 18px;
-  text-align: right;
-}
-
-.cut {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.since {
-  color: var(--text-3);
-}
-
 /* GitHub App: a term and its value per row. */
 .kv {
   margin: 0;
@@ -248,46 +196,5 @@
 
   .kv > div {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  /* A preview hook per block: its container, then the rest. */
-  .table thead {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-  }
-
-  .table tr {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) auto;
-    gap: 4px 12px;
-    padding: 10px 18px;
-    border-top: 1px solid var(--border);
-  }
-
-  .table td,
-  .table td:first-child,
-  .table td:nth-child(4),
-  .table td:last-child {
-    width: auto;
-    padding: 0;
-    border: 0;
-    text-align: left;
-  }
-
-  .table td:first-child {
-    grid-column: 1 / -1;
-  }
-
-  .table td:nth-child(4) {
-    grid-row: 3;
-  }
-
-  .table td:last-child {
-    grid-row: 3;
-    align-self: center;
-    text-align: right;
   }
 }

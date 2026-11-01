@@ -137,7 +137,6 @@ test("broken grants: what needs a grant is unknown, not refused", () => {
   const yaml = [
     "dockerfile: Dockerfile",
     "docker: true",
-    "preview: ./preview.sh",
     "mounts:",
     "  - path: /srv/data",
   ].join("\n");
@@ -145,7 +144,7 @@ test("broken grants: what needs a grant is unknown, not refused", () => {
   assert.deepEqual(errors, []);
   const v = effectiveView(config, "org/app", settings, null);
   assert.ok(![...v.settings, ...v.mounts].some((r) => r.source === "refused"));
-  for (const key of ["dockerfile", "allow_branch_docker_images", "docker", "preview"]) {
+  for (const key of ["dockerfile", "allow_branch_docker_images", "docker"]) {
     assert.equal(byKey(v.settings, key).source, "unknown", key);
     assert.match(byKey(v.settings, key).note, /grants, which have errors/);
   }
@@ -162,22 +161,16 @@ test("broken grants: what needs a grant is unknown, not refused", () => {
   assert.equal(byKey(v.settings, "effort").source, "operator");
 });
 
-test("dockerfile and preview: from the repo once granted", () => {
-  const yaml = "dockerfile: Dockerfile\npreview: ./preview.sh\n";
-  const { settings, grant } = view(yaml, {}, "org/app", [
-    "dockerfile",
-    "preview",
-    "branch_docker_images",
-  ]);
+test("dockerfile: from the repo once granted", () => {
+  const yaml = "dockerfile: Dockerfile\n";
+  const { settings, grant } = view(yaml, {}, "org/app", ["dockerfile", "branch_docker_images"]);
   assert.equal(byKey(settings, "dockerfile").source, "repo");
-  assert.deepEqual(
-    [byKey(settings, "preview").value, byKey(settings, "preview").source],
-    ["./preview.sh (30 min)", "repo"],
-  );
   assert.equal(byKey(settings, "allow_branch_docker_images").value, "true");
-  assert.equal(grant.allowPreview, true);
+  assert.equal(grant.allowDockerfile, true);
   assert.deepEqual(grant.grantFiles, ["grants.rego"]);
-  assert.equal(byKey(view("preview: ./preview.sh\n").settings, "preview").source, "refused");
+  assert.equal(byKey(view(yaml).settings, "dockerfile").source, "refused");
+  // `preview`, removed (#574): no row of its own, refused or not.
+  assert.equal(byKey(view("preview: ./preview.sh\n").settings, "preview"), undefined);
 });
 
 test("docker: refused without its grant; granted, its engine noted when there is none", () => {
@@ -252,7 +245,8 @@ test("settings: agent, brainstorm_agent and wait_for_answers have their rows", (
 
 test("settings: every key the file takes has its row, or a table of its own", () => {
   const elsewhere = Object.keys(KEYS).filter((key) => !KEYS[key].display);
-  assert.deepEqual(elsewhere, ["hosts", "cached_hosts", "mounts"]);
+  // hosts, cached_hosts and preview (#574) only get a warning: the file no longer sets them.
+  assert.deepEqual(elsewhere, ["hosts", "cached_hosts", "mounts", "preview"]);
   const { settings } = view("modes:\n  audit:\n    instructions: audit.md\n");
   for (const key of Object.keys(KEYS).filter((k) => KEYS[k].display)) {
     assert.ok(

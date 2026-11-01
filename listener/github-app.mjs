@@ -26,7 +26,7 @@ export const APP_PERMISSIONS = {
   // (grants.mjs). GitHub has no such permission for a user's projects.
   organization_projects: "write",
 };
-// What workItem() routes, plus the previews' events (handled by a later hook), pushes,
+// What workItem() routes, plus pull requests' and Actions runs' events (reviews.mjs), pushes,
 // which tell the dashboard's repository list (repos.mjs) a default branch changed, and
 // issues: their closing starts the comments waiting for them (waits.mjs), and their open
 // questions label them needs-input (questions.mjs).

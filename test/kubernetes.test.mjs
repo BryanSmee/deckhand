@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { RunError, runnerRefusal } from "../listener/access.mjs";
 import { claude } from "../listener/agents/claude.mjs";
+import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { apiBase, createKubeApi, KubeError } from "../listener/runner/kube-api.mjs";
 import {
   createKubernetesRunner,
@@ -1079,8 +1080,8 @@ test("createKubeApi: the token at each call, the API's message in its errors", a
 });
 
 test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming the runner", () => {
-  const grant = { allowDocker: true, allowDockerfile: true, allowPreview: true };
-  const settings = { docker: {}, dockerfile: "Dockerfile", preview: { command: "x" } };
+  const grant = { allowDocker: true, allowDockerfile: true };
+  const settings = { docker: {}, dockerfile: "Dockerfile" };
   const mounts = [{ source: "/srv", target: "/srv" }];
   const engine = { limits: {}, cache: null };
   // Its capabilities (capabilities.mjs): the repo's image is built with `image:repo`.
@@ -1091,7 +1092,7 @@ test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming
   );
   assert.equal(
     runnerRefusal(config, settings, { grant, mounts }, engine, caps),
-    "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`) without a registry (`KUBERNETES_REGISTRY`), a preview hook (`preview`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
+    "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`) without a registry (`KUBERNETES_REGISTRY`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
   );
   // No engine for this run (a light run, a fork's, no SANDBOX_ENGINE): it goes without one,
   // as under Docker.
@@ -1112,6 +1113,9 @@ test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming
   );
   assert.equal(runnerRefusal(config, { docker: {} }, { grant, mounts: [] }, null), null);
   assert.equal(runnerRefusal(config, {}, { grant, mounts: [] }, null), null);
+  // A `preview` left in the config, from before #574: ignored, so not refused for it.
+  const { settings: left } = parseRepoConfig("preview: ./preview.sh\n", config);
+  assert.equal(runnerRefusal(config, left, { grant, mounts: [] }, null), null);
 });
 
 test("state and follow: an API that errs for a while is asked again, a run at work goes on", async (t) => {

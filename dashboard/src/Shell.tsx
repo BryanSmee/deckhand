@@ -183,8 +183,7 @@ function RepoLinks({
   );
 }
 
-// "2 of 4 running", a slot per run (a bar when there are many), the queue and preview hooks,
-// and Sync. On the rail, the slots and Sync as an icon: what it did is in its title, and in the
+// "2 of 4 running", a slot per run (a bar when there are many), the queue, and Sync. On the rail, the slots and Sync as an icon: what it did is in its title, and in the
 // dashboard's note (App.tsx) for screen readers.
 function RunSlots({
   state,
@@ -207,13 +206,8 @@ function RunSlots({
   }
   if (!state) return rail ? null : <div class={styles.slots}>Loading…</div>;
   const { running, maxParallel: max, queued } = state;
-  const hooks = state.previews?.length ?? 0;
   const summary = runningText(state);
-  const rest = [
-    `${queued} queued`,
-    reservedText(state) ?? "",
-    hooks ? plural(hooks, "preview hook") : "",
-  ].filter(Boolean);
+  const rest = [`${queued} queued`, reservedText(state) ?? ""].filter(Boolean);
   const meter = (
     <Meter running={running} max={max} rail={rail} title={[summary, ...rest].join(" · ")} />
   );

@@ -176,7 +176,6 @@ test("trustedFile: the config, .deckhand/, .github/, CODEOWNERS and the files it
   const settings = parseRepoConfig(
     `instructions: docs/agents.md
 dockerfile: build/Dockerfile
-preview: sh ./deploy/preview.sh --fast
 review:
   instructions: docs/review.md
 modes:
@@ -193,7 +192,6 @@ modes:
     "docs/CODEOWNERS",
     "docs/agents.md",
     "build/Dockerfile",
-    "deploy/preview.sh",
     "docs/review.md",
     "docs/mode.md",
   ]) {
@@ -336,13 +334,6 @@ test("auto-merge: each gate refuses with a comment", async (t) => {
     [{ files: [{ filename: ".deckhand/review.md" }] }, /`\.deckhand\/review\.md`/],
     [{ files: [{ filename: ".github/workflows/ci.yml" }] }, /`\.github\/workflows\/ci\.yml`/],
     [{ files: [{ filename: "x.md", previous_filename: "CODEOWNERS" }] }, /`CODEOWNERS`/],
-    [
-      {
-        yaml: `${MERGE}preview: ./deploy/preview.sh\n`,
-        files: [{ filename: "deploy/preview.sh" }],
-      },
-      /`deploy\/preview\.sh`/,
-    ],
     [
       {
         yaml: MERGE.replace("merge: true", "merge: true\n  instructions: docs/review.md"),
@@ -1181,32 +1172,6 @@ test("deny_fix: a policy error starts no fix run, the comment says so", async (t
   assert.equal(await s.reviews.fix(s.run, s.posted(HIGH)), null);
   assert.equal(s.accepted.length, 0);
   assert.match(s.replies[0].text, /`policy error: 'deny_fix' must be a set of strings`/);
-});
-
-test("auto-merge with a granted preview hook: only with the operator's long acknowledgement", async (t) => {
-  const yaml = `${MERGE}preview: ./deploy/preview.sh\n`;
-  const hook = setup(t, { yaml, granted: { allowPreview: true } });
-  assert.equal(await hook.settle(), null);
-  assert.equal(hook.merges().length, 0);
-  assert.match(
-    hook.replies[0].text,
-    /preview hook runs its default branch as root on the host.*don't grant `acknowledge_automerge_and_preview_is_highly_dangerous`/,
-  );
-  // Asked of nobody: the config alone refuses it.
-  assert.equal(hook.calls.length, 0);
-  const acknowledged = setup(t, {
-    yaml,
-    granted: { allowPreview: true, acknowledgeAutoMergePreview: true },
-  });
-  assert.ok(await acknowledged.settle());
-  // The hook's own script still waits for a human.
-  const script = setup(t, {
-    yaml,
-    granted: { allowPreview: true, acknowledgeAutoMergePreview: true },
-    files: [{ filename: "deploy/preview.sh" }],
-  });
-  assert.equal(await script.settle(), null);
-  assert.match(script.replies[0].text, /`deploy\/preview\.sh`/);
 });
 
 test("auto-merge: more changed files than GitHub lists refuses it", async (t) => {

@@ -1,8 +1,7 @@
 # Deckhand's runner service (server.mjs): the only container with the host's Docker socket (or
-# the Kubernetes API's credentials). It starts sandboxes, builds repo images and runs preview
-# hooks for the listener, and keeps the runs' logs. Built from the repository root
-# (compose.yaml): it runs the listener's backends (listener/runner/, images.mjs, previews.mjs)
-# and lib/, at the same relative paths.
+# the Kubernetes API's credentials). It starts sandboxes and builds repo images for the
+# listener, and keeps the runs' logs. Built from the repository root (compose.yaml): it runs
+# the listener's backends (listener/runner/, images.mjs) and lib/, at the same relative paths.
 FROM node:26-alpine
 # buildx: repo images build with BuildKit. GNU tar: checkouts strip GitHub's top folder.
 RUN apk add --no-cache docker-cli docker-cli-buildx tar
@@ -24,7 +23,7 @@ RUN case "$TARGETARCH" in \
     && apk del .buildctl \
     && buildctl --version
 WORKDIR /app
-# The listener's modules the runner runs: its backends, images, previews, the settings and the
+# The listener's modules the runner runs: its backends, images, the settings and the
 # agents' specifics. No GitHub or agent credential comes with them: those are the listener's.
 COPY listener/*.mjs listener/
 COPY listener/runner/ listener/runner/

@@ -136,17 +136,13 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   );
   assert.doesNotMatch(text, /ALLOWED_HOSTS|allow_repo_hosts/);
   assert.match(text, /Host mount roots granted to this repository: `\/srv\/data \(read-write\)`/);
-  assert.match(
-    text,
-    /`preview` in `.deckhand.yaml`: not granted: .* grant this repository `preview`/,
-  );
+  assert.doesNotMatch(text, /`preview` in `.deckhand.yaml`/);
   assert.match(
     text,
     /`dockerfile` in `.deckhand.yaml`: not granted: .* grant this repository `dockerfile`/,
   );
-  const granted = { ...grant, allowPreview: true, allowDockerfile: true };
+  const granted = { ...grant, allowDockerfile: true };
   const open = promptFor(issue, { mode: "onboarding", settings, config, grant: granted });
-  assert.match(open, /`preview` in `.deckhand.yaml`: allowed/);
   assert.match(open, /`dockerfile` in `.deckhand.yaml`: allowed\n/);
   assert.match(text, /`\.github\/workflows\/`: not granted: .* grant this repository `workflows`/);
   const workflows = { ...grant, allowWorkflows: true };

@@ -247,7 +247,7 @@ services:
       - screenshots:/data/shots
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
-      # what you grant each repo (hosts, preview hook, Dockerfile, host mounts, limits), one
+      # what you grant each repo (hosts, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       # Each mount root you grant, at the same path and read-only: the orchestrator resolves the
@@ -293,9 +293,9 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   # The only service with the host's Docker socket (#503): it starts, follows and removes the
-  # sandboxes, builds repo images, runs preview hooks and keeps the runs' logs, for the orchestrator
-  # alone, on a network nothing else is on and that has no way out. Two copies may run, one
-  # acting and the other waiting for its lease (docs/architecture.md, The runner service).
+  # sandboxes, builds repo images and keeps the runs' logs, for the orchestrator alone, on a
+  # network nothing else is on and that has no way out. Two copies may run, one acting and the
+  # other waiting for its lease (docs/architecture.md, The runner service).
   runner:
     build:
       context: .
@@ -303,8 +303,8 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-runner:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping ends the output streams it serves (the orchestrator follows again from the next
-    # runner), lets its other calls finish (an image's build), then releases its lease, and lets
-    # the preview hooks running end (cut past the grace period). Sandboxes keep running.
+    # runner), lets its other calls finish (an image's build), then releases its lease.
+    # Sandboxes keep running.
     stop_grace_period: 5m
     # The orchestrator's, the models service's (the Antigravity login's refresh), its own to the
     # broker service (its tokens, the runs' inboxes and files), to the github service (the repos'
@@ -313,8 +313,8 @@ services:
     environment:
       # The settings the runner reads too, as the orchestrator does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
-      # GRANTS_DIR: the orchestrator's grants folder, which the runner checks every spec, build and
-      # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs), with what its
+      # GRANTS_DIR: the orchestrator's grants folder, which the runner checks every spec and build
+      # against again (runner/spec-check.mjs, runner/builds.mjs), with what its
       # policies grant, asked of the policy service (POLICY_SERVICE_URL, its default).
       GRANTS_DIR: ${GRANTS_DIR:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
@@ -347,15 +347,13 @@ services:
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      # The host's path of the socket mounted below: preview hooks get it too.
-      DOCKER_SOCKET: ${DOCKER_SOCKET:-/var/run/docker.sock}
       BROKER_URL: http://listener:8081
       EGRESS_PROXY: http://egress:3128
       # The broker service: its service tokens, the runs' inboxes and files.
       BROKER_SERVICE_URL: http://broker:8081
       # The orchestrator's endpoint for it: its services port (a run's first tokens).
       ORCHESTRATOR_URL: http://orchestrator:8083
-      # The github service: the repos' tarballs and blobs, for build contexts and preview hooks.
+      # The github service: the repos' tarballs and blobs, for build contexts.
       GITHUB_SERVICE_URL: http://github:8080
       # Its callers: the orchestrator, on the network they share, and the models service.
       SERVICE_NETWORKS: orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}

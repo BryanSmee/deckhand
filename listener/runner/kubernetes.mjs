@@ -22,8 +22,8 @@
 //     claim mounted read-only, or, when there is none, installed by an init container into an
 //     emptyDir (podSpec()); caches are claims too, when the operator sets their class.
 //
-// Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine,
-// preview hooks and host mounts.
+// Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine
+// and host mounts.
 import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { RunError } from "../access.mjs";

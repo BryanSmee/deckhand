@@ -27,8 +27,8 @@ export function createBackend({
     return {
       runner: createKubernetesRunner({ config, api, inboxDir, mirror, log }),
       images: createKubernetesImages({ config, api, log }),
-      // No short containers: what needs them (an agent's install, a cache's chown, preview
-      // hooks, the Antigravity login's refresh) says so.
+      // No short containers: what needs them (an agent's install, a cache's chown, the
+      // Antigravity login's refresh) says so.
       jobs: {},
     };
   }

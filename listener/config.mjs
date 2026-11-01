@@ -507,8 +507,6 @@ function sandboxConfig(env, s) {
     egressContainer: env.EGRESS_CONTAINER || "",
     grantsDir: s.GRANTS_DIR,
     installNetwork: s.INSTALL_NETWORK,
-    // The host's Docker socket, as preview hooks mount it.
-    dockerSocket: env.DOCKER_SOCKET || "/var/run/docker.sock",
   };
 }
 

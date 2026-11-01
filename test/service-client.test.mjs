@@ -88,7 +88,7 @@ test("a call cut once made is tried again, unless it mustn't be made twice", asy
     ++calls === 1 ? req.socket.destroy() : res.end("{}"),
   );
   const client = serviceClient({ service: "runner", urls: flaky.url, ...fast });
-  assert.deepEqual(await client.json("POST", "/previews", { body: {} }), {});
+  assert.deepEqual(await client.json("POST", "/caches", { body: {} }), {});
   assert.equal(calls, 2);
   calls = 0;
   await assert.rejects(

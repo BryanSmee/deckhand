@@ -267,8 +267,8 @@ export function workItem(config, event, p, skip = () => null) {
   }
   // Fail closed: only deliveries for one of the App's installations.
   if (!p.installation?.id) return skip("not from an installation of the App");
-  // The preview hook's (previewEvent()); nothing runs Claude for them.
-  if (event === "pull_request" || event === "workflow_run") return skip(`${event}: no hook`);
+  // A pull request's state and CI's runs: reviews.mjs follows them, nothing runs Claude for them.
+  if (event === "pull_request" || event === "workflow_run") return skip(`${event}: nothing to run`);
   if (!repo || !author) return skip("not a comment");
   if (!repoAllowed(config, repo)) {
     return skip(`${repo} not in ALLOWED_REPOS`);
@@ -381,19 +381,6 @@ export function discussionEntryItem(repo, d, c, author, body) {
       ? { id: c.id, node_id: c.node_id, parent_id: c.parent_id ?? null, discussion: true }
       : { id: d.id, node_id: d.node_id, discussion: true },
   };
-}
-
-// A delivery for the repo's preview hook (previews.mjs): { repo, base, event } or null.
-// Whoever opened the pull request: the hook comes from the default branch, and judges the
-// event itself.
-export function previewEvent(config, event, p, skip = () => null) {
-  if (event !== "pull_request" && event !== "workflow_run") return null;
-  const repo = p.repository?.full_name;
-  if (!p.installation?.id || !repo) return skip("not from an installation of the App");
-  if (!repoAllowed(config, repo)) {
-    return skip(`${repo} not in ALLOWED_REPOS`);
-  }
-  return { repo, base: p.repository.default_branch || "main", event };
 }
 
 // An issue closed or reopened, or a pull request closed, merged or reopened, in an allowed
