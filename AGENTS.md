@@ -210,6 +210,11 @@ docs/         setup, per-repo config reference, security model, architecture
 - Shared fakes live in `test/helpers.mjs` (`listening`, `serve`, `tempDir`, `testConfig`,
   `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-server.test.mjs`):
   reuse them rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
+- Flaky is a bug, fixed at its cause, never retried away (#563). Ports: the OS's (port 0),
+  never one probed free then handed on; a service that restarts is reached through a port the
+  test holds (`forwarder`), or one the OS never hands out (`listenToRestart`). Time: an injected
+  clock (or `t.mock.timers`) rather than a wall-clock bound, and a wait for what the test
+  asserts on rather than a fixed delay.
 - `orchestrator-server.test.mjs` starts edge and the orchestrator (and the runner beside them)
   per test, the suite's slowest part: one wiring test per area there, the cases themselves in
   the module's own unit tests. Its `handOver()` starts the orchestrator's next copy, waiting
