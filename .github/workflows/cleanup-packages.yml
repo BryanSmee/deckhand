@@ -25,7 +25,6 @@ jobs:
           - deckhand-engine
           - deckhand-engine-podman
           - deckhand-github
-          - deckhand-listener
           - deckhand-models
           - deckhand-orchestrator
           - deckhand-policy
