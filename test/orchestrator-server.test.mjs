@@ -559,7 +559,9 @@ async function startGithubService(dir, github, credentials, { key, policyService
 // asks the orchestrator's egress policy and forwards them; a relayed host's calls, which a sandbox
 // makes over HTTPS the proxy decrypts, go to the service the policy names, as the proxy sends
 // them (with its service token, the sandbox's credential apart, the network vouched for); the
-// policy's questions are the proxy's own. `policyPort()`: the orchestrator's, once it listens.
+// policy's questions are the proxy's own. That relay is a copy of the proxy's, without its TLS:
+// egress-tls.test.mjs is what tests the proxy's own (intercept()). `policyPort()`: the
+// orchestrator's, once it listens.
 async function sandboxProxy({ policyPort, token, urls }) {
   const policyUrl = () => `http://127.0.0.1:${policyPort()}/egress`;
   const policy = (ip, host, options) => egressPolicy(policyUrl())(ip, host, options);

@@ -16,8 +16,8 @@ import { serviceClient } from "../lib/service-client.mjs";
 // What the orchestrator waits for the runner, for the calls a run's life needs: an update of
 // the runner, a slow pull of its image. A run doesn't fail for it.
 const RUN_WAIT_MS = 30 * 60_000;
-// The listener's broker port's, which a sandbox's call waits on.
-const BROKER_WAIT_MS = 10_000;
+// The egress policy's lookups, which a sandbox's connection waits on.
+const POLICY_WAIT_MS = 10_000;
 // A log append's most, and the parts a log is sent in when it moves (upload()).
 const APPEND_MAX = 4 * 1024 * 1024;
 // After a failed append, the next try.
@@ -65,7 +65,7 @@ export function createRunnerClient({
   now = Date.now,
   sleep,
   runWaitMs = RUN_WAIT_MS,
-  brokerWaitMs = BROKER_WAIT_MS,
+  policyWaitMs = POLICY_WAIT_MS,
 }) {
   const as = (service, extra = {}) =>
     serviceClient({
@@ -80,8 +80,8 @@ export function createRunnerClient({
     });
   const orchestrator = as("orchestrator", { epoch, waitMs: runWaitMs });
   // The egress policy's lookups (runner/service.mjs UNFENCED): as the orchestrator, without its
-  // epoch, so a listener draining still answers them.
-  const broker = as("orchestrator", { waitMs: brokerWaitMs });
+  // epoch, so an orchestrator stopping still has them answered.
+  const policy = as("orchestrator", { waitMs: policyWaitMs });
   const models = as("models");
 
   // --- Sandboxes ----------------------------------------------------------------------------
@@ -192,7 +192,7 @@ export function createRunnerClient({
 
   async function locate(ip) {
     try {
-      const { at } = await broker.json("GET", `/addresses/${path(ip)}`);
+      const { at } = await policy.json("GET", `/addresses/${path(ip)}`);
       if (at) known.set(ip, at);
       else known.delete(ip);
       return at;
@@ -207,7 +207,7 @@ export function createRunnerClient({
   async function proxyAddresses({ fresh = false } = {}) {
     if (!fresh && now() - proxyAt < 1000) return proxy;
     try {
-      ({ addresses: proxy } = await broker.json(
+      ({ addresses: proxy } = await policy.json(
         "GET",
         `/proxy-addresses${fresh ? "?fresh=1" : ""}`,
       ));
@@ -221,7 +221,7 @@ export function createRunnerClient({
   // null: the runner couldn't tell (the egress policy then allows what both may reach).
   const installing = async (name) => {
     try {
-      return (await broker.json("GET", `/sandboxes/${path(name)}/installing`)).installing;
+      return (await policy.json("GET", `/sandboxes/${path(name)}/installing`)).installing;
     } catch {
       return null;
     }
@@ -230,7 +230,7 @@ export function createRunnerClient({
   async function egressFor(ip, host) {
     try {
       const query = `ip=${encodeURIComponent(ip)}&host=${encodeURIComponent(host)}`;
-      return (await broker.json("GET", `/egress?${query}`)).answer ?? null;
+      return (await policy.json("GET", `/egress?${query}`)).answer ?? null;
     } catch (error) {
       log(`Egress for ${ip}: ${error.message}`);
       return null;

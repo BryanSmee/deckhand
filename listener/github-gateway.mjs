@@ -38,7 +38,7 @@
 //   streams back (upstream.mjs forward()), an Actions log's from where GitHub redirects
 //   (ACTIONS_LOGS).
 //
-// Served on the broker's port, which sandboxes reach through the egress proxy alone.
+// Served by the github service (../github/), which sandboxes reach through the egress proxy alone.
 import { addressOf } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
 import { PROJECT_READ, READ_PERMISSIONS, readsGitHub, readsOf } from "./github-app.mjs";

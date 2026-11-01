@@ -7,7 +7,7 @@ import { checked, labelArgs } from "../docker.mjs";
 import { freeBlocks } from "../../lib/subnets.mjs";
 
 // How long the proxy's addresses are trusted, and how often a caller that isn't among them
-// may make the runner look again (a sandbox could ask the broker's port in a loop).
+// may make the runner look again (a sandbox could ask the egress policy in a loop).
 const PROXY_TTL_MS = 10000;
 const PROXY_RETRY_MS = 2000;
 

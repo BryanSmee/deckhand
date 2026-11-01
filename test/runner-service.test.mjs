@@ -722,11 +722,11 @@ test("run events: an end said once, with its exit code, across the copies' looks
   );
 });
 
-test("the broker's questions fall back on the runner's last answer while it is away", async (t) => {
+test("the egress policy's questions fall back on the runner's last answer while it is away", async (t) => {
   const store = fileStore();
   const backend = host();
   const a = await copy(t, { store, backend });
-  const { runner } = client(a.url, { brokerWaitMs: 30 });
+  const { runner } = client(a.url, { policyWaitMs: 30 });
   await runner.start(SPEC);
   const at = await runner.locate("10.1.0.2");
   assert.deepEqual(at, { sandbox: "id-dh-o-a-1-1", name: "dh-o-a-1" });

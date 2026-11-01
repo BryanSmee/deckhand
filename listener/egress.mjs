@@ -115,8 +115,9 @@ export function egressPolicy(
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the
 // lowercase http_proxy); NODE_USE_ENV_PROXY because Node's fetch ignores them otherwise.
 // `others`: more hosts on the run's network (its container engine), reached directly. The
-// broker isn't one (#511): its calls (agents' APIs, pushes, the run's files) go through the
-// proxy, which forwards them to it and waits for it while the listener restarts.
+// services' names sandboxes call aren't (#511, ../lib/services.mjs SANDBOX_URLS): their calls
+// (agents' APIs, pushes, the run's files) go through the proxy, which forwards them to each
+// service and waits for it while it restarts.
 export function proxyEnv(config, others = []) {
   const direct = new Set(["localhost", "127.0.0.1", "::1", ...others]);
   const noProxy = [...direct].join(",");

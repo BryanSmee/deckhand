@@ -60,8 +60,7 @@ try {
 
 const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`);
 
-// The orchestrator: the listener's services port, until it moves out (#506): a run's first
-// tokens (which the orchestrator has the broker service sign, with the claims it decided). The
+// The orchestrator's services port: a run's first tokens (which the orchestrator has the broker service sign, with the claims it decided). The
 // github service (#502): the repos' tarballs and blobs.
 const orchestratorUrl = env.ORCHESTRATOR_URL || "http://orchestrator:8083";
 const githubUrl = env.GITHUB_SERVICE_URL || "http://github:8080";

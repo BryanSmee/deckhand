@@ -138,8 +138,7 @@ pushes, clones) and the models service (10 minutes, an agent call's length) use 
 `/ready` answers 503 from then on, for a readiness probe); the runner
 drains its own way (its output streams first, then its lease, `runner/service.mjs` `stop()`), and
 so do edge (its two ports, then the poller's lease, `edge/server.mjs`) and the orchestrator (its
-state saved and its lease released, then its broker port and the egress policy,
-`orchestrator/server.mjs`). With two
+state saved and its lease released, then the egress policy's port, `orchestrator/server.mjs`). With two
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.
 
@@ -185,7 +184,8 @@ Its two copies are active/passive:
    **releases the lease**; the new one takes it at once, rebuilds its tasks from the store,
    re-arms the deadlines and reads the streams from their last acknowledged event. About a
    second: no event is lost, no call fails, a reply or a run starts a second later at most. The
-   old copy then drains its broker port for the sandboxes' calls in flight.
+   sandboxes' calls are the services' (the broker's, the github and the models service's): the
+   orchestrator's handover touches none of them.
 3. **On a crash** the lease expires (15 s) and the waiting copy takes it the same way. A copy
    that loses its lease while acting exits: its restart makes it the waiting one.
 4. **Fencing**: each new holder gets a higher epoch (at least the time in ms), sent with every
