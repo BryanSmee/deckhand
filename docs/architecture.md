@@ -1023,15 +1023,6 @@ one after 30 s (`curl --max-time 30`) and asks again every 30 s; a token that ex
 still renews, from its own sandbox, for 7 days (`RENEW_GRACE_MS`), and the renewed one is bound
 where it was.
 
-**The broker service's own update.** Compose runs one copy, which drains on SIGTERM for 30 s
-(`DRAIN_SECONDS`: the inboxes' long polls, uploads in flight), then the next one starts on the
-same store and key: the proxy waits for it meanwhile, as for the orchestrator (`proxy/wait.mjs`). On
-Kubernetes, two copies on one store, both active (Redis, #509): a rolling update starts the new
-one first, then the old one, out of rotation (`/ready` answers `503`), drains. Either copy
-answers any call: the live runs, their files and their events are in the store, so a run
-ended through one renews through neither, and an inbox read through one goes on from the same
-offset through the other.
-
 **From a listener that signed the tokens itself** (before #505): its `run-token.key` was in
 its data volume (the orchestrator's `data` now). The first orchestrator after the update keeps its public part
 (`run-token.pub`), removes the private one, and hands the public one to the broker service
@@ -1046,6 +1037,31 @@ Runs started before run
 tokens (#493) keep the random secret they started with and no renewal loop: the orchestrator
 keeps accepting it (by hash, from its own sandbox's network, `broker.mjs` `sentBy()`) until
 those runs end. That path goes in a later release, once no such run can still be going.
+
+### The broker service
+
+The broker service (`broker/`, #505) is the only one holding the tokens' signing key
+(`run-token.key`, in its own volume `broker-keys`): it signs a run's first tokens with the claims
+the orchestrator decided (`POST /runs/:id/tokens`, which the orchestrator asks for once the runner
+says the sandbox's network or pod exists), renews them for their own sandbox only (`POST
+/run/token`, through the egress proxy), and signs every service's own service tokens, for the
+caller its network (or pod's service account) proves (`broker/callers.mjs`). Every other service
+checks those tokens offline with its public keys (`GET /keys`, the `service-keys` volume). Its
+store holds the live runs (`broker/runs.mjs`: their claims, where their tokens are bound, a
+run's end), their files ([Run files](#run-files)) and the `runs` stream the orchestrator reads
+and acknowledges (`broker-service.mjs` `consume()`); the models service asks it whether a run
+still goes. Its API (`broker/http.mjs` `ROUTES`) names the callers of each endpoint, and each
+orchestrator call but a `GET` carries its fencing epoch. What each caller may do, and what a hole
+in it gives: [The broker service](security.md#the-broker-service) in security.md.
+
+**The broker service's own update.** Compose runs one copy, which drains on SIGTERM for 30 s
+(`DRAIN_SECONDS`: the inboxes' long polls, uploads in flight), then the next one starts on the
+same store and key: the proxy waits for it meanwhile, as for the orchestrator (`proxy/wait.mjs`). On
+Kubernetes, two copies on one store, both active (Redis, #509): a rolling update starts the new
+one first, then the old one, out of rotation (`/ready` answers `503`), drains. Either copy
+answers any call: the live runs, their files and their events are in the store, so a run
+ended through one renews through neither, and an inbox read through one goes on from the same
+offset through the other.
 
 ### The runner service
 

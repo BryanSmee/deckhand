@@ -6,7 +6,7 @@
 //     networkCallers());
 //   - on Kubernetes, the pod's projected service account token, for the broker's audience
 //     (`x-deckhand-pod-token`), which the API server reviews (TokenReview): its service
-//     account names the caller (SERVICE_ACCOUNTS, `orchestrator=deckhand:deckhand-listener`,
+//     account names the caller (SERVICE_ACCOUNTS, `orchestrator=deckhand:deckhand-orchestrator`,
 //     namespace:name). The broker's own service account needs `create` on `tokenreviews`
 //     (the `system:auth-delegator` ClusterRole).
 import { readFileSync } from "node:fs";
@@ -23,8 +23,8 @@ export { POD_TOKEN_HEADER };
 const ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
 // SERVICE_ACCOUNTS → username (`system:serviceaccount:<namespace>:<name>`) → the services it
-// may be. Services that still run in one pod (the listener's, until #506) share its account:
-// "edge+orchestrator=deckhand:deckhand-listener", as networkCallers() takes them.
+// may be. Services that run in one pod share its account:
+// "edge+orchestrator=deckhand:deckhand-control", as networkCallers() takes them.
 export function accountCallers(text) {
   const accounts = new Map();
   for (const part of String(text ?? "")

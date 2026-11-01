@@ -2,7 +2,8 @@
 
 The listener, split (#499, its parts #500 to #509): edge and the orchestrator (#506,
 [Edge and the orchestrator](#edge-and-the-orchestrator)) took its place, beside the policy
-service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505), the
+service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505,
+[architecture.md](architecture.md#the-broker-service)), the
 runner (#503, [architecture.md](architecture.md#the-runner-service)), the github service (#502,
 [architecture.md](architecture.md#the-github-service)), the models service (#504,
 [The models service](#the-models-service)) and the egress proxy, each from its own image:
