@@ -351,15 +351,16 @@ function serviceUrls(value, name) {
 }
 
 // The environment, over config.yaml's settings (readConfigFile()), over the defaults.
-// `service`: "runner" for the runner service's (../runner/server.mjs), "github" for the github
-// service's (../github/server.mjs), "models" for the models service's (../models/server.mjs),
-// which start no run of their own: ALLOWED_USERS and the agents' credentials are the listener's
-// to require, and SERVICE_NETWORKS theirs to read.
-export function loadConfig(env, file = NO_FILE, { service = "listener" } = {}) {
-  const listener = service === "listener";
-  const settings = listener ? SETTINGS : RUNNER_SETTINGS;
+// `service`: "orchestrator" (the default) starts runs; "edge" (../edge/server.mjs) signs in
+// ALLOWED_USERS, which it requires too, but starts none; "runner" (../runner/server.mjs),
+// "github" (../github/server.mjs) and "models" (../models/server.mjs) start no run of their own:
+// ALLOWED_USERS and the agents' credentials are the orchestrator's to require, and
+// SERVICE_NETWORKS the github service's to read.
+export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {}) {
+  const orchestrator = service === "orchestrator" || service === "listener";
+  const settings = orchestrator ? SETTINGS : RUNNER_SETTINGS;
   const from = settingSource(env, file, settings);
-  requiredSettings(env, from, { users: listener });
+  requiredSettings(env, from, { users: orchestrator || service === "edge" });
   const s = readSettings(env, from, settings);
   registryCredentials(s);
   pickupSlots(s);
@@ -561,14 +562,14 @@ function requiredSettings(env, { setting }, { users = true } = {}) {
 }
 
 // SERVICE_NETWORKS, checked now: a typo would refuse every call of the runner's. `none` (the
-// runner's, where the network can't tell) means nothing here: the listener has to know which
-// address is the runner's. On Kubernetes, where every call arrives at the pod's one address,
+// runner's, where the network can't tell) means nothing here: the orchestrator has to know which
+// address is the runner's, and edge's. On Kubernetes, where every call arrives at the pod's one address,
 // `runner=0.0.0.0/0` says so, and a NetworkPolicy lets only the runner's pods reach the port.
 function serviceNetworks(text) {
   const value = String(text ?? "").trim();
   if (value === "none") {
     throw new ConfigError(
-      "SERVICE_NETWORKS: none is the runner's; the listener needs the runner's network (runner=<subnet>; on Kubernetes runner=0.0.0.0/0, with a NetworkPolicy that lets only the runner's pods reach SERVICES_PORT: docs/setup.md, Kubernetes runner)",
+      "SERVICE_NETWORKS: none is the runner's; edge and the orchestrator need their callers' networks (the orchestrator's: runner=<subnet>,edge=<subnet>; on Kubernetes runner+edge=0.0.0.0/0, with a NetworkPolicy that lets only the runner's and edge's pods reach SERVICES_PORT: docs/setup.md, Kubernetes runner)",
     );
   }
   try {

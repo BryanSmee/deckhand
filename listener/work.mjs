@@ -69,7 +69,7 @@ import { repoAllowed } from "./config.mjs";
 import { FAILED } from "./board.mjs";
 import { createDismissals } from "./dismissals.mjs";
 import { createOrder } from "./order.mjs";
-import { fromDashboard } from "./discussions.mjs";
+import { tagger } from "./discussions.mjs";
 import {
   inboxItem,
   issueItem,
@@ -174,8 +174,10 @@ export function createWorkApi({
   // What the operator's policies grant a repo (grants.mjs grantsBy()): research's, for its mode.
   granted = null,
   publicUrl = () => null,
-  // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null.
+  // The key of the dashboard's "from" lines (discussions.mjs fromKey()), or null; or what tags
+  // them, edge's (discussions.mjs tagger() `tags`).
   fromKey = () => null,
+  fromTags = null,
   now = Date.now,
   log = () => {},
 }) {
@@ -990,7 +992,7 @@ export function createWorkApi({
     }
     const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
     if (!issue) refuse(409, `${repo}'s ${kind} inbox, #${number}, isn't an issue.`);
-    const body = fromDashboard(user, text, fromKey());
+    const body = await tagger({ tags: fromTags, key: fromKey }).post(user, text);
     const sent = await github(repo, "POST", `/repos/${repo}/issues/${number}/comments`, { body });
     if (!sent.ok) throw new Error(`GitHub POST a comment on #${number}: ${sent.status}`);
     const c = await sent.json();

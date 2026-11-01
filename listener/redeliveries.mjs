@@ -3,12 +3,14 @@
 // stopped, or cut by a reverse proxy, is lost unless redelivered. The App's own delivery list
 // (its JWT, no permission needed) says which failed: each one whose attempts all failed is
 // redelivered once, at start, every few minutes and from the dashboard's Sync. A redelivery
-// keeps its GUID, so one the listener did handle (http.mjs firstTime()) is ignored again.
+// keeps its GUID, so one edge did take (its store's delivery ids) is ignored again.
 //
-// The last scan's time and the GUIDs asked for are kept in redeliveries.json: the next scan,
-// after a restart too, looks back that far, within GitHub's 3 days.
+// Edge's (#506): the last scan's time and the GUIDs asked for are kept in its store, which its
+// two copies share. The copy holding the poller's lease scans (../edge/server.mjs); the
+// redelivery may reach either, which asks the store whether it was one (redelivered()). The
+// next scan, after a restart too, looks back to the last one, within GitHub's 3 days.
 import { UNREAD_EVENTS } from "./github-app.mjs";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { openStore } from "../lib/store.mjs";
 
 // How long GitHub keeps deliveries.
 export const RETENTION_MS = 3 * 24 * 3600_000;
@@ -51,26 +53,22 @@ export function nextCursor(link) {
   return next ? new URL(next[1]).searchParams.get("cursor") : null;
 }
 
+const SCANNED = "redeliveries/scanned";
+// A GUID asked for again: never twice, and kept as long as GitHub keeps the delivery.
+const askedKey = (guid) => `redeliveries/asked/${guid}`;
+
 // `app()`: the GitHub App (github-app.mjs, its `asApp`), null before /setup. `handled(guid)`:
-// whether the listener took that delivery already.
+// whether edge took that delivery already (may be a promise). `store`: edge's.
 export function createRedeliveries({
-  path,
+  store = openStore("memory:"),
   app,
   handled = () => false,
   log = () => {},
   now = Date.now,
   checkMs = CHECK_MS,
 }) {
-  const saved = (path && readJson(path, null)) ?? {};
-  let scannedAt = saved.scannedAt ?? null;
-  // GUID → when it was asked for: never twice.
-  const asked = new Map(Object.entries(saved.asked ?? {}));
   let scanning = null;
   let timer = null;
-
-  function save() {
-    if (path) writeJsonAtomic(path, { scannedAt, asked: Object.fromEntries(asked) });
-  }
 
   // The deliveries since `since`, newest first: pages until one reaches past it.
   async function listSince(github, since) {
@@ -98,13 +96,16 @@ export function createRedeliveries({
     scanning = (async () => {
       const started = now();
       const oldest = started - RETENTION_MS;
+      const scannedAt = await store.get(SCANNED);
       const since = Math.max(oldest, (scannedAt ?? oldest) - OVERLAP_MS);
       const list = await listSince(github, since);
       let count = 0;
       for (const d of failedDeliveries(list)) {
-        if (asked.has(d.guid) || handled(d.guid)) continue;
-        // Marked before asking: GitHub may deliver it before it answers (redelivered()).
-        asked.set(d.guid, started);
+        if (await handled(d.guid)) continue;
+        // Marked before asking: GitHub may deliver it before it answers (redelivered()), to
+        // either copy of edge. Already there: asked before, never twice.
+        const kept = Math.max(1, Date.parse(d.delivered_at) + RETENTION_MS - started);
+        if (!(await store.setIfAbsent(askedKey(d.guid), started, { ttlMs: kept }))) continue;
         let res = null;
         try {
           res = await github.asApp("POST", `/app/hook/deliveries/${d.id}/attempts`);
@@ -113,16 +114,14 @@ export function createRedeliveries({
         }
         // Not asked: the next scan tries again. The others are saved whatever happens.
         if (!res?.ok) {
-          asked.delete(d.guid);
+          await store.delete(askedKey(d.guid));
           continue;
         }
         count++;
         const what = [d.event, d.action].filter(Boolean).join(" ");
         log(`Redelivered ${d.guid} (${what}, ${d.delivered_at}: ${d.status_code || d.status})`);
       }
-      for (const [guid, at] of asked) if (at < oldest) asked.delete(guid);
-      scannedAt = started;
-      save();
+      await store.set(SCANNED, started);
       return count;
     })().finally(() => (scanning = null));
     return scanning;
@@ -142,9 +141,10 @@ export function createRedeliveries({
     timer = null;
   }
 
-  // Whether the delivery with this GUID is one the listener asked GitHub for again: its
-  // payload is as old as the failed attempt (http.mjs replays pull requests as they are now).
-  const redelivered = (guid) => !!guid && asked.has(guid);
+  // Whether the delivery with this GUID is one edge asked GitHub for again (a promise): its
+  // payload is as old as the failed attempt (the orchestrator replays pull requests as they
+  // are now, http.mjs).
+  const redelivered = async (guid) => !!guid && (await store.get(askedKey(guid))) !== null;
 
   return { scan, start, stop, redelivered };
 }

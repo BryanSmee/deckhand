@@ -76,7 +76,7 @@ jobs:
           node-version: 26
       - name: node --check
         run: |
-          node --check listener/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs
+          node --check edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs
           node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged
       - name: bash -n
         run: |

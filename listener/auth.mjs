@@ -7,32 +7,41 @@
 //   POST /auth/logout    clears the cookie, and ends the login's sessions everywhere
 //
 // The session is a signed cookie (login, expiry and the login's epoch, HMAC with a key kept in
-// the data volume), so it survives a restart. The allowlist is checked again on every request:
-// removing a user from ALLOWED_USERS and restarting signs them out. Signing out bumps the
-// login's epoch (sessions.json): a cookie copied before then no longer works.
+// edge's data volume), so it survives a restart. The allowlist is checked again on every
+// request: removing a user from ALLOWED_USERS and restarting signs them out. Signing out bumps
+// the login's epoch, in edge's store (#506): a cookie copied before then no longer works, on
+// either copy of edge.
 import { createHmac, randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { GITHUB_HEADERS } from "./github-app.mjs";
 import { escape, page as html, same } from "./html.mjs";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { openStore } from "../lib/store.mjs";
 
 export const SESSION_COOKIE = "deckhand_session";
 const STATE_COOKIE = "deckhand_oauth_state";
 export const SESSION_MS = 7 * 24 * 3600000;
 const STATE_MS = 10 * 60000;
 
-// The key that signs sessions: random, created once, owner-only.
+// The key that signs sessions: random, created once, owner-only. Two copies of edge starting
+// together on one volume keep the same one: the first written wins, the other reads it.
 export function sessionKey(dir) {
   const path = join(dir, "session.key");
   try {
     const key = readFileSync(path);
     if (key.length >= 32) return key;
+    // One too short (cut by a crash) is replaced.
+    rmSync(path, { force: true });
   } catch {
     // None yet.
   }
   const key = randomBytes(32);
-  writeFileSync(path, key, { mode: 0o600 });
+  try {
+    writeFileSync(path, key, { mode: 0o600, flag: "wx" });
+  } catch (error) {
+    if (error.code !== "EEXIST") throw error;
+    return sessionKey(dir);
+  }
   chmodSync(path, 0o600);
   return key;
 }
@@ -53,21 +62,37 @@ export function authPage(res, status, title, body, headers = {}) {
   return html(res, status, title, body, { headers, css: CSS });
 }
 
+// The store key of a login's session epoch.
+const epochKey = (login) => `sessions/${login}`;
+
+// The epochs a listener from before edge kept (its sessions.json, login → epoch), copied into
+// `store` where it has none: a sign-out made then still holds.
+export async function importEpochs(store, epochs) {
+  if (!epochs || typeof epochs !== "object" || Array.isArray(epochs)) return 0;
+  let count = 0;
+  for (const [login, epoch] of Object.entries(epochs)) {
+    if (!Number.isSafeInteger(epoch) || epoch < 1) continue;
+    if (await store.setIfAbsent(epochKey(login.toLowerCase()), epoch)) count++;
+  }
+  return count;
+}
+
 export function createAuth({
   config,
   app, // () => the GitHub App, or null before /setup
   publicUrl, // () => where GitHub sends the browser back
-  key, // signs session cookies (sessionKey())
-  epochsPath = null, // each login's session epoch (sessions.json); null: kept in memory
+  key, // signs session cookies (sessionKey()), or a function returning it
+  // Each login's session epoch (lib/store.mjs): edge's, which both its copies share. None: in
+  // memory.
+  store = openStore("memory:"),
   fetch = globalThis.fetch,
   now = Date.now,
   random = () => randomBytes(16).toString("hex"),
   log = () => {},
 }) {
   const secure = () => publicUrl().startsWith("https:");
-  // login → epoch; a login without one is at 0.
-  const epochs = (epochsPath && readJson(epochsPath, {})) || {};
-  const epochOf = (login) => epochs[login] ?? 0;
+  // A login without one is at 0.
+  const epochOf = async (login) => (await store.get(epochKey(login))) ?? 0;
 
   function cookie(name, value, maxAgeMs) {
     return [
@@ -81,17 +106,19 @@ export function createAuth({
   }
 
   function sign(payload) {
-    return createHmac("sha256", key).update(payload).digest("base64url");
+    return createHmac("sha256", typeof key === "function" ? key() : key)
+      .update(payload)
+      .digest("base64url");
   }
 
-  function issue(login) {
-    const session = { login, exp: now() + SESSION_MS, epoch: epochOf(login.toLowerCase()) };
+  async function issue(login) {
+    const session = { login, exp: now() + SESSION_MS, epoch: await epochOf(login.toLowerCase()) };
     const payload = Buffer.from(JSON.stringify(session)).toString("base64url");
     return `${payload}.${sign(payload)}`;
   }
 
-  // The signed-in allowed login, or null.
-  function user(req) {
+  // The signed-in allowed login, or null: a promise, the epoch being the store's.
+  async function user(req) {
     const value = cookies(req)[SESSION_COOKIE];
     if (!value) return null;
     const [payload, signature = ""] = value.split(".");
@@ -105,7 +132,7 @@ export function createAuth({
     const login = String(session.login ?? "").toLowerCase();
     if (!(session.exp > now()) || !config.users.includes(login)) return null;
     // Cookies from before epochs were kept are at 0.
-    if ((session.epoch ?? 0) !== epochOf(login)) return null;
+    if ((session.epoch ?? 0) !== (await epochOf(login))) return null;
     return login;
   }
 
@@ -116,8 +143,8 @@ export function createAuth({
         res,
         503,
         "No GitHub App yet",
-        `<p>Sign-in goes through the listener's GitHub App: create it first with the setup link
-from the listener's logs.</p>`,
+        `<p>Sign-in goes through Deckhand's GitHub App: create it first with the setup link
+from edge's logs.</p>`,
       );
     }
     const state = random();
@@ -167,15 +194,9 @@ from the listener's logs.</p>`,
     }
     const me = await whoIs(credentials, token);
     if (!me) {
-      return authPage(
-        res,
-        502,
-        "GitHub didn't say who you are",
-        `<p>See the listener's logs.</p>`,
-        {
-          "set-cookie": clear,
-        },
-      );
+      return authPage(res, 502, "GitHub didn't say who you are", `<p>See edge's logs.</p>`, {
+        "set-cookie": clear,
+      });
     }
     const login = me.toLowerCase();
     if (!config.users.includes(login)) {
@@ -194,7 +215,7 @@ GitHub and sign in here with another account.</p>`,
     log(`Login: ${login} signed in to the dashboard`);
     res.writeHead(302, {
       location: "/",
-      "set-cookie": [clear, cookie(SESSION_COOKIE, issue(login), SESSION_MS)],
+      "set-cookie": [clear, cookie(SESSION_COOKIE, await issue(login), SESSION_MS)],
       "cache-control": "no-store",
     });
     res.end();
@@ -252,11 +273,10 @@ GitHub and sign in here with another account.</p>`,
 
   // The cookie goes, and so does every other session of that login: a copied cookie or one
   // left in another browser stops working too.
-  function logout(req, res) {
-    const login = user(req);
+  async function logout(req, res) {
+    const login = await user(req);
     if (login) {
-      epochs[login] = epochOf(login) + 1;
-      if (epochsPath) writeJsonAtomic(epochsPath, epochs, { mode: 0o600 });
+      await store.increment(epochKey(login));
       log(`Login: ${login} signed out, their sessions end`);
     }
     res.writeHead(303, {
@@ -281,7 +301,7 @@ GitHub and sign in here with another account.</p>`,
     };
     run().catch((error) => {
       log(`Login: ${error.stack ?? error}`);
-      if (!res.headersSent) authPage(res, 500, "Sign-in failed", `<p>See the listener's logs.</p>`);
+      if (!res.headersSent) authPage(res, 500, "Sign-in failed", `<p>See edge's logs.</p>`);
     });
     return true;
   }

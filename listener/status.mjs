@@ -80,7 +80,7 @@ function grantedHosts(grants) {
 // folder), null when there are several or none is named. Their messages stay out: they quote
 // the files' values (mount roots on the host, YAML lines), and every signed-in user gets this,
 // whichever repos they see. A repo's config panel shows its own (repos.mjs grantsErrorView()),
-// the listener's logs all of them.
+// the orchestrator's logs all of them.
 function grantsHealth(errors) {
   if (!errors.length) return { ok: true, file: null, message: null };
   // "": the folder itself (grants.mjs walkGrants()), not a file to name.

@@ -653,7 +653,7 @@ test("a repo's config: the policies that apply, with their text; none without an
     throw new Error("GET /repos/org/app/contents: 502");
   };
   const failed = (await call(api, "GET", "/api/repos/org/app/config")).body.policies;
-  const text = "the policies can't be read (see the listener's logs)";
+  const text = "the policies can't be read (see the orchestrator's logs)";
   assert.deepEqual(failed.errors, [{ file: null, row: null, message: text, text }]);
   const none = apiSetup({ first: [info("org/app")], configured: ["org/app"] });
   const bare = (await call(none.api, "GET", "/api/repos/org/app/config")).body.policies;
@@ -953,7 +953,7 @@ test("GET config: an unexpected grants error is said, not detailed", async () =>
     grants: new Error("EIO: /secret/path"),
   });
   const { body } = await call(api, "GET", "/api/repos/org/app/config");
-  assert.match(body.grantsError.message, /can't be read \(see the listener's logs\)/);
+  assert.match(body.grantsError.message, /can't be read \(see the orchestrator's logs\)/);
   assert.doesNotMatch(JSON.stringify(body.grantsError), /secret/);
   assert.equal(body.effective.grant, null);
 });

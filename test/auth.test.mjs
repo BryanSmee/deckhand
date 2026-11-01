@@ -2,13 +2,20 @@ import assert from "node:assert/strict";
 import { statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createAuth, SESSION_COOKIE, SESSION_MS, sessionKey } from "../listener/auth.mjs";
+import {
+  createAuth,
+  importEpochs,
+  SESSION_COOKIE,
+  SESSION_MS,
+  sessionKey,
+} from "../listener/auth.mjs";
+import { openStore } from "../lib/store.mjs";
 import { serve, tempDir, testConfig } from "./helpers.mjs";
 
 const credentials = { client_id: "Iv1.x", client_secret: "cs" };
 
 // An auth handler behind a server, with GitHub answering that the browser is `login`.
-async function serveAuth(t, { login = "Alice", app = { credentials }, epochsPath } = {}) {
+async function serveAuth(t, { login = "Alice", app = { credentials }, store } = {}) {
   const config = testConfig({
     GITHUB_URL: "https://gh.test",
     GITHUB_API: "https://api.gh.test",
@@ -31,15 +38,14 @@ async function serveAuth(t, { login = "Alice", app = { credentials }, epochsPath
     app: () => app,
     publicUrl: () => "https://deck.example.com",
     key: Buffer.alloc(32, 1),
-    epochsPath,
+    store,
     fetch,
     now: () => clock,
     random: () => "state1",
   });
   const { url: base } = await serve(t, (req, res) => {
     if (auth.handle(req, res)) return;
-    const user = auth.user(req);
-    res.writeHead(user ? 200 : 401).end(user ?? "");
+    auth.user(req).then((user) => res.writeHead(user ? 200 : 401).end(user ?? ""));
   });
   const get = (path, cookie) =>
     globalThis.fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -111,7 +117,7 @@ test("a callback without the browser's state, or with a bad code, gets no sessio
 
 test("sessions: forged, expired or for a removed user are refused", async (t) => {
   const s = await serveAuth(t);
-  const good = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
+  const good = `${SESSION_COOKIE}=${await s.auth.issue("alice")}`;
   assert.equal((await s.get("/", good)).status, 200);
   // Same payload, another login: the signature no longer matches.
   const [payload, signature] = good.split("=")[1].split(".");
@@ -120,7 +126,7 @@ test("sessions: forged, expired or for a removed user are refused", async (t) =>
   ).toString("base64url");
   assert.equal((await s.get("/", `${SESSION_COOKIE}=${other}.${signature}`)).status, 401);
   // Signed, but bob isn't allowed (any more).
-  assert.equal((await s.get("/", `${SESSION_COOKIE}=${s.auth.issue("bob")}`)).status, 401);
+  assert.equal((await s.get("/", `${SESSION_COOKIE}=${await s.auth.issue("bob")}`)).status, 401);
   s.later(SESSION_MS + 1);
   assert.equal((await s.get("/", good)).status, 401);
 });
@@ -135,29 +141,43 @@ test("sign-out clears the session cookie", async (t) => {
   assert.match(value(res, SESSION_COOKIE), /^deckhand_session=$/);
 });
 
-test("sign-out ends the login's sessions everywhere, through a restart", async (t) => {
-  const dir = tempDir(t, "deckhand-sessions-");
-  const epochsPath = join(dir, "sessions.json");
-  const s = await serveAuth(t, { epochsPath });
-  const here = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
-  const there = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
-  assert.equal((await s.get("/", there)).status, 200);
+test("sign-out ends the login's sessions everywhere: on edge's other copy, after a restart", async (t) => {
+  // Two copies of edge on one store, as on two nodes; a third started later on it.
+  const store = openStore("memory:");
+  const s = await serveAuth(t, { store });
+  const other = await serveAuth(t, { store });
+  const here = `${SESSION_COOKIE}=${await s.auth.issue("alice")}`;
+  const there = `${SESSION_COOKIE}=${await s.auth.issue("alice")}`;
+  assert.equal((await other.get("/", there)).status, 200);
   const res = await fetch(new URL("/auth/logout", (await s.get("/auth/login")).url), {
     method: "POST",
     redirect: "manual",
     headers: { cookie: here },
   });
   assert.equal(res.status, 303);
-  // The other browser's cookie no longer works, nor a copy of this one.
-  assert.equal((await s.get("/", there)).status, 401);
-  assert.equal((await s.get("/", here)).status, 401);
-  assert.equal(statSync(epochsPath).mode & 0o777, 0o600);
-  // A new sign-in works, and the epoch survives a restart.
-  const again = `${SESSION_COOKIE}=${s.auth.issue("alice")}`;
+  // The other browser's cookie no longer works, nor a copy of this one, on either copy.
+  for (const copy of [s, other]) {
+    assert.equal((await copy.get("/", there)).status, 401);
+    assert.equal((await copy.get("/", here)).status, 401);
+  }
+  // A new sign-in works, and the epoch is the store's.
+  const again = `${SESSION_COOKIE}=${await other.auth.issue("alice")}`;
   assert.equal((await s.get("/", again)).status, 200);
-  const next = await serveAuth(t, { epochsPath });
+  const next = await serveAuth(t, { store });
   assert.equal((await next.get("/", again)).status, 200);
   assert.equal((await next.get("/", there)).status, 401);
+});
+
+test("a listener's sign-outs from before edge are kept: its epochs imported where none is", async (t) => {
+  const store = openStore("memory:");
+  const s = await serveAuth(t, { store });
+  const old = `${SESSION_COOKIE}=${await s.auth.issue("alice")}`;
+  assert.equal(await importEpochs(store, { Alice: 2, bob: "x", carol: 0 }), 1);
+  assert.equal((await s.get("/", old)).status, 401);
+  // Imported again (a handover asked twice): a later sign-out isn't undone.
+  await store.set("sessions/alice", 3);
+  assert.equal(await importEpochs(store, { alice: 2 }), 0);
+  assert.equal(await store.get("sessions/alice"), 3);
 });
 
 test("without an App, sign-in says to set it up first", async (t) => {

@@ -1,28 +1,31 @@
-# What an operator runs: the listener, the runner, the broker service, the github service, the
-# models service, the policy service, the egress proxy, and the sandbox image runs start from.
-# Each sandbox sits on an internal network of
-# its own, which the runner creates and joins the listener and the egress proxy to: the proxy is
-# their only way out (see docs/security.md). The runner is the only one with the Docker socket,
-# the github service the only one with the GitHub App's key, the models service the only one with
-# the agents' credentials; the broker's, the github service's, the models service's and the
-# policy service's networks are internal, each shared with its callers alone.
+# What an operator runs: edge, the orchestrator, the runner, the broker service, the github
+# service, the models service, the policy service, the egress proxy, and the sandbox image runs
+# start from. Each sandbox sits on an internal network of its own, which the runner creates and
+# joins the orchestrator and the egress proxy to: the proxy is their only way out (see
+# docs/security.md). Edge is the only one the internet reaches, with the webhook secret and the
+# sessions' key alone; the orchestrator holds no secret; the runner is the only one with the
+# Docker socket, the github service the only one with the GitHub App's key, the models service
+# the only one with the agents' credentials. Every network but edge's and the services' ways
+# out is internal, each shared by a service and its callers alone.
 #
 #   cp .env.example .env    # then set a Claude credential (and ALLOWED_USERS, or in config.yaml)
 #   cp -r server.example server   # your settings and grants, mounted below: keep it in git
 #   docker compose pull && docker compose up -d
-#   docker compose logs listener   # prints the one-time /setup link
+#   docker compose logs edge   # prints the one-time /setup link
 #
 # The images are the release DECKHAND_VERSION (default: the latest), published for each tag,
 # or `edge` (amd64 only), published for each push to main.
 # Updating is the same two commands, at any time: running sandboxes go on, and the new
-# listener and runner pick them up. `docker compose up -d --build` builds them from this checkout
-# instead. The listener's port is published as is: put your own reverse proxy (TLS, host
-# name) in front of it. See docs/setup.md.
+# orchestrator and runner pick them up. From a release that ran the listener, add
+# --remove-orphans once: the listener's container goes, edge and the orchestrator take its
+# place and its volume (docs/setup.md#from-the-listener). `docker compose up -d --build` builds
+# them from this checkout instead. Edge's port is published as is: put your own reverse proxy
+# (TLS, host name) in front of it. See docs/setup.md.
 
 name: deckhand
 
 # The base image sandboxes run from: the `sandbox` service below pulls or builds it, the
-# listener starts runs from it.
+# orchestrator starts runs from it (through the runner).
 x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-sandbox:${DECKHAND_VERSION:-latest}
 # The container engines runs of repositories granted `docker` get (SANDBOX_ENGINE): the
 # `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/setup.md.
@@ -30,42 +33,90 @@ x-engine-image: &engine-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-e
 x-engine-podman-image: &engine-podman-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine-podman:${DECKHAND_VERSION:-latest}
 
 services:
-  listener:
+  # The only service the internet reaches (#506, docs/services.md): GitHub's webhooks (their HMAC
+  # checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and the
+  # dashboard, whose API it passes on to the orchestrator with the signed-in user. It holds the
+  # webhook secret, the session key and the OAuth client's (its own volume), nothing else.
+  edge:
     build:
       context: .
-      dockerfile: listener/Dockerfile
-    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-listener:${DECKHAND_VERSION:-latest}
+      dockerfile: edge/Dockerfile
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-edge:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping saves the queue and the runs' state (sandboxes keep running), and lets the
-    # sandboxes' calls in flight finish (agents' streams, pushes). New ones the egress proxy
-    # relays (GitHub's) wait for the next listener; those sent to it directly (agents' APIs,
-    # pushes) are refused until then, #511 (docs/architecture.md#restarts).
-    stop_grace_period: 5m
+    # Stopping lets the requests in flight finish (a live log, until the browser reconnects):
+    # deliveries refused meanwhile are asked again by the next copy's redeliveries.
+    stop_grace_period: 30s
     ports:
       - "${PORT:-8080}:8080"
-    # The broker service signs the runs' tokens: the listener asks it for them as runs start.
+    depends_on: [broker, github]
+    # Its way in and out (webhooks, browsers, GitHub's sign-in) on a network of its own, not the
+    # proxy's `default`; its networks to the orchestrator, to the broker (its service tokens) and
+    # to the github service (/setup's conversion, the redeliveries).
+    networks: [edge-out, edge-orchestrator, broker-edge, github-edge]
+    environment:
+      # Who may sign in to the dashboard, as for runs (or in config.yaml): required.
+      ALLOWED_USERS: ${ALLOWED_USERS:-}
+      # Optional: /setup detects it from your browser's address and stores it.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      GITHUB_URL: ${GITHUB_URL:-}
+      GITHUB_API: ${GITHUB_API:-}
+      # Wiring, environment only: the orchestrator, which answers the dashboard's API; the
+      # github service; the broker, its service tokens and their keys.
+      ORCHESTRATOR_URL: http://orchestrator:8083
+      GITHUB_SERVICE_URL: http://github:8080
+      BROKER_SERVICE_URL: http://broker:8081
+      # Who calls its internal port, by the network a call arrives on: the orchestrator.
+      SERVICE_NETWORKS: orchestrator=${EDGE_ORCHESTRATOR_SUBNET:-10.231.250.192/28}
+    volumes:
+      # The App's credentials but its key (app.json: the webhook secret, the OAuth client's),
+      # the session key, its store (the deliveries taken, the sessions' sign-outs, the stream to
+      # the orchestrator): this volume alone.
+      - edge-data:/data
+      # Your configuration, read only: config.yaml (allowed_users, public_url).
+      - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
+  # The queue and the runs' lives (#506): it reads the deliveries edge verified, has the runner
+  # start the sandboxes, posts their replies through the github service, and answers the
+  # dashboard's API. It holds no secret. Two copies may run, one acting and the other waiting for
+  # its lease (docs/services.md); with Compose, one.
+  orchestrator:
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+    image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-orchestrator:${DECKHAND_VERSION:-latest}
+    restart: unless-stopped
+    # Stopping saves the queue and the runs' state (sandboxes keep running), releases its lease,
+    # and lets the sandboxes' calls in flight finish (agents' streams, pushes). New ones the
+    # egress proxy relays wait for the next copy (docs/architecture.md#restarts).
+    stop_grace_period: 5m
+    # The broker service signs the runs' tokens: the orchestrator asks it for them as runs start.
     # Every policy decision goes to the policy service, every GitHub call to the github service,
-    # and the listener asks the models service which agents' credentials it holds before it reads
-    # its settings: started first.
-    depends_on: [broker, policy, github, models]
-    # Its own way out (webhooks), the broker's network of its own, over which it calls the broker
-    # as the orchestrator (and edge), the runner's, the github service's, the policy service's and
-    # the models service's (docs/security.md#the-services-networks).
+    # the deliveries come from edge, and the orchestrator asks the models service which agents'
+    # credentials it holds before it reads its settings: started first.
+    depends_on: [broker, policy, github, models, edge]
+    # No way out: its networks to the broker, the runner, the github service, the policy
+    # service, the models service, edge and the egress proxy (docs/security.md#the-services-networks).
     networks:
-      - default
-      - broker-orchestrator
-      - runner
-      - github-orchestrator
-      - policy
-      - models-orchestrator
-    # How the runner finds it, to join it to each run's network (its gateways and the agents'
-    # endpoints, BROKER_URL below).
+      broker-orchestrator:
+      runner:
+      github-orchestrator:
+      policy:
+      models-orchestrator:
+      edge-orchestrator:
+      # The proxy reaches it there by the listener's name too, as sandboxes call it (BROKER_URL).
+      orchestrator-proxy:
+        aliases: [listener]
+    # How the runner finds it, to join it to each run's network (its gateways for sandboxes from
+    # before the services, BROKER_URL below).
     labels:
       deckhand.role: broker
     environment:
       # Every setting but the secrets and the wiring below can be in config.yaml instead
       # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
-      # these pass .env's value, or nothing, so that the file's keys and the listener's
+      # these pass .env's value, or nothing, so that the file's keys and the orchestrator's
       # defaults apply.
       # Required, here or in config.yaml: GitHub logins allowed to start runs
       # (comma-separated). Empty: no start.
@@ -73,7 +124,7 @@ services:
       # Optional: only these repos (owner/repo, comma-separated), among those where the App
       # is installed. Empty: all of them.
       ALLOWED_REPOS: ${ALLOWED_REPOS:-}
-      # The agents' credentials are the models service's (below): the listener asks it which
+      # The agents' credentials are the models service's (below): the orchestrator asks it which
       # it holds, never for their values.
       # Optional, with a gateway: its names for opus, sonnet and haiku.
       ANTHROPIC_DEFAULT_OPUS_MODEL: ${ANTHROPIC_DEFAULT_OPUS_MODEL:-}
@@ -104,7 +155,7 @@ services:
       AGY_VERSION: ${AGY_VERSION:-}
       # x64:<sha256>,arm64:<sha256> of its release's tarballs: needed with another AGY_VERSION.
       AGY_SHA256: ${AGY_SHA256:-}
-      # Optional: /setup detects it from your browser's address and stores it.
+      # Optional: /setup detects it from your browser's address and stores it (at edge).
       PUBLIC_URL: ${PUBLIC_URL:-}
       CLAUDE_CODE_VERSION: ${CLAUDE_CODE_VERSION:-}
       SANDBOX_MODEL: ${SANDBOX_MODEL:-}
@@ -116,7 +167,7 @@ services:
       BRAINSTORM_EFFORT: ${BRAINSTORM_EFFORT:-}
       MAX_PARALLEL: ${MAX_PARALLEL:-}
       # Slots within MAX_PARALLEL for the issues labelled AUTO_PICKUP_LABEL (auto-pickup), which
-      # the listener starts by itself in the repos that opt in. Empty: 0, off.
+      # the orchestrator starts by itself in the repos that opt in. Empty: 0, off.
       AUTO_PICKUP_SLOTS: ${AUTO_PICKUP_SLOTS:-}
       AUTO_PICKUP_LABEL: ${AUTO_PICKUP_LABEL:-}
       # What every sandbox may reach and its limits: grants/default.yaml, below.
@@ -166,44 +217,47 @@ services:
       CONFLICT_MERGE_DELAY_MS: ${CONFLICT_MERGE_DELAY_MS:-}
       GITHUB_URL: ${GITHUB_URL:-}
       GITHUB_API: ${GITHUB_API:-}
-      # Wiring, environment only. Names of what the listener creates on the host's Docker,
-      # matching the ones below.
+      # Wiring, environment only. Names of what the orchestrator creates on the host's Docker
+      # (through the runner), matching the ones below.
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      # How sandboxes reach the listener's gateways and agents' endpoints: this service, joined
-      # to each run's network under this name.
+      # How sandboxes reach its gateways: this service, joined to each run's network under the
+      # name sandboxes from before edge and the orchestrator know it by.
       BROKER_URL: http://listener:8081
       # The broker service, which signs the runs' tokens (#505).
       BROKER_SERVICE_URL: http://broker:8081
       # The github service, the only one with the GitHub App's key (#502): every GitHub call of
-      # the listener's goes there.
+      # the orchestrator's goes there.
       GITHUB_SERVICE_URL: http://github:8080
       # The models service, which holds the agents' credentials (#504).
       MODELS_SERVICE_URL: http://models:8080
+      # Edge's internal port: the verified deliveries, the App's public parts.
+      EDGE_URL: http://edge:8083
       # Their only way out: the egress service below (its deckhand.role label), joined the same
       # way.
       EGRESS_PROXY: http://egress:3128
       # Where every policy decision is evaluated: the policy service below, which checks the
-      # listener's service tokens with the broker's public key.
+      # orchestrator's service tokens with the broker's public key.
       POLICY_SERVICE_URL: http://policy:8181
-      # The runner below, and the network it calls this service's services port from (8083: a
-      # run's first tokens, the repos' tarballs).
+      # The runner below. Who calls its services port (8083), by the network a call arrives on:
+      # the runner (a run's first tokens) and edge (the dashboard's API).
       RUNNER_URL: http://runner:8080
-      SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-10.231.250.48/28}
+      SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-10.231.250.48/28},edge=${EDGE_ORCHESTRATOR_SUBNET:-10.231.250.192/28}
     volumes:
-      # The App's credentials but its key (app.json: the webhook secret, the OAuth client's), the
-      # runs' summaries, queue and brainstorm state.
+      # The listener's volume: the runs' summaries, queue and brainstorm state, its store (the
+      # queue, the lease). Nothing secret once a listener's App went to edge and the github
+      # service (docs/setup.md#from-the-listener).
       - data:/data
-      # One folder per run, served under /shots/. Sandboxes reach it through the broker (#393):
-      # a volume of its own only as sandboxes from before #393 mount it.
+      # One folder per run, served under /shots/ (through edge). Sandboxes reach it through the
+      # broker (#393): a volume of its own only as sandboxes from before #393 mount it.
       - screenshots:/data/shots
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
       # what you grant each repo (hosts, preview hook, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
-      # Each mount root you grant, at the same path and read-only: the listener resolves the
+      # Each mount root you grant, at the same path and read-only: the orchestrator resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
       # - /nfs/work:/nfs/work:ro
 
@@ -222,8 +276,7 @@ services:
     environment:
       # Who calls, by the network a call arrives on: each caller has one of its own to the
       # broker, whose subnet is fixed below (docs/security.md#service-tokens).
-      # The listener is more than one service until #506: each asks as the one it is.
-      SERVICE_NETWORKS: edge+orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
+      SERVICE_NETWORKS: orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},edge=${BROKER_EDGE_SUBNET:-10.231.250.208/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
       # Where it publishes its public key, which the policy service and the runner mount read-only.
       SERVICE_KEYS_DIR: /service-keys
     volumes:
@@ -235,13 +288,19 @@ services:
       # Its public key (<kid>.pem), for the policy service and the runner to check service tokens with: nothing
       # secret, and a volume apart from its signing key's.
       - service-keys:/service-keys
-    networks: [broker-orchestrator, broker-proxy, broker-runner, broker-models, broker-github]
+    networks:
+      - broker-orchestrator
+      - broker-edge
+      - broker-proxy
+      - broker-runner
+      - broker-models
+      - broker-github
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
   # The only service with the host's Docker socket (#503): it starts, follows and removes the
-  # sandboxes, builds repo images, runs preview hooks and keeps the runs' logs, for the listener
+  # sandboxes, builds repo images, runs preview hooks and keeps the runs' logs, for the orchestrator
   # alone, on a network nothing else is on and that has no way out. Two copies may run, one
   # acting and the other waiting for its lease (docs/architecture.md, The runner service).
   runner:
@@ -250,18 +309,18 @@ services:
       dockerfile: runner/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-runner:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping ends the output streams it serves (the listener follows again from the next
+    # Stopping ends the output streams it serves (the orchestrator follows again from the next
     # runner), lets its other calls finish (an image's build), then releases its lease, and lets
     # the preview hooks running end (cut past the grace period). Sandboxes keep running.
     stop_grace_period: 5m
-    # The listener's, the models service's (the Antigravity login's refresh), its own to the
+    # The orchestrator's, the models service's (the Antigravity login's refresh), its own to the
     # broker service (its tokens, the runs' inboxes and files), to the github service (the repos'
     # tarballs), and to the policy service (what the operator's policies grant a repository).
     networks: [runner, runner-models, broker-runner, github-runner, policy-runner]
     environment:
-      # The settings the runner reads too, as the listener does (config.yaml, below, has the
+      # The settings the runner reads too, as the orchestrator does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
-      # GRANTS_DIR: the listener's grants folder, which the runner checks every spec, build and
+      # GRANTS_DIR: the orchestrator's grants folder, which the runner checks every spec, build and
       # preview hook against again (runner/spec-check.mjs, runner/hooks.mjs), with what its
       # policies grant, asked of the policy service (POLICY_SERVICE_URL, its default).
       GRANTS_DIR: ${GRANTS_DIR:-}
@@ -290,7 +349,8 @@ services:
       KUBERNETES_CACHE_SIZE: ${KUBERNETES_CACHE_SIZE:-}
       KUBERNETES_AGENT_STORAGE_CLASS: ${KUBERNETES_AGENT_STORAGE_CLASS:-}
       KUBERNETES_AGENT_SIZE: ${KUBERNETES_AGENT_SIZE:-}
-      # Wiring, environment only, matching the listener's.
+      # Wiring, environment only, matching the orchestrator's. BROKER_URL: the name the
+      # orchestrator is joined to each run's network under.
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
@@ -300,12 +360,12 @@ services:
       EGRESS_PROXY: http://egress:3128
       # The broker service: its service tokens, the runs' inboxes and files.
       BROKER_SERVICE_URL: http://broker:8081
-      # The orchestrator's endpoint for it: the listener's services port (a run's first tokens).
-      ORCHESTRATOR_URL: http://listener:8083
+      # The orchestrator's endpoint for it: its services port (a run's first tokens).
+      ORCHESTRATOR_URL: http://orchestrator:8083
       # The github service: the repos' tarballs and blobs, for build contexts and preview hooks.
       GITHUB_SERVICE_URL: http://github:8080
-      # Its callers: the listener's services, on the network they share, and the models service.
-      SERVICE_NETWORKS: edge+orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
+      # Its callers: the orchestrator, on the network they share, and the models service.
+      SERVICE_NETWORKS: orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
       # The broker's public keys, which its callers' service tokens are checked with.
       SERVICE_KEYS_DIR: /service-keys
     volumes:
@@ -318,15 +378,16 @@ services:
       # sandbox fetches from the broker (#393): a volume of its own only as sandboxes from before
       # #393 mount it.
       - runs:/data/runs
-      # Your configuration, read only, as the listener reads it: config.yaml, and grants/,
+      # Your configuration, read only, as the orchestrator reads it: config.yaml, and grants/,
       # which the runner checks each sandbox's host paths and engine against again.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
-      # Each mount root you grant, as on the listener: the runner resolves a sandbox's host
+      # Each mount root you grant, as on the orchestrator: the runner resolves a sandbox's host
       # paths again (.., symlinks) before Docker mounts them, and refuses those it can't see.
       # - /nfs/work:/nfs/work:ro
 
   # The only service with the GitHub App's key (#502, docs/services.md): the runs' GitHub and git
-  # gateways (the egress proxy sends their calls here), the listener's own GitHub calls, and the
+  # gateways (the egress proxy sends their calls here), the orchestrator's and edge's own GitHub
+  # calls, and the
   # runner's tarballs. Its way out is GitHub's; each caller reaches it over a network of its own.
   github:
     build:
@@ -335,12 +396,12 @@ services:
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-github:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
     # Stopping lets the calls in flight finish (pushes, clones, an Actions log): the proxy and the
-    # listener wait for the next copy meanwhile (docs/architecture.md#restarts).
+    # orchestrator wait for the next copy meanwhile (docs/architecture.md#restarts).
     stop_grace_period: 5m
     depends_on: [broker, policy]
     environment:
       # GitHub's addresses, the repositories let through, and the grants folder (workflows,
-      # allow_projects), as the listener has them.
+      # allow_projects), as the orchestrator has them.
       GITHUB_URL: ${GITHUB_URL:-}
       GITHUB_API: ${GITHUB_API:-}
       ALLOWED_REPOS: ${ALLOWED_REPOS:-}
@@ -349,14 +410,14 @@ services:
       BROKER_SERVICE_URL: http://broker:8081
       POLICY_SERVICE_URL: http://policy:8181
       # Who calls, by the network a call arrives on (docs/security.md#service-tokens).
-      SERVICE_NETWORKS: edge+orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.144/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
+      SERVICE_NETWORKS: orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28},edge=${GITHUB_EDGE_SUBNET:-10.231.250.224/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.144/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
     volumes:
-      # The App's key (app.json, from /setup, or handed over by the listener that held it): this
+      # The App's key (app.json, from /setup, or handed over from a listener's volume): this
       # volume alone, never the store nor another service's.
       - github-key:/app-key
       # Its store (the runs' state, the idempotency keys) and the granted repos' git mirrors.
       - github-data:/data
-      # Your configuration, read only, as the listener reads it: config.yaml and grants/.
+      # Your configuration, read only, as the orchestrator reads it: config.yaml and grants/.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
     # Pushes of repositories granted `workflows` are saved in /tmp while checked (up to
     # 2 GiB each, one per run): a size-limited tmpfs keeps them off the host disk
@@ -364,10 +425,11 @@ services:
     # tmpfs:
     #   - /tmp:size=4g
     # Its way out on a network of its own: on `default` too, its name would resolve there for
-    # the listener and the proxy, whose calls would then arrive on no caller's network.
+    # the orchestrator and the proxy, whose calls would then arrive on no caller's network.
     networks:
       - github-out
       - github-orchestrator
+      - github-edge
       - github-proxy
       - github-runner
       - broker-github
@@ -379,7 +441,7 @@ services:
   # sandboxes' agents call their APIs through it, by the egress proxy, with their run's token in
   # place of the credential. The plans' logins it refreshes are kept sealed in its store, with a
   # key of its own. Its way out is the agents' APIs; its other networks are internal, each its
-  # callers' (the proxy, the listener) or its callees' (the broker, the runner).
+  # callers' (the proxy, the orchestrator) or its callees' (the broker, the runner).
   models:
     build:
       context: .
@@ -397,7 +459,7 @@ services:
     networks: [models-out, models-proxy, models-orchestrator, broker-models, runner-models]
     environment:
       # Claude Code's credential: one of the three (ANTHROPIC_AUTH_TOKEN for a gateway such
-      # as OpenRouter). Never in a file, and never in a sandbox, nor in the listener: this
+      # as OpenRouter). Never in a file, and never in a sandbox, nor in the orchestrator: this
       # service adds it to the sandboxes' API calls.
       CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
@@ -418,7 +480,7 @@ services:
       AGY_AUTH_FILE: ${AGY_AUTH_FILE:-}
       GEMINI_BASE_URL: ${GEMINI_BASE_URL:-}
       # OpenRouter's key and address, for claude@openrouter in FALLBACKS
-      # (docs/setup.md#fallbacks), which it checks as the listener does.
+      # (docs/setup.md#fallbacks), which it checks as the orchestrator does.
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       OPENROUTER_BASE_URL: ${OPENROUTER_BASE_URL:-}
       FALLBACKS: ${FALLBACKS:-}
@@ -426,7 +488,7 @@ services:
       BRAINSTORM_AGENT: ${BRAINSTORM_AGENT:-}
       RUNNER: ${RUNNER:-}
       # Wiring, environment only. Who calls, by the network a call arrives on: the egress proxy
-      # (the agents' calls) and the listener (as the orchestrator), each over a network of its
+      # (the agents' calls) and the orchestrator, each over a network of its
       # own, whose subnet is fixed below.
       SERVICE_NETWORKS: proxy=${MODELS_PROXY_SUBNET:-10.231.250.80/28},orchestrator=${MODELS_ORCHESTRATOR_SUBNET:-10.231.250.96/28}
       # The broker service: its service tokens, whether a run still goes; its public keys,
@@ -445,7 +507,7 @@ services:
       # read only: you put them there when you sign in (docs/setup.md#the-credentials-folder).
       # The refreshed ones go in the store.
       - ${DECKHAND_CREDENTIALS_DIR:-./credentials}:/data/credentials:ro
-      # Your configuration, read only, as the listener reads it: config.yaml's base URLs.
+      # Your configuration, read only, as the orchestrator reads it: config.yaml's base URLs.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       # The broker's public keys (nothing secret).
       - service-keys:/service-keys:ro
@@ -454,7 +516,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   # The policy service (docs/services.md): Deckhand's, the operator's and the repositories' Rego
-  # policies, evaluated by long-lived `opa` servers for the listener, and for the runner the
+  # policies, evaluated by long-lived `opa` servers for the orchestrator, and for the runner the
   # grants the operator's give a repository. No secret, no state, and no network but its
   # callers': internal ones, without a way out.
   policy:
@@ -463,10 +525,10 @@ services:
       dockerfile: policy-service/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-policy:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping lets the decisions in flight finish (2 s each at most): the listener waits for the
+    # Stopping lets the decisions in flight finish (2 s each at most): the orchestrator waits for the
     # next copy meanwhile, up to 30 s, rather than refuse them (docs/architecture.md#restarts).
     stop_grace_period: 30s
-    # The listener's network to it, the github service's (the runs' writes and pushes) and the
+    # The orchestrator's network to it, the github service's (the runs' writes and pushes) and the
     # runner's (what the operator's policies grant a repository).
     networks: [policy, policy-github, policy-runner]
     environment:
@@ -476,7 +538,7 @@ services:
       # checked with them, offline.
       SERVICE_KEYS_DIR: /keys
     volumes:
-      # Your configuration, as the listener has it, read only: the grants folder's policy/ is
+      # Your configuration, as the orchestrator has it, read only: the grants folder's policy/ is
       # what it reads (docs/security.md#policies).
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       - service-keys:/keys:ro
@@ -487,7 +549,7 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
-  # The sandboxes' egress proxy: asks the listener, for each connection, whether that
+  # The sandboxes' egress proxy: asks the orchestrator, for each connection, whether that
   # sandbox may reach that host.
   egress:
     build:
@@ -500,10 +562,11 @@ services:
     stop_grace_period: 30s
     environment:
       # The egress policy's own port, open while the broker's drains on a restart; the broker's,
-      # where relayed requests go, and the sandboxes' calls to it (the listener's BROKER_URL),
+      # where relayed requests go, and the sandboxes' calls to it (the orchestrator's BROKER_URL),
       # which the proxy forwards (docs/architecture.md#restarts).
-      POLICY_URL: http://listener:8082/egress
-      RELAY_URL: http://listener:8081/relay
+      POLICY_URL: http://orchestrator:8082/egress
+      RELAY_URL: http://orchestrator:8081/relay
+      # As sandboxes call it: the name they have from before edge and the orchestrator.
       BROKER_URL: http://listener:8081
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
       # and files (#505).
@@ -512,16 +575,16 @@ services:
       GITHUB_SERVICE_URL: http://github:8080
       # Where their agents' API calls go (#504).
       MODELS_SERVICE_URL: http://models:8080
-    # Its way out (the hosts granted to runs, the listener), and its networks to the broker, the
-    # github service and the models service.
-    networks: [default, broker-proxy, github-proxy, models-proxy]
+    # Its way out (the hosts granted to runs), and its networks to the orchestrator, the broker,
+    # the github service and the models service.
+    networks: [default, orchestrator-proxy, broker-proxy, github-proxy, models-proxy]
     depends_on: [broker, github, models]
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
       # (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
       - egress-cache:/cache
-    # How the listener finds it, to join it to each run's network.
+    # How the runner finds it, to join it to each run's network.
     labels:
       deckhand.role: egress
     read_only: true
@@ -529,7 +592,7 @@ services:
     security_opt: ["no-new-privileges:true"]
 
   # Pulls or builds the base image sandboxes run from (repo images build FROM it, and a new
-  # base rebuilds them on their next run), then exits: the listener starts them itself.
+  # base rebuilds them on their next run), then exits: the orchestrator starts them itself.
   sandbox:
     build:
       context: .
@@ -540,7 +603,7 @@ services:
     network_mode: none
 
   # The container engines, pulled or built like the sandbox image, with the `engine` profile
-  # only: the listener starts them next to granted runs' sandboxes.
+  # only: the orchestrator starts them next to granted runs' sandboxes.
   engine:
     profiles: [engine]
     build:
@@ -571,6 +634,12 @@ networks:
     ipam:
       config:
         - subnet: ${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28}
+  # Edge's own to the broker (its service tokens): BROKER_EDGE_SUBNET in .env for another one.
+  broker-edge:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${BROKER_EDGE_SUBNET:-10.231.250.208/28}
   broker-proxy:
     internal: true
     ipam:
@@ -609,18 +678,25 @@ networks:
   models-out:
   # The github service's way to GitHub, alone.
   github-out:
+  # Edge's way in (its published port) and out (GitHub's sign-in), alone.
+  edge-out:
   broker-github:
     internal: true
     ipam:
       config:
         - subnet: ${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
   # One network per caller of the github service, the same way: GITHUB_ORCHESTRATOR_SUBNET,
-  # GITHUB_PROXY_SUBNET and GITHUB_RUNNER_SUBNET in .env for others.
+  # GITHUB_EDGE_SUBNET, GITHUB_PROXY_SUBNET and GITHUB_RUNNER_SUBNET in .env for others.
   github-orchestrator:
     internal: true
     ipam:
       config:
         - subnet: ${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28}
+  github-edge:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${GITHUB_EDGE_SUBNET:-10.231.250.224/28}
   github-proxy:
     internal: true
     ipam:
@@ -631,7 +707,7 @@ networks:
     ipam:
       config:
         - subnet: ${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
-  # The listener and the policy service alone, the github service and the policy service alone:
+  # The orchestrator and the policy service alone, the github service and the policy service alone:
   # internal, so the policy service has no way out.
   policy:
     internal: true
@@ -640,7 +716,19 @@ networks:
   # The runner and the policy service alone, the same.
   policy-runner:
     internal: true
-  # The listener and the runner: one calls the other, nothing else is on it, and it has no way
+  # Edge and the orchestrator: each calls the other (the dashboard's API one way, the deliveries'
+  # stream the other), nothing else is on it, and it has no way out. Its subnet is fixed, as each
+  # tells the other by it (SERVICE_NETWORKS): EDGE_ORCHESTRATOR_SUBNET in .env for another one.
+  edge-orchestrator:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${EDGE_ORCHESTRATOR_SUBNET:-10.231.250.192/28}
+  # The egress proxy and the orchestrator: its policy's questions, its relays. Internal: the
+  # orchestrator has no way out.
+  orchestrator-proxy:
+    internal: true
+  # The orchestrator and the runner: one calls the other, nothing else is on it, and it has no way
   # out. Its subnet is fixed, as each tells its caller by it (SERVICE_NETWORKS): RUNNER_SUBNET in
   # .env for another one. Outside Docker's default pools (172.17-172.31/16, 192.168/16), which a
   # busy host has already handed out, like the broker's networks beside it.
@@ -651,7 +739,10 @@ networks:
         - subnet: ${RUNNER_SUBNET:-10.231.250.48/28}
 
 volumes:
+  # The orchestrator's: the listener's of before #506, kept under its name.
   data:
+  # Edge's: the App's credentials but its key, the session key, its store.
+  edge-data:
   runner-data:
   screenshots:
     name: ${SHOTS_VOLUME:-deckhand-screenshots}

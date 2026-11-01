@@ -1,9 +1,9 @@
-// The listener's calls to the broker service (../broker/, #505), which alone holds the tokens'
+// The orchestrator's calls to the broker service (../broker/, #505), which alone holds the tokens'
 // signing key: the runs' first tokens and their end (broker.mjs `issuer`), the public keys the
 // listener checks tokens with, each run's inbox and files (runner/inbox.mjs `mirror`), the
 // sandboxes' calls that reach the listener rather than the broker (relay()), and the broker's
-// `runs` stream, read and acknowledged (consume()). It calls as the orchestrator, the runner
-// included, until both move out of the listener (#503, #506).
+// `runs` stream, read and acknowledged (consume()). The orchestrator's (#506), with its fencing
+// epoch; edge and the github service take its keys from it too.
 import { createPrivateKey, createPublicKey, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -14,6 +14,7 @@ import { keyId, LEGACY_KEY_MS } from "../lib/tokens.mjs";
 // The headers the broker reads a sandbox's call by (../broker/http.mjs): the network (or pod)
 // it came from, as the listener vouches for it here, and its run token.
 import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import { EPOCH_HEADER } from "../lib/service-client.mjs";
 
 // How often the public keys are read again (a key rotated), and how soon after a failure.
 const KEYS_EVERY_MS = 5 * 60_000;
@@ -60,13 +61,27 @@ export function legacyKey(dataDir, { now = Date.now, log = () => {} } = {}) {
 }
 
 // `caller`: lib/broker-client.mjs createBrokerCaller()'s. `legacy`: legacyKey()'s PEM, or null.
+// `epoch()`: the orchestrator's fencing epoch, on each of its calls but a GET (#506); null for
+// a service that has none (edge, the github service: they only read the keys).
 export function createBrokerService({
-  caller,
+  caller: unfenced,
   legacy = null,
+  epoch = () => null,
   log = () => {},
   setTimer = setTimeout,
   clearTimer = clearTimeout,
 }) {
+  const caller = {
+    ...unfenced,
+    call(method, path, options = {}) {
+      const fenced = method === "GET" ? null : epoch();
+      if (fenced == null) return unfenced.call(method, path, options);
+      return unfenced.call(method, path, {
+        ...options,
+        headers: { ...options.headers, [EPOCH_HEADER]: String(fenced) },
+      });
+    },
+  };
   // kid → public key: the broker's run keys, and the legacy one from the start.
   let keys = new Map();
   const legacyKeys = new Map();

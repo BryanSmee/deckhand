@@ -2,9 +2,9 @@
 
 Deckhand runs on your own server with your own private GitHub App and your own Claude
 credential (or OpenAI key, for [Codex](#codex)). You need Docker Engine 26 or later with the compose plugin, and an HTTPS address
-that GitHub can reach (your reverse proxy, or a tunnel) forwarding to the listener's port.
+that GitHub can reach (your reverse proxy, or a tunnel) forwarding to edge's port.
 
-## 1. Start the listener
+## 1. Start Deckhand
 
 ```sh
 cp .env.example .env
@@ -17,28 +17,33 @@ cp -r server.example server
 #   repository. See The server folder below.
 docker compose pull
 docker compose up -d
-docker compose logs listener
+docker compose logs edge
 ```
 
-Compose runs seven images, published for each release (`DECKHAND_VERSION`, default
-`latest`): the listener's, the runner's (the only one with the Docker socket: it starts the
+Compose runs nine images, published for each release (`DECKHAND_VERSION`, default
+`latest`): edge's (the only one the internet reaches: GitHub's webhooks, `/setup`, sign-in and
+the dashboard's files), the orchestrator's (the queue, the runs and the dashboard's data,
+behind edge), the runner's (the only one with the Docker socket: it starts the
 sandboxes, [architecture](architecture.md#the-runner-service)), the broker's (the only service
 holding the key that signs the runs' tokens, see [The broker service](#the-broker-service)), the
-models service's (the only one holding your agents' credentials, see
+github service's (the only one holding the GitHub App's key, see
+[The github service](#the-github-service)), the models service's (the only one holding your agents' credentials, see
 [The models service](#the-models-service)), the policy service's (which evaluates the
-[policies](security.md#policies), on internal networks shared with the listener alone and the
-runner alone), the egress proxy's (the only way out of the sandboxes' internal
+[policies](security.md#policies), on internal networks shared with the orchestrator alone, the
+github service alone and the runner alone), the egress proxy's (the only way out of the sandboxes' internal
 networks, see [Security model](security.md)), and the base sandbox image runs start from (the
 `sandbox` service only pulls it and exits); with the `engine` profile, the
 [container engine](#container-engine)'s two images too. A repository can bring its own image
-`FROM` that base: see [Per-repo config](repo-config.md). The listener publishes port 8080
-(`PORT` to change it); point your reverse proxy at it.
+`FROM` that base: see [Per-repo config](repo-config.md). Edge publishes port 8080
+(`PORT` to change it), on a network of its own (`edge-out`); point your reverse proxy at it.
 
-To build the images from this checkout instead: `docker compose up -d --build`.
+To build the images from this checkout instead: `docker compose up -d --build`. Updating is
+`docker compose pull` and `docker compose up -d` again ([Updating](#updating)); from a release
+that ran the listener, add `--remove-orphans` once ([From the listener](#from-the-listener)).
 
 **A plan's credential** (`CLAUDE_CODE_OAUTH_TOKEN`, from `claude setup-token`, for Codex
 a ChatGPT plan's login from `codex login`, or for the Antigravity CLI a Google AI plan's login,
-both in [the credentials folder](#the-credentials-folder)) works, and the listener's and the
+both in [the credentials folder](#the-credentials-folder)) works, and the orchestrator's and the
 models service's logs warn about it at each start. A subscription (Claude Pro/Max, a ChatGPT plan, Google AI Pro/Ultra) is
 usually licensed to one person, and Google's terms may not allow a plan to drive a bot at all. Serving a team, or repositories other people write to, may
 break your provider's terms: check them before you do. You are responsible for how your
@@ -52,17 +57,20 @@ address (for example `https://deckhand.example.com/setup?token=…`):
 1. Check the public URL (detected from your browser's address, or `PUBLIC_URL`), pick the
    App's name, and the organization that should own it (empty: your personal account).
 2. GitHub shows the App with its permissions and events. Create it.
-3. GitHub sends you back to the listener, which has the github service turn GitHub's answer
+3. GitHub sends you back to edge, which has the github service turn GitHub's answer
    into the App's credentials: the **private key stays in the github service**, in its own
-   volume (`github-key`, `/app-key/app.json`, readable by that service only); the listener keeps
-   the App's ID, its webhook secret and its OAuth client's in its data volume
-   (`/data/app.json`). Then on to the App's installation page: pick the repositories Deckhand
+   volume (`github-key`, `/app-key/app.json`, readable by that service only); edge keeps
+   the App's ID, its webhook secret and its OAuth client's in its own volume
+   (`edge-data`, `/data/app.json`), and gives the orchestrator the App's public parts alone
+   (its ID, slug, owner, bot). Then on to the App's installation page: pick the repositories Deckhand
    may work on. Each one without a `.deckhand.yaml` gets an onboarding issue (see Onboarding
    below).
 
 Once an App is stored, `/setup` is closed. To start over, delete `/data/app.json` from the
-`data` volume and `app.json` from the `github-key` volume, and restart both services. Back up
-the `github-key` volume with the `data` one: without it, Deckhand can't act as the App.
+`edge-data` volume and `app.json` from the `github-key` volume, and restart edge and the github
+service. Back up the `github-key` and `edge-data` volumes with the `data` one: without the
+first, Deckhand can't act as the App; without the second, it can't check GitHub's webhooks or
+sign anyone in.
 
 What the App asks for:
 
@@ -97,19 +105,19 @@ reads them. An App created before reruns has Actions: read only: set it to **rea
 write** in the App's settings, then accept it on each installation. Until then a run's rerun
 is refused with a message naming the permission, and everything else works.
 
-Organization projects lets the listener move a repository's issues on an organization's
+Organization projects lets the orchestrator move a repository's issues on an organization's
 project (v2), and its runs add their issues and pull requests there, for the repositories
 whose grants file lists the project in `allow_projects` only
 ([Projects](repo-config.md#projects)). An App created before then lacks it, which only
 matters once you grant a project: add **Organization projects: read and write** under
 _Organization permissions_ in the App's settings, then accept it on the organization's
-installation. Until then, the listener's moves fail (said in its log and the run's) and a
+installation. Until then, the orchestrator's moves fail (said in its log and the run's) and a
 run's project writes are refused with a message naming the permission; nothing else
 changes. A GitHub App can't reach a project owned by a user account.
 
 Checks and Commit statuses let runs read what CI says of a commit beyond GitHub Actions
 (other services' check runs, commit statuses: `gh pr checks`); the `check_suite` and `status`
-events are subscribed for the listener's own use to come (nothing reads them yet). An App created before then lacks
+events are subscribed for the orchestrator's own use to come (nothing reads them yet). An App created before then lacks
 them: add **Checks: read** and **Commit statuses: read** in its settings, turn on **Check
 suite** and **Status** under _Subscribe to events_, then accept the new permissions on each
 installation ([below](#when-the-app-needs-a-new-permission)). Until then, where a commit
@@ -135,7 +143,7 @@ release; their onboarding check and Policies tab say what no longer applies, as 
 repository file that doesn't start with its `package` line (after comments only), now refused.
 
 Upgrading to per-mode policies (issue #496): the modes' write ceilings built into the listener
-are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
+(as it was then) are gone. A run's GitHub writes, its reads of checks and projects, and its pushes (a new
 decision, `push`: [the push input](repo-config.md#the-push-input)) now need an allow rule
 (`allow_github`, `allow_push`), which Deckhand's `policy/mode-<mode>.rego` files give each
 mode as its ceiling did, with the refusals of the old per-feature files
@@ -144,7 +152,7 @@ mode as its ceiling did, with the refusals of the old per-feature files
 that kept `allow_github := true`** (as the note above said to) now allows every write of every
 mode, an inbox entry's or a review's included, with no ceiling left to cap it: remove that
 rule, and add no `allow_push := true`, unless you mean every mode to write or push all that
-the built-in checks don't refuse. The listener's log at start and each repository's
+the built-in checks don't refuse. The orchestrator's log at start and each repository's
 Policies tab warn of such a rule. Deckhand no longer ships
 `github.rego` or the `gh-*.rego` files but `gh-checks.rego`, `gh-linked-branch.rego` and
 `gh-reviewers.rego`: a file of yours in the grants folder that replaced one of the others by
@@ -156,13 +164,13 @@ its `allow_push` too, as they need its `allow_github` to write.
 An App created before `/after` lacks the `issues` event: turn on **Issues** under _Subscribe
 to events_ in its settings. Without it, a comment waiting for an issue (`/after #77`) still
 starts at once when a pull request that closes the issue (`Closes #77`) is merged into the
-default branch, when a run on the issue ends, or on any comment on it: the listener then
+default branch, when a run on the issue ends, or on any comment on it: the orchestrator then
 asks GitHub about the issue. An issue closed by hand, with nothing else happening to it, is
-only seen at the listener's next check of every wait (`WAITS_CHECK_MINUTES`, 5 minutes by
+only seen at the orchestrator's next check of every wait (`WAITS_CHECK_MINUTES`, 5 minutes by
 default, and at each start). Issues opened with an **Open questions** section aren't labelled
 `NEEDS_INPUT_LABEL` until the graph page reads the repo's open issues, answering them doesn't
 take the label off unless a run starts, and the dashboard only sees the label change when the
-listener restarts. The listener logs a warning at start and with each listing of the
+orchestrator restarts. The orchestrator logs a warning at start and with each listing of the
 repositories naming the events the App misses (once, until that changes), with the address of
 its settings.
 
@@ -179,7 +187,7 @@ itself, and an installation only gets it once an owner of its account accepts it
    permissions ↗** while it lacks one), review and accept the new permissions.
 
 At start, and each time it lists the repositories again (every 5 minutes while the dashboard
-is open, or its **Refresh**), the listener reads the App's settings again. It logs, once each,
+is open, or its **Refresh**), the orchestrator reads the App's settings again. It logs, once each,
 the permissions the App lacks (with the address of its settings) and, for each installation,
 those it hasn't accepted yet (with the address of its page). The dashboard's GitHub App card
 shows the same: a _Missing in its settings_ row for the App's events and permissions, and
@@ -191,7 +199,7 @@ gateway refuses its repository's calls that need it with a `Deckhand:` message n
 the page that accepts it, instead of every token failing. The others are required: a token
 asking for `issues`, `contents` or `pull_requests` that the installation lacks fails, as
 before. An installation's permissions are read again within 5 minutes of a change, at once
-when GitHub tells the listener the new ones were accepted.
+when GitHub tells Deckhand the new ones were accepted.
 
 ## 3. Use it
 
@@ -214,18 +222,18 @@ code or a GitHub token, once your policies grant the repository `research` (an `
 rule in `grants/policy/`: [the grants](security.md#the-grants), [Research runs](security.md#research-runs)).
 
 **Onboarding.** When the App is installed on a repository (at creation, or added to the
-installation later) that has no `.deckhand.yaml` on its default branch, the listener opens an
+installation later) that has no `.deckhand.yaml` on its default branch, the orchestrator opens an
 issue there, "Set up Deckhand for this repository", labelled `deckhand-onboarding`. Claude
 reads the repository and replies with a proposed `.deckhand.yaml` (and a Dockerfile or
 instructions file when needed), each key with its reason, within what you allow. Comments on
 the issue change the proposal, with a read-only token: nothing is pushed. A comment whose
 first line is `Deckhand` (or `/mode work`) confirms it: Claude opens a pull request with
-only the agreed files, and the listener checks the branch's config and adds any errors or
+only the agreed files, and the orchestrator checks the branch's config and adds any errors or
 warnings to its reply. Merge it, and the next runs use the config. See
 [Onboarding](repo-config.md#onboarding).
 
 Only installations by someone in `ALLOWED_USERS`, on repositories `ALLOWED_REPOS` lets
-through, open an issue; the others are skipped, with the reason in the listener's logs. A
+through, open an issue; the others are skipped, with the reason in the orchestrator's logs. A
 repository gets one onboarding issue, ever (`/data/onboarding.json`), so reinstalling the App
 opens no second one. `ONBOARDING=off` turns the automatic issue off; a `/mode onboarding`
 comment on any issue starts the same conversation by hand, for repositories installed
@@ -244,7 +252,7 @@ closed. With a wildcard:
   edit or restart;
 - if the App is public, keep `ALLOWED_REPOS` set: empty, every account that installs the App
   gets through (only `ALLOWED_USERS` start runs, but their repositories show on the
-  dashboard and their webhooks reach the listener);
+  dashboard and their webhooks reach edge);
 - remove the entry when the account is renamed or deleted: someone else could register its
   name and install the App;
 - grants don't follow: a sandbox's hosts, mounts and limits still come from
@@ -266,14 +274,16 @@ list the hosts its sandboxes may reach (see
 
 ## 4. The dashboard
 
-Open the listener's public address (`/`) and sign in with GitHub: the App's sign-in
-(user-to-server OAuth) tells the listener who you are, and only `ALLOWED_USERS` get in; anyone
+Open edge's public address (`/`) and sign in with GitHub: the App's sign-in
+(user-to-server OAuth) tells edge who you are, and only `ALLOWED_USERS` get in; anyone
 else sees who they are signed in as and a refusal. The token GitHub returns is only used to
 read your login, then revoked; the session is a signed cookie valid for 7 days, checked
-against `ALLOWED_USERS` on every request (the key is `/data/session.key`). Signing out ends
-all your sessions, in every browser. A repository's tasks and logs show to the users in its
+against `ALLOWED_USERS` on every request (the key is `/data/session.key` in the `edge-data`
+volume). Signing out ends all your sessions, in every browser, on both of edge's copies. Edge
+serves the dashboard's files and passes its API on to the orchestrator, which answers it, with
+your login. A repository's tasks and logs show to the users in its
 own `users` (see [Security model](security.md#the-dashboard)). `/status` also answers calls
-from inside the container (`docker compose exec listener …`) without a session, but not
+from inside edge's container (`docker compose exec edge …`) without a session, but not
 those a reverse proxy forwarded.
 
 Apps created by `/setup` before the dashboard had sign-in have no callback URL: on the App's
@@ -295,12 +305,12 @@ those waiting for you) and chips by state: running (queued and `/after` waits to
 its review-and-fix loop, `review.fix`), needs input (a brainstorm waiting for your
 comment too), ready for review (once that loop is over; a loop that left blocking findings says
 how many), done, error. Titles come with the webhooks; for tasks from before the dashboard
-had them, the listener asks GitHub once and keeps them in `titles.json` in its data volume.
+had them, the orchestrator asks GitHub once and keeps them in `titles.json` in its data volume.
 
 Each task also links to its pull request (the one that closes its issue, or the pull request
 itself), with a badge for its state: draft, ready for review, merged or closed. The
-`pull_request` webhooks keep it current, in `pulls.json`, and so do the changes the listener
-lets through for runs (a run's `gh pr ready`); for tasks from before, the listener looks through each
+`pull_request` webhooks keep it current, in `pulls.json`, and so do the changes Deckhand
+lets through for runs (a run's `gh pr ready`); for tasks from before, the orchestrator looks through each
 repository's 100 most recently updated pull requests once per start, and asks again about the
 open ones at each start, so one that changed while it was down shows its current state. The
 **Ready for review** chip lists the pull requests waiting for you, and the tab's title counts
@@ -311,9 +321,10 @@ there, a run that failed; each opens its task when clicked. Preferences also kee
 theme, density, motion, start page, board and run log choices and the keyboard shortcuts, in
 this browser only.
 
-GitHub doesn't retry a webhook it couldn't deliver (the listener down or restarting, a
-reverse proxy or tunnel timing out, an outage on GitHub's side). The listener reads the App's
-**Recent Deliveries** itself at start and every 5 minutes, and asks GitHub to redeliver each
+GitHub doesn't retry a webhook it couldn't deliver (edge down or restarting, a
+reverse proxy or tunnel timing out, an outage on GitHub's side). Edge reads the App's
+**Recent Deliveries** itself at start and every 5 minutes (one of its copies, the one holding
+the store's lease `edge/redeliveries`), and asks GitHub to redeliver each
 one that failed, once, within GitHub's 3 days: a comment posted meanwhile still gets its run,
 whatever its age. The App needs no extra permission or event for that: an App can always read
 its own deliveries. **Sync** (in the top bar, after the running and queued counts) does it
@@ -372,7 +383,7 @@ keyboards. While you drag, the graph outlines the node a drop would queue after 
 letting go does ("Queue #31 after #19"); each action shows at once as a dashed node
 ("Starting…"). Each action is written on the issue as the App's comment.
 
-Each task shows its listener's state:
+Each task shows its state in the orchestrator:
 
 | State | What |
 | `queued` | comments wait for a run (a free slot, or the running one) |
@@ -427,7 +438,7 @@ the default branch.
 ## The server folder
 
 Everything you configure but the secrets is in one folder, which `compose.yaml` mounts
-read-only at `/etc/deckhand` in the listener: `./server` by default (`DECKHAND_SERVER_DIR`
+read-only at `/etc/deckhand` in the services that read it: `./server` by default (`DECKHAND_SERVER_DIR`
 in `.env` to move it). Keep it in git, in your deployment's own repository, so each change is
 a reviewed commit:
 
@@ -456,7 +467,7 @@ docker compose up -d
 ```
 
 The grants are read again at each run, so a pull applies to the next run; `config.yaml` is
-read at start, so restart the listener after changing it. Whoever can change the folder can
+read at start, so restart the services after changing it (`docker compose restart`). Whoever can change the folder can
 grant root on the host: protect it like the deployment itself, with `CODEOWNERS` giving each
 team its own repositories' grants (see [Security model](security.md#the-grants-folder)).
 
@@ -487,29 +498,29 @@ A file there, under its name, turns that login on at start: no setting needed.
 service must be able to read. The models service never writes it: each refresh's new tokens go
 in its store, sealed with a key of its own (see [The models service](#the-models-service)), and
 it uses them until the file changes. To sign in again, replace the file: the next call takes the
-new login. The listener no longer mounts the folder (#504): a login it refreshed before is the
-file's content, which the models service starts from.
+new login. Only the models service mounts the folder (#504): a login a listener from before
+refreshed is the file's content, which the models service starts from.
 
 ## Settings
 
 Each setting can come from the environment (`.env`, read by `compose.yaml`) or from
 `config.yaml` in [the server folder](#the-server-folder), a file you commit in your
 deployment's repository and review line by line.
-Secrets (the Claude credential, `OPENAI_API_KEY`, `GEMINI_API_KEY`) stay in `.env`; the App's are in `/data/app.json` (its webhook and OAuth secrets) and the github service's `github-key` volume (its key).
+Secrets (the Claude credential, `OPENAI_API_KEY`, `GEMINI_API_KEY`) stay in `.env`; the App's are in edge's `edge-data` volume (`/data/app.json`: its webhook and OAuth secrets) and the github service's `github-key` volume (its key).
 
 - **Keys:** each setting's environment variable in lowercase (`ALLOWED_USERS` →
   `allowed_users`), lists as YAML lists, `onboarding` as `true` or `false`.
 - **Precedence:** an environment variable that is set and not empty wins, then
   `config.yaml`, then the default below. `NEEDS_INPUT_LABEL` is the exception: set and
   empty in `.env`, it still wins (no label); `needs_input_label: ""` does the same in the file.
-- **Read at start only:** restart the listener (`docker compose restart listener`) after an
+- **Read at start only:** restart the services (`docker compose restart`) after an
   edit. Unlike the grants folder, it isn't read again.
 - **Fail closed:** an unknown key, a value of the wrong type, a bad value or a secret in the
-  file stops the listener, naming the key (`/etc/deckhand/config.yaml: max_parallel:
+  file stops the service reading it, naming the key (`/etc/deckhand/config.yaml: max_parallel:
 expected a whole number of sandboxes, got lots`). The file is optional; `ALLOWED_USERS`
   is required from one or the other.
 
-The listener reads `/etc/deckhand/config.yaml` (`CONFIG_FILE` to change it): `config.yaml`
+Edge and the orchestrator read `/etc/deckhand/config.yaml` (`CONFIG_FILE` to change it): `config.yaml`
 in [the server folder](#the-server-folder), for example:
 
 ```yaml
@@ -533,7 +544,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 
 | Setting                                                                                           | `config.yaml` key                                                                                 | Default                                                                      | What                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                                               | GitHub logins that can start runs                                                                                                                                                                                                                  |
+| `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                                               | GitHub logins that can start runs and sign in to the dashboard (edge and the orchestrator both read it)                                                                                                                                            |
 | `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, or `owner/*` for every repo of an account, comma-separated in `.env`; see [Which repositories](#which-repositories))                                                                                              |
 | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                                              | Claude credential, the models service's alone, which adds it to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's). With several, runs take the gateway's, then the plan's, then the key ([Agents](#agents-and-providers))             |
 | `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                                                  | where the models service sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                                                                                                                      |
@@ -552,8 +563,8 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `OPENROUTER_BASE_URL`                                                                             | `openrouter_base_url`                                                                             | `https://openrouter.ai/api`                                                  | where the models service sends the API calls of `claude@openrouter` runs                                                                                                                                                                           |
 | `OPENROUTER_OPUS_MODEL`, `OPENROUTER_SONNET_MODEL`, `OPENROUTER_HAIKU_MODEL`                      | `openrouter_opus_model`, `openrouter_sonnet_model`, `openrouter_haiku_model`                      | `ANTHROPIC_DEFAULT_*_MODEL`                                                  | what `opus`, `sonnet` and `haiku` stand for on `claude@openrouter` (OpenRouter's names)                                                                                                                                                            |
 | `CLAUDE_FALLBACK_MODEL`                                                                           | `claude_fallback_model`                                                                           | none                                                                         | Claude Code's own `--fallback-model`, when the run's model is overloaded: a tier or a model's name                                                                                                                                                 |
-| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                                                           | the listener's public address                                                                                                                                                                                                                      |
-| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                                                       | the host port compose publishes the listener on                                                                                                                                                                                                    |
+| `PUBLIC_URL`                                                                                      | `public_url`                                                                                      | stored by `/setup`                                                           | edge's public address                                                                                                                                                                                                                              |
+| `PORT`                                                                                            | none: compose's                                                                                   | `8080`                                                                       | the host port compose publishes edge on                                                                                                                                                                                                            |
 | `CLAUDE_CODE_VERSION`                                                                             | `claude_code_version`                                                                             | `2.1.300`                                                                    | Claude Code version the sandboxes install on first use                                                                                                                                                                                             |
 | `AGY_VERSION`                                                                                     | `agy_version`                                                                                     | `1.4.0`                                                                      | Antigravity CLI version the sandboxes install on first use                                                                                                                                                                                         |
 | `AGY_SHA256`                                                                                      | `agy_sha256`                                                                                      | `1.4.0`'s                                                                    | sha256 of the Antigravity CLI's tarballs, `x64:<hex>,arm64:<hex>`: set it whenever you change `AGY_VERSION`, from the release's assets                                                                                                             |
@@ -563,7 +574,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `SANDBOX_FAST_MODE`                                                                               | `sandbox_fast_mode`                                                                               | off                                                                          | `allowed`: `/speed fast` turns on Claude Code's fast mode, which costs more (see [Fast mode](#fast-mode))                                                                                                                                          |
 | `BRAINSTORM_IDLE_MINUTES`                                                                         | `brainstorm_idle_minutes`                                                                         | `10`                                                                         | minutes without a comment before a brainstorm shows as idle                                                                                                                                                                                        |
 | `MAX_PARALLEL`                                                                                    | `max_parallel`                                                                                    | `2`                                                                          | sandboxes running at once (a repo's `max_parallel` within it)                                                                                                                                                                                      |
-| `AUTO_PICKUP_SLOTS`                                                                               | `auto_pickup_slots`                                                                               | `0` (off)                                                                    | slots within `MAX_PARALLEL` for the issues the listener starts by itself (below MAX_PARALLEL; [Auto-pickup](#auto-pickup))                                                                                                                         |
+| `AUTO_PICKUP_SLOTS`                                                                               | `auto_pickup_slots`                                                                               | `0` (off)                                                                    | slots within `MAX_PARALLEL` for the issues the orchestrator starts by itself (below MAX_PARALLEL; [Auto-pickup](#auto-pickup))                                                                                                                     |
 | `AUTO_PICKUP_LABEL`                                                                               | `auto_pickup_label`                                                                               | `auto-pickup`                                                                | the label that asks for it                                                                                                                                                                                                                         |
 | `SANDBOX_SUBNETS`, `SANDBOX_SUBNET_SIZE`                                                          | `sandbox_subnets`, `sandbox_subnet_size`                                                          | none (Docker's pools), `28`                                                  | an IPv4 range the runs' networks take their subnets from, in blocks of that size (below the table)                                                                                                                                                 |
 | `SANDBOX_ENGINE`                                                                                  | `sandbox_engine`                                                                                  | none                                                                         | the container engine runs of repositories granted `docker` get: `sysbox`, `podman` or `auto` (see [Container engine](#container-engine))                                                                                                           |
@@ -575,22 +586,22 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `WAITS_CHECK_MINUTES`                                                                             | `waits_check_minutes`                                                                             | `5`                                                                          | how often comments waiting for other issues (`/after`) ask GitHub again                                                                                                                                                                            |
 | `RUN_LOG_MAX_MB`                                                                                  | `run_log_max_mb`                                                                                  | `200`                                                                        | megabytes a run's log may hold: a run whose output passes it is stopped and fails, the rest of its output not kept (see below)                                                                                                                     |
 | `LOG_RETENTION_DAYS`                                                                              | `log_retention_days`                                                                              | `90`                                                                         | days a run's log, its summary and its screenshots are kept; `0` keeps them forever (see below)                                                                                                                                                     |
-| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`, `CODEX_VOLUME`, `AGY_VOLUME`                                 | `name_prefix`, `claude_code_volume`, `codex_volume`, `agy_volume`                                 | `deckhand`, `deckhand-claude-code`, `deckhand-codex`, `deckhand-antigravity` | names of what the listener creates on Docker (the Antigravity CLI's login is refreshed in `<AGY_VOLUME>-login`)                                                                                                                                    |
+| `NAME_PREFIX`, `CLAUDE_CODE_VOLUME`, `CODEX_VOLUME`, `AGY_VOLUME`                                 | `name_prefix`, `claude_code_volume`, `codex_volume`, `agy_volume`                                 | `deckhand`, `deckhand-claude-code`, `deckhand-codex`, `deckhand-antigravity` | names of what Deckhand creates on Docker (the Antigravity CLI's login is refreshed in `<AGY_VOLUME>-login`)                                                                                                                                        |
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                                                       | the host's Docker socket, as preview hooks mount it                                                                                                                                                                                                |
 | `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                                                     | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                                                                                                                                   |
 | `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                                                          | where compose pulls the images from                                                                                                                                                                                                                |
-| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                                                                 | names of the screenshots and runs volumes compose creates and mounts into the listener only (sandboxes reach their files through the broker)                                                                                                       |
+| `SHOTS_VOLUME`, `RUNS_VOLUME`                                                                     | none: compose's                                                                                   | `deckhand-…`                                                                 | names of the screenshots and runs volumes compose creates and mounts into the orchestrator (and the runner) only (sandboxes reach their files through the broker)                                                                                  |
 
 Each running sandbox has a Docker network of its own (see
 [Security model](security.md#network)). By default Docker takes their subnets from its default
 address pools, which hold about 30 networks shared with your other projects: past that, runs
 fail to start with `all predefined address pools have been fully subnetted` (or `could not
 find an available, non-overlapping IPv4 address pool`). Set aside a range of your own instead,
-`SANDBOX_SUBNETS=10.200.0.0/16` (`sandbox_subnets` in `config.yaml`): the listener cuts it
+`SANDBOX_SUBNETS=10.200.0.0/16` (`sandbox_subnets` in `config.yaml`): Deckhand cuts it
 into blocks of `SANDBOX_SUBNET_SIZE` (`/28` by default, 16 addresses: 4096 networks in a
 `/16`) and gives each run's network the lowest block no network on the host uses, so your
 other projects keep Docker's pools. Pick a range none of your networks or LANs use, inside
-`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `100.64.0.0/10`: the listener refuses to
+`10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `100.64.0.0/10`: Deckhand refuses to
 start with any other (a public range would make other runs' sandboxes look like public hosts
 to the egress proxy). When it is
 full, runs fail to start with an error naming `SANDBOX_SUBNETS`: set a larger range or a lower
@@ -604,8 +615,8 @@ Docker's own pools, so list those first and add yours after them, for example
 
 Each run leaves its log in `logs/<run>.log` on the data volume (the agent's whole output, often
 a few MB), a summary beside it (`logs/<run>.json`, what the dashboard lists after a restart,
-so the listener doesn't read the logs to start) and its screenshots in `shots/`. At start and
-then daily, the listener removes those of runs older than `LOG_RETENTION_DAYS` (90 days by
+so the orchestrator doesn't read the logs to start) and its screenshots in `shots/`. At start and
+then daily, the orchestrator removes those of runs older than `LOG_RETENTION_DAYS` (90 days by
 default), and they leave the dashboard. It keeps a run still going, and the latest run of a
 task that is queued, in a brainstorm, waiting (`/after`) or waiting for input, whatever its
 age. Screenshots linked from older pull requests and comments stop showing once their run is
@@ -631,7 +642,7 @@ doesn't start: the reply says why.
 ### Auto-pickup
 
 An issue nobody starts can wait for months. With `AUTO_PICKUP_SLOTS` above 0 (and below
-`MAX_PARALLEL`, which it comes out of), the listener starts the open issues labelled
+`MAX_PARALLEL`, which it comes out of), the orchestrator starts the open issues labelled
 `AUTO_PICKUP_LABEL` (`auto-pickup`) by itself, oldest created first across the repositories
 whose `.deckhand.yaml` says `auto_pickup: true` ([repo-config.md](repo-config.md#auto-pickup)),
 in `work` mode, as many at once as there are slots. It looks every 5 minutes, a few seconds
@@ -773,8 +784,8 @@ would send them to the gateway; `/agent` can't pick them while a gateway is the 
 
 Claude Code is built for Claude models: others, through a gateway, are uneven at its tool
 calls (edits, long sessions, thinking), and a run can stop halfway or misuse a tool. Try a
-model on a small issue before giving it real work. Restart the listener after changing these
-settings; switching back to Anthropic is emptying `anthropic_base_url` and setting your
+model on a small issue before giving it real work. Restart the models service and the
+orchestrator after changing these settings; switching back to Anthropic is emptying `anthropic_base_url` and setting your
 Anthropic credential.
 
 ### Codex
@@ -797,7 +808,7 @@ Or keep Claude Code as the default and let repositories pick Codex: with both a 
 credential and `OPENAI_API_KEY` set, a repository's `.deckhand.yaml` may say `agent: codex`
 (per repository, or per mode: [Per-repo config](repo-config.md#agent)). A repository can only
 pick an agent you have a credential for, or the one you chose as default. `SANDBOX_AGENT=codex`
-without `OPENAI_API_KEY` (or a ChatGPT plan's login) stops the listener at start.
+without `OPENAI_API_KEY` (or a ChatGPT plan's login) stops the orchestrator at start.
 
 As with Claude Code, the key never enters a sandbox: Codex calls the models service
 (`OPENAI_BASE_URL=<broker>/openai`, which the egress proxy sends there) with the run's agent
@@ -842,7 +853,7 @@ ChatGPT's Codex backend (`chatgpt.com/backend-api/codex`). No sandbox gets it.
    rm -r "$CODEX_HOME"
    ```
 
-3. Restart the models service, then the listener (`docker compose restart models listener`):
+3. Restart the models service, then the orchestrator (`docker compose restart models orchestrator`):
    the file turns the login on.
 
 The models service logs `Codex: a ChatGPT plan's login, from /data/credentials/codex-auth.json`
@@ -853,8 +864,8 @@ service holds. When the login is spent (revoked, or refreshed elsewhere), runs f
 `codex login` again": repeat the steps above; the models service reads the new file without a
 restart. `OPENAI_API_KEY`, when set too, wins.
 
-A plan is licensed to one person: the listener's log warns about it at each start (see
-[1. Start the listener](#1-start-the-listener)).
+A plan is licensed to one person: the orchestrator's log warns about it at each start (see
+[1. Start Deckhand](#1-start-deckhand)).
 
 ### Antigravity CLI
 
@@ -879,7 +890,7 @@ effort as `--effort` (`gemini-4-argon-high` runs `--model gemini-4-argon --effor
 other models (`agy models`) need nothing.
 
 `SANDBOX_AGENT=antigravity` without `GEMINI_API_KEY` (or a Google AI plan's login) stops the
-listener at start.
+orchestrator at start.
 
 As with Claude Code and Codex, the key never enters a sandbox: `agy` calls the models service
 (`GOOGLE_GEMINI_BASE_URL=<broker>/google`) with the run's agent token in `GEMINI_API_KEY` (and
@@ -905,7 +916,7 @@ which gives it Gemini 4 Argon (and the plan's other models: `agy models` lists t
 `agy` takes such a plan: Gemini CLI and the gateways need an API key.
 
 Google's terms may not allow a plan, licensed to one person, to drive an automated bot:
-check them before you set this up. The listener's log warns about it at each start.
+check them before you set this up. The orchestrator's log warns about it at each start.
 
 On a plan, `agy` has no setting to send its calls to the models service, so its login is kept out
 of the sandboxes another way. The models service holds it; each sandbox gets a token file whose
@@ -950,7 +961,7 @@ the token too) is refused; its feature flags (`antigravity-unleash.goog`) and yo
    sandbox_model: best # gemini-4-argon-high; balanced and fast: gemini-4-argon-medium, gemini-3.8-flash-medium
    ```
 
-Then restart the models service and the listener. The models service logs `Antigravity CLI: a
+Then restart the models service and the orchestrator. The models service logs `Antigravity CLI: a
 Google AI plan's login, from /data/credentials/agy-auth.json` at start, or why it can't use it.
 When the access token is within 5 minutes of its expiry, it has `agy` refresh it: the runner runs
 `agy models` in a short container of the sandbox image, on a volume of its own
@@ -994,13 +1005,13 @@ fallbacks: [claude@anthropic:key, claude@openrouter]
 ```
 
 An entry without its credential (`claude@anthropic:key` without `ANTHROPIC_API_KEY`), or a
-credential Deckhand doesn't have, stops the listener at start. Without `FALLBACKS`, nothing
+credential Deckhand doesn't have, stops the orchestrator at start. Without `FALLBACKS`, nothing
 changes: a run whose provider fails ends with an error, as before.
 
 **Which errors count:** only the provider's. The run's agent ended with an error that says
 overloaded (529), rate limited (429), a usage limit or quota reached (402, a plan's limit, no
 credit left), invalid or expired credentials (401, 403), or a server error (5xx), in its
-message or as the last answer the listener got from the provider. A failing test, a task the
+message or as the last answer Deckhand got from the provider. A failing test, a task the
 agent gave up on or any other error ends the run as before. A plan's usage limit
 counts: with a Claude plan first and its API key (`claude@anthropic:key`) or OpenRouter after
 it, runs go on, paid per token, only on the entries you list.
@@ -1037,93 +1048,101 @@ overloaded, before its provider counts as failed.
 
 ### Advanced settings
 
-The listener, the runner, the policy service and the egress proxy also read these. `compose.yaml` doesn't take them from
+Edge, the orchestrator, the runner, the policy service and the egress proxy also read these. `compose.yaml` doesn't take them from
 `.env`: it sets some itself, to match the services and volumes it defines, and leaves the
 others to their defaults. To change one, set its key in `config.yaml` when it has one, or
 else set it in the service's `environment`, for example in a `compose.override.yaml`.
 
-| Setting                                                                                                      | Key                              | Default                                                                                           | What                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `GRANTS_DIR`                                                                                                 | `grants_dir`                     | `/etc/deckhand/grants`                                                                            | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, projects; and your policies in `policy/`, with the grants (preview hook, Dockerfile, engine…: [the grants](security.md#the-grants)) (the server folder's). The runner must read the same folder: it checks every sandbox spec, build and preview hook against it again, and the grants with the policy service (`compose.yaml` gives it the listener's) |
-| `INSTALL_NETWORK`                                                                                            | `install_network`                | `bridge`                                                                                          | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh                                                                                                                                                                                                                                                                                                                |
-| `RUNNER`                                                                                                     | `runner`                         | `docker`                                                                                          | where sandboxes run: `docker`, the host's Docker, or `kubernetes`, pods of the cluster the listener runs in (see [Kubernetes runner](#kubernetes-runner)); another value stops the listener at start, saying so                                                                                                                                                                                                                            |
-| `KUBERNETES_NAMESPACE`                                                                                       | `kubernetes_namespace`           | the runner's own                                                                                  | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims, which has to hold the listener's, the runner's and the egress proxy's pods too                                                                                                                                                                                                                                                                    |
-| `KUBERNETES_PENDING_MINUTES`                                                                                 | `kubernetes_pending_minutes`     | `10`                                                                                              | how long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply                                                                                                                                                                                                                                                                                                             |
-| `KUBERNETES_STORAGE_CLASS`                                                                                   | `kubernetes_storage_class`       | the cluster's default                                                                             | the storage class of the issues' session claims                                                                                                                                                                                                                                                                                                                                                                                            |
-| `KUBERNETES_SESSION_SIZE`                                                                                    | `kubernetes_session_size`        | `10Gi`                                                                                            | the size of each session claim (an issue's clone, and its agent's session)                                                                                                                                                                                                                                                                                                                                                                 |
-| `KUBERNETES_REGISTRY`                                                                                        | `kubernetes_registry`            | none: no repo images                                                                              | the registry repo images are pushed to and the nodes pull from, with an optional path (`registry.example.com/deckhand`); see [Repo images on Kubernetes](#repo-images-on-kubernetes)                                                                                                                                                                                                                                                       |
-| `KUBERNETES_REGISTRY_SECRET`                                                                                 | `kubernetes_registry_secret`     | none; required with `KUBERNETES_REGISTRY`                                                         | a `kubernetes.io/dockerconfigjson` Secret of the namespace, with credentials the registry requires to pull, push and delete: the nodes pull repo images and the agents' installs with it, and the listener and BuildKit push and prune with it                                                                                                                                                                                             |
-| `KUBERNETES_BUILDKIT`                                                                                        | `kubernetes_buildkit`            | `tcp://buildkitd:1234`                                                                            | the BuildKit daemon that builds repo images (`buildctl --addr`); its host is the name of its Service in the namespace                                                                                                                                                                                                                                                                                                                      |
-| `KUBERNETES_REGISTRY_HOSTS`                                                                                  | `kubernetes_registry_hosts`      | none                                                                                              | more hosts the BuildKit daemon may reach while it builds (a registry's token service or layer storage the listener doesn't know), as a grant's `hosts` are written; see [Repo images on Kubernetes](#repo-images-on-kubernetes)                                                                                                                                                                                                            |
-| `KUBERNETES_CACHE_STORAGE_CLASS`                                                                             | `kubernetes_cache_storage_class` | none: no caches                                                                                   | a `ReadWriteMany` storage class for the repos' cache claims (`caches`), which concurrent runs mount                                                                                                                                                                                                                                                                                                                                        |
-| `KUBERNETES_CACHE_SIZE`                                                                                      | `kubernetes_cache_size`          | `10Gi`                                                                                            | the size of each cache claim                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `KUBERNETES_AGENT_STORAGE_CLASS`                                                                             | `kubernetes_agent_storage_class` | `KUBERNETES_CACHE_STORAGE_CLASS`                                                                  | a `ReadWriteMany` storage class for the agents' claims, installed once per version; none (and no claim made beforehand): each run installs its agent in an init container                                                                                                                                                                                                                                                                  |
-| `KUBERNETES_AGENT_SIZE`                                                                                      | `kubernetes_agent_size`          | `5Gi`                                                                                             | the size of each agent's claim                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`                                                         | none: the cluster's              | set by Kubernetes in every pod                                                                    | where the Kubernetes runner reaches the API server                                                                                                                                                                                                                                                                                                                                                                                         |
-| `DEBOUNCE_MS`                                                                                                | `debounce_ms`                    | `15000`                                                                                           | pause after a comment before its run starts, so that comments posted together go in one run                                                                                                                                                                                                                                                                                                                                                |
-| `BRAINSTORM_DEBOUNCE_MS`                                                                                     | `brainstorm_debounce_ms`         | `3000`                                                                                            | the same before a light run (brainstorms, onboarding, inbox entries…)                                                                                                                                                                                                                                                                                                                                                                      |
-| `CONFLICT_MERGE_DELAY_MS`                                                                                    | `conflict_merge_delay_ms`        | `30000`                                                                                           | pause after a repo's default branch moved before its pull requests' conflicts are checked, while GitHub computes them again                                                                                                                                                                                                                                                                                                                |
-| `DATA_DIR`                                                                                                   | none                             | `/data`                                                                                           | the listener's state (the App's credentials, its store: the queue, the runs' summaries: the `data` volume), and the runner's (its store, the runs' inboxes: `runner-data` and `runs`)                                                                                                                                                                                                                                                      |
-| `DASHBOARD_DIR`                                                                                              | none                             | the image's `dashboard/dist`                                                                      | the built dashboard the listener serves                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `SANDBOX_IMAGE`                                                                                              | none                             | `<NAME_PREFIX>-sandbox`                                                                           | the base image runs start from; compose sets the release's                                                                                                                                                                                                                                                                                                                                                                                 |
-| `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE`                                                                        | none                             | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman`                                             | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's                                                                                                                                                                                                                                                                                                                                  |
-| `BROKER_PORT`                                                                                                | none                             | `8081`                                                                                            | port of the broker, GitHub and git gateways (and of the egress policy, for a proxy whose `POLICY_URL` names it), on the runs' networks                                                                                                                                                                                                                                                                                                     |
-| `POLICY_PORT`                                                                                                | none                             | `8082`                                                                                            | port of the egress policy the proxy asks about each connection, on the runs' networks: open until the listener exits, while the broker's port drains on a restart                                                                                                                                                                                                                                                                          |
-| `RUNNER_URL`                                                                                                 | none                             | `http://runner:8080`                                                                              | the [runner service](architecture.md#the-runner-service), as the listener calls it; several, comma-separated, for its copies, tried in turn                                                                                                                                                                                                                                                                                                |
-| `SERVICES_PORT`                                                                                              | none                             | `8083`                                                                                            | port of the listener's services port, where the runner calls it (a run's first tokens, the repos' tarballs), on the network they share                                                                                                                                                                                                                                                                                                     |
-| `SERVICE_NETWORKS`                                                                                           | none                             | none: no call taken                                                                               | which network each calling service is on (`runner=10.231.250.48/28`; on the runner, `edge+orchestrator=…,models=…`, the listener's services and the models service), by its subnet: a call from elsewhere, or with another's token, is refused; `none` on the runner where the network can't tell (Kubernetes, with NetworkPolicies: [Kubernetes runner](#kubernetes-runner)). Compose sets both from `RUNNER_SUBNET`                      |
-| `RUNNER_SUBNET` (compose)                                                                                    | none                             | `10.231.250.48/28`                                                                                | the subnet of the network the listener and the runner share (`.env`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                                  |
-| `STORE_URL`                                                                                                  | none                             | `file://<DATA_DIR>/store`                                                                         | the service's [store](#the-store): the listener's queue and fencing epoch; the runner's logs, events and lease. `file://` for one node, `redis://` for copies on several                                                                                                                                                                                                                                                                   |
-| `BROKER_SERVICE_URL` (runner)                                                                                | none                             | `http://broker:8081`                                                                              | the [broker service](#the-broker-service), where the runner asks for its service tokens and copies the runs' inboxes and files                                                                                                                                                                                                                                                                                                             |
-| `ORCHESTRATOR_URL` (runner)                                                                                  | none                             | `http://listener:8083`                                                                            | the orchestrator's endpoint for the runner, a run's first tokens (the listener's services port, until the orchestrator moves out)                                                                                                                                                                                                                                                                                                          |
-| `GITHUB_SERVICE_URL` (runner)                                                                                | none                             | `ORCHESTRATOR_URL`                                                                                | where the runner gets the repos' tarballs (the listener's, until the github service moves out)                                                                                                                                                                                                                                                                                                                                             |
-| `DRAIN_SECONDS` (runner)                                                                                     | none                             | `280`                                                                                             | how long a stopping runner lets its calls in flight finish (an image's build) before it releases its lease; its output streams end at once                                                                                                                                                                                                                                                                                                 |
-| `BROKER_URL`                                                                                                 | none                             | `http://listener:<BROKER_PORT>`                                                                   | the broker, as sandboxes reach it; compose sets it                                                                                                                                                                                                                                                                                                                                                                                         |
-| `EGRESS_PROXY`                                                                                               | none                             | `http://egress:3128`                                                                              | the egress proxy, as sandboxes reach it; compose sets it                                                                                                                                                                                                                                                                                                                                                                                   |
-| `LISTENER_CONTAINER`                                                                                         | none                             | the container's host name (its id)                                                                | the listener's container, which joins each run's network                                                                                                                                                                                                                                                                                                                                                                                   |
-| `EGRESS_CONTAINER`                                                                                           | none                             | labelled `deckhand.role=egress`                                                                   | the egress proxy's container, which joins each run's network; by default, the one in the listener's compose project                                                                                                                                                                                                                                                                                                                        |
-| `POLICY_SERVICE_URL`                                                                                         | none                             | `http://policy:8181`                                                                              | the [policy service](services.md), which evaluates every policy decision, the config checks and the Policies tab; compose sets it. A decision waits up to 30 s for a service that refuses its connection (restarting), then refuses                                                                                                                                                                                                        |
-| `SERVICE_KEYS_DIR` (broker, policy service, runner)                                                          | none                             | broker: none, not published; policy service: `/keys`; runner: `/service-keys`                     | where the broker writes its public key (`<kid>.pem`) and the policy service and the runner read it, to check their callers' service tokens offline (the `service-keys` volume); compose sets it                                                                                                                                                                                                                                            |
-| `GRANTS_DIR` (policy service)                                                                                | none                             | `/etc/deckhand/grants`                                                                            | where the policy service reads your policies (`policy/*.rego`), found as the listener finds it: the environment's, else `config.yaml`'s `grants_dir`, else the default. Both must read the same files there: the listener reads its own and refuses every policy decision when the service's are others (none included), and logs why at start                                                                                             |
-| `SERVICE_NETWORKS` (policy service)                                                                          | none                             | none: not checked                                                                                 | the subnet of each caller's network, `orchestrator=172.30.2.0/24,…`: a call is refused unless it arrives on its token's caller's network. Compose leaves it unset: its table still names what the listener and the runner, each on a network of its own, may call                                                                                                                                                                          |
-| `LISTENER_CONTAINER` (runner)                                                                                | none                             | labelled `deckhand.role=broker`                                                                   | the listener's container, which the runner joins to each run's network (its broker); by default, the one so labelled in the runner's compose project                                                                                                                                                                                                                                                                                       |
-| `EGRESS_CONTAINER` (runner)                                                                                  | none                             | labelled `deckhand.role=egress`                                                                   | the egress proxy's container, which the runner joins to each run's network; by default, the one in the runner's compose project                                                                                                                                                                                                                                                                                                            |
-| `POLICY_URL` (egress proxy)                                                                                  | none                             | `http://listener:8081/egress`                                                                     | where the proxy asks whether a sandbox may reach a host; compose sets it to `POLICY_PORT`'s `http://listener:8082/egress`, which keeps answering while the broker drains on a restart: set it so elsewhere too (Kubernetes: with 8082 on the `listener` Service)                                                                                                                                                                           |
-| `RELAY_URL` (egress proxy)                                                                                   | none                             | `POLICY_URL`'s host (port 8081 for 8082), `/relay`                                                | where the proxy hands the requests it relays to the listener (the [Antigravity CLI](#antigravity-cli)'s)                                                                                                                                                                                                                                                                                                                                   |
-| `BROKER_URL` (egress proxy)                                                                                  | none                             | `RELAY_URL`'s origin                                                                              | the broker, as sandboxes call it (the listener's `BROKER_URL`): the proxy forwards their plain HTTP to it, and waits for a listener restarting; it must be the listener's own (scheme, host and port), or the runs' calls to it are refused; compose sets it                                                                                                                                                                               |
-| `EGRESS_CACHE_DIR` (egress proxy)                                                                            | none                             | `/cache`                                                                                          | where the proxy keeps the [egress cache](security.md#the-egress-cache) and its CA (`ca/`, the `egress-cache` volume)                                                                                                                                                                                                                                                                                                                       |
-| `EGRESS_CACHE_MAX` (egress proxy)                                                                            | none                             | `10g`                                                                                             | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache                                                                                                                                                                                                                                                                                                                  |
-| `EGRESS_CACHE_ENTRY_MAX` (egress proxy)                                                                      | none                             | `1g`                                                                                              | the largest answer it keeps                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `DRAIN_SECONDS` (egress proxy)                                                                               | none                             | `25`                                                                                              | how long a stopping proxy lets its open connections finish, then cuts them: short with one copy (compose), whose stop refuses new connections until the next one starts; `600`, an agent call's length, where a second copy takes them meanwhile (Kubernetes, [services.md](services.md#the-proxys-handover)); under its `stop_grace_period` or `terminationGracePeriodSeconds`                                                            |
-| `PORT` (in the containers)                                                                                   | none                             | `8080`, egress proxy: `3128`, policy service: `8181`                                              | port the listener, the runner, the policy service and the proxy listen on; the `PORT` above only changes the published one                                                                                                                                                                                                                                                                                                                 |
-| `GITHUB_URL`, `GITHUB_API`                                                                                   | `github_url`, `github_api`       | `https://github.com`, `https://api.github.com`                                                    | GitHub's web and API addresses, always allowed through the egress proxy                                                                                                                                                                                                                                                                                                                                                                    |
-| `CONFIG_FILE`                                                                                                | none                             | `/etc/deckhand/config.yaml`                                                                       | the settings file above; set on purpose, it has to exist                                                                                                                                                                                                                                                                                                                                                                                   |
-| `BROKER_SERVICE_URL`                                                                                         | none                             | `http://broker:8081`                                                                              | the [broker service](#the-broker-service), where the listener asks for the runs' tokens and its own service token; compose sets it                                                                                                                                                                                                                                                                                                         |
-| `BROKER_SERVICE_URL` (egress proxy)                                                                          | none                             | none: to the listener, which relays them                                                          | the broker service, where the proxy sends what a sandbox calls about its own run (`/run/…`: its token's renewal, its inbox and files) with its own service token; compose sets it                                                                                                                                                                                                                                                          |
-| `MODELS_SERVICE_URL`                                                                                         | none                             | `http://models:8080`                                                                              | the [models service](#the-models-service), comma-separated for its copies: where the listener asks which agents' credentials it holds and their fingerprints (waiting for both at start) and a run's API state, and relays the agents' calls of a proxy from before it (a copy it can't reach fails that call, and the next ones go to the next copy); compose sets it                                                                     |
-| `MODELS_SERVICE_URL` (egress proxy)                                                                          | none                             | none: to the listener, which relays them                                                          | the models service, one URL (not comma-separated: the proxy stops at start otherwise; several copies go behind one address), where the proxy sends the sandboxes' agent calls (`/anthropic/`, `/openai/`, `/google/` on the broker's host, and the hosts relayed for an agent) with its own service token; compose sets it                                                                                                                 |
-| `SERVICE_ACCOUNT_TOKEN_FILE` (listener, egress proxy, runner)                                                | none                             | none                                                                                              | on Kubernetes, the pod's service account token projected for the broker (audience `deckhand-broker`), which proves to it who calls (see [Kubernetes runner](#kubernetes-runner))                                                                                                                                                                                                                                                           |
-| `SERVICE_NETWORKS` (broker)                                                                                  | none                             | none; compose sets it                                                                             | with Docker, who calls the broker, by the network a call arrives on: `edge+orchestrator=<subnet>,proxy=<subnet>,runner=<subnet>,models=<subnet>`, each caller's own network to the broker (the listener's services share one until #506, each asking as itself); this or `SERVICE_ACCOUNTS` is required                                                                                                                                    |
-| `SERVICE_ACCOUNTS` (broker)                                                                                  | none                             | none                                                                                              | on Kubernetes, who calls the broker, by its pod's service account: `edge+orchestrator=<namespace>:<name>,proxy=<namespace>:<name>,runner=<namespace>:<name>,models=<namespace>:<name>`                                                                                                                                                                                                                                                     |
-| `STORE_URL` (broker)                                                                                         | none                             | `file:///data/store`                                                                              | the broker's store: the live runs, their files and events (the `broker-store` volume); `redis://…` for two copies on several nodes, with `REDIS_PASSWORD` (see [The store](#the-store))                                                                                                                                                                                                                                                    |
-| `KEY_DIR` (broker)                                                                                           | none                             | `/keys`                                                                                           | the folder of the broker's signing key, `run-token.key`, made on first start (the `broker-keys` volume): back it up, or every running sandbox's token is refused once it is gone                                                                                                                                                                                                                                                           |
-| `DRAIN_SECONDS` (broker)                                                                                     | none                             | `30`                                                                                              | how long a stopping broker lets its calls finish (an inbox's long poll lasts 25 s), under its `stop_grace_period`                                                                                                                                                                                                                                                                                                                          |
-| `PORT` (broker)                                                                                              | none                             | `8081`                                                                                            | the port the broker listens on                                                                                                                                                                                                                                                                                                                                                                                                             |
-| `GITHUB_SERVICE_URL` (listener, runner, egress proxy)                                                        | none                             | listener and runner: `http://github:8080`; egress proxy: none, to the listener, which relays them | the github service, which holds the App's key: the listener's GitHub calls, the runner's tarballs, the sandboxes' GitHub calls and pushes                                                                                                                                                                                                                                                                                                  |
-| `APP_DIR` (github service)                                                                                   | none                             | `/app-key`                                                                                        | the folder of the App's credentials, its key with them (`app.json`, the `github-key` volume): back it up                                                                                                                                                                                                                                                                                                                                   |
-| `STORE_URL` (github service)                                                                                 | none                             | `file:///data/store`                                                                              | its store (the `github-data` volume): the runs' state, the listener's reactions, the idempotency keys; `redis://…` for two copies on several nodes                                                                                                                                                                                                                                                                                         |
-| `SERVICE_NETWORKS` (github service)                                                                          | none                             | none: it doesn't start; compose sets it                                                           | each caller's network, `service=subnet`; `none` on Kubernetes                                                                                                                                                                                                                                                                                                                                                                              |
-| `DRAIN_SECONDS` (github service)                                                                             | none                             | `280`                                                                                             | how long a stopping copy lets its calls finish (pushes, clones)                                                                                                                                                                                                                                                                                                                                                                            |
-| `GITHUB_ORCHESTRATOR_SUBNET`, `GITHUB_PROXY_SUBNET`, `GITHUB_RUNNER_SUBNET`, `BROKER_GITHUB_SUBNET` (`.env`) | none                             | `10.231.250.128/28`, `10.231.250.144/28`, `10.231.250.160/28`, `10.231.250.176/28`                | the github service's networks                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `SERVICE_NETWORKS` (models service)                                                                          | none                             | none: no call taken (`none` on Kubernetes)                                                        | who calls it, by the network a call arrives on: `proxy=<subnet>,orchestrator=<subnet>`; compose sets it                                                                                                                                                                                                                                                                                                                                    |
-| `STORE_URL`, `KEY_DIR` (models service)                                                                      | none                             | `file://<DATA_DIR>/store`, `/keys`                                                                | its store (the plans' refreshed logins, sealed, the runs' API state), and the folder of the key they are sealed with (`models.key`, made on first start)                                                                                                                                                                                                                                                                                   |
-| `BROKER_SERVICE_URL`, `RUNNER_URL`, `SERVICE_KEYS_DIR` (models service)                                      | none                             | `http://broker:8081`, `http://runner:8080`, `/service-keys`                                       | the broker (its service tokens, whether a run goes), the runner (the Antigravity login's refresh), and the broker's public keys, which its callers' service tokens are checked with                                                                                                                                                                                                                                                        |
-| `DRAIN_SECONDS` (models service)                                                                             | none                             | `600`                                                                                             | how long a stopping copy lets the agents' calls in flight finish                                                                                                                                                                                                                                                                                                                                                                           |
-| `PORT` (models service)                                                                                      | none                             | `8080`                                                                                            |                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `BROKER_ORCHESTRATOR_SUBNET`, `BROKER_PROXY_SUBNET`, `BROKER_RUNNER_SUBNET`, `BROKER_MODELS_SUBNET` (`.env`) | none                             | `10.231.250.0/28`, `10.231.250.16/28`, `10.231.250.32/28`, `10.231.250.64/28`                     | the subnets of compose's networks between the broker and its callers, which `SERVICE_NETWORKS` names: change them in `.env` if they clash with one of the host's                                                                                                                                                                                                                                                                           |
-| `MODELS_PROXY_SUBNET`, `MODELS_ORCHESTRATOR_SUBNET`, `RUNNER_MODELS_SUBNET` (`.env`)                         | none                             | `10.231.250.80/28`, `10.231.250.96/28`, `10.231.250.112/28`                                       | the subnets of the models service's networks to its callers and to the runner, which tell them apart                                                                                                                                                                                                                                                                                                                                       |
-| `DECKHAND_VERSION` (in the image)                                                                            | none                             | set when the image is built                                                                       | the version the dashboard shows                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `DECKHAND_SOURCE` (in the image)                                                                             | none                             | set when the image is built; empty from source                                                    | the repository the image was built from: the dashboard links the version to its commit or release there                                                                                                                                                                                                                                                                                                                                    |
+| Setting                                                                                                                            | Key                              | Default                                                                                                         | What                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| ---------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GRANTS_DIR`                                                                                                                       | `grants_dir`                     | `/etc/deckhand/grants`                                                                                          | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, projects; and your policies in `policy/`, with the grants (preview hook, Dockerfile, engine…: [the grants](security.md#the-grants)) (the server folder's). The runner must read the same folder: it checks every sandbox spec, build and preview hook against it again, and the grants with the policy service (`compose.yaml` gives it the orchestrator's) |
+| `INSTALL_NETWORK`                                                                                                                  | `install_network`                | `bridge`                                                                                                        | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh                                                                                                                                                                                                                                                                                                                    |
+| `RUNNER`                                                                                                                           | `runner`                         | `docker`                                                                                                        | where sandboxes run: `docker`, the host's Docker, or `kubernetes`, pods of the cluster the runner runs in (see [Kubernetes runner](#kubernetes-runner)); another value stops the orchestrator and the runner at start, saying so                                                                                                                                                                                                               |
+| `KUBERNETES_NAMESPACE`                                                                                                             | `kubernetes_namespace`           | the runner's own                                                                                                | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims, which has to hold the orchestrator's, the runner's and the egress proxy's pods too                                                                                                                                                                                                                                                                    |
+| `KUBERNETES_PENDING_MINUTES`                                                                                                       | `kubernetes_pending_minutes`     | `10`                                                                                                            | how long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply                                                                                                                                                                                                                                                                                                                 |
+| `KUBERNETES_STORAGE_CLASS`                                                                                                         | `kubernetes_storage_class`       | the cluster's default                                                                                           | the storage class of the issues' session claims                                                                                                                                                                                                                                                                                                                                                                                                |
+| `KUBERNETES_SESSION_SIZE`                                                                                                          | `kubernetes_session_size`        | `10Gi`                                                                                                          | the size of each session claim (an issue's clone, and its agent's session)                                                                                                                                                                                                                                                                                                                                                                     |
+| `KUBERNETES_REGISTRY`                                                                                                              | `kubernetes_registry`            | none: no repo images                                                                                            | the registry repo images are pushed to and the nodes pull from, with an optional path (`registry.example.com/deckhand`); see [Repo images on Kubernetes](#repo-images-on-kubernetes)                                                                                                                                                                                                                                                           |
+| `KUBERNETES_REGISTRY_SECRET`                                                                                                       | `kubernetes_registry_secret`     | none; required with `KUBERNETES_REGISTRY`                                                                       | a `kubernetes.io/dockerconfigjson` Secret of the namespace, with credentials the registry requires to pull, push and delete: the nodes pull repo images and the agents' installs with it, and the runner and BuildKit push and prune with it                                                                                                                                                                                                   |
+| `KUBERNETES_BUILDKIT`                                                                                                              | `kubernetes_buildkit`            | `tcp://buildkitd:1234`                                                                                          | the BuildKit daemon that builds repo images (`buildctl --addr`); its host is the name of its Service in the namespace                                                                                                                                                                                                                                                                                                                          |
+| `KUBERNETES_REGISTRY_HOSTS`                                                                                                        | `kubernetes_registry_hosts`      | none                                                                                                            | more hosts the BuildKit daemon may reach while it builds (a registry's token service or layer storage Deckhand doesn't know), as a grant's `hosts` are written; see [Repo images on Kubernetes](#repo-images-on-kubernetes)                                                                                                                                                                                                                    |
+| `KUBERNETES_CACHE_STORAGE_CLASS`                                                                                                   | `kubernetes_cache_storage_class` | none: no caches                                                                                                 | a `ReadWriteMany` storage class for the repos' cache claims (`caches`), which concurrent runs mount                                                                                                                                                                                                                                                                                                                                            |
+| `KUBERNETES_CACHE_SIZE`                                                                                                            | `kubernetes_cache_size`          | `10Gi`                                                                                                          | the size of each cache claim                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `KUBERNETES_AGENT_STORAGE_CLASS`                                                                                                   | `kubernetes_agent_storage_class` | `KUBERNETES_CACHE_STORAGE_CLASS`                                                                                | a `ReadWriteMany` storage class for the agents' claims, installed once per version; none (and no claim made beforehand): each run installs its agent in an init container                                                                                                                                                                                                                                                                      |
+| `KUBERNETES_AGENT_SIZE`                                                                                                            | `kubernetes_agent_size`          | `5Gi`                                                                                                           | the size of each agent's claim                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `KUBERNETES_SERVICE_HOST`, `KUBERNETES_SERVICE_PORT`                                                                               | none: the cluster's              | set by Kubernetes in every pod                                                                                  | where the Kubernetes runner reaches the API server                                                                                                                                                                                                                                                                                                                                                                                             |
+| `DEBOUNCE_MS`                                                                                                                      | `debounce_ms`                    | `15000`                                                                                                         | pause after a comment before its run starts, so that comments posted together go in one run                                                                                                                                                                                                                                                                                                                                                    |
+| `BRAINSTORM_DEBOUNCE_MS`                                                                                                           | `brainstorm_debounce_ms`         | `3000`                                                                                                          | the same before a light run (brainstorms, onboarding, inbox entries…)                                                                                                                                                                                                                                                                                                                                                                          |
+| `CONFLICT_MERGE_DELAY_MS`                                                                                                          | `conflict_merge_delay_ms`        | `30000`                                                                                                         | pause after a repo's default branch moved before its pull requests' conflicts are checked, while GitHub computes them again                                                                                                                                                                                                                                                                                                                    |
+| `DATA_DIR`                                                                                                                         | none                             | `/data`                                                                                                         | the orchestrator's state (its store: the queue, the runs' summaries: the `data` volume), edge's (the App's credentials but its key, the session key, its store: `edge-data`), and the runner's (its store, the runs' inboxes: `runner-data` and `runs`)                                                                                                                                                                                        |
+| `DASHBOARD_DIR`                                                                                                                    | none                             | the image's `dashboard/dist`                                                                                    | the built dashboard edge serves                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `SANDBOX_IMAGE`                                                                                                                    | none                             | `<NAME_PREFIX>-sandbox`                                                                                         | the base image runs start from; compose sets the release's                                                                                                                                                                                                                                                                                                                                                                                     |
+| `ENGINE_IMAGE`, `ENGINE_PODMAN_IMAGE`                                                                                              | none                             | `<NAME_PREFIX>-engine`, `<NAME_PREFIX>-engine-podman`                                                           | the [container engine](#container-engine)'s images, for Sysbox and for Podman; compose sets the release's                                                                                                                                                                                                                                                                                                                                      |
+| `BROKER_PORT`                                                                                                                      | none                             | `8081`                                                                                                          | port of the broker, GitHub and git gateways (and of the egress policy, for a proxy whose `POLICY_URL` names it), on the runs' networks                                                                                                                                                                                                                                                                                                         |
+| `POLICY_PORT`                                                                                                                      | none                             | `8082`                                                                                                          | port of the egress policy the proxy asks about each connection, on the runs' networks: open until the orchestrator exits, while the broker's port drains on a restart                                                                                                                                                                                                                                                                          |
+| `RUNNER_URL`                                                                                                                       | none                             | `http://runner:8080`                                                                                            | the [runner service](architecture.md#the-runner-service), as the orchestrator calls it; several, comma-separated, for its copies, tried in turn                                                                                                                                                                                                                                                                                                |
+| `SERVICES_PORT`                                                                                                                    | none                             | `8083`                                                                                                          | the orchestrator's services port, where the runner calls it (a run's first tokens) and edge passes the dashboard's API on, on the networks they share                                                                                                                                                                                                                                                                                          |
+| `SERVICE_NETWORKS`                                                                                                                 | none                             | none: no call taken                                                                                             | which network each calling service is on, by its subnet (on the orchestrator `runner=…,edge=…`; on the runner `orchestrator=…,models=…`): a call from elsewhere, or with another's token, is refused; `none` on the runner where the network can't tell (Kubernetes, with NetworkPolicies: [Kubernetes runner](#kubernetes-runner)). Compose sets them from `RUNNER_SUBNET`, `EDGE_ORCHESTRATOR_SUBNET` and `RUNNER_MODELS_SUBNET`             |
+| `RUNNER_SUBNET` (compose)                                                                                                          | none                             | `10.231.250.48/28`                                                                                              | the subnet of the network the orchestrator and the runner share (`runner`) (`.env`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                       |
+| `EDGE_ORCHESTRATOR_SUBNET` (compose)                                                                                               | none                             | `10.231.250.192/28`                                                                                             | the subnet of the network edge and the orchestrator share (`edge-orchestrator`), should it overlap one of the host's                                                                                                                                                                                                                                                                                                                           |
+| `STORE_URL`                                                                                                                        | none                             | `file://<DATA_DIR>/store`                                                                                       | the service's [store](#the-store): the orchestrator's queue, its lease and fencing epoch; edge's (below); the runner's logs, events and lease. `file://` for one node (several copies on it included), `redis://` for copies on several                                                                                                                                                                                                        |
+| `LEASE_SECONDS` (orchestrator)                                                                                                     | none                             | `15`                                                                                                            | how long the acting copy's lease lasts, renewed every third of it: a crashed copy's is taken by the waiting one once it expires; a stopping one releases it at once (see [Two copies](#two-copies))                                                                                                                                                                                                                                            |
+| `EDGE_URL` (orchestrator)                                                                                                          | none                             | `http://edge:8083`                                                                                              | edge's internal port: where the orchestrator reads the deliveries' stream and the App's public parts; compose sets it                                                                                                                                                                                                                                                                                                                          |
+| `INTERNAL_PORT` (edge)                                                                                                             | none                             | `8083`                                                                                                          | the port the orchestrator calls edge on (the deliveries' stream, the App's public parts), on their network alone; never `PORT`'s, which the internet reaches                                                                                                                                                                                                                                                                                   |
+| `ORCHESTRATOR_URL` (edge)                                                                                                          | none                             | `http://orchestrator:8083`                                                                                      | the orchestrator's services port, where edge passes the dashboard's API, `/status` and the screenshots on; compose sets it                                                                                                                                                                                                                                                                                                                     |
+| `SERVICE_NETWORKS` (edge)                                                                                                          | none                             | none: no call taken                                                                                             | the orchestrator's network to edge's internal port, `orchestrator=<subnet>`; compose sets it from `EDGE_ORCHESTRATOR_SUBNET`                                                                                                                                                                                                                                                                                                                   |
+| `STORE_URL` (edge)                                                                                                                 | none                             | `file:///data/store`                                                                                            | edge's store (the `edge-data` volume): the deliveries taken (a day), the sessions' epochs, the redeliveries' state and lease, the deliveries' stream to the orchestrator; `redis://…` for two copies on several nodes, with `REDIS_PASSWORD`                                                                                                                                                                                                   |
+| `DRAIN_SECONDS` (edge)                                                                                                             | none                             | `25`                                                                                                            | how long a stopping copy lets its requests finish (a live log), under compose's `stop_grace_period` of 30 s                                                                                                                                                                                                                                                                                                                                    |
+| `BROKER_SERVICE_URL` (runner)                                                                                                      | none                             | `http://broker:8081`                                                                                            | the [broker service](#the-broker-service), where the runner asks for its service tokens and copies the runs' inboxes and files                                                                                                                                                                                                                                                                                                                 |
+| `ORCHESTRATOR_URL` (runner)                                                                                                        | none                             | `http://listener:8083`                                                                                          | the orchestrator's services port, where the runner gets a run's first tokens; compose sets `http://orchestrator:8083`                                                                                                                                                                                                                                                                                                                          |
+| `GITHUB_SERVICE_URL` (runner)                                                                                                      | none                             | `http://github:8080`                                                                                            | where the runner gets the repos' tarballs: the github service                                                                                                                                                                                                                                                                                                                                                                                  |
+| `DRAIN_SECONDS` (runner)                                                                                                           | none                             | `280`                                                                                                           | how long a stopping runner lets its calls in flight finish (an image's build) before it releases its lease; its output streams end at once                                                                                                                                                                                                                                                                                                     |
+| `BROKER_URL`                                                                                                                       | none                             | `http://listener:<BROKER_PORT>`                                                                                 | the broker, as sandboxes reach it: the orchestrator's `BROKER_PORT`, joined to each run's network as `listener`, so sandboxes from before keep their address; compose sets it                                                                                                                                                                                                                                                                  |
+| `EGRESS_PROXY`                                                                                                                     | none                             | `http://egress:3128`                                                                                            | the egress proxy, as sandboxes reach it; compose sets it                                                                                                                                                                                                                                                                                                                                                                                       |
+| `LISTENER_CONTAINER`                                                                                                               | none                             | the container's host name (its id)                                                                              | the orchestrator's container, which joins each run's network (the setting keeps the listener's name)                                                                                                                                                                                                                                                                                                                                           |
+| `EGRESS_CONTAINER`                                                                                                                 | none                             | labelled `deckhand.role=egress`                                                                                 | the egress proxy's container, which joins each run's network; by default, the one in the orchestrator's compose project                                                                                                                                                                                                                                                                                                                        |
+| `POLICY_SERVICE_URL`                                                                                                               | none                             | `http://policy:8181`                                                                                            | the [policy service](services.md), which evaluates every policy decision, the config checks and the Policies tab; compose sets it. A decision waits up to 30 s for a service that refuses its connection (restarting), then refuses                                                                                                                                                                                                            |
+| `SERVICE_KEYS_DIR` (broker, policy service, runner)                                                                                | none                             | broker: none, not published; policy service: `/keys`; runner: `/service-keys`                                   | where the broker writes its public key (`<kid>.pem`) and the policy service and the runner read it, to check their callers' service tokens offline (the `service-keys` volume); compose sets it                                                                                                                                                                                                                                                |
+| `GRANTS_DIR` (policy service)                                                                                                      | none                             | `/etc/deckhand/grants`                                                                                          | where the policy service reads your policies (`policy/*.rego`), found as the orchestrator finds it: the environment's, else `config.yaml`'s `grants_dir`, else the default. Both must read the same files there: the orchestrator reads its own and refuses every policy decision when the service's are others (none included), and logs why at start                                                                                         |
+| `SERVICE_NETWORKS` (policy service)                                                                                                | none                             | none: not checked                                                                                               | the subnet of each caller's network, `orchestrator=172.30.2.0/24,…`: a call is refused unless it arrives on its token's caller's network. Compose leaves it unset: its table still names what the orchestrator, the github service and the runner, each on a network of its own, may call                                                                                                                                                      |
+| `LISTENER_CONTAINER` (runner)                                                                                                      | none                             | labelled `deckhand.role=broker`                                                                                 | the orchestrator's container, which the runner joins to each run's network (its broker); by default, the one so labelled in the runner's compose project                                                                                                                                                                                                                                                                                       |
+| `EGRESS_CONTAINER` (runner)                                                                                                        | none                             | labelled `deckhand.role=egress`                                                                                 | the egress proxy's container, which the runner joins to each run's network; by default, the one in the runner's compose project                                                                                                                                                                                                                                                                                                                |
+| `POLICY_URL` (egress proxy)                                                                                                        | none                             | `http://listener:8081/egress`                                                                                   | where the proxy asks whether a sandbox may reach a host; compose sets it to the orchestrator's `POLICY_PORT`, `http://orchestrator:8082/egress`, which keeps answering while the broker port drains on a restart: set it so elsewhere too (Kubernetes: with 8082 on the orchestrator's Service)                                                                                                                                                |
+| `RELAY_URL` (egress proxy)                                                                                                         | none                             | `POLICY_URL`'s host (port 8081 for 8082), `/relay`                                                              | where the proxy hands the requests it relays to the orchestrator (the [Antigravity CLI](#antigravity-cli)'s)                                                                                                                                                                                                                                                                                                                                   |
+| `BROKER_URL` (egress proxy)                                                                                                        | none                             | `RELAY_URL`'s origin                                                                                            | the broker, as sandboxes call it (the orchestrator's `BROKER_URL`, `http://listener:8081`): the proxy forwards their plain HTTP to it, and waits for an orchestrator restarting or handing over; it must be the orchestrator's own (scheme, host and port), or the runs' calls to it are refused; compose sets it                                                                                                                              |
+| `EGRESS_CACHE_DIR` (egress proxy)                                                                                                  | none                             | `/cache`                                                                                                        | where the proxy keeps the [egress cache](security.md#the-egress-cache) and its CA (`ca/`, the `egress-cache` volume)                                                                                                                                                                                                                                                                                                                           |
+| `EGRESS_CACHE_MAX` (egress proxy)                                                                                                  | none                             | `10g`                                                                                                           | the egress cache's size, in bytes or with `k`, `m`, `g`, `t`; the least recently used answers go beyond it; `0`: no cache                                                                                                                                                                                                                                                                                                                      |
+| `EGRESS_CACHE_ENTRY_MAX` (egress proxy)                                                                                            | none                             | `1g`                                                                                                            | the largest answer it keeps                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `DRAIN_SECONDS` (egress proxy)                                                                                                     | none                             | `25`                                                                                                            | how long a stopping proxy lets its open connections finish, then cuts them: short with one copy (compose), whose stop refuses new connections until the next one starts; `600`, an agent call's length, where a second copy takes them meanwhile (Kubernetes, [services.md](services.md#the-proxys-handover)); under its `stop_grace_period` or `terminationGracePeriodSeconds`                                                                |
+| `PORT` (in the containers)                                                                                                         | none                             | `8080`, egress proxy: `3128`, policy service: `8181`                                                            | port edge, the runner, the policy service and the proxy listen on (the orchestrator has none: its ports are `BROKER_PORT`, `POLICY_PORT` and `SERVICES_PORT`); the `PORT` above only changes the published one                                                                                                                                                                                                                                 |
+| `GITHUB_URL`, `GITHUB_API`                                                                                                         | `github_url`, `github_api`       | `https://github.com`, `https://api.github.com`                                                                  | GitHub's web and API addresses, always allowed through the egress proxy                                                                                                                                                                                                                                                                                                                                                                        |
+| `CONFIG_FILE`                                                                                                                      | none                             | `/etc/deckhand/config.yaml`                                                                                     | the settings file above; set on purpose, it has to exist                                                                                                                                                                                                                                                                                                                                                                                       |
+| `BROKER_SERVICE_URL`                                                                                                               | none                             | `http://broker:8081`                                                                                            | the [broker service](#the-broker-service), where the orchestrator asks for the runs' tokens, and edge and the orchestrator for their own service tokens; compose sets it                                                                                                                                                                                                                                                                       |
+| `BROKER_SERVICE_URL` (egress proxy)                                                                                                | none                             | none: to the orchestrator, which relays them                                                                    | the broker service, where the proxy sends what a sandbox calls about its own run (`/run/…`: its token's renewal, its inbox and files) with its own service token; compose sets it                                                                                                                                                                                                                                                              |
+| `MODELS_SERVICE_URL`                                                                                                               | none                             | `http://models:8080`                                                                                            | the [models service](#the-models-service), comma-separated for its copies: where the orchestrator asks which agents' credentials it holds and their fingerprints (waiting for both at start) and a run's API state, and relays the agents' calls of a proxy from before it (a copy it can't reach fails that call, and the next ones go to the next copy); compose sets it                                                                     |
+| `MODELS_SERVICE_URL` (egress proxy)                                                                                                | none                             | none: to the orchestrator, which relays them                                                                    | the models service, one URL (not comma-separated: the proxy stops at start otherwise; several copies go behind one address), where the proxy sends the sandboxes' agent calls (`/anthropic/`, `/openai/`, `/google/` on the broker's host, and the hosts relayed for an agent) with its own service token; compose sets it                                                                                                                     |
+| `SERVICE_ACCOUNT_TOKEN_FILE` (edge, orchestrator, egress proxy, runner)                                                            | none                             | none                                                                                                            | on Kubernetes, the pod's service account token projected for the broker (audience `deckhand-broker`), which proves to it who calls (see [Kubernetes runner](#kubernetes-runner))                                                                                                                                                                                                                                                               |
+| `SERVICE_NETWORKS` (broker)                                                                                                        | none                             | none; compose sets it                                                                                           | with Docker, who calls the broker, by the network a call arrives on: `orchestrator=<subnet>,edge=<subnet>,proxy=<subnet>,runner=<subnet>,models=<subnet>,github=<subnet>`, each caller's own network to the broker; this or `SERVICE_ACCOUNTS` is required                                                                                                                                                                                     |
+| `SERVICE_ACCOUNTS` (broker)                                                                                                        | none                             | none                                                                                                            | on Kubernetes, who calls the broker, by its pod's service account: `orchestrator=<namespace>:<name>,edge=<namespace>:<name>,proxy=<namespace>:<name>,runner=<namespace>:<name>,models=<namespace>:<name>`                                                                                                                                                                                                                                      |
+| `STORE_URL` (broker)                                                                                                               | none                             | `file:///data/store`                                                                                            | the broker's store: the live runs, their files and events (the `broker-store` volume); `redis://…` for two copies on several nodes, with `REDIS_PASSWORD` (see [The store](#the-store))                                                                                                                                                                                                                                                        |
+| `KEY_DIR` (broker)                                                                                                                 | none                             | `/keys`                                                                                                         | the folder of the broker's signing key, `run-token.key`, made on first start (the `broker-keys` volume): back it up, or every running sandbox's token is refused once it is gone                                                                                                                                                                                                                                                               |
+| `DRAIN_SECONDS` (broker)                                                                                                           | none                             | `30`                                                                                                            | how long a stopping broker lets its calls finish (an inbox's long poll lasts 25 s), under its `stop_grace_period`                                                                                                                                                                                                                                                                                                                              |
+| `PORT` (broker)                                                                                                                    | none                             | `8081`                                                                                                          | the port the broker listens on                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `GITHUB_SERVICE_URL` (edge, orchestrator, runner, egress proxy)                                                                    | none                             | edge, orchestrator and runner: `http://github:8080`; egress proxy: none, to the orchestrator, which relays them | the github service, which holds the App's key: the orchestrator's GitHub calls, edge's (`/setup`'s conversion, the redeliveries), the runner's tarballs, the sandboxes' GitHub calls and pushes                                                                                                                                                                                                                                                |
+| `APP_DIR` (github service)                                                                                                         | none                             | `/app-key`                                                                                                      | the folder of the App's credentials, its key with them (`app.json`, the `github-key` volume): back it up                                                                                                                                                                                                                                                                                                                                       |
+| `STORE_URL` (github service)                                                                                                       | none                             | `file:///data/store`                                                                                            | its store (the `github-data` volume): the runs' state, the orchestrator's reactions, the idempotency keys; `redis://…` for two copies on several nodes                                                                                                                                                                                                                                                                                         |
+| `SERVICE_NETWORKS` (github service)                                                                                                | none                             | none: it doesn't start; compose sets it                                                                         | each caller's network, `service=subnet`; `none` on Kubernetes                                                                                                                                                                                                                                                                                                                                                                                  |
+| `DRAIN_SECONDS` (github service)                                                                                                   | none                             | `280`                                                                                                           | how long a stopping copy lets its calls finish (pushes, clones)                                                                                                                                                                                                                                                                                                                                                                                |
+| `GITHUB_ORCHESTRATOR_SUBNET`, `GITHUB_EDGE_SUBNET`, `GITHUB_PROXY_SUBNET`, `GITHUB_RUNNER_SUBNET`, `BROKER_GITHUB_SUBNET` (`.env`) | none                             | `10.231.250.128/28`, `10.231.250.224/28`, `10.231.250.144/28`, `10.231.250.160/28`, `10.231.250.176/28`         | the github service's networks                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `SERVICE_NETWORKS` (models service)                                                                                                | none                             | none: no call taken (`none` on Kubernetes)                                                                      | who calls it, by the network a call arrives on: `proxy=<subnet>,orchestrator=<subnet>`; compose sets it                                                                                                                                                                                                                                                                                                                                        |
+| `STORE_URL`, `KEY_DIR` (models service)                                                                                            | none                             | `file://<DATA_DIR>/store`, `/keys`                                                                              | its store (the plans' refreshed logins, sealed, the runs' API state), and the folder of the key they are sealed with (`models.key`, made on first start)                                                                                                                                                                                                                                                                                       |
+| `BROKER_SERVICE_URL`, `RUNNER_URL`, `SERVICE_KEYS_DIR` (models service)                                                            | none                             | `http://broker:8081`, `http://runner:8080`, `/service-keys`                                                     | the broker (its service tokens, whether a run goes), the runner (the Antigravity login's refresh), and the broker's public keys, which its callers' service tokens are checked with                                                                                                                                                                                                                                                            |
+| `DRAIN_SECONDS` (models service)                                                                                                   | none                             | `600`                                                                                                           | how long a stopping copy lets the agents' calls in flight finish                                                                                                                                                                                                                                                                                                                                                                               |
+| `PORT` (models service)                                                                                                            | none                             | `8080`                                                                                                          |                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `BROKER_ORCHESTRATOR_SUBNET`, `BROKER_EDGE_SUBNET`, `BROKER_PROXY_SUBNET`, `BROKER_RUNNER_SUBNET`, `BROKER_MODELS_SUBNET` (`.env`) | none                             | `10.231.250.0/28`, `10.231.250.208/28`, `10.231.250.16/28`, `10.231.250.32/28`, `10.231.250.64/28`              | the subnets of compose's networks between the broker and its callers, which `SERVICE_NETWORKS` names: change them in `.env` if they clash with one of the host's                                                                                                                                                                                                                                                                               |
+| `MODELS_PROXY_SUBNET`, `MODELS_ORCHESTRATOR_SUBNET`, `RUNNER_MODELS_SUBNET` (`.env`)                                               | none                             | `10.231.250.80/28`, `10.231.250.96/28`, `10.231.250.112/28`                                                     | the subnets of the models service's networks to its callers and to the runner, which tell them apart                                                                                                                                                                                                                                                                                                                                           |
+| `DECKHAND_VERSION` (in the image)                                                                                                  | none                             | set when the image is built                                                                                     | the version the dashboard shows                                                                                                                                                                                                                                                                                                                                                                                                                |
+| `DECKHAND_SOURCE` (in the image)                                                                                                   | none                             | set when the image is built; empty from source                                                                  | the repository the image was built from: the dashboard links the version to its commit or release there                                                                                                                                                                                                                                                                                                                                        |
 
 ## Updating
 
@@ -1141,40 +1160,43 @@ docker compose up -d
 - **A pinned version**: set `DECKHAND_VERSION=1.2.3` in `.env`, change it to update (by
   hand, or with Renovate's docker-compose or regex manager), then the same two commands.
 - **`edge`**: set `DECKHAND_VERSION=edge` in `.env` to follow `main`, unreleased and for
-  amd64 only. It is built as soon as a push lands (a newer push cancels the build in
+  amd64 only (the tag has nothing to do with the edge service).
+  It is built as soon as a push lands (a newer push cancels the build in
   progress, so a burst of merges builds once), and the dashboard shows the commit it runs as
   `edge-<short sha>`. The same two
   commands (or Watchtower) update it.
 
 To check which version runs and that a restart happened, open the dashboard's Repositories
-page: its toolbar shows the version (linked to its commit or release), the listener's uptime
+page: its toolbar shows the version (linked to its commit or release), the orchestrator's uptime
 and its Node version, as in "Deckhand edge-1713fa6 · up 3 d 4 h · Node 26.1.0". `/status`
 returns the same `version` and `startedAt` for scripts.
 
-You can update at any time, runs in progress included. The listener and the runner stop
-within their grace periods without waiting for them: it starts no new run, saves the comments still waiting for
-one, and the sandboxes keep running. The new listener finds them again by their Docker
+You can update at any time, runs in progress included. The orchestrator and the runner stop
+within their grace periods without waiting for them: the orchestrator starts no new run, saves the comments still waiting for
+one, and the sandboxes keep running. The new orchestrator finds them again by their Docker
 labels, delivers the comments that arrive meanwhile, and posts each run's final reply once,
-even for a run that finished while no listener was there. Queued comments are then handled.
+even for a run that finished while no orchestrator was there. Queued comments are then handled.
+Edge takes GitHub's webhooks meanwhile: they wait in its store until the orchestrator reads
+them, so none is lost. With two copies of each, an update stops nothing ([Two copies](#two-copies)).
 A new base image rebuilds a repository's own image on its next run (see
 [Per-repo config](repo-config.md)); running sandboxes keep the image they started with.
-The policy service restarts in a few seconds and holds nothing: the decisions the listener
+The policy service restarts in a few seconds and holds nothing: the decisions the orchestrator
 asks meanwhile (a run's GitHub write, a merge) wait for it, up to 30 seconds, rather than being
 refused.
 
 **Updating to the policy service** (#501): it reads your server folder as the `node` user (uid
 1000), where the listener read it as root. Your grants folder and its `policy/` must be readable
 by that user (the usual `0644` files and `0755` folders are): otherwise every policy decision is
-refused, and the listener's log says why at start.
+refused, and the orchestrator's log says why at start.
 
 **From before the runner service (#503).** The Docker socket moved from the listener to a
 service of its own, `runner` in `compose.yaml`, with its own image (`deckhand-runner`), volume
 (`runner-data`), a network it shares with the listener alone (`runner`, `RUNNER_SUBNET`) and one
 of its own to the broker (`broker-runner`, `BROKER_RUNNER_SUBNET`). Take the new `compose.yaml`
 (or add the `runner` service, those two networks, the listener's `deckhand.role: broker` label,
-`RUNNER_URL` and `SERVICE_NETWORKS`, and the broker's `runner=` and `edge+orchestrator+models=`
-callers to yours), then the same two commands. The `runs` volume moves to the runner as it is: sandboxes running through the update
-keep their inbox. At its first start the listener sends the runs' logs it kept (`/data/logs/*.log`)
+`RUNNER_URL` and `SERVICE_NETWORKS`, and the broker's `runner=` caller to yours, as the current
+`compose.yaml` writes them), then the same two commands. The `runs` volume moves to the runner as it is: sandboxes running through the update
+keep their inbox. At its first start the orchestrator (the listener, then) sends the runs' logs it kept (`/data/logs/*.log`)
 to the runner and removes them; their summaries stay. Mount roots you grant go on the runner
 too, read-only at the same paths: it resolves the sandboxes' host paths again before Docker
 mounts them.
@@ -1252,18 +1274,86 @@ caller, `github-orchestrator`, `github-proxy`, `github-runner`, its own to the b
 policy service, and `github-out`, its way to GitHub). Take the new `compose.yaml` (or add the
 `github` service, its networks and volumes, the broker's `github=` caller, and
 `GITHUB_SERVICE_URL` on the listener, the runner and the egress proxy), then the same two
-commands. At its first start the listener hands the key it kept in `/data/app.json` over to the
-github service, then removes it there: the log says "handed over to the github service". The
-running sandboxes keep their GitHub and git access through the update: a proxy that still sends
-their calls to the listener has them relayed to the github service, and their pushes too. The
-listener's git mirrors (`/data/git-mirrors`) are a cache the github service makes again in its
-own volume: remove them from the `data` volume once updated.
+commands. At its first start the orchestrator (the listener, then) hands the key it kept in
+`/data/app.json` over to the github service, then removes it there: the log says "handed over to
+the github service". The running sandboxes keep their GitHub and git access through the update:
+a proxy that still sends their calls to the listener has them relayed to the github service by
+the orchestrator, which answers under that name, and their pushes too. The listener's git
+mirrors (`/data/git-mirrors`) are a cache the github service makes again in its own volume:
+remove them from the `data` volume once updated.
+
+### From the listener
+
+The listener (`deckhand-listener`) is gone (#506): edge and the orchestrator, two services with
+images of their own (`deckhand-edge`, `deckhand-orchestrator`), do what it did. Take the new
+`compose.yaml` (its `edge` and `orchestrator` services, the `edge-data` volume, the networks
+`edge-out`, `edge-orchestrator`, `broker-edge`, `github-edge` and `orchestrator-proxy`, and
+`SERVICE_NETWORKS` that name `edge=` and `orchestrator=` apart), then, once:
+
+```sh
+docker compose pull
+docker compose up -d --remove-orphans
+```
+
+`--remove-orphans` removes the old `listener` container, which would hold the published port
+otherwise; edge and the orchestrator start in its place.
+
+- **The `data` volume** is the orchestrator's now, under the same name: the queue, the runs'
+  state and its store stay where they were.
+- **The App's credentials** leave it. At its first start the orchestrator hands the App's key
+  in `/data/app.json` to the github service (if it is still there, as
+  [above](#updating)), then the rest, once, to edge: the webhook secret, the OAuth client's,
+  the session key and the sign-outs. Then it removes `app.json`, `session.key`, `sessions.json`
+  and `redeliveries.json` from `/data`, and its log says "handed over to edge, removed from
+  /data". Edge keeps them in its own volume, `edge-data`. Signed-in sessions survive the update
+  when edge took the listener's session key (only when it had no App yet).
+- **Running sandboxes go on.** The orchestrator is joined to their networks under the name
+  `listener`, and the egress proxy reaches it under that name too: their address
+  (`BROKER_URL`) doesn't change.
+- **Edge refusing.** Edge already holding another App (a `/setup` done before the update)
+  refuses the listener's: the orchestrator's log says so, and the credentials stay in
+  `/data/app.json` until you choose. To take the listener's App, remove `app.json` from the
+  `edge-data` volume; to keep edge's, remove `/data/app.json` from the `data` volume. Then
+  restart edge and the orchestrator.
+
+### Two copies
+
+Edge and the orchestrator can each run two copies, so an update stops nothing.
+
+- **Edge's are both active**, on one store: either takes any request, a delivery GitHub sends
+  twice (or that reaches both) goes on once, a sign-out ends the login's sessions on both, and
+  the redeliveries' poller runs on the copy holding its lease. An update is rolling: the new
+  copy starts, the old one drains (`DRAIN_SECONDS`, 25 s) and leaves the poller's lease to the
+  other.
+- **The orchestrator's are active and passive.** The copy holding the store's lease acts (15 s,
+  `LEASE_SECONDS`, renewed every third of it); the other waits for it ("Waiting for the
+  orchestrator's lease: another copy acts"), its services port open for its probes alone
+  (`/health`; `/ready` is 503 until it acts, which keeps it out of a Kubernetes Service), 503 to
+  every call. On SIGTERM the acting copy stops
+  its timers and edge's requests (edge asks again, for up to 15 s), acknowledges the deliveries
+  it is handling, saves the queue and the runs' state, releases the lease, then drains the
+  broker port and the egress policy. The waiting copy takes the lease at once, about a second
+  later, rebuilds its tasks from the store and reads on from the last acknowledged delivery. On
+  a crash, the lease expires after 15 s and the waiting copy takes it then. A copy that loses
+  its lease while acting exits, and restarts as the waiting one.
+- **Fencing.** Each new holder of the lease gets a higher epoch, sent with its every call to the
+  github service, the runner and the broker (`x-deckhand-epoch`), which refuse one older than
+  the newest they have seen (409): a copy that lost its lease writes nothing more. A reply is
+  keyed by its run and a run's start by its id, so an event handled again by the next copy does
+  nothing twice.
+
+With Compose, one copy of each runs, and an update is a stop then a start. Two copies on one
+node work as well: the store's file backend is shared by the processes on one node (each call
+holds the folder's lock, `state.lock`), so `docker compose up -d --scale orchestrator=2` gets
+the handover above. Both copies answer to the same names there (`orchestrator`, and `listener` on
+the runs' networks): a call that reaches the waiting one is refused, and tried again until it
+reaches the one acting. Copies on several nodes need Redis ([The store](#the-store)).
 
 ## The github service
 
 The github service (`github/`, its own image) is the only one holding the GitHub App's key and
-its installation tokens: the listener's own GitHub calls (replies, labels, reviews, the
-dashboard's data), the sandboxes' (relayed by the egress proxy: [How sandboxes reach
+its installation tokens: the orchestrator's GitHub calls (replies, labels, reviews, the
+dashboard's data), edge's (`/setup`'s conversion of the App's manifest, the redeliveries), the sandboxes' (relayed by the egress proxy: [How sandboxes reach
 GitHub](#how-sandboxes-reach-github)) and the runner's tarballs all go through it, each caller
 reaching it over an internal network of its own, which it tells them apart by
 (`SERVICE_NETWORKS`). Its key is in the `github-key` volume, which no other service mounts: back
@@ -1276,23 +1366,25 @@ host disk (`tmpfs` in `compose.yaml`, commented out).
 ## The broker service
 
 The broker (`broker/`, its own image) is the only service holding the key that signs the runs'
-tokens and the services' own: the listener, the runner and the egress proxy check them with its
-public keys alone. It also keeps the live runs, their inbox, CA, digest and screenshots, in its store
+tokens and the services' own: edge, the orchestrator, the runner and the egress proxy check them
+with its public keys alone. It also keeps the live runs, their inbox, CA, digest and screenshots, in its store
 (the `broker-store` volume), and serves what a sandbox calls about its own run, through the
 egress proxy: its token's renewal, its inbox, its files. Its key is in the `broker-keys`
-volume, which no other service mounts: back it up with the listener's `data` volume.
+volume, which no other service mounts: back it up with the orchestrator's `data` volume.
 
-The listener, the proxy and the runner each reach it over an internal network of their own
-(`broker-orchestrator`, `broker-proxy`, `broker-runner`), and it tells them apart by that network
-(`SERVICE_NETWORKS`): their subnets are fixed in `compose.yaml`, `10.231.250.0/28`,
-`10.231.250.16/28` and `10.231.250.32/28`; set `BROKER_ORCHESTRATOR_SUBNET`,
-`BROKER_PROXY_SUBNET` and `BROKER_RUNNER_SUBNET` in `.env` if the host already uses them. The
-listener is still more than one service (#506): it asks as each one it is (`edge`,
-`orchestrator`), which its network lets it be (`edge+orchestrator=`). The models service has its
-own, `broker-models` (`BROKER_MODELS_SUBNET`, `10.231.250.64/28`).
+The orchestrator, edge, the proxy and the runner each reach it over an internal network of their
+own (`broker-orchestrator`, `broker-edge`, `broker-proxy`, `broker-runner`), and it tells them
+apart by that network (`SERVICE_NETWORKS`): their subnets are fixed in `compose.yaml`,
+`10.231.250.0/28`, `10.231.250.208/28`, `10.231.250.16/28` and `10.231.250.32/28`; set
+`BROKER_ORCHESTRATOR_SUBNET`, `BROKER_EDGE_SUBNET`, `BROKER_PROXY_SUBNET` and
+`BROKER_RUNNER_SUBNET` in `.env` if the host already uses them. The models service and the
+github service have theirs, `broker-models` (`BROKER_MODELS_SUBNET`, `10.231.250.64/28`) and
+`broker-github` (`BROKER_GITHUB_SUBNET`, `10.231.250.176/28`). Each of the orchestrator's calls
+but a GET carries its lease's epoch, and the broker refuses one older than the newest it has
+seen ([Two copies](#two-copies)).
 
-**From a listener that signed the tokens itself.** The first listener started after the
-update finds its old `run-token.key` in its data volume, keeps its public part
+**From a listener that signed the tokens itself.** The first listener (or orchestrator) started
+after the update finds its old `run-token.key` in its data volume, keeps its public part
 (`run-token.pub`) for the tokens the running sandboxes still hold, removes the private one, and
 hands the public one to the broker, which renews those tokens with its own key from then on.
 The running sandboxes go on; after 7 days, when none of the old tokens can still be presented,
@@ -1305,7 +1397,7 @@ the keys and tokens in `.env` (`CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`,
 `ANTHROPIC_AUTH_TOKEN`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`) go to its
 environment, and the plans' logins in [the credentials folder](#the-credentials-folder) are
 mounted there, read only. The sandboxes' agents call their APIs through it, by the egress proxy,
-which sends it their calls (`MODELS_SERVICE_URL`); the listener asks it which credentials it
+which sends it their calls (`MODELS_SERVICE_URL`); the orchestrator asks it which credentials it
 holds, by name, before it reads its own settings (it waits for it at start), and never sees
 their values. The providers' addresses (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
 `GEMINI_BASE_URL`, `OPENROUTER_BASE_URL`) are its settings too, in `.env` or `config.yaml`.
@@ -1322,9 +1414,9 @@ refreshed by one of them at a time. **Every copy must mount the same `models.key
 or one Kubernetes Secret holding the file, never one per pod): a copy whose key isn't the one a
 login was sealed with refuses it, saying so in its log and in runs' errors, rather than replace
 the other copy's refreshed login with the file's spent one. Its fingerprints' salt comes from the
-key too, so copies with one key give the listener one set.
+key too, so copies with one key give the orchestrator one set.
 
-The proxy and the listener each reach it over an internal network of their own
+The proxy and the orchestrator each reach it over an internal network of their own
 (`models-proxy`, `models-orchestrator`), and it tells them apart by that network
 (`SERVICE_NETWORKS`, `10.231.250.80/28` and `10.231.250.96/28`: `MODELS_PROXY_SUBNET` and
 `MODELS_ORCHESTRATOR_SUBNET` in `.env` if the host already uses them); it reaches the broker
@@ -1344,58 +1436,70 @@ plans' logins at each refresh, owner-only: root's. The models service reads it a
 user (uid 1000), so give it the folder and its files before you update, or every run on a plan
 fails (its log says which file it can't read, at start):
 
-````sh
+```sh
 sudo chown -R 1000 credentials
-``` A listener that still has one in its
-environment warns about it at start, and uses none of them.
+```
+
+An orchestrator that still has one in its environment warns about it at start, and uses none
+of them.
 
 ## Kubernetes runner
 
 With `RUNNER=kubernetes`, each run's sandbox is a pod of the cluster the runner service runs
 in, rather than a container of the host's Docker: runs spread over the cluster's nodes, and
-`MAX_PARALLEL` still caps how many run at once. The listener stays one replica (its state in
-`/data` has one writer); the runner calls the API server with its ServiceAccount (no `kubectl`,
-no Docker socket), the listener never: only the runner's pod mounts that ServiceAccount's token.
+`MAX_PARALLEL` still caps how many run at once. The orchestrator may run two replicas, one
+acting and the other waiting for its lease, and edge two, both active
+([Two copies](#two-copies)), once each one's store is one they share (Redis on several nodes,
+[The store](#the-store)). The runner calls the API
+
+server with its ServiceAccount (no `kubectl`, no Docker socket), edge and the orchestrator
+never: only the runner's pod mounts that ServiceAccount's token.
 Two copies of the runner may run, one acting and the other waiting for its lease
 ([The runner service](architecture.md#the-runner-service)), once their store is one they share
 (`STORE_URL`, [The store](#the-store)), and the runs' inboxes (its `runs` volume, ReadWriteMany,
 until they move to the store, #505); `/ready` answers only on the one acting, for the readiness
 probe. Ready-made manifests are on their way (issue #396); until then, this is what the
 runner expects in its namespace (`KUBERNETES_NAMESPACE`, by default the runner's own).
-That namespace has to hold the listener's and the egress proxy's pods and Services too: the
+That namespace has to hold the orchestrator's and the egress proxy's pods and Services too: the
 policy check below accepts no peer in another namespace, so sandboxes elsewhere could never
 be allowed to reach them, and every run would be refused.
 
-- **RBAC**: a Role for the runner's ServiceAccount (the listener needs none): `create`, `get`, `list` and `delete` on
+- **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none): `create`, `get`, `list` and `delete` on
   `pods`, `secrets` and `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log` and `services`, and `list` on
   `events` (why a pod is stuck), `networkpolicies` (`networking.k8s.io`) and `endpointslices` (`discovery.k8s.io`).
   Nothing cluster-wide.
-- **The listener and the runner**, each telling the other's calls by NetworkPolicies, as every
+- **The orchestrator and the runner**, each telling the other's calls by NetworkPolicies, as every
   call reaches a pod at its one address (#505 brings a proof of the caller's own, its pod's
   projected service account token):
-  - a `runner` Service on 8080 (the listener's `RUNNER_URL`), and the listener's services port
-    (8083) on its Service (the runner's `ORCHESTRATOR_URL`);
-  - the runner checks the listener's service tokens with the broker's public key: the volume the
+  - a `runner` Service on 8080 (the orchestrator's `RUNNER_URL`), and the orchestrator's services
+    port (8083) on its Service (the runner's `ORCHESTRATOR_URL`, and edge's);
+  - the runner checks the orchestrator's service tokens with the broker's public key: the volume the
     broker writes it to, mounted read-only on the runner too (`SERVICE_KEYS_DIR`, as the policy
     service has it below);
-  - on the listener, `SERVICE_NETWORKS=runner=0.0.0.0/0`, and a NetworkPolicy that lets only the
-    runner's pods reach its 8083; on the runner, `SERVICE_NETWORKS=none`, and a NetworkPolicy
-    that lets only the listener's pods reach its 8080. 8083 serves a run's first tokens while it
+  - on the orchestrator, `SERVICE_NETWORKS=runner+edge=0.0.0.0/0` (either caller, on any
+    address: their tokens tell them apart), and a NetworkPolicy that lets only the runner's and
+    edge's pods reach its 8083; on the runner, `SERVICE_NETWORKS=none`, and a NetworkPolicy
+    that lets only the orchestrator's pods reach its 8080. 8083 serves a run's first tokens while it
     starts (the repositories' tarballs and blobs are the github service's, `GITHUB_SERVICE_URL`,
     whose NetworkPolicy lets the runner's pods in), only to a caller holding the runner's
     service token from the broker: the first policy is defence in depth, in case such a token
     leaks. The sandboxes' policy below lets them
-    reach the listener on 8081 only.
+    reach the orchestrator on 8081 only.
+- **Edge**, the only pods the ingress reaches: a Service on 8080 (`PORT`) behind your ingress,
+  and its internal port (8083, `INTERNAL_PORT`), the orchestrator's `EDGE_URL`. On edge,
+  `SERVICE_NETWORKS=none`, and a NetworkPolicy that lets only the orchestrator's pods reach its
+  8083, and the ingress its 8080. Its `/data` (`app.json`, `session.key`, its store) is a
+  volume of its own, which no other pod mounts.
 - **Services** named after the hosts of `BROKER_URL` and `EGRESS_PROXY` (`listener` on 8081,
-  and on 8082 when the egress proxy's `POLICY_URL` names it, `egress` on 3128 by default), each with a cluster IP. Sandboxes get no DNS server (a lookup fails at once): their pods map
+  the orchestrator's pods, and on 8082 when the egress proxy's `POLICY_URL` names it, `egress` on 3128 by default), each with a cluster IP. Sandboxes get no DNS server (a lookup fails at once): their pods map
   those names to the Services' IPs (`hostAliases`).
 - **The broker service** ([above](#the-broker-service)): a Deployment of its image with its key
   in a Secret of its own mounted at `KEY_DIR`, a `broker` Service on 8081, and
-  `BROKER_SERVICE_URL` set to it in the listener's, the runner's and the egress proxy's
-  Deployments.
+  `BROKER_SERVICE_URL` set to it in edge's, the orchestrator's, the runner's and the egress
+  proxy's Deployments.
   Sandboxes never reach it but through the proxy. It tells its callers apart by their pods'
-  service accounts: `SERVICE_ACCOUNTS` names them (`edge+orchestrator=<namespace>:<listener's>,proxy=<namespace>:<proxy's>,runner=<namespace>:<runner's>,models=<namespace>:<models service's>`),
-  the listener's, the runner's and the proxy's pods each mount a token projected for it (a
+  service accounts: `SERVICE_ACCOUNTS` names them (`orchestrator=<namespace>:<orchestrator's>,edge=<namespace>:<edge's>,proxy=<namespace>:<proxy's>,runner=<namespace>:<runner's>,models=<namespace>:<models service's>`),
+  each its own service account; edge's, the orchestrator's, the runner's and the proxy's pods each mount a token projected for it (a
   `serviceAccountToken` volume with `audience: deckhand-broker`) and name its path in
   `SERVICE_ACCOUNT_TOKEN_FILE`, and the broker's own ServiceAccount reviews them (a
   ClusterRoleBinding to `system:auth-delegator`). One replica on the file backend
@@ -1405,9 +1509,9 @@ be allowed to reach them, and every run would be refused.
 - **NetworkPolicies** that isolate the sandboxes. Their pods are labelled
   `deckhand.role: sandbox`. One policy has to pick them for both `Ingress` and `Egress`, and
   none that picks them may let anything in, or let them out to anything but the namespace's
-  other pods (the egress proxy's and the listener's, never other sandboxes): no `ipBlock`, no
+  other pods (the egress proxy's and the orchestrator's, never other sandboxes): no `ipBlock`, no
   `namespaceSelector`, and each rule naming its ports, the egress proxy's and the broker's only
-  (`EGRESS_PROXY`'s and `BROKER_URL`'s: never the listener's services port, which gives the
+  (`EGRESS_PROXY`'s and `BROKER_URL`'s: never the orchestrator's services port, which gives the
   runner's tokens). The runner checks it before every run and refuses to start one otherwise,
   saying why. For example:
 
@@ -1421,44 +1525,45 @@ be allowed to reach them, and every run would be refused.
     egress:
       - to: [{ podSelector: { matchLabels: { app: deckhand-egress } } }]
         ports: [{ port: 3128 }]
-      - to: [{ podSelector: { matchLabels: { app: deckhand-listener } } }]
+      - to: [{ podSelector: { matchLabels: { app: deckhand-orchestrator } } }]
         ports: [{ port: 8081 }]
-````
+  ```
 
-Sandboxes reach the listener through the proxy (#511); the second rule is for those started
+Sandboxes reach the orchestrator through the proxy (#511); the second rule is for those started
 before, which still call it directly, and can go once none of them runs. The proxy
-recognises their calls by its own `BROKER_URL`, which must be the listener's (same scheme,
+recognises their calls by its own `BROKER_URL`, which must be the orchestrator's (same scheme,
 host and port): its default, `RELAY_URL`'s origin, is only right when both name the same
 Service. Set it in the proxy's Deployment otherwise; with another value, the runs' agent
-calls, pushes and files are refused, and the listener logs that the proxy's `BROKER_URL`
+calls, pushes and files are refused, and the orchestrator logs that the proxy's `BROKER_URL`
 isn't its own.
 
 The cluster's network plugin has to enforce NetworkPolicies (Calico, Cilium…): one that
 ignores them leaves the sandboxes unisolated, whatever the policy says.
 
 - **The policy service** (`deckhand-policy`'s image, [architecture.md](architecture.md#the-policy-service)):
-  a Deployment and a Service the listener's `POLICY_SERVICE_URL` names (`policy` on 8181), the
+  a Deployment and a Service the orchestrator's `POLICY_SERVICE_URL` names (`policy` on 8181), the
   broker's public key in a volume the broker writes and the service mounts read-only
   (`SERVICE_KEYS_DIR` on both), and the grants folder's `policy/` mounted read-only at
   `GRANTS_DIR/policy/` in the service (the files themselves, at the same place as in the
-  listener's: it refuses every decision when the service reads other ones). It runs as a user, on a read-only filesystem with an `emptyDir` on
-  `/tmp`; a NetworkPolicy letting in the listener and the runner alone (which asks it the grants) and letting nothing out keeps it as
+  orchestrator's: it refuses every decision when the service reads other ones). It runs as a user, on a read-only filesystem with an `emptyDir` on
+  `/tmp`; a NetworkPolicy letting in the orchestrator, the github service and the runner alone (which asks it the grants) and letting nothing out keeps it as
   closed as Compose's internal network. Its pods may be two, behind a readiness probe on
   `/ready`, with `maxUnavailable: 0`: an update fails no decision.
 - **The agents**: see [Agents on Kubernetes](#agents-on-kubernetes).
-- **Grace periods**: `terminationGracePeriodSeconds: 300` on the listener's pod and the
-  runner's, and about 30 on the egress proxy's. On SIGTERM the listener lets the sandboxes' calls in flight finish for up
-  to 280 s, and the proxy for 25 s ([Restarts](architecture.md#restarts)); Kubernetes' default
-  of 30 s would cut the listener's long before.
+- **Grace periods**: `terminationGracePeriodSeconds: 300` on the orchestrator's pods and the
+  runner's, and about 30 on edge's and the egress proxy's. On SIGTERM the orchestrator releases
+  its lease, then lets the sandboxes' calls in flight finish for up to 280 s, edge its requests
+  for 25 s and the proxy for 25 s ([Restarts](architecture.md#restarts)); Kubernetes' default
+  of 30 s would cut the orchestrator's long before.
 - **The kubelet**: a `containerLogMaxSize` above `RUN_LOG_MAX_MB` (the default 10 MiB rotates a
-  run's log away, and a listener restarted mid-run then misses or repeats lines: it logs a
+  run's log away, and a runner restarted mid-run then misses or repeats lines: it logs a
   warning), and a `podPidsLimit`, as Kubernetes only limits processes per node (grants'
   `limits.pids` don't apply).
 
 `SANDBOX_IMAGE` has to be a reference the nodes can pull, from a registry
 (`ghcr.io/bryansmee/deckhand-sandbox:<version>`, not the default `<NAME_PREFIX>-sandbox`),
 ideally a version tag or a digest. A `:latest` or untagged one is pulled again at every
-start; a node keeps a pinned one. The sandbox image has to match the listener's version: an
+start; a node keeps a pinned one. The sandbox image has to match the orchestrator's version: an
 older entrypoint doesn't tag its stderr lines, and its setup output would read as the
 agent's.
 
@@ -1488,33 +1593,33 @@ cluster and pushed to a registry, as nodes only pull from one:
   change builds a new one. Old tags are pruned through the registry's API as on Docker (the
   default branch's newest and the newest few kept, never one a pod runs), so it has to allow
   deletes (`REGISTRY_STORAGE_DELETE_ENABLED=true` for the CNCF distribution registry); one that
-  doesn't keeps its tags, which the listener logs. A tag whose manifest a kept one shares (an
-  identical build) is deleted alone where the registry can, else kept. A tag whose date the listener can't read is kept, and logged.
+  doesn't keeps its tags, which the runner logs. A tag whose manifest a kept one shares (an
+  identical build) is deleted alone where the registry can, else kept. A tag whose date the runner can't read is kept, and logged.
 - **A pull Secret** (`KUBERNETES_REGISTRY_SECRET`, required with `KUBERNETES_REGISTRY`: the
-  listener doesn't start without it), of type `kubernetes.io/dockerconfigjson`, whose
-  credentials may pull from, push to and delete from the registry. The registry has to require them for all three, pulls included: sandboxes and builds can reach an in-cluster one, any run's sandbox among them (a research run's, a fork's, a repository's without the `dockerfile` grant). A registry that lets anyone push would let one run replace another repository's image, which then runs with that repository's grant; one that lets anyone pull would let any run read every repository's image, which holds whatever its Dockerfile copied of a private checkout. (On Docker, sandboxes can't read the host's images.) An in-cluster registry is best also kept out of the sandboxes' reach: a NetworkPolicy that lets only the listener, BuildKit and the nodes in. Sandbox pods, install pods and init containers pull with this Secret,
-  and the listener reads it (its Role's `get` on `secrets` covers it) to push through BuildKit
+  runner doesn't start without it), of type `kubernetes.io/dockerconfigjson`, whose
+  credentials may pull from, push to and delete from the registry. The registry has to require them for all three, pulls included: sandboxes and builds can reach an in-cluster one, any run's sandbox among them (a research run's, a fork's, a repository's without the `dockerfile` grant). A registry that lets anyone push would let one run replace another repository's image, which then runs with that repository's grant; one that lets anyone pull would let any run read every repository's image, which holds whatever its Dockerfile copied of a private checkout. (On Docker, sandboxes can't read the host's images.) An in-cluster registry is best also kept out of the sandboxes' reach: a NetworkPolicy that lets only the runner, BuildKit and the nodes in. Sandbox pods, install pods and init containers pull with this Secret,
+  and the runner reads it (its Role's `get` on `secrets` covers it) to push through BuildKit
   and prune. It replaces the ServiceAccount's own `imagePullSecrets`, which Kubernetes adds
   only to a pod that lists none: when `SANDBOX_IMAGE` comes from a private registry, the
   Secret has to hold that registry's credentials too. For a repository with its own image,
-  `SANDBOX_IMAGE` has to be readable through its registry's API as well: the listener reads
+  `SANDBOX_IMAGE` has to be readable through its registry's API as well: the runner reads
   its digest there (anonymously for a public one, such as ghcr.io's releases). Runs on the
   base image alone don't look it up: the nodes pull it as they can.
 - **A BuildKit daemon** (`moby/buildkit`, rootless), a Deployment with a Service named after
-  `KUBERNETES_BUILDKIT`'s host, in the namespace. The listener drives it with `buildctl`
+  `KUBERNETES_BUILDKIT`'s host, in the namespace. The runner drives it with `buildctl`
   (in its image), with the checkout as the build's context and `DECKHAND_BASE` as on Docker.
-  Only the listener may reach it, and it goes out only through the egress proxy: set
+  Only the runner may reach it, and it goes out only through the egress proxy: set
   `HTTPS_PROXY` and `HTTP_PROXY` to `EGRESS_PROXY` in its Deployment, with `NO_PROXY` for an
   in-cluster registry, and give its pods NetworkPolicies that one picks for `Egress` and one
   for `Ingress`, letting them out to the namespace's pods only (the proxy, an in-cluster
-  registry) and to DNS (UDP or TCP port 53, no `endPort`), and in only from the namespace's pods that can't be sandboxes (the listener's: a peer has to ask for a label sandbox pods don't have, or a `deckhand.role` other than `sandbox`, as a sandbox's own policy lets it reach any pod but another sandbox). The
-  listener checks them before every build, as it checks the sandboxes', and refuses to build
+  registry) and to DNS (UDP or TCP port 53, no `endPort`), and in only from the namespace's pods that can't be sandboxes (the runner's: a peer has to ask for a label sandbox pods don't have, or a `deckhand.role` other than `sandbox`, as a sandbox's own policy lets it reach any pod but another sandbox). The
+  runner checks them before every build, as it checks the sandboxes', and refuses to build
   otherwise, saying why (the Role's `get` on `pods` and `list` on `networkpolicies` and
-  `endpointslices` cover it). The proxy asks the listener about the daemon's pod IPs (the
+  `endpointslices` cover it). The proxy asks the orchestrator about the daemon's pod IPs (the
   endpoints of its Service): while a build runs, they may reach that run's hosts (the repo's
   grant) and the registries of the image and its base, with the hosts those send a puller to
   (Docker Hub's token service and layer storage, ghcr.io's layer storage, the token services
-  the listener has seen, and `KUBERNETES_REGISTRY_HOSTS`), tunnelled, never decrypted, and
+  Deckhand has seen, and `KUBERNETES_REGISTRY_HOSTS`), tunnelled, never decrypted, and
   nothing between builds. A Dockerfile that pulls from another registry (`FROM node:26` in a
   stage) needs that registry's hosts in the repository's grant. Builds of repositories
   granted other hosts wait for each other, in order of arrival, so one repository's
@@ -1529,7 +1634,7 @@ every sandbox mounts read-only, as on Docker:
 
 - **With `KUBERNETES_AGENT_STORAGE_CLASS`** (by default `KUBERNETES_CACHE_STORAGE_CLASS`), a
   `ReadWriteMany` class (NFS, CephFS, EFS…), or a claim of that name made beforehand: the
-  listener makes the claim when it is missing, and before the first run of each version a pod
+  runner makes the claim when it is missing, and before the first run of each version a pod
   of its own (`deckhand.role: install`) runs the base image's installer into it, then goes. It
   meets Pod Security `restricted`: it runs as uid 1001, neither root nor the sandbox's user,
   so no sandbox can change what the next one runs, and sandboxes mount the claim read-only.
@@ -1548,7 +1653,7 @@ installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim th
 holds only where the storage class applies `fsGroup`: a CSI driver with `fsGroupPolicy: File`
 (its default, `ReadWriteOnceWithFSType`, skips `ReadWriteMany` volumes), or a provisioner whose
 new volumes every user can write (NFS with `root_squash` ignores `fsGroup`; EFS needs an access
-point). The listener checks it: an install, or a short pod at a cache's first use, that can't
+point). The runner checks it: an install, or a short pod at a cache's first use, that can't
 write to its claim fails the run saying so (and a cache's claim is removed, so the next run
 makes it again). An agent's claim filled beforehand needs no write: its installer finds the
 version there and leaves it as it is.
@@ -1563,14 +1668,17 @@ without caches, said once in the run's log.
 
 ## The store
 
-The services the listener is being split into ([services.md](services.md)) keep their state
-in a store, which each one's `STORE_URL` names. The broker service keeps its live runs, their
-files and events there ([The broker service](#the-broker-service)); the runner the runs' logs and
-events and its lease; the listener its queue and its fencing epoch, the rest of its state in
-`/data` until the split.
+Deckhand's services ([services.md](services.md)) keep their state in a store, which each one's
+`STORE_URL` names. The broker service keeps its live runs, their files and events there
+([The broker service](#the-broker-service)); the runner the runs' logs and events and its lease;
+the orchestrator its queue, its lease and its fencing epoch (the rest of its state in `/data`);
+edge the deliveries it took, the sessions' epochs and the deliveries' stream the orchestrator
+reads.
 
 - **`file:///data/store`**, a folder in the service's volume: on Docker Compose, and on one
-  node, where each service runs one copy.
+  node. Several processes on that node may share it (two copies of a service, or one starting
+  while the last drains): each call holds the folder's lock (`state.lock`, taken over once 10 s
+  stale) and reads again what another process wrote.
 - **`redis://[user:password@]host:6379[/db]`**, or **`rediss://`** over TLS: on several nodes
   (a k3s cluster with more than one), where two copies of a service run on different nodes and
   a ReadWriteOnce volume can't be on both. `?prefix=` changes what goes before every key
@@ -1620,7 +1728,7 @@ run's log, its files), the secrets and GitHub tokens are redacted instead.
 A sandbox has no Docker: it never gets the host's socket, and its hardening (uid 1000, no
 capabilities, `no-new-privileges`) rules out running an engine inside it. A repository whose
 runs need to build and run images (to check its Dockerfiles, say) can get a **container
-engine** instead: a second container the listener starts next to each of its work runs'
+engine** instead: a second container the runner starts next to each of its work runs'
 sandboxes, on the run's own network, and removes with it. The sandbox gets the `docker` CLI
 (with buildx and compose) and `DOCKER_HOST=tcp://engine:2375`; containers it starts with a
 published port answer at `engine:<port>`. Nothing in the engine touches the host's Docker,
@@ -1732,7 +1840,7 @@ write` to open or edit a pull request…): see [Tokens](security.md#tokens). Ins
   that, so a run can go on for hours. Every run but a research one trusts the egress
   proxy's CA, which certifies GitHub's hosts for the relay.
 - Git fetches from GitHub over HTTPS through the GitHub gateway, and pushes through the github
-  service's git gateway (to the listener's broker address, which the proxy sends there, with the
+  service's git gateway (to the broker's address, `listener`, which the proxy sends there, with the
   run token), which pushes the run's own branch only (its
   issue's `issue-<n>-*`, or its pull request's head), never the default one, with a token of
   its own (see [Security model](security.md#the-default-branch)): contents only, and
@@ -1749,16 +1857,18 @@ set its default workflow permissions to read-only and keep deploy secrets behind
 environments with required reviewers: see
 [GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches).
 
-Nor does a sandbox get your Claude credential. Its Claude Code calls the listener (same port,
-`ANTHROPIC_BASE_URL=<broker>/anthropic`) with the run's agent token where the credential would
-be; the listener checks the token, puts your credential in its place and forwards the call
+Nor does a sandbox get your Claude credential. Its Claude Code calls the broker's address
+(`ANTHROPIC_BASE_URL=<broker>/anthropic`, which the egress proxy sends to the models service)
+with the run's agent token where the credential would be; the models service checks the token,
+puts your credential in its place and forwards the call
+
 to Anthropic, streaming the answer back (see [Security model](security.md#tokens)). Codex
 does the same with `OPENAI_BASE_URL=<broker>/openai` and your `OPENAI_API_KEY`, and the
 Antigravity CLI with `GOOGLE_GEMINI_BASE_URL=<broker>/google` and your `GEMINI_API_KEY`, or
 through the egress proxy with a Google AI plan's login (see
 [Antigravity CLI](#antigravity-cli)).
 
-No agent is part of any image: before the first run that needs it, the listener installs the
+No agent is part of any image: before the first run that needs it, the runner installs the
 pinned `CLAUDE_CODE_VERSION` into the `deckhand-claude-code` volume (Codex: `CODEX_VERSION`,
 `deckhand-codex`; the Antigravity CLI: `AGY_VERSION`, `deckhand-antigravity`, its release's
 tarball checked against the sha256 `AGY_SHA256` pins), in a container of its own, and later
@@ -1775,10 +1885,10 @@ runs next to the sandbox rather than in it. See [Security model](security.md): t
 mounts, the mandatory hosts, and what isn't covered.
 
 Upgrading from a version where all sandboxes shared the `deckhand-sandboxes` network: runs
-started before the update go on (the new listener joins itself and the proxy to that network
+started before the update go on (the orchestrator and the proxy are joined to that network
 again). Once they are over, `docker network rm deckhand-sandboxes`: compose no longer
 creates it, and `SANDBOX_NETWORK` is no longer read. Keep the `deckhand.role: egress` label
-of `compose.yaml`'s `egress` service if you copied the file: the listener finds the proxy
+of `compose.yaml`'s `egress` service if you copied the file: the runner finds the proxy
 by it.
 
 Upgrading from a version where `compose.yaml` mounted `config.yaml` and `grants/` one by
@@ -1787,7 +1897,7 @@ and drop their lines from your `compose.yaml` or `compose.override.yaml` if you 
 there; the new `compose.yaml` mounts the folder.
 
 Upgrading from a version with a single grants file (`GRANTS_FILE`, `grants.yaml`): the
-listener reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.
+orchestrator reads a folder now, `GRANTS_DIR`, and refuses to start while `GRANTS_FILE` is set.
 Move each `owner/repo:` entry to its own file, `owner/repo.yaml`, with its keys one level
 up; `"*"` becomes `default.yaml`. Then mount the folder instead of the file
 (`server/grants/`, see [the server folder](#the-server-folder)) and remove `GRANTS_FILE`. For example:
@@ -1808,12 +1918,12 @@ hook, Dockerfile and branch images: grant them in your policies, for each reposi
 uses them (or every one: a rule without `input.repo.name`), with `preview`, `dockerfile` and
 `branch_docker_images` ([Upgrading the grants](#upgrading-the-grants-498)). Until then that
 repository's runs stop with a reply naming the missing grant, its preview hook doesn't run
-(the listener's logs say why), and `allow_branch_docker_images` in its `.deckhand.yaml` is
+(the orchestrator's logs say why), and `allow_branch_docker_images` in its `.deckhand.yaml` is
 ignored with a warning in the run's log.
 
 Upgrading from a version with `ALLOWED_HOSTS` or `SANDBOX_CPUS`, `SANDBOX_MEMORY`,
 `SANDBOX_PIDS`: what every sandbox gets is in the grants folder now, read at each run, and
-the listener refuses to start while any of them is set (in `.env` or `config.yaml`, where
+the orchestrator refuses to start while any of them is set (in `.env` or `config.yaml`, where
 `allowed_hosts: []` counts too). Move them to `grants/default.yaml`, then remove them:
 
 ```sh

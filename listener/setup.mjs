@@ -8,7 +8,7 @@
 //                         its credentials, then the browser goes on to install the App
 //
 // Whoever creates the App decides where webhooks come from, so the form needs the one-time
-// token the listener prints in its logs, and the whole flow closes once an App is stored.
+// token edge prints in its logs (#506), and the whole flow closes once an App is stored.
 import { randomBytes } from "node:crypto";
 import { APP_EVENTS, APP_PERMISSIONS } from "./github-app.mjs";
 import { escape, page as html, same } from "./html.mjs";
@@ -16,7 +16,7 @@ import { readBody } from "../lib/http.mjs";
 
 const STATE_TTL_MS = 60 * 60000;
 
-// `publicUrl`: where GitHub reaches this listener.
+// `publicUrl`: where GitHub reaches this Deckhand (edge).
 export function manifest({ name, publicUrl }) {
   return {
     name,
@@ -74,7 +74,7 @@ export function createSetup({
   random = () => randomBytes(24).toString("hex"),
   now = Date.now,
   // The manifest's code → the App's credentials but its key: the github service converts it
-  // (../github/app.mjs), and keeps the key. Required: the listener never asks GitHub itself,
+  // (../github/app.mjs), and keeps the key. Required: edge never asks GitHub itself,
   // whose answer holds the key.
   convert,
   log = () => {},
@@ -92,10 +92,10 @@ export function createSetup({
       res,
       200,
       "Already set up",
-      `<p>This listener already has its GitHub App. To install it on more repositories, open the
+      `<p>This Deckhand already has its GitHub App. To install it on more repositories, open the
 App's page on GitHub (Settings → Developer settings → GitHub Apps → Install App).</p>
-<p class="muted">To start over with a new App, delete <code>app.json</code> from the data volume
-and restart the listener.</p>`,
+<p class="muted">To start over with a new App, delete <code>app.json</code> from edge's data volume
+and the github service's, and restart both.</p>`,
     );
   }
 
@@ -104,8 +104,8 @@ and restart the listener.</p>`,
       res,
       403,
       "Setup link needed",
-      `<p>Open the setup link printed in the listener's logs
-(<code>docker compose logs listener</code>): it carries a one-time token.</p>`,
+      `<p>Open the setup link printed in edge's logs
+(<code>docker compose logs edge</code>): it carries a one-time token.</p>`,
     );
   }
 
@@ -122,7 +122,7 @@ the permissions and events Deckhand needs, then send you back here to install it
 repositories.</p>
 <form method="post" action="/setup">
   <input type="hidden" name="token" value="${escape(token)}" />
-  <label for="url">Public URL of this listener</label>
+  <label for="url">Public URL of this Deckhand</label>
   <input id="url" name="url" type="url" required value="${escape(url)}" />
   <small>Where GitHub sends webhooks (<code>/webhook</code>) and screenshots are served.</small>
   ${
@@ -218,7 +218,7 @@ back here to install it.</p>
     };
     run().catch((error) => {
       log(`Setup: ${error.stack ?? error}`);
-      if (!res.headersSent) page(res, 500, "Setup failed", `<p>See the listener's logs.</p>`);
+      if (!res.headersSent) page(res, 500, "Setup failed", `<p>See edge's logs.</p>`);
     });
     return true;
   }

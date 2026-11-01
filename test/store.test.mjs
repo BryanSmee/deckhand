@@ -1,7 +1,14 @@
 // The store (lib/store.mjs): the shared suite on each backend, then what the file backend
 // adds, everything kept across a restart.
 import assert from "node:assert/strict";
-import { appendFileSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  linkSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -231,4 +238,170 @@ test("nextEpoch: the clock's, above the last one, whatever the clock says", asyn
   // A store made anew starts from the clock: above what was seen while it moved on.
   now = 9000;
   assert.equal(await nextEpoch(openStore("memory:"), { now: () => now }), 9000);
+});
+
+// Two processes on one folder (#506): a service's two copies on one node, one acting and one
+// waiting for its lease, each its own fileStore().
+test("file: two copies on one folder see each other's keys, leases and streams at once", async (t) => {
+  const dir = tempDir(t);
+  const a = fileStore({ dir });
+  const b = fileStore({ dir });
+  await a.set("k", 1);
+  assert.equal(await b.get("k"), 1);
+  assert.equal(await a.setIfAbsent("delivery/g", 1), true);
+  assert.equal(await b.setIfAbsent("delivery/g", 1), false);
+  // A lease is one copy's; released, the other takes it at once, with a higher epoch.
+  const held = await a.acquire("orchestrator", "a", { ttlMs: 60_000 });
+  assert.equal(await b.acquire("orchestrator", "b", { ttlMs: 60_000 }), null);
+  assert.equal(await a.release("orchestrator", "a", held.epoch), true);
+  const taken = await b.acquire("orchestrator", "b", { ttlMs: 60_000 });
+  assert.ok(taken.epoch > held.epoch);
+  assert.equal(await a.renew("orchestrator", "a", held.epoch, { ttlMs: 60_000 }), null);
+  // One appends, the other reads and acknowledges: the first sees it acknowledged.
+  const id = await a.append("deliveries", { n: 1 });
+  assert.deepEqual(await b.read("deliveries", "orchestrator"), [{ id, event: { n: 1 } }]);
+  assert.equal(await b.ack("deliveries", "orchestrator", [id]), 1);
+  assert.deepEqual(await a.read("deliveries", "orchestrator"), []);
+  const next = await b.append("deliveries", { n: 2 });
+  assert.ok(Number(next) > Number(id));
+  assert.deepEqual(await a.read("deliveries", "orchestrator"), [{ id: next, event: { n: 2 } }]);
+  // A stream one rewrote (a trim) is read again whole by the other.
+  for (let n = 3; n < 10; n++) await a.append("short", { n }, { maxLength: 2 });
+  assert.deepEqual(
+    (await b.read("short", "c")).map((e) => e.event.n),
+    [8, 9],
+  );
+});
+
+test("file: two processes' increments on one folder are never lost; a crashed one's lock is taken over", async (t) => {
+  const dir = tempDir(t);
+  const script = `
+    import { fileStore } from ${JSON.stringify(new URL("../lib/store-file.mjs", import.meta.url).href)};
+    const store = fileStore({ dir: process.argv[1] });
+    for (let i = 0; i < 100; i++) await store.increment("n");
+  `;
+  const { spawn } = await import("node:child_process");
+  const run = () =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir], {
+        stdio: ["ignore", "inherit", "inherit"],
+      });
+      child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
+    });
+  await Promise.all([run(), run()]);
+  assert.equal(await fileStore({ dir }).get("n"), 200);
+  // A lock left behind, old enough: not waited for forever.
+  writeFileSync(join(dir, "state.lock"), "12345");
+  const { utimesSync } = await import("node:fs");
+  const old = new Date(Date.now() - 60_000);
+  utimesSync(join(dir, "state.lock"), old, old);
+  assert.equal(await fileStore({ dir }).increment("n"), 201);
+  // Left behind again, and four processes racing to take it over: one at a time, none lost
+  // (a takeover never removes the lock another process made anew).
+  for (let round = 0; round < 3; round++) {
+    writeFileSync(join(dir, "state.lock"), "12345");
+    utimesSync(join(dir, "state.lock"), old, old);
+    await Promise.all([run(), run(), run(), run()]);
+  }
+  assert.equal(await fileStore({ dir }).get("n"), 201 + 3 * 400);
+});
+
+test("file: acknowledged with drop, a stream's events leave its memory and, past 100, its file (#506)", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  for (let n = 0; n < 250; n++) {
+    const id = await store.append("deliveries", { n, text: "x".repeat(1000) });
+    await store.read("deliveries", "orchestrator");
+    await store.ack("deliveries", "orchestrator", [id], { drop: true });
+  }
+  const file = readFileSync(join(dir, "streams", "deliveries.jsonl"), "utf8");
+  assert.ok(file.split("\n").filter(Boolean).length < 100, "acknowledged lines kept");
+  // Read again from the folder (a restart, the other copy): none of them comes back.
+  const again = fileStore({ dir });
+  assert.deepEqual(await again.read("deliveries", "another"), []);
+  const id = await again.append("deliveries", { n: 250 });
+  assert.equal(Number(id), 251);
+});
+
+test("file: a stream whose file was rewritten empty (every event dropped) goes on from its next id", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  // Opened before the rewrite: edge's other copy.
+  const other = fileStore({ dir });
+  await other.read("deliveries", "orchestrator");
+  for (let n = 1; n <= 100; n++) {
+    const id = await store.append("deliveries", { n });
+    await store.read("deliveries", "orchestrator");
+    await store.ack("deliveries", "orchestrator", [id], { drop: true });
+  }
+  assert.equal(readFileSync(join(dir, "streams", "deliveries.jsonl"), "utf8"), "");
+  // The other copy appends next, then a store opened anew (a restart): ids go on, and the
+  // orchestrator reads both.
+  assert.equal(await other.append("deliveries", { n: 101 }), "101");
+  const restarted = fileStore({ dir });
+  assert.equal(await restarted.append("deliveries", { n: 102 }), "102");
+  assert.deepEqual(
+    (await restarted.read("deliveries", "orchestrator")).map((e) => e.event.n),
+    [101, 102],
+  );
+});
+
+test("file: an earlier event still pending while later ones are dropped: ids never handed out twice", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  const other = fileStore({ dir });
+  await other.read("deliveries", "orchestrator");
+  const ids = [];
+  for (let n = 1; n <= 101; n++) ids.push(await store.append("deliveries", { n }));
+  await store.read("deliveries", "orchestrator", { count: 200 });
+  // The first still handled (retried, say) while the 100 after it are done.
+  for (const id of ids.slice(1))
+    await store.ack("deliveries", "orchestrator", [id], { drop: true });
+  assert.equal(
+    readFileSync(join(dir, "streams", "deliveries.jsonl"), "utf8")
+      .trim()
+      .split("\n").length,
+    1,
+  );
+  // The other copy, and a store opened anew, append next: their ids follow the last one.
+  assert.equal(await other.append("deliveries", { n: 102 }), "102");
+  const restarted = fileStore({ dir });
+  assert.equal(await restarted.append("deliveries", { n: 103 }), "103");
+  await restarted.ack("deliveries", "orchestrator", [ids[0]], { drop: true });
+  assert.deepEqual(
+    (await restarted.read("deliveries", "orchestrator")).map((e) => e.event.n),
+    [102, 103],
+  );
+});
+
+test("file: a stream rewritten twice by another copy is read again whole, its inode reused or not", async (t) => {
+  const dir = tempDir(t);
+  const a = fileStore({ dir });
+  const b = fileStore({ dir });
+  for (let n = 1; n <= 3; n++) await a.append("deliveries", { n });
+  // B has the stream cached: three events, their bytes.
+  assert.equal((await b.read("deliveries", "orchestrator")).length, 3);
+  // Its file's inode, kept aside by a second name.
+  const kept = join(dir, "kept-inode");
+  linkSync(join(dir, "streams", "deliveries.jsonl"), kept);
+  await b.ack("deliveries", "orchestrator", ["1", "2", "3"], { drop: true });
+  // A handles 200 more, two rewrites (a rename may hand the second the first's inode), then 5.
+  for (let n = 4; n <= 203; n++) {
+    const id = await a.append("deliveries", { n });
+    await a.read("deliveries", "orchestrator");
+    await a.ack("deliveries", "orchestrator", [id], { drop: true });
+  }
+  for (let n = 204; n <= 208; n++) await a.append("deliveries", { n, text: "x".repeat(50) });
+  // The inode B cached handed back to the file, as a rename may: the file as A left it, under it.
+  const path = join(dir, "streams", "deliveries.jsonl");
+  const now = readFileSync(path);
+  writeFileSync(kept, now);
+  renameSync(kept, path);
+  // B's next append follows A's, and the orchestrator reads all six.
+  assert.equal(await b.append("deliveries", { n: 209 }), "209");
+  assert.equal(await a.append("deliveries", { n: 210 }), "210");
+  assert.deepEqual(
+    (await a.read("deliveries", "orchestrator")).map((e) => e.event.n),
+    [204, 205, 206, 207, 208, 209, 210],
+  );
 });

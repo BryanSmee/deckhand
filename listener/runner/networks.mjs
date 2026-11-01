@@ -125,8 +125,9 @@ export function createNetworks({ config, docker, log, now }) {
   }
 
   // The broker's and the proxy's containers, with the names sandboxes call them by: the
-  // broker is LISTENER_CONTAINER, or the container labelled deckhand.role=broker (the listener,
-  // until the broker moves out, #505); the proxy is EGRESS_CONTAINER, or the one labelled
+  // broker is LISTENER_CONTAINER, or the containers labelled deckhand.role=broker (the
+  // orchestrator's, both of its copies when two run, #506); the proxy is EGRESS_CONTAINER, or
+  // the one labelled
   // deckhand.role=egress, each in the runner's own compose project (the container it runs in:
   // its host name, Docker's short id). Looked up each time: `docker compose up -d` recreates
   // them under new ids.
@@ -145,11 +146,16 @@ export function createNetworks({ config, docker, log, now }) {
           : `the runner's own container ${own} wasn't found: set LISTENER_CONTAINER and EGRESS_CONTAINER (docs/setup.md)`,
       );
     }
-    const broker =
-      config.listenerContainer || (await labelled("broker", project.out, "LISTENER_CONTAINER"));
+    const brokers = config.listenerContainer
+      ? [config.listenerContainer]
+      : await labelled("broker", project.out, "LISTENER_CONTAINER", { many: true });
     return [
-      { container: broker, alias: aliasOf(config.brokerUrl) },
-      { container: await egressContainer(project.out), alias: aliasOf(config.egressProxy) },
+      ...brokers.map((container) => ({ container, alias: aliasOf(config.brokerUrl) })),
+      {
+        container: await egressContainer(project.out),
+        alias: aliasOf(config.egressProxy),
+        egress: true,
+      },
     ];
   }
 
@@ -157,8 +163,9 @@ export function createNetworks({ config, docker, log, now }) {
     return config.egressContainer || labelled("egress", project, "EGRESS_CONTAINER");
   }
 
-  // The one container labelled deckhand.role=<role> in `project`.
-  async function labelled(role, project, setting) {
+  // The one container labelled deckhand.role=<role> in `project`; `many`: all of them, one at
+  // least.
+  async function labelled(role, project, setting, { many = false } = {}) {
     const { code, out, err } = await docker([
       "ps",
       "--filter",
@@ -167,14 +174,15 @@ export function createNetworks({ config, docker, log, now }) {
       "--format",
       "{{.ID}}",
     ]);
-    const found = code === 0 ? out.split("\n").filter(Boolean) : [];
-    if (found.length !== 1) {
-      const what = role === "egress" ? "the egress proxy's container" : "the listener's container";
+    const found = code === 0 ? out.split("\n").filter(Boolean).sort() : [];
+    if (many ? !found.length : found.length !== 1) {
+      const what =
+        role === "egress" ? "the egress proxy's container" : "the orchestrator's container";
       throw new Error(
         `${what} wasn't found (${code === 0 ? `${found.length} labelled ${ROLE}=${role}` : err}): set ${setting} (docs/setup.md)`,
       );
     }
-    return found[0];
+    return many ? found : found[0];
   }
 
   // A container's networks, by name; null when it is gone.
@@ -209,7 +217,8 @@ export function createNetworks({ config, docker, log, now }) {
     const at = now();
     let addresses = [];
     try {
-      const container = config.egressContainer || (await peers())[1].container;
+      const container =
+        config.egressContainer || (await peers()).find((peer) => peer.egress).container;
       addresses = (await addressesOf(container)) ?? [];
     } catch (error) {
       log(`Looking up the egress proxy: ${error.message}`);

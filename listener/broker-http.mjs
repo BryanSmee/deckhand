@@ -371,8 +371,11 @@ export function createBrokerHttp(ctx) {
     sendJson(res, { error: "not found" }, 404);
   }
 
-  function listen() {
-    const server = drainable(createServer(handle)).listen(config.brokerPort, () => {
+  // `bind(server, port, done)`: how it listens (the orchestrator's waits for a port the copy
+  // before it still drains).
+  function listen(bind = (server, port, done) => server.listen(port, done)) {
+    const server = drainable(createServer(handle));
+    bind(server, config.brokerPort, () => {
       // BROKER_PORT=0 (the tests): the OS picks a free port, and sandboxes are sent to that one.
       if (!config.brokerPort) {
         const url = new URL(config.brokerUrl);
@@ -389,14 +392,15 @@ export function createBrokerHttp(ctx) {
   // the calls in flight finish, but every sandbox connection, to any host, waits on this
   // answer, so it stays open until the listener exits. The broker's port answers /egress too,
   // for a proxy whose POLICY_URL still names it.
-  function listenPolicy() {
+  function listenPolicy(bind = (server, port, done) => server.listen(port, done)) {
     const answer = (req, res) => {
       if (req.method === "GET" && req.url.startsWith("/egress?")) {
         return egressAnswer(req, res).catch(failed(res, "Egress", false));
       }
       sendJson(res, { error: "not found" }, 404);
     };
-    const server = drainable(createServer(answer)).listen(config.policyPort, () => {
+    const server = drainable(createServer(answer));
+    bind(server, config.policyPort, () => {
       config.policyPort = server.address().port;
       log(`Egress policy on :${config.policyPort}`);
     });

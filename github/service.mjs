@@ -87,15 +87,17 @@ export const ROUTES = {
   ...each(WRITES, "/as/:owner/:repo/*", WRITER),
   "POST /graphql/:owner/:repo": READERS,
   "GET /as-app/*": READERS,
-  // The App's one write the listener makes: a delivery GitHub couldn't hand over, asked again
-  // (redeliveries.mjs). Never a token minted (`…/access_tokens`), a webhook's config changed or
-  // an installation removed: no other write as the App is routed.
-  "POST /as-app/app/hook/deliveries/:id/attempts": WRITER,
+  // The App's one write Deckhand makes: a delivery GitHub couldn't hand over, asked again by
+  // edge, which takes the webhooks (redeliveries.mjs, #506). Never a token minted
+  // (`…/access_tokens`), a webhook's config changed or an installation removed: no other write
+  // as the App is routed.
+  "POST /as-app/app/hook/deliveries/:id/attempts": ["edge"],
   "GET /as-installation/:id/*": READERS,
   // The App.
   "GET /app": READERS,
+  // A listener's key, which the orchestrator has its data volume of; /setup's conversion, edge's.
   "PUT /app": WRITER,
-  "POST /app/manifest": WRITER,
+  "POST /app/manifest": ["edge"],
   // The runs, as the orchestrator decided them, and what they did.
   "PUT /runs/:id": WRITER,
   "GET /runs/:id": WRITER,
