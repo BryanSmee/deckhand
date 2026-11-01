@@ -12,6 +12,8 @@ import {
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
+import { sealWith } from "../lib/seal.mjs";
 import { nextEpoch, openStore, storable } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -404,4 +406,20 @@ test("file: a stream rewritten twice by another copy is read again whole, its in
     (await a.read("deliveries", "orchestrator")).map((e) => e.event.n),
     [204, 205, 206, 207, 208, 209, 210],
   );
+});
+
+test("a sealed value is never refused for a token's shape, and one sealed in base64url still opens", async () => {
+  const store = openStore("memory:");
+  const { seal, open } = sealWith(randomBytes(32), "test");
+  // No `_` (nor `-`) for a token's shape to start from, however many seals.
+  const sealed = seal("x".repeat(600));
+  assert.doesNotMatch(sealed, /[_-]/);
+  for (let i = 0; i < 2000; i++) await store.set("sealed", seal(randomBytes(400).toString("hex")));
+  // What earlier copies wrote, base64url: read back the same.
+  const urlSafe = sealed
+    .split(".")
+    .map((part) => Buffer.from(part, "base64").toString("base64url"))
+    .join(".");
+  assert.equal(open(urlSafe), "x".repeat(600));
+  assert.equal(open(sealed), "x".repeat(600));
 });

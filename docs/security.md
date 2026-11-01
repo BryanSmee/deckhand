@@ -19,7 +19,7 @@ and shares a network only with the services it calls or is called by
 | Service                                      | Holds                                                   | A hole in it gives                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | -------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [edge](#edge)                                | the webhook secret, the session key, the OAuth client's | forged deliveries and sessions (any allowed user's dashboard); through the github service, reads, the redeliveries and /setup's conversion (refused once an App is held) only: no token minted, no write                                                                                                                                                                                                                                                     |
-| [orchestrator](#the-orchestrator)            | nothing secret                                          | what it decides: runs started (each spec checked again by the runner against the grants), the App's writes through the github service, a run's first tokens with the claims it picks; no way out but the services it calls; the sandboxes reach its broker port through the proxy                                                                                                                                                                            |
+| [orchestrator](#the-orchestrator)            | nothing secret                                          | what it decides: runs started (each spec checked again by the runner against the grants), the App's writes through the github service, a run's first tokens with the claims it picks; no way out but the services it calls; no sandbox calls it (the egress proxy asks its egress policy)                                                                                                                                                                    |
 | [runner](#the-runner-service)                | the Docker socket or the Kubernetes API                 | with Docker, the host (the socket is root on it), and with it every service's secrets on that host (the App's key, the signing key, the agents' credentials, in their volumes); on Kubernetes, the runs' namespace. It holds no credential itself                                                                                                                                                                                                            |
 | [broker](#the-broker-service)                | the tokens' signing key                                 | every live run's inbox and digest, so it can direct their agents; tokens with any claims for a live run, handed to its sandbox at renewal, and so pushes through it to any repository the App is installed on (any branch but the default, as the push policies allow) and any of the operator's agent credentials; the `runs` stream the orchestrator reads (run ends, screenshots). Outside a live run's own network (or pod), none of its tokens is taken |
 | [github](#the-github-service)                | the App's key, its installation tokens                  | the App, on every repository it is installed on                                                                                                                                                                                                                                                                                                                                                                                                              |
@@ -27,10 +27,10 @@ and shares a network only with the services it calls or is called by
 | [policy](architecture.md#the-policy-service) | nothing secret                                          | wrong decisions for its callers: a run's capabilities, the grants the runner checks every spec against again, the runs' writes and pushes; no network but its callers', so nothing else                                                                                                                                                                                                                                                                      |
 | [egress proxy](#network)                     | Deckhand's CA                                           | the runs' traffic, and the hosts they are granted; every live run's tokens, used as its own sandbox (it is the one vouching for it), and so their pushes, writes and agent calls                                                                                                                                                                                                                                                                             |
 
-With Docker, the runs reach none of them directly: only the egress proxy is on their networks,
-and it relays their calls to the github service, the models service, the broker and the
-orchestrator's broker port, vouching for the sandbox each came from. On Kubernetes, the
-NetworkPolicy still lets sandboxes reach the orchestrator's 8081 directly (#567, #396).
+The runs reach none of them directly: only the egress proxy is on their networks (on
+Kubernetes, the only pods the NetworkPolicy lets them reach), and it relays their calls to the
+github service, the models service and the broker, vouching for the sandbox each came from. No
+sandbox calls the orchestrator: the proxy asks its egress policy about their connections.
 
 ## The default branch
 
@@ -319,27 +319,25 @@ run (the issues it created, the comments it posted, the reactions it added, the 
 reran) stays with the [github service](#the-github-service), in its store, by the run's id.
 
 **Bound to its sandbox.** `sandbox` is the ID of the run's own network (Docker) or of its pod
-(Kubernetes). Each service compares it with the ID of the network the call came from: the
-runner's answer for its source address, or, for a call the egress proxy relayed or
-forwarded, for the address the proxy names (`X-Deckhand-Client`, below). The broker service
-has no runner to ask: the proxy, when it forwards a sandbox's call about its own run there,
-names the network itself (`X-Deckhand-Sandbox`, the one the orchestrator's egress policy gave it
-for that connection), moves the sandbox's run token to `X-Deckhand-Run-Token` and sends its
-own service token; the broker believes those headers from the proxy alone, as its
-service token and the network it arrived on prove, and drops what a sandbox sent in them. IDs, not addresses or names: both are
-reused, an ID never. A token that leaks, to a research run on the open web say, gets another
+(Kubernetes). Each service compares it with the ID of the network the call came from, which the
+egress proxy names: when it relays or forwards a sandbox's call, it names the network itself
+(`X-Deckhand-Sandbox`, the one the orchestrator's egress policy gave it for that connection),
+moves the sandbox's credential apart (`X-Deckhand-Run-Token` for the broker and the models
+service, `X-Deckhand-Run-Authorization` for the github service) and sends its own service token;
+each service believes those headers from the proxy alone, as its service token and the network
+it arrived on prove, and the proxy drops what a sandbox sent in them. IDs, not addresses or
+names: both are reused, an ID never. A token that leaks, to a research run on the open web say, gets another
 sandbox neither GitHub, a push, nor calls on the operator's credentials: `403`. The run's
 container engine is on its network, so its calls count as the run's, as they did; no other
-container there does (the orchestrator's, the egress proxy's: `broker-http.mjs` `sandboxAt()`
-checks which container has the address), so a token can't ride on a call the proxy makes
-itself. When a run
+container there does (the egress proxy's: `egress-http.mjs` `taskWhere()` checks which
+container has the address), so a token can't ride on a call the proxy makes itself. When a run
 ends, the orchestrator forgets it and has the runner remove its network (or pod): its tokens are worth nothing
 from then on, before their `exp`.
 
 The same lookup finds a connection's run for **the egress policy** and for **GitHub calls
 that carry no token** (git's first request, a `curl` download): the runner tells which network
 (or pod) the address is on now, and which container has it there, the sandbox or its engine
-(`runner.locate()`, `broker-http.mjs` `taskWhere()`); nothing per run is kept, so another
+(`runner.locate()`, `egress-http.mjs` `taskWhere()`); nothing per run is kept, so another
 run's engine starting before its sandbox changes nothing for anyone (#517). The runner caches
 its answers for a few seconds, and forgets them whenever a network is created or removed or a
 container joins one.
@@ -542,9 +540,8 @@ dashboard's data, and the egress policy the proxy asks. It **holds no secret**: 
 settings is one (`test/networks.test.mjs` reads `compose.yaml`'s environments), and no secret's
 volume is mounted in it; its `data` volume holds its state. It **has no way
 out**: every network it is on is internal ([The services' networks](#the-services-networks)).
-Its ports: the services port (8083: the runner's `POST /runs/:run/tokens`, edge's `/edge/*`),
-the broker port (8081, which the egress proxy reaches under the name `listener`) and the egress policy's (8082).
-None is published.
+Its ports: the services port (8083: the runner's `POST /runs/:run/tokens`, edge's `/edge/*`)
+and the egress policy's (8082, the egress proxy's). None is published.
 
 - **One copy acts.** Two may run: the acting one holds the store's lease `orchestrator`
   (`lib/active.mjs`, 15 seconds, `LEASE_SECONDS`, renewed every third of its life); the other
@@ -713,8 +710,7 @@ the stream and the screenshots it copies; a run's first tokens, which it asks fo
 asks it (their claims are the orchestrator's, never the runner's); the runner the runs' inboxes
 and files it copies there; the proxy the sandboxes' calls about their own run. Each
 orchestrator call but a `GET` carries its fencing epoch, refused when stale (`409`, #506): a copy
-that lost its lease ends no run and gets no token signed. The sandboxes' endpoints take the orchestrator
-too (for the calls it relays). The models service asks it whether
+that lost its lease ends no run and gets no token signed. The models service asks it whether
 a run still goes, and its agent's provider (`GET /runs/:id`). Edge, on `broker-edge`, and the other
 services get their own service tokens there and nothing else.
 
@@ -788,14 +784,14 @@ redelivery.
 
 The runs' networks hold the egress proxy and the sandboxes only:
 from a sandbox, every service is reached through the proxy, which vouches for the sandbox
-(`X-Deckhand-Client`), never directly. Two services share a network only when one calls the
+(`X-Deckhand-Sandbox`), never directly. Two services share a network only when one calls the
 other, and a service is on no network it doesn't call or isn't called over, but its way out
 when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted hosts).
 `test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's, the
 runner's, the models service's and the github service's `SERVICE_NETWORKS` name each caller's own
 network, and checks which containers the runner joins to a run's network. The broker, the github
 service, the models service and edge are on none of them (#505, #502, #504, #506). Nor is
-the orchestrator: sandboxes reach it, under the name `listener`, through the proxy alone.
+the orchestrator: no sandbox calls it.
 
 **The models service's table** (`models/http.mjs` `ROUTES`): the proxy the sandboxes' agent calls
 (`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with the network it vouches they came
@@ -829,8 +825,7 @@ a network of its own rather than the proxy's `default`; `edge-orchestrator` (int
 conversion, the redeliveries, the App's reads). **The orchestrator** has no way out: every network
 it is on is internal (`broker-orchestrator`, `runner`, `github-orchestrator`, `policy`,
 `models-orchestrator`, `edge-orchestrator`, and `orchestrator-proxy`, where the egress proxy asks
-its egress policy and forwards the sandboxes' calls to its broker port, reaching it as
-`orchestrator` and, by an alias, `listener`). So a hole in the orchestrator reaches the internet
+its egress policy). So a hole in the orchestrator reaches the internet
 only through the services it calls, and a hole in edge reaches the orchestrator only through the
 ports above ([Edge](#edge)).
 
@@ -866,8 +861,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   there, such a call gets `401`). The proxy names the network (or pod) of the sandbox the
   orchestrator's egress policy found at that address, in an `X-Deckhand-Sandbox` header, replacing
   any the client sent (and drops one from every request it doesn't relay), with its own service
-  token: the github service believes it from the proxy alone (or the orchestrator relaying, which
-  finds it the same way), and binds the run token to it. A token that doesn't check, an
+  token: the github service believes it from the proxy alone, and binds the run token to it. A token that doesn't check, an
   unknown or finished run's, or any other credential, gets `401`; another sandbox's `403`; a run
   without `pull` (a research run: `readsGitHub()`) `403`, whatever it sends.
 - **Pushes** to GitHub's web host (`git-receive-pack`) are refused: they go to the git
@@ -1090,7 +1084,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   reach](#what-a-forks-code-may-reach)).
 - GitHub's content hosts (`*.githubusercontent.com`, `listener/egress.mjs`
   `githubContent()`), all of them, are relayed to the gateway too for such a run
-  (`listener/broker-http.mjs`): its file hosts (`GITHUB_FILES`: `raw.githubusercontent.com`,
+  (`listener/egress-http.mjs`): its file hosts (`GITHUB_FILES`: `raw.githubusercontent.com`,
   `media.githubusercontent.com` for LFS files, `patch-diff.githubusercontent.com` for diffs)
   for that check, the others (release assets, avatars…) as they are, read only,
   to the host they name. Both go on without a token, the sandbox's `Authorization` and
@@ -1577,8 +1571,8 @@ hooks, `.claude/settings.json`, before the model reads anything). Before either 
 
 What it can still reach is in [Not covered](#not-covered).
 
-No volume of the orchestrator's (or edge's) is mounted (#393). A run's files go through the broker's port
-(`run-files.mjs`, [Run files](architecture.md#run-files)), with the run token, which works
+No volume of the orchestrator's (or edge's) is mounted (#393). A run's files go through the broker
+service ([Run files](architecture.md#run-files)), with the run token, which works
 from its own sandbox only ([Run tokens](#run-tokens)), and only for its own run's files:
 
 - **Its inbox** (the comments delivered to it), **the egress proxy's CA and its digest**: read
@@ -2681,15 +2675,15 @@ holds to any host, so it holds almost nothing:
 
 ```
 sandbox ──(its run's network, internal: no route out)──▶ egress proxy ──▶ allowed hosts
-   └─────────────────────────────────────────────────▶ orchestrator, as `listener` (broker, Claude's API calls)
+                                                              └──▶ the broker, github and models services
 ```
 
 - Each run has a **network of its own**, named after the run and labelled with the
   deployment's `NAME_PREFIX`: the runner creates it before the sandbox and removes it with
-  the sandbox. Only three containers are on it (four with a
-  [container engine](#container-engine)): the sandbox, the orchestrator and the egress proxy, which the runner joins to it under the names sandboxes call them by (the host
-  names of `BROKER_URL` and `EGRESS_PROXY`: the orchestrator is `listener`, as sandboxes from
-  before it know it). Sandboxes can't reach each other, nor what
+  the sandbox. Only two containers are on it (three with a
+  [container engine](#container-engine)): the sandbox and the egress proxy, which the runner
+  joins to it under the name sandboxes call it by (the host of `EGRESS_PROXY`). Sandboxes
+  can't reach each other, nor what
   another run's setup started (a dev server, a database).
 - That network is **internal**: Docker gives it no route out. The runner creates it with
   `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
@@ -2737,17 +2731,18 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
   its reply, and finds a connection's run by the ID of the network its address is on now,
   never by an address it kept: Docker may give the address to another sandbox, which must not
   get the finished run's hosts.
-- The proxy forwards plain HTTP to `BROKER_URL`'s origin (`listener`, as sandboxes call it: the
-  agents' APIs, pushes, the run's files, each sent on to the service that serves it, the rest to
-  the orchestrator's broker port) once the policy, asked about
-  the broker (`broker=1`), allows it: only for a running sandbox or its engine, never a build or an install's own pod, nor
-  anyone else. It names the sandbox it came from (`x-deckhand-client`, replaced whatever the
-  sandbox sent), as for a relayed call: the broker turns that address into the ID of the network
-  (or pod) it is on, which the run's token is bound to, and believes the header from the
-  proxy's addresses alone. The path and query are set on the
-  broker's own URL, never parsed as a URL again, so a path such as `//host/x` stays a path
-  on the broker and never names another host. The proxy refuses the broker's `/egress` there,
-  its URL parsed first (`..`, `%2e`): the orchestrator answers it to the proxy only.
+- The proxy forwards plain HTTP to the services' names sandboxes call (`http://broker:8081`,
+  `http://github:8080`, `http://models:8080`: `lib/services.mjs` `SANDBOX_URLS`, the same in
+  every release) to its own URL for each (`BROKER_SERVICE_URL`, `GITHUB_SERVICE_URL`,
+  `MODELS_SERVICE_URL`), and only on the paths that service takes from sandboxes: the run's
+  token and files (`/run/…`) to the broker, pushes (`/git/…`) to the github service, the agents'
+  APIs (`/anthropic/`, `/openai/`, `/google/`) to the models service; anything else there is
+  `404`. Only once the policy, asked about the name (`forward=1`), allows it: for a running
+  sandbox or its engine, never a build or an install's own pod, nor anyone else, and never as a
+  tunnel. It names the network (or pod) the policy gave for the sandbox, as for a relayed call.
+  The path and query (its URL parsed first: `..`, `%2e`) are set on the service's own URL, never
+  parsed as a URL again, so a path such as `//host/x` stays a path on the service and never
+  names another host.
 - Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, and the
   run's container engine) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
@@ -2906,7 +2901,7 @@ for them, so every run of a repository reaches the same hosts.
 
 Each entry is a host name (`registry.npmjs.org`), `*.domain` (any subdomain, at any depth,
 not the domain itself: list both if you need both), or `*` (anything). Any port. An IP
-address or a name without a domain (`172.17.0.1`, `listener`) works too: you decide what sits
+address or a name without a domain (`172.17.0.1`, `cache`) works too: you decide what sits
 next to the sandboxes. Hosts you list may resolve to private addresses (`*` alone doesn't
 count, see above).
 
@@ -2918,18 +2913,18 @@ instructions and the dashboard's repository panel all name these files.
 
 **Mandatory hosts**, always allowed:
 
-| Host                      | For                                                                             |
-| ------------------------- | ------------------------------------------------------------------------------- |
-| `api.anthropic.com`       | Claude Code's runs only: WebFetch's domain check                                |
-| `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)    |
-| `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway)  |
-| `*.githubusercontent.com` | raw and LFS files, diffs, release downloads, avatars (relayed for checked runs) |
-| `listener`                | the broker and the agent's API calls, forwarded by the proxy (`BROKER_URL`)     |
+| Host                         | For                                                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `api.anthropic.com`          | Claude Code's runs only: WebFetch's domain check                                                      |
+| `github.com`                 | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)                          |
+| `api.github.com`             | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway)                        |
+| `*.githubusercontent.com`    | raw and LFS files, diffs, release downloads, avatars (relayed for checked runs)                       |
+| `broker`, `github`, `models` | the services' names: the run's token and files, pushes, the agent's API calls, forwarded by the proxy |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
 credential in `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`), `ANTHROPIC_API_KEY` or
-`ANTHROPIC_AUTH_TOKEN`, Claude Code sends its API calls to the broker's host (`ANTHROPIC_BASE_URL`, which the proxy sends to the models service,
+`ANTHROPIC_AUTH_TOKEN`, Claude Code sends its API calls to the models service's name (`ANTHROPIC_BASE_URL`, which the proxy forwards to the models service,
 see [The Claude credential](#the-claude-credential)) and nothing else but WebFetch's domain
 check to `api.anthropic.com`:
 
@@ -2942,15 +2937,16 @@ check to `api.anthropic.com`:
 Check it again when you change `CLAUDE_CODE_VERSION`. A refused host shows up in the
 orchestrator's logs (`Egress: refused <host> for <repo>#<n>`).
 
-A Codex run's mandatory hosts are GitHub's and `BROKER_URL`'s only: no `api.anthropic.com`,
+A Codex run's mandatory hosts are GitHub's and the services' names only: no `api.anthropic.com`,
 and no `api.openai.com` either. Checked against Codex 0.162.1 (the pinned `CODEX_VERSION`)
-through a proxy that logged every connection: with its calls sent to `BROKER_URL` and the
+through a proxy that logged every connection: with its calls sent to the models service's name
+(`OPENAI_BASE_URL`) and the
 settings `sandbox/agents/codex.sh` writes (analytics, update check, plugins, apps and remote
 plugins off), it opens none. Without them it reaches `chatgpt.com`, `ab.chatgpt.com`,
 `github.com` and `api.github.com` for its plugin marketplace and analytics. Its web search
 runs on OpenAI's side, in the API call. Check it again when you change `CODEX_VERSION`.
 
-An Antigravity CLI run's mandatory hosts are GitHub's, `BROKER_URL`'s, and `agy`'s own:
+An Antigravity CLI run's mandatory hosts are GitHub's, the services' names, and `agy`'s own:
 `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (relayed to the models service, see
 [The Antigravity CLI's login](#the-antigravity-clis-login)) and `antigravity-unleash.goog`
 (feature flags) and `lh3.googleusercontent.com` (the account's avatar, which its eligibility

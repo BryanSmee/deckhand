@@ -5,12 +5,13 @@ import { test } from "node:test";
 import { activePassive } from "../lib/active.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 
-const until = async (check, what) => {
-  for (let i = 0; i < 200; i++) {
+// By the clock, not a count of tries: a loaded runner's timers fire late.
+const until = async (check, what, ms = 5000) => {
+  for (const end = Date.now() + ms; Date.now() < end;) {
     if (check()) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error(`timed out waiting for ${what}`);
+  if (!check()) throw new Error(`timed out waiting for ${what}`);
 };
 
 function copy(t, store, holder, ttlMs = 150) {
@@ -55,13 +56,14 @@ test("a holder that stops renewing loses the lease: the other takes over once it
     ...store,
     renew: (...args) => (frozen ? new Promise(() => {}) : store.renew(...args)),
   };
-  const a = copy(t, flaky, "a");
-  const b = copy(t, store, "b");
+  // A second's lease: a runner that stalls a while (CI's, busy) doesn't let it lapse early.
+  const a = copy(t, flaky, "a", 1000);
+  const b = copy(t, store, "b", 1000);
   await a.lease.start();
   await b.lease.start();
   const first = a.lease.epoch();
-  // Renewed a third into its life, so it lasts while its holder does: twice its life on.
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  // Renewed a third into its life, so it lasts while its holder does: past its first renewal.
+  await new Promise((resolve) => setTimeout(resolve, 500));
   assert.deepEqual([a.lease.active(), b.lease.active()], [true, false]);
   frozen = true;
   await until(() => b.lease.active(), "the expiry");

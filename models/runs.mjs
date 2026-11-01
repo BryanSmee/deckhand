@@ -164,8 +164,8 @@ export function createRuns({
     if (found.sandbox && found.sandbox !== claims.sandbox) {
       return { status: 403, message: NOT_ITS_SANDBOX };
     }
-    // The token's claim, else (a token from before it) the broker's record.
-    const agent = claims.agent ?? found;
+    // The token's claim: none, no provider.
+    const agent = claims.agent ?? null;
     const provider = typeof agent?.provider === "string" ? agent.provider : null;
     const credential = typeof agent?.credential === "string" ? agent.credential : null;
     return { run: view(claims.jti, provider, credential), claims };

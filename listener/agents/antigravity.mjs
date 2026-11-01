@@ -11,6 +11,7 @@
 // service (../../models/google.mjs), which puts the plan's access token in its place. Security model: ../../docs/security.md.
 import { GOOGLE_CREDENTIALS } from "./credentials.mjs";
 import { installSpec, normalizer } from "./common.mjs";
+import { SANDBOX_URLS } from "../../lib/services.mjs";
 
 // Deckhand's tiers → the plan's models (`agy models` lists them, each with its effort as a
 // suffix; on a Gemini API key, antigravity.sh declares Argon itself). The operator can point
@@ -102,7 +103,7 @@ export const antigravity = {
   // (antigravity.sh, DECKHAND_AGENT_TOKEN).
   env: (config, secret) =>
     config?.agyCredential === "GEMINI_API_KEY"
-      ? { GEMINI_API_KEY: secret, GOOGLE_GEMINI_BASE_URL: `${config.brokerUrl}/google` }
+      ? { GEMINI_API_KEY: secret, GOOGLE_GEMINI_BASE_URL: `${SANDBOX_URLS.models}/google` }
       : { DECKHAND_AGENT_TOKEN: secret },
   secrets: GOOGLE_CREDENTIALS,
   providers: { google: { secrets: GOOGLE_CREDENTIALS } },

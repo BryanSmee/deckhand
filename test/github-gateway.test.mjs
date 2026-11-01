@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
-import { createBroker } from "../listener/broker.mjs";
 import { readsOf } from "../listener/github-app.mjs";
 import { createGraphqlChecks } from "../listener/github-graphql.mjs";
 import {
@@ -18,7 +17,7 @@ import {
   secretOf,
 } from "../listener/github-gateway.mjs";
 import { createReadChecks } from "../listener/github-writes.mjs";
-import { defaultPolicies, hasOpa, sandboxAt, serve } from "./helpers.mjs";
+import { defaultPolicies, hasOpa, serve, tokenBroker } from "./helpers.mjs";
 
 const TOKEN = "repo-token-0123456789abcdef";
 const OPERATOR = "operator-key-0123456789abcdef";
@@ -28,14 +27,15 @@ const WORK_READS = ["pull", "read:issues", "read:pulls", "read:actions"];
 const READS = readsOf(WORK_READS);
 
 // A fake GitHub, on GitHub Enterprise Server's layout (its API under /api/v3, on the web's
-// host), and a gateway in front of it. `anonymous`: the run a call without a secret is from.
+// host), and a gateway in front of it. `anonymous`: the run a call without a token is from.
+// `address`: where its runs' sandbox is (127.0.0.1, the tests', by default).
 // `checkWrite`: what the REST writes are held to (github-writes.mjs): here, nothing; null, the
 // gateway's own default. `checkGraphql`: the same for GraphQL (github-graphql.mjs): here, its
 // body goes on as a read.
 async function gateway(
   t,
   {
-    sentFrom = sandboxAt(),
+    address = "127.0.0.1",
     app = true,
     maxInFlight,
     hold,
@@ -63,7 +63,7 @@ async function gateway(
       res.end(JSON.stringify({ url: req.url }));
     });
   });
-  const broker = createBroker({ sentFrom });
+  const broker = tokenBroker({ address });
   const minted = [];
   const fake = {
     repoToken: async (repo, extra) => (minted.push([repo, extra]), { token: TOKEN }),
@@ -90,12 +90,12 @@ async function gateway(
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it: by default with the reads a work run's token had
-  // before capabilities.
+  // before capabilities. `secret`: its run token.
   const register = (options = {}) => {
-    const secret = broker.register("Org/Repo", { caps: WORK_READS, ...options });
+    const id = broker.register("Org/Repo", { caps: WORK_READS, ...options });
     const notes = [];
-    broker.provide(secret, "anthropic", (line) => notes.push(line));
-    return { secret, notes, run: broker.runOf(secret) };
+    broker.provide(id, "anthropic", (line) => notes.push(line));
+    return { secret: broker.token(id), notes, run: broker.runOf(id) };
   };
   // A call as the proxy relays it: /relay/<host><path>.
   const call = (path, { secret, auth, method = "GET", body, headers = {}, redirect } = {}) =>
@@ -191,7 +191,7 @@ test("a call without a secret is its sandbox's run's, found by its address", asy
 });
 
 test("another run's secret, a finished run's, another sandbox's or a research run's: nothing", async (t) => {
-  const gw = await gateway(t, { sentFrom: sandboxAt("10.9.0.5") });
+  const gw = await gateway(t, { address: "10.9.0.5" });
   const { secret } = gw.register();
   const answers = [];
   const ask = async (options) => {
@@ -201,7 +201,7 @@ test("another run's secret, a finished run's, another sandbox's or a research ru
   await ask({ secret: "guess" });
   await ask({ auth: "Basic" });
   await ask({ auth: "Negotiate x" });
-  // The right secret, sent from the tests' address rather than its sandbox's.
+  // The right token, sent from the tests' address rather than its sandbox's.
   await ask({ secret });
   const research = gw.register({ caps: ["internet"] });
   const ok = await gateway(t);

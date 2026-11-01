@@ -14,10 +14,6 @@
 //   close(run)           no more messages: the agent exits once it has answered (or is
 //                        stopped if it stays silent after that, runs.mjs linger())
 //   closed(run)          whether close() was called, for a listener that restarts
-//   poll(run, from, opts)  the inbox's whole lines after byte `from`, waiting for one up to
-//                        `timeout` ms (the sandbox's long poll, ../run-files.mjs); null
-//                        without an inbox
-//   file(run, name)      the run's "ca" (the egress proxy's) or "digest", or null
 //   wait(name)           until it exits
 //   kill(name)           ends it now (a cancelled run, or one silent after its answer):
 //                        SIGTERM, then SIGKILL after 10 s
@@ -30,9 +26,8 @@
 //   locate(ip)           { sandbox, name }: the ID of the run's network that address is on (its
 //                        pod's UID, on Kubernetes) and the container that has it there
 //                        (Kubernetes names none: the pod is the sandbox), or null: what the
-//                        run's tokens are bound to, once the broker knows that container is
-//                        the run's sandbox or engine (../broker-http.mjs sandboxAt())
-//   sandboxIdOf(name, run)  the ID of a run's network (its pod's UID), or null
+//                        run's tokens are bound to, once the egress policy knows that
+//                        container is the run's sandbox or engine (../egress-http.mjs taskWhere())
 //
 // This file composes its parts, which share `docker`: inbox.mjs (the messages' file and the
 // run's other files, which the sandbox fetches from the broker rather than mounts),
@@ -117,10 +112,9 @@ export function createDockerRunner({
   inboxDir, // the runs folder, in the listener's own volume
   log = () => {},
   now = Date.now,
-  timers, // inbox.mjs poll()'s clock
   mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
 }) {
-  const inbox = createInbox({ inboxDir, timers, mirror });
+  const inbox = createInbox({ inboxDir, mirror });
   const networks = createNetworks({ config, docker, log, now });
   const engines = createEngines({ config, docker });
   // Runs whose network exists before their sandbox does: relink() leaves them alone.
@@ -165,7 +159,7 @@ export function createDockerRunner({
       // Not secrets: where the engine and the run's files are, as values.
       const engineVars = {
         ...(started ? engineEnv(started.backend) : {}),
-        ...inbox.env(config.brokerUrl, ca, digest),
+        ...inbox.env(ca, digest),
       };
       await recheck();
       checked(
@@ -329,9 +323,7 @@ export function createDockerRunner({
     send: inbox.send,
     close: inbox.close,
     closed: inbox.closed,
-    poll: inbox.poll,
     resync: inbox.resync,
-    file: inbox.file,
     wait,
     kill,
     remove,
@@ -339,7 +331,5 @@ export function createDockerRunner({
     relink: createRelink({ config, docker, log, list, starting, networks, engines }),
     proxyAddresses: networks.proxyAddresses,
     locate: networks.locate,
-    // Its network is named after the run.
-    sandboxIdOf: (name, run) => networks.idOf(run).catch(() => null),
   };
 }

@@ -41,7 +41,7 @@ deckhand_messages() {
 # The run token (DECKHAND_RUN_TOKEN, ../listener/broker.mjs), in a file on a tmpfs rather than
 # the environment, which a running process never reads again: deckhand-token prints it to gh,
 # git and the rest, and renews it every few minutes in the background until the sandbox stops,
-# as it lasts 15. A run started before tokens has DECKHAND_RUN_SECRET instead.
+# as it lasts 15.
 if [ -n "${DECKHAND_RUN_TOKEN:-}" ]; then
   if [ -z "${DECKHAND_TOKEN_FILE:-}" ]; then
     DECKHAND_TOKEN_FILE=/dev/shm/deckhand/run-token
@@ -60,8 +60,8 @@ if [ -n "${DECKHAND_RUN_TOKEN:-}" ]; then
   fi
 fi
 
-# The run's files on the broker (../listener/run-files.mjs), rather than in a volume shared
-# with the listener: the egress proxy's CA and the run's digest, fetched once into files of
+# The run's files on the broker service (../broker/http.mjs), rather than in a volume shared
+# with the orchestrator: the egress proxy's CA and the run's digest, fetched once into files of
 # the sandbox's own, which DECKHAND_CA and TASK_DIGEST then name. A path (a sandbox started by
 # hand) is used as it is. Without them the run can't do its job: it stops (set -e). `$1`: the
 # folder (/tmp/deckhand, reserved in repo-config.mjs).
@@ -86,10 +86,10 @@ if [ -n "${SCREENSHOT_DIR:-}" ]; then
   [ -z "${DECKHAND_BROKER_URL:-}" ] || deckhand-files shots --watch >&2 < /dev/null &
 fi
 
-# The egress proxy's CA (DECKHAND_CA, a file from the listener for every run that reaches
-# GitHub, whose calls the proxy relays to the listener's GitHub gateway, and when the
-# repository's grant has cached_hosts or the agent's calls are relayed to the listener): the
-# proxy decrypts those hosts' HTTPS to hand it to the listener, or to cache it. Trusted next to the
+# The egress proxy's CA (DECKHAND_CA, a file from the broker for every run that reaches GitHub,
+# whose calls the proxy relays to the github service's GitHub gateway, and when the
+# repository's grant has cached_hosts or the agent's calls are relayed to the models service):
+# the proxy decrypts those hosts' HTTPS to hand it to the service, or to cache it. Trusted next to the
 # image's own roots, in a bundle of ours (`node` can't run update-ca-certificates), through
 # the variables each tool reads, and by Chromium, which reads its own store (~/.pki/nssdb).
 if [ -n "${DECKHAND_CA:-}" ] && [ -f "$DECKHAND_CA" ]; then
@@ -240,12 +240,12 @@ clean_git_dir() {
 
 # Every start, not just the clone's: the hook may change with the image.
 [ -n "${SANDBOX_NO_CLONE:-}" ] || cp /usr/local/share/git-hooks/pre-push /workspace/.git/hooks/pre-push
-# The GitHub gateway's tokens only read, and it refuses pushes: they go through the listener's
-# git gateway, which refuses the base branch whatever the hook above says
-# (../listener/git-gateway.mjs). Not for light runs, which the git gateway refuses anyway: their
-# push fails at the GitHub gateway instead.
-if [ -n "${DECKHAND_BROKER_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ] && [ -z "${SANDBOX_NO_CLONE:-}" ]; then
-  git config --global "url.$DECKHAND_BROKER_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
+# The GitHub gateway's tokens only read, and it refuses pushes: they go through the github
+# service's git gateway (DECKHAND_GIT_URL), which refuses the base branch whatever the hook above
+# says (../listener/git-gateway.mjs). Not for light runs, which the git gateway refuses anyway:
+# their push fails at the GitHub gateway instead.
+if [ -n "${DECKHAND_GIT_URL:-}" ] && [ -z "${SANDBOX_LIGHT:-}" ] && [ -z "${SANDBOX_NO_CLONE:-}" ]; then
+  git config --global "url.$DECKHAND_GIT_URL/git/.pushInsteadOf" "${REPO_URL%/*/*}/"
 fi
 
 # The run's container engine (../listener/runner/engine.mjs): the containers it builds and

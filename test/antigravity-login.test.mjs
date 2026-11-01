@@ -1,7 +1,7 @@
 // The Antigravity CLI's plan login, held by the models service: refreshed by `agy` itself in a
 // short container the runner starts (a fake docker here), once for concurrent calls and every
 // copy of the service, kept sealed in its store, re-read when replaced, and a refused refresh
-// says to sign in again. And its endpoint (google.mjs): the run's secret in,
+// says to sign in again. And its endpoint (google.mjs): the run's agent token in,
 // the plan's access token out, on the paths `agy` calls only.
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -13,9 +13,8 @@ import { createAntigravityLogin } from "../models/antigravity-login.mjs";
 import { loginSeal } from "../models/logins.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
 import { loginRefresh } from "../runner/service.mjs";
-import { createBroker } from "../listener/broker.mjs";
 import { createGoogleRelay } from "../models/google.mjs";
-import { sandboxAt, serve, tempDir } from "./helpers.mjs";
+import { serve, tempDir, tokenBroker } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-17T12:00:00Z");
 const config = {
@@ -275,7 +274,7 @@ async function fakeGoogle(t, status = 200) {
 
 async function relay(t, options = {}) {
   const google = await fakeGoogle(t, options.status);
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const refusedTokens = [];
   // `login: null`: the operator set none.
   const plan =
@@ -293,11 +292,11 @@ async function relay(t, options = {}) {
     upstream: () => options.upstream ?? google.url,
   });
   const { url } = await serve(t, (req, res) => endpoint.handle(req, res));
-  // An Antigravity CLI run's secret, as runs.mjs registers it.
+  // An Antigravity CLI run's agent token, as runs.mjs registers it.
   const run = (provider = "google") => {
-    const secret = broker.register("org/repo");
-    broker.provide(secret, provider);
-    return secret;
+    const id = broker.register("org/repo");
+    broker.provide(id, provider);
+    return broker.agentToken(id);
   };
   return { url, google, run, endpoint, refusedTokens, broker };
 }
@@ -310,7 +309,7 @@ const call = (url, path, secret, init = {}) =>
     ...init,
   });
 
-test("the run's secret is swapped for the plan's access token, the answer streamed back", async (t) => {
+test("the run's agent token is swapped for the plan's access token, the answer streamed back", async (t) => {
   const { url, google, run, endpoint } = await relay(t);
   const secret = run();
   const res = await call(
@@ -419,7 +418,7 @@ test("a login that can't be refreshed: its error stays in the models service's l
   const leak = new Error('can\'t be refreshed ({"token":{"access_token":"ya29.plan-access-tok');
   const logs = [];
   const google = await fakeGoogle(t);
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const endpoint = createGoogleRelay({
     runs: broker,
     login: {
@@ -431,7 +430,7 @@ test("a login that can't be refreshed: its error stays in the models service's l
     log: (line) => logs.push(line),
   });
   const { url } = await serve(t, (req, res) => endpoint.handle(req, res));
-  const secret = broker.register("org/repo");
+  const secret = broker.agentToken(broker.register("org/repo"));
   broker.provide(secret, "google");
   const res = await call(
     url,

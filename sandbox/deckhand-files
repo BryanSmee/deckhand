@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// The run's files on the broker (../listener/run-files.mjs), with the run token (deckhand-token):
+// The run's files on the broker service (../broker/http.mjs), with the run token (deckhand-token):
 //
 //   deckhand-files get <url> <path>   fetches the egress proxy's CA or the run's digest into
 //                                     <path> (entrypoint.sh, at start), retrying for a minute

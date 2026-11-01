@@ -19,9 +19,19 @@ import { gitBlob } from "../listener/images.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { createRuns, runFields } from "../broker/runs.mjs";
+import { createBroker } from "../listener/broker.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
-import { keyFolder, keyId } from "../lib/tokens.mjs";
+import {
+  AGENT_AUDIENCE,
+  isToken,
+  keyFolder,
+  keyId,
+  RUN_AUDIENCE,
+  signToken,
+  TOKEN_TTL_MS,
+  TOKEN_VERSION,
+} from "../lib/tokens.mjs";
 import { allowOnly, builtInPolicies, createEngine } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
 import { createPolicyService, ROUTES } from "../policy-service/service.mjs";
@@ -63,14 +73,6 @@ export async function serve(t, handle) {
   return { url: `http://127.0.0.1:${port}`, server, port };
 }
 
-// A broker's `sentFrom` (broker.mjs) for a sandbox at `address`: the tests' requests come from
-// 127.0.0.1, so another address stands for a secret sent from another sandbox.
-export function sandboxAt(address = "127.0.0.1") {
-  const asked = [];
-  const sentFrom = async (run, ip) => (asked.push({ run, ip }), ip === address);
-  return Object.assign(sentFrom, { asked });
-}
-
 // A signing key of the test's own: { privateKey, publicKey, kid }.
 export function testKey() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -93,6 +95,50 @@ export function localBroker({ now = Date.now, key = testKey() } = {}) {
     end: (id) => runs.end(id),
   };
   return { issuer, keys: () => new Map([[key.kid, key.publicKey]]), runs, store, key };
+}
+
+// A broker (../listener/broker.mjs) whose runs' tokens the test signs at once, from what the run
+// may do then (its branches, capabilities, provider), as the broker service would: `token(run)`
+// for the gateways, `agentToken(run)` for the agents' endpoints, both bound to `net-1`, the
+// network the tests' requests are on when they come from `address` (127.0.0.1: another address
+// stands for another sandbox). Its other calls take one of those tokens in place of the run's
+// handle too. `options`: createBroker()'s, over these.
+export function tokenBroker({ address = "127.0.0.1", ...options } = {}) {
+  const local = localBroker();
+  const broker = createBroker({
+    ...local,
+    sandboxOf: async (ip) => (ip === address ? "net-1" : null),
+    ...options,
+  });
+  const jtiOf = (token) => JSON.parse(Buffer.from(token.split(".")[1], "base64url")).jti;
+  const idOf = (handle) => (isToken(handle) ? jtiOf(handle) : handle);
+  for (const name of ["runOf", "provide", "allow", "grant", "revoke", "watchPushes", "secretsOf"]) {
+    const call = broker[name];
+    broker[name] = (handle, ...rest) => call(idOf(handle), ...rest);
+  }
+  const sign = (handle, audience) => {
+    const run = broker.runOf(handle);
+    const claims = {
+      ver: TOKEN_VERSION,
+      jti: run.id,
+      repo: run.repo,
+      mode: run.mode,
+      issue: run.issue,
+      fork: run.fork,
+      branches: run.branches,
+      sandbox: "net-1",
+      caps: run.caps,
+      ...(run.provider && { agent: { provider: run.provider, credential: run.credential } }),
+    };
+    const now = options.now?.() ?? Date.now();
+    const { privateKey, kid } = local.key;
+    return signToken(claims, { privateKey, kid, audience, ttlMs: TOKEN_TTL_MS, now });
+  };
+  return Object.assign(broker, {
+    token: (handle) => sign(handle, RUN_AUDIENCE),
+    agentToken: (handle) => sign(handle, AGENT_AUDIENCE),
+    service: local,
+  });
 }
 
 // Retried: a process the test stopped may still be writing there.

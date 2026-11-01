@@ -1,19 +1,12 @@
 // The orchestrator's calls to the broker service (../broker/, #505), which alone holds the tokens'
 // signing key: the runs' first tokens and their end (broker.mjs `issuer`), the public keys the
-// listener checks tokens with, each run's inbox and files (runner/inbox.mjs `mirror`), the
-// sandboxes' calls that reach the listener rather than the broker (relay()), and the broker's
-// `runs` stream, read and acknowledged (consume()). The orchestrator's (#506), with its fencing
+// listener checks tokens with, each run's inbox and files (runner/inbox.mjs `mirror`), and the
+// broker's `runs` stream, read and acknowledged (consume()). The orchestrator's (#506), with its fencing
 // epoch; edge and the github service take its keys from it too.
-import { createPrivateKey, createPublicKey, randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createPublicKey, randomBytes } from "node:crypto";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { SHOT_FOLDER, SHOT_NAME } from "../lib/shots.mjs";
-import { keyId, LEGACY_KEY_MS } from "../lib/tokens.mjs";
-
-// The headers the broker reads a sandbox's call by (../broker/http.mjs): the network (or pod)
-// it came from, as the listener vouches for it here, and its run token.
-import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 
 // How often the public keys are read again (a key rotated), and how soon after a failure.
@@ -26,46 +19,11 @@ export const INBOX_CHUNK = 1024 * 1024;
 
 const enc = encodeURIComponent;
 
-// The key the listener signed run tokens with before the broker service (`run-token.key` in its
-// data volume, #493): its public part only, kept as `run-token.pub` for as long as one of its
-// tokens may still be presented (LEGACY_KEY_MS), the private one removed, so that the signing
-// key is in the broker's containers alone. → its PEM, or null.
-export function legacyKey(dataDir, { now = Date.now, log = () => {} } = {}) {
-  const keyPath = join(dataDir, "run-token.key");
-  const pubPath = join(dataDir, "run-token.pub");
-  let pem = null;
-  try {
-    pem = readFileSync(keyPath, "utf8");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
-  }
-  if (pem) {
-    const publicKey = createPublicKey(createPrivateKey(pem));
-    const saved = readJson(pubPath, null);
-    writeJsonAtomic(pubPath, {
-      pem: publicKey.export({ type: "spki", format: "pem" }),
-      at: saved?.at ?? now(),
-    });
-    rmSync(keyPath, { force: true });
-    log(
-      `Broker: run-token.key removed, its public key kept in run-token.pub for the running sandboxes' tokens: the broker service signs them now`,
-    );
-  }
-  const saved = readJson(pubPath, null);
-  if (!saved?.pem) return null;
-  if (now() - saved.at > LEGACY_KEY_MS) {
-    rmSync(pubPath, { force: true });
-    return null;
-  }
-  return saved.pem;
-}
-
-// `caller`: lib/broker-client.mjs createBrokerCaller()'s. `legacy`: legacyKey()'s PEM, or null.
+// `caller`: lib/broker-client.mjs createBrokerCaller()'s.
 // `epoch()`: the orchestrator's fencing epoch, on each of its calls but a GET (#506); null for
 // a service that has none (edge, the github service: they only read the keys).
 export function createBrokerService({
   caller: unfenced,
-  legacy = null,
   epoch = () => null,
   log = () => {},
   setTimer = setTimeout,
@@ -82,13 +40,8 @@ export function createBrokerService({
       });
     },
   };
-  // kid → public key: the broker's run keys, and the legacy one from the start.
+  // kid → public key: the broker's keys.
   let keys = new Map();
-  const legacyKeys = new Map();
-  if (legacy) {
-    const publicKey = createPublicKey(legacy);
-    legacyKeys.set(keyId(publicKey), publicKey);
-  }
   let stopped = false;
   const timers = new Set();
   function later(fn, ms) {
@@ -141,22 +94,6 @@ export function createBrokerService({
     } catch (error) {
       log(`Broker: its keys (${error.message}), asking again`);
       later(refreshKeys, RETRY_MS);
-    }
-  }
-
-  // The legacy key handed to the broker, for the renewals of the tokens it signed: asked again
-  // until it is taken.
-  async function importLegacy() {
-    if (!legacy) return;
-    try {
-      await ok(await caller.call("POST", "/keys", { body: { pem: legacy } }), "the old key");
-    } catch (error) {
-      // Refused for good (past the broker's first days, say): said once, not asked again.
-      if (error.status >= 400 && error.status < 500) {
-        return log(`Broker: the listener's old key refused (${error.message})`);
-      }
-      log(`Broker: handing over the listener's old key (${error.message}), trying again`);
-      later(importLegacy, RETRY_MS);
     }
   }
 
@@ -254,35 +191,6 @@ export function createBrokerService({
 
   const forget = (run) => inboxes.delete(run);
 
-  // --- Sandboxes that reach the listener rather than the broker ---------------------------
-
-  // A sandbox's call about its own run (`/run/…`), on to the broker with the network (or pod)
-  // `sandbox` the listener found it came from, as the proxy would: a proxy from before the
-  // broker service sends them here, and so do sandboxes from before #511, directly. `token`:
-  // the run token it sent.
-  // `path`: the call's, checked (broker-http.mjs runPath()): the listener's service token goes
-  // with it, so it is never req.url as sent.
-  async function relay(req, res, { sandbox, token, path }) {
-    const kept = ["content-type", "content-length", "transfer-encoding"];
-    const answer = await caller.call(req.method, path, {
-      // As it comes: an upload is counted against the run's cap while it does.
-      body: req,
-      headers: {
-        ...Object.fromEntries(kept.filter((h) => req.headers[h]).map((h) => [h, req.headers[h]])),
-        [SANDBOX_HEADER]: sandbox ?? "",
-        [RUN_TOKEN_HEADER]: token,
-      },
-      // An inbox's long poll waits 25 s.
-      timeout: 60_000,
-    });
-    const { "content-type": type, "cache-control": cache } = answer.headers;
-    res.writeHead(answer.status, {
-      ...(type && { "content-type": type }),
-      ...(cache && { "cache-control": cache }),
-    });
-    res.end(answer.body);
-  }
-
   // --- The broker's stream ---------------------------------------------------------------
 
   // The screenshot an event names, copied into the folder GET /shots/ serves, then deleted at
@@ -370,15 +278,13 @@ export function createBrokerService({
 
   return {
     issuer,
-    keys: () => new Map([...legacyKeys, ...keys]),
-    // The broker's alone, for the service tokens it signs (services-http.mjs): never the
-    // listener's from before it, which only run tokens it signed are checked with.
+    keys: () => keys,
+    // The same, for the service tokens it signs (services-http.mjs).
     serviceKeys: () => keys,
     unknownKey,
     async start() {
       caller.start();
       await refreshKeys();
-      await importLegacy();
     },
     stop() {
       stopped = true;
@@ -391,7 +297,6 @@ export function createBrokerService({
     reconcile,
     persist,
     mirror: { files, sync, forget },
-    relay,
     consume,
     readKeys,
   };

@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
-import { createServer, request } from "node:http";
+import { request } from "node:http";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
@@ -69,15 +69,13 @@ async function startEdge(t) {
     });
     res.writeHead(200, { "content-type": "application/json" }).end('{"answered":true}');
   });
-  const probe = createServer();
-  const internalPort = await listening(probe);
-  await new Promise((resolve) => probe.close(resolve));
   const child = spawn(process.execPath, ["edge/server.mjs"], {
     cwd: new URL("..", import.meta.url).pathname,
     env: {
       PATH: process.env.PATH,
       PORT: "0",
-      INTERNAL_PORT: String(internalPort),
+      // A port the OS picks, as for PORT: one probed free first may be another test's by then.
+      INTERNAL_PORT: "0",
       DATA_DIR: dir,
       ALLOWED_USERS: "alice",
       PUBLIC_URL: "https://hooks.example.com",
@@ -102,7 +100,7 @@ async function startEdge(t) {
       child.on("exit", (code) => (clearInterval(timer), reject(new Error(`exit ${code}: ${out}`))));
     });
   const port = Number((await until(/Listening on :(\d+)\n/))[1]);
-  await until(`Internal port on :${internalPort}`);
+  const internalPort = Number((await until(/Internal port on :(\d+)\n/))[1]);
   const asOrchestrator = `Bearer ${signServiceToken({ sub: "orchestrator", aud: "edge" }, key)}`;
   const internal = (path, init = {}) =>
     fetch(`http://127.0.0.1:${internalPort}${path}`, {

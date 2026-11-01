@@ -292,7 +292,7 @@ export function createImages({
     // Why there are none, when there aren't.
     noCaches: keepsCaches ? null : (backend.noCaches ?? `the ${config.runner} runner keeps none`),
     // The egress proxy's answer for a caller that isn't a sandbox (its builder, an install),
-    // or null (broker-http.mjs).
+    // or null (egress-http.mjs).
     egressFor: async (ip, host) => (await backend.egressFor?.(ip, host)) ?? null,
     building: () => [...builds.keys()],
   };

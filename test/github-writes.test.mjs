@@ -4,7 +4,6 @@
 // allow everything. GraphQL's are github-graphql.test.mjs's.
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createBroker } from "../listener/broker.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { createGithubGateway } from "../listener/github-gateway.mjs";
 import {
@@ -24,9 +23,9 @@ import {
   localService,
   policyEngine,
   policyEngineOf,
-  sandboxAt,
   serve,
   hasOpa,
+  tokenBroker,
 } from "./helpers.mjs";
 
 const json = (value) => Buffer.from(JSON.stringify(value));
@@ -2292,7 +2291,7 @@ test("a rerun through the gateway: its installation's Actions permission named f
   const { lookup: resolving } = rerunLookup();
   const looked = [];
   const lookup = (repo, path) => (looked.push(path), resolving(repo, path));
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const checks = createWriteChecks({
     policies: allowingPolicies,
     needsInputLabel: () => null,
@@ -2307,12 +2306,15 @@ test("a rerun through the gateway: its installation's Actions permission named f
     wroteWrite: checks.answered,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
-  const secret = broker.register("org/repo", {
-    mode: "work",
-    push: true,
-    issue: 1,
-    caps: ["pull", "read:issues", "read:pulls", "read:actions"],
-  });
+  // The run's token: the gateway reads what it may do from the run itself.
+  const secret = broker.token(
+    broker.register("org/repo", {
+      mode: "work",
+      push: true,
+      issue: 1,
+      caps: ["pull", "read:issues", "read:pulls", "read:actions"],
+    }),
+  );
   broker.allow(secret, ["issue-1-*"]);
   const rerun = () =>
     fetch(`${url}/relay/127.0.0.1/repos/org/repo/actions/runs/100/rerun-failed-jobs`, {
@@ -2493,7 +2495,7 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
     operator: { "writes.rego": "package deckhand\n" },
     messages: (input) => (input.action === "comment" ? ["no comments today"] : []),
   });
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = tokenBroker();
   const gw = createGithubGateway({
     broker,
     app: () => ({ repoToken: async () => ({ token: "t-0123456789abcdef" }) }),
@@ -2506,12 +2508,14 @@ test("a policy's refusal reaches the agent through the gateway, in GitHub's erro
     }).check,
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
-  const secret = broker.register("org/repo", {
-    mode: "work",
-    push: true,
-    issue: 1,
-    caps: ["pull", "read:issues", "read:pulls", "read:actions"],
-  });
+  const secret = broker.token(
+    broker.register("org/repo", {
+      mode: "work",
+      push: true,
+      issue: 1,
+      caps: ["pull", "read:issues", "read:pulls", "read:actions"],
+    }),
+  );
   const notes = [];
   broker.provide(secret, "anthropic", (line) => notes.push(line));
   const post = (path, body) =>

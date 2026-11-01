@@ -5,6 +5,8 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { activePassive } from "../lib/active.mjs";
@@ -34,7 +36,6 @@ const config = {
   limits: { cpus: "1", memory: "1g", pids: 256 },
   githubUrl: "https://github.com",
   githubApi: "https://api.github.com",
-  brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
   egressContainer: "",
   engine: null,
@@ -74,14 +75,18 @@ function host({ lines = ['{"type":"result","result":"Done."}'] } = {}) {
     calls.push({ args, env: opts.env });
     return fake.docker(args);
   };
-  const runner = createDockerRunner({
-    config,
-    docker,
-    spawn: logsSpawn(lines),
-    inboxDir: tempDir(null, "deckhand-runs-"),
-  });
+  const inboxDir = tempDir(null, "deckhand-runs-");
+  const runner = createDockerRunner({ config, docker, spawn: logsSpawn(lines), inboxDir });
   const runs = () => calls.filter((c) => c.args[0] === "run").length;
-  return { ...fake, calls, runner, runs };
+  // A run's inbox file, as the broker gets a copy of it.
+  const inbox = (run) => {
+    try {
+      return readFileSync(join(inboxDir, run, "inbox.jsonl"), "utf8");
+    } catch {
+      return null;
+    }
+  };
+  return { ...fake, calls, runner, runs, inbox };
 }
 
 // One copy of the runner service, listening; its lease on `store` (shared by the copies).
@@ -206,9 +211,11 @@ test("each caller gets its own endpoints only, from its own network, with a vali
     await status("GET", "/addresses/10.0.0.9", { sub: "orchestrator", epoch: null }),
     200,
   );
+  assert.equal(await status("GET", "/proxy-addresses", { sub: "orchestrator", epoch: null }), 200);
+  // The inbox is the broker's to serve: the runner keeps no route for it.
   assert.equal(
     await status("GET", "/runs/dh-o-a-1-1/inbox?from=0", { sub: "orchestrator", epoch: null }),
-    404,
+    403,
   );
   assert.equal(await status("GET", "/sandboxes", { sub: "orchestrator", epoch: null }), 400);
   assert.equal(await status("GET", "/addresses/10.0.0.9", { sub: "edge" }), 403);
@@ -450,12 +457,12 @@ test("output, messages and the inbox through the client: what was read is skippe
   // A runner that isn't there: follow() says so and ends, never throws (its caller asks again).
   const gone = client("http://127.0.0.1:9", { runWaitMs: 50 }).runner;
   await gone.follow("dh-o-a-1", { onOut: () => assert.fail(), onErr: () => assert.fail() });
-  // Messages in order, the close after them; the inbox read by the broker's poll.
+  // Messages in order, the close after them, in the inbox the broker gets a copy of.
   await runner.send("dh-o-a-1-1", "First", { name: "claude", message: (t) => t });
   runner.send("dh-o-a-1-1", "Second");
   await runner.close("dh-o-a-1-1");
   assert.equal(await runner.closed("dh-o-a-1-1"), true);
-  const lines = (await runner.poll("dh-o-a-1-1", 0)).toString().trim().split("\n");
+  const lines = backend.inbox("dh-o-a-1-1").trim().split("\n");
   assert.equal(lines.length, 3);
   assert.match(lines[0], /First/);
   assert.match(lines[1], /Second/);
@@ -470,8 +477,8 @@ test("output, messages and the inbox through the client: what was read is skippe
     ).json();
   assert.deepEqual(await again(), { sent: true });
   assert.deepEqual(await again(), { sent: false });
-  // No inbox: null.
-  assert.equal(await runner.poll("dh-o-x-1-1", 0), null);
+  // No inbox: none.
+  assert.equal(backend.inbox("dh-o-x-1-1"), null);
 });
 
 test("a run's log: appends in order through the client, one sent twice taken once, a wrong offset refused", async (t) => {
@@ -715,11 +722,11 @@ test("run events: an end said once, with its exit code, across the copies' looks
   );
 });
 
-test("the broker's questions fall back on the runner's last answer while it is away", async (t) => {
+test("the egress policy's questions fall back on the runner's last answer while it is away", async (t) => {
   const store = fileStore();
   const backend = host();
   const a = await copy(t, { store, backend });
-  const { runner } = client(a.url, { brokerWaitMs: 30 });
+  const { runner } = client(a.url, { policyWaitMs: 30 });
   await runner.start(SPEC);
   const at = await runner.locate("10.1.0.2");
   assert.deepEqual(at, { sandbox: "id-dh-o-a-1-1", name: "dh-o-a-1" });

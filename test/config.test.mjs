@@ -17,23 +17,25 @@ test("refuses to start without allowed users", () => {
   }
 });
 
-test("the listener's ports are each its own: a BROKER_PORT on POLICY_PORT's default says so", () => {
+test("the listener's ports are each its own: a SERVICES_PORT on POLICY_PORT's default says so", () => {
   const ALLOWED_USERS = "alice";
   assert.throws(
-    () => loadConfig({ ALLOWED_USERS, BROKER_PORT: "8082" }),
+    () => loadConfig({ ALLOWED_USERS, SERVICES_PORT: "8082" }),
     (error) =>
       error instanceof ConfigError &&
-      /BROKER_PORT and POLICY_PORT are both 8082/.test(error.message),
+      /POLICY_PORT and SERVICES_PORT are both 8082/.test(error.message),
   );
   assert.throws(
     () => loadConfig({ ALLOWED_USERS, PORT: "9000", POLICY_PORT: "9000" }),
     /PORT and POLICY_PORT/,
   );
   // 0: ports the OS picks, as the tests do.
-  const zero = loadConfig({ ALLOWED_USERS, PORT: "0", BROKER_PORT: "0", POLICY_PORT: "0" });
-  assert.deepEqual([zero.port, zero.brokerPort, zero.policyPort], [0, 0, 0]);
+  const zero = loadConfig({ ALLOWED_USERS, PORT: "0", POLICY_PORT: "0", SERVICES_PORT: "0" });
+  assert.deepEqual([zero.port, zero.policyPort, zero.servicesPort], [0, 0, 0]);
   const config = loadConfig({ ALLOWED_USERS });
-  assert.deepEqual([config.port, config.brokerPort, config.policyPort], [8080, 8081, 8082]);
+  assert.deepEqual([config.port, config.policyPort, config.servicesPort], [8080, 8082, 8083]);
+  // The broker's port is gone with it (#567): set, it says nothing.
+  assert.equal(loadConfig({ ALLOWED_USERS, BROKER_PORT: "8082" }).brokerPort, undefined);
 });
 
 test("allowed users and repos are lowercase lists", () => {

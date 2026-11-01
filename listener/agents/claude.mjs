@@ -2,6 +2,7 @@
 // it and read it. Its sandbox half is ../../sandbox/agents/claude.sh.
 import { CREDENTIALS, NAMED } from "./credentials.mjs";
 import { cutOutput, EFFORTS, idOf, installSpec, normalizer } from "./common.mjs";
+import { SANDBOX_URLS } from "../../lib/services.mjs";
 
 // Deckhand's model tiers (`/model best`) → Claude Code's aliases, which the operator can point
 // elsewhere (ANTHROPIC_DEFAULT_OPUS_MODEL…, config.modelAliases).
@@ -83,7 +84,7 @@ export const claude = {
       : config.claudeCredential;
     return {
       ...(provider === "anthropic" ? name && { [name]: secret } : { ANTHROPIC_AUTH_TOKEN: secret }),
-      ANTHROPIC_BASE_URL: `${config.brokerUrl}/anthropic`,
+      ANTHROPIC_BASE_URL: `${SANDBOX_URLS.models}/anthropic`,
       ...config.modelAliases,
       ...(provider === "openrouter" && config.openrouterAliases),
       // Claude Code's own fallback when the model is overloaded, within the provider.

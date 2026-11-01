@@ -18,12 +18,6 @@ function hostOf(url) {
   return new URL(url).hostname.toLowerCase();
 }
 
-// The broker's host, as sandboxes call it (BROKER_URL): the egress proxy forwards their plain
-// HTTP to it (../proxy/proxy.mjs, its own BROKER_URL), once the policy allowed it (broker-http.mjs).
-export function brokerHost(config) {
-  return hostOf(config.brokerUrl);
-}
-
 // The GitHub hosts the listener is configured with, the web's and the API's (one, on GitHub
 // Enterprise Server): what git and gh use. The egress proxy relays them to the listener's GitHub
 // gateway (github-gateway.mjs), which holds the token: never a raw tunnel from a sandbox.
@@ -36,7 +30,7 @@ export function githubHosts(config) {
 // github-gateway.mjs ACTIONS_LOGS), all on one CDN, which serves any of them whatever name the
 // connection was made to: a tunnel to avatars.githubusercontent.com answers as
 // raw.githubusercontent.com when asked so (`Host`). So for a run the GitHub gateway checks they
-// are all relayed to it (broker-http.mjs), never tunnelled: it checks GITHUB_FILES' and sends
+// are all relayed to it (egress-http.mjs), never tunnelled: it checks GITHUB_FILES' and sends
 // each on to the host it names, anonymously. Plain hosts for the others.
 export function githubContent(host) {
   return /^(?:[a-z0-9-]+\.)+githubusercontent\.com$/.test(
@@ -57,8 +51,8 @@ export const GITHUB_FILES = [
 // What the agent (its `hosts`, agents/; by default the operator's) and GitHub need. Raw files
 // and release downloads come from *.githubusercontent.com, which carries no token: allowed,
 // relayed for the runs the gateway checks (githubContent()), plain hosts for the others.
-// The listener (the broker) is no host of theirs: the proxy forwards its calls, for its runs'
-// sandboxes and engines only (broker-http.mjs).
+// The services' names sandboxes call (../lib/services.mjs SANDBOX_URLS) are no hosts of theirs:
+// the proxy forwards their calls, for the runs' sandboxes and engines only (egress-http.mjs).
 export function mandatoryHosts(config, agent = agentFor(config.agent)) {
   return [...agent.hosts, ...githubHosts(config), "*.githubusercontent.com"];
 }
@@ -121,8 +115,9 @@ export function egressPolicy(
 // The proxy settings a sandbox gets. Both cases, as tools disagree (curl only reads the
 // lowercase http_proxy); NODE_USE_ENV_PROXY because Node's fetch ignores them otherwise.
 // `others`: more hosts on the run's network (its container engine), reached directly. The
-// broker isn't one (#511): its calls (agents' APIs, pushes, the run's files) go through the
-// proxy, which forwards them to it and waits for it while the listener restarts.
+// services' names sandboxes call aren't (#511, ../lib/services.mjs SANDBOX_URLS): their calls
+// (agents' APIs, pushes, the run's files) go through the proxy, which forwards them to each
+// service and waits for it while it restarts.
 export function proxyEnv(config, others = []) {
   const direct = new Set(["localhost", "127.0.0.1", "::1", ...others]);
   const noProxy = [...direct].join(",");

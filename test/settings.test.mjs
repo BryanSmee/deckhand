@@ -40,7 +40,7 @@ test("the listener, the policy service and the proxy read settings that the scan
     "ALLOWED_USERS",
     "DEBOUNCE_MS",
     "POLICY_URL",
-    "BROKER_URL",
+    "MODELS_SERVICE_URL",
     "SERVICE_NETWORKS",
   ]) {
     assert.ok(settingsRead().includes(name), name);

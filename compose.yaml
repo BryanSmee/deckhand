@@ -86,9 +86,8 @@ services:
       dockerfile: orchestrator/Dockerfile
     image: ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-orchestrator:${DECKHAND_VERSION:-latest}
     restart: unless-stopped
-    # Stopping saves the queue and the runs' state (sandboxes keep running), releases its lease,
-    # and lets the sandboxes' calls in flight finish (agents' streams, pushes). New ones the
-    # egress proxy relays wait for the next copy (docs/architecture.md#restarts).
+    # Stopping saves the queue and the runs' state (sandboxes keep running) and releases its
+    # lease; the egress proxy's questions wait for the next copy (docs/architecture.md#restarts).
     stop_grace_period: 5m
     # The broker service signs the runs' tokens: the orchestrator asks it for them as runs start.
     # Every policy decision goes to the policy service, every GitHub call to the github service,
@@ -104,9 +103,7 @@ services:
       policy:
       models-orchestrator:
       edge-orchestrator:
-      # The proxy reaches it there as `listener` too, the name sandboxes call it by (BROKER_URL).
       orchestrator-proxy:
-        aliases: [listener]
     environment:
       # Every setting but the secrets and the wiring below can be in config.yaml instead
       # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
@@ -216,9 +213,6 @@ services:
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      # How sandboxes reach its gateways: through the egress proxy, which forwards their calls
-      # to it under the name `listener`.
-      BROKER_URL: http://listener:8081
       # The broker service, which signs the runs' tokens (#505).
       BROKER_SERVICE_URL: http://broker:8081
       # The github service, the only one with the GitHub App's key (#502): every GitHub call of
@@ -242,8 +236,9 @@ services:
       # Its state: the runs' summaries, queue and brainstorm state, its store (the queue, the
       # lease). Nothing secret.
       - data:/data
-      # One folder per run, served under /shots/ (through edge). Sandboxes reach it through the
-      # broker (#393): a volume of its own only as sandboxes from before #393 mount it.
+      # One folder per run, served under /shots/ (through edge), copied there from the broker,
+      # which sandboxes upload them to (#393): the screenshots linked from GitHub, in a volume of
+      # their own (SHOTS_VOLUME).
       - screenshots:/data/shots
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
@@ -342,12 +337,10 @@ services:
       KUBERNETES_CACHE_SIZE: ${KUBERNETES_CACHE_SIZE:-}
       KUBERNETES_AGENT_STORAGE_CLASS: ${KUBERNETES_AGENT_STORAGE_CLASS:-}
       KUBERNETES_AGENT_SIZE: ${KUBERNETES_AGENT_SIZE:-}
-      # Wiring, environment only, matching the orchestrator's. BROKER_URL: the name sandboxes
-      # call the orchestrator's gateways by, through the egress proxy.
+      # Wiring, environment only, matching the orchestrator's.
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      BROKER_URL: http://listener:8081
       EGRESS_PROXY: http://egress:3128
       # The broker service: its service tokens, the runs' inboxes and files.
       BROKER_SERVICE_URL: http://broker:8081
@@ -361,14 +354,11 @@ services:
       SERVICE_KEYS_DIR: /service-keys
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
-      # Its store: the runs' logs, their events, its lease.
+      # Its store: the runs' logs, their events, its lease; and each run's inbox (comments for a
+      # running sandbox), its proxy CA and digest, which the broker has a copy of for the sandbox.
       - runner-data:/data
       # The broker's public keys (nothing secret), as the policy service has them.
       - service-keys:/service-keys:ro
-      # Each run's inbox (comments for a running sandbox), its proxy CA and digest, which the
-      # sandbox fetches from the broker (#393): a volume of its own only as sandboxes from before
-      # #393 mount it.
-      - runs:/data/runs
       # Your configuration, read only, as the orchestrator reads it: config.yaml, and grants/,
       # which the runner checks each sandbox's host paths and engine against again.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
@@ -552,13 +542,8 @@ services:
     # docs/architecture.md#restarts): new connections are refused until the next proxy starts.
     stop_grace_period: 30s
     environment:
-      # The egress policy's own port, open while the broker's drains on a restart; the broker's,
-      # where relayed requests go, and the sandboxes' calls to it (the orchestrator's BROKER_URL),
-      # which the proxy forwards (docs/architecture.md#restarts).
+      # The orchestrator's egress policy, on its own port (docs/architecture.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
-      RELAY_URL: http://orchestrator:8081/relay
-      # As sandboxes call it.
-      BROKER_URL: http://listener:8081
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
       # and files (#505).
       BROKER_SERVICE_URL: http://broker:8081
@@ -715,8 +700,8 @@ networks:
     ipam:
       config:
         - subnet: ${EDGE_ORCHESTRATOR_SUBNET:-10.231.250.192/28}
-  # The egress proxy and the orchestrator: its policy's questions, its relays. Internal: the
-  # orchestrator has no way out.
+  # The egress proxy and the orchestrator: its policy's questions. Internal: the orchestrator has
+  # no way out.
   orchestrator-proxy:
     internal: true
   # The orchestrator and the runner: one calls the other, nothing else is on it, and it has no way
@@ -737,8 +722,6 @@ volumes:
   runner-data:
   screenshots:
     name: ${SHOTS_VOLUME:-deckhand-screenshots}
-  runs:
-    name: ${RUNS_VOLUME:-deckhand-runs}
   egress-cache:
   broker-keys:
   broker-store:

@@ -142,7 +142,7 @@ export function readsOf(caps = []) {
 
 // Whether a run gets anything from GitHub: only with `pull`, which every read capability needs
 // (capabilities.mjs). Without it (a research run) the GitHub gateway refuses its calls, and its
-// sandbox reaches public GitHub anonymously (broker-http.mjs).
+// sandbox reaches public GitHub anonymously (egress-http.mjs).
 export const readsGitHub = (run) => !!run?.caps?.includes("pull");
 // Whether a run's sandbox reaches GitHub's hosts through a tunnel rather than the GitHub gateway:
 // only once its capabilities are decided (broker.mjs grant()) and give no `pull`. A run the

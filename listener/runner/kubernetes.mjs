@@ -4,12 +4,12 @@
 // spread over the cluster's nodes.
 //
 //   - A run's environment goes into a Secret of its own (envFrom), never inline in the Pod,
-//     deleted with the run. The run's files (inbox, CA, digest) come from the broker
-//     (../run-files.mjs), as under Docker: no volume is shared with the listener.
+//     deleted with the run. The run's files (inbox, CA, digest) come from the broker service
+//     through the egress proxy, as under Docker: no volume is shared with the listener.
 //   - The Pod meets Pod Security `restricted` (podSpec()), gets no ServiceAccount token and no
-//     DNS server (a lookup fails at once, as on Docker's internal network): `listener` and
-//     `egress` (the hosts of BROKER_URL and EGRESS_PROXY) are the namespace's Services of
-//     those names, through hostAliases.
+//     DNS server (a lookup fails at once, as on Docker's internal network): `egress` (the host
+//     of EGRESS_PROXY) is the namespace's Service of that name, through hostAliases. The
+//     services' names it calls (lib/services.mjs SANDBOX_URLS) are the proxy's to read.
 //   - No network per run: the namespace's NetworkPolicies isolate every sandbox, and start()
 //     refuses to run without them (isolationProblem()). The egress proxy knows a sandbox by its
 //     pod IP (address()).
@@ -152,12 +152,12 @@ export function excludesSandboxes(selector = {}, labels) {
 // Why the namespace's NetworkPolicies (`policies`) don't isolate a sandbox pod with `labels`,
 // or null when they do: one of them picks it for both Ingress and Egress, and none of those
 // that pick it lets anything in, nor lets it out to anything but other pods of the namespace
-// that aren't sandboxes (the egress proxy and the listener). Policies add up, so a single
-// wider one is enough to refuse: fail closed.
-// Each rule to them names its ports, among `ports` (the proxy's, the broker's): a sandbox that
-// could reach another port of theirs (the listener's services port) would get what only the
+// that aren't sandboxes (the egress proxy). Policies add up, so a single wider one is enough to
+// refuse: fail closed.
+// Each rule to them names its ports, among `ports` (the proxy's): a sandbox that could reach
+// another port of a pod there (the orchestrator's services port) would get what only the
 // runner may.
-export function isolationProblem(policies, labels, { ports = [3128, 8081] } = {}) {
+export function isolationProblem(policies, labels, { ports = [3128] } = {}) {
   const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
   const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
   if (!picking.some((p) => types(p).includes("Ingress") && types(p).includes("Egress"))) {
@@ -381,13 +381,12 @@ export function createKubernetesRunner({
   log = () => {},
   now = Date.now,
   sleep = delay,
-  timers, // inbox.mjs poll()'s clock
   mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
   watchMs = WATCH_MS,
 }) {
   const { pendingMs, storageClass, sessionSize, cacheStorageClass, registrySecret } =
     config.kubernetes;
-  const inbox = createInbox({ inboxDir, timers, mirror });
+  const inbox = createInbox({ inboxDir, mirror });
   // Runs whose Secret exists before their pod does: relink() leaves them alone.
   const starting = new Set();
   let proxy = { at: -Infinity, addresses: [] };
@@ -441,7 +440,7 @@ export function createKubernetesRunner({
           },
           secret,
           // Not secrets: where the run's files are.
-          env: { ...inbox.env(config.brokerUrl, ca, digest), SANDBOX_TAG_STDERR: "1" },
+          env: { ...inbox.env(ca, digest), SANDBOX_TAG_STDERR: "1" },
           aliases,
           pullSecret: registrySecret ? kubeName(registrySecret) : null,
           agentInit,
@@ -495,9 +494,8 @@ export function createKubernetesRunner({
     };
   }
 
-  // The ports sandboxes reach the proxy and the broker on: none other (isolationProblem()).
-  const portOf = (url, fallback) => Number(new URL(url).port || fallback);
-  const sandboxPorts = () => [portOf(config.egressProxy, 3128), portOf(config.brokerUrl, 8081)];
+  // The port sandboxes reach the proxy on: none other (isolationProblem()).
+  const sandboxPorts = () => [Number(new URL(config.egressProxy).port || 3128)];
 
   // Fail closed: without the namespace's NetworkPolicies, a sandbox would reach anything.
   async function checkIsolation(labels) {
@@ -505,16 +503,16 @@ export function createKubernetesRunner({
     const problem = isolationProblem(items, labels, { ports: sandboxPorts() });
     if (problem) {
       throw new Error(
-        `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy and the listener only (see docs/setup.md, Kubernetes runner)`,
+        `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/setup.md, Kubernetes runner)`,
       );
     }
   }
 
-  // The listener's and the proxy's host names, as sandboxes call them (BROKER_URL,
-  // EGRESS_PROXY), → the namespace's Services of those names: sandboxes have no DNS.
+  // The proxy's host name, as sandboxes call it (EGRESS_PROXY), → the namespace's Service of that
+  // name: sandboxes have no DNS.
   async function hostAliases() {
     const byIp = new Map();
-    for (const url of [config.brokerUrl, config.egressProxy]) {
+    for (const url of [config.egressProxy]) {
       const host = aliasOf(url);
       if (!host) continue; // an address already
       const service = await api.find(`services/${host}`);
@@ -851,7 +849,7 @@ export function createKubernetesRunner({
   // hasn't ended yet. Asked of the init container's own status, not the pod's phase, which
   // the kubelet reports Running only at its next sync, after the sandbox has started; and
   // never kept, for the same reason. A no is final for the run, which the caller remembers
-  // (broker-http.mjs): an init container that ended never runs again. Null when the API
+  // (egress-http.mjs): an init container that ended never runs again. Null when the API
   // can't tell.
   async function installing(name) {
     let pod;
@@ -937,16 +935,6 @@ export function createKubernetesRunner({
     return uid;
   }
 
-  // The UID of the task's pod, or null: a run's from before tokens (../broker-http.mjs).
-  async function sandboxIdOf(name) {
-    try {
-      return (await api.find(podPath(name)))?.metadata?.uid ?? null;
-    } catch (error) {
-      log(`${name}: its pod's UID: ${error.message}`);
-      return null;
-    }
-  }
-
   // The IPs of the pods behind the egress Service, ready or not (one starting still relays).
   async function proxyAddresses({ fresh = false } = {}) {
     const age = now() - proxy.at;
@@ -992,9 +980,7 @@ export function createKubernetesRunner({
     send: inbox.send,
     close: inbox.close,
     closed: inbox.closed,
-    poll: inbox.poll,
     resync: inbox.resync,
-    file: inbox.file,
     wait,
     kill,
     remove,
@@ -1007,7 +993,6 @@ export function createKubernetesRunner({
       const sandbox = await sandboxOf(ip);
       return sandbox ? { sandbox, name: null } : null;
     },
-    sandboxIdOf,
   };
 }
 
