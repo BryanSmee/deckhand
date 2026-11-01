@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { linkSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
 import { tempDir } from "./helpers.mjs";
@@ -35,8 +36,10 @@ before(async () => {
     tasks: new Map(),
     shotsDir,
   };
-  server = createHttp(ctx, { dashboardDir: join(dataDir, "dist") }).listen();
-  await new Promise((resolve) => server.once("listening", resolve));
+  // As edge passes them on (../edge/forward.mjs): /shots/ is public, /status a local caller's.
+  const http = createHttp(ctx);
+  server = createServer((req, res) => http.handle(req, res, { local: true }));
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   base = `http://127.0.0.1:${server.address().port}/shots`;
 });
 
@@ -59,8 +62,8 @@ test("a link in a run's folder is a 404, wherever it points", async () => {
   assert.equal(res.status, 404);
 });
 
-// A blocking open would wait for a writer, with the whole listener (a regression hangs here).
-test("a FIFO in a run's folder is a 404, and doesn't block the listener", async () => {
+// A blocking open would wait for a writer, with the whole orchestrator (a regression hangs here).
+test("a FIFO in a run's folder is a 404, and doesn't block the orchestrator", async () => {
   assert.equal((await fetch(`${base}/${folder}/fifo.png`)).status, 404);
 });
 
@@ -70,11 +73,11 @@ test("missing files and other names are a 404", async () => {
   }
 });
 
-// A route that throws (here: this listener has no setup flow) answers 500 and leaves the
-// listener up, its error logged.
-test("an unexpected throw answers 500, and the listener keeps serving", async () => {
-  const res = await fetch(base.replace(/\/shots$/, "/anything"));
+// A route that throws (here: this orchestrator has no status) answers 500 and leaves the
+// orchestrator up, its error logged.
+test("an unexpected throw answers 500, and the orchestrator keeps serving", async () => {
+  const res = await fetch(base.replace(/\/shots$/, "/status"));
   assert.equal(res.status, 500);
-  assert.ok(logged.some((line) => line.startsWith("GET /anything: TypeError")));
+  assert.ok(logged.some((line) => line.startsWith("GET /status: TypeError")));
   assert.equal((await fetch(`${base}/${folder}/page.png`)).status, 200);
 });

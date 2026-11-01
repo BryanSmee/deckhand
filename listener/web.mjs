@@ -66,7 +66,7 @@ export function apiRoute({
       }
       log(`${name}: ${error.stack ?? error}`);
       if (!res.headersSent) {
-        send(res, 502, { error: "GitHub didn't answer: see the listener's logs." });
+        send(res, 502, { error: "GitHub didn't answer: see the orchestrator's logs." });
       }
     });
     return true;

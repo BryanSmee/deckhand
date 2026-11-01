@@ -16,13 +16,13 @@ brainstorm sessions). The plan and its decisions: PocketBerry's PB-135 and issue
 Node 26. The GitHub gateway has one dependency, graphql-js, bundled into a file before it runs
 (the github service's image); the dashboard has build-time ones (see Conventions).
 
-| Task            | Command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tests           | `node --test --test-force-exit` (after `cd listener/vendor && npm ci && npm run build`, which bundles graphql-js; `--test-force-exit`: a file whose tests are done exits even if something it started is left open, #521)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Syntax check    | `node --check listener/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs`, `for f in sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/antigravity/install sandbox/agents/antigravity/refresh sandbox/agents/npm-install sandbox/agents/release-install sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do bash -n "$f"; done` (one at a time: `bash -n a b` reads `b` as an argument of `a`; it prints what fails), `node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged` |
-| Format          | `npx --yes prettier@3 --check .` (`--write` to fix; `npx --yes prettier@3 --write --ignore-unknown <files>` for just the files you changed)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to a listener on `:8080`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| Task            | Command                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Tests           | `node --test --test-force-exit` (after `cd listener/vendor && npm ci && npm run build`, which bundles graphql-js; `--test-force-exit`: a file whose tests are done exits even if something it started is left open, #521)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Dashboard       | `cd dashboard && npm ci && npm test && npm run build` (types, tests, build)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Syntax check    | `node --check edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs`, `for f in sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install sandbox/agents/codex/install sandbox/agents/antigravity/install sandbox/agents/antigravity/refresh sandbox/agents/npm-install sandbox/agents/release-install sandbox/deckhand-token sandbox/gh sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do bash -n "$f"; done` (one at a time: `bash -n a b` reads `b` as an argument of `a`; it prints what fails), `node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged` |
+| Format          | `npx --yes prettier@3 --check .` (`--write` to fix; `npx --yes prettier@3 --write --ignore-unknown <files>` for just the files you changed)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Dashboard (dev) | `cd dashboard && npm run dev` (proxies the API to edge on `:8080`)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
 Run the first four before pushing (the dashboard's when it changed). CI runs them too, a job
 each, on every pull request and push to `main` (`.github/workflows/checks.yml`, GitHub-hosted
@@ -33,20 +33,24 @@ repository start with the dashboard's packages installed and graphql-js bundled 
 `.deckhand.yaml`) and the npm cache kept between runs.
 
 Work runs also have a container engine (`docker`, `DOCKER_HOST=tcp://engine:2375`) when the
-operator grants one (your prompt says whether this run has it), but never webhooks: test the
-listener through the injectable seams below, and say in the pull request what you could not
+operator grants one (your prompt says whether this run has it), but never webhooks: test edge
+and the orchestrator through the injectable seams below, and say in the pull request what you could not
 run. The engine is another machine: `-v "$PWD:…"` mounts its empty
 directory, not your clone, so send files with `tar` on stdin. With the engine:
 
 ```sh
-# Build an image, from the root: listener, runner, policy service, sandbox and proxy COPY from
-# other directories.
-docker build -t deckhand-listener -f listener/Dockerfile .
+# Build an image, from the root: edge, the orchestrator, the runner, the policy service, the
+# sandbox and the proxy COPY from other directories.
+docker build -t deckhand-edge -f edge/Dockerfile .
+docker build -t deckhand-orchestrator -f orchestrator/Dockerfile .
 docker build -t deckhand-runner -f runner/Dockerfile .
 docker build -t deckhand-github -f github/Dockerfile .
-# Start it: ALLOWED_USERS is all it needs to come up. Ports answer on engine, not localhost.
-docker run -d --name listener -p 8080:8080 -e ALLOWED_USERS=someone deckhand-listener
+# Start edge: ALLOWED_USERS is all it needs to come up. Ports answer on engine, not localhost.
+docker run -d --name edge -p 8080:8080 -e ALLOWED_USERS=someone deckhand-edge
 curl engine:8080/health
+# The whole stack, as an operator runs it (one copy each; --scale orchestrator=2 for a
+# handover): every service, then `docker compose -p <name> down -v` once seen.
+docker compose -p dh --env-file <your .env> up -d --build
 # The tests on another Node: a Debian image (bash and git for the fakes), jq, not root, and
 # graphql-js bundled first (listener/vendor/graphql.mjs isn't committed).
 git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
@@ -65,22 +69,31 @@ started before you finish.
 lib/          what every service shares, copied into each image: yaml, settings, redact, http,
               files, drain, tokens, service tokens, the store (store.mjs, store-file.mjs,
               store-redis.mjs and its client resp.mjs)
-listener/     server.mjs (wiring), http.mjs (webhooks, dashboard API), tasks.mjs (queue),
+edge/         edge (#506), the only service the internet reaches: server.mjs (wiring), http.mjs
+              (webhooks, /setup, sign-in, the dashboard's files), forward.mjs (the dashboard's API
+              passed on to the orchestrator), internal.mjs (the deliveries' stream and the App's
+              public parts, for the orchestrator), app.mjs (the webhook secret, the OAuth
+              client's), client.mjs (what the orchestrator calls it with)
+orchestrator/ the orchestrator (#506): server.mjs (wiring: its lease, then the queue and the runs'
+              lives, from ../listener/'s modules); two copies, active/passive
+listener/     the modules edge and the orchestrator run (no entry point of its own): http.mjs (the
+              dashboard's API and the deliveries, the orchestrator's), tasks.mjs (queue),
               runs.mjs, restart.mjs, … (docs/architecture.md), runner/ (Docker and Kubernetes backends),
                 agents/ (each agent's specifics: install, env, hosts, session, normalize(); the
               credentials' names, credentials.mjs)
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
               (wiring), service.mjs (its API, who may call what), runs.mjs (the runs' state in its
-              store), app.mjs (the App's credentials), client.mjs (what the listener calls it
-              with); it runs listener/'s GitHub and git gateways (github-*.mjs, git-gateway.mjs)
+              store), app.mjs (the App's credentials), client.mjs (what the orchestrator and
+              edge call it with); it runs listener/'s GitHub and git gateways (github-*.mjs,
+              git-gateway.mjs)
 runner/       the runner service (#503): the only one with the Docker socket or the Kubernetes
               API; server.mjs (wiring), service.mjs (its API, who may call what), client.mjs
-              (what the listener calls it with), logs.mjs, events.mjs, spec-check.mjs,
+              (what the orchestrator calls it with), logs.mjs, events.mjs, spec-check.mjs,
               hooks.mjs; it runs listener/runner/'s backends, images.mjs and previews.mjs
 policy-service/ the policy service (#501): long-lived `opa` servers evaluating the operator's and
-              the repos' policies for the listener; its own image, no network but the listener's
+              the repos' policies for the orchestrator; its own image, no network but its callers'
 policy/       Deckhand's default policies (*.rego), copied into the policy service's image
-dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in the listener's image
+dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in edge's image
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git credential
               helper and gh wrapper; agents/<name>.sh and agents/<name>/ (Claude Code's
               flags, installer, settings, hooks, progress.jq)
@@ -101,29 +114,29 @@ docs/         setup, per-repo config reference, security model, architecture
 
 ## Conventions
 
-- **No runtime dependencies.** The listener uses `node:http`, `node:crypto`, `node:fs` and the
-  docker CLI only. Ask before adding a package.
+- **No runtime dependencies.** Edge and the orchestrator use `node:http`, `node:crypto` and
+  `node:fs` only (the docker CLI is the runner's). Ask before adding a package.
 - **graphql-js is the one exception** (`listener/vendor/`, issue #406): the GitHub gateway must
   parse the runs' GraphQL to check their writes (`github-graphql.mjs`), and a parser of its own
   would be the bigger risk. Pinned to an exact version (`package-lock.json` too), and bundled
   with esbuild into one file, `listener/vendor/graphql.mjs` (not committed), in the github
   service's image's build stage (it runs the gateway, #502): the released image has no
   `node_modules`. `graphql.entry.mjs`
-  lists what the listener takes from it. GitHub's schema is pinned beside it
+  lists what the gateway takes from it. GitHub's schema is pinned beside it
   (`github.graphql`): `npm run schema` there reads it again through `gh`, on purpose, and its
   diff is reviewed.
 - **The dashboard is the exception** (`dashboard/`, issue #22): Preact, Vite and TypeScript,
   with hand-written CSS Modules, no UI or chart library. Its packages are build-time only: the
-  image's build stage turns them into static files in `dashboard/dist/`, which the listener
+  image's build stage turns them into static files in `dashboard/dist/`, which edge
   serves; the released image has no `node_modules`. `src/types.ts` is the contract with
   `http.mjs` (`api/state`) and `runlog.mjs` (the log stream): change them together. Tests: Vitest and
   Testing Library, named `*.spec.ts(x)`: Node runs `*.test.ts` files itself, and
   `node --test` must leave them alone.
 - **ESM** (`.mjs`), small functions, comments that explain _why_, briefly.
-- **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the listener, base
+- **Nothing project-specific.** No PocketBerry, Linear, pnpm or Postgres in the services, base
   image or generic prompts: a project brings those through its per-repo config, Dockerfile
   and extra instructions. Names, hosts and volume names come from settings.
-- **Sandboxes outlive a listener update**: an endpoint they call is never just removed. It
+- **Sandboxes outlive an update**: an endpoint they call is never just removed. It
   first answers, for a while, with what to run instead (`docs/architecture.md`, Restarts).
 - **GitHub only.** Issues, labels and sub-issues; branches `issue-<n>-<slug>`.
 - **Naming.** Never use "Claude" or "Anthropic" in the product, image or repo names; "runs
@@ -158,7 +171,7 @@ docs/         setup, per-repo config reference, security model, architecture
   run that fails them, or whose policies fail, doesn't start. Every run gets only its sandbox,
   the agent's API, its own endpoints and its prompt beyond them.
 - **The agents' credentials are the models service's alone** (#504): its environment and the
-  credentials folder (read only), the refreshed logins sealed in its store. The listener learns
+  credentials folder (read only), the refreshed logins sealed in its store. The orchestrator learns
   their names and fingerprints only; a run's agent token gets its own agent's credential alone
   (its `agent` claim, `models/runs.mjs`).
 - **No GitHub token in a sandbox:** it holds only a run token (and its agent's token), signed
@@ -175,22 +188,30 @@ docs/         setup, per-repo config reference, security model, architecture
   read-write.
 - **Network restricted by default** through the egress proxy; containers run with
   `--cap-drop ALL` and `no-new-privileges`. The Docker socket (and the Kubernetes API's
-  credentials) stays in the runner service, never in the listener; the runner checks every
+  credentials) stays in the runner service, never in edge or the orchestrator; the runner checks every
   sandbox spec against the grants again (`runner/spec-check.mjs`), asking the policy service
   for the operator's grants itself.
 - **A mode says nothing of what its runs may do** (`listener/modes.mjs`: its volumes, agent
   defaults, trigger, prompt): their capabilities, writes and pushes are the policies' alone.
-- Verify every webhook's HMAC with a constant-time comparison.
+- **Edge holds the webhook secret, the session key and the OAuth client's, nothing else; the
+  orchestrator holds no secret** (#506, a test reads compose.yaml's environments and volumes):
+  no setting of the orchestrator's names one, and it has no way out. The orchestrator takes a
+  dashboard user's login from edge's service token alone (`listener/services-http.mjs`), and
+  its lease's fencing epoch goes with every call to the github service, the runner and the
+  broker, which refuse an older one.
+- Verify every webhook's HMAC with a constant-time comparison (edge, `edge/http.mjs`).
 
 ## Testing
 
 - `node --test` with `node:assert`. Inject what touches the outside: `fetch` for GitHub,
   the runner for Docker, a clock for timers, a temp dir for state files.
 - Shared fakes live in `test/helpers.mjs` (`listening`, `serve`, `tempDir`, `testConfig`,
-  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `server.test.mjs`): reuse them
-  rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
-- `server.test.mjs` starts a listener per test, the suite's slowest part: one wiring test per
-  area there, the cases themselves in the module's own unit tests.
+  `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-server.test.mjs`):
+  reuse them rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
+- `orchestrator-server.test.mjs` starts edge and the orchestrator (and the runner beside them)
+  per test, the suite's slowest part: one wiring test per area there, the cases themselves in
+  the module's own unit tests. Its `handOver()` starts the orchestrator's next copy, waiting
+  for the lease, before it stops the one acting. `edge-server.test.mjs` starts edge alone.
 - Dashboard specs share `dashboard/src/testUtils.ts` (`mockApi`, `makeTask`, `makeState`) and
   `vitest.setup.ts` (the global stubs and cleanup).
 - Cover the decisions that matter: allowlist and config narrowing, mount path checks,

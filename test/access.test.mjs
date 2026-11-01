@@ -61,7 +61,7 @@ test("a broken grant file stops the repo's runs, naming the file; the details st
   const { error, logged } = await refusal(t, "hosts: [bad host]\n", "");
   assert.equal(
     error,
-    "Claude can't run here: `org/repo.yaml` in the operator's grants folder has errors (see the listener's logs).",
+    "Claude can't run here: `org/repo.yaml` in the operator's grants folder has errors (see the orchestrator's logs).",
   );
   assert.match(logged.join("\n"), /org\/repo\.yaml: hosts: .*bad host/);
   // One still saying allow_repo_hosts, gone since #151: the same.
@@ -91,7 +91,7 @@ test("a broken policy stops the repo's runs as a broken grant file does", async 
     (e) =>
       e instanceof RunError &&
       e.message ===
-        "Claude can't run here: the operator's grants folder has errors (see the listener's logs).",
+        "Claude can't run here: the operator's grants folder has errors (see the orchestrator's logs).",
   );
   assert.match(logged.join("\n"), /the operator's policies can't decide org\/repo's: policy error/);
 });

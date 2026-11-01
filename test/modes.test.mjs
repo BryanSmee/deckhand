@@ -93,9 +93,9 @@ test("entryRun: only the ideas and bugs inboxes' entries are a run each", () => 
   }
 });
 
-test("every built-in mode's prompt is in prompts/, and copied into the listener's image", () => {
-  // The Dockerfile names each file: one left out stops the listener at start.
-  const dockerfile = readFileSync(new URL("../listener/Dockerfile", import.meta.url), "utf8");
+test("every built-in mode's prompt is in prompts/, and copied into the orchestrator's image", () => {
+  // The Dockerfile names each file: one left out stops the orchestrator at start.
+  const dockerfile = readFileSync(new URL("../orchestrator/Dockerfile", import.meta.url), "utf8");
   for (const [name, { prompt }] of Object.entries(MODES)) {
     if (!prompt) continue;
     assert.ok(existsSync(new URL(`../prompts/${prompt}`, import.meta.url)), name);

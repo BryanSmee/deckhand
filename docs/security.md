@@ -37,7 +37,7 @@ that file asks for, so none can:
   - a run without the `push` [capability](#capabilities) (with Deckhand's default policies:
     brainstorms, onboarding, inbox entries, discussions, run analyses, reviews, research):
     none. The broker registers every one as a run that can't push, so the gateway refuses
-    it whatever its token, and the same holds for a run a restarted listener picks up again.
+    it whatever its token, and the same holds for a run a restarted orchestrator picks up again.
 
   Anything else is refused, whether an update, a force-push or a delete: another issue's
   branch (which that issue's next run checks out), another pull request's (which its author
@@ -53,11 +53,11 @@ that file asks for, so none can:
   too); without policies, every push is refused. A policy can only
   narrow the checks above: no rule reaches another task's branch or the default one.
 
-- **One branch is created outside the git gateway**: a work run's own, by the listener, as
+- **One branch is created outside the git gateway**: a work run's own, by the orchestrator, as
   the run starts, so its issue's Development sidebar links it (`listener/linked-branch.mjs`,
   GitHub's `createLinkedBranch`, which creates the branch it links: GitHub links no existing
-  one). It carries no code the gateway didn't check: the listener creates it at the base
-  branch's head, read from GitHub, with its own token, never the sandbox's, and only when
+  one). It carries no code the gateway didn't check: the orchestrator creates it at the base
+  branch's head, read from GitHub, with the github service's token, never the sandbox's, and only when
   the run may push `issue-<n>-*` (a run with `push`, not one where a fork's code runs), the issue
   has no `issue-<n>-…` branch yet, and the name it gets back matches `issue-<n>-*`. The
   run asks for nothing: no sandbox can create or link a branch through the GitHub gateway
@@ -110,7 +110,7 @@ repositories of free plans. Where they are, a ruleset on the default branch (pul
 required) is still worth adding: it also covers people and other tools. A sandbox's
 branches still reach the default branch through pull requests that a maintainer merges:
 review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script. The
-one exception is [Auto-merge](#auto-merge), where the listener merges, and only with your
+one exception is [Auto-merge](#auto-merge), where the orchestrator merges, and only with your
 per-repository grant.
 
 ### GitHub Actions on Deckhand's branches
@@ -159,8 +159,8 @@ hold a secret or a write permission the base added after the branch was cut, aro
 branch edits. A workflow that doesn't merge cleanly refuses the push until the branch is
 rebased. A merge's workflows are followed into the reusable workflows they call, as merged,
 even when the tip has the same caller: a branch cut from an older default branch can pair its
-caller with the base's newer callee. The same merge check runs again before the listener
-opens, edits, readies or drafts a run's pull request (into whatever base it asks for), or
+caller with the base's newer callee. The same merge check runs again before the gateway lets a
+run open, edit, ready or draft its pull request (into whatever base it asks for), or
 updates its branch, since each runs its workflows from a new merge (`opened`, `edited`,
 `ready_for_review`, `converted_to_draft`, `synchronize`).
 The push is refused, with git's `[remote rejected]` naming the file and the rule, when
@@ -209,7 +209,7 @@ run's branch was checked at its tip. Not checked:
 - configuration variables (`vars`), which any workflow reads: keep secrets out of them;
 - a base's later changes: each pull request event a maintainer causes (`labeled`, `reopened`, a
   re-run by hand, a merge queue's `merge_group`…) merges the branch with its base as it is
-  then. The branch's next push, and the listener opening, editing, readying or drafting its
+  then. The branch's next push, and the run opening, editing, readying or drafting its
   pull request, check the merge again, but an event in between, after the base's workflows
   changed, runs a merge nobody checked. Limit environments' deployment branches (below) so that
   such a merge still can't read their secrets.
@@ -263,10 +263,10 @@ signs with an **Ed25519** key that no other service holds. Every service checks 
 signature **offline**, with the broker's public keys alone (`GET /keys`): the
 [GitHub gateway](#the-github-gateway) and the git gateway (through `listener/broker.mjs`), and the
 models service's agent endpoints (`models/upstream.mjs`, through `models/runs.mjs`) never ask the
-broker whether a token is genuine. The listener also checks that its run is one it still has
-going, which costs nothing there; the models service asks the broker whether the run still goes
-(`GET /runs/:id`, every 30 s at most per run). No HMAC: a service that can check a token can't mint one, so the listener, which
-the internet reaches, signs nothing (#492). The checks are strict and hand-written on
+broker whether a token is genuine. The github service also checks that its run is one the
+orchestrator told it of (`PUT /runs/:id`, in its store); the models service asks the broker whether the run still goes
+(`GET /runs/:id`, every 30 s at most per run). No HMAC: a service that can check a token can't mint one, so edge, which
+the internet reaches, signs no token (#492). The checks are strict and hand-written on
 `node:crypto`:
 
 - the algorithm is **EdDSA, always**: the header's `alg` never picks it, and any other
@@ -280,11 +280,11 @@ the internet reaches, signs nothing (#492). The checks are strict and hand-writt
   git's Basic auth adds a third).
 
 The signing key is `run-token.key` in the broker's own volume (`broker-keys`, owner-only,
-made on first start; a Secret on Kubernetes), never in the listener's data volume nor in the
+made on first start; a Secret on Kubernetes), never in the orchestrator's data volume, edge's, nor the
 broker's store, so running sandboxes' tokens still check after a restart of either. Removing
 it makes a new one: every running sandbox's token is refused from then on. A listener from
-before the broker service kept it in its data volume: the next one removes it there, keeping
-its public part only (`run-token.pub`), which it hands to the broker (`POST /keys`, the
+before the broker service kept it in its data volume: the orchestrator, which took that volume,
+removes it there, keeping its public part only (`run-token.pub`), which it hands to the broker (`POST /keys`, the
 orchestrator alone) for the run tokens its sandboxes still hold, for 7 days at most, and only
 in the 7 days after the first broker started on that store: after the migration, no key but
 the broker's own is ever added. The
@@ -297,7 +297,7 @@ to know what it may do. `jti` (the run's id), `repo`, `mode`, `issue`, `fork`, `
 it may push), `sandbox` (below), `agent` (the provider of the run's agent and the credential of
 its the run names, which the models service gives its calls alone: #504), `caps` (its
 [capabilities](#capabilities), as its start decided them) and `ver`, the claims' format
-(a sandbox outlives a listener update; an unknown version is refused). What changes during a
+(a sandbox outlives an orchestrator update; an unknown version is refused). What changes during a
 run (the issues it created, the comments it posted, the reactions it added, the workflow runs it
 reran) stays with the [github service](#the-github-service), in its store, by the run's id.
 
@@ -306,18 +306,19 @@ reran) stays with the [github service](#the-github-service), in its store, by th
 runner's answer for its source address, or, for a call the egress proxy relayed or
 forwarded, for the address the proxy names (`X-Deckhand-Client`, below). The broker service
 has no runner to ask: the proxy, when it forwards a sandbox's call about its own run there,
-names the network itself (`X-Deckhand-Sandbox`, the one the listener's egress policy gave it
+names the network itself (`X-Deckhand-Sandbox`, the one the orchestrator's egress policy gave it
 for that connection), moves the sandbox's run token to `X-Deckhand-Run-Token` and sends its
 own service token; the broker believes those headers from the proxy alone (and from the
-listener, which relays the calls that still reach it, vouching the same way), as its
+orchestrator, which relays the calls of sandboxes from before the services that still reach it,
+vouching the same way), as its
 service token and the network it arrived on prove, and drops what a sandbox sent in them. IDs, not addresses or names: both are
 reused, an ID never. A token that leaks, to a research run on the open web say, gets another
 sandbox neither GitHub, a push, nor calls on the operator's credentials: `403`. The run's
 container engine is on its network, so its calls count as the run's, as they did; no other
-container there does (the listener's, the egress proxy's: `broker-http.mjs` `sandboxAt()`
+container there does (the orchestrator's, the egress proxy's: `broker-http.mjs` `sandboxAt()`
 checks which container has the address), so a token can't ride on a call the proxy makes
 itself. When a run
-ends, the listener forgets it and removes its network (or pod): its tokens are worth nothing
+ends, the orchestrator forgets it and has the runner remove its network (or pod): its tokens are worth nothing
 from then on, before their `exp`.
 
 The same lookup finds a connection's run for **the egress policy** and for **GitHub calls
@@ -329,9 +330,9 @@ its answers for a few seconds, and forgets them whenever a network is created or
 container joins one.
 
 **What a push may do** is the git gateway's decision from the token's claims (`repo`,
-`branches`, `fork`), not the broker's record. The services still need the run to be one the
-broker knows, which in the listener costs nothing; once they run apart (#492) the network's
-removal at the run's end is what refuses its tokens there.
+`branches`, `fork`), not the broker's record. The services still need the run to be one they
+know (the github service's store, the broker's record); the network's removal at the run's end
+is what refuses its tokens there.
 
 **Lifetime.** The run token lasts **15 minutes**. It is a file on a tmpfs
 (`/dev/shm/deckhand/run-token`, `DECKHAND_TOKEN_FILE`) rather than an environment variable,
@@ -369,11 +370,11 @@ and nothing at the gateways.
 
 **The broker unreachable.** Running sandboxes keep working until their token expires, then
 their calls fail until it is back, when the next renewal (every 30 seconds by then) brings
-them back. The proxy waits for a broker restarting (5 minutes), as for the listener; with two
+them back. The proxy waits for a broker restarting (5 minutes), as for the orchestrator; with two
 copies on one store (Kubernetes, Redis #509), an update leaves one answering. A run that ended
 is ended at the broker before its network goes (`DELETE /runs/:id`, told again until it is
 heard), so either copy refuses its tokens; a record whose end never came expires 8 days after
-its last renewal, and its inbox and files go when the listener next lists the runs (at its
+its last renewal, and its inbox and files go when the orchestrator next lists the runs (at its
 start, then every hour).
 
 **Runs from before tokens** keep the random secret they started with (`DECKHAND_RUN_SECRET`),
@@ -393,7 +394,7 @@ sandbox is what limits a leak. An inbox message shaped like a token is redacted 
 reaches the sandbox.
 
 **No sandbox holds a GitHub token.** Its `GH_TOKEN`, `deckhand-token` and git credential
-helper hand out the [run token](#run-tokens), and every call to GitHub goes through the listener's GitHub
+helper hand out the [run token](#run-tokens), and every call to GitHub goes through the github service's GitHub
 gateway, which adds the token. In this document, "a sandbox's token" or "a run's token" is
 that token: what the gateway sends GitHub for the run's calls, never something the sandbox
 can read.
@@ -458,31 +459,121 @@ can read.
   outlives its run in a sandbox: once the run ends, its run token gets nothing. Uninstalling the
   App, or suspending its installation, revokes them at once.
 
-What a run prints doesn't publish one either way: the github service sends the listener the
+What a run prints doesn't publish one either way: the github service sends the orchestrator the
 fingerprint of each installation token its gateway used for a run (a `token` event,
-`lib/fingerprints.mjs`: never the token), and the listener redacts what matches from the run's
+`lib/fingerprints.mjs`: never the token), and the orchestrator redacts what matches from the run's
 log (what the dashboard shows), the run analysis digest and its reply, as `[redacted]`, a
 defence in depth now that the sandbox never sees them. A fingerprint finds a whole token only:
-one cut short in the output, which the listener found down to 16 characters when it held the
+one cut short in the output, which a listener from before the github service found down to 16 characters when it held the
 tokens itself, is left to the shape check. Anything shaped like a GitHub token (`ghs_`, `ghp_`,
 `gho_`, `ghu_`, `ghr_` followed by 36 characters or more, `github_pat_…`) is redacted too,
-wherever it came from: a token a restarted listener has no fingerprint of any more, or one the
+wherever it came from: a token a restarted orchestrator has no fingerprint of any more, or one the
 agent found elsewhere.
+
+### Edge
+
+The internet reaches one service only: **edge** (`edge/`, #506, [services.md](services.md)).
+Compose publishes its port (`PORT`, 8080) on `edge-out`, a network of its own. It serves GitHub's
+webhooks (`POST /webhook`), /setup, sign-in and sessions (`listener/auth.mjs`), the dashboard's
+files and `/health`, and passes the rest on to the orchestrator. It holds three secrets and
+nothing else: the webhook secret, the session key and the OAuth client's (its id and secret), in
+its own volume (`edge-data`, [Edge's and the orchestrator's data](#edges-and-the-orchestrators-data)).
+No App key, no agent credential, no Docker socket: a hole in edge can sign deliveries and
+sessions, not act as the App or start a sandbox. It runs as `node`, on a read-only root
+filesystem, without capabilities.
+
+- **Webhooks.** Until its signature can be checked, a delivery is read in one of a few capped
+  places (16, 4 per source address, 5 MB, 10 seconds: `listener/deliveries.mjs`). Its HMAC
+  (`X-Hub-Signature-256`) is checked with a constant-time comparison (`listener/events.mjs`
+  `verified()`): none, or a wrong one, gets `401`. A verified delivery is **taken once, by its
+  GUID** (`X-GitHub-Delivery`), set-if-absent in edge's store (`deliveries/<guid>`, kept a day:
+  a redelivery of one taken comes within it), which both copies share: one GitHub sends twice, or that reaches
+  both copies, goes on once. It goes on the `deliveries` stream in that store, with the secrets
+  edge holds redacted from what people wrote (`storable()`), and only then is answered `202`.
+  Once the orchestrator acknowledges it, it goes from the stream, its payload with it (the file
+  store rewrites the stream's file once it holds 100 lines of them).
+  The store away: `503`, its GUID freed, and GitHub marks it failed for the redeliveries to ask
+  again. Their poller (the App's one write, `POST /as-app/app/hook/deliveries/:id/attempts` at
+  the github service, edge's alone) runs on one copy, the holder of the store's lease
+  `edge/redeliveries`.
+- **What it passes on** (`edge/forward.mjs`): the dashboard's API (`/api/*`, the live logs
+  included), `/status` and the screenshots (`/shots/…`), to the orchestrator's services port
+  under `/edge/…`, with edge's service token and the signed-in user's login in `x-deckhand-user`
+  (or `x-deckhand-local: 1` for a `/status` call from inside edge's container). Edge builds
+  those headers itself: of the browser's request, only `content-type`, `accept` and
+  `last-event-id` go on, never its cookies nor an `x-deckhand-user` it sent; its Host and Origin
+  go as `x-deckhand-host` and `x-deckhand-origin`, so that the orchestrator's same-origin check
+  reads what the browser sent. The orchestrator takes the user header from edge's service token
+  alone, arriving on `edge-orchestrator` (`listener/services-http.mjs`: `/edge/*` names edge
+  only): a browser can't reach the orchestrator, and what it sends edge says nothing of who it
+  is, edge's sign-in does. The dashboard stays on edge's origin, with the same CSP and
+  `SameSite` cookie. An orchestrator away (handing over to its other copy) is waited for up to
+  15 seconds, then `503`.
+- **Its internal port** (`INTERNAL_PORT`, 8083, `edge/internal.mjs`) is the orchestrator's alone
+  (its service token, from `edge-orchestrator`), never on the published one: the deliveries'
+  stream (`GET /events`, `POST /events/ack`), the App's public parts (`GET /app`: its id, slug,
+  owner, URLs and bot's id, never a secret), a listener's App handed over (`PUT /app`,
+  [below](#edges-and-the-orchestrators-data)), a redeliveries' scan (the dashboard's Sync), and
+  the tags of the dashboard's "From the dashboard by @user" lines (`POST /from-tags`). Those
+  tags are signed with a key derived from the webhook secret: the orchestrator posts the lines
+  and holds no key, and a run, which posts as the App too, can't write a line that shows as a
+  user's. A compromised orchestrator can still have edge tag any text as any user's, as it can
+  post any comment through the github service.
+- **Sessions** ([The dashboard](#the-dashboard)) are signed with the session key; each login's
+  epoch is in edge's store (`sessions/<login>`), so a sign-out on either copy ends that login's
+  sessions on both.
+
+Two copies may run, both active on one store; a rolling update starts the new one, then the old
+one drains (`DRAIN_SECONDS`, 25 seconds) and hands the poller's lease to the other.
+
+### The orchestrator
+
+Everything else is the **orchestrator**'s (`orchestrator/server.mjs`, #506): deliveries become
+tasks, the queue, the runs' lives (started through the runner, their replies, reactions and labels
+through the github service), what it starts by itself (reviews, fixes, auto-merge…), the
+dashboard's data, and the egress policy the proxy asks. It **holds no secret**: none of its
+settings is one (`test/networks.test.mjs` reads `compose.yaml`'s environments), and no secret's
+volume is mounted in it; it keeps the listener's `data` volume, its state. It **has no way
+out**: every network it is on is internal ([The services' networks](#the-services-networks)).
+Its ports: the services port (8083: the runner's `POST /runs/:run/tokens`, edge's `/edge/*`),
+the broker port (8081: the relays and gateways for sandboxes from before the services, on the
+runs' networks, where it is joined under the name `listener`) and the egress policy's (8082).
+None is published.
+
+- **One copy acts.** Two may run: the acting one holds the store's lease `orchestrator`
+  (`lib/active.mjs`, 15 seconds, `LEASE_SECONDS`, renewed every third of its life); the other
+  arms no timer and reads no stream until it takes the lease, its services port answering its
+  probes alone (`/health`, and `/ready` 503) and `503` to every call. On SIGTERM the
+  acting copy saves its state and releases the lease, which the other takes in about a second;
+  on a crash, once it expires. A copy that loses its lease while acting exits.
+- **Fencing.** Each new holder gets a higher epoch (at least the time in ms), sent with every
+  call to the github service, the runner and the broker (`x-deckhand-epoch`), which keep the
+  newest they have seen in their store and refuse an older one (`409`, `lib/fence.mjs`; one
+  more than a day ahead of their clock, `400`). The github service fences every call that
+  changes something, the broker every call but a `GET` (new in #506), the runner every call but
+  its lookups for the egress policy and its log reads, which write nothing. So a copy that lost
+  its lease (paused, say, and woken after the other took over) can't post a reply, start or stop
+  a run, end one at the broker or have a token signed.
+- **Idempotency.** An event the next copy handles again does nothing twice: a reply carries a
+  key by its run and kind (`<run>:reply`), which the github service keeps a day with its answer;
+  a run's start is keyed by its run's id at the runner; and a delivery handled whose
+  acknowledgement was lost is noted by its GUID in the orchestrator's store
+  (`deliveries/handled/<guid>`, an hour) and skipped.
 
 ### The runner service
 
 The host's Docker socket is root on the host, and the Kubernetes API's credentials can start
 any pod in the runner's namespace: only the runner service holds either (`runner/`, #503,
-[architecture.md](architecture.md#the-runner-service)). The listener, which the internet reaches
-(webhooks, the dashboard), has neither: a hole in it no longer gives the host. What the runner
+[architecture.md](architecture.md#the-runner-service)). Edge, which the internet reaches
+(webhooks, the dashboard), has neither, nor does the orchestrator: a hole in either doesn't give
+the host. What the runner
 does, it does for its callers, each endpoint naming which (`runner/service.mjs` `ROUTES`, checked
 with their service tokens first, below):
 
-| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; queue preview hooks; write and remove logs; and, for the egress policy and the runs from before tokens it still serves, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files (unfenced: a listener still draining answers the proxy) |
-| edge         | read a run's log (the dashboard's live view)                                                                                                                                                                                                                                                                                                                                                                   |
-| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                        |
+| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; queue preview hooks; write and remove logs; and, for the egress policy and the runs from before tokens it still serves, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files, and read a run's log, for the dashboard's live view too, which edge passes on (unfenced: a copy still draining answers the proxy) |
+| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                                                                                                   |
 
 None can act on a container or a network that isn't one of this deployment's runs: the runner
 stops, follows and removes only the sandboxes it lists by their labels (`deckhand.owner`,
@@ -490,8 +581,8 @@ stops, follows and removes only the sandboxes it lists by their labels (`deckhan
 that run's, a sandbox's run must be its own (`<name>-<ms>`), and a network goes only when its
 labels say it is that run's (a start removes only the one it made). None can name a container's
 image, mounts or capabilities beyond a sandbox spec
-(`listener/sandbox-spec.mjs`), which the runner turns into Docker's options as it did in the
-listener: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
+(`listener/sandbox-spec.mjs`), which the runner turns into Docker's options as a listener from
+before it did: `--cap-drop ALL`, `no-new-privileges`, the operator's limits and a user. And it
 checks the spec again first, against the grants folder it reads itself and the operator's
 policies it asks the policy service itself ([the grants](#the-grants): `runner/spec-check.mjs`):
 the sandbox's user, no capability, the base image or the run's repository's own, the task's own
@@ -512,27 +603,27 @@ and a preview hook, which runs as root with the socket, only with the `preview` 
 reads its command and image itself, from the repository's default branch's config in its own
 checkout, and runs it in that checkout, never from the orchestrator's call (`runner/hooks.mjs`).
 The hook's event comes from the orchestrator: the runner can't check the delivery's signature
-(the listener did), only that it is a `pull_request` or `workflow_run` event about that
-repository, with its pull request or workflow run. A compromised listener can still start a run
-(it is the orchestrator until #506), but not one it names as root on the host.
+(edge did), only that it is a `pull_request` or `workflow_run` event about that
+repository, with its pull request or workflow run. A compromised orchestrator can still start a
+run, but not one it names as root on the host.
 
 The runner holds no GitHub credential either: a
 build's context and a preview hook start from the repository's tarball, which it gets from the
 [github service](#the-github-service) (`GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
 blob id, `GET /blobs/…`, the runner's only routes there, for an allowed repository, its names,
-path and ref checked before they make an API path), never from the listener, which can't serve
-it files of its own any more (#502): a compromised listener can't make a preview hook or an
+path and ref checked before they make an API path), never from the orchestrator, which can't serve
+it files of its own (#502): a compromised orchestrator can't make a preview hook or an
 image build run its own files as root on the host. A run's first tokens come from the
 orchestrator (`POST /runs/<run>/tokens`, only while that run starts), which has the broker sign
 them with its own claims: the runner can't choose what a run's tokens allow. Every orchestrator call carries its
 fencing epoch: an older one than the newest the runner saw is refused (`409`).
 
-On Docker, the runner and the listener share one internal network (`runner` in `compose.yaml`,
-`RUNNER_SUBNET`), which nothing else is on and which has no way out; the runner is on no other
-but `broker-runner` and `github-runner`, below.
+On Docker, the runner and the orchestrator share one internal network (`runner` in
+`compose.yaml`, `RUNNER_SUBNET`), which nothing else is on and which has no way out; the runner
+is on no other but `runner-models`, `broker-runner`, `github-runner` and `policy-runner`, below.
 Each tells its caller by the subnet a call arrives on (`SERVICE_NETWORKS`): the runner takes the
-listener's three services there (edge, the orchestrator, models), the listener's services port the
-runner alone. The runner has one more network, to the broker service alone (`broker-runner`): its
+orchestrator there and the models service on `runner-models`; the orchestrator's services port
+takes the runner there and edge on `edge-orchestrator` alone. The runner has one more network, to the broker service alone (`broker-runner`): its
 own service tokens, the runs' inboxes and files it copies there. It checks its callers' tokens
 with the broker's public keys (the `service-keys` volume, read-only).
 
@@ -541,21 +632,24 @@ with the broker's public keys (the `service-keys` volume, read-only).
 The GitHub App's private key mints installation tokens for every repository the App is installed
 on: only the github service holds it (`github/`, #502, [architecture.md](architecture.md#the-github-service)),
 in its own volume (`github-key`, `APP_DIR`: `app.json`, owner-only; a Secret on Kubernetes), never
-in its store nor in another service's. The listener, which the internet reaches, keeps the App's
-names, its webhook secret and its OAuth client's (`app.json` in its data volume, edge's), never
-the key. Its installation tokens stay in the service: the runs' calls go on with a token minted
-for that call (below), the listener's own with one it never gets.
+in its store nor in another service's. Edge, which the internet reaches, keeps the App's
+names, its webhook secret and its OAuth client's (`app.json` in its own volume, `edge-data`),
+never the key; the orchestrator gets the App's public parts from edge (`GET /app`), nothing
+secret. Its installation tokens stay in the service: the runs' calls go on with a token minted
+for that call (below), edge's and the orchestrator's own with one they never get.
 
 What each caller may do (`github/service.mjs` `ROUTES`, checked with their service tokens first):
 
-| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                      |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| proxy        | the sandboxes' calls: the [GitHub gateway](#the-github-gateway) (`/relay/<host>/…`) and the git gateway (`/git/…`), the network (or pod) they came from vouched for (`X-Deckhand-Sandbox`), their own credential passed on apart (`X-Deckhand-Run-Authorization`)                                                                                                                        |
-| orchestrator | its own GitHub calls, reads and writes, as a repository's installation (`/as/<owner>/<repo>/<path>`), GraphQL, as the App (`/as-app/…`: reads, and one write, a delivery's redelivery: never a token minted, the webhook changed or an installation removed); the runs it starts and ends (`/runs/<id>`), its reactions, the events; /setup's conversion; the sandboxes' calls it relays |
-| edge         | reads only: `GET`s as a repository's installation, as the App or one installation (the repositories it lists), GraphQL without a mutation (or a subscription), the App's public parts                                                                                                                                                                                                    |
-| runner       | a repository's tarball and a file's blob id, nothing else of GitHub's                                                                                                                                                                                                                                                                                                                    |
+| Caller       | May                                                                                                                                                                                                                                                                                                                        |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| proxy        | the sandboxes' calls: the [GitHub gateway](#the-github-gateway) (`/relay/<host>/…`) and the git gateway (`/git/…`), the network (or pod) they came from vouched for (`X-Deckhand-Sandbox`), their own credential passed on apart (`X-Deckhand-Run-Authorization`)                                                          |
+| orchestrator | its own GitHub calls, reads and writes, as a repository's installation (`/as/<owner>/<repo>/<path>`), GraphQL, as the App (`/as-app/…`: reads only); the runs it starts and ends (`/runs/<id>`), its reactions, the events; a listener's key handed over (`PUT /app`); the sandboxes' calls it relays                      |
+| edge         | reads: `GET`s as a repository's installation, as the App or one installation (the repositories it lists), GraphQL without a mutation (or a subscription), the App's public parts; the App's one write, a delivery's redelivery (never a token minted, the webhook changed or an installation removed); /setup's conversion |
+| runner       | a repository's tarball and a file's blob id, nothing else of GitHub's                                                                                                                                                                                                                                                      |
 
-The listener holds edge and the orchestrator until #506, and calls as the orchestrator. Every
+Edge calls as edge, from its own network (`github-edge`): its one write is a delivery's
+redelivery (`POST /as-app/app/hook/deliveries/:id/attempts`), and /setup's conversion is its
+(`POST /app/manifest`). Every
 orchestrator call that changes something carries its fencing epoch, refused when stale (`409`),
 so that a copy that lost its lease writes nothing; and a write may carry an idempotency key
 (`Idempotency-Key`: a run's reply has `<run>:reply`), which the service keeps a day with its
@@ -569,9 +663,9 @@ whom its writes may assign), and its end (`DELETE`). The issues it created, the 
 posted, the reactions it added and the workflow runs it reran are changed with compare-and-set
 (`github/runs.mjs` `update()`), a rerun counted against `MAX_RERUNS` on the latest state as its
 slot is taken; and each is kept before GitHub's answer ends for the sandbox (`settle`,
-`listener/upstream.mjs`), so that its next call sees it, whichever copy takes it. The listener's
+`listener/upstream.mjs`), so that its next call sees it, whichever copy takes it. The orchestrator's
 own reactions are noted there before GitHub is asked (`PUT /reactions`), as reactions.json noted
-them in the listener before. The limit of 16 calls in flight per run is a set of slots in the
+them in a listener before. The limit of 16 calls in flight per run is a set of slots in the
 store, one per call, taken and given back with compare-and-set, renewed while its call goes on
 and lapsing a minute after a copy stops renewing it (a crash), what GitHub advertised to a run's git is shared too (a fetch's pack
 request may reach the other copy), and the pushes, a run's notes and the pull requests runs
@@ -579,7 +673,7 @@ change reach the orchestrator as events it acknowledges. Each copy keeps its own
 tokens and git mirrors: caches only.
 
 **Its networks**, with Docker: one per caller, internal, each with a fixed subnet the service
-tells its callers by (`SERVICE_NETWORKS`: `github-orchestrator` for the listener,
+tells its callers by (`SERVICE_NETWORKS`: `github-orchestrator`, `github-edge`,
 `github-proxy`, `github-runner`), its own to the broker (`broker-github`) and to the policy
 service (`policy-github`), and its way out to GitHub, `github-out`, which nothing else is on:
 on a network its callers are on too, its name would resolve there, and their calls would arrive
@@ -587,18 +681,20 @@ on no caller's network.
 
 **The key's move.** A listener from before the service hands its key over at start (`PUT /app`,
 the orchestrator alone; the same App's only: another one's is refused), then removes it from
-its `app.json`. A new App's key never reaches the listener: /setup has the service convert the
-manifest's code (`POST /app/manifest`), which keeps the key and answers with the rest. GitHub
-converts a code once: the rest is kept beside the key for an hour (`setup.json`), so that a
-listener that didn't get the answer gets it by asking again with the same code (its /setup
+its `app.json`: the orchestrator does it, from the listener's volume it took over, before the
+rest goes to edge ([Edge's and the orchestrator's data](#edges-and-the-orchestrators-data)). A
+new App's key never reaches edge: /setup has the service convert the manifest's code
+(`POST /app/manifest`, edge alone), which keeps the key and answers with the rest. GitHub
+converts a code once: the rest is kept beside the key for an hour (`setup.json`), so that an
+edge that didn't get the answer gets it by asking again with the same code (its /setup
 callback loaded again), and goes then. A refused handover (another App's key there) is said
-once in the listener's log, and the key stays in its `app.json` until the operator removes one
+once in the orchestrator's log, and the key stays in its `app.json` until the operator removes one
 of the two.
 
 **The operator's credentials** (the agents' keys, the plans' logins) are no service's but the
-listener's (the models service's, #504): the github service redacts them from the runs' writes
-without holding them, by their **fingerprints** (`lib/fingerprints.mjs`): the listener sends a
-salted SHA-256 of each whole credential, with its length and 12 bits of a rolling hash that
+models service's (#504): the github service redacts them from the runs' writes without
+holding them, by their **fingerprints** (`lib/fingerprints.mjs`): the orchestrator relays the
+models service's, a salted SHA-256 of each whole credential, with its length and 12 bits of a rolling hash that
 finds the candidates quickly (only 12: that hash is linear, and the whole of it would spare
 someone reading the store most of the work of guessing a short credential whose start is known) (`PUT /fingerprints`, again when a login is refreshed), and the gateway
 redacts each part of a write of that length whose hashes match.
@@ -609,7 +705,7 @@ from before tokens' secret goes there the same way.
 
 ### Service tokens
 
-Once the listener is split into services (#499, [services.md](services.md)), each one calls
+Deckhand runs as services (#499, [services.md](services.md)), each one calling
 others: edge the orchestrator, the orchestrator the runner, the proxy the github service, and so
 on (`lib/services.mjs` `CALLS`, the one list of who calls whom). Every such call carries a
 **service token** (`lib/service-token.mjs`), which the broker signs with the run tokens' key and
@@ -623,8 +719,9 @@ mechanism: Ed25519, checked offline with its public key, the same strict checks 
   asked again every few seconds while the tokens held last). The broker hands a service tokens
   only for the services `CALLS` says it calls, and only to the service the request proves it
   is, never one it names (`broker/callers.mjs`): the network it arrived on with Docker
-  (`SERVICE_NETWORKS`, compose's `broker-orchestrator` and `broker-proxy`, each a caller's
-  own, internal), its pod's service account on Kubernetes (`SERVICE_ACCOUNTS`): a token
+  (`SERVICE_NETWORKS`, compose's `broker-orchestrator`, `broker-edge`, `broker-proxy` and the
+  others, each a caller's own, internal), its pod's service account on Kubernetes (`SERVICE_ACCOUNTS`, edge and the orchestrator each
+  with its own): a token
   projected for the broker alone (audience `deckhand-broker`), which the API server reviews
   (TokenReview). Neither set: the broker doesn't start.
 - **Bound to its caller**: with Docker, each service is attached only to the networks of the
@@ -649,11 +746,13 @@ endpoints, which callers may call it, in **one table per service**, checked in c
 
 No token, or one that isn't valid for the service (another key, another `aud`, expired):
 `401`. A token from another caller's network, a caller the table doesn't name on the endpoint,
-or an endpoint that isn't in the table at all: `403`. Where routes overlap (`GET /runs/*` and `GET /runs/:id/secret`), each one that matches must name the caller, whatever their order. A path the URL parser would change (`//host/…`, `..` segments) is refused first (`400`), so a handler that routes on the raw path serves the endpoint the guard allowed. A compromised edge, already inside the
-internal network, gets what edge needs (a repository's config, the dashboard's data), never a
-minted token or a write.
+or an endpoint that isn't in the table at all: `403`. Where routes overlap (`GET /runs/*` and `GET /runs/:id/secret`), each one that matches must name the caller, whatever their order. A path the URL parser would change (`//host/…`, `..` segments) is refused first (`400`), so a handler that routes on the raw path serves the endpoint the guard allowed. A compromised edge, already on its internal networks, gets what edge needs (a repository's
+config, the dashboard's data, the redeliveries), never a minted token or a write but a
+redelivery.
 
-**The services' networks.** The runs' networks hold the egress proxy and the sandboxes only:
+### The services' networks
+
+The runs' networks hold the egress proxy and the sandboxes only:
 from a sandbox, every service is reached through the proxy, which vouches for the sandbox
 (`X-Deckhand-Client`), never directly. Two services share a network only when one calls the
 other, and a service is on no network it doesn't call or isn't called over, but its way out
@@ -661,23 +760,25 @@ when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted h
 `test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's, the
 runner's, the models service's and the github service's `SERVICE_NETWORKS` name each caller's own
 network, and checks which containers the runner joins to a run's network. The broker, the github
-service and the models service are on none of them (#505, #502, #504). The listener still joins
-the runs' networks, for the pushes a proxy from before the github service sends it directly,
-which it relays there.
+service, the models service and edge are on none of them (#505, #502, #504, #506). The
+orchestrator still joins the runs' networks, under the name `listener` sandboxes from before it
+call it by, for the calls a proxy or a sandbox from before the services sends it directly, which
+it relays.
 
 **The broker's table** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
 the stream and the screenshots it copies; a run's first tokens, which it asks for when the runner
 asks it (their claims are the orchestrator's, never the runner's); the runner the runs' inboxes
-and files it copies there; the proxy the sandboxes' calls about their own run. The listener holds
-the orchestrator until it moves out (#506) and calls as it; the runner's endpoints still take the
-orchestrator too (a listener from before the runner service copies the inboxes during an
-update), and so do the sandboxes' (for the calls it relays). The models service asks it whether
-a run still goes, and its agent's provider (`GET /runs/:id`). Edge and the other services get
-their own service tokens there and nothing else.
+and files it copies there; the proxy the sandboxes' calls about their own run. Each
+orchestrator call but a `GET` carries its fencing epoch, refused when stale (`409`, #506): a copy
+that lost its lease ends no run and gets no token signed. The runner's endpoints still take the
+orchestrator too (it copies the inboxes of runs from before the runner service), and so do the
+sandboxes' (for the calls it relays). The models service asks it whether
+a run still goes, and its agent's provider (`GET /runs/:id`). Edge, on `broker-edge`, and the other
+services get their own service tokens there and nothing else.
 
 **The models service's table** (`models/http.mjs` `ROUTES`): the proxy the sandboxes' agent calls
 (`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with the network it vouches they came
-from; the orchestrator the same (a proxy from before the service sends them to the listener,
+from; the orchestrator the same (a proxy from before the service sends them to the orchestrator,
 which relays them), which credentials it holds (names), their fingerprints, a run's API state
 and the `models` stream. It is on networks of its own with each: `models-proxy`,
 `models-orchestrator`, internal, with fixed subnets it tells them by (`SERVICE_NETWORKS`); and on
@@ -687,18 +788,31 @@ APIs, `models-out`, with nothing else on it ([The models service](#the-models-se
 isn't internal first, and a call arriving there names no caller. The networks test checks that a
 service and each of its callers share only the network `SERVICE_NETWORKS` names.
 
-The runner is on one network, `runner`, internal and shared with the listener alone, with a
+The runner is on one network, `runner`, internal and shared with the orchestrator alone, with a
 fixed subnet each tells its caller by (`SERVICE_NETWORKS`, [The runner service](#the-runner-service)),
 and on `runner-models`, the models service's, for the Antigravity login's refresh.
 The policy service (#501), with Docker Compose, is on three others, internal (no way out):
-`policy`, shared with the listener alone, `policy-github`, shared with the github service alone
+`policy`, shared with the orchestrator alone, `policy-github`, shared with the github service alone
 (the runs' writes and pushes), and `policy-runner`, shared with the runner alone, which asks
 it [the grants](#the-grants) (`GET /policies` and `POST /evaluate` only, never `/capabilities`
 or `/check`). Compose doesn't set its `SERVICE_NETWORKS`: its table still names what each
-caller may call. The listener's service tokens come
-from the broker service, as the orchestrator's, and the broker publishes the public key the
+caller may call. The orchestrator's service tokens come
+from the broker service, as every other's, and the broker publishes the public key the
 policy service and the runner check them with (`SERVICE_KEYS_DIR`, the `service-keys` volume,
 which only the broker writes).
+
+Edge and the orchestrator (#506) are two services, each with its own networks to the broker,
+the github service and each other: no network is theirs together but `edge-orchestrator`.
+**Edge** is on `edge-out`, its way in and out (the published port, browsers, GitHub's sign-in),
+a network of its own rather than the proxy's `default`; `edge-orchestrator` (internal,
+`EDGE_ORCHESTRATOR_SUBNET`); `broker-edge` (its service tokens) and `github-edge` (/setup's
+conversion, the redeliveries, the App's reads). **The orchestrator** has no way out: every network
+it is on is internal (`broker-orchestrator`, `runner`, `github-orchestrator`, `policy`,
+`models-orchestrator`, `edge-orchestrator`, and `orchestrator-proxy`, where the egress proxy asks
+its egress policy and relays the calls of sandboxes from before the services, reaching it as
+`orchestrator` and, by an alias, `listener`). So a hole in the orchestrator reaches the internet
+only through the services it calls, and a hole in edge reaches the orchestrator only through the
+ports above ([Edge](#edge)).
 
 To check it by hand, from inside a running sandbox (`docker exec -it <sandbox> sh`), for each
 service (`<service>:<port>`, as `compose.yaml` names them):
@@ -717,10 +831,10 @@ service, is refused (`401`, `403`), whatever the endpoint.
 
 `listener/github-gateway.mjs`, in the [github service](#the-github-service). The egress proxy
 relays GitHub's hosts (`GITHUB_API`'s and `GITHUB_URL`'s, `listener/egress.mjs` `githubHosts()`)
-to it, as it relays the Antigravity CLI's to the listener: it decrypts their HTTPS with
+to it, as it relays the Antigravity CLI's to the models service: it decrypts their HTTPS with
 [Deckhand's CA](#https-and-deckhands-ca), which every run that reaches GitHub trusts, and sends
 each request to the github service as `/relay/<host>/<path>` instead of the host
-(`GITHUB_SERVICE_URL`; a proxy without it, from before the service, sends them to the listener,
+(`GITHUB_SERVICE_URL`; a proxy without it, from before the service, sends them to the orchestrator,
 which relays them there the same way). REST, GraphQL, clones and fetches all go there;
 tools keep talking to `api.github.com` and `github.com` unchanged. A sandbox has no other way
 to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to them is refused
@@ -731,9 +845,9 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   carries none (git's first request, a download with `curl`) is the run's whose sandbox has
   its address; never its engine's, whose builds and containers don't get the token (from
   there, such a call gets `401`). The proxy names the network (or pod) of the sandbox the
-  listener's egress policy found at that address, in an `X-Deckhand-Sandbox` header, replacing
+  orchestrator's egress policy found at that address, in an `X-Deckhand-Sandbox` header, replacing
   any the client sent (and drops one from every request it doesn't relay), with its own service
-  token: the github service believes it from the proxy alone (or the listener relaying, which
+  token: the github service believes it from the proxy alone (or the orchestrator relaying, which
   finds it the same way), and binds the run token to it. A token that doesn't check, an
   unknown or finished run's, or any other credential, gets `401`; another sandbox's `403`; a run
   without `pull` (a research run: `readsGitHub()`) `403`, whatever it sends.
@@ -780,14 +894,14 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   field selects GitHub's own `issue { url }`, unaliased (an alias such as `url: title` would
   answer with a URL of the run's choosing), since another field could answer under that name
   with any issue; no older than that call; written by the
-  App's bot, which files issues for every run and for the listener, so that alone says
+  App's bot, which files issues for every run and for the orchestrator, so that alone says
   nothing; saved with the run across restarts), another issue
   or pull request. A comment by its id (`…/issues/comments/<id>`, GraphQL's
   `updateIssueComment` and `deleteIssueComment`) must be one the run posted (issue #455): GitHub
   answered one of its own comments with it (REST's `201`, or `addComment`'s
   `commentEdge { node { url } }`, under the same rules on response keys and aliases as
   `createIssue`'s), saved with the run, and it is still the App's bot's on GitHub. Any other,
-  the listener's own included (the same bot writes them), is refused before any look-up. A sub-issue link's child, named by its id, must be one the run created or
+  the orchestrator's own included (the same bot writes them), is refused before any look-up. A sub-issue link's child, named by its id, must be one the run created or
   one already under its issue, and moving an issue from
   another parent (`replace_parent` with any value but `false`) is refused: a link could
   otherwise take any issue under the run's, where its policies would let it edit. A "blocked by"
@@ -807,7 +921,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   write with a query string is refused unchecked: GitHub may read parameters there too. Then:
   - a write it can't classify and one outside the run's repository are refused before any
     policy runs, and so is every write of a run whose refused writes already cost 100 look-ups
-    on GitHub in the last hour (`MAX_REFUSED_LOOKUPS`: they share the listener's rate limit;
+    on GitHub in the last hour (`MAX_REFUSED_LOOKUPS`: they share the orchestrator's rate limit;
     each look-up counts as it is made, and is given back when its write goes on or GitHub or
     the policy service failed), and so are the **built-in checks** that hold whatever a policy says: a link's
     child and blocker (above), a reaction removed only if the run added it, an assignee, a
@@ -818,15 +932,15 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     users or the App's bot, never Copilot: an assignment notifies them. A reaction's target is
     the comment's issue or pull request, read from GitHub; a run removes only the reactions
     GitHub said it added and hasn't removed since (saved with the run like the issues it
-    created, its 100 newest): the App's bot also adds the listener's reactions, which a run
+    created, its 100 newest): the App's bot also adds the orchestrator's reactions, which a run
     never removes, on any comment, even where the run's same reaction came first (GitHub keeps
-    one per user and content): the listener notes each one before it asks GitHub
-    (`reactions.json`, issue #458). Whatever a policy says, no run writes the repository's
+    one per user and content): the orchestrator notes each one before it asks GitHub
+    (`PUT /reactions`, in the github service's store; `reactions.json` before, issue #458). Whatever a policy says, no run writes the repository's
     contents (pushes go through the git gateway) or settings, reviews, or a comment it didn't
     post;
   - an item added to a project (v2) (`addProjectV2ItemById`, issue #454) is a `project` on
     its content. A project is outside every repository, so per-repo config
-    can't name one: its project, looked up from its node ID with the listener's token, must
+    can't name one: its project, looked up from its node ID with the orchestrator's token, must
     be one the operator's grants list for the repository (`allow_projects`), or it is refused
     before any policy, which can't reach another. Only that write's token gets
     `organization_projects: write`. In a granted repository, only the runs the policies allow
@@ -836,7 +950,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     analysis, which read outsiders' text (the App can't narrow its token to one project: their titles, fields and the
     items it can see, which GitHub redacts for repositories the token doesn't cover). Setting
     an item's fields, removing or archiving it, and the project's settings, fields and views
-    are refused: the listener moves the repository's issues itself, from its
+    are refused: the orchestrator moves the repository's issues itself, from its
     `projects:` ([Projects](repo-config.md#projects)), on granted projects only;
   - then the policies' **`allow_github` and `deny_github`** ([Policies](#policies)): the write
     goes on when an allow rule of the operator's matches it (the repository's too for its own
@@ -852,7 +966,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     pull requests. Its deny rules refuse deleting a comment, resolving a person's thread,
     assigning anyone and a rerun past a first. A brainstorm (`mode-brainstorm.rego`) edits and
     reacts on its own issue, files issues and labels, orders and files its follow-ups (a
-    "blocked by" link, a project, a milestone), and never comments: the listener posts its
+    "blocked by" link, a project, a milestone), and never comments: the orchestrator posts its
     reply. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label
     and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,
     analyses, reviews and research write nothing. No default rule
@@ -870,7 +984,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   allows `rerun` on the run's own, `own_pr`, to work runs and a repository's modes), and its branch must be one the run may push (`github-pulls.mjs`). A run of Deckhand's reruns twice at most per
   head commit (`MAX_RERUNS`: a rerun takes a slot once its checks pass, with no await between
   the count and the slot, so calls made at once can't pass it; the slot is saved with the run
-  before the call goes out, so a listener restarted meanwhile still counts it, and is freed when GitHub
+  before the call goes out, so a github service restarted meanwhile still counts it, and is freed when GitHub
   refuses it or it never goes out, and counted from GitHub's answer (or from none at all: a
   call whose answer was lost may have gone out, so it counts, fail closed), with the run and commit its check
   resolved, never looked up again, and saved with the run across a restart), and Deckhand's
@@ -891,8 +1005,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   GraphQL `GET` and a query string are refused, as GitHub would otherwise run something
   unchecked. A document with no mutation skips one of the spec's rules, the one on fields
   that can't merge (fragments on distinct types selecting a field of two types, as
-  `gh issue view` does): GitHub doesn't apply it, and a query's token only reads. Validation runs in a worker thread (`createValidator()`), never on the listener's
-  thread (its webhooks, dashboard and REST calls), one document at a time, taken from the
+  `gh issue view` does): GitHub doesn't apply it, and a query's token only reads. Validation runs in a worker thread (`createValidator()`), never on the github service's
+  main thread (its other runs' calls, the orchestrator's and edge's), one document at a time, taken from the
   runs in turn, so one that floods the worker (with as many calls as the gateway lets a run
   have at once) delays itself, not the other runs. A document validated for over 10
   seconds is refused alone (`503`), and the worker started again for the others. A query goes on. A call holds 10 mutation
@@ -903,7 +1017,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   a parent or a template at creation, Copilot's assignment, a sub-issue by URL are refused), except the empty fields gh always sends, which set nothing
   (`createIssue`'s `projectIds` as `null` or `[]`, issue #422; one with a project is refused): a mutation
   GitHub adds is refused until Deckhand names it. The node IDs the fields name, inline or in
-  their variables (resolved as GitHub resolves them), are looked up with the listener's
+  their variables (resolved as GitHub resolves them), are looked up with the github service's
   token to a repository, a kind and a number, so the call's own claims say nothing; a node
   outside the run's repository is refused like a missing one, before its type is named; each
   field is then a write as above, held to the built-in checks, `allow_github` and
@@ -968,7 +1082,7 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
   the egress proxy doesn't open. The gateway follows that one redirect itself (HTTPS, no
   credential sent, the signed URL being its own), only to GitHub's log storage
   (`*.blob.core.windows.net`, `*.githubusercontent.com`) or GitHub's own host
-  (`logStorage()`: the listener isn't behind the egress proxy) and streams the log back
+  (`logStorage()`: the github service isn't behind the egress proxy) and streams the log back
   (`github-gateway.mjs` `ACTIONS_LOGS`); any other redirect goes back to the sandbox as it
   came.
 - **Two exceptions, neither with a token**, which reach GitHub's hosts through a tunnel
@@ -990,11 +1104,11 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
 
 The operator's agent credentials (Claude, OpenAI and Google keys, a gateway's token, the plans'
 logins) are in one service only, the **models service** (`models/`, #504): its environment, and
-the plans' files in its credentials folder, mounted read only. Not in the listener, the runner,
+the plans' files in its credentials folder, mounted read only. Not in edge, the orchestrator, the runner,
 the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`).
 
-- **Who calls it.** The egress proxy, with the sandboxes' agent calls, and the listener as the
-  orchestrator, each over a network of its own that only the two of them are on; every call
+- **Who calls it.** The egress proxy, with the sandboxes' agent calls, and the orchestrator, each
+  over a network of its own that only the two of them are on; every call
   carries the caller's [service token](#service-tokens), checked against one table of what each
   caller may do (`models/http.mjs` `ROUTES`): the proxy reaches the agents' endpoints alone; the
   orchestrator also learns which credentials it holds (names only), their fingerprints, a run's
@@ -1003,17 +1117,17 @@ the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`
 - **A run's agent token, checked offline.** A sandbox's call arrives with its run's agent token
   (moved by the proxy into `x-deckhand-run-token`, its own service token in `Authorization`)
   and the network (or pod) the proxy vouches it came from (`x-deckhand-sandbox`, from the
-  listener's egress policy, as for the broker). The service checks the token with the broker's
+  orchestrator's egress policy, as for the broker). The service checks the token with the broker's
   public keys, for the agents' audience, from that network only, for a run the broker says still
   goes (asked every 30 s at most, its last answer kept 10 minutes while it is away), and reads
-  its **`agent` claim**: the provider, and the credential of its, the listener chose for the run
+  its **`agent` claim**: the provider, and the credential of its, the orchestrator chose for the run
   (`claude@anthropic:key`). A Claude Code run's token gets no OpenAI key, nor the plan when it
   names the key; a token from before that claim gets the provider the broker's record of its run
   names (`models/runs.mjs`).
 - **Sandboxes outlive the update.** Their agents keep the base URL they started with, the
   broker's host (`<broker>/anthropic`, …): the egress proxy sends those paths to the models
   service, and the hosts it relays for the Antigravity CLI on a plan too (the egress policy says
-  `models: true`). A proxy from before it still sends them to the listener, which relays them
+  `models: true`). A proxy from before it still sends them to the orchestrator, which relays them
   on, streaming, vouching for the sandbox as the proxy would (`listener/models-service.mjs`
   `relay()`). A run from before run tokens, whose sandbox holds a secret instead, gets no agent
   call any more.
@@ -1026,7 +1140,7 @@ the broker or any sandbox (a test reads `compose.yaml`: `test/networks.test.mjs`
   sign-in). Their refresh tokens are single-use, so one copy refreshes at a time, holding a
   lease in the store, and the others wait for its result; a refused refresh is saved too, so no
   copy spends the login again until the file is replaced.
-- **What the listener learns.** Which credentials are set, by name (its settings need them:
+- **What the orchestrator learns.** Which credentials are set, by name (its settings need them:
   which agents may run, `FALLBACKS`), and their **fingerprints** for redaction (`GET
 /fingerprints`: a salt, each value's length and salted SHA-256, and the salted SHA-256 of
   each of its 16-character parts at fixed offsets, with a 32-bit rolling hash of each part that
@@ -1064,7 +1178,7 @@ and end up in a public comment.
   credential elsewhere. A sandbox never reaches the gateway itself, so it needs no host.
 - So a run's agent token can call the API with your credential while the run lasts, and nothing
   after: what a run copied out of its sandbox can't.
-- The listener redacts the run's tokens from the sandbox's output before writing the run's log
+- The orchestrator redacts the run's tokens from the sandbox's output before writing the run's log
   (what the dashboard shows) and from its reply before posting it, as `[redacted]`: the value,
   or any part of it 16 characters long or more (a value cut off in an error message); a value
   shorter than that isn't redacted (it would be no credential, and would redact ordinary words),
@@ -1133,7 +1247,7 @@ point at the models service, and its calls go to Google directly, so it is kept 
   `daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` as relayed: the proxy ends the
   sandbox's TLS with Deckhand's CA (see [HTTPS and Deckhand's CA](#https-and-deckhands-ca)),
   cache on or off, and sends each request to the models service
-  (`<MODELS_SERVICE_URL>/relay/<host>/<path>`; a proxy from before it, to the listener's
+  (`<MODELS_SERVICE_URL>/relay/<host>/<path>`; a proxy from before it, to the orchestrator's
   `RELAY_URL`, which relays it on) instead of the host, never as a tunnel. A path that could
   leave `/relay/<host>/` once parsed (`..`, `%2e`, `\`, or not starting with `/`) gets a
   `400` and never reaches either. The models service
@@ -1168,7 +1282,7 @@ hosts, through the same proxy. Check the hosts and paths again when you change `
 (`claude@openrouter` in `FALLBACKS`), is kept out the same way: such a run's Claude Code gets
 the run's agent token as `ANTHROPIC_AUTH_TOKEN`, and the models service's Anthropic endpoint,
 which the token's `agent` claim tells which provider the run is on, sends the call to
-`OPENROUTER_BASE_URL` with your key. A sandbox can't pick its provider: only the listener sets
+`OPENROUTER_BASE_URL` with your key. A sandbox can't pick its provider: only the orchestrator sets
 it, from `FALLBACKS`, and the broker signs it into the run's tokens. The key is
 redacted like the others.
 
@@ -1191,14 +1305,14 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
   is a line in the run's log ("Deckhand refused the agent's call …"), redacted like the
   sandbox's output: an agent version that needs another path shows up there. Each call is
   noted once (by each copy of the models service), and the first 20 only, then one line saying
-  the rest aren't, which the service streams to the listener (its `models` stream): the
-  listener's own lines are written even past `RUN_LOG_MAX_MB` (see [Output](#output)), so a sandbox looping
+  the rest aren't, which the service streams to the orchestrator (its `models` stream): the
+  orchestrator's own lines are written even past `RUN_LOG_MAX_MB` (see [Output](#output)), so a sandbox looping
   on refused calls can't grow its log without end. When a new `CLAUDE_CODE_VERSION`,
   `CODEX_VERSION` or `AGY_VERSION` needs another path, add it to the endpoint's list (`ROUTES`, `GEMINI_ROUTES`,
   `RELAYED_PATHS`).
-- Each endpoint serves its agent's runs only, from the provider the listener gave the run
+- Each endpoint serves its agent's runs only, from the provider the orchestrator gave the run
   (`broker.provide()`, claimed by its tokens): a Claude Code run's token gets no OpenAI key,
-  and a run without a provider gets no credential at all. A run a restarted listener picks up
+  and a run without a provider gets no credential at all. A run a restarted orchestrator picks up
   whose saved record names no provider gets its agent's default one.
 - A run has at most 16 calls in flight through all the endpoints of a copy of the models
   service together (32 with two copies): the next one answers `429` (agents retry those) until
@@ -1220,7 +1334,7 @@ A sandbox only gets Docker named volumes:
 | `<prefix>-<owner>-<repo>-<n>-<hash>-light-<agent>`              | the agent session of its light runs                                                             |
 | `<prefix>-<owner>-<repo>-<n>-<hash>-light-push-workspace`       | the clone of its light runs the policies give `push` (and their `-light-push-<agent>`)          |
 | `<prefix>-<owner>-<repo>-<n>-<hash>-research-…`                 | a research run's own (see [Research runs](#research-runs))                                      |
-| `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the listener                                                      |
+| `<prefix>-claude-code`, `-codex`, `-antigravity`, **read-only** | the run's agent, installed by the runner                                                        |
 | `<prefix>-cache-<owner>-<repo>-<path>-<hash>`                   | the repo's `caches`, its own                                                                    |
 
 `<agent>` is the run's agent (`claude`, `codex`, `antigravity`), and `<prefix>` the
@@ -1252,7 +1366,7 @@ capabilities pick them.
 Anyone can open a pull request from a fork, and an allowed user may ask for work on it: a
 comment on it, or on another of the issue's pull requests, triggers a run whose code then
 runs the fork's, through its setup, tests or the agent. Such a run is a fork's run (the
-listener looks up each pull request the run's comments came from), and must not reach what
+orchestrator looks up each pull request the run's comments came from), and must not reach what
 the repository's later runs trust and execute:
 
 - **Container engine**: none, whatever the grant (see [Container engine](#container-engine)).
@@ -1363,7 +1477,7 @@ see the difference, and doesn't claim to.
 - **Lookups**: a run's calls may cause 120 lookups on GitHub a minute (answers already kept
   don't count), whatever host they came by: past that, its calls that need one get `429`
   until the minute is over. The installation's rate limit is the repository's other runs'
-  and the listener's too.
+  and the orchestrator's too.
 - **GraphQL** (`listener/github-forks.mjs` `checkGraphql()`, its fields followed with their
   types through the pinned schema): a fragment on `Blob`, the only type that holds a whole
   file, is refused whatever it names (an expression such as `refs/pull/7/head:a.js` can name a
@@ -1450,19 +1564,20 @@ hooks, `.claude/settings.json`, before the model reads anything). Before either 
 
 What it can still reach is in [Not covered](#not-covered).
 
-No volume of the listener's is mounted (#393). A run's files go through the broker's port
+No volume of the orchestrator's (or edge's) is mounted (#393). A run's files go through the broker's port
 (`run-files.mjs`, [Run files](architecture.md#run-files)), with the run token, which works
 from its own sandbox only ([Run tokens](#run-tokens)), and only for its own run's files:
 
 - **Its inbox** (the comments delivered to it), **the egress proxy's CA and its digest**: read
-  only, from the listener's runs folder (a file rather than the container's stdin, so a run
-  outlives a listener restart). Another run's token, or one sent from another sandbox, gets
+  only, from the broker's store (rather than the container's stdin, so a run
+  outlives an orchestrator restart). Another run's token, or one sent from another sandbox, gets
   `403`; none, or a finished run's, `401`.
-- **Its screenshots**: uploaded into its own folder of the listener's `shots/`, named with
-  24 random hex digits, which it can't list. The listener writes each file itself, after
+- **Its screenshots**: uploaded into its own folder at the broker, named with
+  24 random hex digits, which it can't list. The broker takes each file after
   checking it: a name `GET /shots` serves (`[\w.-]+` with `.png`, `.jpg`, `.jpeg` or `.webp`),
   content starting the way that type does (so no HTML is served as an image), at most 10 MB a
-  file and 100 MB a run. It renames it into place, so `/shots` never serves half a file. A
+  file and 100 MB a run. The orchestrator copies it into its `shots/` and renames it into place, so `/shots`
+  (served through edge) never serves half a file. A
   research run has no folder: refused. `/shots` still serves only regular files (no
   symbolic or hard link, nothing resolving elsewhere): folders from before #393 were written
   by sandboxes.
@@ -1470,7 +1585,7 @@ from its own sandbox only ([Run tokens](#run-tokens)), and only for its own run'
 Each agent's install volume (Claude Code's, Codex's, the Antigravity CLI's) is shared by
 every repository, so it is read-only in sandboxes: a run that could replace `claude` there
 would run its code in the next sandbox of any repository, with that run's tokens and
-grants. The listener installs each version before the first run that needs it, as root, so
+grants. The runner installs each version before the first run that needs it, as root, so
 its files don't belong to the sandboxes' user, uid 1000, either. A Claude Code install that
 finds the volume owned by uid 1000 (from an older Deckhand) takes it over and reinstalls from
 npm rather than keep what a sandbox could have changed. A sandbox whose version isn't
@@ -1507,7 +1622,7 @@ A host path reaches a sandbox only when **both** sides agree:
      - /nfs/work/docs # read-only
    ```
 
-At each run, the listener resolves each requested path with `realpath` (`..` and every
+At each run, the orchestrator resolves each requested path (and the runner again) with `realpath` (`..` and every
 symlink) and checks that the result is the root or inside it. With `/nfs/work` granted:
 
 | Requested                          | Result                                            |
@@ -1550,23 +1665,23 @@ when the run builds an image first. Two things keep a sandbox from redirecting i
   for the path read-only.
 
 What isn't guaranteed: ACLs and NFS server-side permissions aren't read, only the mode bits,
-owner and group the listener sees. Read-only requests aren't checked this way, so a path
+owner and group the orchestrator sees. Read-only requests aren't checked this way, so a path
 under a directory some sandbox can write could still be swapped in the moment between the
 last check and the mount; grant read-write roots that don't hold your read-only ones. A
 process outside Deckhand that can write the root can always redirect a mount. If uid 1000 is
 also your own user on the host, the directories you own count as writable by sandboxes.
-Directories above a root are checked as the listener's container sees them (Docker makes its
-`/nfs` root's, whatever the host's is): a sandbox only writes the host's through a granted
-root, which the listener sees at the same path, so mount every root into the listener.
+Directories above a root are checked as the orchestrator's container sees them (Docker makes
+its `/nfs` root's, whatever the host's is): a sandbox only writes the host's through a granted
+root, which the orchestrator sees at the same path, so mount every root into the orchestrator.
 
-**The listener must see each root**, at the same path, to resolve what is asked: mount it
-into the listener read-only in `compose.yaml` (`- /nfs/work:/nfs/work:ro`). A root it can't
-see grants nothing.
+**The orchestrator and the runner must see each root**, at the same path, to resolve what is
+asked: mount it into both read-only in `compose.yaml` (`- /nfs/work:/nfs/work:ro`). A root they
+can't see grants nothing.
 
 ## The grants folder
 
 What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
-(`/etc/deckhand/grants` in the listener: `grants/` in the
+(`/etc/deckhand/grants` in the orchestrator and the services that read it: `grants/` in the
 [server folder](setup.md#the-server-folder) `compose.yaml` mounts read-only, with
 [`server.example/grants/`](../server.example/grants) to start from): one file per
 repository for its hosts, projects, mounts and limits, `default.yaml` for every repository,
@@ -1594,7 +1709,7 @@ hosts: ["*.acme.dev", pypi.org]
 # egress cache below), besides default.yaml's.
 cached_hosts: [apt.acme.dev]
 # Organization projects (v2), <organization>/<number>, its runs add their issues and pull
-# requests to, and the listener moves its issues on (see Projects in repo-config.md). Needs the
+# requests to, and the orchestrator moves its issues on (see Projects in repo-config.md). Needs the
 # App's Organization projects permission. Per repository only.
 allow_projects: [acme/3]
 # Its own limits; missing ones keep default.yaml's, else the built-in 2 CPUs, 4g, 2048.
@@ -1629,13 +1744,13 @@ for `false`, which granted nothing, to remove it
 ([Upgrading](setup.md#upgrading-the-grants-498)).
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
-nothing: its runs stop, with a reply naming the file (the details are in the listener's logs,
+nothing: its runs stop, with a reply naming the file (the details are in the orchestrator's logs,
 not on GitHub), and the dashboard's repositories tab shows it as invalid, with the file and
 its errors in its panel. Other repositories keep running. A broken `default.yaml`, or a
 `.yaml` file that isn't `default.yaml` or `<owner>/<repo>.yaml` (deeper or at the top, a
 `.yml`, a name GitHub doesn't allow, `acme/API.yaml` next to `acme/api.yaml`), stops every
-run, and the listener won't start with one. At start, a repository's broken file is logged
-and the listener starts anyway.
+run, and the orchestrator won't start with one. At start, a repository's broken file is logged
+and the orchestrator starts anyway.
 
 **Symlinks** are followed while they stay in the folder: one leading outside it is an error,
 for that repository when it is its file, for every repository when it is a folder.
@@ -1652,7 +1767,7 @@ folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
 /server/grants/globex/         @globex/admins
 ```
 
-`compose.yaml` mounts the server folder read-only into the listener; pull it on the host and
+`compose.yaml` mounts the server folder read-only into the services that read it; pull it on the host and
 the next run reads the change.
 
 Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an alias. See
@@ -1663,14 +1778,14 @@ apply.
 a preview hook holds the Docker socket, so it is root on the host (the App's key in
 `/data`, the Claude credential, every repository's volumes); a Dockerfile is built on the
 host's Docker with its network (on Kubernetes, by the cluster's BuildKit daemon, through the
-egress proxy with the repo's hosts only, and pushed to the operator's registry; the listener
+egress proxy with the repo's hosts only, and pushed to the operator's registry; the runner
 refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
-listener can't see. The registry has to require credentials to pull, push and delete (the listener doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
+runner can't see. The registry has to require credentials to pull, push and delete (Deckhand doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
 [Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `preview` without
 the `preview` grant, or `dockerfile` without the `dockerfile` grant, gets neither: its runs stop
 and the reply on the issue says which grant is missing, like refused mounts, and its preview
-hook doesn't run (the listener's logs say why:
+hook doesn't run (the orchestrator's logs say why:
 `ignored: pull_request: preview hook of <repo> not run: …`). Grant them to repositories
 whose default branch you trust as much as the host itself. `branch_docker_images`
 is a grant too, not a `.deckhand.yaml` key: it lets anyone who can push a branch of the
@@ -1717,10 +1832,10 @@ allow_grant if {
 - **One repository at a time**: `docker`, `workflows`, `auto_merge`, `auto_merge_public` and
   `acknowledge_automerge_and_preview_is_highly_dangerous` (an engine, workflow files run with
   the Actions secrets, merges nobody reviewed are too broad to grant every repository by
-  accident). The listener asks each of them again for two repositories nobody has: `*/*`, and
+  accident). The orchestrator asks each of them again for two repositories nobody has: `*/*`, and
   `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that also
   grants it there (one without `input.repo.name`, a `startswith` on the owner, a `glob.match`
-  with `*`) gives it to none, and the listener logs why. This is a best-effort check, not a
+  with `*`) gives it to none, and the orchestrator logs why. This is a best-effort check, not a
   guarantee: a rule that doesn't match those two names (`regex.match("^acme/[a-z-]+$", …)`,
   `endswith(input.repo.name, "/api")`) still grants every repository it matches. List each
   `input.repo.name`. The others may go to every repository (a rule without `input.repo.name`).
@@ -1740,7 +1855,7 @@ allow_grant if {
 - **Where they show**: a refusal says, for example, "the operator's policies don't grant
   `docker` to this repository (`allow_grant`)". The repository's config page names each grant,
   with the policy files that have `allow_grant` rules, and its Capabilities tab each
-  capability's grant. The `/mode policy` dry run doesn't ask them. At start, the listener warns
+  capability's grant. The `/mode policy` dry run doesn't ask them. At start, the orchestrator warns
   for each policy file of the grants folder whose `allow_grant` rules name `auto_merge` or
   `auto_merge_public`.
 
@@ -1749,8 +1864,9 @@ allow_grant if {
 A comment reaches Claude when its author is in `ALLOWED_USERS` and the repository's own
 `users`, and those are checked again later, not only when it arrives:
 
-- a comment queued when the listener stops (or crashes) keeps its author in the queue, saved
-  in the store as it comes (`store/state.json`): the next listener drops it (and takes its 👀 off) when its author or repository is no longer
+- a comment queued when the orchestrator stops (or crashes) keeps its author in the queue, saved
+  in the store as it comes (`store/state.json`): the next orchestrator (or the copy waiting for
+  its lease) drops it (and takes its 👀 off) when its author or repository is no longer
   allowed;
 - every queued comment is checked again against the repository's `users`, read from its
   default branch, when its run begins (or, for a run still going after a restart, before it
@@ -1762,21 +1878,22 @@ A comment on a pull request goes on in the session of the issue the pull request
 (`Closes #12` in its description) only when the pull request's head branch is in the
 repository, as for the branches a run may push: anyone can open a pull request from a fork
 saying `Closes #12`, and an allowed user's comment on it would otherwise go on in issue 12's
-session. An issue comment's payload doesn't have the head: the listener trusts the App's own
+session. An issue comment's payload doesn't have the head: the orchestrator trusts the App's own
 pull requests (`<slug>[bot]`, Claude's) and looks the others up, whoever opened them
 (another App, `github-actions[bot]`, a collaborator). Anything else is the pull request's
 own task.
 
 GitHub may send a delivery again (by hand from the App's settings, or after a timeout on its
-side): the listener remembers the last 500 delivery ids (`X-GitHub-Delivery`) and handles
-each once. A restart forgets them.
+side): edge takes each delivery id (`X-GitHub-Delivery`) once, in its store, for a day, across
+restarts and for both its copies; and the orchestrator handles each once, a delivery it handled
+whose acknowledgement was lost included ([Edge](#edge), [The orchestrator](#the-orchestrator)).
 
 ### Auto-pickup
 
 With `AUTO_PICKUP_SLOTS` set and a repository's `auto_pickup: true`, a label starts a run
-with no comment: the listener picks the open issues labelled `AUTO_PICKUP_LABEL` by itself
+with no comment: the orchestrator picks the open issues labelled `AUTO_PICKUP_LABEL` by itself
 (`listener/auto-pickup.mjs`, [setup.md](setup.md#auto-pickup)). The label stands for an
-allowed user's trigger comment, so the listener checks what it would check of one, and what
+allowed user's trigger comment, so the orchestrator checks what it would check of one, and what
 it couldn't see of a label:
 
 - the run is the work of whoever last added the label (the issue's `labeled` events): they
@@ -1805,53 +1922,89 @@ it couldn't see of a label:
 ## The dashboard
 
 Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose tool output
-may hold what a run read) are shown to the users in its own `users` too, as the listener last
+may hold what a run read) are shown to the users in its own `users` too, as the orchestrator last
 read them (for a run or a comment, or for the repositories tab); a repository whose
-`.deckhand.yaml` hasn't been read since the listener started is shown to every allowed user
+`.deckhand.yaml` hasn't been read since the orchestrator started is shown to every allowed user
 until it is. `/status` lists them the runs, preview hooks and queued comments of those
-repositories only. An open live log stops within a second of its viewer signing out or
-leaving the repository's `users`. The repositories tab and its configs are shown to every
-allowed user.
+repositories only. An open live log stops within a second of its viewer leaving the
+repository's `users`. Edge checks the session on each request it passes on, not during a
+stream: a live log already open goes on after a sign-out until its stream ends or reconnects.
+The repositories tab and its configs are shown to every allowed user.
 
-Every answer on the listener's port carries `Content-Security-Policy: default-src 'self';
+Every answer on edge's port carries `Content-Security-Policy: default-src 'self';
 frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`: the dashboard runs its own
 scripts only (its build has none inline), and no page can frame it to get a signed-in user to
 click Start, Cancel or Rerun, which `SameSite=Lax` would let a sibling domain do. The setup
 and sign-in pages narrow it to `default-src 'none'`, their own images, and their style by its
 hash.
 
-A session is a signed cookie, valid for 7 days, with the login and its **epoch**. Signing out
-bumps the login's epoch (`/data/sessions.json`): every session of that login ends, in any
-browser, including a copied cookie. Removing a user from `ALLOWED_USERS` and restarting also
-signs them out; rotating `/data/session.key` signs everyone out.
+Edge signs users in and holds their sessions ([Edge](#edge)); the orchestrator, which answers
+the dashboard's API, only learns the login edge passes on with its service token. A session is
+a signed cookie, valid for 7 days, with the login and its **epoch**. Signing out bumps the
+login's epoch, in edge's store (`sessions/<login>`): every session of that login ends, in any
+browser, on either copy of edge, including a copied cookie. Removing a user from `ALLOWED_USERS`
+and restarting edge also signs them out; rotating `session.key` in edge's volume signs everyone
+out.
 
-`/status` answers calls from inside the listener's container without a session. A reverse
+`/status` answers calls from inside edge's container without a session (edge passes them on as
+local, `x-deckhand-local`). A reverse
 proxy on the host's network calls from loopback too: a request carrying `Forwarded`,
 `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` needs a session. If your proxy adds none
 of them, keep `/status` from it.
 
-## The listener's data
+## Edge's and the orchestrator's data
 
-The data volume (`/data`) holds what the listener keeps; whoever reads it can sign deliveries as
-GitHub and sign in users, but not act as the App (its key is the github service's). The files
-holding secrets are the owner's only (`0600`):
+**Edge's volume** (`edge-data`, its `/data`) holds its three secrets: whoever reads it can sign
+deliveries as GitHub and sign in users, but not act as the App (its key is the github
+service's). The files holding secrets are the owner's only (`0600`):
+
+| File          | What                                                                                                                                                                          |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.json`    | the App's names, its webhook secret and its OAuth client's (never its key)                                                                                                    |
+| `session.key` | signs dashboard sessions                                                                                                                                                      |
+| `store/`      | its store: the delivery ids taken, each login's session epoch, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
+
+**The orchestrator's volume** (`data`, the listener's from before, kept under its name) holds
+nothing that signs deliveries or sessions once a listener's App went to edge and the github
+service (below); whoever reads it reads the queue and what the runs did, and a running run's
+agent token. The files holding one are the owner's only (`0600`):
 
 | File                     | What                                                                                                                                      |
 | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.json`               | the App's client and webhook secrets (its key, from a listener before the github service, until handed over at start)                     |
-| `session.key`            | signs dashboard sessions                                                                                                                  |
-| `sessions.json`          | each login's session epoch                                                                                                                |
 | `run-token.pub`          | the public part of the key a listener from before the broker service signed the runs' tokens with, for 7 days ([Run tokens](#run-tokens)) |
 | `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over)                                                                         |
-| `store/state.json`       | the store's keys: the queued comments, with their authors                                                                                 |
+| `store/state.json`       | the store's keys: the queued comments, with their authors; its lease and fencing epoch; the deliveries it handled                         |
 | `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes                                                                             |
 | `waits.json`             | comments waiting for other issues (`/after`), with their authors                                                                          |
 
+**A listener's App.** An update from a release that ran the listener leaves its `app.json` in
+the `data` volume the orchestrator takes over. The orchestrator hands the App's key to the
+github service (`PUT /app`, [The github service](#the-github-service)), then the rest (the
+webhook secret, the OAuth client's, the session key and the sign-outs' epochs) to edge (`PUT
+/app` on its internal port), once; then it removes `app.json`, `session.key`, `sessions.json`
+and `redeliveries.json` from `/data`, where nothing secret stays. Edge refusing them (it holds
+another App: `409`) keeps them there until the operator removes one of the two, as the
+orchestrator's log says. Edge takes the listener's session key only when it had no App yet, so
+running sessions survive the update then; it never replaces a key its own sign-ins were made
+with.
+
+**The store** (`STORE_URL`: a folder by default, Redis #509) never holds a secret. Each
+service's refuses a value or an event holding one it knows, a GitHub token or a private key
+(`lib/store.mjs` `withoutSecrets()`): edge's refuses its webhook secret, OAuth client secret and
+session key. What people wrote (a delivery's payload, a queued comment) is kept with them
+redacted (`storable()`), rather than refused whole. The file backend (`lib/store-file.mjs`) may
+be shared by several processes on one node: two copies of a service on one volume
+(`docker compose up -d --scale orchestrator=2`, or edge), or one starting while the last
+drains. Each call holds the folder's lock (`state.lock`, taken over once 10 seconds stale, one process at a time), reads
+`state.json` again when another process wrote it, and a stream's new lines. Copies on several
+nodes need Redis.
+
 The runs' signing key is the broker service's alone, in its own volume (`broker-keys`), with
 its store (`broker-store`: the live runs, the hashes of their tokens, their inbox and files):
-neither is the listener's. The App's key is the github service's alone, in its own volume
-(`github-key`), with its store and git mirrors (`github-data`: the runs' state, the listener's
-reactions, the idempotency keys and their answers).
+neither is edge's nor the orchestrator's. The App's key is the github service's alone, in its
+own volume (`github-key`), with its store and git mirrors (`github-data`: the runs' state, the
+orchestrator's reactions, the idempotency keys and their answers, the newest orchestrator epoch
+it saw).
 
 The agents' credentials are the models service's alone: its environment, and the credentials
 folder, a folder on the host mounted read only there (`./credentials` by default) whose
@@ -1862,13 +2015,10 @@ own volume (`models-keys`): whoever reads both has the plans.
 
 Run logs, which the runner keeps in its own volume ([The runner's data](#the-runners-data)),
 have the operator's credentials, the run's tokens and its GitHub tokens redacted (see
-[The Claude credential](#the-claude-credential)): the listener redacts each line before it
-sends it. Their summaries (`logs/<run>.json`, the listener's) hold what the log's first line
+[The Claude credential](#the-claude-credential)): the orchestrator redacts each line before it
+sends it. Their summaries (`logs/<run>.json`, the orchestrator's) hold what the log's first line
 does, the run's comments included, and its screenshots' folder. Both, and the screenshots, go
 after `LOG_RETENTION_DAYS` (90 by default).
-
-`store/` holds the listener's fencing epoch (nothing secret, [The runner
-service](#the-runner-service)).
 
 ### The runner's data
 
@@ -1891,8 +2041,9 @@ what a `/cancel` comment does: only the repository's half of the checks below ap
 run may go on on a closed issue; refused when nothing runs or is queued). The work area
 starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at each request:
 
-- a signed-in dashboard session, and an `Origin` header naming this listener (its
-  `PUBLIC_URL`, or the host the browser asked for): a page elsewhere can't post for a
+- a signed-in dashboard session, and an `Origin` header naming this Deckhand (its
+  `PUBLIC_URL`, or the host the browser asked edge for, which edge passes on in
+  `x-deckhand-origin` and `x-deckhand-host`): a page elsewhere can't post for a
   signed-in user, on top of the session cookie's `SameSite=Lax`;
 - the repository in `ALLOWED_REPOS` (when set: by name, or through its owner's `owner/*`)
   and the App installed on it;
@@ -1903,7 +2054,7 @@ starts runs, so it is checked as a comment that waited is (`tasks.resume()`), at
 
 Each action is written on the issue as the App's comment ("Started from the dashboard by
 @alice"), so the issue's history says who started what, as a trigger comment would. The
-App's comments are ignored as triggers, so the listener queues or holds the work itself
+App's comments are ignored as triggers, so the orchestrator queues or holds the work itself
 rather than through a webhook. The backlog (`GET /api/repos/<owner>/<repo>/issues`) lists a
 repository's open issues to signed-in users in its `users` (all of them while its config has
 errors), from GitHub at most once every 30 seconds per repository, or after an `issues`
@@ -1935,7 +2086,7 @@ Its Dismiss (`POST /api/repos/<owner>/<repo>/dismiss { runId }`) passes the repo
 of these checks (same origin, the user in `ALLOWED_USERS` and the repo's `users`, a config
 without errors), not the issue's: a closed or busy item may be dismissed, since nothing runs.
 It takes only the task's latest run, when it ended in `error`, `interrupted` or `cancelled`. It
-is the listener's own state (`dismissed.json`: the run, who dismissed it and when), which only
+is the orchestrator's own state (`dismissed.json`: the run, who dismissed it and when), which only
 the dashboard reads; nothing is posted on GitHub. Its Undo (`{ runId, undo: true }`) is open to
 any of the repo's users, whoever dismissed it, as the dismissal is.
 
@@ -1961,21 +2112,21 @@ posted on the inbox issue as the App's comment, ending "From the dashboard by @a
 run reads it as that user's entry, as it would read their own comment there.
 
 A lane's name (`POST /api/repos/<owner>/<repo>/lane`) passes the repository's half too, for
-keys of that repository's issues and pull requests only. It is the listener's own state
+keys of that repository's issues and pull requests only. It is the orchestrator's own state
 (`lanes.json`), never posted on GitHub nor read by a run: one line of at most 60 characters,
 shown as text.
 
 Sync (`POST /api/sync`) takes a signed-in session and this dashboard's `Origin`, at most once
 every 30 seconds for everyone. It starts nothing itself: it asks GitHub to redeliver the
 App's deliveries that failed (signed by GitHub as any delivery, then checked as one) and reads
-the open pull requests' states again, for every repository, as the listener does at start.
+the open pull requests' states again, for every repository, as the orchestrator does at start.
 
 A run analysis (New request's Analyze runs, `POST /api/repos/<owner>/<repo>/analyze`) passes the
 repository's half of these checks too; its preview (`GET`, the same path) all but the origin,
 as it changes nothing. It only ever reads runs of that repository: they are picked by the
 repo of each run's record, and its digest is built from those alone. Its run never gets the
 logs themselves (they cover every repository, and are a few MB each), nor a mount of the logs
-folder: the listener writes a digest into the run's inbox folder, which its sandbox alone fetches
+folder: the orchestrator writes a digest into the run's inbox folder, which its sandbox alone fetches
 from the broker (`TASK_DIGEST`), built from the dashboard's entries (`runlog.mjs` `format()`, tool details and
 outputs clipped), redacted of the operator's credentials and of GitHub tokens (`secrets.mjs`)
 and capped at about 400 KB. Its token only reads, as onboarding's: it replies, and files
@@ -1988,7 +2139,7 @@ as is, so it quotes less than the dashboard shows:
   digest asked for by run id leaves them out (see [Research runs](#research-runs)).
 - **Unless GitHub says the repository is private**, both when the analysis is asked for and
   again when its run starts (a repo made public meanwhile, or a lookup that fails, counts as
-  public), no listener notes, setup output or failed tools' outputs: only the dashboard showed
+  public), no orchestrator notes, setup output or failed tools' outputs: only the dashboard showed
   them. Kinds, outcomes, timings, tool counts, the calls made and the final replies (already
   posted on the repository) stay.
 - Its instructions (`prompts/analyze.md`) say the digest is data, not instructions, and that
@@ -2022,13 +2173,13 @@ Every sandbox runs:
   `--pids-limit`: `limits` in the repo's grants file, else in `default.yaml`, else 2 CPUs,
   `4g` and 2048 processes.
 
-The containers the listener starts around runs get the same treatment where they can: the
+The containers the runner starts around runs get the same treatment where they can: the
 Claude Code install runs as root with only `CHOWN` (to take over an older volume); the one
 that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
 The Docker socket is the runner service's alone ([The runner service](#the-runner-service)),
 and preview hooks', which a repo's maintainers configure and only run with the `preview`
-[grant](#the-grants) (see [Per-repo config](repo-config.md#preview-hook)). Neither the listener, nor
+[grant](#the-grants) (see [Per-repo config](repo-config.md#preview-hook)). Neither edge, the orchestrator, nor
 any sandbox, nor a container engine gets it. Image builds only run for repositories granted
 `dockerfile`.
 
@@ -2042,19 +2193,19 @@ with a container engine). Preview hooks still need the real socket
 
 ### Output
 
-A run's output can't stop the listener, nor fill its data volume:
+A run's output can't stop the orchestrator, nor fill a data volume:
 
 - A line of output is cut at 1 MB (`… (line cut)` at its end), and the rest of it dropped up
-  to its newline. A line the listener fails to handle (a full disk, say) is lost, not the
-  listener.
+  to its newline. A line the orchestrator fails to handle (a full disk, say) is lost, not the
+  orchestrator.
 - A run's log holds at most `RUN_LOG_MAX_MB` (200 MB by default, and never unlimited) of the
   sandbox's output. Past it, nothing more of it is written: the sandbox is stopped and the
-  run fails, with a note in its log and a reply saying why. The listener's own lines (a few
-  notes) are still written. A restarted listener counts what the log already holds, and
+  run fails, with a note in its log and a reply saying why. The orchestrator's own lines (a few
+  notes) are still written. A restarted orchestrator counts what the log already holds, and
   stops the sandbox again if it still runs.
 - At start, a log without its summary (`logs/<run>.json`) is read whole up to 64 MB, else
   only its first line and its last 4 MB. One that can't be read is left out of the run list,
-  and logged: no log keeps the listener from starting.
+  and logged: no log keeps the orchestrator from starting.
 
 The cap is per run: the logs together can take up to that much for each run kept, until
 `LOG_RETENTION_DAYS`.
@@ -2083,7 +2234,7 @@ in the engine only:
   [Not covered](#not-covered).
 - **Its limits** are the repository's (`limits` in its grants, else the built-in ones), on top of
   the sandbox's: a run can use twice its limits, half in each container.
-- **Its network** is the run's: internal, with the sandbox, the listener and the proxy. Its
+- **Its network** is the run's: internal, with the sandbox, the orchestrator and the proxy. Its
   address counts as the sandbox's for the egress proxy, so its pulls, its builds' steps and
   its containers reach only the run's hosts, through the proxy (by address: its containers
   can't resolve names on the run's network). Its containers have no other route out.
@@ -2097,7 +2248,7 @@ in the engine only:
   engine.
 - **Clean-up**: the engine and its run's volume carry the `deckhand.engine` label (not
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
-  listener's check every minute removes those whose run is gone, after a restart too.
+  orchestrator's check every minute removes those whose run is gone, after a restart too.
 
 ## Reviews
 
@@ -2105,7 +2256,7 @@ A repository turns reviews on with a `review` block in its `.deckhand.yaml` (def
 only). It widens nothing, so it needs no grant: a review is a light run with a read-only token
 (`contents`, `issues`, `pull_requests: read`), no branch to push, no setup and no engine.
 
-- **The listener posts the review**, with its own token (`POST /repos/{repo}/pulls/{n}/reviews`),
+- **The orchestrator posts the review**, with the App's token, through the github service (`POST /repos/{repo}/pulls/{n}/reviews`),
   from the run's final message. Without `review.fix`, a diff written to talk the agent into
   something can't make it write anything: the most it can do is change the review's text
   (with `fix`, see [Review fix runs](#review-fix-runs)). The review never
@@ -2115,7 +2266,7 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   changes, on GitHub or in its verdict, never auto-merges.
 - **No sandbox reviews or approves**, a work run's included: their tokens only read pull
   requests ([Tokens](#tokens)), so none can approve its own pull request or clear the
-  review's request for changes. Only the listener posts reviews, and never an approval.
+  review's request for changes. Only the orchestrator posts reviews, and never an approval.
 - **Who gets one by itself** (`review.on: ready`): pull requests on a branch of the
   repository, opened by the App or by a user of `ALLOWED_USERS` and the repo's `users`, when
   they turn ready. Never a fork's, never an outsider's: nobody outside the allowlist can make
@@ -2124,7 +2275,7 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   only a file of that name, the operator's or the repository's maintainers', replaces it. A
   bot that opens a pull request on a branch of the repository was given write access to it.
 - **Only allowed users' comments**: the review reads its thread (the pull request's
-  description, comments and reviews, and the issue it closes) from a file the listener writes
+  description, comments and reviews, and the issue it closes) from a file the orchestrator writes
   (`TASK_DIGEST`), with only what users of `ALLOWED_USERS` and the repo's `users`, and the App
   itself, wrote. What anyone else wrote, another bot included, is replaced with a line saying
   it was left out; an allowed user who wants it read quotes it in a comment of their own. It
@@ -2143,7 +2294,7 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
 
 With `review.fix`, a review that requests changes on Deckhand's own pull request (opened by
 the App, on a branch of the repository, linked to its issue) starts a work run in that
-issue's session, and the listener reviews what it pushed: a loop of up to `review.fix` fix
+issue's session, and the orchestrator reviews what it pushed: a loop of up to `review.fix` fix
 runs (`true`: one, whose push is reviewed only with `review.merge`), capped by the operator's
 `MAX_FIX_ROUNDS` (5 by default). It is a normal
 work run, with the same token, push rules, secrets and mounts, so the key needs no grant. The
@@ -2190,7 +2341,7 @@ contributors whose threads you don't watch.
 With `review.ci: wait` and `review.fix`, a failed GitHub Actions run on Deckhand's own pull
 request starts a work run that fixes CI instead of a review (up to `review.ci_fix`, capped by
 `MAX_FIX_ROUNDS`, counted apart from the review's rounds, with the same gates and `deny_fix`).
-The listener decides it from the Actions API alone, without a model. Its message holds the
+The orchestrator decides it from the Actions API alone, without a model. Its message holds the
 failed runs' and jobs' names, conclusions, ids and links, never their logs: the branch's code
 printed those, and the run reads them itself through the GitHub gateway, which adds the
 installation token (the run's `actions: read`; the sandbox holds none). GitHub answers a log's
@@ -2202,16 +2353,16 @@ skipping or weakening it, and the same limits as a review's fix run. It may reru
 jobs of a run it judges flaky, once, instead of changing code (a rerun the GitHub gateway
 checks: [The GitHub gateway](#the-github-gateway)): the same head commit then goes back to
 waiting for CI, and a second failure counts as the next CI fix round, whose message says
-which of the runs it reran failed again, so aren't flaky, and offers no rerun for those. The listener copies no
+which of the runs it reran failed again, so aren't flaky, and offers no rerun for those. The orchestrator copies no
 log text into a message, comment or review prompt. A workflow's or job's name comes from the
-branch's files: the comment the listener posts quotes each as code. What any work run is held
+branch's files: the comment the orchestrator posts quotes each as code. What any work run is held
 to (above) holds too: a fix to `.github/workflows/` needs the `workflows` grant.
 
 ### Auto-merge
 
 With the `auto_merge` [grant](#the-grants) for a repository and `review.merge: true` in its
-`.deckhand.yaml`, the listener merges Deckhand's own pull requests after a review with nothing
-blocking (and, after a fix run, one more review of what it pushed), with its own token
+`.deckhand.yaml`, the orchestrator merges Deckhand's own pull requests after a review with nothing
+blocking (and, after a fix run, one more review of what it pushed), with the App's token
 (`PUT /pulls/{n}/merge`, the App's `contents` and `pull_requests: write`). The flow and its
 gates are in [Auto-merge](repo-config.md#auto-merge).
 
@@ -2234,10 +2385,10 @@ branch, the last check of everything above. With it on:
 
 - **The grant is yours, per repository**: a rule giving it to every repository gives it to
   none, a repository's `.deckhand.yaml` can only ask (and its policies can't grant it), and the
-  listener logs a warning at start for each policy file of the grants folder that grants it. The dashboard shows a red badge on the repository and a red box in its config
+  orchestrator logs a warning at start for each policy file of the grants folder that grants it. The dashboard shows a red badge on the repository and a red box in its config
   panel.
 - **No sandbox can merge**: their tokens only read code and pull requests ([Tokens](#tokens)),
-  and the git gateway never pushes the default branch. Only the listener merges, after its
+  and the git gateway never pushes the default branch. Only the orchestrator merges, after its
   own checks.
 - **Nothing that widens Deckhand is merged by itself**: a pull request that changes
   `.deckhand.yaml`, `.deckhand/`, `.github/`, a `CODEOWNERS` or a file the config names (the
@@ -2269,9 +2420,9 @@ trusted, and whose default branch deploys nothing you couldn't roll back.
 [Policies](repo-config.md#policies) are Rego rules that allow and refuse a decision: `run`, a
 run a person asks for (a comment, the dashboard, an inbox entry, a discussion), before it is
 queued; `merge`, the last gate of an auto-merge; `review`, a review that starts by itself; `fix`, a review's fix
-run, a CI fix run or a conflict's rebase run; `link_branch`, the branch the listener links to a
+run, a CI fix run or a conflict's rebase run; `link_branch`, the branch the orchestrator links to a
 work run's issue ([The default branch](#the-default-branch)); `request_review`, the reviewers
-the listener requests on Deckhand's ready pull request (`review.request`, allowed users only,
+the orchestrator requests on Deckhand's ready pull request (`review.request`, allowed users only,
 never a team, and never at a run's request); `github`, a run's write to GitHub (REST, or a
 GraphQL mutation's field), and its reads of CI's checks and of projects, after the gateway's
 built-in checks: [The GitHub gateway](#the-github-gateway); `push`, each branch a run's push
@@ -2287,7 +2438,7 @@ namespace of its own:
 
 - **The operator's**: Deckhand ships its own in the policy service's image
   ([the default policies](repo-config.md#the-default-policies): `allow.rego`, which allows the
-  listener's own decisions (`merge`, `review`, `fix`, `link_branch`, `request_review`),
+  orchestrator's own decisions (`merge`, `review`, `fix`, `link_branch`, `request_review`),
   `run.rego`, which allows each mode where it makes sense (brainstorms and onboarding on issues
   only), a `mode-<mode>.rego` per mode for what its runs get, write and push
   (`allow_capabilities`, `allow_github`, `allow_push`), a `gh-<feature>.rego` for a feature
@@ -2295,9 +2446,9 @@ namespace of its own:
   `review.rego`), which hold without any setup. Yours are the `*.rego` files of `policy/` in the grants folder, which the policy service
   mounts read-only and reads again at each decision: one with the same name as Deckhand's
   replaces it, others add to them. **Their allow rules are the ceiling** of every repository: a
-  caller sends a repository's files, never yours. The listener reads your folder too and sends,
+  caller sends a repository's files, never yours. The orchestrator reads your folder too and sends,
   with each decision, a digest of the operator's layer it expects: the service refuses a decision
-  whose digest isn't its own layer's, and the listener refuses every decision while the service
+  whose digest isn't its own layer's, and the orchestrator refuses every decision while the service
   reads other files than its own (a grants folder it doesn't mount, or mounts elsewhere, which it
   would read as none), so your rules are never dropped unseen.
 - **A repository's**, in `.deckhand/policy/` on its default branch. Its deny rules apply to
@@ -2331,9 +2482,9 @@ namespace of its own:
   never merged by itself.
 - **They run in the policy service, isolated** (`policy-service/`, #501): a service of its own,
   which holds no secret, keeps no state and has no network but its callers' (with Docker
-  Compose, internal networks it shares with the listener alone and the runner alone: no way
-  out), running as a
-  user, on a read-only filesystem, without capabilities. The listener starts no `opa`. The
+  Compose, internal networks it shares with the orchestrator alone, the github service alone and the
+  runner alone: no way out), running as a
+  user, on a read-only filesystem, without capabilities. The orchestrator starts no `opa`. The
   pinned `opa` binary of its image (version and sha256 in `policy-service/Dockerfile`) runs as
   **long-lived servers**, each with one **policy set** loaded at its start (your layer, with or
   without one repository's), listening on a Unix socket in its own temp folder (no port), with
@@ -2350,7 +2501,7 @@ namespace of its own:
   is checked for builtins that read files or the network before it is pinned
   (`test/policies.test.mjs` tries the known ones with the real binary, through the service).
 - **Each call to the service is authenticated**: a [service token](#service-tokens) the
-  broker signed (the listener calls as the orchestrator until it is split, #506), checked
+  broker signed, checked
   offline with the broker's public key, which the broker publishes in a volume the service
   mounts read-only (`SERVICE_KEYS_DIR`); its table lets the orchestrator, the github service
   and the broker ask it, nobody else. It answers `/health` and `/ready` without one, and they
@@ -2368,12 +2519,12 @@ namespace of its own:
   messages and, for a policy error, says to post the comment again; from the dashboard, the
   action is refused with them), and a run's input that GitHub can't give (the issue, pull
   request or discussion it is on) refuses it too, so a broken policy or `opa` stops every run
-  people start in that repository (every repository, for yours): the listener's own runs
+  people start in that repository (every repository, for yours): the orchestrator's own runs
   (reviews, fix runs) aren't asked. With Deckhand's files alone and no repository file, the
-  listener decides as `run.rego` would, from the comment alone: no `opa`, no read of its issue.
+  orchestrator decides as `run.rego` would, from the comment alone: no `opa`, no read of its issue.
   It only lists the repository's policy folder, as every decision does, and when GitHub can't
   list it, it keeps the last listing up to an hour old (a push forgets it, and the log says when
-  it is used): a listener that hasn't listed it in that hour, since its start or since a push,
+  it is used): an orchestrator that hasn't listed it in that hour, since its start or since a push,
   refuses then, as every other decision does at once. For `merge`, the pull request then waits for
   a human, as with any refusal; for `review`, the review is skipped (the log says why); for
   `fix`, no fix run starts and a comment says why; for `link_branch`, no branch is linked (the
@@ -2382,7 +2533,7 @@ namespace of its own:
   in that repository; for `push`, the whole push is refused. Every run's GitHub write and push
   asks the policy service (no allow rule, no write: Deckhand's `mode-<mode>.rego` files hold
   them), so a policy service that can't be reached stops the runs' writes and pushes in every
-  repository. The listener waits up to 30 seconds for one that refuses
+  repository. The orchestrator waits up to 30 seconds for one that refuses
   its connection or is draining (an update, a restart), then refuses; so does an `opa` that
   doesn't start (its temp folder unwritable, say). A refusal only
   ever costs a run, a write or a merge, never starts one. Your folder's compile errors are logged at start; a repository's
@@ -2407,7 +2558,7 @@ goes in the run's log, in its saved state and in its tokens' `caps` claim; the d
 Capabilities tab shows each mode's, with the file that decided each one.
 
 **The minimum**, which every run gets whatever the policies say: its sandbox (no capability, no
-privilege gain, as any container), the agent's API through the listener, the listener's
+privilege gain, as any container), the agent's API through the models service, Deckhand's
 endpoints for its own run (its token, progress, files, inbox) and its prompt with the text that
 triggered it. Nothing of the repository's: no clone, branch, image, setup, caches, mounts,
 engine, screenshots or GitHub token (a run without `pull` gets none, whatever its mode), volumes
@@ -2415,20 +2566,20 @@ of its own (`<issue>-bare-…`, a light run's `<issue>-light-bare-…`: no earli
 transcript), and only the hosts every run
 needs.
 
-| Capability         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | [Grant](#the-grants)   | Enforced by                                                                        |
-| ------------------ | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------- | ---------------------------------------------------------------------------------- |
-| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                        | the listener at start; GitHub (`contents: read`); the gateway (nothing without it) |
-| `push`             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                        | the git gateway                                                                    |
-| `setup`            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                        | the listener at start                                                              |
-| `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `dockerfile`           | the listener at start                                                              |
-| `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `branch_docker_images` | the listener at start (never a fork's)                                             |
-| `docker`           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `docker`               | the listener at start (never for a fork's pull request)                            |
-| `preview`          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `preview`              | not per run yet: the hook runs on pull request events                              |
-| `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `research`             | the egress proxy                                                                   |
-| `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                        | GitHub (`issues: read`); the gateway (its own issue only without it)               |
-| `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                        | GitHub (`pull_requests: read`)                                                     |
-| `read:discussions` | its discussions                                                        | `pull`               |                             |                        | GitHub (`discussions: read`)                                                       |
-| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses       | `pull`               |                             |                        | GitHub (`actions`, `checks`, `statuses: read`)                                     |
+| Capability         | Gives                                                                  | Needs                | Asked by (`.deckhand.yaml`) | [Grant](#the-grants)   | Enforced by                                                                            |
+| ------------------ | ---------------------------------------------------------------------- | -------------------- | --------------------------- | ---------------------- | -------------------------------------------------------------------------------------- |
+| `pull`             | a clone of the repository, its granted hosts and mounts, screenshots   |                      |                             |                        | the orchestrator at start; GitHub (`contents: read`); the gateway (nothing without it) |
+| `push`             | its branches (the token's `branches`), its issue's branch and draft PR | `pull`               |                             |                        | the git gateway                                                                        |
+| `setup`            | the `setup` command, the repository's caches                           | `pull`               | `setup` or `caches`         |                        | the orchestrator at start                                                              |
+| `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `dockerfile`           | the orchestrator at start                                                              |
+| `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `branch_docker_images` | the orchestrator at start (never a fork's)                                             |
+| `docker`           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `docker`               | the orchestrator at start (never for a fork's pull request)                            |
+| `preview`          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `preview`              | not per run yet: the hook runs on pull request events                                  |
+| `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `research`             | the egress proxy                                                                       |
+| `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                        | GitHub (`issues: read`); the gateway (its own issue only without it)                   |
+| `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                        | GitHub (`pull_requests: read`)                                                         |
+| `read:discussions` | its discussions                                                        | `pull`               |                             |                        | GitHub (`discussions: read`)                                                           |
+| `read:actions`     | its GitHub Actions runs and logs, check runs and commit statuses       | `pull`               |                             |                        | GitHub (`actions`, `checks`, `statuses: read`)                                         |
 
 **Greedy**: a capability is used when the policies allow it, when a key of `.deckhand.yaml`
 asks for it if it has one, and when its grant gives it if one gates it. Allowed and asked for
@@ -2513,24 +2664,24 @@ a repository's grants file, which opens it for every run of that repository, nex
 code and a token. A research run is one prompt-injected page away from sending whatever it
 holds to any host, so it holds almost nothing:
 
-| What                           | A research run                                                                          |
-| ------------------------------ | --------------------------------------------------------------------------------------- |
-| Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's   |
-| The repository's code          | none: no clone, `/workspace` starts empty                                               |
-| GitHub                         | public pages and API, anonymously; the GitHub and git gateways refuse it                |
-| Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))             |
-| Input                          | the issue's title, description and last 50 comments, written by the listener (redacted) |
-| Output                         | its final message, posted by the listener as the reply; no screenshots folder           |
-| Run analyses                   | never in one: what a page made it say would reach a run with the code and a token       |
-| Image, setup, caches, mounts   | the base image only; no `setup`, `caches`, host mounts or project `instructions`        |
-| Container engine, egress cache | none: no engine, no cached hosts; Deckhand's CA only for the Antigravity CLI on a plan  |
-| Volumes                        | `<name>-research-workspace` and its session volume: no other run mounts them            |
+| What                           | A research run                                                                              |
+| ------------------------------ | ------------------------------------------------------------------------------------------- |
+| Hosts                          | any public one (`*`); private addresses only for the mandatory hosts, not the grant's       |
+| The repository's code          | none: no clone, `/workspace` starts empty                                                   |
+| GitHub                         | public pages and API, anonymously; the GitHub and git gateways refuse it                    |
+| Other runs' secrets            | useless: a secret only works from its own run's sandbox ([Tokens](#tokens))                 |
+| Input                          | the issue's title, description and last 50 comments, written by the orchestrator (redacted) |
+| Output                         | its final message, posted by the orchestrator as the reply; no screenshots folder           |
+| Run analyses                   | never in one: what a page made it say would reach a run with the code and a token           |
+| Image, setup, caches, mounts   | the base image only; no `setup`, `caches`, host mounts or project `instructions`            |
+| Container engine, egress cache | none: no engine, no cached hosts; Deckhand's CA only for the Antigravity CLI on a plan      |
+| Volumes                        | `<name>-research-workspace` and its session volume: no other run mounts them                |
 
 - **The grant**: `research` ([the grants](#the-grants)), for one repository or every one; off by
   default. Without it, `/mode research` gets a reply naming it and
   no sandbox starts; it is checked again when the run starts.
 - **Private addresses**: `*` never reaches one, nor an address on one of the egress proxy's
-  networks, whatever its range (see [Network](#network)), so the listener's dashboard port,
+  networks, whatever its range (see [Network](#network)), so the orchestrator's ports,
   other runs' sandboxes and engines, and your LAN stay out of reach. Unlike other runs, a research
   run doesn't get the private addresses of the hosts you grant its repository either: an
   internal host next to the open internet would be a way out for what it serves.
@@ -2546,25 +2697,26 @@ holds to any host, so it holds almost nothing:
 
 ```
 sandbox ──(its run's network, internal: no route out)──▶ egress proxy ──▶ allowed hosts
-   └─────────────────────────────────────────────────▶ listener (broker, Claude's API calls)
+   └─────────────────────────────────────────────────▶ orchestrator, as `listener` (broker, Claude's API calls)
 ```
 
 - Each run has a **network of its own**, named after the run and labelled with the
-  deployment's `NAME_PREFIX`: the listener creates it before the sandbox and removes it with
+  deployment's `NAME_PREFIX`: the runner creates it before the sandbox and removes it with
   the sandbox. Only three containers are on it (four with a
-  [container engine](#container-engine)): the sandbox, the listener and the egress proxy, which the listener joins to it under the names sandboxes call them by (the host
-  names of `BROKER_URL` and `EGRESS_PROXY`). Sandboxes can't reach each other, nor what
+  [container engine](#container-engine)): the sandbox, the orchestrator and the egress proxy, which the runner joins to it under the names sandboxes call them by (the host
+  names of `BROKER_URL` and `EGRESS_PROXY`: the orchestrator is `listener`, as sandboxes from
+  before it know it). Sandboxes can't reach each other, nor what
   another run's setup started (a dev server, a database).
-- That network is **internal**: Docker gives it no route out. The listener creates it with
+- That network is **internal**: Docker gives it no route out. The runner creates it with
   `--internal`, checks it (`docker network inspect`) and refuses to start the run otherwise.
   Its subnet comes from Docker's address pools, or from `SANDBOX_SUBNETS` when set (a block
   no other network on the host uses, [Setup](setup.md#settings)): either way the network is
   internal, so the range changes addresses, not what a sandbox can reach. It must lie inside
-  `10/8`, `172.16/12`, `192.168/16` or `100.64/10`: the listener refuses to start with
+  `10/8`, `172.16/12`, `192.168/16` or `100.64/10`: Deckhand refuses to start with
   another.
-- The listener finds its own container by its host name (Docker's default: the container's
-  id) and the proxy's by its `deckhand.role=egress` label in the same compose project
-  (`LISTENER_CONTAINER`, `EGRESS_CONTAINER` to name them instead). A new listener joins
+- The runner finds the orchestrator's container by its `deckhand.role=broker` label and the
+  proxy's by its `deckhand.role=egress` label, in its own compose project
+  (`LISTENER_CONTAINER`, `EGRESS_CONTAINER` to name them instead). A new runner joins
   both again to the running sandboxes' networks when it starts, and checks every minute
   (`docker compose up -d` recreates either without the networks it was joined to); networks
   of this deployment whose run is gone are removed then.
@@ -2572,11 +2724,12 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
   and the outside one. Being on all of them, it is the only path between two runs: it
   connects to the hosts a run may reach only, and to a private address only for a host you
   list by name (below). It handles HTTP `CONNECT` (HTTPS, and anything tunnelled) and plain HTTP
-  requests. For each one, it asks the listener whether the sandbox at that source address
-  may reach that host; the listener matches the address to the running sandbox (`docker
-inspect`) and answers from that run's list. Only the proxy may ask: the listener compares
-  the caller with the proxy's addresses on all of its networks (`docker inspect`). An unknown address, an unknown host, or a
-  listener that doesn't answer: refused, with a `403` saying why.
+  requests. For each one, it asks the orchestrator's egress policy whether the sandbox at that source
+  address may reach that host; the orchestrator matches the address to the running sandbox (the
+  runner's `docker inspect`) and answers from that run's list. Only the proxy may ask: the
+  orchestrator compares
+  the caller with the proxy's addresses on all of its networks (`docker inspect`). An unknown address, an unknown host, or an
+  orchestrator that doesn't answer: refused, with a `403` saying why.
 - The proxy resolves names itself and connects to the address it checked. Loopback,
   link-local (cloud metadata, `169.254.169.254`), `0/8`, multicast and reserved (`224/4` and
   up), IPv6 site-local (`fec0::/10`) and anything that isn't an IP address are always
@@ -2585,7 +2738,7 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   host is one you allow by name or `*.domain` in the grants folder, never through `*` alone. The same goes for any address in
   a subnet of the networks the proxy is on (read from its interfaces at each connection, so a
   run's network counts as soon as it is joined): other runs' sandboxes and engines, the
-  listener, whatever range Docker gave those networks, a public one or a global IPv6 prefix
+  orchestrator, whatever range Docker gave those networks, a public one or a global IPv6 prefix
   included. IPv6 addresses are compared as bytes, and those standing for an
   IPv4 one (`::ffff:0:0/96`, `::ffff:0:0:0/96`, `::/96`, NAT64's `64:ff9b::/96`, 6to4's
   `2002::/16`) are checked as that IPv4 address, so `[::ffff:a9fe:a9fe]` is the metadata
@@ -2593,16 +2746,17 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
 - The proxy keeps answers from the hosts you list in `cached_hosts`, and decrypts their
   HTTPS to do so (see [The egress cache](#the-egress-cache)). It also decrypts GitHub's hosts
   and those that carry the Antigravity CLI's token (for its runs only), and hands their
-  requests to the listener, naming the sandbox they came from (see
+  requests to the github service and the models service, naming the sandbox they came from (see
   [The GitHub gateway](#the-github-gateway) and
   [The Antigravity CLI's login](#the-antigravity-clis-login)). Every other `CONNECT` stays a
   tunnel the proxy can't read.
-- The listener stops answering for a run as soon as it sees its sandbox exit, before posting
+- The orchestrator stops answering for a run as soon as it sees its sandbox exit, before posting
   its reply, and finds a connection's run by the ID of the network its address is on now,
   never by an address it kept: Docker may give the address to another sandbox, which must not
   get the finished run's hosts.
-- The proxy forwards plain HTTP to the listener's broker (`BROKER_URL`'s origin: the agents'
-  APIs, which go on to the models service, pushes, the run's files) once the policy, asked about
+- The proxy forwards plain HTTP to `BROKER_URL`'s origin (`listener`, as sandboxes call it: the
+  agents' APIs, pushes, the run's files, each sent on to the service that serves it, the rest to
+  the orchestrator's broker port) once the policy, asked about
   the broker (`broker=1`), allows it: only for a running sandbox or its engine, never a build or an install's own pod, nor
   anyone else. It names the sandbox it came from (`x-deckhand-client`, replaced whatever the
   sandbox sent), as for a relayed call: the broker turns that address into the ID of the network
@@ -2610,7 +2764,7 @@ inspect`) and answers from that run's list. Only the proxy may ask: the listener
   proxy's addresses alone. The path and query are set on the
   broker's own URL, never parsed as a URL again, so a path such as `//host/x` stays a path
   on the broker and never names another host. The proxy refuses the broker's `/egress` there,
-  its URL parsed first (`..`, `%2e`): the listener answers it to the proxy only.
+  its URL parsed first (`..`, `%2e`): the orchestrator answers it to the proxy only.
 - Sandboxes get `HTTP_PROXY`, `HTTPS_PROXY` (both cases), `NO_PROXY` (`localhost`, and the
   run's container engine) and `NODE_USE_ENV_PROXY=1`: without it, Node's `fetch` ignores the proxy (and
   fails, as nothing else goes out). The Playwright browser gets the proxy as flags. A tool
@@ -2682,7 +2836,7 @@ mandatory): `cached_hosts` alone opens nothing.
 HTTPS reaches the proxy as a `CONNECT` tunnel, which it can't read. For a host in
 `cached_hosts` (and the relayed hosts: GitHub's, the Antigravity CLI's), and only then, the
 proxy ends the client's TLS itself, with a certificate for that host signed by a CA of its
-own, and serves the requests inside through the cache above (or hands them to the listener); what isn't served from it goes on to the host over TLS, which the proxy checks
+own, and serves the requests inside through the cache above (or hands them to the service that relays them); what isn't served from it goes on to the host over TLS, which the proxy checks
 against Node's trust store. Everything else keeps the raw tunnel, and the client sees the
 real server's certificate.
 
@@ -2693,7 +2847,7 @@ real server's certificate.
   constraints still exclude GitHub, below, on its next start): sandboxes get it at their
   next start, and runs going on then lose their cached and relayed hosts' HTTPS (their
   certificates are the old CA's), GitHub's included, until their next run. Its key
-  (`ca.key`) never leaves that volume; no sandbox, engine or listener mounts it. Its **name
+  (`ca.key`) never leaves that volume; no sandbox, engine or other service mounts it. Its **name
   constraints** exclude the agents' providers (`anthropic.com`, `openai.com`, `chatgpt.com`
   and their subdomains): a certificate it signs for them fails verification, and the proxy
   never asks for one. Each host's certificate lasts 7 days, and is made again 2 days before
@@ -2709,10 +2863,10 @@ real server's certificate.
   GitHub's content hosts are relayed, for a work run that isn't a fork's (they carry no
   token), and neither relayed nor decrypted for the others unless you cache them. The
   providers' names stay excluded: the operator's credentials still go there, from the
-  listener.
+  models service.
 - **Trust in the sandbox**: for every run that reaches GitHub (all but research runs), and
   when its repository's grant has `cached_hosts` or its agent's calls are relayed (the
-  Antigravity CLI's), the listener
+  Antigravity CLI's), the orchestrator
   asks the proxy for the CA's certificate (public, at `http://egress:3128/deckhand-ca.crt`)
   and puts it in the run's inbox folder, which its sandbox alone fetches from the broker at
   start (a run that can't stops). The sandbox's entrypoint adds it to a
@@ -2720,11 +2874,11 @@ real server's certificate.
   `CURL_CA_BUNDLE`, `GIT_SSL_CAINFO`, `REQUESTS_CA_BUNDLE` and `PIP_CERT` point at, and to
   Chromium's store (`~/.pki/nssdb`, with `certutil`). A tool that reads none of them refuses
   cached hosts' certificates, and fails rather than going round the proxy. When the
-  listener can't get the CA (the proxy doesn't answer), the run stops, saying so: it couldn't
+  orchestrator can't get the CA (the proxy doesn't answer), the run stops, saying so: it couldn't
   reach GitHub. (A research run, whose GitHub isn't relayed, then has no cached hosts, and
   an Antigravity CLI one on a plan stops.)
 - **Never cached**, whatever `cached_hosts` says: the mandatory hosts below, the agent's and
-  GitHub's (decrypted only to be relayed to the listener). Their traffic carries the run
+  GitHub's (decrypted only to be relayed to the github service and the models service). Their traffic carries the run
   token, which the cache would refuse anyway. Nor a run's [container engine](#container-engine): its builds and
   containers don't trust the CA, so its connections keep the tunnel, and only plain HTTP is
   cached for them; caching in the engine itself is `docker: { cache: true }`'s.
@@ -2747,7 +2901,7 @@ the same proxy. Someone who gets the key (from the host, or the proxy's volume) 
 impersonate any other host to the sandboxes running then, for at most the CA's year, GitHub's
 included (whose traffic from a sandbox carries no token), but not Anthropic's or OpenAI's
 hosts (nor Google's, which the Antigravity CLI's runs relay, are excluded): treat the volume
-like the listener's data. Removing the volume (or `ca/`
+like edge's data. Removing the volume (or `ca/`
 in it) and restarting the proxy makes a new CA.
 
 ### Where a sandbox's hosts come from
@@ -2787,7 +2941,7 @@ instructions and the dashboard's repository panel all name these files.
 | `github.com`              | git over HTTPS (`GITHUB_URL`), relayed to the [gateway](#the-github-gateway)    |
 | `api.github.com`          | `gh` and the API (`GITHUB_API`), relayed to the [gateway](#the-github-gateway)  |
 | `*.githubusercontent.com` | raw and LFS files, diffs, release downloads, avatars (relayed for checked runs) |
-| the listener              | the broker and the agent's API calls, forwarded by the proxy (`BROKER_URL`)     |
+| `listener`                | the broker and the agent's API calls, forwarded by the proxy (`BROKER_URL`)     |
 
 That list was checked against Claude Code 2.1.300 (the pinned version) by reading the hosts
 in its binary. With `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` (set in the image) and the
@@ -2803,18 +2957,18 @@ check to `api.anthropic.com`:
   `downloads.claude.ai`): non-essential traffic, off.
 
 Check it again when you change `CLAUDE_CODE_VERSION`. A refused host shows up in the
-listener's logs (`Egress: refused <host> for <repo>#<n>`).
+orchestrator's logs (`Egress: refused <host> for <repo>#<n>`).
 
-A Codex run's mandatory hosts are GitHub's and the listener only: no `api.anthropic.com`,
+A Codex run's mandatory hosts are GitHub's and `BROKER_URL`'s only: no `api.anthropic.com`,
 and no `api.openai.com` either. Checked against Codex 0.162.1 (the pinned `CODEX_VERSION`)
-through a proxy that logged every connection: with its calls sent to the listener and the
+through a proxy that logged every connection: with its calls sent to `BROKER_URL` and the
 settings `sandbox/agents/codex.sh` writes (analytics, update check, plugins, apps and remote
 plugins off), it opens none. Without them it reaches `chatgpt.com`, `ab.chatgpt.com`,
 `github.com` and `api.github.com` for its plugin marketplace and analytics. Its web search
 runs on OpenAI's side, in the API call. Check it again when you change `CODEX_VERSION`.
 
-An Antigravity CLI run's mandatory hosts are GitHub's, the listener, and `agy`'s own:
-`daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (relayed to the listener, see
+An Antigravity CLI run's mandatory hosts are GitHub's, `BROKER_URL`'s, and `agy`'s own:
+`daily-cloudcode-pa.googleapis.com` and `www.googleapis.com` (relayed to the models service, see
 [The Antigravity CLI's login](#the-antigravity-clis-login)) and `antigravity-unleash.goog`
 (feature flags) and `lh3.googleusercontent.com` (the account's avatar, which its eligibility
 check needs). `play.googleapis.com` is refused for its runs, whatever the grants say. Checked against agy 1.4.0 (the pinned `AGY_VERSION`) through a proxy
@@ -2880,27 +3034,30 @@ it again when you change `AGY_VERSION`.
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.
-- **The listener and the proxy are on every run's network**: a sandbox reaches the
-  listener's two ports (below) and the proxy's, as every other sandbox does, but not the
-  other sandboxes behind them.
+- **The orchestrator and the proxy are on every run's network**: a sandbox reaches the
+  orchestrator's ports (its broker port, 8081; the egress policy's, 8082, which answers the
+  proxy alone; its services port, 8083, which takes the runner's and edge's service tokens
+  alone, from their networks) and the proxy's, as every other sandbox does, but not the other
+  sandboxes behind them.
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - **A research run allows every public host**: everything it holds can leave, so it holds
   little (see [Research runs](#research-runs)), but what it does hold can: the issue's
   thread, what it read on the web, and what the agent's provider sends back. Don't grant
   `research` to a repository whose issues hold what must not leave.
-- The listener's own port (8080: dashboard, webhook) is reachable from sandboxes; it needs
-  a dashboard session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or
-  the webhook's signature. `/status` also answers calls from inside the listener's container
-  (see [The dashboard](#the-dashboard)).
+- Edge's port (8080: dashboard, webhook) is on no run's network, but a sandbox may reach its
+  published address through the proxy, as any host its run may reach; it needs a dashboard
+  session (a signed-in allowed user, see [Setup](setup.md#4-the-dashboard)) or the webhook's
+  signature. `/status` also answers calls from inside edge's container (see
+  [The dashboard](#the-dashboard)).
   Deliveries without a signature or over 5 MB are refused before their body is read (a push
   that large only delays a config's refresh). At most 16 are read at once, 4 per client
   address (per /64 for IPv6), each within 10 seconds and dropped after 2 seconds without
   data. A reader older than a second loses its place to a new delivery when its address's
-  share, or the listener, is full: GitHub sends a body in milliseconds. When the listener is
+  share, or edge, is full: GitHub sends a body in milliseconds. When edge is
   full of younger readers, a delivery from an address holding fewer places than another takes
   the oldest place of the address holding the most, so a few clients reopening stalled bodies
   can delay deliveries but not keep them out. Behind a reverse proxy every delivery has the
   proxy's address, so they all share those 4 places: restrict `/webhook` to GitHub's `hooks`
   ranges (`https://api.github.com/meta`) at the proxy, and let it buffer request bodies, to
-  keep slow clients away from the listener.
+  keep slow clients away from edge.

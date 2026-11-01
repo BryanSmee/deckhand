@@ -54,7 +54,10 @@ async function brokerService(t) {
 // sandboxes' addresses.
 async function listener(t, { service, runsDir, shotsDir, ips, tokens = null }) {
   const networks = { [ips.a]: "net-a", [ips.b]: "net-b" };
-  const remote = createRemote({ caller: createBrokerCaller({ url: service.at(LISTENER_AT) }) });
+  const remote = createRemote({
+    caller: createBrokerCaller({ url: service.at(LISTENER_AT) }),
+    epoch: () => 1,
+  });
   t.after(() => remote.stop());
   await remote.start();
   const broker = createBroker({

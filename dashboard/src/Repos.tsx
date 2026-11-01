@@ -400,7 +400,7 @@ function Row({ r, list, task, now, onStart, failure }: RowProps) {
             ];
       case "unknown":
         return [
-          "GitHub didn't answer: see the listener's logs",
+          "GitHub didn't answer: see the orchestrator's logs",
           <a class={small()} href={configOf(r.repo)}>
             Config
           </a>,

@@ -63,3 +63,96 @@ test("a run's first tokens: only while it starts, only for the runner", async (t
   });
   assert.equal(tarball.status, 403);
 });
+
+test("edge's requests: the dashboard's API with the user it signed in, from edge's token alone", async (t) => {
+  const pendingTokens = new Map();
+  const seen = [];
+  let ready = null;
+  const server = createServicesHttp({
+    keys,
+    bound: networkCallers("runner+edge=127.0.0.0/8"),
+    pendingTokens,
+    edge: () => ready,
+  });
+  const url = `http://127.0.0.1:${await listening(server)}`;
+  server.unref();
+  t.after(() => server.close());
+  const ask = (headers, path = "/edge/api/state") =>
+    fetch(`${url}${path}`, {
+      headers: {
+        "x-deckhand-user": "Alice",
+        "x-deckhand-host": "deck.example.com",
+        "x-deckhand-origin": "https://deck.example.com",
+        ...headers,
+      },
+    });
+  // Not ready yet (the state coming back from the store): 503, which edge asks again.
+  assert.equal((await ask(as("edge", "orchestrator"))).status, 503);
+  ready = (req, res, who) => {
+    seen.push({ url: req.url, host: req.headers.host, origin: req.headers.origin, ...who });
+    res.end("ok");
+  };
+  const res = await ask(as("edge", "orchestrator"));
+  assert.equal(res.status, 200);
+  assert.deepEqual(seen, [
+    {
+      url: "/api/state",
+      host: "deck.example.com",
+      origin: "https://deck.example.com",
+      user: "alice",
+      local: false,
+    },
+  ]);
+  // The runner's token, none, or another service's: the user header counts for nothing.
+  assert.equal((await ask(as("runner", "orchestrator"))).status, 403);
+  assert.equal((await ask({})).status, 401);
+  assert.equal((await ask(as("edge", "runner"))).status, 401);
+  // A name that isn't a login is no user; /status from edge's own container is local.
+  await ask({ ...as("edge", "orchestrator"), "x-deckhand-user": "a b" });
+  await ask({ ...as("edge", "orchestrator"), "x-deckhand-local": "1" }, "/edge/status");
+  assert.deepEqual(
+    seen.slice(1).map(({ url, user, local }) => ({ url, user, local })),
+    [
+      { url: "/api/state", user: null, local: false },
+      { url: "/status", user: "alice", local: true },
+    ],
+  );
+  // Edge never gets a run's first tokens.
+  pendingTokens.set("dh-a-1", async () => ({}));
+  const tokens = await fetch(`${url}/runs/dh-a-1/tokens`, {
+    method: "POST",
+    headers: as("edge", "orchestrator"),
+    body: JSON.stringify({ sandbox: "net-1" }),
+  });
+  assert.equal(tokens.status, 403);
+});
+
+test("a copy waiting for the lease answers its probes, and 503 to every call", async (t) => {
+  let acting = false;
+  const server = createServicesHttp({
+    keys,
+    bound: networkCallers("runner+edge=127.0.0.0/8"),
+    pendingTokens: new Map([["dh-a-1", async () => ({ A: "1" })]]),
+    edge: () => (req, res) => res.end("ok"),
+    active: () => acting,
+  });
+  const url = `http://127.0.0.1:${await listening(server)}`;
+  server.unref();
+  t.after(() => server.close());
+  assert.equal((await fetch(`${url}/health`)).status, 200);
+  assert.equal((await fetch(`${url}/ready`)).status, 503);
+  const tokens = () =>
+    fetch(`${url}/runs/dh-a-1/tokens`, {
+      method: "POST",
+      headers: as("runner", "orchestrator"),
+      body: JSON.stringify({ sandbox: "net-1" }),
+    });
+  assert.equal((await tokens()).status, 503);
+  assert.equal(
+    (await fetch(`${url}/edge/status`, { headers: as("edge", "orchestrator") })).status,
+    503,
+  );
+  acting = true;
+  assert.equal((await fetch(`${url}/ready`)).status, 200);
+  assert.equal((await tokens()).status, 200);
+});

@@ -10,7 +10,9 @@
 //   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), a key of the
 //   listener's from before this service (POST /keys), the `runs` stream (GET /events, POST
 //   /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
-//   first tokens (POST /runs/:id/tokens), with the claims it decided;
+//   first tokens (POST /runs/:id/tokens), with the claims it decided. Each of its calls but a
+//   GET carries its fencing epoch (../lib/fence.mjs, #506): one older than the newest seen is
+//   refused (409), so a copy that lost its lease ends no run and gets no token signed;
 //   the runner's: a run's inbox and files (POST /runs/:id/inbox, PUT /runs/:id/files/:name);
 //   the models service's: whether a run still goes, and its agent's provider (GET /runs/:id);
 //   the sandboxes', through the egress proxy (#511), which vouches for the network or pod they
@@ -19,13 +21,14 @@
 //   /run/inbox?from=<byte>), the CA and digest (GET /run/ca, /run/digest), screenshots (PUT
 //   /run/shots/<file>).
 //
-// The listener holds the orchestrator and the runner until they move out (#503, #506): it calls
-// as the orchestrator, which the runner's endpoints take meanwhile. It also relays the calls of
-// sandboxes that reach it rather than this service (a proxy from before it, a sandbox from before
-// #511), vouching for them as the proxy does.
+// The orchestrator copies the inbox of a run from before the runner kept them, so the runner's
+// endpoints take it too. It also relays the calls of sandboxes that reach it rather than this
+// service (a proxy from before it, a sandbox from before #511), vouching for them as the proxy
+// does.
 import { createServer } from "node:http";
 import { drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, sendJson } from "../lib/http.mjs";
+import { createFence } from "../lib/fence.mjs";
 import { issueServiceTokens, serviceGuard } from "../lib/service-token.mjs";
 import { FILES } from "./files.mjs";
 import { runFields, STREAM } from "./runs.mjs";
@@ -35,8 +38,7 @@ import { runFields, STREAM } from "./runs.mjs";
 import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 export { RUN_TOKEN_HEADER, SANDBOX_HEADER };
 
-// Until the runner and the orchestrator move out of the listener, which calls as the
-// orchestrator (#503, #506): the runner's endpoints take it too, and the sandboxes' (its relay).
+// The runner's endpoints take the orchestrator too, and the sandboxes' (its relay): above.
 const RUNNER = ["runner", "orchestrator"];
 const SANDBOX = ["proxy", "orchestrator"];
 
@@ -105,6 +107,7 @@ export function createBrokerHandler({
     bound: callers.bound,
     now,
   });
+  const fence = createFence({ store, service: "broker", now });
 
   // What the proxy passed on of a sandbox's call: its run token, and the network (or pod) it
   // vouches the call came from.
@@ -256,8 +259,11 @@ export function createBrokerHandler({
       );
       return sendJson(res, { tokens });
     }
-    guard(req);
+    const caller = guard(req);
     if (url.pathname.startsWith("/run/")) return runCall(req, res, url);
+    // What the orchestrator changes carries its fencing epoch (#506): a copy of it that lost its
+    // lease can't end a run, nor have its tokens signed.
+    if (caller === "orchestrator" && req.method !== "GET") await fence(req);
     return serviceCall(req, res, url);
   }
 

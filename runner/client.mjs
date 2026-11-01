@@ -2,9 +2,9 @@
 // backends in process (../listener/runner/docker.mjs's runner, ../listener/images.mjs's images,
 // ../listener/previews.mjs's queue), over its API (service.mjs), plus the runs' logs and events
 // it keeps. Each part calls as the service it is for, with that service's token: the
-// orchestrator drives runs (with its fencing epoch) and asks where addresses are, for the
-// listener's broker port and egress policy (without it); edge reads logs; models has the
-// Antigravity login refreshed. While the listener is all of them, it holds the three tokens.
+// orchestrator drives runs (with its fencing epoch), reads their logs (the dashboard's live view,
+// which edge passes on, #506) and asks where addresses are, for its broker port and egress
+// policy (without its epoch); models has the Antigravity login refreshed.
 //
 // The runner away (updating, handing over to its other copy) is waited for, not taken for a
 // failure: lib/service-client.mjs tries again. The broker port's questions wait less, and fall
@@ -79,7 +79,6 @@ export function createRunnerClient({
       ...extra,
     });
   const orchestrator = as("orchestrator", { epoch, waitMs: runWaitMs });
-  const edge = as("edge");
   // The egress policy's lookups (runner/service.mjs UNFENCED): as the orchestrator, without its
   // epoch, so a listener draining still answers them.
   const broker = as("orchestrator", { waitMs: brokerWaitMs });
@@ -341,7 +340,7 @@ export function createRunnerClient({
   // --- Logs ----------------------------------------------------------------------------------
 
   // { size, data } from `offset`, waiting up to `wait` ms for more.
-  async function readLog(id, { offset = 0, length, wait = 0, caller = edge, signal } = {}) {
+  async function readLog(id, { offset = 0, length, wait = 0, caller = orchestrator, signal } = {}) {
     const query = `offset=${offset}${length ? `&length=${length}` : ""}${wait ? `&wait=${wait}` : ""}`;
     const res = await caller.request("GET", `/logs/${path(id)}?${query}`, { signal });
     if (!res.ok) throw await failure(res, `the log of ${id}`);

@@ -17,6 +17,7 @@ import { redact } from "../lib/redact.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
+import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
 import { loadConfig, withModelCredentials } from "../listener/config.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
@@ -168,11 +169,13 @@ async function setup(t, { env = {}, copies = 1, clock = { now: Date.now() } } = 
   async function startRun(id, fields) {
     const res = await orchestrator.call("POST", `/runs/${id}/tokens`, {
       body: { repo: "org/repo", mode: "work", sandbox: "net-1", ...fields },
+      headers: { [EPOCH_HEADER]: "1" },
     });
     assert.equal(res.status, 200, res.body.toString());
     return res.json();
   }
-  const endRun = (id) => orchestrator.call("DELETE", `/runs/${id}`);
+  const endRun = (id) =>
+    orchestrator.call("DELETE", `/runs/${id}`, { headers: { [EPOCH_HEADER]: "1" } });
   // A sandbox's call, as the proxy relays it from `sandbox`.
   async function agentCall(copy, path, agentToken, { sandbox = "net-1", ...options } = {}) {
     const service = await tokenFor("proxy", "models");

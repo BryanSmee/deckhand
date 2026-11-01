@@ -30,13 +30,15 @@ const MAX_BODY = 4 * MAX_TEXT + 4 * MAX_TITLE;
 const COMMENTS = 100;
 const REPLIES = 50;
 
-// The key that signs the "from" lines (fromLine()), from the App's webhook secret: the
-// listener's to know, and kept across restarts.
+// The key that signs the "from" lines (fromLine()), from the App's webhook secret: edge's to
+// know (#506), and kept across restarts. The orchestrator, which posts them, asks edge for their
+// tags (tagger()).
 export const fromKey = (secret) =>
   secret ? createHmac("sha256", secret).update("deckhand-from").digest() : null;
 
-// The tag of `user`'s `text`: whitespace aside, as GitHub may give it back with \r\n.
-const fromTag = (key, user, text) =>
+// The tag of `user`'s `text`: whitespace aside, as GitHub may give it back with \r\n. Edge
+// computes them (../edge/internal.mjs), which holds the webhook secret the key comes from.
+export const fromTag = (key, user, text) =>
   createHmac("sha256", key)
     .update(`${user.toLowerCase()}\n${text.replace(/\s+/g, " ").trim()}`)
     .digest("base64url")
@@ -46,13 +48,51 @@ const fromTag = (key, user, text) =>
 // signed (`key`: fromKey()'s) for that text: a run posts as the App too, and could otherwise
 // write the line under its own text, or under someone else's name.
 export function fromLine(user, text, key) {
+  return taggedLine(user, key ? fromTag(key, user, text) : null);
+}
+
+// The line with its tag, from wherever it came (tagger()); none: unsigned.
+function taggedLine(user, tag) {
   const line = `From the dashboard by @${user}`;
-  return key ? `${line} <!-- deckhand-from:${user}:${fromTag(key, user, text)} -->` : line;
+  return tag ? `${line} <!-- deckhand-from:${user}:${tag} -->` : line;
 }
 
 // The App's post of `user`'s `text`, from the dashboard: the text, then who wrote it.
 export function fromDashboard(user, text, key) {
   return `${text.trim()}\n\n${fromLine(user, text.trim(), key)}`;
+}
+
+// What tags the "from" lines: `tags([{ user, text }])` → their tags (null for none), edge's
+// (../edge/client.mjs tags()), or, from a key (fromKey()'s, the tests'), computed here.
+export function tagger({ tags = null, key = () => null } = {}) {
+  const all =
+    tags ??
+    (async (items) => {
+      const k = key();
+      return items.map(({ user, text }) => (k ? fromTag(k, user, text) : null));
+    });
+  return {
+    // fromDashboard()'s, signed by `all`.
+    async post(user, text) {
+      const [tag] = await all([{ user, text: text.trim() }]);
+      return `${text.trim()}\n\n${taggedLine(user, tag)}`;
+    },
+    // A verifier for postOf() of the nodes given: their "from" lines' tags asked at once.
+    async verifier(nodes) {
+      const claims = [];
+      for (const node of nodes) {
+        const body = node?.body ?? "";
+        const from = FROM.exec(body);
+        if (from) claims.push({ user: from[1], text: body.slice(0, from.index).trim() });
+      }
+      const tags = await all(claims);
+      const known = new Map(claims.map((c, i) => [`${c.user}\n${c.text}`, tags[i]]));
+      return (user, text, tag) => {
+        const expected = known.get(`${user}\n${text}`);
+        return !!expected && same(tag, expected);
+      };
+    },
+  };
 }
 
 const FROM = /\n*From the dashboard by @([\w-]+)[ \t]*<!-- deckhand-from:([\w-]+):([\w-]+) -->\s*$/;
@@ -61,17 +101,26 @@ const AUTHOR = "author { login __typename }";
 const POST = `id databaseId url body createdAt ${AUTHOR}`;
 const THREAD = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { discussion(number: $number) { ${POST} number title category { name } comments(last: ${COMMENTS}) { totalCount nodes { ${POST} replies(last: ${REPLIES}) { totalCount nodes { ${POST} } } } } } } }`;
 
+// Whether `node` is the App's own post (`bot`: its login).
+function byApp(node, bot) {
+  const login = node?.author?.login;
+  return (
+    node?.author?.__typename === "Bot" &&
+    !!bot &&
+    login?.replace(/\[bot\]$/i, "").toLowerCase() === bot.replace(/\[bot\]$/i, "").toLowerCase()
+  );
+}
+
 // A post as the dashboard shows it: { id, url, author, deckhand, at, body }. The App's posts
 // are Deckhand's answers (they end with the marker, left out), or a dashboard user's (the last
-// line says who, with a tag `key` (fromKey()'s) signed for its text; left out too). Only the
-// App's own: anyone may write that line. Any other App post is shown as the App's: a run's,
-// say, whatever its last line claims.
+// line says who, with a tag `key` (fromKey()'s, or a verifier from tagger()) signed for its
+// text; left out too). Only the App's own: anyone may write that line. Any other App post is
+// shown as the App's: a run's, say, whatever its last line claims.
 export function postOf(node, bot, key = null) {
+  const verify =
+    typeof key === "function" ? key : (user, text, tag) => same(tag, fromTag(key, user, text));
   const login = node.author?.login ?? null;
-  const app =
-    node.author?.__typename === "Bot" &&
-    !!bot &&
-    login?.replace(/\[bot\]$/i, "").toLowerCase() === bot.replace(/\[bot\]$/i, "").toLowerCase();
+  const app = byApp(node, bot);
   let body = node.body ?? "";
   let author = login;
   let deckhand = false;
@@ -81,11 +130,7 @@ export function postOf(node, bot, key = null) {
   } else if (app && key) {
     const from = FROM.exec(body);
     const text = from && body.slice(0, from.index).trim();
-    if (
-      from &&
-      from[1].toLowerCase() === from[2].toLowerCase() &&
-      same(from[3], fromTag(key, from[1], text))
-    ) {
+    if (from && from[1].toLowerCase() === from[2].toLowerCase() && verify(from[1], text, from[3])) {
       author = from[1];
       body = text;
     }
@@ -121,11 +166,14 @@ export function createDiscussionApi({
   nameOf = async (repo) => repo,
   accept,
   publicUrl = () => null,
-  // The key of the dashboard's "from" lines (fromKey()), or null without an App.
+  // The key of the dashboard's "from" lines (fromKey()), or null without an App; or what tags
+  // them, edge's (tagger() `tags`).
   key = () => null,
+  tags = null,
   now = Date.now,
   log = () => {},
 }) {
+  const from = tagger({ tags, key });
   // "owner/repo#n" → { at, read: Promise<thread> }
   const threads = new Map();
 
@@ -173,7 +221,13 @@ export function createDiscussionApi({
     if (normalize(d.category?.name ?? "") !== category) {
       refuse(404, `#${number} isn't in ${repo}'s discussions category.`);
     }
-    return { node: d, thread: threadOf(d, config.bot, key()) };
+    const nodes = [
+      d,
+      ...(d.comments?.nodes ?? []).flatMap((c) => [c, ...(c.replies?.nodes ?? [])]),
+    ];
+    // The App's own posts only: anyone may end a comment with a "from" line.
+    const verify = await from.verifier(nodes.filter((n) => n?.body && byApp(n, config.bot)));
+    return { node: d, thread: threadOf(d, config.bot, verify) };
   }
 
   // The checks and the thread are read together, and kept: each poll would ask GitHub for the
@@ -224,7 +278,7 @@ export function createDiscussionApi({
         repo: r.id,
         category: found.id,
         title: title.trim(),
-        body: fromDashboard(user, body, key()),
+        body: await from.post(user, body),
       },
     );
     const d = made.createDiscussion.discussion;
@@ -278,7 +332,7 @@ export function createDiscussionApi({
     const c = await addDiscussionComment(
       graphql,
       repo,
-      { id: d.id, thread, body: fromDashboard(user, text, key()) },
+      { id: d.id, thread, body: await from.post(user, text) },
       "id databaseId url replyTo { databaseId }",
     );
     // Shown on the next read, not in THREAD_MS.

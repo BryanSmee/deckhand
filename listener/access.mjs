@@ -58,7 +58,7 @@ export async function grantedAccess(config, task, settings, { agent, note, log, 
     const where = check.error.file
       ? `\`${check.error.file}\` in the operator's grants folder has errors`
       : "the operator's grants folder has errors";
-    throw new RunError(`${cantRun(agent)}: ${where} (see the listener's logs).`);
+    throw new RunError(`${cantRun(agent)}: ${where} (see the orchestrator's logs).`);
   }
   const { grant, missing } = check;
   if (missing.length) {
@@ -131,7 +131,7 @@ export function grantsRefusal(check) {
   const where = check.error.file
     ? `\`${check.error.file}\` in the operator's grants folder has errors`
     : "the operator's grants folder has errors";
-  return `${where} (see the listener's logs)`;
+  return `${where} (see the orchestrator's logs)`;
 }
 
 // The egress proxy's CA certificate, which the sandbox trusts so that the proxy may decrypt
