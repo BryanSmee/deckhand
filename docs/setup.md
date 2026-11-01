@@ -991,9 +991,11 @@ The numbers come from the models service, which holds the plans (`models/usage.m
   calls (the only source for the Antigravity CLI, whose answers carry none), each plan at most
   every 5 minutes, and only when no run read it lately. These calls aren't documented and may
   change: one that fails is only logged in the models service's log, the bars keep their last
-  reading, and it is asked again 30 minutes later. A login due for a refresh isn't polled: an
-  idle dashboard never spends a refresh token, nor starts the Antigravity CLI's refresh
-  container; the next run's call refreshes it.
+  reading, and it is asked again 30 minutes later. A ChatGPT login due for a refresh (it lasts
+  days) isn't polled: an idle dashboard never spends its refresh token; the next run's call
+  refreshes it. The Antigravity CLI's quota call is its plan's only reading and its login lasts
+  an hour, so while a dashboard is open its poll refreshes the login when due (a short `agy`
+  container, as a run's refresh), at most once an hour.
 - **Claude's plan is read from the runs' calls alone** with a `claude setup-token` token: its
   OAuth usage call needs the `user:profile` scope, which such a token doesn't have. The models
   service tries it once, logs `Claude's usage call refused (… user:profile …): not asked again`,

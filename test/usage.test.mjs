@@ -18,6 +18,7 @@ import {
   createUsage,
   FAILED_MS,
   POLL_MS,
+  REFRESH_EVERY_MS,
 } from "../models/usage.mjs";
 import { serve, tokenBroker } from "./helpers.mjs";
 
@@ -454,40 +455,91 @@ test("Claude's usage call refused to a setup-token's token: logged once, never a
   assert.ok(!logs[0].includes("sk-ant"));
 });
 
-test("a login due for a refresh isn't polled: the poll never refreshes it", async (t) => {
+test("a ChatGPT login due for a refresh isn't polled; the Antigravity CLI's is refreshed, once an hour", async (t) => {
   const asked = [];
   const { url } = await serve(t, (req, res) => {
     asked.push(req.url);
     res.end(JSON.stringify({ rate_limit: {}, models: {} }));
   });
-  let fresh = false;
-  let refreshed = 0;
-  const login = {
-    current: async () => (fresh ? { authorization: "Bearer a" } : null),
-    headers: async () => (refreshed++, { authorization: "Bearer a" }),
+  // Two logins, each due until refreshed (its headers() called).
+  const loginOf = () => {
+    const login = { refreshed: 0, fresh: false };
+    login.current = async () => (login.fresh ? { authorization: "Bearer a" } : null);
+    login.headers = async () => (
+      login.refreshed++,
+      (login.fresh = true),
+      { authorization: "Bearer a" }
+    );
+    return login;
   };
+  const chatgpt = loginOf();
+  const agy = loginOf();
   const clock = { now: NOW };
-  const { usage } = usageOf(
-    {
-      codex: codexPoll({ login, chatgptUrl: `${url}/backend-api/codex`, fetch }),
-      antigravity: antigravityPoll({ login, host: url, fetch }),
-    },
-    clock,
+  const store = openStore("memory:", { now: () => clock.now });
+  const copies = [0, 1].map(() =>
+    createUsage({
+      plans: {
+        codex: codexPoll({ login: chatgpt, chatgptUrl: `${url}/backend-api/codex`, fetch }),
+        antigravity: antigravityPoll({ login: agy, host: url, fetch }),
+      },
+      store,
+      now: () => clock.now,
+    }),
   );
-  await usage.read({ poll: true });
-  await usage.settled();
-  assert.deepEqual(asked, []);
-  assert.equal(refreshed, 0);
-  fresh = true;
-  clock.now += POLL_MS;
-  await usage.read({ poll: true });
-  await usage.settled();
+  const poll = async (copy) => {
+    await copy.read({ poll: true });
+    await copy.settled();
+  };
+  await poll(copies[0]);
+  // ChatGPT's: not polled, not refreshed. The Antigravity CLI's: refreshed, then polled.
+  assert.equal(chatgpt.refreshed, 0);
+  assert.equal(agy.refreshed, 1);
   assert.deepEqual(asked.sort(), [
-    "/backend-api/wham/usage",
     "/v1internal:fetchAvailableModels",
     "/v1internal:loadCodeAssist",
   ]);
-  assert.equal(refreshed, 0);
+  // Due again before the hour is out: no refresh, by either copy, so no poll.
+  agy.fresh = false;
+  asked.length = 0;
+  clock.now += 10 * 60_000;
+  await poll(copies[1]);
+  clock.now += 10 * 60_000;
+  await poll(copies[0]);
+  assert.equal(agy.refreshed, 1);
+  assert.deepEqual(asked, []);
+  // An hour on: refreshed again.
+  clock.now += REFRESH_EVERY_MS;
+  await poll(copies[1]);
+  assert.equal(agy.refreshed, 2);
+  assert.ok(asked.includes("/v1internal:fetchAvailableModels"));
+  // A run refreshed the ChatGPT login: polled, never refreshed by the poll.
+  chatgpt.fresh = true;
+  clock.now += POLL_MS;
+  await poll(copies[0]);
+  assert.ok(asked.includes("/backend-api/wham/usage"));
+  assert.equal(chatgpt.refreshed, 0);
+});
+
+test("Codex's resets given as seconds after the answer: not a write at each answer", async () => {
+  const { usage, store, clock } = usageOf({ codex: true });
+  const headers = {
+    "x-codex-primary-used-percent": "40",
+    "x-codex-primary-window-minutes": "300",
+    "x-codex-primary-reset-after-seconds": "3600",
+  };
+  await usage.codexAnswered(200, headers);
+  let writes = 0;
+  const cas = store.compareAndSet.bind(store);
+  store.compareAndSet = (...args) => (writes++, cas(...args));
+  // The same reset, seconds on: the same minute.
+  clock.now += 2000;
+  await usage.codexAnswered(200, { ...headers, "x-codex-primary-reset-after-seconds": "3598" });
+  clock.now += 1500;
+  await usage.codexAnswered(200, headers);
+  assert.equal(writes, 0);
+  // A percent more: written.
+  await usage.codexAnswered(200, { ...headers, "x-codex-primary-used-percent": "41" });
+  assert.equal(writes, 1);
 });
 
 test("a usage call's reading replaces the plan's windows; the runs' answers merge, in one order", async () => {

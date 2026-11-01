@@ -1160,8 +1160,9 @@ each in its log).
   models service asks a plan no run read lately, every 5 minutes at most for every copy (a lease
   in the store), 30 minutes after a failed call, which is only logged; never again (until a restart)
   after Claude's refuses its token, which a `claude setup-token` token's missing `user:profile`
-  scope makes the usual case, and not while a login is due for a refresh (the poll doesn't
-  refresh it). Readings are in the store,
+  scope makes the usual case, and not while a ChatGPT login is due for a refresh (the poll doesn't
+  refresh it); the Antigravity CLI's, its plan's only reading, refreshes its hour-long login
+  when due, once an hour at most for every copy (`usage:<plan>:refresh`). Readings are in the store,
   `usage:<plan>`, written when a percent, a reset or a limit changes, or once a minute. A 429
   marks its window full until its reset. api/state's `plans` has only their numbers and times,
   and only when a plan is set; they update only when runs use the plan or a dashboard is open.

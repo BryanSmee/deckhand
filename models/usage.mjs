@@ -8,8 +8,8 @@
 //   rate limit headers, which cost nothing;
 //   by asking the plan, while a dashboard is open (GET /usage?poll=1, every POLL_MS at most, for
 //   every copy): Claude's OAuth usage call (refused to a `claude setup-token` token: then never
-//   again, claudePoll()), ChatGPT's and the Antigravity CLI's quota calls (skipped while their
-//   login is due for a refresh). They aren't documented and may change: a poll that fails is
+//   again, claudePoll()), ChatGPT's quota call (skipped while its login is due for a refresh)
+//   and the Antigravity CLI's (which refreshes its login when due, once an hour at most). They aren't documented and may change: a poll that fails is
 //   only logged, the passive readings stay, and the next one waits FAILED_MS.
 //
 // A reading parsed here never makes up a value: a header missing or garbled leaves its window out.
@@ -20,6 +20,9 @@ export const PLANS = { claude: "Claude", codex: "Codex", antigravity: "Antigravi
 // How often a dashboard's poll asks a plan, for every copy, and how long after a failed one.
 export const POLL_MS = 5 * 60_000;
 export const FAILED_MS = 30 * 60_000;
+// How often a poll may refresh an idle plan's login (the Antigravity CLI's): one refresh, one
+// hour-long token, so its bars keep up while a dashboard is open.
+export const REFRESH_EVERY_MS = 60 * 60_000;
 // How long a plan's call for its usage may take.
 const POLL_TIMEOUT_MS = 10_000;
 // How long a reading is kept in the store: past a week's window, nothing of it is still true.
@@ -201,10 +204,12 @@ export function claudePoll({ token, upstream = "https://api.anthropic.com", fetc
 }
 
 // A login's headers, unless it is due for a refresh (logins.mjs current()): a poll of an idle
-// plan mustn't spend a refresh token, nor start the Antigravity CLI's refresh container. The
-// next run's call refreshes it, and the poll after that goes.
-async function loginHeaders(login) {
-  return login.current ? login.current() : login.headers();
+// plan mustn't spend a refresh token. The next run's call refreshes it, and the poll after that
+// goes. `mayRefresh()`: whether this poll may refresh it all the same (the Antigravity CLI's,
+// below).
+async function loginHeaders(login, mayRefresh = async () => false) {
+  if (!login.current) return login.headers();
+  return (await login.current()) ?? ((await mayRefresh()) ? login.headers() : null);
 }
 
 export function codexPoll({ login, chatgptUrl, fetch, now = Date.now }) {
@@ -217,6 +222,10 @@ export function codexPoll({ login, chatgptUrl, fetch, now = Date.now }) {
   };
 }
 
+// The Antigravity CLI's answers carry no usage, so its poll is its plan's only reading, and its
+// access token lasts an hour: an idle plan's poll refreshes its login when due, `agy` in the
+// runner's container, at most once every REFRESH_EVERY_MS for every copy (createUsage()'s
+// `mayRefresh`). A ChatGPT login lasts days: its poll waits for a run's refresh.
 export function antigravityPoll({ login, host, fetch }) {
   const call = async (method, body, headers) =>
     askJson(fetch, `${host}/v1internal:${method}`, {
@@ -225,8 +234,8 @@ export function antigravityPoll({ login, host, fetch }) {
       body: JSON.stringify(body),
     });
   let project = null;
-  return async () => {
-    const headers = await loginHeaders(login);
+  return async ({ mayRefresh } = {}) => {
+    const headers = await loginHeaders(login, mayRefresh);
     if (!headers) return null;
     // The plan's project, as `agy` asks for it first; without one, the call takes none.
     if (!project) {
@@ -276,7 +285,13 @@ const newest = (windows) => Math.max(0, ...windows.map((w) => w.at ?? 0));
 const shape = (entry) =>
   JSON.stringify([
     entry.limitedUntil,
-    entry.windows.map((w) => [w.name, Math.round(w.used * 100), w.resetsAt]),
+    // To the minute: a reset given as seconds after the answer (Codex's reset-after-seconds)
+    // moves by the milliseconds between two of them.
+    entry.windows.map((w) => [
+      w.name,
+      Math.round(w.used * 100),
+      w.resetsAt === null ? null : Math.round(w.resetsAt / 60_000),
+    ]),
   ]);
 
 // `plans`: { claude, codex, antigravity } → true for a plan the operator set, or its usage call
@@ -349,6 +364,11 @@ export function createUsage({ plans = {}, store, now = Date.now, log = () => {} 
     return seen("codex", windows, status < 400 ? { limitedUntil: null } : {});
   }
 
+  // Whether a poll of `plan` may refresh its login now: once every REFRESH_EVERY_MS for every
+  // copy, whatever came of it.
+  const mayRefresh = (plan) =>
+    store.setIfAbsent(`usage:${plan}:refresh`, now(), { ttlMs: REFRESH_EVERY_MS });
+
   // One poll of `plan`, for every copy every POLL_MS at most, FAILED_MS after a failure, never
   // again after a LastingRefusal; not when the runs' answers read it lately. Never throws.
   async function poll(plan, entry) {
@@ -358,7 +378,7 @@ export function createUsage({ plans = {}, store, now = Date.now, log = () => {} 
     const run = (async () => {
       if (!(await store.setIfAbsent(pollKey(plan), now(), { ttlMs: POLL_MS }))) return;
       try {
-        const windows = await ask();
+        const windows = await ask({ mayRefresh: () => mayRefresh(plan) });
         if (windows) await seen(plan, windows, { polled: true });
       } catch (error) {
         if (error instanceof LastingRefusal) {
