@@ -1,5 +1,5 @@
 // What the listener is busy with, for /status (http.mjs): running runs, reaction updates still
-// on their way to GitHub, preview hooks; `idle` when none is. Reactions are tracked here
+// on their way to GitHub; `idle` when none is. Reactions are tracked here
 // (track()) as runs end and queued comments are dropped.
 import { entryOf } from "./agents/index.mjs";
 import { AUTHS } from "./agents/credentials.mjs";
@@ -113,29 +113,20 @@ export function createStatus(ctx) {
   // Queued comments don't count: they are saved as they come (saveQueue()), running sandboxes go on without
   // the listener (restoreRuns()), and brainstorms between replies are restored from
   // brainstorms.json and their volume. Nothing needs to drain before a restart. `sees(repo)`:
-  // which repos' runs, hooks and queues are listed (a signed-in user's, http.mjs); `idle` is
+  // which repos' runs and queues are listed (a signed-in user's, http.mjs); `idle` is
   // the whole listener's either way.
   function status(sees = () => true) {
     const active = ctx.runs.filter((r) => r.status === "running");
-    const previews = ctx.previews.status();
     const reasons = (shown) => [
       ...active
         .filter((r) => shown(r.repo ?? parseKey(r.key)?.repo))
         .map((r) => `${r.kind} run ${r.key} since ${new Date(r.startedAt).toISOString()}`),
       ...(inflight.size ? [`${inflight.size} reaction update(s) in flight`] : []),
-      // A preview hook may be deploying: a restart waits for it too.
-      ...previews
-        .filter((h) => shown(h.repo))
-        .map(
-          (h) =>
-            `preview hook ${h.repo} (${h.event}) ${h.state} since ${new Date(h.since).toISOString()}`,
-        ),
     ];
     return {
       version: ctx.server.version,
       startedAt: ctx.server.startedAt,
       idle: ctx.running === 0 && !reasons(() => true).length,
-      previews: previews.filter((h) => sees(h.repo)),
       reasons: reasons(sees),
       setUp: ctx.app !== null,
       queued: [...tasks.values()]

@@ -2,7 +2,7 @@
 // sends pushes here instead (entrypoint.sh: `url.<broker>/git/.pushInsteadOf`), with the
 // run token as its password (git-credential-deckhand), checked offline (broker.mjs check()).
 // The gateway reads the push's ref updates, refuses any outside `refs/heads/`, to the repo's
-// default branch (the branch Deckhand trusts: its `.deckhand.yaml`, preview hook and Dockerfile
+// default branch (the branch Deckhand trusts: its `.deckhand.yaml` and Dockerfile
 // come from there) or to a branch that isn't the run's own (broker.mjs allow(): its issue's,
 // its pull request's), and forwards the rest to GitHub with a token of its own that the sandbox never sees. Updates,
 // force-pushes and deletes alike: another task's branch, a maintainer's pull request or

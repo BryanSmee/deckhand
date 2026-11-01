@@ -120,12 +120,6 @@ inbox:
   bugs: 4 # issue number
   discussions: Ask Claude # GitHub Discussions category
 
-# Run on pull_request and workflow_run deliveries (see below).
-preview:
-  command: ./deploy/preview.sh
-  image: docker:27-cli
-  timeout_minutes: 30
-
 # Rebase this repo's open Deckhand pull requests that conflict with their base (see below).
 conflicts:
   check_minutes: 15
@@ -178,9 +172,6 @@ projects:
 | `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                              |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                     |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                      |
-| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `preview` grant                                                        |
-| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                                                |
-| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                                    |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                  |
 | `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                                            |
 | `auto_pickup`                           | `false`                                 | `true`: Deckhand starts this repo's open issues labelled `AUTO_PICKUP_LABEL` by itself, in the operator's `AUTO_PICKUP_SLOTS` (see Auto-pickup) |
@@ -719,12 +710,6 @@ nothing blocking. It takes both sides:
   nothing is merged; the reviews and fix runs go on as without `merge`.
 - **`on: ready`**: the merge follows the reviews that start by themselves, never a
   `/mode review` comment's. Without it, the config check warns and nothing is merged.
-- **With a [preview hook](#preview-hook)** granted (`preview`), the operator's
-  `acknowledge_automerge_and_preview_is_highly_dangerous` grant too, for this repository. The hook runs the default branch's files as root on the host, and the
-  trusted-files gate below only sees the hook's command line, not what it runs (a script it
-  sources, a `Makefile`, `package.json`, a compose file, what its image `COPY`s). With both
-  on, an auto-merged change can reach root on the host with nobody reading it. Without the
-  acknowledgement, the config check warns, and each review's merge is refused with a comment.
 
 **The flow**, all in Deckhand (never in a sandbox, whose token can't merge):
 
@@ -762,12 +747,11 @@ findings still does. `low`, the default: any medium finding blocks.
 - its head is still the commit the review read;
 - the repository is private, or the grant is `auto_merge_public`, as GitHub says at that moment;
 - it changes none of the files Deckhand trusts: `.deckhand.yaml`, `.deckhand/`, `.github/`,
-  any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`, the words of
-  the preview hook's command that are paths, `review.instructions`, the modes' instructions),
+  any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`,
+  `review.instructions`, the modes' instructions),
   renames included. Merging those by itself would let a run widen its own config: such a
   pull request always waits for a human. GitHub lists 3000 changed files at most: a pull
   request with more than it lists is refused;
-- a granted preview hook only with the acknowledgement above;
 - `mergeable_state` is `clean`, and its GitHub Actions runs on the head commit are finished
   with none failed (read with the App's `actions: read`; no new permission). A failed run
   refuses at once, naming it; `dirty` (a conflict) or `behind` too. `unstable` with every
@@ -827,44 +811,19 @@ They are light runs, like brainstorms: no branch, no `setup`, the brainstorm mod
   it, like one written on GitHub. Comments written on GitHub show up in the dashboard within
   15 seconds or so. The category must exist on GitHub: the dashboard never creates it.
 
-## Preview hook
+## Preview deployments
 
-Only when the operator's policies grant the repository `preview`: holding
-the Docker socket is root on the host. Without it, a `preview` key stops the repository's
-runs (the reply says which grant is missing) and its hook never runs.
+Deckhand no longer runs a preview hook (#574): it held the host's Docker socket, so it was root
+on the host. A `preview` key left in `.deckhand.yaml` is ignored, with a warning in the run's
+log and on the config page (`preview: removed, ignored`); the repository's runs go on.
 
-On `pull_request` and `workflow_run` deliveries for the repository (whoever opened the pull
-request), the runner service (the only one with the Docker socket) runs `preview.command`, read
-from the default branch's `.deckhand.yaml`:
-
-- with `sh -c`, in a new container of `preview.image` (or the repo's image), as root;
-- in `/deckhand-checkout`, the repository's files at the default branch, never the pull
-  request's;
-- with the delivery's JSON on stdin, and `GITHUB_EVENT_NAME` (`pull_request` or
-  `workflow_run`) and `DECKHAND_REPO` set;
-- with the host's Docker socket at `/var/run/docker.sock` (`DOCKER_SOCKET` on the host), so
-  it can start or remove a preview deployment.
-
-The hook decides what to do from the event (`action`, the pull request's head, whether a
-workflow succeeded…): the event's content comes from whoever opened the pull request, so
-treat it as untrusted input. That includes the App's bot's own pull requests: they are
-same-repository, but a sandbox wrote them (see
+To deploy a preview of each pull request, add a webhook to the repository (Settings ›
+Webhooks) for its `pull_request` events (and `workflow_run`, to deploy once CI has passed),
+pointed at a small HTTPS server of your own that checks the webhook's secret and deploys. It
+gets the deliveries the hook got, with only the access you give it. Treat what an event says
+as untrusted input: whoever opened the pull request wrote it, the App's bot's own pull
+requests included (a sandbox wrote them, see
 [GitHub Actions on Deckhand's branches](security.md#github-actions-on-deckhands-branches)).
-Holding the Docker socket is root on the host.
-
-Hooks of one repository run one at a time, in delivery order. At most 3 wait behind the
-running one: deliveries past that are dropped (and logged), since anyone can open pull
-requests. A newer delivery for a pull request (or a workflow run) whose hook still waits
-replaces it, so the hook may not see every event: have it bring the preview to the state the
-event describes (open, updated, closed) rather than react to each action. A hook is **busy** for as
-long as its command runs: Deckhand's `/status` lists it and isn't idle meanwhile, so a
-restart that waits for it doesn't cut a deployment short. The runner, stopping for an update,
-lets a running hook finish within its grace period (`DRAIN_SECONDS`, 280 s by default), then
-stops and removes it, and drops the hooks still waiting, saying so in its log: the next event
-for that pull request or workflow run runs the hook again. Its other copy takes events
-meanwhile, so a repository's next hook may start before that last one ends. A hook that starts something
-should wait until it is up before exiting. Its output is kept in the runner's volume
-(`runner-data`), under `previews/`.
 
 ## Conflicts
 
@@ -1078,7 +1037,7 @@ What a run's sandbox gets (`pull`, `push`, `setup`, `docker`, `internet`, `read:
 `deny_capabilities` (`{"capability": …, "reason": …}`) on `repo` (`name`, `private`), `mode`,
 `custom_mode`, `issue`, `reason`, `fork`, `trigger` (as the run input's) and `command` (the
 comment's first line: `work`, `stop`…); used if its key (`setup`, `dockerfile`,
-`docker`, `preview`) asks for it and the operator's [grant](security.md#the-grants) gives it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give each built-in mode
+`docker`) asks for it and the operator's [grant](security.md#the-grants) gives it, and what it needs is used (a deny drops what needs it). Deckhand's `mode-<mode>.rego` give each built-in mode
 its own; the repository's `modes:` work's at most, and only what its `.deckhand/policy/` allows too (nothing: refused). The repository's config page, Capabilities tab, shows for each mode what a run gets, the file that decided each capability and what stops it.
 The `read:*` are what the run's token reads on GitHub (`read:issues` every issue, `read:pulls`
 every pull request, `read:discussions`, `read:actions` CI): without `read:issues`, a run reads its

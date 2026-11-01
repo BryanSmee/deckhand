@@ -35,8 +35,8 @@ NetworkPolicy still lets sandboxes reach the orchestrator's 8081 directly (#567,
 ## The default branch
 
 Deckhand trusts a repository's default branch: its `.deckhand.yaml`, its sandbox
-instructions. What that file can ask for beyond a sandbox (mounts, the preview hook, which
-runs with the Docker socket, the Dockerfile built on the host) only happens when your
+instructions. What that file can ask for beyond a sandbox (mounts, the Dockerfile built on
+the host) only happens when your
 grants folder allows it for that repository (see [The grants folder](#the-grants-folder)): with
 the App on many repositories, whoever can push one's default branch must not get root on the
 host through it. A sandbox that could write to a default branch could still change what
@@ -134,7 +134,7 @@ This doesn't depend on GitHub: branch protection and rulesets aren't enforced on
 repositories of free plans. Where they are, a ruleset on the default branch (pull request
 required) is still worth adding: it also covers people and other tools. A sandbox's
 branches still reach the default branch through pull requests that a maintainer merges:
-review those that touch `.deckhand.yaml`, the Dockerfile or the preview hook's script. The
+review those that touch `.deckhand.yaml` or the Dockerfile. The
 one exception is [Auto-merge](#auto-merge), where the orchestrator merges, and only with your
 per-repository grant.
 
@@ -268,8 +268,8 @@ changes: your workflows are yours to set up. On each repository the App is insta
   with required reviewers, or limit those workflows to the default branch (with the
   `workflows` grant, the gateway refuses the workflows a run writes that name one, above);
 - treat pull requests from the App's bot (`<app>[bot]`) like an outsider's in workflows
-  and in the [preview hook](repo-config.md#preview-hook): they are same-repository and look
-  trusted, but their code comes from a sandbox.
+  and in your own webhooks ([preview deployments](repo-config.md#preview-deployments)): they
+  are same-repository and look trusted, but their code comes from a sandbox.
 - the same goes for `pull_request_target` and `workflow_run` workflows that check out a
   pull request's head: they run it with the default branch's secrets and a token that may
   write.
@@ -576,10 +576,10 @@ the host. What the runner
 does, it does for its callers, each endpoint naming which (`runner/service.mjs` `ROUTES`, checked
 with their service tokens first, below):
 
-| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; queue preview hooks; write and remove logs; and, for the egress policy, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files, and read a run's log, for the dashboard's live view too, which edge passes on (unfenced: a copy still draining answers the proxy) |
-| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                                                   |
+| Caller       | May                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| orchestrator | start, follow, message, stop and remove sandboxes; build images, install agents, prepare caches; write and remove logs; and, for the egress policy, ask where an address is, the egress proxy's addresses, whether a sandbox installs its agent, and read a run's inbox and files, and read a run's log, for the dashboard's live view too, which edge passes on (unfenced: a copy still draining answers the proxy) |
+| models       | have the Antigravity login refreshed: it sends the token file, never a container to run                                                                                                                                                                                                                                                                                                                              |
 
 None can act on a container or a network that isn't one of this deployment's runs: the runner
 stops, follows and removes only the sandboxes it lists by their labels (`deckhand.owner`,
@@ -603,22 +603,16 @@ root, to hand it to the sandbox's user) only in the base image or the repository
 paths. A repo image builds only with the `dockerfile` grant (a branch's with
 `branch_docker_images`), from what the runner decides: the default branch's files unless a
 branch's is asked and granted, the Dockerfile's blob as the github service says it (`GET
-/blobs/…`), the hosts the grants give;
-and a preview hook, which runs as root with the socket, only with the `preview` grant: the runner
-reads its command and image itself, from the repository's default branch's config in its own
-checkout, and runs it in that checkout, never from the orchestrator's call (`runner/hooks.mjs`).
-The hook's event comes from the orchestrator: the runner can't check the delivery's signature
-(edge did), only that it is a `pull_request` or `workflow_run` event about that
-repository, with its pull request or workflow run. A compromised orchestrator can still start a
-run, but not one it names as root on the host.
+/blobs/…`), the hosts the grants give (`runner/builds.mjs`). A compromised orchestrator can
+still start a run, but not one it names as root on the host.
 
 The runner holds no GitHub credential either: a
-build's context and a preview hook start from the repository's tarball, which it gets from the
+build's context starts from the repository's tarball, which it gets from the
 [github service](#the-github-service) (`GET /tarballs/<owner>/<repo>[/<ref>]` and a file's
 blob id, `GET /blobs/…`, the runner's only routes there, for an allowed repository, its names,
 path and ref checked before they make an API path), never from the orchestrator, which can't serve
-it files of its own (#502): a compromised orchestrator can't make a preview hook or an
-image build run its own files as root on the host. A run's first tokens come from the
+it files of its own (#502): a compromised orchestrator can't make an image build run its
+own files on the host. A run's first tokens come from the
 orchestrator (`POST /runs/<run>/tokens`, only while that run starts), which has the broker sign
 them with its own claims: the runner can't choose what a run's tokens allow. Every orchestrator call carries its
 fencing epoch: an older one than the newest the runner saw is refused (`409`).
@@ -1704,8 +1698,8 @@ What you give a repository beyond what every sandbox gets lives in `GRANTS_DIR`
 [server folder](setup.md#the-server-folder) `compose.yaml` mounts read-only, with
 [`server.example/grants/`](../server.example/grants) to start from): one file per
 repository for its hosts, projects, mounts and limits, `default.yaml` for every repository,
-and your policies in `policy/`, which hold [the grants](#the-grants) (a Dockerfile, a preview
-hook, an engine, research, workflows, auto-merge). It is optional and read again at each run,
+and your policies in `policy/`, which hold [the grants](#the-grants) (a Dockerfile, an engine,
+research, workflows, auto-merge). It is optional and read again at each run,
 so an edit applies without a restart.
 
 ```
@@ -1756,11 +1750,12 @@ limits: { memory: 8g }
 `mounts` and `allow_projects` in `default.yaml` are errors: a root, or a project outside every
 repository, for every repository, are too broad to grant by accident, so they are granted one
 repository at a time. The yes-or-no keys these files had before #498 (`allow_dockerfile`,
-`allow_preview`, `allow_branch_docker_images`, `allow_docker`, `allow_research`,
-`allow_workflows`, `allow_auto_merge`, `acknowledge_automerge_and_preview_is_highly_dangerous`)
-are errors too, each saying what to do instead: for `true`, the `allow_grant` rule to write;
-for `false`, which granted nothing, to remove it
-([Upgrading](setup.md#upgrading-the-grants-498)).
+`allow_branch_docker_images`, `allow_docker`, `allow_research`, `allow_workflows`,
+`allow_auto_merge`) are errors too, each saying what to do instead: for `true`, the
+`allow_grant` rule to write; for `false`, which granted nothing, to remove it
+([Upgrading](setup.md#upgrading-the-grants-498)). The preview hook's, `allow_preview` and
+`acknowledge_automerge_and_preview_is_highly_dangerous`, are only warnings: the hook is gone,
+so they grant nothing ([Upgrading](setup.md#upgrading-the-preview-hook-is-gone-574)).
 
 **Errors stop runs, file by file.** A repository's file with errors grants that repository
 nothing: its runs stop, with a reply naming the file (the details are in the orchestrator's logs,
@@ -1774,8 +1769,8 @@ and the orchestrator starts anyway.
 **Symlinks** are followed while they stay in the folder: one leading outside it is an error,
 for that repository when it is its file, for every repository when it is a folder.
 
-**Who can edit the folder can grant root on the host** (the `preview` grant, in `policy/`)
-and host paths (`mounts`): protect it like the deployment itself. A git checkout works well: reviewed pull
+**Who can edit the folder can grant what reaches the host** (a Dockerfile built on its
+Docker, a container engine, in `policy/`) and host paths (`mounts`): protect it like the deployment itself. A git checkout works well: reviewed pull
 requests, and a `CODEOWNERS` giving each team its own repositories' files, while the
 folder's root (`default.yaml`, `CODEOWNERS` itself) stays with you:
 
@@ -1793,20 +1788,16 @@ Quote patterns starting with `*` (`"*.acme.dev"`): YAML reads a bare `*` as an a
 [Where a sandbox's hosts come from](#where-a-sandboxs-hosts-come-from) for how `hosts`
 apply.
 
-**Preview hooks and Dockerfiles** are the most powerful things a `.deckhand.yaml` asks for:
-a preview hook holds the Docker socket, so it is root on the host (the App's key in
-`/data`, the Claude credential, every repository's volumes); a Dockerfile is built on the
+**Dockerfiles** are the most powerful thing a `.deckhand.yaml` asks for: a Dockerfile is built on the
 host's Docker with its network (on Kubernetes, by the cluster's BuildKit daemon, through the
 egress proxy with the repo's hosts only, and pushed to the operator's registry; the runner
 refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
 runner can't see. The registry has to require credentials to pull, push and delete (Deckhand doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
-[Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `preview` without
-the `preview` grant, or `dockerfile` without the `dockerfile` grant, gets neither: its runs stop
-and the reply on the issue says which grant is missing, like refused mounts, and its preview
-hook doesn't run (the orchestrator's logs say why:
-`ignored: pull_request: preview hook of <repo> not run: …`). Grant them to repositories
-whose default branch you trust as much as the host itself. `branch_docker_images`
+[Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
+without the `dockerfile` grant doesn't get it: its runs stop and the reply on the issue says
+which grant is missing, like refused mounts. Grant it to repositories whose default branch you
+trust as much as the host itself. `branch_docker_images`
 is a grant too, not a `.deckhand.yaml` key: it lets anyone who can push a branch of the
 repository change what is built.
 
@@ -1830,26 +1821,24 @@ package deckhand
 
 allow_grant if {
   input.repo.name == "acme/api"
-  input.grant in {"dockerfile", "preview", "research"}
+  input.grant in {"dockerfile", "research"}
 }
 ```
 
-| Grant                                                   | What the repository gets                                                                              |
-| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `dockerfile`                                            | its `dockerfile` built on the host's Docker (capability `image:repo`)                                 |
-| `branch_docker_images`                                  | its pull requests' runs build their branch's Dockerfile, never a fork's (`image:branch`)              |
-| `preview`                                               | its [preview hook](repo-config.md#preview-hook), with the Docker socket: root on the host (`preview`) |
-| `docker`                                                | a [container engine](#container-engine) next to its sandboxes (`docker`)                              |
-| `research`                                              | [research runs](#research-runs): any public host, without its code (`internet`)                       |
-| `workflows`                                             | its pushes may change `.github/workflows/` ([above](#github-actions-on-deckhands-branches))           |
-| `auto_merge`                                            | UNSAFE: `review.merge` merges on a private repository ([Auto-merge](#auto-merge))                     |
-| `auto_merge_public`                                     | the same on a public repository too                                                                   |
-| `acknowledge_automerge_and_preview_is_highly_dangerous` | EVEN MORE UNSAFE: auto-merge while its preview hook runs the default branch as root on the host       |
+| Grant                  | What the repository gets                                                                    |
+| ---------------------- | ------------------------------------------------------------------------------------------- |
+| `dockerfile`           | its `dockerfile` built on the host's Docker (capability `image:repo`)                       |
+| `branch_docker_images` | its pull requests' runs build their branch's Dockerfile, never a fork's (`image:branch`)    |
+| `docker`               | a [container engine](#container-engine) next to its sandboxes (`docker`)                    |
+| `research`             | [research runs](#research-runs): any public host, without its code (`internet`)             |
+| `workflows`            | its pushes may change `.github/workflows/` ([above](#github-actions-on-deckhands-branches)) |
+| `auto_merge`           | UNSAFE: `review.merge` merges on a private repository ([Auto-merge](#auto-merge))           |
+| `auto_merge_public`    | the same on a public repository too                                                         |
 
 - **Nothing by default**: Deckhand's default policies have no `allow_grant` rule. No rule, no
   grant.
-- **One repository at a time**: `docker`, `workflows`, `auto_merge`, `auto_merge_public` and
-  `acknowledge_automerge_and_preview_is_highly_dangerous` (an engine, workflow files run with
+- **One repository at a time**: `docker`, `workflows`, `auto_merge` and `auto_merge_public`
+  (an engine, workflow files run with
   the Actions secrets, merges nobody reviewed are too broad to grant every repository by
   accident). The orchestrator asks each of them again for two repositories nobody has: `*/*`, and
   `<owner>/*` under the asked repository's owner (GitHub names have no `*`). A rule that also
@@ -1868,8 +1857,8 @@ allow_grant if {
   error), the repository gets nothing, as with a grants file with errors: no run starts there,
   and the reply says the grants folder has errors.
 - **The runner asks too**: it calls the policy service itself (the operator's layer only, no
-  repository's files) and checks every sandbox spec (an engine needs `docker`), image build
-  (`dockerfile`, `branch_docker_images`) and preview hook (`preview`) against these, whatever
+  repository's files) and checks every sandbox spec (an engine needs `docker`), and image build
+  (`dockerfile`, `branch_docker_images`) against these, whatever
   the orchestrator says ([The runner service](#the-runner-service)).
 - **Where they show**: a refusal says, for example, "the operator's policies don't grant
   `docker` to this repository (`allow_grant`)". The repository's config page names each grant,
@@ -1944,7 +1933,7 @@ Only `ALLOWED_USERS` sign in. Each repository's tasks, runs and live logs (whose
 may hold what a run read) are shown to the users in its own `users` too, as the orchestrator last
 read them (for a run or a comment, or for the repositories tab); a repository whose
 `.deckhand.yaml` hasn't been read since the orchestrator started is shown to every allowed user
-until it is. `/status` lists them the runs, preview hooks and queued comments of those
+until it is. `/status` lists them the runs and queued comments of those
 repositories only. An open live log stops within a second of its viewer leaving the
 repository's `users`. Edge checks the session on each request it passes on, not during a
 stream: a live log already open goes on after a sign-out until its stream ends or reconnects.
@@ -2182,9 +2171,8 @@ The containers the runner starts around runs get the same treatment where they c
 Claude Code install runs as root with only `CHOWN` (to take over an older volume); the one
 that hands a new cache volume to uid 1000 keeps only `CHOWN`, without network.
 
-The Docker socket is the runner service's alone ([The runner service](#the-runner-service)),
-and preview hooks', which a repo's maintainers configure and only run with the `preview`
-[grant](#the-grants) (see [Per-repo config](repo-config.md#preview-hook)). Neither edge, the orchestrator, nor
+The Docker socket is the runner service's alone ([The runner service](#the-runner-service)).
+Neither edge, the orchestrator, nor
 any sandbox, nor a container engine gets it. Image builds only run for repositories granted
 `dockerfile`.
 
@@ -2193,8 +2181,7 @@ socket proxy (for example `tecnativa/docker-socket-proxy`) through `DOCKER_HOST`
 the socket itself. It needs: `CONTAINERS`, `IMAGES`, `BUILD`, `VOLUMES`, `NETWORKS`, `POST`
 and `DELETE` (`docker run`, `ps`, `logs`, `inspect`, `wait`, `rm`, `cp`, `build`, `image ls/rm`,
 `volume create/inspect/ls/rm`, `network create/inspect/connect/disconnect/ls/rm`, and `info`
-with a container engine). Preview hooks still need the real socket
-(`DOCKER_SOCKET`): leave `preview` out of your repos' configs if you go this way.
+with a container engine).
 
 ### Output
 
@@ -2397,15 +2384,8 @@ branch, the last check of everything above. With it on:
   own checks.
 - **Nothing that widens Deckhand is merged by itself**: a pull request that changes
   `.deckhand.yaml`, `.deckhand/`, `.github/`, a `CODEOWNERS` or a file the config names (the
-  instructions, the Dockerfile, the paths in the preview hook's command) waits for a human, so
+  instructions, the Dockerfile) waits for a human, so
   a run can't grant itself more through a merge.
-- **Not with a preview hook, unless you say so at length**: the hook runs the default branch's
-  files as root on the host, with the Docker socket, and no gate can follow what its command
-  runs (a script it sources, a `Makefile`, `package.json`, a compose file, the files its image
-  `COPY`s). A repository with a granted hook doesn't auto-merge until your policies also grant it
-  `acknowledge_automerge_and_preview_is_highly_dangerous`. With it, a prompt injection
-  that gets a change merged can run as root on the host on the next pull request: the whole
-  deployment, every repository's secrets and the Claude credential. Don't grant it.
 - **What was reviewed is what is merged**: the merge names the reviewed commit, so a push
   after the review fails it; the repository's visibility, `mergeable_state` and its GitHub
   Actions runs are read from GitHub at the merge, not taken from a webhook. A merge waiting
@@ -2579,7 +2559,6 @@ needs.
 | `image:repo`       | the image built from its `dockerfile`                                  | `pull`               | `dockerfile`                | `dockerfile`           | the orchestrator at start                                                              |
 | `image:branch`     | on a pull request, the image of its branch's Dockerfile                | `push`, `image:repo` | `dockerfile`                | `branch_docker_images` | the orchestrator at start (never a fork's)                                             |
 | `docker`           | a [container engine](#container-engine)                                | `pull`               | `docker`                    | `docker`               | the orchestrator at start (never for a fork's pull request)                            |
-| `preview`          | the [preview hook](repo-config.md#preview-hook)                        |                      | `preview`                   | `preview`              | not per run yet: the hook runs on pull request events                                  |
 | `internet`         | any public host (as [research runs](#research-runs))                   |                      |                             | `research`             | the egress proxy                                                                       |
 | `read:issues`      | every issue, lists and search included (without it, its own only)      | `pull`               |                             |                        | GitHub (`issues: read`); the gateway (its own issue only without it)                   |
 | `read:pulls`       | every pull request, lists and search included                          | `pull`               |                             |                        | GitHub (`pull_requests: read`)                                                         |
@@ -3021,12 +3000,10 @@ it again when you change `AGY_VERSION`.
   install** run with normal network access: they run on the host's Docker, outside the
   sandboxes' networks. Builds run the repo's Dockerfile from its default branch (or its pull
   requests' branches with `branch_docker_images`). A branch's image gets a tag of its
-  own (`branch-…`, hashing its commit), so the default branch's runs and preview hooks never
-  use an image built from a branch. A repo's image name and tags hash the repository too
+  own (`branch-…`, hashing its commit), so the default branch's runs never use an image built
+  from a branch. A repo's image name and tags hash the repository too
   (`<prefix>-repo-<owner>-<repo>-<hash>`): repositories whose names read alike (`acme/x.y`,
-  `acme/x-y`) never run, or prune, each other's image, nor do their preview hooks.
-- **Preview hooks** (with the `preview` grant) run on Docker's default network with the Docker
-  socket.
+  `acme/x-y`) never run, or prune, each other's image.
 - **Deckhand's own source** is in every sandbox, read-only (`/usr/local/share/deckhand/src`,
   for onboarding: see [Onboarding](architecture.md#onboarding)), repo images built from the
   base image included: whoever can steer a run can read it. In a one-operator deployment

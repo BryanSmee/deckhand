@@ -10,7 +10,6 @@ import { board, isLive, runPlaces, STATES } from "./board.mjs";
 import {
   closedItem,
   parseKey,
-  previewEvent,
   prId,
   pullRequest,
   replayedIssue,
@@ -22,7 +21,6 @@ import {
 import { fetchPull, getJson } from "./github.mjs";
 import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
-import { previewHook } from "./previews.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
 import { applyInput, inputEvent } from "./questions.mjs";
 import { refreshFor } from "./repos.mjs";
@@ -191,7 +189,6 @@ export function createHttp(ctx) {
           running: [...tasks.values()].filter((t) => t.running && pickedTask(t)).length,
         },
       }),
-      previews: ctx.previews.status().filter((h) => sees(user, h.repo)),
       // Each repo read so far: its inbox issues and discussions category (New request).
       inboxes: Object.fromEntries((ctx.inboxes?.() ?? []).filter(([repo]) => sees(user, repo))),
       // GitHub Enterprise: the dashboard's links go where the orchestrator's do.
@@ -336,7 +333,7 @@ export function createHttp(ctx) {
     );
   }
 
-  // A verified delivery: onboarding, a pull request's state, a preview hook or a comment. What
+  // A verified delivery: onboarding, a pull request's state or a comment. What
   // it admits goes in `work`, returned.
   function dispatch(event, payload, work) {
     const admitted = (promise) => work.push(admittedAs(promise));
@@ -409,11 +406,6 @@ export function createHttp(ctx) {
     if (event === "pull_request") admitted(ctx.reviews.pushed(event, payload));
     // A GitHub Actions run that completed on a commit an auto-merge or a review waits on.
     if (event === "workflow_run") admitted(ctx.reviews.checksDone(event, payload));
-    const preview = previewEvent(config, event, payload, skip);
-    if (preview) {
-      previewHook(ctx, preview, payload).catch((error) => log(error.stack ?? error));
-      return work;
-    }
     // The operator's checks first, so only comments that may run cost a config read.
     const item = workItem(config, event, payload, skip);
     if (item) {

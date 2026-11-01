@@ -1,5 +1,5 @@
-// Settings › Server against a fake api/server: the status, the runs and grants, the preview
-// hooks, the GitHub App, and Sync now updating the last sync.
+// Settings › Server against a fake api/server: the status, the runs and grants, the GitHub App,
+// and Sync now updating the last sync.
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { useState } from "preact/hooks";
 import { beforeEach, expect, test } from "vitest";
@@ -62,26 +62,7 @@ const value = (term: string) =>
   card("GitHub App").getByText(term).closest("div")!.querySelector("dd")!;
 
 test("what this Deckhand is and how it is set up", async () => {
-  const state = makeState({
-    previews: [
-      {
-        name: "acme-app-preview-pr-33",
-        repo: "acme/app",
-        event: "pull_request",
-        action: "synchronize",
-        state: "running",
-        since: 1791990000000 - 4 * 60000,
-      },
-      {
-        name: "acme-site-preview-main",
-        repo: "acme/site",
-        event: "workflow_run",
-        action: null,
-        state: "waiting",
-        since: 1791990000000 - 60000,
-      },
-    ],
-  });
+  const state = makeState();
   render(<Dashboard state={state} error={null} repos={list()} />);
   await screen.findByText("Sysbox");
 
@@ -105,14 +86,6 @@ test("what this Deckhand is and how it is set up", async () => {
   expect(runs.getByText("Read, no errors")).toBeTruthy();
   expect(runs.getByText("Plan first, then API key as fallback")).toBeTruthy();
   expect(runs.getByText("CLAUDE_CODE_OAUTH_TOKEN")).toBeTruthy();
-
-  const previews = card("Preview hooks");
-  expect(previews.getByText("2 going on")).toBeTruthy();
-  const rows = previews.getAllByRole("row").slice(1);
-  expect(rows.map((r) => [...r.querySelectorAll("td")].map((td) => td.textContent))).toEqual([
-    ["acme-app-preview-pr-33", "acme/app", "pull_request · synchronize", "Running", "4 min"],
-    ["acme-site-preview-main", "acme/site", "workflow_run", "Waiting", "1 min"],
-  ]);
 
   const app = card("GitHub App");
   expect(app.getByRole("link", { name: "App settings" }).getAttribute("href")).toBe(
@@ -186,12 +159,10 @@ test("a grants folder with errors: the file to fix and the message", async () =>
   expect(runs.queryByText("Read, no errors")).toBeNull();
 });
 
-test("no engine, every repository allowed, and no preview hook", async () => {
+test("no engine, and every repository allowed", async () => {
   api.routes["api/server"] = () => ({ ...SETUP, engine: null, allowedRepos: [] });
   render(<Dashboard state={makeState()} error={null} repos={list()} />);
   await screen.findByText("None");
-  expect(card("Preview hooks").getByText("None going on")).toBeTruthy();
-  expect(card("Preview hooks").queryByRole("table")).toBeNull();
   expect(value("Allowed repositories").textContent).toBe(
     "Every repository the App is installed on · ALLOWED_REPOS",
   );

@@ -68,15 +68,6 @@ export const CAPABILITIES = [
     enforcedBy: "the listener at start",
   },
   {
-    name: "preview",
-    needs: [],
-    config: ["preview"],
-    grant: "preview",
-    what: "the repository's preview hook on its pull requests",
-    // The hook runs on pull request events, whichever run opened them (previews.mjs).
-    enforcedBy: "not per run yet: the hook runs on pull request events",
-  },
-  {
     name: "internet",
     needs: [],
     grant: "research",
@@ -248,18 +239,6 @@ export function outcomeOf({ rules, custom, settings, grant, repo, mode = null })
     }
   }
   const used = capabilities.filter((c) => c.used).map((c) => c.name);
-  // A repository's preview hook runs on its pull requests' events, not per run (previews.mjs):
-  // a deny of `preview` doesn't stop it yet, which the page says rather than show it applied.
-  const preview = capabilities.find((c) => c.name === "preview");
-  if (
-    preview.status === "denied" &&
-    asked(settings, BY_NAME.get("preview")) &&
-    grant?.allowPreview
-  ) {
-    warnings.push(
-      "`preview` is denied, but the repository's preview hook still runs on its pull requests' events: the capabilities don't decide it yet",
-    );
-  }
   // Modes that can't do without it: a review reads the diff and gives its verdict from it (the
   // listener parses it), a discussion's thread is read with its token (preparation.mjs reads
   // an issue's only).
@@ -407,7 +386,7 @@ const GRANTS_UNREAD =
 // those outcomeOf() already refused as a capability's.
 function ungrantedFor({ used, errors }, grant, settings) {
   if (!grant || !used.includes("pull")) return [];
-  const capabilityOf = { preview: "preview", dockerfile: "image:repo", docker: "docker" };
+  const capabilityOf = { dockerfile: "image:repo", docker: "docker" };
   return ungranted(grant, settings ?? {}).filter((line) => {
     const name = capabilityOf[line.split(":")[0]];
     return !errors.some((e) => e.startsWith(`\`${name}\`:`));

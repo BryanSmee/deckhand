@@ -1,17 +1,16 @@
 // Settings › Server (docs/design/dashboard-redesign.md › Pages › Settings › Server): what this
 // Deckhand is and how it is set up, read-only. The listener's status and version (api/state's
-// `server`), its run slots and preview hooks (api/state), the engine, proxy, grants and access
+// `server`), its run slots (api/state), the engine, proxy, grants and access
 // (api/server, read when the page opens), and the GitHub App (api/repos's `app`) with the last sync
 // and Sync now.
 import { Fragment } from "preact";
 import { usePolled } from "./api";
 import { ago, AUTH_NAMES, dayTime, plural, uptime, versionUrl } from "./format";
 import { useSync, syncMessage } from "./Sync";
-import type { AppLinks, Auth, Preview, ServerSetup, State, SyncResult } from "./types";
+import type { AppLinks, Auth, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { Meter } from "./ui/Meter";
-import { StatusBadge } from "./ui/Status";
 import { Card } from "./ui/Surface";
 import styles from "./Server.module.css";
 
@@ -30,7 +29,6 @@ export function Server({ state, error = null, app, refresh }: Props) {
     <div class={styles.page}>
       <Status state={state} error={error} />
       <Runs state={state} setup={setup.data} error={setup.error} />
-      <Previews previews={state?.previews ?? []} now={state?.now ?? Date.now()} />
       <App
         app={app}
         setup={setup.data}
@@ -198,54 +196,6 @@ function Runs({
           )}
         </div>
       </div>
-    </Card>
-  );
-}
-
-// The preview hooks waiting or running: a row each.
-function Previews({ previews, now }: { previews: Preview[]; now: number }) {
-  return (
-    <Card as="section" aria-labelledby="server-previews">
-      <div class={styles.head}>
-        <h2 id="server-previews">Preview hooks</h2>
-        <span class={styles.aside}>
-          {previews.length ? `${previews.length} going on` : "None going on"}
-        </span>
-      </div>
-      {previews.length > 0 && (
-        <table class={styles.table}>
-          <thead>
-            <tr>
-              <th scope="col">Container</th>
-              <th scope="col">Repository</th>
-              <th scope="col">Event</th>
-              <th scope="col">State</th>
-              <th scope="col">Since</th>
-            </tr>
-          </thead>
-          <tbody>
-            {previews.map((p) => (
-              <tr key={p.name}>
-                <td class={`${styles.mono} ${styles.cut}`} title={p.name}>
-                  {p.name}
-                </td>
-                <td class={styles.mono}>{p.repo}</td>
-                <td>{[p.event, p.action].filter(Boolean).join(" · ")}</td>
-                <td>
-                  {p.state === "running" ? (
-                    <StatusBadge tone="run" pulse label="Running" />
-                  ) : (
-                    <StatusBadge tone="idle" label="Waiting" />
-                  )}
-                </td>
-                <td class={styles.since} title={new Date(p.since).toLocaleString()}>
-                  {uptime(p.since, now)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
     </Card>
   );
 }

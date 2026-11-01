@@ -40,7 +40,6 @@ test("/status says since when the listener runs, next to its version", () => {
     server: serverInfo({ DECKHAND_VERSION: "1.2.3" }, () => 1000),
     tasks: new Map(),
     runs: [],
-    previews: { status: () => [] },
     running: 0,
     app: null,
   };

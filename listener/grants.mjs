@@ -6,10 +6,11 @@
 // so a team can own its repos' files (CODEOWNERS), and a mistake in one stops that repo's runs
 // only. Read again at each run, so an edit applies without a restart. Format: ../docs/security.md.
 //
-// The yes-or-no grants (a preview hook, its Dockerfile and its pull requests' branches', a
-// container engine, research runs, pushes that change workflows, auto-merge) are the operator's
-// policies' since #498: `allow_grant` rules in GRANTS_DIR/policy/, asked per repository
-// (GRANTS, grantsOf()). The keys they had here are errors that say what to write instead.
+// The yes-or-no grants (its Dockerfile and its pull requests' branches', a container engine,
+// research runs, pushes that change workflows, auto-merge) are the operator's policies' since
+// #498: `allow_grant` rules in GRANTS_DIR/policy/, asked per repository (GRANTS, grantsOf()).
+// The keys they had here are errors that say what to write instead, but the preview hook's,
+// gone (#574): a warning, so that a file that still has them loads.
 //
 //   grants/
 //     default.yaml       # every repo: hosts added to each repo's, base limits
@@ -26,7 +27,7 @@
 //     policy/grants.rego # the yes-or-no grants, for each repository (GRANTS)
 //       allow_grant if {
 //         input.repo.name == "acme/api"
-//         input.grant in {"dockerfile", "preview", "docker"}
+//         input.grant in {"dockerfile", "docker"}
 //       }
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { join, posix } from "node:path";
@@ -63,8 +64,6 @@ export const GRANTS = {
   dockerfile: "allowDockerfile",
   // Its pull requests' runs build their branch's Dockerfile (`image:branch`).
   branch_docker_images: "allowBranchDockerImages",
-  // Its `preview` hook, run with the Docker socket: root on the host (previews.mjs).
-  preview: "allowPreview",
   // Its `docker`: a container engine next to its sandboxes (`docker`, runner/engine.mjs).
   docker: "allowDocker",
   // `/mode research`: the open internet, without its code (`internet`).
@@ -75,9 +74,6 @@ export const GRANTS = {
   auto_merge: "allowAutoMerge",
   // On a public one too: the field then says "public".
   auto_merge_public: "allowAutoMerge",
-  // Auto-merge while its preview hook runs: what an unread merge changes may run as root on the
-  // host. Long on purpose: nobody grants it without reading it.
-  acknowledge_automerge_and_preview_is_highly_dangerous: "acknowledgeAutoMergePreview",
 };
 
 // The grants a rule must give one repository at a time, never all of them (it names
@@ -89,13 +85,7 @@ export const GRANTS = {
 // (to every repository, or to all of an owner's: `startswith`, `glob.match`) gives it nowhere
 // (policies.mjs grants()). Best effort: a wide rule that misses both names (a `regex.match`, an
 // `endswith`) isn't caught. A rule listing names one by one passes.
-export const REPO_ONLY = new Set([
-  "docker",
-  "workflows",
-  "auto_merge",
-  "auto_merge_public",
-  "acknowledge_automerge_and_preview_is_highly_dangerous",
-]);
+export const REPO_ONLY = new Set(["docker", "workflows", "auto_merge", "auto_merge_public"]);
 
 // A repository's name no repository has: what a rule that gives a grant to every repository
 // gives it to too.
@@ -129,16 +119,19 @@ export function grantFields(names) {
 // The keys a grants file had for them before #498: an error saying what to write instead, so
 // that nothing granted is lost without a word (nor anything granted by mistake).
 const MOVED = {
-  allow_preview: "preview",
   allow_dockerfile: "dockerfile",
   allow_branch_docker_images: "branch_docker_images",
   allow_docker: "docker",
   allow_research: "research",
   allow_workflows: "workflows",
   allow_auto_merge: "auto_merge",
-  acknowledge_automerge_and_preview_is_highly_dangerous:
-    "acknowledge_automerge_and_preview_is_highly_dangerous",
 };
+
+// The preview hook's keys, from before #498: the hook is gone (#574), so they grant nothing
+// whatever their value, and a grants file that still has them loads, with a warning.
+const REMOVED = ["allow_preview", "acknowledge_automerge_and_preview_is_highly_dangerous"];
+const removed = (key) =>
+  `${key}: the preview hook is gone (#574), ignored: remove it (docs/setup.md#upgrading-the-preview-hook-is-gone-574)`;
 // What a grants file's former key (`key`: `value`, in `file`) says to do now. Its value
 // decides: `false` granted nothing, and nothing is granted by default now, so the key goes (in a
 // repository's file, a `deny_grant` keeps out what a rule for every repository would give it);
@@ -176,8 +169,8 @@ function moved(key, file, value) {
 // in its cache, HTTPS too (proxy/cache.mjs, proxy/authority.mjs).
 const HOST_LISTS = { hosts: "hosts", cached_hosts: "cachedHosts" };
 
-// One file's text → { hosts, cachedHosts, mounts, allowProjects, limits }, limits null unless it
-// sets them. `file` names it
+// One file's text → { hosts, cachedHosts, mounts, allowProjects, limits, warnings }, limits null
+// unless it sets them; warnings, what it has that is ignored (REMOVED). `file` names it
 // in errors; `base`: the limits its own start from. Throws a GrantsError listing every error.
 function parseGrant(text, file, base, { isDefault = false } = {}) {
   const errors = [];
@@ -195,9 +188,12 @@ function parseGrant(text, file, base, { isDefault = false } = {}) {
     mounts: [],
     allowProjects: [],
     limits: null,
+    warnings: [],
   };
   for (const [key, v] of Object.entries(value)) {
-    if (key === "allow_repo_hosts") {
+    if (REMOVED.includes(key)) {
+      grant.warnings.push(`${file}: ${removed(key)}`);
+    } else if (key === "allow_repo_hosts") {
       // Ignoring it would quietly take away the hosts the repo's .deckhand.yaml added.
       fail(`${key}: gone, list the hosts its sandboxes may reach under hosts here`);
     } else if (Object.hasOwn(MOVED, key)) {
@@ -443,6 +439,20 @@ export function grantErrors(grants) {
   return errors;
 }
 
+// What the grants folder has that is ignored (parseGrant()'s warnings), for the listener to say
+// at start: default.yaml's and each repo file's that loads (grantErrors() says the others').
+export function grantWarnings(grants) {
+  const warnings = [...(grants.defaults?.warnings ?? [])];
+  for (const { load } of grants.repos.values()) {
+    try {
+      warnings.push(...load().warnings);
+    } catch {
+      // grantErrors()'.
+    }
+  }
+  return warnings;
+}
+
 // The operator's policy files (name → text) that name an auto-merge grant, for the warning at
 // start: a rule may give it to some repository. Only read, not evaluated: loud rather than exact.
 export function autoMergeFiles(files) {
@@ -510,15 +520,11 @@ export async function grantOf(
   return withGrants(grant, said);
 }
 
-// What the repo's config asks for that only a grant allows: a preview hook (run with the
-// Docker socket, so root on the host), a Dockerfile (built on the host's Docker, with its
-// network) and a container engine (runner/engine.mjs). One line each, naming the grant to add; they stop its runs and preview hooks
-// like errors in the config.
+// What the repo's config asks for that only a grant allows: a Dockerfile (built on the host's
+// Docker, with its network) and a container engine (runner/engine.mjs). One line each, naming
+// the grant to add; they stop its runs like errors in the config.
 export function ungranted(grant, settings) {
   const missing = [];
-  if (settings.preview && !grant.allowPreview) {
-    missing.push(`preview: ${notGranted("preview")}`);
-  }
   if (settings.dockerfile && !grant.allowDockerfile) {
     missing.push(`dockerfile: ${notGranted("dockerfile")}`);
   }
@@ -530,9 +536,8 @@ export function ungranted(grant, settings) {
 
 // Why the repo's `review.merge` merges nothing, one line each (empty: auto-merge is on). Not
 // in ungranted(): the reviews still run, only the merge waits for a human. `isPrivate`: what
-// GitHub says, null when unknown (the merge checks it again, reviews.mjs). `preview: false`
-// leaves out previewProblem(), which the merge's gates comment on (reviews.mjs).
-export function autoMergeProblems(grant, settings, isPrivate = null, { preview = true } = {}) {
+// GitHub says, null when unknown (the merge checks it again, reviews.mjs).
+export function autoMergeProblems(grant, settings, isPrivate = null) {
   if (!settings?.review?.merge) return [];
   const problems = [];
   if (!grant?.allowAutoMerge) {
@@ -545,18 +550,7 @@ export function autoMergeProblems(grant, settings, isPrivate = null, { preview =
   if (settings.review.on !== "ready") {
     problems.push("review.merge: needs `review.on: ready`, nothing is merged");
   }
-  const hook = preview && previewProblem(grant, settings);
-  if (hook) problems.push(`review.merge: ${hook}, nothing is merged`);
   return problems;
-}
-
-// Why a repo with a granted preview hook doesn't auto-merge, or null. The hook runs the default
-// branch's files as root on the host (previews.mjs), and no gate can follow what its command
-// runs (a script it sources, a Makefile, package.json, what its image COPYs): an unread merge
-// would reach root. Only the operator's long acknowledgement lets both on.
-export function previewProblem(grant, settings) {
-  if (!settings?.preview || !grant?.allowPreview || grant.acknowledgeAutoMergePreview) return null;
-  return `the repository's preview hook runs its default branch as root on the host, and ${notGranted("acknowledge_automerge_and_preview_is_highly_dangerous")}`;
 }
 
 // What the operator's grants refuse in a repo's settings, checked as a run checks them before

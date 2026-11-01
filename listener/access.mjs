@@ -45,7 +45,7 @@ function refusedMounts(refused, name) {
 }
 
 // What the operator grants the repo, with its config's requests: the hosts its sandbox may
-// reach, its host mounts and limits. Refused mounts, and a preview hook or Dockerfile
+// reach, its host mounts and limits. Refused mounts, and a Dockerfile or an engine
 // without their grant, stop the run, and the reply lists them. `task`: the run's (tasks.mjs),
 // `agent` its agent, `note(text)` a line in its log.
 // `fs`: the file system the mounts are resolved on (grants.mjs resolveMounts()), for tests;
@@ -105,7 +105,7 @@ export async function researchRefusal(config, repo, { granted = null, check = nu
 // public host, and private addresses only for the hosts every run needs (mandatoryHosts()),
 // not the repo's granted ones: an internal host next to the open internet would be a way out
 // for what it serves. Without, only those. Nothing else of the repo's: no mounts, no cached
-// hosts (no CA), its limits only. Its config's requests (a preview hook, a Dockerfile) don't
+// hosts (no CA), its limits only. Its config's requests (a Dockerfile, an engine) don't
 // matter: none of it runs.
 export async function bareAccess(config, task, { agent, log, internet, granted }) {
   const check = await grantCheck(config, task.repo, { mounts: [] }, { granted });
@@ -183,13 +183,11 @@ export function engineFor(config, task, settings, { grant, limits }, fork, note,
 
 // What the operator granted and the repo asks for that the runner can't do yet (RUNNER), as
 // the reply's reason, or null. Docker does all of it; the Kubernetes runner runs no container
-// engine, builds no repo image without a registry to push it to, runs no preview hook and
-// mounts no host path (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
+// engine, builds no repo image without a registry to push it to and mounts no host path
+// (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
 // grantedAccess(). The engine only when the run would get one (`engine`, engineFor()'s): a
 // run without `docker`, a fork's, or one without SANDBOX_ENGINE goes without, as under Docker.
-// `caps`: the run's capabilities (capabilities.mjs). A
-// preview hook stops every run, as the issue settled (#391): the hook itself runs on
-// webhooks, and previews.mjs skips it here.
+// `caps`: the run's capabilities (capabilities.mjs).
 export function runnerRefusal(config, settings, { grant, mounts }, engine, caps = new Set()) {
   if ((config.runner ?? "docker") === "docker") return null;
   const asked = [
@@ -201,7 +199,6 @@ export function runnerRefusal(config, settings, { grant, mounts }, engine, caps 
       (caps.has("image:repo") || caps.has("image:branch")) &&
       !config.kubernetes?.registry &&
       `its own image (\`dockerfile\`) without a registry (\`KUBERNETES_REGISTRY\`)`,
-    settings.preview && grant.allowPreview && "a preview hook (`preview`)",
     mounts.length && "host mounts (`mounts`)",
   ].filter(Boolean);
   if (!asked.length) return null;

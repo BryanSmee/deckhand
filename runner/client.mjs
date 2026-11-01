@@ -1,6 +1,6 @@
 // The runner service as its callers see it (#503): the same interfaces the listener had from the
-// backends in process (../listener/runner/docker.mjs's runner, ../listener/images.mjs's images,
-// ../listener/previews.mjs's queue), over its API (service.mjs), plus the runs' logs and events
+// backends in process (../listener/runner/docker.mjs's runner, ../listener/images.mjs's images),
+// over its API (service.mjs), plus the runs' logs and events
 // it keeps. Each part calls as the service it is for, with that service's token: the
 // orchestrator drives runs (with its fencing epoch), reads their logs (the dashboard's live view,
 // which edge passes on, #506) and asks where addresses are, for its broker port and egress
@@ -299,7 +299,7 @@ export function createRunnerClient({
   }
 
   // What it is built from (the Dockerfile's blob, the ref, the hosts) the runner decides, from
-  // the grants and the github service (../runner/hooks.mjs buildPlan()): this asks.
+  // the grants and the github service (../runner/builds.mjs buildPlan()): this asks.
   const imageFor = ({ repo, ref, branch = false, dockerfile, onBuild, output, access }) =>
     streamed(
       `the image of ${repo}`,
@@ -315,27 +315,6 @@ export function createRunnerClient({
 
   const caches = async (repo, paths, image) =>
     (await orchestrator.json("POST", "/caches", { body: { repo, paths, image } })).caches;
-
-  // --- Preview hooks -------------------------------------------------------------------------
-
-  let hooks = []; // GET /previews, as last read: /status and the dashboard read it at once
-  async function refreshPreviews() {
-    try {
-      hooks = await orchestrator.json("GET", "/previews", { waitMs: brokerWaitMs });
-    } catch (error) {
-      log(`The preview hooks: ${error.message}`);
-    }
-    return hooks;
-  }
-
-  // Queued in the runner, which runs it and logs its exit: one may last minutes. Keyed: one
-  // sent again after its answer was lost runs once (a hook runs as root on the host).
-  async function runPreview(job) {
-    const id = randomBytes(12).toString("hex");
-    await orchestrator.json("POST", "/previews", { body: { ...job, id } });
-    await refreshPreviews();
-    return null;
-  }
 
   // --- Logs ----------------------------------------------------------------------------------
 
@@ -543,12 +522,6 @@ export function createRunnerClient({
       caches,
       info,
       egressFor,
-    },
-    previews: {
-      run: runPreview,
-      status: () => hooks,
-      refresh: refreshPreviews,
-      runs: async () => (await info()).previews,
     },
     logs: { open: openRemote, read: readLog, text: logText, upload, remove: removeLog },
     events,

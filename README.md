@@ -53,8 +53,6 @@ operator, across as many repositories as the App is installed on.
 - **Inboxes.** An ideas issue and a bug reports issue, where each of your comments becomes a
   filed GitHub issue, and a GitHub Discussions category (for example "Ask Claude") where
   Claude answers questions.
-- **Preview hook.** A command of the repository run on `pull_request` and `workflow_run`
-  events, to deploy or remove previews.
 - **Dashboard.** Every issue, pull request and discussion Deckhand worked on, grouped by
   project and repository, with its state and the live log of its runs, and a graph of what
   waits for what (`/after`). Sign-in with GitHub.
@@ -159,10 +157,10 @@ states, every setting and how sandboxes reach GitHub.
 
 A repository can add a `.deckhand.yaml` at its root: its own users (narrowing
 `ALLOWED_USERS`), trigger word, models, parallel runs, a setup command, project
-instructions, a Dockerfile for its image, caches, host mounts, inboxes and a preview hook.
-Its Dockerfile, preview hook and host mounts only count once the operator grants them to it
-in the grants folder: mounts and the hosts its sandboxes may reach in its file there, the
-Dockerfile and the hook in the operator's policies (`allow_grant`).
+instructions, a Dockerfile for its image, caches, host mounts and inboxes. Its Dockerfile
+and host mounts only count once the operator grants them to it in the grants folder: mounts
+and the hosts its sandboxes may reach in its file there, the Dockerfile in the operator's
+policies (`allow_grant`).
 
 ```yaml
 users: [alice]
@@ -215,10 +213,9 @@ Read this before installing Deckhand on a repository.
 - **The egress proxy decides where data can go.** Every allowed host is trusted entirely:
   anything a sandbox can write to there (its own repository on GitHub, a bucket behind `*`)
   is a way out. Keep the list short.
-- **What isn't covered:** image builds, the Claude Code install and preview hooks run
-  outside the sandboxes' networks, and preview hooks get the Docker socket (root on the
-  host): a repository only gets its own Dockerfile built or preview hook run when its grants
-  say so (the `dockerfile` and `preview` grants). DNS lookups may leave the internal networks.
+- **What isn't covered:** image builds and the Claude Code install run outside the
+  sandboxes' networks: a repository only gets its own Dockerfile built when its grants say so
+  (the `dockerfile` grant). DNS lookups may leave the internal networks.
 
 All of it, with the grants folder and the limits of each measure:
 [docs/security.md](docs/security.md).

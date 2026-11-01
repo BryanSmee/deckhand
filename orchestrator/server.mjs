@@ -72,6 +72,7 @@ import {
   grantFor,
   grantOf,
   grantsBy,
+  grantWarnings,
   loadGrants,
 } from "../listener/grants.mjs";
 import { createHttp } from "../listener/http.mjs";
@@ -126,8 +127,6 @@ const FINGERPRINTS_MS = 30_000;
 
 // How often the runs the broker service has are compared with the listener's.
 const RECONCILE_MS = 60 * 60_000;
-// How often the preview hooks the runner runs are asked again, for /status and the dashboard.
-const PREVIEWS_MS = 5000;
 
 // How often the App's public parts are asked of edge again (another App set up there), and
 // how soon while it has none.
@@ -186,6 +185,7 @@ try {
   for (const error of grantErrors(grants)) {
     console.error(`${error.message} (no run starts in that repository until it is fixed)`);
   }
+  for (const warning of grantWarnings(grants)) console.error(`Warning: grants: ${warning}`);
   // Loud on purpose: model output reaches these default branches with no human reading it.
   let files = new Map();
   try {
@@ -323,7 +323,7 @@ const edge = createEdgeClient({
   log,
 });
 
-// Where sandboxes, images, preview hooks and the runs' logs are: the runner service (RUNNER is
+// Where sandboxes, images and the runs' logs are: the runner service (RUNNER is
 // its setting).
 const runnerClient = createRunnerClient({
   urls: config.runnerUrl,
@@ -620,7 +620,7 @@ const inputs = createInputs({
 // The run order the maintainer set on the dashboard: which queued task starts next (order.mjs).
 const order = createOrder({ path: join(config.dataDir, "order.json") });
 
-// --- Per-repo settings, images and preview hooks -------------------------------------------
+// --- Per-repo settings and images ----------------------------------------------------------
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
 
@@ -711,7 +711,6 @@ Object.assign(ctx, {
   }),
   // Built and run by the runner service, from tarballs it gets through the listener.
   images: runnerClient.images,
-  previews: runnerClient.previews,
   runLogs: runnerClient.logs,
   // Runs' tokens, signed by the broker service and checked here with its public keys; and the
   // secrets of runs from before them. Both work from their own sandbox alone, whether it calls
@@ -1133,7 +1132,7 @@ const history = createHistory(ctx);
 // Once the logs kept here are at the runner: one removed before it arrives would arrive after
 // its summary went, and stay there for good.
 moved.done.then(() => ctx.stopping || history.start());
-// How the runner's sandboxes ended (runner/events.mjs), and the preview hooks it runs.
+// How the runner's sandboxes ended (runner/events.mjs).
 const runEvents = createRunEvents({
   events: runnerClient.events,
   // Live, or over (its end said once its sandbox went): on its record and summary, and in
@@ -1155,9 +1154,6 @@ const runEvents = createRunEvents({
   log,
 });
 runEvents.start();
-runnerClient.previews.refresh();
-const previewing = setInterval(() => runnerClient.previews.refresh(), PREVIEWS_MS);
-previewing.unref();
 // The App's key at the github service first, should this copy be the one handing it over (30 s
 // at most): what follows needs it there. Not waited for here: the SIGTERM handler below is.
 Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).unref())]).then(
@@ -1202,7 +1198,6 @@ sigterm = () => {
   ctx.autoPickup.stop();
   history.stop();
   runEvents.stop();
-  clearInterval(previewing);
   clearInterval(relinking);
   clearInterval(reconciling);
   clearInterval(printing);

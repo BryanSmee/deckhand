@@ -43,7 +43,7 @@ import {
   sameRepo,
   taskKey,
 } from "./events.mjs";
-import { autoMergeProblems, previewProblem } from "./grants.mjs";
+import { autoMergeProblems } from "./grants.mjs";
 import { pushInput } from "./git-gateway.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
 import { getJson, paginate } from "./github.mjs";
@@ -436,8 +436,8 @@ export function mergeBlockers(review, allowed = "low") {
 // The files Deckhand trusts on the default branch: an auto-merge that changed one would let a
 // run widen its own config, so such a pull request always waits for a human. → whether `path`
 // (a changed file's, repo-relative) is one: the config and `.deckhand/`, `.github/`, any
-// CODEOWNERS, and the files the config names (instructions, Dockerfile, the preview hook's
-// script, the review instructions, the modes' instructions).
+// CODEOWNERS, and the files the config names (instructions, Dockerfile, the review
+// instructions, the modes' instructions).
 export function trustedFile(settings, path) {
   const named = new Set(
     [
@@ -445,10 +445,6 @@ export function trustedFile(settings, path) {
       settings?.dockerfile,
       settings?.review?.instructions,
       ...Object.values(settings?.modes ?? {}).map((m) => m?.instructions),
-      // Each word of the hook's command that may be a file of the repo: "./deploy/x.sh".
-      ...String(settings?.preview?.command ?? "")
-        .split(/\s+/)
-        .map((word) => word.replace(/^\.\//, "")),
     ]
       .filter((p) => typeof p === "string" && p)
       .map((p) => p.replace(/^\.\//, "")),
@@ -520,8 +516,6 @@ export async function mergeRefusal(
   { github, config, busy = () => false, sleep, policies = null, now = Date.now },
   { repo, number, sha, settings, grant, review = null, fixes = 0, gates = [] },
 ) {
-  const hook = previewProblem(grant, settings);
-  if (hook) return { why: hook };
   let pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
   if (!pr) return { why: "the pull request can't be read" };
   const own = !!config.bot && pr.user?.login?.toLowerCase() === config.bot.toLowerCase();
@@ -1770,7 +1764,7 @@ export function createReviews({
     const { settings, errors } = await repoSettings(repo, base);
     if (errors.length || !settings.review?.merge) return null;
     const grant = await grantOf(repo);
-    if (autoMergeProblems(grant, settings, null, { preview: false }).length) return null;
+    if (autoMergeProblems(grant, settings, null).length) return null;
     return { settings, grant };
   }
 

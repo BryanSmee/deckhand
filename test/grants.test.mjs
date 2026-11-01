@@ -25,9 +25,9 @@ import {
   grantFor,
   grantOf as grantWithPolicies,
   grantsFrom,
+  grantWarnings,
   loadGrants,
   NO_GRANTS,
-  previewProblem,
   REPO_ONLY,
   resolveMounts,
   ungranted,
@@ -55,14 +55,12 @@ function folder(t, files) {
 const NOTHING = {
   hosts: [],
   cachedHosts: [],
-  allowPreview: false,
   allowDockerfile: false,
   allowBranchDockerImages: false,
   allowDocker: false,
   allowResearch: false,
   allowWorkflows: false,
   allowAutoMerge: false,
-  acknowledgeAutoMergePreview: false,
   grantFiles: [],
   mounts: [],
   allowProjects: [],
@@ -85,14 +83,12 @@ mounts:
   assert.deepEqual(grantOf(files, "org/repo"), {
     hosts: ["*.example.com", "pypi.org"],
     cachedHosts: [],
-    allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
     allowResearch: false,
     allowWorkflows: false,
     allowAutoMerge: false,
-    acknowledgeAutoMergePreview: false,
     grantFiles: [],
     allowProjects: [],
     limits: { cpus: "4", memory: "4g", pids: 4096 },
@@ -227,8 +223,8 @@ test("each repo file's errors, one list per file", () => {
   bad("allow_repo_hosts: true\n", /allow_repo_hosts: gone, list the hosts .* under hosts here/);
   // Moved to the operator's policies (#498): what to write instead, with the repo's name.
   bad(
-    "allow_preview: true\n",
-    /allow_preview: moved to the operator's policies \(#498\): `allow_grant if \{ input\.repo\.name == "org\/repo"; input\.grant == "preview" \}` in policy\/ of the grants folder/,
+    "allow_docker: true\n",
+    /allow_docker: moved to the operator's policies \(#498\): `allow_grant if \{ input\.repo\.name == "org\/repo"; input\.grant == "docker" \}` in policy\/ of the grants folder/,
   );
   bad(
     "allow_auto_merge: public\n",
@@ -364,17 +360,37 @@ test("GRANTS_FILE is gone: the listener says so rather than drop its grants", ()
   );
 });
 
-test("a preview hook or a Dockerfile without its grant: one line each, naming the grant", () => {
-  const settings = { preview: { command: "./preview.sh" }, dockerfile: "Dockerfile" };
+test("a Dockerfile without its grant: one line, naming the grant", () => {
+  const settings = { dockerfile: "Dockerfile" };
   const none = grantOf({}, "org/repo");
   assert.deepEqual(ungranted(none, settings), [
-    "preview: the operator's policies don't grant `preview` to this repository (`allow_grant`)",
     "dockerfile: the operator's policies don't grant `dockerfile` to this repository (`allow_grant`)",
   ]);
-  const both = { ...none, allowPreview: true, allowDockerfile: true };
-  assert.deepEqual(ungranted(both, settings), []);
+  assert.deepEqual(ungranted({ ...none, allowDockerfile: true }, settings), []);
   // Nothing asked, nothing missing.
-  assert.deepEqual(ungranted(none, { preview: null, dockerfile: null }), []);
+  assert.deepEqual(ungranted(none, { dockerfile: null }), []);
+});
+
+test("the preview hook's former keys load, ignored, with a warning (#574)", () => {
+  for (const key of ["allow_preview", "acknowledge_automerge_and_preview_is_highly_dangerous"]) {
+    for (const value of ["true", "false", "public"]) {
+      const grants = grantsFrom(
+        { "default.yaml": `${key}: ${value}\n`, "org/repo.yaml": `${key}: ${value}\n` },
+        config,
+      );
+      assert.deepEqual(grantErrors(grants), [], key);
+      const empty = grantsFrom({ "default.yaml": "", "org/repo.yaml": "" }, config);
+      assert.deepEqual(grantFor(grants, config, "org/repo"), grantFor(empty, config, "org/repo"));
+      assert.deepEqual(grantWarnings(grants), [
+        `default.yaml: ${key}: the preview hook is gone (#574), ignored: remove it (docs/setup.md#upgrading-the-preview-hook-is-gone-574)`,
+        `org/repo.yaml: ${key}: the preview hook is gone (#574), ignored: remove it (docs/setup.md#upgrading-the-preview-hook-is-gone-574)`,
+      ]);
+    }
+  }
+  // Nothing to say of a folder without them, nor of a repo file with errors (grantErrors()').
+  const grants = grantsFrom({ "org/repo.yaml": "allow_preview: true\nnetwork: host\n" }, config);
+  assert.deepEqual(grantWarnings(grants), []);
+  assert.equal(grantErrors(grants).length, 1);
 });
 
 // Read-write mounts are checked from /, and the temp dir's own parents (/tmp, sticky) may
@@ -577,22 +593,25 @@ test("mounts: writable by uid 1000 as owner (write bit or not), group 1000 or an
 test("the yes-or-no grants: the operator's policies', each a field of the grant (#498)", () => {
   // Every grant sets a field nothing else does but auto-merge's two.
   assert.deepEqual(Object.keys(GRANTS).sort(), [
-    "acknowledge_automerge_and_preview_is_highly_dangerous",
     "auto_merge",
     "auto_merge_public",
     "branch_docker_images",
     "docker",
     "dockerfile",
-    "preview",
     "research",
     "workflows",
   ]);
   assert.deepEqual(grantFields(new Set()), NO_GRANTS);
-  assert.deepEqual(grantFields(new Set(["docker", "preview"])), {
+  assert.deepEqual(grantFields(new Set(["docker", "research"])), {
     ...NO_GRANTS,
     allowDocker: true,
-    allowPreview: true,
+    allowResearch: true,
   });
+  // The preview hook's, gone (#574): a policy that still gives them grants nothing.
+  assert.deepEqual(
+    grantFields(new Set(["preview", "acknowledge_automerge_and_preview_is_highly_dangerous"])),
+    NO_GRANTS,
+  );
   // `auto_merge_public`: a public repository too, whether `auto_merge` is given or not.
   assert.equal(grantFields(new Set(["auto_merge"])).allowAutoMerge, true);
   assert.equal(grantFields(new Set(["auto_merge_public"])).allowAutoMerge, "public");
@@ -601,7 +620,6 @@ test("the yes-or-no grants: the operator's policies', each a field of the grant 
   assert.deepEqual(grantFields(new Set(["everything"])), NO_GRANTS);
   // Those given one repository at a time: an engine, workflows, auto-merge.
   assert.deepEqual([...REPO_ONLY].sort(), [
-    "acknowledge_automerge_and_preview_is_highly_dangerous",
     "auto_merge",
     "auto_merge_public",
     "docker",
@@ -667,15 +685,12 @@ test("grantOf: the folder's grant with what the policies grant; their failure a 
 
 test("each grant's former key is an error saying what to write, in default.yaml too", () => {
   const keys = {
-    allow_preview: "preview",
     allow_dockerfile: "dockerfile",
     allow_branch_docker_images: "branch_docker_images",
     allow_docker: "docker",
     allow_research: "research",
     allow_workflows: "workflows",
     allow_auto_merge: "auto_merge",
-    acknowledge_automerge_and_preview_is_highly_dangerous:
-      "acknowledge_automerge_and_preview_is_highly_dangerous",
   };
   for (const [key, name] of Object.entries(keys)) {
     assert.throws(
@@ -740,7 +755,6 @@ test("a former grant key's other values: never valid, no rule to copy; auto-merg
   };
   // `public` is auto-merge's alone; another value of any key was never valid: no rule suggested.
   for (const [key, value] of [
-    ["allow_preview", "public"],
     ["allow_docker", "public"],
     ["allow_dockerfile", '"no"'],
     ["allow_research", '"false"'],
@@ -777,26 +791,6 @@ test("autoMergeFiles: the operator's policy files that name an auto-merge grant"
   assert.deepEqual(autoMergeFiles(files), ["grants.rego", "public.rego"]);
 });
 
-test("acknowledge_automerge_and_preview_is_highly_dangerous: what it lets through", () => {
-  const key = "acknowledge_automerge_and_preview_is_highly_dangerous";
-  const settings = {
-    review: { on: "ready", merge: true },
-    preview: { command: "./x.sh" },
-  };
-  const grant = { allowAutoMerge: true, allowPreview: true };
-  assert.equal(previewProblem(grant, settings).includes(key), true);
-  assert.match(
-    autoMergeProblems(grant, settings, true)[0],
-    new RegExp(`don't grant \`${key}\` to this repository \\(\`allow_grant\`\\), nothing`),
-  );
-  // The merge's gates say it themselves.
-  assert.deepEqual(autoMergeProblems(grant, settings, true, { preview: false }), []);
-  assert.equal(previewProblem({ ...grant, acknowledgeAutoMergePreview: true }, settings), null);
-  // A hook that isn't granted never runs: nothing to acknowledge.
-  assert.equal(previewProblem({ allowAutoMerge: true }, settings), null);
-  assert.equal(previewProblem(grant, { review: settings.review }), null);
-});
-
 test("autoMergeProblems: the grant, the repository's visibility and `review.on: ready`", () => {
   const review = { on: "ready", fix: true, merge: true, mergeMethod: "squash" };
   const settings = { review };
@@ -823,7 +817,7 @@ test("autoMergeProblems: the grant, the repository's visibility and `review.on: 
 
 test("`docker` without its grant is refused", () => {
   const none = grantOf({}, "org/repo");
-  const settings = { preview: null, dockerfile: null, docker: { cache: false } };
+  const settings = { dockerfile: null, docker: { cache: false } };
   assert.deepEqual(ungranted(none, settings), [
     "docker: the operator's policies don't grant `docker` to this repository (`allow_grant`)",
   ]);
@@ -837,7 +831,7 @@ test("server.example/grants is a valid grants folder that grants nothing", () =>
   assert.deepEqual(grantErrors(grants), []);
   const grant = grantFor(grants, config, "your-org/your-repo");
   assert.deepEqual(grant.hosts, []);
-  assert.equal(grant.allowPreview, false);
+  assert.equal(grant.allowDockerfile, false);
   // Its policy/grants.rego: comments and the package, no rule.
   const policies = operatorPolicies(dir);
   assert.deepEqual([...policies.keys()], ["grants.rego"]);
@@ -862,7 +856,6 @@ test(
       "branch_docker_images",
       "docker",
       "dockerfile",
-      "preview",
       "research",
       "workflows",
     ]);

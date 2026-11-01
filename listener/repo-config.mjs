@@ -1,7 +1,7 @@
 // Per-repo settings: a repo's .deckhand.yaml, always read from its default branch so a pull
 // request can't change its own permissions. It can only narrow the operator's settings
-// (users, parallel runs), requests what the operator must grant (mounts, preview hook,
-// Dockerfile, container engine: grants.mjs), and brings what is the project's own: trigger
+// (users, parallel runs), requests what the operator must grant (mounts, Dockerfile,
+// container engine: grants.mjs), and brings what is the project's own: trigger
 // word, agent (among the operator's), models, setup command, extra instructions, its own
 // modes, caches. Format and example: ../docs/repo-config.md.
 import { createHash } from "node:crypto";
@@ -284,28 +284,6 @@ function parseInbox(value, { key, settings, fail, warn }) {
     } else if (Number.isInteger(entry) && entry > 0) settings.inbox[name] = entry;
     else fail(`inbox.${name}`, "expected an issue number");
   }
-}
-
-// A hook runs as root on the host's Docker, and a restart waits for it: two hours at most.
-const MAX_PREVIEW_MINUTES = 120;
-
-function parsePreview(value, { settings, fail, warn }) {
-  const preview = isMap(value) ? value : { command: value };
-  const command = text("preview.command", preview.command, fail);
-  const image = preview.image ?? null;
-  const minutes = preview.timeout_minutes ?? 30;
-  if (image !== null && (typeof image !== "string" || !/^[\w./:@-]+$/.test(image))) {
-    fail("preview.image", "expected an image name");
-  }
-  if (!Number.isInteger(minutes) || minutes <= 0 || minutes > MAX_PREVIEW_MINUTES) {
-    fail("preview.timeout_minutes", `expected a whole number from 1 to ${MAX_PREVIEW_MINUTES}`);
-  }
-  for (const other of Object.keys(preview)) {
-    if (!["command", "image", "timeout_minutes"].includes(other)) {
-      warn(`preview.${other}: unknown, ignored`);
-    }
-  }
-  if (command) settings.preview = { command, image, timeoutMinutes: minutes };
 }
 
 // `docker: true`, or `docker: { cache: true }` to keep the engine's images and layers
@@ -715,11 +693,12 @@ export const KEYS = {
     parse: parseInbox,
     display: ({ value, row }) => row(inboxText(value)),
   },
+  // The preview hook, gone (#574): a config that still has it asks for less, and its runs go on.
   preview: {
-    field: "preview",
-    default: null,
-    parse: parsePreview,
-    display: ({ value, row, refused }) => refused(previewText(value)) ?? row(previewText(value)),
+    parse: (value, { key, warn }) => {
+      warn(`${key}: removed, ignored (a GitHub webhook does this now, see docs/repo-config.md)`);
+    },
+    display: false,
   },
   conflicts: {
     field: "conflicts",
@@ -832,12 +811,6 @@ function inboxText(inbox) {
 function dockerText(docker) {
   if (!docker) return "none";
   return docker.cache ? "a container engine, its cache kept" : "a container engine";
-}
-
-function previewText(preview) {
-  if (!preview) return "none";
-  const image = preview.image ? `, image ${preview.image}` : "";
-  return `${preview.command} (${preview.timeoutMinutes} min${image})`;
 }
 
 // One of `modes:`, into settings.modes. Every key is checked: a mistyped one would otherwise

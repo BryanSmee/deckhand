@@ -9,7 +9,7 @@
 // `branch_docker_images`, from a pull request's own branch, never a fork's)
 // and tagged with a hash of the base image's id and the Dockerfile's blob: a new base or a changed Dockerfile builds a new tag, the same
 // ones reuse it. A branch's image is tagged apart (`branch-…`, its commit in the hash): the
-// default branch's runs and preview hooks never pick up what a branch built. Old tags are
+// default branch's runs never pick up what a branch built. Old tags are
 // pruned, keeping the default branch's newest and the most recent few.
 import { createHash } from "node:crypto";
 import { readFileSync, rmSync } from "node:fs";

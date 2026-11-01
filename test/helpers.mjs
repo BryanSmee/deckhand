@@ -755,7 +755,6 @@ export const WORK_CAPABILITIES = [
   "image:repo",
   "image:branch",
   "docker",
-  "preview",
   "read:issues",
   "read:pulls",
   "read:actions",

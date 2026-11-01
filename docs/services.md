@@ -71,7 +71,7 @@ flowchart LR
 | orchestrator | nothing secret                            | queue, waits, tasks, history, decisions, its lease | edge (the dashboard's API), runner (a run's first tokens, once its sandbox's network exists), proxy (the egress policy)                                                |
 | runner       | Docker socket or Kubernetes API           | containers, networks, run logs                     | orchestrator (and the egress policy, which stays with it), models (the plan logins' refresh only)                                                                      |
 | broker       | the tokens' signing key                   | live runs, run files                               | orchestrator (a run's first tokens, for the runner), runner (the runs' inboxes and files), proxy (sandboxes), every service that calls another (its own service token) |
-| github       | the App's key, installation tokens        | each run's issues, reactions, pushes               | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts and previews)                                                                                |
+| github       | the App's key, installation tokens        | each run's issues, reactions, pushes               | edge, orchestrator, proxy, runner (the repo's tarball, for build contexts)                                                                                             |
 | models       | the operator's agent credentials          | plan logins (sealed), runs' API state              | proxy (the agents' calls), orchestrator (which credentials it holds, their fingerprints, a run's API state, its stream)                                                |
 | policy       | nothing secret                            | nothing (reads the policy folders)                 | github, orchestrator, broker, runner (the operator's grants for a repository)                                                                                          |
 | proxy        | Deckhand's CA                             | the egress cache                                   | sandboxes                                                                                                                                                              |
@@ -85,11 +85,11 @@ tokens are the orchestrator's to have the broker sign, with the claims it decide
 it for them once the sandbox's network (or pod) exists, and never chooses what they allow. Every service that calls another also calls it for its own service token (#500), which the
 diagram leaves out; the policy service calls none, and checks the tokens it gets offline. The dotted
 arrows are narrow: the runner fetches a repository's tarball from the github service for build
-contexts and preview hooks (the App's key stays there), models has the runner start the plan logins' refresh, and the runner copies each run's inbox and
+contexts (the App's key stays there), models has the runner start the plan logins' refresh, and the runner copies each run's inbox and
 files to the broker as they change (`listener/runner/inbox.mjs` `mirror`), and the runner asks the
 policy service what the operator's policies [grant](security.md#the-grants) a repository
-(`GET /policies`, `POST /evaluate`, the operator's layer only), to check every sandbox spec,
-image build and preview hook against it again. A run's live log reaches the dashboard through
+(`GET /policies`, `POST /evaluate`, the operator's layer only), to check every sandbox spec
+and image build against it again. A run's live log reaches the dashboard through
 the orchestrator, which reads it from the runner and answers what edge passes on: edge calls the
 runner for nothing.
 
@@ -171,8 +171,7 @@ holds no key); a redeliveries' scan, for the dashboard's Sync.
 
 **The orchestrator** (`orchestrator/server.mjs`) owns the rest: intake (deliveries to tasks,
 `/mode`, `/after`, the dashboard's actions), the tasks and the queue, a run's life, what it
-starts by itself (reviews, fixes, CI fixes, auto-merge, reviewers, conflicts, onboarding,
-previews' decisions), what the dashboard shows, restarts. It holds no secret and has no way out.
+starts by itself (reviews, fixes, CI fixes, auto-merge, reviewers, conflicts, onboarding), what the dashboard shows, restarts. It holds no secret and has no way out.
 Its two copies are active/passive:
 
 1. **One acts**, the one holding the `orchestrator` lease in its store (`lib/active.mjs`, 15 s,
