@@ -3261,8 +3261,11 @@ mounts:
     await send(entry(100, "Keyboard shortcuts"));
     await settled(github, [99, 100]);
     await until(() => (listener.output().match(/done \(ok\)/g) ?? []).length === 2, "two runs");
-    const [first, second] = prompts(dir);
-    assert.equal(prompts(dir).length, 2);
+    // Side by side: each sandbox writes its prompt when it gets there, in either order.
+    const all = prompts(dir);
+    assert.equal(all.length, 2);
+    const first = all.find((prompt) => prompt.includes("issuecomment-99"));
+    const second = all.find((prompt) => prompt.includes("issuecomment-100"));
     assert.match(first, /The entry:\n\nFrom @alice[^\n]*issuecomment-99\):\n\nA dark mode\n$/);
     assert.doesNotMatch(first, /Keyboard shortcuts/);
     assert.match(second, /issuecomment-100\):\n\nKeyboard shortcuts\n$/);
