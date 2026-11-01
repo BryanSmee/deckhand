@@ -13,6 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
+import { connect, createServer as createTcpServer } from "node:net";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitBlob } from "../listener/images.mjs";
@@ -71,6 +72,49 @@ export async function serve(t, handle) {
   server.unref();
   t.after(() => server.close());
   return { url: `http://127.0.0.1:${port}`, server, port };
+}
+
+// A port of the test's own, bound once and held until it ends, passing each connection on to the
+// port `target()` names then: a service's current copy, which listens on a port the OS picks. A
+// service that restarts, or another copy that takes over, is still at the same URL, and no port
+// is probed free then handed on, for another process to take meanwhile (#563). While `target()`
+// names none, or one that refuses, a connection waits for it (`waitMs` at most), as for a
+// service slow to answer. → its port.
+export async function forwarder(t, target, { waitMs = 60_000 } = {}) {
+  const sockets = new Set();
+  const track = (socket) => {
+    sockets.add(socket);
+    socket.on("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+    return socket;
+  };
+  const server = createTcpServer((client) => {
+    track(client).pause();
+    const until = Date.now() + waitMs;
+    const attempt = () => {
+      if (client.destroyed) return;
+      const port = target();
+      if (!port) return retry();
+      const upstream = track(connect(port, "127.0.0.1"));
+      upstream.once("error", retry);
+      upstream.once("connect", () => {
+        upstream.off("error", retry);
+        upstream.on("close", () => client.destroy());
+        client.on("close", () => upstream.destroy());
+        client.pipe(upstream);
+        upstream.pipe(client);
+      });
+    };
+    const retry = () => (Date.now() < until ? setTimeout(attempt, 20) : client.destroy());
+    attempt();
+  });
+  const port = await listening(server);
+  server.unref();
+  t.after(() => {
+    server.close();
+    for (const socket of sockets) socket.destroy();
+  });
+  return port;
 }
 
 // A signing key of the test's own: { privateKey, publicKey, kid }.

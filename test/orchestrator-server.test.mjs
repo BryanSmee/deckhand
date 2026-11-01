@@ -55,7 +55,15 @@ import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
 import { openStore } from "../lib/store.mjs";
-import { evalResult, fakeOpa, grantsPolicy, servePolicies, tempDir, testKey } from "./helpers.mjs";
+import {
+  evalResult,
+  fakeOpa,
+  forwarder,
+  grantsPolicy,
+  servePolicies,
+  tempDir,
+  testKey,
+} from "./helpers.mjs";
 
 // The policy service's opa allowing a brainstorm's GitHub writes on its own issue only, as
 // Deckhand's mode-brainstorm.rego does for an edit (github-writes.test.mjs evaluates the real
@@ -486,25 +494,6 @@ function startModels(settings, { dir, runnerUrl, log }) {
   return { handle: (req, res) => handle(req, res), stop: () => broker.stop() };
 }
 
-// A port nothing listens on now: the runner's and the broker's, which each needs of the other's
-// before either has started. Below the range the OS picks ports 0 from (32768 and up), so that
-// another test's listener can't take it meanwhile.
-let nextPort = 20000 + (process.pid % 400) * 30;
-async function freePort() {
-  for (;;) {
-    const port = nextPort++;
-    if (nextPort >= 32000) nextPort = 20000;
-    const server = createServer();
-    const free = await new Promise((resolve) => {
-      server.once("error", () => resolve(false));
-      server.listen(port, "127.0.0.1", () => resolve(true));
-    });
-    if (!free) continue;
-    await new Promise((resolve) => server.close(resolve));
-    return port;
-  }
-}
-
 // The github service (../github/), in this process: the App's key in its own folder, the
 // broker's key for the tokens, the policy service for the runs' writes and pushes, the test's
 // grants. `extra`: the listener's settings it reads too (GITHUB_URL…).
@@ -630,7 +619,7 @@ async function sandboxProxy({ policyPort, token, urls }) {
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
 describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, () => {
-  // The ports a listener bound, from its log: its own, its egress policy's.
+  // The ports a listener bound, from its log: edge's, its egress policy's.
   async function ports(listener) {
     const bound = async (name) => {
       const re = new RegExp(`${name} on :(\\d+)\n`);
@@ -730,12 +719,22 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
         models: `http://127.0.0.1:${modelsServer.address().port}`,
       },
     });
-    // Port 0: the OS picks free ports, which the listener logs. The runner's is picked first:
-    // the listener calls it.
-    const runnerPort = await freePort();
-    // Edge's internal port and the orchestrator's services port: each calls the other.
-    const edgeInternalPort = await freePort();
-    const servicesPortFixed = await freePort();
+    // Port 0: the OS picks free ports, which each service logs. Each calls the others: the
+    // orchestrator the runner and edge, they the orchestrator, before either has started, and
+    // the orchestrator and the runner restart. So they reach each other through ports of the
+    // test's own, passing calls on to the copy now running (forwarder()): `listener`, `edge` and
+    // `runner` below, once they listen.
+    let edge = null;
+    let listener = null;
+    let runner = null;
+    const portOf = (copy, re) => Number([...(copy?.own() ?? "").matchAll(re)].at(-1)?.[1] ?? 0);
+    const runnerPort = await forwarder(t, () =>
+      portOf(runner, /Deckhand runner \(\w+\) on :(\d+)/g),
+    );
+    const edgeInternalPort = await forwarder(t, () => portOf(edge, /Internal port on :(\d+)\n/g));
+    const servicesPort = await forwarder(t, () => portOf(listener, /Services on :(\d+)\n/g));
+    const policyPort = await forwarder(t, () => portOf(listener, /Egress policy on :(\d+)\n/g));
+    policyPortNow = policyPort;
     const settings = {
       BROKER_SERVICE_URL: brokerUrl,
       PATH: `${dir}:${process.env.PATH}`,
@@ -743,7 +742,7 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       ALLOWED_USERS: "alice,bob",
       PORT: "0",
       POLICY_PORT: "0",
-      SERVICES_PORT: String(servicesPortFixed),
+      SERVICES_PORT: "0",
       // A copy killed leaves its lease for this long: the next one waits it out.
       LEASE_SECONDS: "2",
       EDGE_URL: `http://127.0.0.1:${edgeInternalPort}`,
@@ -775,11 +774,10 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     // The runner: the same settings (those it reads), its own port and store, the broker
     // service's keys, the listener's services port as its orchestrator and github service.
     // Started once the listener's is known.
-    let runner = null;
     let runnerSettings = null;
     const runnerOut = () => (runner?.own() ?? "") + modelsOut;
     const startRunner = (more = {}) => {
-      runner = start({ ...runnerSettings, ...more }, { script: "runner/server.mjs" });
+      runner = start({ ...runnerSettings, ...more, PORT: "0" }, { script: "runner/server.mjs" });
       return runner.until(/Deckhand runner \(\w+\) on :\d+/);
     };
     // Edge, in front: its own data folder (the App but its key) and store, the orchestrator's
@@ -787,15 +785,15 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
     const edgeEnv = (env) => ({
       ...listenerEnv(env),
       PORT: env.EDGE_PORT ?? "0",
-      INTERNAL_PORT: String(edgeInternalPort),
+      INTERNAL_PORT: "0",
       DATA_DIR: edgeDir,
-      ORCHESTRATOR_URL: `http://127.0.0.1:${servicesPortFixed}`,
+      ORCHESTRATOR_URL: `http://127.0.0.1:${servicesPort}`,
       SERVICE_NETWORKS: "orchestrator=127.0.0.0/8",
     });
-    let edge = start(edgeEnv(settings), { script: "edge/server.mjs" });
+    edge = start(edgeEnv(settings), { script: "edge/server.mjs" });
     const edgeOut = () => edge.own();
     const others = () => edgeOut() + runnerOut();
-    let listener = start(listenerEnv(settings), { also: others });
+    listener = start(listenerEnv(settings), { also: others });
     t.after(() => {
       listener.child.kill("SIGKILL");
       edge.child.kill("SIGKILL");
@@ -812,26 +810,16 @@ describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, (
       modelsServer.close();
       stopSandboxes(dir);
     });
-    const servicesPort = Number(
-      (await listener.until(/Services on :(\d+)\n/)).match(/Services on :(\d+)\n/)[1],
-    );
     runnerSettings = {
       ...settings,
-      PORT: String(runnerPort),
       SERVICE_NETWORKS: "edge+orchestrator+models=127.0.0.0/8",
       STORE_URL: `file://${join(dir, "runner-store")}`,
       ORCHESTRATOR_URL: `http://127.0.0.1:${servicesPort}`,
       SERVICE_KEYS_DIR: join(dir, "keys"),
     };
     await startRunner();
-    const [port, policyPort] = await ports(listener);
-    policyPortNow = policyPort;
-    // Restarts keep them: the egress proxy asks the policy at a fixed URL.
-    Object.assign(settings, {
-      PORT: String(port),
-      POLICY_PORT: String(policyPort),
-      SERVICES_PORT: String(servicesPort),
-    });
+    const [port] = await ports(listener);
+    settings.PORT = String(port);
     // `id`: its GUID (X-GitHub-Delivery), for a redelivery.
     const send = (payload, event = "issue_comment", id) => {
       const body = JSON.stringify(payload);

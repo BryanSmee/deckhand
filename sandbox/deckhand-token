@@ -69,7 +69,13 @@ case "${1:-}" in
     : "${DECKHAND_BROKER_URL:?no broker to renew the run token with}"
     every=${DECKHAND_TOKEN_RENEW:-300}
     wait=${DECKHAND_TOKEN_FIRST:-$every}
-    while sleep "$wait"; do
+    # Stopped between two steps, never halfway through a write (its `.part` left behind), and its
+    # sleep with it: bash runs a trap once the command it waits for is done, and `wait` is one
+    # that a signal ends at once.
+    sleeping=
+    trap 'rm -f "$file.part"; [ -z "$sleeping" ] || kill "$sleeping" 2> /dev/null; exit 0' TERM INT
+    while sleep "$wait" & sleeping=$! && wait "$sleeping"; do
+      sleeping=
       if renew; then
         wait=$every
       else

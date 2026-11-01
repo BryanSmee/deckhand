@@ -107,12 +107,14 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   const renew = execFile(`${bin}deckhand-token`, ["--renew"], { env });
   let err = "";
   renew.stderr.on("data", (d) => (err += d));
+  const exited = new Promise((resolve) => renew.on("exit", resolve));
   t.after(() => renew.kill());
-  // Until the broker's last answer is in the file: killed between its `.part` and its `mv`, the
-  // script would leave the `.part` behind. The next renewal is 0.3 s away.
+  // Until the broker's last answer is in the file. Stopped whenever (a renewal may have begun
+  // meanwhile), it finishes what it writes or leaves nothing of it.
   const written = () => n >= 3 && readFileSync(file, "utf8") === `${jwt(n)}\n`;
   for (let i = 0; i < 100 && !written(); i++) await new Promise((r) => setTimeout(r, 50));
   renew.kill();
+  await exited;
   assert.ok(n >= 3, "renewed twice");
   assert.equal(asked[0], `POST /run/token Bearer ${jwt(0)}`);
   assert.equal(asked[1], `POST /run/token Bearer ${jwt(0)}`);
