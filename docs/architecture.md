@@ -1184,6 +1184,36 @@ from `github-app.mjs` before (`request()`, `asApp()`, `asInstallation()`, `ident
 /app`), and leaves `app.json`; edge's /setup has the service convert a new App's manifest code
   (`POST /app/manifest`), so a new key never reaches edge or the orchestrator.
 
+### The models service
+
+The models service (`models/`, #504) is the only one holding the operator's agent credentials:
+its environment and the credentials folder (read-only), and the plans' logins it refreshes,
+sealed in its store with a key only it holds (`models/logins.mjs`). It serves the agents' API
+endpoints (`models/upstream.mjs`, `anthropic.mjs`, `openai.mjs`, `google.mjs`) and the plans'
+logins (`chatgpt.mjs`, `antigravity-login.mjs`, whose refresh the runner runs in a container of
+its own). Its API (`models/http.mjs` `ROUTES`) names the callers of each endpoint: the egress
+proxy the sandboxes' agent calls (`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with
+the network it vouches they came from, and the orchestrator the same (relaying for a proxy from
+before the service, `models-service.mjs` `relay()`), the credentials' names (`GET /credentials`,
+before its settings are read) and fingerprints (`GET /fingerprints`, for redaction), a run's API
+state (`GET /runs/:id/api`, for its reply and fallbacks at its end) and the `models` stream (the
+calls it refused a run, a line each in its log).
+
+- **A call** carries the run's agent token, checked offline with the broker's public keys
+  (`models/runs.mjs`): its `agent` claim (a run never gets another agent's credential), from its
+  own sandbox, for a run the broker says still goes (`GET /runs/:id`, every 30 s at most per
+  run). The service swaps it for the operator's credential and streams the answer back.
+- **Two copies** may run on one store, both active: a plan's refresh token is single-use, so a
+  refresh is a lease in the store (one copy refreshes, the other waits for its result), and a
+  run's API state is there by the run's id. A run has 16 calls in flight at most per copy.
+- **Its update** drains for as long as an agent call lasts (`DRAIN_SECONDS`, 600): a stopping
+  copy refuses new calls (`/ready` answers `503`) and lets those in flight finish, so no turn is
+  cut. With Compose, one copy runs, and a new call waits for the next one only as long as the
+  proxy waits (5 minutes, [services.md](services.md#upgrades-without-downtime)).
+
+What each caller may do, and the credentials' fingerprints:
+[The models service](security.md#the-models-service) in security.md.
+
 ### Run files
 
 A run's inbox, the egress proxy's CA and the run's digest are the broker service's

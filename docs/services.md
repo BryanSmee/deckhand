@@ -6,7 +6,7 @@ service (#501, [architecture.md](architecture.md#the-policy-service)), the broke
 [architecture.md](architecture.md#the-broker-service)), the
 runner (#503, [architecture.md](architecture.md#the-runner-service)), the github service (#502,
 [architecture.md](architecture.md#the-github-service)), the models service (#504,
-[The models service](#the-models-service)) and the egress proxy, each from its own image:
+[architecture.md](architecture.md#the-models-service)) and the egress proxy, each from its own image:
 [architecture.md](architecture.md) describes what each module does.
 
 The split follows who holds which secret and who can reach what. The only service the internet
