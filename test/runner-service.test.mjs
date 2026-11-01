@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
@@ -13,6 +13,7 @@ import { activePassive } from "../lib/active.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
 import { fileStore } from "../lib/store-file.mjs";
+import { withoutSecrets } from "../lib/store.mjs";
 import { keyId } from "../lib/tokens.mjs";
 import { createDockerRunner } from "../listener/runner/docker.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
@@ -808,6 +809,21 @@ test("only this deployment's sandboxes and runs' networks: never another contain
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-2"), 409);
   assert.equal(await status("POST", "/sandboxes/dh-o-a-1/kill"), 200);
   assert.equal(await status("DELETE", "/sandboxes/dh-o-a-1?run=dh-o-a-1-1"), 200);
+});
+
+test("a log file uploaded: parts end where its redaction's did, so the store finds no token it didn't", async (t) => {
+  // The runner's store, refusing a part holding a token's shape (lib/store.mjs).
+  const store = withoutSecrets(fileStore(), () => []);
+  const a = await copy(t, { store, backend: host() });
+  const { logs } = client(a.url);
+  // A run token's claims after letters: none in the line, but the whole of one in a part that
+  // starts at its `e`, where a cut every 4 MB (runner/client.mjs APPEND_MAX) falls.
+  const run = `eyJ2ZXIiOjEsInN1YiI6InJ1biJ9.${"z".repeat(40)}`;
+  const text = `x\n${"a".repeat(4 * 1024 * 1024 - 2)}${run}\n`;
+  const file = join(tempDir(t), "dh-o-a-1-1.log");
+  writeFileSync(file, text);
+  await logs.upload("dh-o-a-1-1", file);
+  assert.equal(await logs.text("dh-o-a-1-1"), text);
 });
 
 // Two copies during a handover (a lease that expired on a stalled one), both reading the log's

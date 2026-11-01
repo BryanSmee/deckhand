@@ -11,6 +11,7 @@
 // back on the runner's last answer: a sandbox's calls go on while the runner updates.
 import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
+import { partEnd } from "../lib/redact.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 
 // What the orchestrator waits for the runner, for the calls a run's life needs: an update of
@@ -428,7 +429,10 @@ export function createRunnerClient({
 
   // A log written before the runner kept them (a file of the listener's): sent in parts, from
   // where the runner's copy ends, should a previous try have sent some of it. A runner's copy
-  // longer than the file is no try's to fix: LOG_LONGER.
+  // longer than the file is no try's to fix: LOG_LONGER. Each part ends where the file was
+  // redacted by (partEnd(), ../listener/runlog.mjs moveLogs()): the runner's store finds no
+  // token in one that the file's redaction didn't, but for a run of token bytes over 4 MB, cut
+  // anywhere (runlog.mjs REDACT_PART_MAX says why that is accepted).
   const longer = (id, file) =>
     Object.assign(new Error(`the runner's log of ${id} is longer than ${file}`), {
       code: "LOG_LONGER",
@@ -442,7 +446,8 @@ export function createRunnerClient({
       while (at < total) {
         const data = Buffer.alloc(Math.min(APPEND_MAX, total - at));
         const n = readSync(fd, data, 0, data.length, at);
-        const after = await append(id, at, data.subarray(0, n));
+        const end = at + n < total ? partEnd(data.subarray(0, n)) || n : n;
+        const after = await append(id, at, data.subarray(0, end));
         const now = typeof after === "number" ? after : after.conflict;
         if (now > total) throw longer(id, file);
         at = now;

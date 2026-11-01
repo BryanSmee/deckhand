@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -41,6 +49,9 @@ function fakeRunner(refuse = []) {
     },
   };
 }
+
+// The redacted copies moveLogs() left in `dir` (runlog.mjs redactedCopy()).
+const redactedCopies = (dir) => readdirSync(dir).filter((f) => f.endsWith(".redacted"));
 
 // A start: the logs a listener kept itself go to the runner, then the runs are listed.
 async function started(dir, options) {
@@ -506,6 +517,110 @@ test("runs: a log whose summary can't be written stays here, unsent: its run is 
   assert.equal(runner.logs.size, 0);
   assert.equal(existsSync(join(dir, `${id}.log`)), true);
   assert.match(logs.join("\n"), new RegExp(`${id}\\.log not sent to the runner`));
+});
+
+test("runs: a log holding a token goes redacted, whole, its bytes otherwise as they were", async (t) => {
+  const dir = tempDir(t);
+  const [dirty, clean] = ["deckhand-org-repo-13-1000", "deckhand-org-repo-14-1000"];
+  const meta = (id) => line({ type: "listener", key: id, repo: "org/repo", startedAt: 1000 });
+  const token = `ghs_${"a1".repeat(18)}`;
+  const runToken = `eyJ2ZXIiOjEsInN1YiI6InJ1biJ9.${"x".repeat(43)}`;
+  // A byte that isn't UTF-8 stays that byte; a line with no newline at the end is read too.
+  const tail = Buffer.from([0xff, 0x0a]);
+  writeFileSync(
+    join(dir, `${dirty}.log`),
+    Buffer.concat([
+      Buffer.from(`${meta(dirty)}\n{"text":"token ${token} here"}\n`),
+      tail,
+      Buffer.from(`{"text":"${runToken}"}`),
+    ]),
+  );
+  writeFileSync(join(dir, `${clean}.log`), `${meta(clean)}\n`);
+  const calls = [];
+  const runner = {
+    // A part a try before sent of the file as it was.
+    logs: new Map([[dirty, Buffer.from(meta(dirty))]]),
+    remove: async (id) => {
+      calls.push(`remove ${id}`);
+      runner.logs.delete(id);
+    },
+    upload: async (id, path) => {
+      calls.push(`upload ${id}`);
+      runner.logs.set(id, readFileSync(path));
+    },
+  };
+  await moveLogs(dir, runner, { log: () => {} }).done;
+  // Removed before it is sent, not after: the runner's log would be gone. The two logs' order is
+  // the folder's.
+  assert.deepEqual(
+    calls.filter((c) => c.endsWith(dirty)),
+    [`remove ${dirty}`, `upload ${dirty}`],
+  );
+  assert.deepEqual(
+    calls.filter((c) => c.endsWith(clean)),
+    [`upload ${clean}`],
+  );
+  assert.deepEqual(
+    runner.logs.get(dirty),
+    Buffer.concat([
+      Buffer.from(`${meta(dirty)}\n{"text":"token [redacted] here"}\n`),
+      tail,
+      Buffer.from(`{"text":"[redacted]"}`),
+    ]),
+  );
+  assert.equal(runner.logs.get(clean).toString(), `${meta(clean)}\n`);
+  for (const id of [dirty, clean]) assert.equal(existsSync(join(dir, `${id}.log`)), false);
+  assert.deepEqual(redactedCopies(dir), []);
+});
+
+test("runs: a redacted copy a stopped start left goes once an hour old, a newer one stays", async (t) => {
+  const dir = tempDir(t);
+  const [old, recent] = ["a.log.1.redacted", "b.log.2.redacted"];
+  for (const f of [old, recent]) writeFileSync(join(dir, f), "x");
+  const hours = (n) => new Date(Date.now() - n * 60 * 60_000);
+  utimesSync(join(dir, old), hours(2), hours(2));
+  await moveLogs(dir, fakeRunner(), { log: () => {} }).done;
+  assert.deepEqual(redactedCopies(dir), [recent]);
+});
+
+test("runs: a log longer than a read, a token across two of them and in a long line, goes redacted", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-16-1000";
+  const first = `${line({ type: "listener", key: id, startedAt: 1000 })}\n`;
+  const token = `ghs_${"c".repeat(36)}`;
+  const read = 4 * 1024 * 1024; // runlog.mjs REDACT_READ
+  // A line of words longer than a read, the token across the end of the first read; then one
+  // more past a read's length, with no newline at the end and a token near its own end.
+  const words = (n) => "word ".repeat(Math.ceil(n / 5)).slice(0, n);
+  const before = words(read - first.length - 10);
+  const long = `${before}${token} ${words(read)}\n`;
+  const last = `${words(read + 100)}${token}`;
+  writeFileSync(join(dir, `${id}.log`), first + long + last);
+  const runner = fakeRunner();
+  runner.remove = async () => {};
+  await moveLogs(dir, runner, { log: () => {} }).done;
+  assert.equal(
+    runner.logs.get(id),
+    `${first}${before}[redacted] ${words(read)}\n${words(read + 100)}[redacted]`,
+  );
+});
+
+test("runs: a log to redact whose runner copy can't be removed stays as it was, for the next start", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-15-1000";
+  const text = `${line({ type: "listener", key: id, startedAt: 1000 })}\nghp_${"b".repeat(36)}\n`;
+  writeFileSync(join(dir, `${id}.log`), text);
+  const runner = {
+    remove: async () => {
+      throw new Error("the runner service didn't answer");
+    },
+    upload: async () => assert.fail("not sent before its runner copy is removed"),
+  };
+  const logs = [];
+  await moveLogs(dir, runner, { log: (l) => logs.push(l) }).done;
+  assert.equal(readFileSync(join(dir, `${id}.log`), "utf8"), text);
+  assert.deepEqual(redactedCopies(dir), []);
+  assert.match(logs.join("\n"), /not sent to the runner \(the runner service didn't answer\)/);
 });
 
 test("runs: live runs' logs move first, on their own; a failed try is tried again, never left halfway", async (t) => {
