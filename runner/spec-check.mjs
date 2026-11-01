@@ -45,7 +45,7 @@ const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // The labels a spec may set: its task's. The runner's own (`deckhand.owner`, `deckhand.run`,
 // `deckhand.engine`) it sets itself, and `deckhand.role` and compose's are what it finds the
-// listener and the proxy by.
+// proxy by.
 const LABELS = new Set(["deckhand.task"]);
 
 // Whether `image` is the base image or `repo`'s own, under the registry the runner pushes to

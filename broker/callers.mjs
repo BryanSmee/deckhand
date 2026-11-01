@@ -23,8 +23,9 @@ export { POD_TOKEN_HEADER };
 const ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
 // SERVICE_ACCOUNTS → username (`system:serviceaccount:<namespace>:<name>`) → the services it
-// may be. Services that run in one pod share its account:
-// "edge+orchestrator=deckhand:deckhand-control", as networkCallers() takes them.
+// may be. Services that run in one pod share its account, "runner+models=deckhand:deckhand-workers",
+// as networkCallers() takes them (the syntax only: each service should keep its own account, and
+// edge, the one the internet reaches, never shares one).
 export function accountCallers(text) {
   const accounts = new Map();
   for (const part of String(text ?? "")

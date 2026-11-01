@@ -502,9 +502,8 @@ function sandboxConfig(env, s) {
     enginePodmanImage: env.ENGINE_PODMAN_IMAGE || `${prefix}-engine-podman`,
     // The only way out of the runs' networks (../proxy/proxy.mjs).
     egressProxy: (env.EGRESS_PROXY || "http://egress:3128").replace(/\/$/, ""),
-    // The containers joined to each run's network (runner/docker.mjs): by default, the one
-    // the listener runs in and the one compose.yaml labels deckhand.role=egress.
-    listenerContainer: env.LISTENER_CONTAINER || "",
+    // The container joined to each run's network (runner/networks.mjs): by default, the one
+    // compose.yaml labels deckhand.role=egress.
     egressContainer: env.EGRESS_CONTAINER || "",
     grantsDir: s.GRANTS_DIR,
     installNetwork: s.INSTALL_NETWORK,

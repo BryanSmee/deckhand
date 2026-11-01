@@ -109,10 +109,6 @@ services:
       # The proxy reaches it there by the listener's name too, as sandboxes call it (BROKER_URL).
       orchestrator-proxy:
         aliases: [listener]
-    # How the runner finds it, to join it to each run's network (its gateways for sandboxes from
-    # before the services, BROKER_URL below).
-    labels:
-      deckhand.role: broker
     environment:
       # Every setting but the secrets and the wiring below can be in config.yaml instead
       # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
@@ -222,8 +218,8 @@ services:
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      # How sandboxes reach its gateways: this service, joined to each run's network under the
-      # name sandboxes from before edge and the orchestrator know it by.
+      # How sandboxes reach its gateways: through the egress proxy, which forwards their calls
+      # to it under the name sandboxes from before edge and the orchestrator know it by.
       BROKER_URL: http://listener:8081
       # The broker service, which signs the runs' tokens (#505).
       BROKER_SERVICE_URL: http://broker:8081
@@ -349,8 +345,8 @@ services:
       KUBERNETES_CACHE_SIZE: ${KUBERNETES_CACHE_SIZE:-}
       KUBERNETES_AGENT_STORAGE_CLASS: ${KUBERNETES_AGENT_STORAGE_CLASS:-}
       KUBERNETES_AGENT_SIZE: ${KUBERNETES_AGENT_SIZE:-}
-      # Wiring, environment only, matching the orchestrator's. BROKER_URL: the name the
-      # orchestrator is joined to each run's network under.
+      # Wiring, environment only, matching the orchestrator's. BROKER_URL: the name sandboxes
+      # call the orchestrator's gateways by, through the egress proxy.
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image

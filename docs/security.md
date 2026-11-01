@@ -560,8 +560,8 @@ settings is one (`test/networks.test.mjs` reads `compose.yaml`'s environments), 
 volume is mounted in it; it keeps the listener's `data` volume, its state. It **has no way
 out**: every network it is on is internal ([The services' networks](#the-services-networks)).
 Its ports: the services port (8083: the runner's `POST /runs/:run/tokens`, edge's `/edge/*`),
-the broker port (8081: the relays and gateways for sandboxes from before the services, on the
-runs' networks, where it is joined under the name `listener`) and the egress policy's (8082).
+the broker port (8081: the relays and gateways for sandboxes from before the services, which
+the egress proxy reaches under the name `listener`) and the egress policy's (8082).
 None is published.
 
 - **One copy acts.** Two may run: the acting one holds the store's lease `orchestrator`
@@ -826,10 +826,8 @@ when it needs one (webhooks, GitHub, the agents' APIs, registries, the granted h
 `test/networks.test.mjs` reads `compose.yaml` and fails otherwise, checks that the broker's, the
 runner's, the models service's and the github service's `SERVICE_NETWORKS` name each caller's own
 network, and checks which containers the runner joins to a run's network. The broker, the github
-service, the models service and edge are on none of them (#505, #502, #504, #506). The
-orchestrator still joins the runs' networks, under the name `listener` sandboxes from before it
-call it by, for the calls a proxy or a sandbox from before the services sends it directly, which
-it relays.
+service, the models service and edge are on none of them (#505, #502, #504, #506). Nor is
+the orchestrator: sandboxes reach it, under the name `listener`, through the proxy alone.
 
 **The models service's table** (`models/http.mjs` `ROUTES`): the proxy the sandboxes' agent calls
 (`/anthropic/`, `/openai/`, `/google/`, `/relay/<host>/`), with the network it vouches they came
@@ -2769,12 +2767,11 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
   internal, so the range changes addresses, not what a sandbox can reach. It must lie inside
   `10/8`, `172.16/12`, `192.168/16` or `100.64/10`: Deckhand refuses to start with
   another.
-- The runner finds the orchestrator's container by its `deckhand.role=broker` label and the
-  proxy's by its `deckhand.role=egress` label, in its own compose project
-  (`LISTENER_CONTAINER`, `EGRESS_CONTAINER` to name them instead). A new runner joins
-  both again to the running sandboxes' networks when it starts, and checks every minute
-  (`docker compose up -d` recreates either without the networks it was joined to); networks
-  of this deployment whose run is gone are removed then.
+- The runner finds the proxy's container by its `deckhand.role=egress` label, in its own
+  compose project (`EGRESS_CONTAINER` to name it instead), and joins no other container to a
+  run's network. A new runner joins it again to the running sandboxes' networks when it
+  starts, and checks every minute (`docker compose up -d` recreates it without the networks it
+  was joined to); networks of this deployment whose run is gone are removed then.
 - The **egress proxy** (`proxy/proxy.mjs`, the `egress` service) is on every run's network
   and the outside one. Being on all of them, it is the only path between two runs: it
   connects to the hosts a run may reach only, and to a private address only for a host you
@@ -3089,11 +3086,8 @@ it again when you change `AGY_VERSION`.
 - **DNS**: Docker's embedded resolver may forward lookups from the internal network to the
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.
-- **The orchestrator and the proxy are on every run's network**: a sandbox reaches the
-  orchestrator's ports (its broker port, 8081; the egress policy's, 8082, which answers the
-  proxy alone; its services port, 8083, which takes the runner's and edge's service tokens
-  alone, from their networks) and the proxy's, as every other sandbox does, but not the other
-  sandboxes behind them.
+- **The proxy is on every run's network**: a sandbox reaches the proxy's port, as every
+  other sandbox does, but not the other sandboxes behind it.
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - **A research run allows every public host**: everything it holds can leave, so it holds

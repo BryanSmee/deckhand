@@ -51,7 +51,7 @@ export function createRelink({ config, docker, log, list, starting, networks, en
     }
   };
 
-  // The listener and the proxy, back on the networks of the `running` sandboxes.
+  // The proxy, back on the networks of the `running` sandboxes.
   async function rejoin(running) {
     const wanted = new Set();
     for (const s of running) {
