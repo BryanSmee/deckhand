@@ -69,6 +69,17 @@ function shownPlans(plans: PlanUsage[] | undefined, pick: (p: PlanUsage) => Plan
     .filter((p) => p.windows.length);
 }
 
+// The header's windows: the main ones by name (the 5-hour and weekly limits), else the first
+// ones; and while the plan is limited, a full window besides (a model's weekly limit, say), so
+// that the limit shows.
+const MAIN_WINDOWS = ["5h", "7d"];
+export function compactWindows(plan: PlanUsage): PlanWindow[] {
+  const main = plan.windows.filter((w) => MAIN_WINDOWS.includes(w.name));
+  const picked = main.length ? main : plan.windows.slice(0, COMPACT_WINDOWS);
+  const full = plan.limited ? plan.windows.filter((w) => w.used >= 1 && !picked.includes(w)) : [];
+  return [...picked, ...full];
+}
+
 // The most used window, a current one before a stale one.
 function mostUsed(plan: PlanUsage, now: number): PlanWindow[] {
   const ranked = [...plan.windows].sort(
@@ -92,7 +103,7 @@ export function PlanBars({
 }) {
   const shown = shownPlans(plans, (plan) =>
     form === "compact"
-      ? plan.windows.slice(0, COMPACT_WINDOWS)
+      ? compactWindows(plan)
       : form === "phone"
         ? mostUsed(plan, now)
         : plan.windows,

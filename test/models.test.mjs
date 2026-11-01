@@ -365,7 +365,12 @@ test("a plan's usage, from its answers and its usage call, reaches the orchestra
     asked.push({ url: req.url, headers: req.headers });
     req.resume().on("end", () => {
       if (req.url === "/api/oauth/usage") {
-        return res.end(JSON.stringify({ seven_day_opus: { utilization: 60, resets_at: null } }));
+        return res.end(
+          JSON.stringify({
+            seven_day_opus: { utilization: 60, resets_at: null },
+            five_hour: { utilization: 30, resets_at: null },
+          }),
+        );
       }
       res.writeHead(200, {
         "anthropic-ratelimit-unified-5h-utilization": "0.25",
@@ -406,9 +411,13 @@ test("a plan's usage, from its answers and its usage call, reaches the orchestra
   const polled = asked.find((a) => a.url === "/api/oauth/usage");
   assert.equal(polled.headers.authorization, "Bearer sk-ant-oat01-plan-0123456789");
   const again = await ctx.asOrchestrator(copy, "GET", "/usage");
+  // The call's whole list, in the windows' order, the main ones first.
   assert.deepEqual(
-    again.json.plans[0].windows.map((w) => w.name),
-    ["7d_opus", "5h"],
+    again.json.plans[0].windows.map((w) => [w.name, w.used]),
+    [
+      ["5h", 0.3],
+      ["7d_opus", 0.6],
+    ],
   );
   assert.ok(!again.text.includes("oat01"));
   // The proxy may not read it.

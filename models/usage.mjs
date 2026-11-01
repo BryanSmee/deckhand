@@ -244,15 +244,29 @@ export function antigravityPoll({ login, host, fetch }) {
   };
 }
 
+// The windows' order, whichever reading gave them: the main ones first (the dashboard's header
+// shows those), then a model's. Others (the Antigravity CLI's, the most used first) after them,
+// in their reading's order.
+const ORDER = [
+  "5h",
+  "7d",
+  ...CLAUDE_WINDOWS.slice(2).map(([name]) => name),
+  "primary",
+  "secondary",
+];
+const rank = (w) => (ORDER.includes(w.name) ? ORDER.indexOf(w.name) : ORDER.length);
+
 // `windows` over `before`'s, by name: a window this reading doesn't give (a model's weekly
-// limit, which only the usage call says) stays until it resets. Each its own `at`.
-function merged(before = [], windows, at, now) {
+// limit, which only the usage call says) stays until it resets. Each its own `at`. `replace`:
+// a usage call's reading, which gives them all: none of `before`'s is kept (the Antigravity
+// CLI's models sharing a quota change from one to the next).
+function merged(before = [], windows, at, now, replace = false) {
   const fresh = new Map(windows.map((w) => [w.name, { ...w, at }]));
-  const kept = before.filter(
-    (w) => !fresh.has(w.name) && (w.resetsAt === null || w.resetsAt > now),
-  );
-  // In the reading's order, those kept after.
-  return [...fresh.values(), ...kept];
+  const kept = replace
+    ? []
+    : before.filter((w) => !fresh.has(w.name) && (w.resetsAt === null || w.resetsAt > now));
+  // A stable sort: those of the same rank in their reading's order, those kept after.
+  return [...fresh.values(), ...kept].sort((a, b) => rank(a) - rank(b));
 }
 
 // What a copy writes is what changed (a percent's worth of use, a reset, a limit), or how
@@ -273,28 +287,34 @@ export function createUsage({ plans = {}, store, now = Date.now, log = () => {} 
   const saves = new Set(); // the readings being written
   const refused = new Set(); // the plans whose usage call can't work with their credential
 
+  // `change(before)` → the entry to write, over the stored one: written only if no other copy
+  // changed it meanwhile (a 429's limit mustn't be lost to another call's answer), else read and
+  // changed again.
   async function save(plan, change) {
-    const before = (await store.get(usageKey(plan))) ?? { windows: [], limitedUntil: null };
-    const after = change(before);
-    const recent = newest(after.windows) - newest(before.windows) < FRESH_MS;
-    if (recent && shape(after) === shape(before)) return;
-    await store.set(usageKey(plan), after, { ttlMs: KEEP_MS });
+    for (;;) {
+      const raw = await store.get(usageKey(plan));
+      const before = raw ?? { windows: [], limitedUntil: null };
+      const after = change(before);
+      const recent = newest(after.windows) - newest(before.windows) < FRESH_MS;
+      if (recent && shape(after) === shape(before)) return;
+      if (await store.compareAndSet(usageKey(plan), raw, after, { ttlMs: KEEP_MS })) return;
+    }
   }
 
   // A reading of `plan`'s windows. `limitedUntil`: a 429's reset, the plan limited till then;
   // undefined, left as it was; null, an answer that got through. `hit`: the window that limit
-  // is about, full until then.
-  async function seen(plan, windows, { limitedUntil, hit } = {}) {
+  // is about, full until then. `polled`: a usage call's, the plan's whole list.
+  async function seen(plan, windows, { limitedUntil, hit, polled = false } = {}) {
     if (!set.includes(plan)) return;
     if (!windows.length && limitedUntil === undefined) return;
     const at = now();
     const saving = save(plan, (before) => {
-      let after = merged(before.windows, windows, at, at);
+      let after = merged(before.windows, windows, at, at, polled);
       if (hit && limitedUntil) {
         const known = after.some((w) => w.name === hit);
         after = known
           ? after.map((w) => (w.name === hit ? { ...w, used: 1, resetsAt: limitedUntil } : w))
-          : [...after, { name: hit, used: 1, resetsAt: limitedUntil, at }];
+          : merged(after, [{ name: hit, used: 1, resetsAt: limitedUntil }], at, at);
       }
       return {
         windows: after,
@@ -339,7 +359,7 @@ export function createUsage({ plans = {}, store, now = Date.now, log = () => {} 
       if (!(await store.setIfAbsent(pollKey(plan), now(), { ttlMs: POLL_MS }))) return;
       try {
         const windows = await ask();
-        if (windows) await seen(plan, windows);
+        if (windows) await seen(plan, windows, { polled: true });
       } catch (error) {
         if (error instanceof LastingRefusal) {
           refused.add(plan);

@@ -239,8 +239,8 @@ test("readings are merged by window, and written only when they change or a minu
   const names = (await usage.read())[0].windows.map((w) => w.name);
   assert.deepEqual(names, ["5h", "7d", "7d_opus"]);
   let writes = 0;
-  const set = store.set.bind(store);
-  store.set = (...args) => (writes++, set(...args));
+  const set = store.compareAndSet.bind(store);
+  store.compareAndSet = (...args) => (writes++, set(...args));
   clock.now += 1000;
   await usage.claudeAnswered(200, CLAUDE_HEADERS, null);
   assert.equal(writes, 0);
@@ -488,4 +488,60 @@ test("a login due for a refresh isn't polled: the poll never refreshes it", asyn
     "/v1internal:loadCodeAssist",
   ]);
   assert.equal(refreshed, 0);
+});
+
+test("a usage call's reading replaces the plan's windows; the runs' answers merge, in one order", async () => {
+  const { usage } = usageOf({ antigravity: true, claude: true });
+  const w = (name, used) => ({ name, used, resetsAt: NOW + 3600_000 });
+  await usage.seen("antigravity", [w("gemini-pro", 0.5), w("claude-sonnet", 0.2)], {
+    polled: true,
+  });
+  // The next call folds claude-sonnet into gemini-pro's quota: its old window goes.
+  await usage.seen("antigravity", [w("gemini-pro", 0.6)], { polled: true });
+  const read = async (plan) =>
+    (await usage.read()).find((p) => p.plan === plan).windows.map((x) => [x.name, x.used]);
+  assert.deepEqual(await read("antigravity"), [["gemini-pro", 0.6]]);
+  // Claude's: a model's window first in its reading, the main ones still first once merged.
+  await usage.seen("claude", [w("7d_opus", 0.4)]);
+  await usage.seen("claude", [w("7d", 0.3), w("5h", 0.1)]);
+  assert.deepEqual(await read("claude"), [
+    ["5h", 0.1],
+    ["7d", 0.3],
+    ["7d_opus", 0.4],
+  ]);
+});
+
+test("two copies writing at once: neither loses the other's change, a 429's limit included", async () => {
+  const clock = { now: NOW };
+  const store = openStore("memory:", { now: () => clock.now });
+  const [a, b] = [0, 1].map(() =>
+    createUsage({ plans: { claude: true }, store, now: () => clock.now }),
+  );
+  // B reads the entry before A's write lands, then writes over it: compareAndSet sends it back.
+  const get = store.get.bind(store);
+  let racing = true;
+  store.get = async (key) => {
+    const value = await get(key);
+    if (racing) {
+      racing = false;
+      await a.claudeAnswered(
+        429,
+        { "anthropic-ratelimit-unified-representative-claim": "five_hour" },
+        NOW + 3600_000,
+      );
+    }
+    return value;
+  };
+  await b.claudeAnswered(500, CLAUDE_HEADERS, null);
+  const [claude] = await b.read();
+  // A's limit kept; B's reading, the newer, over the windows.
+  assert.equal(claude.limited, true);
+  assert.equal(claude.limitedUntil, NOW + 3600_000);
+  assert.deepEqual(
+    claude.windows.map((w) => [w.name, w.used]),
+    [
+      ["5h", 0.42],
+      ["7d", 0.18],
+    ],
+  );
 });

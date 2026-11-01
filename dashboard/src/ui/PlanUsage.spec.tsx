@@ -3,7 +3,7 @@
 import { render, screen } from "@testing-library/preact";
 import { expect, test } from "vitest";
 import { makePlan } from "../testUtils";
-import { PlanBars, windowTone } from "./PlanUsage";
+import { compactWindows, PlanBars, windowTone } from "./PlanUsage";
 
 const NOW = 1_800_000_000_000;
 const bars = () => screen.queryAllByRole("img").map((b) => b.getAttribute("aria-label"));
@@ -79,4 +79,26 @@ test("the phone's top bar: two plans at most, the most used, in their order", ()
   const plans = [plan("Claude", 0.2), plan("Codex", 0.9), plan("Antigravity", 0.5)];
   render(<PlanBars plans={plans} now={NOW} form="phone" />);
   expect(bars().map((b) => b!.split(" ")[0])).toEqual(["Codex", "Antigravity"]);
+});
+
+test("the header: the main windows by name, and a full one besides while the plan is limited", () => {
+  const until = NOW + 3_600_000;
+  const plan = makePlan({
+    limited: true,
+    limitedUntil: until,
+    windows: [
+      { name: "7d_opus", used: 1, resetsAt: until, at: NOW },
+      { name: "5h", used: 0.3, resetsAt: NOW + 1000, at: NOW },
+      { name: "7d", used: 0.5, resetsAt: NOW + 2000, at: NOW },
+    ],
+  });
+  render(<PlanBars plans={[plan]} now={NOW} form="compact" />);
+  expect(bars().map((b) => b!.split(":")[0])).toEqual([
+    "Claude 5h",
+    "Claude week",
+    "Claude week (Opus)",
+  ]);
+  expect(bars()[2]).toMatch(/100 % used, limit reached until /);
+  // Not limited: the main ones alone, whatever their order.
+  expect(compactWindows({ ...plan, limited: false }).map((w) => w.name)).toEqual(["5h", "7d"]);
 });
