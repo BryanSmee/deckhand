@@ -690,14 +690,9 @@ Object.assign(ctx, {
   images: runnerClient.images,
   runLogs: runnerClient.logs,
   // Runs' tokens, signed by the broker service, and what each run may do, which the services
-  // its sandbox calls check them against.
+  // its sandbox calls check them against: the orchestrator checks none itself.
   brokerService,
-  broker: createBroker({
-    issuer: brokerService.issuer,
-    keys: brokerService.keys,
-    unknownKey: brokerService.unknownKey,
-    gateway: githubGateway(),
-  }),
+  broker: createBroker({ issuer: brokerService.issuer, gateway: githubGateway() }),
   // The egress proxy's CA certificate, for runs that reach GitHub, or whose grant has
   // cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),

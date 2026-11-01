@@ -1179,6 +1179,33 @@ The policy service reads your server folder as the `node` user (uid 1000): your 
 its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
 every policy decision is refused, and the orchestrator's log says why at start.
 
+### Upgrading: the paths from before the services are gone (#567)
+
+The orchestrator no longer answers sandboxes: its broker port (8081) and the `listener` name are
+gone, with what kept sandboxes, proxies and runs of earlier releases working. Sandboxes call the
+broker, the github and the models service by their own names, through the egress proxy. What
+changes for you:
+
+- **Running sandboxes**: deploy only once none started by the earlier release still runs. One
+  calls `http://listener:8081`, which nothing answers any more: its pushes, GitHub calls, agent
+  calls and inbox fail. `docker ps --filter label=deckhand.run` on the server lists the running
+  ones: wait for them to end (or `/cancel` them) first. On Kubernetes, the sandbox pods
+  (`deckhand.role=sandbox`).
+- **Kubernetes NetworkPolicy**: sandboxes may reach the egress proxy alone now. A policy that
+  also lets them reach the orchestrator on 8081, as these docs said before, is refused, and no
+  run starts until it names the proxy's port only ([Kubernetes runner](#kubernetes-runner)). The
+  orchestrator's Service named `listener` can go.
+- **Settings no longer read**: `BROKER_URL` and `BROKER_PORT` (the orchestrator, the runner, the
+  egress proxy), `RELAY_URL` (the egress proxy) and `RUNS_VOLUME`. Remove them from your `.env`,
+  compose overrides or Deployments: they are ignored. The egress proxy's `BROKER_SERVICE_URL`,
+  `GITHUB_SERVICE_URL` and `MODELS_SERVICE_URL` now default to compose's names, and its
+  `POLICY_URL` to `http://orchestrator:8082/egress`.
+- **The `runs` volume** (`deckhand-runs` by default) is no longer mounted: the runner keeps the
+  runs' inboxes in its own (`runner-data`). Once no sandbox of the earlier release runs, remove
+  it: `docker volume rm deckhand-runs`.
+- **The listener's keys**: a `run-token.key` or `run-token.pub` left in the orchestrator's data
+  volume is no longer read. Delete them.
+
 ### Upgrading: the preview hook is gone (#574)
 
 Deckhand no longer runs a repository's `preview.command` on its pull requests' events: the hook

@@ -1,9 +1,9 @@
 #!/bin/bash
-# Prints what this run gives GitHub in place of a token: its run token, a JWT the listener's
-# broker signs (../listener/broker.mjs), bound to this sandbox and valid for 15 minutes. The
-# egress proxy relays its GitHub calls to the listener's GitHub gateway
-# (../listener/github-gateway.mjs), which swaps it for a token limited to the run's repo that the
-# sandbox never sees, while the run lasts. The git credential helper and the gh wrapper call it
+# Prints what this run gives GitHub in place of a token: its run token, a JWT the broker service
+# signs (../broker/runs.mjs), bound to this sandbox and valid for 15 minutes. The egress proxy
+# relays its GitHub calls to the github service's GitHub gateway
+# (../listener/github-gateway.mjs), which swaps it for a token limited to the run's repo that
+# the sandbox never sees, while the run lasts. The git credential helper and the gh wrapper call it
 # each time: the token changes, so nothing may keep it.
 #
 #   deckhand-token          prints the token, from DECKHAND_TOKEN_FILE
@@ -16,7 +16,7 @@
 #                           call): the first token was signed when the sandbox was created, which
 #                           may be long before it starts (a pod Pending while its image pulls or
 #                           its agent installs). The broker takes an expired one from its sandbox
-#                           (../listener/broker.mjs renew()), and gives back the same one when it
+#                           (../broker/runs.mjs renew()), and gives back the same one when it
 #                           was signed less than a minute ago
 #   deckhand-token --renew  asks the broker for a new one every DECKHAND_TOKEN_RENEW seconds
 #                           (300), presenting the current one, and replaces the file whole,

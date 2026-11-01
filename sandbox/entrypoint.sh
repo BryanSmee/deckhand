@@ -86,10 +86,10 @@ if [ -n "${SCREENSHOT_DIR:-}" ]; then
   [ -z "${DECKHAND_BROKER_URL:-}" ] || deckhand-files shots --watch >&2 < /dev/null &
 fi
 
-# The egress proxy's CA (DECKHAND_CA, a file from the listener for every run that reaches
-# GitHub, whose calls the proxy relays to the listener's GitHub gateway, and when the
-# repository's grant has cached_hosts or the agent's calls are relayed to the listener): the
-# proxy decrypts those hosts' HTTPS to hand it to the listener, or to cache it. Trusted next to the
+# The egress proxy's CA (DECKHAND_CA, a file from the broker for every run that reaches GitHub,
+# whose calls the proxy relays to the github service's GitHub gateway, and when the
+# repository's grant has cached_hosts or the agent's calls are relayed to the models service):
+# the proxy decrypts those hosts' HTTPS to hand it to the service, or to cache it. Trusted next to the
 # image's own roots, in a bundle of ours (`node` can't run update-ca-certificates), through
 # the variables each tool reads, and by Chromium, which reads its own store (~/.pki/nssdb).
 if [ -n "${DECKHAND_CA:-}" ] && [ -f "$DECKHAND_CA" ]; then

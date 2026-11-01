@@ -1,13 +1,13 @@
-// Waiting for the listener while it restarts (docs/architecture.md, Restarts): a connection it
-// refused, or that failed before it was made, never reached it, so trying again is safe for
+// Waiting for the orchestrator's egress policy, or a service the proxy forwards to, while it
+// restarts (docs/architecture.md, Restarts): a connection it refused, or that failed before it was made, never reached it, so trying again is safe for
 // any call, a push or a POST too. Once a request is sent on a connection, it never is again.
 
-// How long a call waits for the listener before the sandbox hears it is unreachable: as long as
+// How long a call waits for one before the sandbox hears it is unreachable: as long as
 // the previous one may drain (DRAIN_MS, ../lib/drain.mjs) and the next one start, as with
 // one copy of each (compose) the next only starts once the previous one has exited.
 export const LISTENER_WAIT_MS = 300_000;
 
-// The errors of a connection that wasn't made: refused (a listener stopped or draining), reset
+// The errors of a connection that wasn't made: refused (a copy stopped or draining), reset
 // while connecting, or no such host (its container gone, Docker's DNS has no name for it).
 const NOT_REACHED = new Set([
   "ECONNREFUSED",

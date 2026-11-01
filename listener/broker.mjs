@@ -68,10 +68,11 @@ export function addressOf(req) {
 }
 
 export function createBroker({
-  // req → the address of the sandbox that sent it, for check(): its source address by default.
+  // What check() reads, the tests' alone (below), with `keys` and `unknownKey`: req → the
+  // address of the sandbox that sent it, its source address by default; address → the ID of
+  // the network (or pod) it is on, or null, what binds a token to its sandbox (none: every
+  // token is refused).
   clientOf = async (req) => addressOf(req),
-  // address → the ID of the network (or pod) it is on, as the runner tells (runner/), or null:
-  // what binds a token to its sandbox. None: every token is refused.
   sandboxOf = async () => null,
   // The broker service (broker-service.mjs createBrokerService()): { issue(id, fields) →
   // { token, agentToken }, put(id, fields), end(id) }.
@@ -80,7 +81,7 @@ export function createBroker({
   // calls: { put(id, fields), end(id) }, told each run with what its gateways check, once its
   // sandbox is known, and its end. None: nowhere (the tests').
   gateway = NO_GATEWAY,
-  // () → kid → public key: what run tokens are checked with, the broker service's.
+  // () → kid → public key: what check() verifies run tokens with.
   keys = () => new Map(),
   // () → a promise, once the keys were read again: called when a token names an unknown key.
   unknownKey = async () => {},
@@ -313,7 +314,10 @@ export function createBroker({
 
   // The run a call's run token names, once checked: { run, claims } or { status, message }.
   // `from`: the call (its request: the address is clientOf()'s) or the address it came from;
-  // `audience`: the service's.
+  // `audience`: the service's. No service calls it: the gateways check a run's tokens in the
+  // github service (../github/runs.mjs check()), the models service its agent token
+  // (../models/runs.mjs). It stands in for those in the gateways' and endpoints' tests, which
+  // run on this broker.
   async function check(credential, from, audience = RUN_AUDIENCE) {
     const ip = typeof from === "string" ? from : from ? await clientOf(from) : "";
     const unknown = { status: 401, message: "unknown or finished run" };
