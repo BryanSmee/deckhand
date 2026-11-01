@@ -45,7 +45,7 @@ import { createRunnerClient } from "../runner/client.mjs";
 import { createAnthropicProxy } from "./anthropic.mjs";
 import { createAntigravityLogin } from "./antigravity-login.mjs";
 import { CHATGPT_URL, createChatgptLogin } from "./chatgpt.mjs";
-import { createGoogleRelay, RELAYED_PATHS } from "./google.mjs";
+import { CLOUDCODE_HOST, createGoogleRelay } from "./google.mjs";
 import { createModelsServer } from "./http.mjs";
 import { fingerprintSalt, loginKey, loginSeal } from "./logins.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
@@ -193,7 +193,7 @@ export function createModels({
         agyLogin &&
         antigravityPoll({
           login: agyLogin,
-          host: `https://${Object.keys(RELAYED_PATHS)[0]}`,
+          host: `https://${CLOUDCODE_HOST}`,
           fetch,
         }),
     },

@@ -212,7 +212,7 @@ export function sharedLogin({
 // A plan's login as its endpoint uses it (chatgpt.mjs, antigravity-login.mjs): sharedLogin()'s,
 // with what differs between plans. `due(login)`: whether it needs a refresh now; `refresh(login)`
 // → the new login; `headersOf(login)`: the headers that make a call the plan's; `accessOf(login)`:
-// its access token; `secretsOf(login)`: its tokens. → { headers, refused, secrets }.
+// its access token; `secretsOf(login)`: its tokens. → { headers, current, refused, secrets }.
 export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...options }) {
   const shared = sharedLogin(options);
   let last = null; // the login as last used, for refused() and secrets()
@@ -237,6 +237,15 @@ export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...opt
     return headersOf(saved.login);
   }
 
+  // The headers, unless the login is due for a refresh (or unusable): null then, nothing
+  // refreshed. For the usage polls (usage.mjs), which an idle dashboard makes.
+  async function current() {
+    const saved = await shared.load();
+    if (saved.broken || accessOf(saved.login) === stale || due(saved.login)) return null;
+    last = saved.login;
+    return headersOf(saved.login);
+  }
+
   // The upstream refused this access token (401): the next call refreshes it first, once.
   function refused(authorization) {
     const token = String(authorization).replace(/^Bearer /, "");
@@ -247,5 +256,5 @@ export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...opt
   // sandbox has them (http.mjs fingerprints).
   const secrets = () => (last ? secretsOf(last) : []);
 
-  return { headers, refused, secrets };
+  return { headers, current, refused, secrets };
 }

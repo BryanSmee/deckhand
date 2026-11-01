@@ -7,9 +7,10 @@
 //   passively, from the plans' own answers to the runs' calls (anthropic.mjs, openai.mjs): their
 //   rate limit headers, which cost nothing;
 //   by asking the plan, while a dashboard is open (GET /usage?poll=1, every POLL_MS at most, for
-//   every copy): Claude's OAuth usage call, ChatGPT's and the Antigravity CLI's quota calls. They
-//   aren't documented and may change: a poll that fails is only logged, the passive readings
-//   stay, and the next one waits FAILED_MS.
+//   every copy): Claude's OAuth usage call (refused to a `claude setup-token` token: then never
+//   again, claudePoll()), ChatGPT's and the Antigravity CLI's quota calls (skipped while their
+//   login is due for a refresh). They aren't documented and may change: a poll that fails is
+//   only logged, the passive readings stay, and the next one waits FAILED_MS.
 //
 // A reading parsed here never makes up a value: a header missing or garbled leaves its window out.
 
@@ -158,51 +159,88 @@ export function antigravityPolled(json) {
   return [...seen.values()].sort((a, b) => b.used - a.used).slice(0, 6);
 }
 
-// `fetch(url, init)` → the JSON of a plan's usage call, throwing on anything but a 200.
+// `fetch(url, init)` → the JSON of a plan's usage call, throwing on anything but a 200 (the
+// error's `status`, the answer's).
 async function askJson(fetch, url, init) {
   const res = await fetch(url, { ...init, signal: AbortSignal.timeout(POLL_TIMEOUT_MS) });
-  if (res.status !== 200) throw new Error(`answered ${res.status}`);
+  if (res.status !== 200) {
+    throw Object.assign(new Error(`answered ${res.status}`), { status: res.status });
+  }
   return res.json();
 }
 
-// The plans' usage calls, each `async () → windows`, given what they need: the Claude plan's
-// token and Anthropic's address; the ChatGPT and Google AI logins' headers (chatgpt.mjs,
-// antigravity-login.mjs headers()), and where their calls go.
+// A poll that can't work with this credential, whatever the time: not asked again by this
+// copy (a new credential means a restart).
+export class LastingRefusal extends Error {}
+
+// The plans' usage calls, each `async () → windows`, or null when it skipped this time, given
+// what they need: the Claude plan's token and Anthropic's address; the ChatGPT and Google AI
+// logins (chatgpt.mjs, antigravity-login.mjs), and where their calls go.
+//
+// Claude's needs the token's `user:profile` scope, which a `claude setup-token` token (what
+// docs/setup.md has CLAUDE_CODE_OAUTH_TOKEN be) doesn't have: refused (401, 403), it is a
+// LastingRefusal, and the Claude plan's bars come from the runs' answers alone.
 export function claudePoll({ token, upstream = "https://api.anthropic.com", fetch }) {
   const url = new URL("api/oauth/usage", `${upstream.replace(/\/+$/, "")}/`);
-  return async () =>
-    claudePolled(
-      await askJson(fetch, url, {
+  return async () => {
+    let json;
+    try {
+      json = await askJson(fetch, url, {
         headers: { authorization: `Bearer ${token}`, "anthropic-beta": "oauth-2025-04-20" },
-      }),
-    );
+      });
+    } catch (error) {
+      if (error.status === 401 || error.status === 403) {
+        throw new LastingRefusal(
+          `${error.message}: the token lacks the user:profile scope, as one from \`claude setup-token\` does, so only the runs' answers say the plan's usage`,
+        );
+      }
+      throw error;
+    }
+    return claudePolled(json);
+  };
+}
+
+// A login's headers, unless it is due for a refresh (logins.mjs current()): a poll of an idle
+// plan mustn't spend a refresh token, nor start the Antigravity CLI's refresh container. The
+// next run's call refreshes it, and the poll after that goes.
+async function loginHeaders(login) {
+  return login.current ? login.current() : login.headers();
 }
 
 export function codexPoll({ login, chatgptUrl, fetch, now = Date.now }) {
   // https://chatgpt.com/backend-api/codex → https://chatgpt.com/backend-api/wham/usage
   const url = new URL("wham/usage", `${chatgptUrl.replace(/\/+$/, "").replace(/\/codex$/, "")}/`);
-  return async () =>
-    codexPolled(await askJson(fetch, url, { headers: await login.headers() }), now());
+  return async () => {
+    const headers = await loginHeaders(login);
+    if (!headers) return null;
+    return codexPolled(await askJson(fetch, url, { headers }), now());
+  };
 }
 
 export function antigravityPoll({ login, host, fetch }) {
-  const call = async (method, body) =>
+  const call = async (method, body, headers) =>
     askJson(fetch, `${host}/v1internal:${method}`, {
       method: "POST",
-      headers: { ...(await login.headers()), "content-type": "application/json" },
+      headers: { ...headers, "content-type": "application/json" },
       body: JSON.stringify(body),
     });
   let project = null;
   return async () => {
+    const headers = await loginHeaders(login);
+    if (!headers) return null;
     // The plan's project, as `agy` asks for it first; without one, the call takes none.
     if (!project) {
-      const found = await call("loadCodeAssist", { metadata: { ideType: "ANTIGRAVITY" } }).catch(
-        () => null,
-      );
+      const found = await call(
+        "loadCodeAssist",
+        { metadata: { ideType: "ANTIGRAVITY" } },
+        headers,
+      ).catch(() => null);
       const id = found?.cloudaicompanionProject;
       project = typeof id === "string" ? id : (id?.id ?? null);
     }
-    return antigravityPolled(await call("fetchAvailableModels", project ? { project } : {}));
+    return antigravityPolled(
+      await call("fetchAvailableModels", project ? { project } : {}, headers),
+    );
   };
 }
 
@@ -233,6 +271,7 @@ export function createUsage({ plans = {}, store, now = Date.now, log = () => {} 
   const set = Object.keys(PLANS).filter((plan) => plans[plan]);
   const polling = new Map(); // plan → the poll under way in this copy
   const saves = new Set(); // the readings being written
+  const refused = new Set(); // the plans whose usage call can't work with their credential
 
   async function save(plan, change) {
     const before = (await store.get(usageKey(plan))) ?? { windows: [], limitedUntil: null };
@@ -290,17 +329,23 @@ export function createUsage({ plans = {}, store, now = Date.now, log = () => {} 
     return seen("codex", windows, status < 400 ? { limitedUntil: null } : {});
   }
 
-  // One poll of `plan`, for every copy every POLL_MS at most, FAILED_MS after a failure; not
-  // when the runs' answers read it lately. Never throws.
+  // One poll of `plan`, for every copy every POLL_MS at most, FAILED_MS after a failure, never
+  // again after a LastingRefusal; not when the runs' answers read it lately. Never throws.
   async function poll(plan, entry) {
     const ask = plans[plan];
-    if (typeof ask !== "function" || polling.has(plan)) return;
+    if (typeof ask !== "function" || polling.has(plan) || refused.has(plan)) return;
     if (now() - newest(entry?.windows ?? []) < POLL_MS) return;
     const run = (async () => {
       if (!(await store.setIfAbsent(pollKey(plan), now(), { ttlMs: POLL_MS }))) return;
       try {
-        await seen(plan, await ask());
+        const windows = await ask();
+        if (windows) await seen(plan, windows);
       } catch (error) {
+        if (error instanceof LastingRefusal) {
+          refused.add(plan);
+          log(`Usage: ${PLANS[plan]}'s usage call refused (${error.message}): not asked again`);
+          return;
+        }
         log(
           `Usage: ${PLANS[plan]}'s usage call failed (${error.message}): asked again in ${FAILED_MS / 60_000} minutes`,
         );

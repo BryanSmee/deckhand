@@ -18,7 +18,7 @@ test("no plans, or a plan without readings yet: nothing at all", () => {
 test("one plan: a labelled bar per window, its percentage and reset in its label", () => {
   render(<PlanBars plans={[makePlan()]} now={NOW} form="compact" />);
   expect(screen.getByRole("group", { name: "Plan usage" }).textContent).toBe(
-    "Claude5h 42 %week 18 %",
+    "Claude5h42 %week18 %",
   );
   const [fiveHour, week] = bars();
   expect(fiveHour).toMatch(/^Claude 5h: 42 % used, resets (today )?\d/);
@@ -67,4 +67,16 @@ test("a reading from before its window's reset is stale, and says when it was re
   expect(bars()[0]).toBe(
     "Claude 5h: 90 % used, read before its last reset, so no longer current, as of 2 h ago",
   );
+});
+
+test("the phone's top bar: two plans at most, the most used, in their order", () => {
+  const plan = (id: string, used: number) =>
+    makePlan({
+      plan: id,
+      label: id,
+      windows: [{ name: "5h", used, resetsAt: NOW + 1000, at: NOW }],
+    });
+  const plans = [plan("Claude", 0.2), plan("Codex", 0.9), plan("Antigravity", 0.5)];
+  render(<PlanBars plans={plans} now={NOW} form="phone" />);
+  expect(bars().map((b) => b!.split(" ")[0])).toEqual(["Codex", "Antigravity"]);
 });

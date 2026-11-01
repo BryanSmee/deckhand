@@ -261,3 +261,20 @@ test("a copy with another models.key refuses the stored login, never writes the 
   assert.deepEqual(await store.get("login:chatgpt"), before);
   assert.equal(server.calls.length, 1);
 });
+
+test("current(): the headers of a fresh login, none for one due, and never a refresh", async (t) => {
+  const server = tokenServer();
+  const fresh = createChatgptLogin({
+    file: await authFile(t),
+    fetch: server.fetch,
+    now: () => NOW,
+  });
+  assert.equal((await fresh.current()).authorization, `Bearer ${access(60)}`);
+  const due = createChatgptLogin({
+    file: await authFile(t, { access_token: access(2) }),
+    fetch: server.fetch,
+    now: () => NOW,
+  });
+  assert.equal(await due.current(), null);
+  assert.equal(server.calls.length, 0);
+});

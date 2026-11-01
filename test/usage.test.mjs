@@ -7,7 +7,10 @@ import { planOf } from "../listener/models-service.mjs";
 import { createAnthropicProxy } from "../models/anthropic.mjs";
 import { createOpenAiProxy } from "../models/openai.mjs";
 import {
+  antigravityPoll,
   antigravityPolled,
+  claudePoll,
+  codexPoll,
   claudePolled,
   claudeWindows,
   codexPolled,
@@ -294,7 +297,7 @@ test("a dashboard's poll asks a plan not read lately, once for every copy, and a
 });
 
 // Claude's endpoint with a plan and an API key, answering with the plan's headers.
-async function serveClaude(t, usage) {
+async function serveClaude(t, usage, { name = "CLAUDE_CODE_OAUTH_TOKEN" } = {}) {
   const { url: upstream } = await serve(t, (req, res) => {
     req.resume().on("end", () => {
       res.writeHead(200, CLAUDE_HEADERS);
@@ -304,8 +307,8 @@ async function serveClaude(t, usage) {
   const broker = tokenBroker();
   const proxy = createAnthropicProxy({
     runs: broker,
-    name: "CLAUDE_CODE_OAUTH_TOKEN",
-    credential: "sk-ant-oat01-plan",
+    name,
+    credential: name === "CLAUDE_CODE_OAUTH_TOKEN" ? "sk-ant-oat01-plan" : "sk-gateway",
     named: { plan: "sk-ant-oat01-plan", key: "sk-ant-api03-key" },
     upstream,
     providers: {
@@ -334,6 +337,9 @@ test("only runs on the plan feed it: not the API key, a gateway or OpenRouter", 
   const { call } = await serveClaude(t, usage);
   await call("anthropic", "key", "x-api-key");
   await call("openrouter", null, "authorization");
+  // A gateway's token (ANTHROPIC_AUTH_TOKEN) as the default credential.
+  const gateway = await serveClaude(t, usage, { name: "ANTHROPIC_AUTH_TOKEN" });
+  await gateway.call("anthropic", null, "authorization");
   assert.deepEqual((await usage.read())[0].windows, []);
   await call("anthropic", null, "authorization");
   const [claude] = await usage.read();
@@ -418,4 +424,68 @@ test("the orchestrator keeps of a plan's usage its numbers, times and names only
     },
   );
   assert.equal(planOf(null), null);
+});
+
+test("Claude's usage call refused to a setup-token's token: logged once, never asked again", async (t) => {
+  const asked = [];
+  const { url } = await serve(t, (req, res) => {
+    asked.push(req.url);
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end('{"error":{"message":"OAuth token does not meet scope requirement user:profile"}}');
+  });
+  const clock = { now: NOW };
+  const logs = [];
+  const { usage } = usageOf(
+    { claude: claudePoll({ token: "sk-ant-oat01-x", upstream: url, fetch }) },
+    clock,
+    logs,
+  );
+  for (let i = 0; i < 3; i++) {
+    await usage.read({ poll: true });
+    await usage.settled();
+    clock.now += FAILED_MS + POLL_MS;
+  }
+  assert.deepEqual(asked, ["/api/oauth/usage"]);
+  assert.equal(logs.length, 1);
+  assert.match(
+    logs[0],
+    /Claude's usage call refused \(answered 403: .*user:profile.*\): not asked again/,
+  );
+  assert.ok(!logs[0].includes("sk-ant"));
+});
+
+test("a login due for a refresh isn't polled: the poll never refreshes it", async (t) => {
+  const asked = [];
+  const { url } = await serve(t, (req, res) => {
+    asked.push(req.url);
+    res.end(JSON.stringify({ rate_limit: {}, models: {} }));
+  });
+  let fresh = false;
+  let refreshed = 0;
+  const login = {
+    current: async () => (fresh ? { authorization: "Bearer a" } : null),
+    headers: async () => (refreshed++, { authorization: "Bearer a" }),
+  };
+  const clock = { now: NOW };
+  const { usage } = usageOf(
+    {
+      codex: codexPoll({ login, chatgptUrl: `${url}/backend-api/codex`, fetch }),
+      antigravity: antigravityPoll({ login, host: url, fetch }),
+    },
+    clock,
+  );
+  await usage.read({ poll: true });
+  await usage.settled();
+  assert.deepEqual(asked, []);
+  assert.equal(refreshed, 0);
+  fresh = true;
+  clock.now += POLL_MS;
+  await usage.read({ poll: true });
+  await usage.settled();
+  assert.deepEqual(asked.sort(), [
+    "/backend-api/wham/usage",
+    "/v1internal:fetchAvailableModels",
+    "/v1internal:loadCodeAssist",
+  ]);
+  assert.equal(refreshed, 0);
 });

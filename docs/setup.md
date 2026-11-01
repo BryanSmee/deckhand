@@ -987,11 +987,18 @@ The numbers come from the models service, which holds the plans (`models/usage.m
 - **From the runs' own calls**, at no cost: the rate limit headers of the plan's answers
   (`anthropic-ratelimit-unified-*` for Claude, `x-codex-primary-*` and `x-codex-secondary-*`
   for Codex). Only the plan's: runs on an API key, a gateway or OpenRouter change nothing.
-- **By asking the plan, while a dashboard is open**: Claude's OAuth usage call, ChatGPT's and
-  the Antigravity CLI's quota calls (the only source for the Antigravity CLI, whose answers carry
-  none), each plan at most every 5 minutes, and only when no run read it lately. These calls
-  aren't documented and may change: one that fails is only logged in the models service's log,
-  the bars keep their last reading, and it is asked again 30 minutes later.
+- **By asking the plan, while a dashboard is open**: ChatGPT's and the Antigravity CLI's quota
+  calls (the only source for the Antigravity CLI, whose answers carry none), each plan at most
+  every 5 minutes, and only when no run read it lately. These calls aren't documented and may
+  change: one that fails is only logged in the models service's log, the bars keep their last
+  reading, and it is asked again 30 minutes later. A login due for a refresh isn't polled: an
+  idle dashboard never spends a refresh token, nor starts the Antigravity CLI's refresh
+  container; the next run's call refreshes it.
+- **Claude's plan is read from the runs' calls alone** with a `claude setup-token` token: its
+  OAuth usage call needs the `user:profile` scope, which such a token doesn't have. The models
+  service tries it once, logs `Claude's usage call refused (… user:profile …): not asked again`,
+  and doesn't ask again until it restarts. So the Claude bars show the 5-hour and weekly
+  limits, not the weekly limits per model that only that call gives.
 
 So the bars stay as they were while no run uses the plan and no dashboard is open: a reading
 older than 15 minutes says when it was taken. Only percentages and times reach the dashboard,

@@ -24,14 +24,28 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  width: 64px;
+  min-width: 64px;
+  max-width: 120px;
 }
 
+/* The name gives way, its percentage never. */
 .itemLabel {
+  display: flex;
+  gap: 4px;
   font-size: 11px;
   line-height: 14px;
   color: var(--text-3);
   white-space: nowrap;
+}
+
+.itemName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.itemLabel .value {
+  flex: none;
 }
 
 .value {
@@ -67,15 +81,21 @@
   background: repeating-linear-gradient(135deg, var(--idle-solid) 0 3px, transparent 3px 6px);
 }
 
-/* The phone's top bar: one short bar per plan, next to the switcher. */
+/* The phone's top bar: one short bar per plan (two at most), next to the switcher; it gives
+   way before the switcher's label does, its labels cut short. */
 .phone {
   gap: 8px;
-  flex: none;
+  flex: 0 1 auto;
+}
+
+.phone .plan {
+  flex: 0 1 auto;
 }
 
 .phone .item {
   width: auto;
-  min-width: 48px;
+  min-width: 40px;
+  max-width: 96px;
 }
 
 /* Every window, with its reset: the repositories sheet, Settings › Server. */

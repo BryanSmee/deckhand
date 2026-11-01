@@ -12,6 +12,9 @@ const WARN_AT = 0.75;
 const OLD_MS = 15 * 60_000;
 // The windows the header shows per plan: its main ones, listed first.
 const COMPACT_WINDOWS = 2;
+// The plans the phone's top bar has room for, next to the switcher: the most used ones. The
+// repositories sheet has them all.
+const PHONE_PLANS = 2;
 
 const WINDOW_NAMES: Record<string, string> = {
   "5h": "5h",
@@ -94,6 +97,12 @@ export function PlanBars({
         ? mostUsed(plan, now)
         : plan.windows,
   );
+  if (form === "phone" && shown.length > PHONE_PLANS) {
+    const kept = [...shown]
+      .sort((a, b) => b.windows[0].used - a.windows[0].used)
+      .slice(0, PHONE_PLANS);
+    shown.splice(0, shown.length, ...shown.filter((p) => kept.includes(p)));
+  }
   if (!shown.length) return null;
   const cls = [styles.plans, styles[form], className].filter(Boolean).join(" ");
   if (form === "full")
@@ -131,7 +140,9 @@ export function PlanBars({
             return (
               <span key={w.name} class={styles.item} role="img" aria-label={text} title={text}>
                 <span class={styles.itemLabel}>
-                  {form === "phone" ? plan.label : windowName(w)}{" "}
+                  <span class={styles.itemName}>
+                    {form === "phone" ? plan.label : windowName(w)}
+                  </span>
                   <span class={styles.value}>{percent(w.used)}</span>
                 </span>
                 <Bar plan={plan} w={w} now={now} />
