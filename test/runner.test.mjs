@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
-import { hostname } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
@@ -27,7 +26,6 @@ const config = {
   prefix: "dh",
   brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
-  listenerContainer: "me",
   egressContainer: "",
   engine: "auto",
   engineImage: "dh-engine",
@@ -45,7 +43,6 @@ function runner({
   now,
   before = () => {},
   engine = config.engine,
-  listener = config.listenerContainer,
 } = {}) {
   const calls = [];
   const fake = fakeDocker({ answers, routeOut, runtimes, taken });
@@ -56,7 +53,7 @@ function runner({
   };
   const inboxDir = tempDir(null, "deckhand-runs-");
   const runner = createDockerRunner({
-    config: { ...config, engine, subnets: subnets ?? null, listenerContainer: listener },
+    config: { ...config, engine, subnets: subnets ?? null },
     docker,
     spawn,
     inboxDir,
@@ -166,7 +163,7 @@ test("start: the run's tokens bound to its network's ID, by name only; locate() 
   assert.equal(await sandboxOf("10.1.0.2"), null);
 });
 
-test("start: the run's own internal network, with the listener and the proxy on it", async () => {
+test("start: the run's own internal network, with the proxy alone on it", async () => {
   const { r, calls, nets } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   await r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
@@ -180,48 +177,30 @@ test("start: the run's own internal network, with the listener and the proxy on 
     "deckhand.run=dh-a-1",
     "dh-a-1",
   ]);
-  // Under the names sandboxes call them by; the proxy found by its label.
-  assert.ok(calls.some((c) => c.args.join(" ") === "network connect --alias listener dh-a-1 me"));
-  assert.ok(
-    calls.some((c) => c.args.join(" ") === "network connect --alias egress dh-a-1 egress-id"),
+  // Under the name sandboxes call it by, found by its label; no other container joins.
+  assert.deepEqual(
+    calls.filter((c) => c.args[1] === "connect").map((c) => c.args.join(" ")),
+    [
+      "network connect --alias egress dh-a-1 egress-id",
+      "network connect --alias egress dh-b-1 egress-id",
+    ],
   );
   assert.match(
     callOf(calls, "ps").join(" "),
     /--filter label=deckhand\.role=egress --filter label=com\.docker\.compose\.project=deckhand/,
   );
   // Two sandboxes never share a network.
-  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id", "me"]);
-  assert.deepEqual([...nets.get("dh-b-1")].sort(), ["dh-b", "egress-id", "me"]);
+  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id"]);
+  assert.deepEqual([...nets.get("dh-b-1")].sort(), ["dh-b", "egress-id"]);
 });
 
-test("start: without LISTENER_CONTAINER, the runner joins those labelled as the broker, in its own project", async () => {
-  const { r, calls, nets, containers } = runner({ listener: "" });
-  // The runner's own container (its host name) says which compose project it is in.
-  containers.set(hostname(), { project: "deckhand", ip: "10.0.0.2" });
-  containers.set("listener-id", { project: "deckhand", ip: "10.0.0.4", role: "broker" });
+test("start: the orchestrator never joins a run's network, whatever its label", async () => {
+  const { r, calls, nets, containers } = runner();
+  // The label the orchestrator had while sandboxes reached it directly (before #511).
+  containers.set("orchestrator-id", { project: "deckhand", ip: "10.0.0.4", role: "broker" });
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
-  assert.match(
-    calls.map((c) => c.args.join(" ")).join("\n"),
-    /^ps --filter label=deckhand\.role=broker --filter label=com\.docker\.compose\.project=deckhand/m,
-  );
-  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id", "listener-id"]);
-  // The orchestrator's two copies (#506): both, the one waiting for the lease too, so that
-  // either acts on the run's network under its name.
-  containers.set("waiting-id", { project: "deckhand", ip: "10.0.0.5", role: "broker" });
-  await r.start({ run: "dh-c-1", name: "dh-c", image: "i" });
-  assert.deepEqual([...nets.get("dh-c-1")].sort(), [
-    "dh-c",
-    "egress-id",
-    "listener-id",
-    "waiting-id",
-  ]);
-  // None labelled so: no run starts, saying what to set.
-  containers.delete("listener-id");
-  containers.delete("waiting-id");
-  await assert.rejects(
-    r.start({ run: "dh-b-1", name: "dh-b", image: "i" }),
-    /the orchestrator's container wasn't found \(0 labelled deckhand\.role=broker\): set LISTENER_CONTAINER/,
-  );
+  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-id"]);
+  assert.ok(!calls.some((c) => c.args.join(" ").includes("deckhand.role=broker")));
 });
 
 // SANDBOX_SUBNETS, as config.mjs gives it.
@@ -496,7 +475,7 @@ test("locate: the sandbox's own, on its run's network; its network's ID by its n
   const { r } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   assert.deepEqual(await r.locate("10.1.0.2"), { sandbox: "id-dh-a-1", name: "dh-a" });
-  // The listener's and the proxy's there are on it too, under their own names.
+  // The proxy's there is on it too, under its own name.
   assert.deepEqual(await r.locate("10.0.0.3"), { sandbox: "id-dh-a-1", name: "egress-id" });
   assert.equal(await r.sandboxIdOf("dh-a", "dh-a-1"), "id-dh-a-1");
 });
@@ -534,7 +513,7 @@ test("start with a run digest: in the inbox folder, at the broker as TASK_DIGEST
   assert.equal(existsSync(join(other.inboxDir, "dh-b-1", "digest.md")), false);
 });
 
-test("remove: the sandbox, then its network, once the listener and the proxy leave it", async () => {
+test("remove: the sandbox, then its network, once the proxy leaves it", async () => {
   const { r, nets, containers } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   await r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
@@ -559,18 +538,18 @@ test("kill: stops the sandbox now, SIGKILL after 10 s; one that isn't there is a
   await assert.rejects(r.kill("dh-gone"), /docker stop dh-gone/);
 });
 
-test("relink: a recreated listener and proxy join the running sandboxes' networks again", async () => {
+test("relink: a recreated proxy joins the running sandboxes' networks again", async () => {
   const { r, calls, nets, containers } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   await r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
   containers.get("dh-b").running = false; // over, not removed yet: nothing to join
-  // `docker compose up -d`: both recreated, on none of those networks.
-  for (const on of nets.values()) ["me", "egress-id"].forEach((c) => on.delete(c));
+  // `docker compose up -d`: recreated, on none of those networks.
+  for (const on of nets.values()) on.delete("egress-id");
   containers.delete("egress-id");
   containers.set("egress-new", { project: "deckhand", ip: "10.0.0.9", role: "egress" });
   calls.length = 0;
   await r.relink();
-  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-new", "me"]);
+  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "egress-new"]);
   assert.deepEqual([...nets.get("dh-b-1")], ["dh-b"]);
   assert.ok(
     calls.some((c) => c.args.join(" ") === "network connect --alias egress dh-a-1 egress-new"),
@@ -585,7 +564,7 @@ test("relink: networks whose run is gone are removed, not those of runs starting
   const { r, nets, netLabels } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   // Left by a listener that lost track of its run, and another deployment's.
-  nets.set("dh-gone-1", new Set(["me", "egress-id"]));
+  nets.set("dh-gone-1", new Set(["egress-id"]));
   netLabels.set("dh-gone-1", { "deckhand.owner": "dh", "deckhand.run": "dh-gone-1" });
   nets.set("other-1", new Set());
   // A run whose network exists, its sandbox not yet.
@@ -868,7 +847,7 @@ test("start: the engine first, on the run's network as `engine`, then the sandbo
   assert.doesNotMatch(joined, /--privileged|docker\.sock/);
   assert.match(sandbox.join(" "), /-e DOCKER_HOST=tcp:\/\/engine:2375 /);
   assert.doesNotMatch(sandbox.join(" "), /DOCKER_BUILDKIT/);
-  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "dh-a-engine", "egress-id", "me"]);
+  assert.deepEqual([...nets.get("dh-a-1")].sort(), ["dh-a", "dh-a-engine", "egress-id"]);
   assert.deepEqual(volumes.get("dh-a-1-engine"), {
     "deckhand.owner": "dh",
     "deckhand.engine": "dh-a-1",

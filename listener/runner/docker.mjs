@@ -24,7 +24,7 @@
 //   remove(name, run)    the sandbox, its engine, its network and its inbox
 //   hasSession(name, agent)  whether its issue has a session of that agent already (a
 //                        previous run)
-//   relink()             joins the listener and the proxy to running sandboxes' networks
+//   relink()             joins the proxy to running sandboxes' networks
 //                        again, and removes the networks of runs that are gone
 //   proxyAddresses()     the egress proxy's addresses, on all of its networks
 //   locate(ip)           { sandbox, name }: the ID of the run's network that address is on (its

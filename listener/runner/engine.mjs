@@ -16,7 +16,7 @@ import { limitArgs } from "../docker.mjs";
 export const ENGINES = ["sysbox", "podman", "auto"];
 
 // What the sandbox calls it by on the run's network, and where its API listens: unencrypted,
-// but only the run's own network (the sandbox, the listener, the proxy) can reach it.
+// but only the run's own network (the sandbox, the proxy) can reach it.
 export const ENGINE_HOST = "engine";
 const ENGINE_PORT = 2375;
 

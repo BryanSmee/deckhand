@@ -3,9 +3,8 @@
 # Docker on files in that dir.
 # Sandboxes run detached: `run` starts the fake sandbox in the background (its output in
 # containers/<name>/out), `logs --follow` tails it, `ps`, `inspect`, `wait` and `rm` see it.
-# Each run's network is a file in nets/, listing the containers joined to it: the sandbox,
-# the listener, `listener-1` (deckhand.role=broker), and the egress proxy, `egress-1`, whose
-# address is 127.0.0.1 (the fake sandbox asks the egress policy from there).
+# Each run's network is a file in nets/, listing the containers joined to it: the sandbox
+# and the egress proxy, `egress-1` (deckhand.role=egress), whose address is 127.0.0.1 (the fake sandbox asks the egress policy from there).
 # The fake sandbox asks the broker and the egress policy, prints a result (once $dir/go
 # exists, if $dir/hold does), then answers each comment of its inbox until the listener
 # closes it (then never exits if $dir/linger exists). What a test checks is logged in
@@ -23,7 +22,7 @@ nap() { [ -n "${never-}" ] || exec {never}<> <(:); read -r -t 0.05 -u "$never" _
 listed() { local line; while IFS= read -r line; do [ "$line" = "$1" ] && return; done < "$2"; false; }
 case "$1" in
   ps)
-    case "$*" in *deckhand.role=egress*) echo egress-1; exit ;; *deckhand.role=broker*) echo listener-1; exit ;; esac
+    case "$*" in *deckhand.role=egress*) echo egress-1; exit ;; esac
     for d in "$c"/*/; do
       [ -d "$d" ] || continue
       n=${d%/}
@@ -134,7 +133,7 @@ case "$1" in
       # A sandbox's address on its network, for the egress proxy's questions, and 127.0.0.1
       # on a second one, `loopback`: where the fake sandbox and the tests send its secret from
       # (the broker checks it is the run's own; not once $dir/elsewhere exists). The
-      # listener's and the proxy's on each network they are joined to.
+      # proxy's on each network it is joined to.
       *)
         if [ -d "$c/$n" ]; then
           read -r run < "$c/$n/run"

@@ -1,5 +1,5 @@
-// The listener's port for sandboxes, on the runs' networks only (compose.yaml doesn't publish
-// it): the egress proxy's questions (may this sandbox reach this host?, on a port of their own
+// The orchestrator's port for sandboxes, which they reach through the egress proxy (compose.yaml
+// doesn't publish it): the egress proxy's questions (may this sandbox reach this host?, on a port of their own
 // too, listenPolicy()), the GitHub gateway (github-gateway.mjs), which the proxy sends the
 // sandboxes' GitHub calls to, and the git gateway (git-gateway.mjs). The agents' API calls are
 // the models service's (../models/, #504): a proxy from before it still sends them here, and
@@ -99,8 +99,8 @@ async function sandboxOfTask(ctx, task) {
 
 // The running task a connection from `ip` belongs to, by the ID of the network (or pod) the
 // address is on, as the runner tells now (runner.locate()), with whether it is the task's
-// sandbox or its container engine; null for any other container there (the listener's, the
-// proxy's) or none. Nothing per run is kept: a run whose engine starts before its sandbox, or
+// sandbox or its container engine; null for any other container there (the proxy's) or
+// none. Nothing per run is kept: a run whose engine starts before its sandbox, or
 // another run's starting meanwhile, changes nothing for the others (#517).
 export async function taskWhere(ctx, ip) {
   const at = ip ? await ctx.runner.locate?.(ip) : null;
@@ -157,7 +157,7 @@ export async function clientAddress(ctx, req) {
 
 // The ID of the network (or pod) a call from `ip` binds it to (broker.mjs `sandboxOf`), or
 // null: only from a running task's sandbox or its engine, never from another container on that
-// network, the listener's or the egress proxy's (a call the proxy made itself, with no client
+// network, the egress proxy's (a call the proxy made itself, with no client
 // to name, to a host the operator named that leads back here).
 export async function sandboxAt(ctx, ip) {
   const where = await taskWhere(ctx, ip);

@@ -84,6 +84,11 @@ GitHub ──webhook──▶ edge ──▶ orchestrator ──▶ runner ─�
 - The **models service** (`models/`) is the only one holding your Claude (or OpenAI, Google)
   credential: the sandboxes' agents call their API through it, with their run's token in its
   place.
+- The **broker** (`broker/`) is the only one holding the key that signs the runs' tokens and
+  the services' own: every other service checks them offline. It keeps the live runs, and
+  answers what a sandbox asks about its own run (its token's renewal, its inbox, its files).
+- The **policy service** (`policy-service/`) evaluates your policies and the repositories'
+  (`opa`, long-lived), with no network but its callers' and no secret.
 - A **sandbox** (`sandbox/`) is a container from the base image, or the repository's own
   image built `FROM` it. It runs Claude Code with permissions bypassed, in a clone of the
   repository kept between the issue's runs.
@@ -231,9 +236,7 @@ docker compose up -d
 Runs in progress keep going while the orchestrator restarts: their sandboxes run detached, and
 the new orchestrator finds them by their Docker labels, delivers the comments that arrive
 meanwhile and posts each final reply once. Webhooks wait in edge's store meanwhile; comments
-still waiting for a run and brainstorms between replies are kept. From a release that ran the
-listener, add `--remove-orphans` once ([From the listener](docs/setup.md#from-the-listener)).
-With two copies of edge and of the orchestrator, an update stops nothing
+still waiting for a run and brainstorms between replies are kept. With two copies of edge and of the orchestrator, an update stops nothing
 ([Two copies](docs/setup.md#two-copies)). Pin a release with `DECKHAND_VERSION` in `.env` (for Renovate), or
 leave it on `latest` (for Watchtower). See [Updating](docs/setup.md#updating).
 

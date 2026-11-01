@@ -2,7 +2,7 @@
 // port under /edge/: the dashboard's API, /status and the runs' screenshots, each with the user
 // edge signed in; and the verified deliveries edge puts on its stream (deliver()). The public
 // server (webhooks, /setup, sign-in, the dashboard's files) is edge's (../edge/http.mjs); the
-// broker's, on the runs' networks only, is broker-http.mjs.
+// broker's, which sandboxes reach through the egress proxy, is broker-http.mjs.
 import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { pipeline } from "node:stream";

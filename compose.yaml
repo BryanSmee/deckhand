@@ -16,9 +16,7 @@
 # The images are the release DECKHAND_VERSION (default: the latest), published for each tag,
 # or `edge` (amd64 only), published for each push to main.
 # Updating is the same two commands, at any time: running sandboxes go on, and the new
-# orchestrator and runner pick them up. From a release that ran the listener, add
-# --remove-orphans once: the listener's container goes, edge and the orchestrator take its
-# place and its volume (docs/setup.md#from-the-listener). `docker compose up -d --build` builds
+# orchestrator and runner pick them up. `docker compose up -d --build` builds
 # them from this checkout instead. Edge's port is published as is: put your own reverse proxy
 # (TLS, host name) in front of it. See docs/setup.md.
 
@@ -106,13 +104,9 @@ services:
       policy:
       models-orchestrator:
       edge-orchestrator:
-      # The proxy reaches it there by the listener's name too, as sandboxes call it (BROKER_URL).
+      # The proxy reaches it there as `listener` too, the name sandboxes call it by (BROKER_URL).
       orchestrator-proxy:
         aliases: [listener]
-    # How the runner finds it, to join it to each run's network (its gateways for sandboxes from
-    # before the services, BROKER_URL below).
-    labels:
-      deckhand.role: broker
     environment:
       # Every setting but the secrets and the wiring below can be in config.yaml instead
       # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
@@ -222,8 +216,8 @@ services:
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
-      # How sandboxes reach its gateways: this service, joined to each run's network under the
-      # name sandboxes from before edge and the orchestrator know it by.
+      # How sandboxes reach its gateways: through the egress proxy, which forwards their calls
+      # to it under the name `listener`.
       BROKER_URL: http://listener:8081
       # The broker service, which signs the runs' tokens (#505).
       BROKER_SERVICE_URL: http://broker:8081
@@ -245,9 +239,8 @@ services:
       RUNNER_URL: http://runner:8080
       SERVICE_NETWORKS: runner=${RUNNER_SUBNET:-10.231.250.48/28},edge=${EDGE_ORCHESTRATOR_SUBNET:-10.231.250.192/28}
     volumes:
-      # The listener's volume: the runs' summaries, queue and brainstorm state, its store (the
-      # queue, the lease). Nothing secret once a listener's App went to edge and the github
-      # service (docs/setup.md#from-the-listener).
+      # Its state: the runs' summaries, queue and brainstorm state, its store (the queue, the
+      # lease). Nothing secret.
       - data:/data
       # One folder per run, served under /shots/ (through edge). Sandboxes reach it through the
       # broker (#393): a volume of its own only as sandboxes from before #393 mount it.
@@ -349,8 +342,8 @@ services:
       KUBERNETES_CACHE_SIZE: ${KUBERNETES_CACHE_SIZE:-}
       KUBERNETES_AGENT_STORAGE_CLASS: ${KUBERNETES_AGENT_STORAGE_CLASS:-}
       KUBERNETES_AGENT_SIZE: ${KUBERNETES_AGENT_SIZE:-}
-      # Wiring, environment only, matching the orchestrator's. BROKER_URL: the name the
-      # orchestrator is joined to each run's network under.
+      # Wiring, environment only, matching the orchestrator's. BROKER_URL: the name sandboxes
+      # call the orchestrator's gateways by, through the egress proxy.
       SANDBOX_IMAGE: *sandbox-image
       ENGINE_IMAGE: *engine-image
       ENGINE_PODMAN_IMAGE: *engine-podman-image
@@ -412,7 +405,7 @@ services:
       # Who calls, by the network a call arrives on (docs/security.md#service-tokens).
       SERVICE_NETWORKS: orchestrator=${GITHUB_ORCHESTRATOR_SUBNET:-10.231.250.128/28},edge=${GITHUB_EDGE_SUBNET:-10.231.250.224/28},proxy=${GITHUB_PROXY_SUBNET:-10.231.250.144/28},runner=${GITHUB_RUNNER_SUBNET:-10.231.250.160/28}
     volumes:
-      # The App's key (app.json, from /setup, or handed over from a listener's volume): this
+      # The App's key (app.json, from /setup): this
       # volume alone, never the store nor another service's.
       - github-key:/app-key
       # Its store (the runs' state, the idempotency keys) and the granted repos' git mirrors.
@@ -566,7 +559,7 @@ services:
       # which the proxy forwards (docs/architecture.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
       RELAY_URL: http://orchestrator:8081/relay
-      # As sandboxes call it: the name they have from before edge and the orchestrator.
+      # As sandboxes call it.
       BROKER_URL: http://listener:8081
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox
       # and files (#505).
@@ -739,7 +732,7 @@ networks:
         - subnet: ${RUNNER_SUBNET:-10.231.250.48/28}
 
 volumes:
-  # The orchestrator's: the listener's of before #506, kept under its name.
+  # The orchestrator's.
   data:
   # Edge's: the App's credentials but its key, the session key, its store.
   edge-data:
@@ -757,6 +750,5 @@ volumes:
   models-keys:
   models-store:
   # The broker's public keys: the broker service writes them, the policy service, the runner and
-  # the models service read them. Not
-  # the listener's `keys` of before the broker service, which root wrote.
+  # the models service read them.
   service-keys:

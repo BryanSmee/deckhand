@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitBlob } from "../listener/images.mjs";
 import { loadConfig } from "../listener/config.mjs";
@@ -553,7 +553,8 @@ export function fakeDocker({
   const internal = new Set();
   const volumes = new Map();
   const containers = new Map([
-    ["me", { project: "deckhand", ip: "10.0.0.1" }],
+    // The runner's own (its host name), which says the compose project the proxy is found in.
+    [hostname(), { project: "deckhand", ip: "10.0.0.1" }],
     ["egress-id", { project: "deckhand", ip: "10.0.0.3", role: "egress" }],
   ]);
   const ok = (out = "") => ({ code: 0, out, err: "" });
