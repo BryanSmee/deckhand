@@ -7,7 +7,7 @@ import { checked, labelArgs } from "../docker.mjs";
 import { freeBlocks } from "../../lib/subnets.mjs";
 
 // How long the proxy's addresses are trusted, and how often a caller that isn't among them
-// may make the runner look again (a sandbox could ask the broker's port in a loop).
+// may make the runner look again (a sandbox could ask the egress policy in a loop).
 const PROXY_TTL_MS = 10000;
 const PROXY_RETRY_MS = 2000;
 
@@ -209,7 +209,7 @@ export function createNetworks({ config, docker, log, now }) {
   // Where an address is on the runs' networks: { sandbox, name }, the ID of the network and the
   // name of the container that has it there (a sandbox, its engine, the proxy), or
   // null: what a run's tokens are bound to (../broker.mjs check()), and what the egress policy
-  // finds a connection's run by (../broker-http.mjs taskWhere()). IDs, not names or addresses:
+  // finds a connection's run by (../egress-http.mjs taskWhere()). IDs, not names or addresses:
   // both are reused, an ID never. Cached, as each call to the broker asks; forgotten whenever a
   // network is created or removed or a container joins one, so an address never names a
   // network that is gone. One not found makes the runner look again, at most every

@@ -195,15 +195,12 @@ test("the agent: installed like Codex, its login out of the sandbox, no mid-run 
     env: { AGY_SHA256: "x64:ab" },
   });
   // With a plan login: the agent token alone, which the sandbox writes in its token file. With
-  // GEMINI_API_KEY: the agent token as GEMINI_API_KEY and the listener's URL.
+  // GEMINI_API_KEY: the agent token as GEMINI_API_KEY and the models service's name.
   assert.deepEqual(antigravity.env(config, "run-secret"), { DECKHAND_AGENT_TOKEN: "run-secret" });
-  assert.deepEqual(
-    antigravity.env(
-      { ...config, agyCredential: "GEMINI_API_KEY", brokerUrl: "http://b:8081" },
-      "s",
-    ),
-    { GEMINI_API_KEY: "s", GOOGLE_GEMINI_BASE_URL: "http://b:8081/google" },
-  );
+  assert.deepEqual(antigravity.env({ ...config, agyCredential: "GEMINI_API_KEY" }, "s"), {
+    GEMINI_API_KEY: "s",
+    GOOGLE_GEMINI_BASE_URL: "http://models:8080/google",
+  });
   assert.deepEqual(antigravity.secrets, ["GEMINI_API_KEY", "AGY_AUTH_FILE"]);
   assert.ok(AGENT_SECRETS.includes("GEMINI_API_KEY"));
   assert.ok(AGENT_SECRETS.includes("AGY_AUTH_FILE"));
@@ -388,7 +385,7 @@ test("its run: print mode with the model and its effort, then the conversation t
   assert.equal(human.stdout, "\nDone it.\n\nDone in 0.5 min\n");
 });
 
-test("its home: the run's secret as its token, the clone trusted, MCP, hooks and rules", (t) => {
+test("its home: the run's agent token as its token, the clone trusted, MCP, hooks and rules", (t) => {
   const { stdout, home } = agyScript(
     t,
     `mkdir -p "$HOME/.gemini/antigravity-cli"
@@ -397,13 +394,13 @@ test("its home: the run's secret as its token, the clone trusted, MCP, hooks and
      agent_mcp playwright playwright-mcp --headless --proxy-server "http://egress:3128"
      echo "# Rules" > "$HOME/rules.md"; agent_instructions "$HOME/rules.md"
      stat -c %a "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"`,
-    { DECKHAND_RUN_SECRET: "run-secret" },
+    { DECKHAND_AGENT_TOKEN: "agent-token" },
   );
   const read = (path) => JSON.parse(readFileSync(join(home, ".gemini", path), "utf8"));
   assert.deepEqual(read("antigravity-cli/antigravity-oauth-token"), {
     auth_method: "consumer",
     token: {
-      access_token: "run-secret",
+      access_token: "agent-token",
       token_type: "Bearer",
       refresh_token: "deckhand-placeholder",
       expiry: "2099-01-01T00:00:00Z",
@@ -449,10 +446,10 @@ test("its home: the run's secret as its token, the clone trusted, MCP, hooks and
      [ ! -e "$HOME/.gemini/antigravity-cli/antigravity-oauth-token" ] && echo "no-token"
      jq '.customModelsConfig.customModels.mine = {}' "$HOME/.gemini/antigravity-cli/settings.json" > "$HOME/s"
      mv "$HOME/s" "$HOME/.gemini/antigravity-cli/settings.json"
-     DECKHAND_RUN_SECRET=run-secret agy_home
+     DECKHAND_AGENT_TOKEN=agent-token agy_home
      jq -c . "$HOME/.gemini/antigravity-cli/settings.json"
      rm "$HOME/.gemini/antigravity-cli/settings.json"; GEMINI_API_KEY=run-secret agy_home
-     DECKHAND_RUN_SECRET=run-secret agy_home
+     DECKHAND_AGENT_TOKEN=agent-token agy_home
      jq -c . "$HOME/.gemini/antigravity-cli/settings.json"`,
   );
   const [geminiSettings, tokenGone, mineKept, planSettings] = withKey.stdout.trim().split("\n");

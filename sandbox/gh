@@ -1,7 +1,7 @@
 #!/bin/bash
 # gh with the run token as its token (deckhand-token): the egress proxy relays its calls to
-# the listener's GitHub gateway (../listener/github-gateway.mjs), which swaps it for a token the
-# sandbox never sees and checks its writes, `gh pr create`, `edit` and `ready` included
+# the github service's GitHub gateway (../listener/github-gateway.mjs), which swaps it for a
+# token the sandbox never sees and checks its writes, `gh pr create`, `edit` and `ready` included
 # (github-pulls.mjs). Installed ahead of the real gh on PATH. Outside a Deckhand run (no
 # broker), gh runs as usual.
 real=${DECKHAND_REAL_GH:-/usr/bin/gh}

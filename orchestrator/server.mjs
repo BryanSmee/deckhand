@@ -28,15 +28,9 @@ import { planWarning } from "../listener/agents/credentials.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
 import { createBroker } from "../listener/broker.mjs";
-import { createBrokerService, legacyKey } from "../listener/broker-service.mjs";
+import { createBrokerService } from "../listener/broker-service.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
-import {
-  clientAddress,
-  createBrokerHttp,
-  relayToGithub,
-  runAt,
-  sandboxAt,
-} from "../listener/broker-http.mjs";
+import { createEgressHttp } from "../listener/egress-http.mjs";
 import { createGithubClient } from "../github/client.mjs";
 import { createProjects } from "../listener/projects.mjs";
 import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
@@ -112,7 +106,7 @@ import { createTitles } from "../listener/titles.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createWorkApi } from "../listener/work.mjs";
 
-// How long the egress policy's answers in flight get once the broker drained: they are quick.
+// How long the egress policy's answers in flight get once the rest is saved: they are quick.
 const POLICY_DRAIN_MS = 5000;
 
 // How long a listener that stops waits for the 👀 still on their way, for the queue it leaves.
@@ -140,9 +134,7 @@ function log(...args) {
 }
 
 // The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
-// its stream of their events. The key the listener signed tokens with before it moves out of
-// the data volume, but for its public part (legacyKey()).
-// Its calls carry the orchestrator's service tokens: for the broker, the policy service, the
+// its stream of their events. Its calls carry the orchestrator's service tokens: for the broker, the policy service, the
 // runner, the models service, the github service and edge.
 let brokerCaller;
 let models;
@@ -222,7 +214,6 @@ let epoch = null;
 
 const brokerService = createBrokerService({
   caller: brokerCaller,
-  legacy: legacyKey(config.dataDir, { log }),
   epoch: () => epoch,
   log,
 });
@@ -254,7 +245,7 @@ let edgeReady = null;
 // Whether this copy acts: from the lease's taking until SIGTERM.
 let acting = false;
 const services = createServicesHttp({
-  // The broker service's own keys: never the listener's from before it.
+  // The broker service's keys.
   keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
   bound: networkCallers(config.serviceNetworks),
   pendingTokens,
@@ -348,22 +339,8 @@ const githubService = createGithubClient({
 function githubGateway() {
   return {
     async put(id, fields) {
-      let { sandbox } = fields;
-      // A run from before tokens, picked up by a listener that didn't keep its network: looked
-      // up, as the egress policy would (broker-http.mjs sandboxOfTask()).
-      if (!sandbox && fields.secretHash) {
-        const task = [...ctx.tasks.values()].find((t) => t.live?.id === id);
-        sandbox = task
-          ? await Promise.resolve(ctx.runner.sandboxIdOf?.(task.name, id)).catch(() => null)
-          : null;
-        if (task && sandbox) task.live.sandbox ??= sandbox;
-      }
-      // A run from before tokens: its secret's fingerprints, which its writes are redacted by.
-      const secret = [...ctx.tasks.values()].find((t) => t.live?.id === id)?.live.secret;
       await githubService.runs.put(id, {
         ...fields,
-        sandbox: sandbox ?? null,
-        ...(fields.secretHash && secret && { secretPrints: fingerprint([secret]) }),
         users: ctx.usersOf?.(fields.repo) ?? config.users,
         needsInputLabel: config.needsInputLabel,
       });
@@ -712,19 +689,10 @@ Object.assign(ctx, {
   // Built and run by the runner service, from tarballs it gets through the listener.
   images: runnerClient.images,
   runLogs: runnerClient.logs,
-  // Runs' tokens, signed by the broker service and checked here with its public keys; and the
-  // secrets of runs from before them. Both work from their own sandbox alone, whether it calls
-  // the listener directly or through the egress proxy.
+  // Runs' tokens, signed by the broker service, and what each run may do, which the services
+  // its sandbox calls check them against: the orchestrator checks none itself.
   brokerService,
-  broker: createBroker({
-    issuer: brokerService.issuer,
-    keys: brokerService.keys,
-    unknownKey: brokerService.unknownKey,
-    gateway: githubGateway(),
-    sandboxOf: (ip) => sandboxAt(ctx, ip),
-    sentFrom: (run, ip) => runAt(ctx, run, ip),
-    clientOf: (req) => clientAddress(ctx, req),
-  }),
+  broker: createBroker({ issuer: brokerService.issuer, gateway: githubGateway() }),
   // The egress proxy's CA certificate, for runs that reach GitHub, or whose grant has
   // cached_hosts (egress.mjs).
   egressCa: () => fetchEgressCa(config.egressProxy),
@@ -732,15 +700,11 @@ Object.assign(ctx, {
   runner: runnerClient.runner,
 });
 
-// The sandboxes' only way to GitHub, the github service (../github/, #502): their calls that
-// still reach the listener (a proxy from before it, a sandbox's own) are relayed there, naming
-// the network (or pod) they came from.
+// The github service (../github/, #502), the sandboxes' only way to GitHub.
 const lookup = (repo, path) => getJson(github, repo, path, [404, 410]);
 ctx.githubService = githubService;
 // What a run did on GitHub (its reruns, for the CI step), read at its end.
 ctx.githubRunState = (id, options) => githubService.runs.state(id, options);
-ctx.githubGateway = { handle: (req, res) => relayToGithub(ctx, req, res) };
-ctx.gitGateway = ctx.githubGateway;
 
 // --- Tasks, runs and restarts --------------------------------------------------------------
 
@@ -1028,11 +992,9 @@ order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 const http = createHttp(ctx);
 edgeReady = http.handle;
 const bind = (server, port, done) => listenWhenFree(server, port).then(done);
-const brokerHttp = createBrokerHttp(ctx);
-const broker = brokerHttp.listen(bind);
 // Not drained: the egress proxy asks it about every sandbox connection until the orchestrator
 // exits.
-const policy = brokerHttp.listenPolicy(bind);
+const policy = createEgressHttp(ctx).listen(bind);
 
 // At start and from the dashboard's Sync: the deliveries GitHub couldn't hand over, asked for
 // again by edge (redeliveries.mjs), and the open pull requests' states asked again; from Sync,
@@ -1182,10 +1144,7 @@ Promise.race([handedOver, new Promise((resolve) => setTimeout(resolve, 30_000).u
 // queue with its deadlines and 👀 ids, the runs' state): here, only the writes under way are
 // waited for, the delivery being handled, and the lines of output read in the last second.
 // Then the lease is released, and the waiting copy takes it at once (a second, about). The
-// broker port takes the sandboxes' calls until then, and drains from then on: it takes no new
-// connection (the egress proxy waits for the next copy, proxy/wait.mjs) and the calls in flight
-// finish (agents' streams, pushes, inbox polls) before it exits (lib/drain.mjs). The egress
-// policy's port answers until then.
+// egress policy's port answers until it exits.
 sigterm = () => {
   if (ctx.stopping) return;
   ctx.stopping = true;
@@ -1232,14 +1191,6 @@ sigterm = () => {
       return lease.control.stop();
     })
     .catch((error) => log(`Releasing the lease: ${error.stack ?? error}`));
-  // The broker port relays the sandboxes' calls with this copy's epoch: until the lease goes,
-  // it takes new ones; then it drains (no new connection: the proxy waits for the next copy,
-  // which listens once it holds the lease), the calls in flight finishing.
-  const drained = released
-    .then(() => drain(broker))
-    .then((all) => {
-      if (!all) log("Stopping: sandboxes' calls still going at the end of the grace period, cut");
-    });
   const saved = released
     .then(() => ctx.store.close())
     .catch((error) => log(`Closing the store: ${error.stack ?? error}`))
@@ -1248,9 +1199,7 @@ sigterm = () => {
   // Last, the egress policy: closed, so that the proxy's next questions are refused and wait for
   // the next copy, and its answers in flight are sent, rather than cut by the exit (which
   // the proxy would take for a refusal).
-  Promise.all([saved, drained])
-    .then(() => drain(policy, { graceMs: POLICY_DRAIN_MS }))
-    .finally(() => process.exit(0));
+  saved.then(() => drain(policy, { graceMs: POLICY_DRAIN_MS })).finally(() => process.exit(0));
 };
 
 // Verified deliveries, from edge's stream, each acknowledged once handled (http.mjs deliver()):

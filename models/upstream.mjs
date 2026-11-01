@@ -58,8 +58,7 @@ export function credentialFailure(what, error) {
 //   errorShape   { body(type, message), auth, forbidden, unavailable, notFound, busy }: errors in the
 //                provider's shape and its types for each, so the agent shows them as such
 //   notApi       what a refused path says
-//   secretOf     req → the run's agent token (or its secret, from before tokens), from
-//                whichever header the agent sent it in
+//   secretOf     req → the run's agent token, from whichever header the agent sent it in
 //   routeOf      run → { base, what, missing }: the provider's base URL (baseOf()), its name in
 //                messages, and why the operator's credential is missing, if it is
 //   drop         request headers the service sets rather than the sandbox

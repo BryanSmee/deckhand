@@ -3,18 +3,17 @@ import { createHash } from "node:crypto";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
 import { readsGitHub } from "../listener/github-app.mjs";
-import { localBroker, sandboxAt } from "./helpers.mjs";
+import { localBroker } from "./helpers.mjs";
 
 test("a run keeps why the listener started it, which deny_github reads", () => {
-  const broker = createBroker({ sentFrom: sandboxAt() });
+  const broker = createBroker({});
   const fix = broker.register("org/c", { mode: "work", push: true, reason: "conflict" });
   assert.equal(broker.runOf(fix).reason, "conflict");
   assert.equal(broker.runOf(broker.register("org/c")).reason, null);
 });
 
-test("a run's secret names its run until the run ends, and only from its own sandbox", async () => {
-  const sentFrom = sandboxAt("10.9.0.5");
-  const broker = createBroker({ sentFrom });
+test("a run's handle names it until the run ends", () => {
+  const broker = createBroker({});
   const a = broker.register("Org/A", { mode: "review" });
   const b = broker.register("org/b");
   assert.equal(broker.runOf(a).repo, "org/a");
@@ -22,36 +21,12 @@ test("a run's secret names its run until the run ends, and only from its own san
   assert.equal(broker.runOf(b).mode, null);
   assert.equal(broker.runOf("guess"), undefined);
   assert.equal(broker.runOf(undefined), undefined);
-  // Its source address, or the one the egress proxy named for a call it relayed.
-  const req = { socket: { remoteAddress: "::ffff:127.0.0.1" } };
-  assert.equal(await broker.sentBy(broker.runOf(a), req), false);
-  assert.equal(await broker.sentBy(broker.runOf(a), req, "10.9.0.5"), true);
-  assert.deepEqual(sentFrom.asked, [
-    { run: broker.runOf(a), ip: "127.0.0.1" },
-    { run: broker.runOf(a), ip: "10.9.0.5" },
-  ]);
   broker.revoke(a);
   assert.equal(broker.runOf(a), undefined);
   assert.equal(broker.size(), 1);
-  // A call the egress proxy forwarded (#511): the sandbox it names (broker-http.mjs
-  // clientAddress()), for the git gateway, the agents' APIs and the run's files alike.
-  const forwarded = createBroker({
-    sentFrom,
-    clientOf: async (r) => r.headers?.["x-deckhand-client"] ?? "",
-  });
-  const c = forwarded.register("org/c");
-  const via = (ip) => ({
-    socket: { remoteAddress: "10.0.0.9" },
-    headers: { "x-deckhand-client": ip },
-  });
-  assert.equal(await forwarded.sentBy(forwarded.runOf(c), via("10.9.0.5")), true);
-  assert.equal(await forwarded.sentBy(forwarded.runOf(c), via("10.9.0.6")), false);
-  // Without a `sentFrom`, no request is the run's.
-  const none = createBroker({});
-  assert.equal(await none.sentBy(none.runOf(none.register("org/a")), req), false);
 });
 
-test("a research run's secret still names the run, which pushes nothing", () => {
+test("a research run still names its repo, and pushes nothing", () => {
   const broker = createBroker({});
   const research = broker.register("org/a", { caps: ["internet"] });
   assert.equal(broker.runOf(research).repo, "org/a");
@@ -59,15 +34,12 @@ test("a research run's secret still names the run, which pushes nothing", () => 
   assert.equal(broker.runOf(research).push, false);
 });
 
-test("only runs registered as work push; a restarted run's secret keeps its own", () => {
+test("only runs registered as work push", () => {
   const broker = createBroker({});
   assert.equal(broker.runOf(broker.register("org/a")).push, false);
   assert.equal(broker.runOf(broker.register("org/a")).push, false);
   assert.equal(broker.runOf(broker.register("org/a", { push: "yes" })).push, false);
   assert.equal(broker.runOf(broker.register("org/a", { push: true })).push, true);
-  const secret = broker.register("org/a", { push: true, secret: "kept" });
-  assert.equal(secret, "kept");
-  assert.equal(broker.runOf("kept").push, true);
 });
 
 test("a run's branches: none until allowed, and never for a run that can't push", () => {
@@ -179,19 +151,9 @@ test("a token from another broker's key is refused, as one signed for another sa
   assert.equal((await broker.check(mine, "10.9.1.5")).run.id, "run-a");
 });
 
-test("a run from before tokens keeps its secret, bound to its sandbox's address", async () => {
-  const broker = createBroker({ sentFrom: sandboxAt("10.9.0.5"), ...localBroker() });
-  const secret = broker.register("org/a", { id: "old", secret: "kept-secret" });
-  assert.equal(secret, "kept-secret");
-  assert.equal(broker.runOf("old"), broker.runOf("kept-secret"));
-  assert.equal((await broker.check("kept-secret", "10.9.0.5")).run.id, "old");
-  assert.equal((await broker.check("kept-secret", "10.9.1.5")).status, 403);
-  assert.equal((await broker.check("kept-secret", undefined)).status, 403);
-  broker.revoke("old");
-  assert.equal((await broker.check("kept-secret", "10.9.0.5")).status, 401);
-  // A token run has no secret at all, and can't be issued once ended.
+test("a run that ended gets no token", async () => {
+  const broker = createBroker({ ...localBroker() });
   broker.register("org/a", { id: "new" });
-  assert.equal(broker.runOf("new").secret, undefined);
   broker.revoke("new");
   await assert.rejects(broker.issue("new", "net-a"), /ended/);
 });
@@ -232,7 +194,7 @@ test("a restarted listener redacts the run tokens saved with the run, and tells 
   broker.register("org/a", { id: "run-a", mode: "work", push: true });
   broker.allow("run-a", ["issue-1-*"]);
   const { token } = await broker.issue("run-a", "net-a");
-  // The broker service lost it meanwhile (a run from before it): told again, with its claims.
+  // The broker service lost it meanwhile (its store, say): told again, with its claims.
   await service.runs.end("run-a");
   const again = tokenBroker().broker;
   const restarted = createBroker({ ...service, sandboxOf: async () => "net-a" });
@@ -256,9 +218,5 @@ test("a restarted listener redacts the run tokens saved with the run, and tells 
   const { issued } = await service.runs.get("run-a");
   assert.equal(issued[0].hash, createHash("sha256").update(token).digest("hex"));
   assert.equal(issued.length, 2);
-  // A run from before tokens has nothing there.
-  restarted.register("org/a", { id: "old", secret: "kept" });
-  await restarted.restore("old");
-  assert.equal(await service.runs.get("old"), null);
   assert.equal(again.size(), 0);
 });

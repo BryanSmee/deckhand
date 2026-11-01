@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import { EventEmitter } from "node:events";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
@@ -15,7 +15,6 @@ import {
   LINE_CUT,
   MAX_LINE,
 } from "../listener/runner/docker.mjs";
-import { MAX_READ } from "../listener/runner/inbox.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { parseCidr } from "../lib/subnets.mjs";
 import { fakeDocker, tempDir } from "./helpers.mjs";
@@ -24,7 +23,6 @@ const SPEC = { user: SANDBOX_USER, limits: { cpus: "1", memory: "1g", pids: 256 
 
 const config = {
   prefix: "dh",
-  brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
   egressContainer: "",
   engine: "auto",
@@ -73,7 +71,7 @@ test("start: detached, labelled, secrets by name only, its inbox at the broker",
     name: "dh-org-repo-12",
     image: "dh-sandbox",
     labels: { "deckhand.task": "org/repo#12" },
-    env: { DECKHAND_RUN_SECRET: "s3cret", UNSET: undefined },
+    env: { DECKHAND_RUN_TOKEN: "s3cret", UNSET: undefined },
   });
   const { args, env } = calls.find((c) => c.args[0] === "run");
   assert.deepEqual(args.slice(0, 4), ["run", "--detach", "--init", "--name"]);
@@ -81,10 +79,10 @@ test("start: detached, labelled, secrets by name only, its inbox at the broker",
   const joined = args.join(" ");
   assert.match(joined, /--label deckhand\.owner=dh --label deckhand\.run=dh-org-repo-12-1/);
   assert.match(joined, /--label deckhand\.task=org\/repo#12/);
-  assert.match(joined, /-e DECKHAND_RUN_SECRET /);
+  assert.match(joined, /-e DECKHAND_RUN_TOKEN /);
   assert.doesNotMatch(joined, /s3cret|UNSET/);
-  assert.equal(env.DECKHAND_RUN_SECRET, "s3cret");
-  assert.ok(args.includes("TASK_INBOX=http://listener:8081/run/inbox"));
+  assert.equal(env.DECKHAND_RUN_TOKEN, "s3cret");
+  assert.ok(args.includes("TASK_INBOX=http://broker:8081/run/inbox"));
   // Nothing of the listener's is mounted: the run's files go through the broker (#393).
   assert.doesNotMatch(joined, /--mount|-v /);
   assert.match(joined, /--network dh-org-repo-12-1 /);
@@ -388,66 +386,6 @@ test("deckhand-inbox and the runner agree on the close line", () => {
   assert.equal(new Function(`return ${copy[1]}`)(), CLOSE);
 });
 
-// A clock of the test's own for poll()'s wait: the timers it set, fired by hand.
-function fakeTimers() {
-  const pending = new Set();
-  return {
-    pending,
-    setTimeout: (fn) => (pending.add(fn), fn),
-    clearTimeout: (fn) => pending.delete(fn),
-    fire: () => [...pending].forEach((fn) => (pending.delete(fn), fn())),
-  };
-}
-
-test("poll: the whole lines after an offset, waiting for the next one, or none at the timeout", async () => {
-  const timers = fakeTimers();
-  const inboxDir = tempDir(null, "deckhand-runs-");
-  const r = createDockerRunner({ config, docker: fakeDocker().docker, inboxDir, timers });
-  await r.start({ ...SPEC, run: "x-1", name: "x", image: "i" });
-  assert.equal(await r.poll("gone-1", 0), null);
-  r.send("x-1", "one");
-  const first = await r.poll("x-1", 0);
-  assert.equal(JSON.parse(first).message.content, "one");
-  // Nothing after it yet: waits, until a message comes.
-  const waiting = r.poll("x-1", first.length);
-  assert.equal(timers.pending.size, 1);
-  r.send("x-1", "two");
-  const second = await waiting;
-  assert.equal(JSON.parse(second).message.content, "two");
-  assert.equal(timers.pending.size, 0, "its timer cleared");
-  // Nothing comes: an empty answer at the timeout.
-  const quiet = r.poll("x-1", first.length + second.length);
-  timers.fire();
-  assert.equal((await quiet).length, 0);
-  // A request that goes away stops waiting.
-  const gone = new AbortController();
-  const aborted = r.poll("x-1", first.length + second.length, { signal: gone.signal });
-  gone.abort();
-  assert.equal((await aborted).length, 0);
-  // A restarted listener (another runner, the same folder) answers from the same offset:
-  // nothing lost, nothing repeated.
-  r.close("x-1");
-  const again = createDockerRunner({ config, docker: fakeDocker().docker, inboxDir, timers });
-  assert.equal((await again.poll("x-1", first.length + second.length)).toString(), CLOSE + "\n");
-  assert.equal((await again.poll("x-1", 0)).toString(), `${first}${second}${CLOSE}\n`);
-});
-
-test("poll: a line not yet whole isn't answered, one over MAX_READ comes alone", async () => {
-  const inboxDir = tempDir(null, "deckhand-runs-");
-  const r = createDockerRunner({ config, docker: fakeDocker().docker, inboxDir });
-  await r.start({ ...SPEC, run: "x-1", name: "x", image: "i" });
-  const file = join(inboxDir, "x-1", "inbox.jsonl");
-  appendFileSync(file, '{"half":');
-  const gone = new AbortController();
-  const half = r.poll("x-1", 0, { signal: gone.signal });
-  gone.abort();
-  assert.equal((await half).length, 0);
-  appendFileSync(file, `"${"x".repeat(MAX_READ)}"}\nshort\n`);
-  const big = await r.poll("x-1", 0);
-  assert.equal(big.toString().split("\n").length, 2, "one line");
-  assert.equal((await r.poll("x-1", big.length)).toString(), "short\n");
-});
-
 test("list: this deployment's sandboxes, by label", async () => {
   const { r, calls } = runner({
     answers: {
@@ -468,16 +406,14 @@ test("state and locate: null when there is no such sandbox", async () => {
   const { r } = runner();
   assert.equal(await r.state("x"), null);
   assert.equal(await r.locate("10.0.0.2"), null);
-  assert.equal(await r.sandboxIdOf("x", "dh-x-1"), null);
 });
 
-test("locate: the sandbox's own, on its run's network; its network's ID by its name", async () => {
+test("locate: the sandbox's own, on its run's network", async () => {
   const { r } = runner();
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i" });
   assert.deepEqual(await r.locate("10.1.0.2"), { sandbox: "id-dh-a-1", name: "dh-a" });
   // The proxy's there is on it too, under its own name.
   assert.deepEqual(await r.locate("10.0.0.3"), { sandbox: "id-dh-a-1", name: "egress-id" });
-  assert.equal(await r.sandboxIdOf("dh-a", "dh-a-1"), "id-dh-a-1");
 });
 
 test("start with the egress proxy's CA: in the inbox folder, at the broker as DECKHAND_CA", async () => {
@@ -486,14 +422,12 @@ test("start with the egress proxy's CA: in the inbox folder, at the broker as DE
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i", ca: pem });
   assert.equal(readFileSync(join(inboxDir, "dh-a-1", "egress-ca.crt"), "utf8"), pem);
   const { args } = calls.find((c) => c.args[0] === "run");
-  assert.match(args.join(" "), /-e DECKHAND_CA=http:\/\/listener:8081\/run\/ca /);
-  assert.equal(r.file("dh-a-1", "ca").toString(), pem);
+  assert.match(args.join(" "), /-e DECKHAND_CA=http:\/\/broker:8081\/run\/ca /);
   // None without it.
   const other = runner();
   await other.r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
   const run = other.calls.find((c) => c.args[0] === "run").args.join(" ");
   assert.doesNotMatch(run, /DECKHAND_CA/);
-  assert.equal(other.r.file("dh-b-1", "ca"), null);
   assert.equal(existsSync(join(other.inboxDir, "dh-b-1", "egress-ca.crt")), false);
 });
 
@@ -502,11 +436,7 @@ test("start with a run digest: in the inbox folder, at the broker as TASK_DIGEST
   await r.start({ run: "dh-a-1", name: "dh-a", image: "i", digest: "# Run digest\n" });
   assert.equal(readFileSync(join(inboxDir, "dh-a-1", "digest.md"), "utf8"), "# Run digest\n");
   const { args } = calls.find((c) => c.args[0] === "run");
-  assert.match(args.join(" "), /-e TASK_DIGEST=http:\/\/listener:8081\/run\/digest /);
-  assert.equal(r.file("dh-a-1", "digest").toString(), "# Run digest\n");
-  // Only the run's own files, by name.
-  assert.equal(r.file("dh-a-1", "inbox"), null);
-  assert.equal(r.file("dh-a-1", "../dh-a-1/digest.md"), null);
+  assert.match(args.join(" "), /-e TASK_DIGEST=http:\/\/broker:8081\/run\/digest /);
   const other = runner();
   await other.r.start({ run: "dh-b-1", name: "dh-b", image: "i" });
   assert.doesNotMatch(other.calls.find((c) => c.args[0] === "run").args.join(" "), /TASK_DIGEST/);
@@ -603,7 +533,7 @@ test("proxyAddresses: the proxy's on all of its networks, looked up again when a
 });
 
 test("aliasOf: the host name sandboxes use, none for an address", () => {
-  assert.equal(aliasOf("http://listener:8081"), "listener");
+  assert.equal(aliasOf("http://egress:3128"), "egress");
   assert.equal(aliasOf("http://127.0.0.1:3128"), null);
   assert.equal(aliasOf("http://[::1]:3128"), null);
 });

@@ -32,7 +32,6 @@ const config = {
   prefix: "dh",
   image: BASE,
   runner: "kubernetes",
-  brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
   limits: { cpus: "2", memory: "4g", pids: 2048 },
   claudeCodeVolume: "dh-claude-code",

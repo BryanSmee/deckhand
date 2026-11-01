@@ -382,7 +382,6 @@ export function createRestart(ctx) {
             "mode",
             "talk",
             "light",
-            "secret",
             "agentToken",
             "sandbox",
             "asked",
@@ -404,7 +403,7 @@ export function createRestart(ctx) {
         // Delivered comments are among the handled ones.
         unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
       };
-      // The run's tokens (or its secret, from before tokens) are in it: the owner's only.
+      // The run's tokens are in it: the owner's only.
       writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
       moved(live, handled);
       return true;
@@ -542,9 +541,8 @@ export function createRestart(ctx) {
       created: task.live.created,
       reruns: task.live.reruns,
       reason: record.reason ?? null,
-      // Its id, so its tokens still name it; a run from before tokens, its secret.
+      // Its id, so its tokens still name it.
       id: saved.id,
-      secret: saved.secret ?? null,
       agentToken: saved.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
       issued: saved.runTokens ?? [],
@@ -564,8 +562,8 @@ export function createRestart(ctx) {
       record.credential ?? null,
     );
     watchPushes(task);
-    // The broker service hears it still goes, and gets its inbox and files again (all of them,
-    // for a run from before it, #505): its tokens renew there, its sandbox reads them there.
+    // The broker service hears it still goes, and gets its inbox and files again (#505): its
+    // tokens renew there, its sandbox reads them there.
     const told = ctx.brokerService?.persist ?? ((what, fn) => fn().catch(() => {}));
     told(`run ${saved.id}`, () => ctx.broker.restore(saved.id, shots));
     if (ctx.runner.resync) told(`run ${saved.id}'s files`, () => ctx.runner.resync(saved.id));

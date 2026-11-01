@@ -4,7 +4,8 @@ import assert from "node:assert/strict";
 import { connect } from "node:net";
 import { test } from "node:test";
 import { ownSubnets } from "../proxy/addresses.mjs";
-import { blockedAddress, createProxy, listenerPolicy, target, v6Bytes } from "../proxy/proxy.mjs";
+import { SANDBOX_URLS } from "../lib/services.mjs";
+import { blockedAddress, createProxy, egressPolicy, target, v6Bytes } from "../proxy/proxy.mjs";
 import { listening, serve } from "./helpers.mjs";
 
 // An upstream web server, and a proxy allowing `allowed` hosts (all resolving to it).
@@ -237,20 +238,20 @@ test("CONNECT targets", () => {
   assert.equal(target("a:b:443"), null);
 });
 
-test("the listener's policy: its answer, or refused when it can't answer", async (t) => {
+test("the orchestrator's policy: its answer, or refused when it can't answer", async (t) => {
   const asked = [];
   const { url } = await serve(t, (req, res) => {
     asked.push(req.url);
     if (req.url.includes("broken")) return res.writeHead(500).end();
     const cache = req.url.includes("cached");
     const decrypt = req.url.includes("decrypt");
-    // The broker's host: with the network of the sandbox the proxy vouches for.
-    const sandbox = req.url.includes("broker") ? "net-a" : undefined;
+    // A service's name, forwarded: with the network of the sandbox the proxy vouches for.
+    const sandbox = req.url.includes("forward=1") ? "net-a" : undefined;
     res.end(
       JSON.stringify({ allowed: req.url.includes("good"), private: true, cache, decrypt, sandbox }),
     );
   });
-  const policy = listenerPolicy(`${url}/egress`);
+  const policy = egressPolicy(`${url}/egress`);
   assert.deepEqual(await policy("10.0.0.5", "good.com"), {
     allowed: true,
     private: true,
@@ -261,36 +262,37 @@ test("the listener's policy: its answer, or refused when it can't answer", async
     sandbox: null,
     service: null,
   });
-  assert.equal((await policy("10.0.0.5", "good.broker", { broker: true })).sandbox, "net-a");
+  assert.equal((await policy("10.0.0.5", "good.broker", { forward: true })).sandbox, "net-a");
+  assert.equal(asked.at(-1), "/egress?ip=10.0.0.5&host=good.broker&forward=1");
   assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
   assert.equal((await policy("10.0.0.5", "good.cached.com")).decrypt, false);
   assert.equal((await policy("10.0.0.5", "good.cached.decrypt.com")).decrypt, true);
   assert.equal((await policy("10.0.0.5", "bad.com")).allowed, false);
   assert.equal((await policy("10.0.0.5", "broken.com")).allowed, false);
   assert.equal(asked[0], "/egress?ip=10.0.0.5&host=good.com");
-  const down = listenerPolicy("http://127.0.0.1:1/egress", 500);
+  const down = egressPolicy("http://127.0.0.1:1/egress", 500);
   assert.equal((await down("10.0.0.5", "good.com")).allowed, false);
 });
 
-test("a push to the broker's host goes to the github service, with the network the policy vouches for", async (t) => {
+test("a push to the github service's name goes there, with the network the policy vouches for; nothing else does", async (t) => {
   const heard = [];
   const answer = (req, res) => (heard.push({ url: req.url, headers: req.headers }), res.end("ok"));
-  const listener = await serve(t, answer);
   const github = await serve(t, answer);
+  const asked = [];
   const proxy = createProxy({
-    policy: async (ip, host, { broker } = {}) => ({ allowed: broker === true, sandbox: "net-1" }),
-    brokerUrl: listener.url,
+    policy: async (ip, host, { forward } = {}) => (
+      asked.push(host),
+      { allowed: forward === true, sandbox: "net-1" }
+    ),
     githubService: { url: github.url, header: async () => "Bearer proxy-token" },
   });
   const proxyPort = await listening(proxy);
   t.after(() => proxy.close());
-  const via = (path, headers = {}) =>
+  const via = (url, headers = {}) =>
     new Promise((resolve, reject) => {
       const req = connect(proxyPort, "127.0.0.1", () =>
         req.write(
-          `GET ${listener.url}${path} HTTP/1.1\r\nhost: ${new URL(listener.url).host}\r\n${Object.entries(
-            headers,
-          )
+          `GET ${url} HTTP/1.1\r\nhost: ${new URL(url).host}\r\n${Object.entries(headers)
             .map(([k, v]) => `${k}: ${v}\r\n`)
             .join("")}connection: close\r\n\r\n`,
         ),
@@ -301,18 +303,29 @@ test("a push to the broker's host goes to the github service, with the network t
       req.on("error", reject);
     });
   const basic = `Basic ${Buffer.from("x:run-token").toString("base64")}`;
-  const text = await via("/git/org/repo.git/info/refs?service=git-receive-pack", {
-    authorization: basic,
-    "x-deckhand-sandbox": "net-other",
-  });
+  const text = await via(
+    `${SANDBOX_URLS.github}/git/org/repo.git/info/refs?service=git-receive-pack`,
+    { authorization: basic, "x-deckhand-sandbox": "net-other" },
+  );
   assert.match(text, /^HTTP\/1\.1 200/);
+  assert.deepEqual(asked, ["github"]);
   const pushed = heard.at(-1);
   assert.equal(pushed.url, "/git/org/repo.git/info/refs?service=git-receive-pack");
   assert.equal(pushed.headers.host, new URL(github.url).host);
   assert.equal(pushed.headers.authorization, "Bearer proxy-token");
   assert.equal(pushed.headers["x-deckhand-run-authorization"], basic);
   assert.equal(pushed.headers["x-deckhand-sandbox"], "net-1");
-  // The rest of the broker's host: the listener's, as before (the agents' endpoints).
-  await via("/anthropic/v1/messages");
-  assert.equal(heard.at(-1).headers.host, new URL(listener.url).host);
+  // Another path of its (the GitHub gateway's relay, its runs), or one climbing out of it: the
+  // proxy's own service token never goes with them.
+  for (const path of ["/relay/api.github.com/user", "/runs/r1", "/git/../runs/r1"]) {
+    assert.match(await via(`${SANDBOX_URLS.github}${path}`), /^HTTP\/1\.1 404/, path);
+  }
+  // A service the proxy has no URL for (here the models service's): not reached.
+  assert.match(
+    await via(`${SANDBOX_URLS.models}/anthropic/v1/messages`),
+    /^HTTP\/1\.1 502[^]*could not reach the models service/,
+  );
+  // Its name on another port: no service's, so asked as any host, which the policy refuses.
+  assert.match(await via("http://github:9999/git/org/repo.git"), /^HTTP\/1\.1 403/);
+  assert.equal(heard.length, 1);
 });

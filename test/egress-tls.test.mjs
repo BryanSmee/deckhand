@@ -26,19 +26,20 @@ const publicCa = createAuthority({ dir: temp(null, "public-ca") });
 await publicCa.ready();
 const nameOf = (pem) => new X509Certificate(pem).subject.replace(/^CN=/, "");
 
-// `decrypt`: the listener's answer for cached.test, false for a container engine's address.
-// relayed.test is relayed to `relayUrl` (the listener's /relay).
+// `decrypt`: the policy's answer for cached.test, false for a container engine's address.
+// relayed.test and github.test are GitHub's, relayed to the github service (`relayTo`, its URL,
+// or `githubService`).
 async function setup(
   t,
   {
     upstreamCa = publicCa.certificate(),
     cacheOn = true,
     decrypt = true,
-    relayUrl = null,
-    githubService = null,
+    relayTo = null,
+    githubService = relayTo && { url: relayTo, header: async () => "Bearer proxy-token" },
     modelsService = null,
     wait = {},
-    held = null, // a promise the policy's answers wait for (a listener slow to answer)
+    held = null, // a promise the policy's answers wait for (an orchestrator slow to answer)
   } = {},
 ) {
   const seen = [];
@@ -68,11 +69,11 @@ async function setup(
       asked.push(host);
       await held;
       const cache = host === "cached.test";
-      // GitHub's, to the github service, with the run's network the listener vouches for;
+      // GitHub's, to the github service, with the run's network the policy vouches for;
       // agent.test: an agent's relayed host, whose calls are the models service's.
-      const github = host === "github.test";
+      const github = host === "github.test" || host === "relayed.test";
       const models = host === "agent.test";
-      const relay = host === "relayed.test" || github || models;
+      const relay = github || models;
       return {
         allowed: true,
         private: true,
@@ -83,7 +84,7 @@ async function setup(
         ...(models && { models: true, sandbox: "net-agy" }),
       };
     },
-    // A relayed host is never resolved: its requests go to the listener.
+    // A relayed host is never resolved: its requests go to a service.
     lookup: async (host) => {
       if (["relayed.test", "github.test", "agent.test"].includes(host))
         throw new Error(`${host} resolved`);
@@ -93,7 +94,6 @@ async function setup(
     cache: createCache({ dir: temp(t, "egress-cache"), max: cacheOn ? 1024 * 1024 : 0 }),
     authority,
     upstreamCa,
-    relayUrl,
     githubService,
     modelsService,
     wait,
@@ -170,7 +170,7 @@ test("HTTPS to a cached host: decrypted with Deckhand's CA, and the second GET i
   assert.deepEqual(seen, [{ url: "/pkg.tgz", host: `cached.test:${upstreamPort}` }]);
 });
 
-test("a cached host's request never names a client: only a relayed one does", async (t) => {
+test("a cached host's request passes on nothing the services read a sandbox's call by", async (t) => {
   // Decrypted to be cached, but with a credential: sent on as is, past the cache.
   const { get, heard, authority } = await setup(t);
   const answer = await get("cached.test", "/x", authority.certificate(), {
@@ -226,9 +226,9 @@ test("a cached host's tunnel that doesn't start with TLS is passed on as is", as
   assert.match(text, /plain \/raw$/);
 });
 
-test("a relayed host: decrypted, cache on or off, each request to the listener instead", async (t) => {
+test("a relayed host: decrypted, cache on or off, each request to its service instead", async (t) => {
   const relayed = [];
-  const listener = await serve(t, (req, res) => {
+  const service = await serve(t, (req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", () => {
@@ -239,27 +239,26 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
   });
   for (const cacheOn of [true, false]) {
     relayed.length = 0;
-    const { get, seen, authority, proxyPort } = await setup(t, {
-      cacheOn,
-      relayUrl: `${listener.url}/relay`,
-    });
-    // The sandbox can't name another address than its own.
+    const { get, seen, authority, proxyPort } = await setup(t, { cacheOn, relayTo: service.url });
+    // The sandbox can't name another network than its own.
     const answer = await get(
       "relayed.test",
       "/v1internal:streamGenerateContent?alt=sse",
       authority.certificate(),
-      { "x-deckhand-client": "10.9.0.7" },
+      { "x-deckhand-client": "10.9.0.7", "x-deckhand-sandbox": "net-other" },
     );
     assert.equal(answer.status, 201);
     assert.equal(answer.body, "data: relayed\n\n");
     assert.equal(answer.issuer, nameOf(authority.certificate()));
     assert.equal(answer.headers["x-deckhand-cache"], undefined);
-    // To the listener, the host in the path; never to the host itself.
+    // To the service, the host in the path; never to the host itself.
     assert.equal(relayed.length, 1);
     assert.equal(relayed[0].url, "/relay/relayed.test/v1internal:streamGenerateContent?alt=sse");
-    assert.equal(relayed[0].headers.host, new URL(listener.url).host);
-    // With the address of the sandbox it came from, which the listener binds secrets to.
-    assert.equal(relayed[0].headers["x-deckhand-client"], "127.0.0.1");
+    assert.equal(relayed[0].headers.host, new URL(service.url).host);
+    // With the network of the sandbox it came from, as the policy said, which the run's token is
+    // bound to; no address of the sandbox's.
+    assert.equal(relayed[0].headers["x-deckhand-sandbox"], "net-1");
+    assert.equal(relayed[0].headers["x-deckhand-client"], undefined);
     assert.equal(seen.length, 0);
 
     // Its plain HTTP is refused: a relayed host has no address to go to.
@@ -273,8 +272,8 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
     });
     assert.equal(plain, 403);
 
-    // A path that climbs out of /relay/<host>/ never reaches the listener: its /egress would
-    // answer the proxy's address.
+    // A path that climbs out of /relay/<host>/ never reaches the service's other endpoints,
+    // which the proxy's own service token would open.
     for (const path of [
       "/../../egress?ip=10.0.0.2&host=x.test",
       "/%2e%2e/%2E%2E/egress?ip=10.0.0.2&host=x.test",
@@ -287,9 +286,10 @@ test("a relayed host: decrypted, cache on or off, each request to the listener i
     assert.equal(relayed.length, 1);
   }
 
-  // No relay URL (or no CA): refused, never a tunnel that would reach the host.
+  // No service to relay it to (or no CA): refused, never a tunnel that would reach the host.
   const nowhere = await setup(t);
   await assert.rejects(nowhere.tunnel("relayed.test", 443), /403/);
+  await assert.rejects(nowhere.tunnel("agent.test", 443), /403/);
 });
 
 test("GitHub's relayed hosts go to the github service: the run's credential apart, its network vouched for", async (t) => {
@@ -298,10 +298,8 @@ test("GitHub's relayed hosts go to the github service: the run's credential apar
     heard.push({ url: req.url, headers: req.headers });
     res.end("ok");
   };
-  const listener = await serve(t, answer);
   const github = await serve(t, answer);
   const { get, authority } = await setup(t, {
-    relayUrl: `${listener.url}/relay`,
     githubService: { url: github.url, header: async () => "Bearer proxy-token" },
   });
   const res = await get("github.test", "/repos/o/r?x=1", authority.certificate(), {
@@ -318,58 +316,54 @@ test("GitHub's relayed hosts go to the github service: the run's credential apar
   assert.equal(headers.authorization, "Bearer proxy-token");
   assert.equal(headers["x-deckhand-run-authorization"], "token run-token");
   assert.equal(headers["x-deckhand-sandbox"], "net-1");
-  // The agents' relayed hosts still go to the listener.
-  await get("relayed.test", "/v1/x", authority.certificate());
-  assert.equal(heard.at(-1).url, "/relay/relayed.test/v1/x");
-  assert.equal(heard.at(-1).headers.host, new URL(listener.url).host);
 });
 
-test("a relayed host to an https: listener: over verified TLS, one connection per request", async (t) => {
+test("a relayed host to an https: service: over verified TLS, one connection per request", async (t) => {
   const relayed = [];
-  const listener = createHttpsServer({ ...(await publicCa.certFor("localhost")) }, (req, res) => {
+  const service = createHttpsServer({ ...(await publicCa.certFor("localhost")) }, (req, res) => {
     relayed.push({ url: req.url, connection: req.headers.connection });
     res.end("over TLS");
   });
-  const port = await listening(listener);
-  t.after(() => listener.close());
-  const { get, authority } = await setup(t, { relayUrl: `https://localhost:${port}/relay` });
+  const port = await listening(service);
+  t.after(() => service.close());
+  const { get, authority } = await setup(t, { relayTo: `https://localhost:${port}` });
   const answer = await get("relayed.test", "/v1/x", authority.certificate(), {
     connection: "keep-alive",
     "keep-alive": "timeout=60",
   });
   assert.equal(answer.status, 200);
   assert.equal(answer.body, "over TLS");
-  // The listener's connection closes, not the client's.
+  // The service's connection closes, not the client's.
   assert.notEqual(answer.headers.connection, "close");
   // The client's keep-alive isn't passed on: the connection, not pooled, closes once answered.
   assert.deepEqual(relayed, [{ url: "/relay/relayed.test/v1/x", connection: "close" }]);
 });
 
-test("a relayed host while the listener restarts: waited for, sent once, never again", async (t) => {
-  // The listener's port, closed until the second wait (an injected clock).
+test("a relayed host while its service restarts: waited for, sent once, never again", async (t) => {
+  // The service's port, closed until the second wait (an injected clock).
   const relayed = [];
-  const { server: listener, url } = await serve(t, (req, res) => {
+  const { server: service, url } = await serve(t, (req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", () => {
       relayed.push({ method: req.method, url: req.url, body });
-      // A listener that dies once it has the request: nothing comes back.
+      // A service that dies once it has the request: nothing comes back.
       if (body === "die") return req.socket.destroy();
       res.end("done");
     });
   });
   const port = Number(new URL(url).port);
-  await new Promise((resolve) => listener.close(resolve));
+  await new Promise((resolve) => service.close(resolve));
   const clock = { t: 0, sleeps: 0 };
   const wait = {
     now: () => clock.t,
     sleep: async (ms) => {
       clock.t += ms;
       if (++clock.sleeps === 2)
-        await new Promise((resolve) => listener.listen(port, "127.0.0.1", resolve));
+        await new Promise((resolve) => service.listen(port, "127.0.0.1", resolve));
     },
   };
-  const { tunnel, authority } = await setup(t, { relayUrl: `${url}/relay`, wait });
+  const { tunnel, authority } = await setup(t, { relayTo: url, wait });
 
   // POST through a tunnel to relayed.test → { status, body }.
   async function post(body) {
@@ -400,21 +394,21 @@ test("a relayed host while the listener restarts: waited for, sent once, never a
     });
   }
 
-  // Refused twice, then the listener is back: the POST reaches it once, body and all.
+  // Refused twice, then the service is back: the POST reaches it once, body and all.
   assert.deepEqual(await post("push"), { status: 200, body: "done" });
   assert.deepEqual(relayed, [{ method: "POST", url: "/relay/relayed.test/v1/push", body: "push" }]);
   assert.equal(clock.sleeps, 2);
 
-  // A request the listener got before it died isn't sent again: the sandbox hears it.
+  // A request the service got before it died isn't sent again: the sandbox hears it.
   relayed.length = 0;
   const cut = await post("die");
   assert.equal(cut.status, 502);
-  assert.match(cut.body, /could not reach the listener/);
+  assert.match(cut.body, /could not reach the github service/);
   assert.equal(relayed.length, 1);
   assert.equal(clock.sleeps, 2);
 
   // Gone for good: the sandbox hears it after 5 minutes.
-  await new Promise((resolve) => listener.close(resolve));
+  await new Promise((resolve) => service.close(resolve));
   const before = clock.t;
   const late = await post("push");
   assert.equal(late.status, 502);
@@ -428,7 +422,7 @@ test("a draining proxy: no new tunnel, a relayed stream in flight finishes, then
     res.write("data: 1\n\n");
     stream = res;
   });
-  const { tunnel, authority, proxy } = await setup(t, { relayUrl: `${url}/relay` });
+  const { tunnel, authority, proxy } = await setup(t, { relayTo: url });
   // A kept-alive connection inside the tunnel, as gh's or an agent's.
   const raw = await tunnel("relayed.test", 443);
   const socket = tlsConnect({
@@ -530,7 +524,7 @@ test("what a client sends while the policy is asked goes on first: raw and decry
   let again;
   const later = new Promise((resolve) => (again = resolve));
   const { url } = await serve(t, (req, res) => res.end(`relayed ${req.url}`));
-  const relayed = await setup(t, { held: later, relayUrl: `${url}/relay` });
+  const relayed = await setup(t, { held: later, relayTo: url });
   const socket = netConnect(relayed.proxyPort, "127.0.0.1");
   t.after(() => socket.destroy());
   await new Promise((resolve) => socket.once("connect", resolve));
@@ -611,12 +605,12 @@ test("the CA: made once, kept across restarts; host certificates reused, then re
 });
 
 test("relayTarget: only origin-form paths that stay under /relay/<host>/", () => {
-  const base = "http://listener:8081/relay";
+  const base = "http://github:8080/relay";
   assert.equal(
     relayTarget(base, "a.test", "/v1internal:x?alt=sse")?.href,
-    "http://listener:8081/relay/a.test/v1internal:x?alt=sse",
+    "http://github:8080/relay/a.test/v1internal:x?alt=sse",
   );
-  assert.equal(relayTarget(base, "a.test", "/")?.href, "http://listener:8081/relay/a.test/");
+  assert.equal(relayTarget(base, "a.test", "/")?.href, "http://github:8080/relay/a.test/");
   // Dots that are no dot segment: GitHub's compare, a search's date range, a file's name.
   for (const path of [
     "/repos/o/r/compare/main...feature",
@@ -683,7 +677,7 @@ test("the CA can't vouch for the agents' providers, even with its key, but does 
   // Nor a name that only ends the same way.
   assert.match(forged(dir, "notanthropic.com"), /: OK/);
   assert.equal(certifiable("notanthropic.com"), true);
-  // GitHub's hosts: relayed to the listener's GitHub gateway, which holds the tokens.
+  // GitHub's hosts: relayed to the github service's GitHub gateway, which holds the tokens.
   for (const name of ["github.com", "api.github.com", "objects.githubusercontent.com"]) {
     assert.match(forged(dir, name), /: OK/, name);
     assert.equal(certifiable(name), true);
@@ -794,8 +788,6 @@ test("a CA made again while the proxy runs: the next run's certificate, and new 
 });
 
 test("an agent's relayed host goes to the models service, with the proxy's token and the network it vouches for", async (t) => {
-  const listener = [];
-  const { url: listenerUrl } = await serve(t, (req, res) => (listener.push(req.url), res.end()));
   const heard = [];
   const { url: modelsUrl } = await serve(t, (req, res) => {
     heard.push({ url: req.url, headers: req.headers });
@@ -803,7 +795,6 @@ test("an agent's relayed host goes to the models service, with the proxy's token
     req.on("end", () => res.end("data: from models\n\n"));
   });
   const { get, authority } = await setup(t, {
-    relayUrl: `${listenerUrl}/relay`,
     modelsService: { url: modelsUrl, header: async () => "Bearer proxy-service-token" },
   });
   const answer = await get("agent.test", "/v1internal:loadCodeAssist", authority.certificate(), {
@@ -819,8 +810,6 @@ test("an agent's relayed host goes to the models service, with the proxy's token
   assert.equal(heard[0].headers.authorization, "Bearer proxy-service-token");
   assert.equal(heard[0].headers["x-deckhand-run-token"], "the-agent-token");
   assert.equal(heard[0].headers["x-deckhand-sandbox"], "net-agy");
-  // Nothing went to the listener.
-  assert.deepEqual(listener, []);
   // A path that climbs out of /relay/<host>/ never reaches it.
   const out = await get("agent.test", "/%2e%2e/credentials", authority.certificate());
   assert.equal(out.status, 400);

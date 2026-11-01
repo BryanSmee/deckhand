@@ -28,8 +28,7 @@ ENV DECKHAND_VERSION=$DECKHAND_VERSION
 # the version to its commit or release there. Empty from source: no link.
 ARG DECKHAND_SOURCE=
 ENV DECKHAND_SOURCE=$DECKHAND_SOURCE
-# 8081: the token broker's relay and gateways for sandboxes from before the services (runs'
-# networks only). 8082: the egress policy (the proxy's). 8083: the other services' calls (the
-# runner's, edge's). Nothing is published.
-EXPOSE 8081 8082 8083
+# 8082: the egress policy (the proxy's). 8083: the other services' calls (the runner's, edge's).
+# Nothing is published.
+EXPOSE 8082 8083
 CMD ["node", "orchestrator/server.mjs"]

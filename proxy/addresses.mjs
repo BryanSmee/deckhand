@@ -89,9 +89,9 @@ function parsed(address) {
 }
 
 // The subnets of the networks the proxy is on (os.networkInterfaces()'s shape), loopback
-// aside: { family, bytes, prefix }. Each run's network is one, and the compose network the
-// listener is on another: Deckhand's own sandboxes, engines and listener, whatever range the
-// operator or Docker gave them.
+// aside: { family, bytes, prefix }. Each run's network is one, and each compose network to a
+// service another: Deckhand's own sandboxes, engines and services, whatever range the operator
+// or Docker gave them.
 export function ownSubnets(interfaces) {
   const out = [];
   for (const list of Object.values(interfaces ?? {})) {

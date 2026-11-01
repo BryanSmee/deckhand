@@ -1,6 +1,6 @@
 // The egress proxy's cache of plain HTTP answers, for the hosts the operator lists in
-// `cached_hosts` (the listener says which, ../listener/egress.mjs): package mirrors and
-// downloads that every run fetches again otherwise. Shared by every sandbox, so only what
+// `cached_hosts` (the orchestrator's egress policy says which, ../listener/egress.mjs): package
+// mirrors and downloads that every run fetches again otherwise. Shared by every sandbox, so only what
 // is the same for anyone is kept: a GET without credentials, answered 200 for everyone.
 //
 // On disk, one entry per URL (and Accept-Encoding, Accept): `<sha256>.body` and its metadata,

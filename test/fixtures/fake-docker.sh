@@ -184,29 +184,37 @@ case "$1" in
       case "$arg" in deckhand.run=*) run=${arg#deckhand.run=} ;; esac
       prev=$arg
     done
-    # The run token stands for the run's secret below: what the fake sandbox sends the listener.
-    export DECKHAND_RUN_SECRET=${DECKHAND_RUN_TOKEN:-${DECKHAND_RUN_SECRET-}}
     mkdir -p "$c/$name"
     echo "$run" > "$c/$name/run"
     # On its run's network before run-args tells a test it started.
     echo "$name" >> "$dir/nets/$run"
     # Each file renamed into place, so a test never reads one half-written; run-args last:
     # tests wait for it, then read the others. (Not .tmp: tests look for leftover state writes.)
-    echo "$DECKHAND_RUN_SECRET" > "$dir/run-secret.part" && mv "$dir/run-secret.part" "$dir/run-secret"
+    echo "$DECKHAND_RUN_TOKEN" > "$dir/run-token.part" && mv "$dir/run-token.part" "$dir/run-token"
     env > "$dir/run-env.part" && mv "$dir/run-env.part" "$dir/run-env"
     printf '%s\n' "$@" > "$dir/run-args.part" && mv "$dir/run-args.part" "$dir/run-args"
+    # The services' names it calls (lib/services.mjs SANDBOX_URLS), through the egress proxy the
+    # test plays (DECKHAND_TEST_PROXY, orchestrator-server.test.mjs sandboxProxy()), in origin-form.
+    for var in DECKHAND_BROKER_URL ANTHROPIC_BASE_URL OPENAI_BASE_URL GOOGLE_GEMINI_BASE_URL \
+      TASK_DIGEST DECKHAND_CA; do
+      value=${!var-}
+      for named in http://broker:8081 http://github:8080 http://models:8080; do
+        value=${value/#"$named"/${DECKHAND_TEST_PROXY-}}
+      done
+      [ -z "$value" ] || export "$var=$value"
+    done
     setsid bash -c '
       nap() { [ -n "${never-}" ] || exec {never}<> <(:); read -r -t 0.05 -u "$never" _ || :; }
       # A GitHub call as the egress proxy relays it (/relay/<the API'"'"'s host>/<path>), with the
-      # run'"'"'s secret as gh sends it: the listener'"'"'s settings are in this environment too.
+      # run token as gh sends it: the listener'"'"'s settings are in this environment too.
       api=${GITHUB_API#*://}
-      curl -fsS -H "Authorization: token $DECKHAND_RUN_SECRET" \
+      curl -fsS -H "Authorization: token $DECKHAND_RUN_TOKEN" \
         "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo" > "$dir/broker-answer"
       # The logins of assignees, one a line, when the test leaves them: each assigned to the
       # run'"'"'s issue, its answer'"'"'s status in assign-<login>.
       if [ -e "$dir/assignees" ]; then
         while read -r login; do
-          curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: token $DECKHAND_RUN_SECRET" \
+          curl -sS -o /dev/null -w "%{http_code}" -X POST -H "Authorization: token $DECKHAND_RUN_TOKEN" \
             --data-binary "{\"assignees\":[\"$login\"]}" \
             "$DECKHAND_BROKER_URL/relay/${api%%[:/]*}/repos/org/repo/issues/12/assignees" > "$dir/assign-$login"
         done < "$dir/assignees"
@@ -214,10 +222,10 @@ case "$1" in
       # The run'"'"'s files on the broker, as deckhand-files fetches and uploads them: its digest
       # when it has one, and a screenshot when the test leaves one in shot.
       if [ -n "${TASK_DIGEST:-}" ]; then
-        curl -sS -H "Authorization: Bearer $DECKHAND_RUN_SECRET" "$TASK_DIGEST" > "$dir/digest-fetched"
+        curl -sS -H "Authorization: Bearer $DECKHAND_RUN_TOKEN" "$TASK_DIGEST" > "$dir/digest-fetched"
       fi
       if [ -e "$dir/shot" ]; then
-        curl -sS -o /dev/null -w "%{http_code}" -X PUT -H "Authorization: Bearer $DECKHAND_RUN_SECRET" \
+        curl -sS -o /dev/null -w "%{http_code}" -X PUT -H "Authorization: Bearer $DECKHAND_RUN_TOKEN" \
           --data-binary "@$dir/shot" "$DECKHAND_BROKER_URL/run/shots/page.png" > "$dir/shot-answer"
       fi
       # What the egress proxy would ask about this sandbox'"'"'s connections, "host answer"
@@ -230,7 +238,7 @@ case "$1" in
       curl -sS -w "\n" "${urls[@]}" | while IFS= read -r answer; do
         echo "${hosts[i++]} $answer"
       done >> "$dir/egress"
-      # Claude Code'"'"'s API call, through the listener, with the run'"'"'s secret.
+      # Claude Code'"'"'s API call, through the models service, with the run'"'"'s agent token.
       # The agent'"'"'s token in ANTHROPIC_API_KEY (claude@anthropic:key): as an x-api-key, and an
       # entry of its own. (The listener'"'"'s own variables are in this environment too.)
       entry="$SANDBOX_AGENT@$SANDBOX_PROVIDER"
@@ -261,7 +269,7 @@ case "$1" in
         echo "{\"type\":\"result\",\"is_error\":true,\"result\":\"The tests still fail.\",\"duration_ms\":1000}"
         exit 0
       fi
-      # Codex: its API call through the listener, one turn on the message it was given, and
+      # Codex: its API call through the models service, one turn on the message it was given, and
       # no inbox to read (it takes no messages mid-run).
       if [ "$SANDBOX_AGENT" = codex ]; then
         curl -sS -X POST -H "Authorization: Bearer $OPENAI_API_KEY" \
@@ -274,7 +282,7 @@ case "$1" in
         exit 0
       fi
       # The Antigravity CLI: what the egress proxy would ask about its own hosts, a call to the
-      # listener'"'"'s relay on a path it refuses (the real one would reach Google), and its
+      # models service'"'"'s relay on a path it refuses (the real one would reach Google), and its
       # stream-json.
       if [ "$SANDBOX_AGENT" = antigravity ]; then
         if [ -n "${GEMINI_API_KEY:-}" ]; then
@@ -301,7 +309,7 @@ case "$1" in
       fi
       result="All done."
       # A run talked into posting secrets: its own, and whatever the test leaves in leak.
-      [ -e "$dir/leak" ] && result="Leaked $DECKHAND_RUN_SECRET and $(cat "$dir/leak")."
+      [ -e "$dir/leak" ] && result="Leaked $DECKHAND_RUN_TOKEN and $(cat "$dir/leak")."
       # The final message the test wrote (a review'"'"'s, say), else the line above.
       if [ -e "$dir/result" ]; then
         jq -nc --rawfile text "$dir/result" '"'"'{type: "result", result: $text, duration_ms: 60000}'"'"'

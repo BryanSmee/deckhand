@@ -1,19 +1,13 @@
-// The egress proxy waiting for a listener that restarts (proxy/wait.mjs): a connection that
-// wasn't made is tried again, with an injected clock, for up to 5 minutes; any other failure,
-// a request already sent among them, is not.
+// The egress proxy waiting for the orchestrator or a service that restarts (proxy/wait.mjs): a
+// connection that wasn't made is tried again, with an injected clock, for up to 5 minutes; any
+// other failure, a request already sent among them, is not.
 import assert from "node:assert/strict";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
 import { DRAIN_MS } from "../lib/drain.mjs";
-import {
-  createProxy,
-  defaultBrokerUrl,
-  defaultRelayUrl,
-  EARLY_MAX,
-  listenerPolicy,
-  policyPath,
-} from "../proxy/proxy.mjs";
+import { SANDBOX_URLS } from "../lib/services.mjs";
+import { createProxy, EARLY_MAX, egressPolicy } from "../proxy/proxy.mjs";
 import { LISTENER_WAIT_MS, notReached, untilReached } from "../proxy/wait.mjs";
 import { listening, serve } from "./helpers.mjs";
 
@@ -117,7 +111,7 @@ test("the policy waits for the listener rather than refusing every host", async 
     if (clock.sleeps.length === 2)
       await new Promise((resolve) => server.listen(port, "127.0.0.1", resolve));
   };
-  const policy = listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, clock);
+  const policy = egressPolicy(`http://127.0.0.1:${port}/egress`, 5000, clock);
   assert.deepEqual(await policy("10.0.0.2", "api.github.com"), {
     allowed: true,
     private: false,
@@ -134,19 +128,9 @@ test("the policy waits for the listener rather than refusing every host", async 
   // Gone for good: refused after 5 minutes, as a listener that says no.
   await new Promise((resolve) => server.close(resolve));
   const later = fakeClock();
-  const gone = listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, later);
+  const gone = egressPolicy(`http://127.0.0.1:${port}/egress`, 5000, later);
   assert.deepEqual(await gone("10.0.0.2", "api.github.com"), { allowed: false });
   assert.equal(later.t, LISTENER_WAIT_MS);
-});
-
-test("relayed requests go to the broker's port beside the policy's, without RELAY_URL", () => {
-  assert.equal(defaultRelayUrl("http://listener:8082/egress"), "http://listener:8081/relay");
-  // A POLICY_URL that names the broker's port, as before the policy had its own.
-  assert.equal(defaultRelayUrl("http://listener:8081/egress"), "http://listener:8081/relay");
-  assert.equal(
-    defaultRelayUrl("http://broker.internal:9000/egress"),
-    "http://broker.internal:9000/relay",
-  );
 });
 
 test("a client that left stops the policy's wait: no question for nobody", async (t) => {
@@ -154,14 +138,14 @@ test("a client that left stops the policy's wait: no question for nobody", async
   await new Promise((resolve) => server.close(resolve));
   const url = `http://127.0.0.1:${port}/egress`;
   const clock = fakeClock();
-  const policy = listenerPolicy(url, 5000, clock);
+  const policy = egressPolicy(url, 5000, clock);
   assert.deepEqual(await policy("10.0.0.2", "x.test", { gone: () => true }), { allowed: false });
   assert.equal(clock.t, 0);
 
   // Through the proxy: a CONNECT whose client hangs up while the listener is down.
   let sleeps = 0;
   const proxy = createProxy({
-    policy: listenerPolicy(url, 5000, {
+    policy: egressPolicy(url, 5000, {
       sleep: () => (sleeps++, new Promise((resolve) => setTimeout(resolve, 10))),
     }),
   });
@@ -182,7 +166,7 @@ test("what a CONNECT's client sends before its answer is capped while the policy
   const { server, port } = await serve(t, () => {});
   await new Promise((resolve) => server.close(resolve));
   const proxy = createProxy({
-    policy: listenerPolicy(`http://127.0.0.1:${port}/egress`, 5000, {
+    policy: egressPolicy(`http://127.0.0.1:${port}/egress`, 5000, {
       sleep: () => new Promise((resolve) => setTimeout(resolve, 10)),
     }),
   });
@@ -218,47 +202,52 @@ function viaProxy(proxyPort, url, { method = "GET", headers = {}, body } = {}) {
   });
 }
 
-test("sandboxes' calls to the broker go to it through the proxy, waiting for a restarting listener", async (t) => {
-  // The broker's port, closed until the second wait (an injected clock).
+test("sandboxes' calls to a service's name go to it through the proxy, waiting for a restarting service", async (t) => {
+  // The github service's port, closed until the second wait (an injected clock).
   const got = [];
-  const { server: listener, url } = await serve(t, (req, res) => {
+  const { server: service, url } = await serve(t, (req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", () => {
       got.push({ method: req.method, url: req.url, body, headers: req.headers });
-      // A listener that dies once it has the request: nothing comes back.
+      // A service that dies once it has the request: nothing comes back.
       if (body === "die") return req.socket.destroy();
       res.end("done");
     });
   });
   const port = Number(new URL(url).port);
-  await new Promise((resolve) => listener.close(resolve));
+  await new Promise((resolve) => service.close(resolve));
   const clock = fakeClock();
   const sleep = clock.sleep;
   clock.sleep = async (ms) => {
     await sleep(ms);
     if (clock.sleeps.length === 2)
-      await new Promise((resolve) => listener.listen(port, "127.0.0.1", resolve));
+      await new Promise((resolve) => service.listen(port, "127.0.0.1", resolve));
   };
-  // The listener's policy: the broker for its sandbox (127.0.0.1) when the proxy forwards it,
-  // nothing else.
+  // The orchestrator's policy: the services' names for its sandbox (127.0.0.1) when the proxy
+  // forwards them, nothing else.
   const asked = [];
   const proxy = createProxy({
-    policy: async (ip, host, { broker } = {}) => {
-      asked.push([ip, host, broker === true]);
-      return { allowed: broker === true && ip === "127.0.0.1" };
+    policy: async (ip, host, { forward } = {}) => {
+      asked.push([ip, host, forward === true]);
+      return { allowed: forward === true && ip === "127.0.0.1", sandbox: "net-1" };
     },
-    brokerUrl: url,
+    githubService: { url, header: async () => "Bearer proxy" },
     wait: clock,
   });
   const proxyPort = await listening(proxy);
   t.after(() => proxy.close());
 
-  // A push: sent once the listener is back, body and all, naming the sandbox (whatever it said
-  // itself), once the policy said the broker is the sandbox's to reach.
-  const push = await viaProxy(proxyPort, `${url}/git/org/repo.git/git-receive-pack`, {
+  // A push: sent once the service is back, body and all, naming the sandbox's network
+  // (whatever it said itself), once the policy said the name is the sandbox's to reach.
+  const github = SANDBOX_URLS.github;
+  const push = await viaProxy(proxyPort, `${github}/git/org/repo.git/git-receive-pack`, {
     method: "POST",
-    headers: { "x-deckhand-client": "10.9.9.9", "proxy-authorization": "x" },
+    headers: {
+      "x-deckhand-client": "10.9.9.9",
+      "x-deckhand-sandbox": "net-9",
+      "proxy-authorization": "x",
+    },
     body: "pack",
   });
   assert.deepEqual(push, { status: 200, body: "done" });
@@ -266,86 +255,70 @@ test("sandboxes' calls to the broker go to it through the proxy, waiting for a r
   assert.equal(got[0].method, "POST");
   assert.equal(got[0].url, "/git/org/repo.git/git-receive-pack");
   assert.equal(got[0].body, "pack");
-  assert.equal(got[0].headers["x-deckhand-client"], "127.0.0.1");
+  assert.equal(got[0].headers["x-deckhand-sandbox"], "net-1");
+  assert.equal(got[0].headers["x-deckhand-client"], undefined);
   assert.equal(got[0].headers.host, `127.0.0.1:${port}`);
   assert.equal(got[0].headers["proxy-authorization"], undefined);
   assert.equal(clock.sleeps.length, 2);
-  assert.deepEqual(asked, [["127.0.0.1", "127.0.0.1", true]]);
+  assert.deepEqual(asked, [["127.0.0.1", "github", true]]);
 
-  // A request the listener got before it died isn't sent again: the sandbox hears it.
+  // A request the service got before it died isn't sent again: the sandbox hears it.
   got.length = 0;
-  const cut = await viaProxy(proxyPort, `${url}/anthropic/v1/messages`, {
+  const cut = await viaProxy(proxyPort, `${github}/git/org/repo.git/git-receive-pack`, {
     method: "POST",
     body: "die",
   });
   assert.equal(cut.status, 502);
-  assert.match(cut.body, /could not reach the listener/);
+  assert.match(cut.body, /could not reach the github service/);
   assert.equal(got.length, 1);
 
-  // Its policy: the broker answers it to the proxy alone, so never on a sandbox's behalf, nor
-  // through a dot segment the URL parser resolves.
-  got.length = 0;
-  for (const path of ["/egress?ip=10.0.0.3&host=x.test", "/run/../egress?ip=1", "/EGRESS?x"]) {
-    const answer = await viaProxy(proxyPort, `${url}${path}`);
-    assert.equal(answer.status, 403, path);
-  }
-  assert.deepEqual(got, []);
-
-  // Another port on the broker's host isn't the broker: an ordinary host, the policy decides.
+  // Another port on the name isn't the service: an ordinary host, the policy decides.
   asked.length = 0;
-  const other = await viaProxy(proxyPort, `http://127.0.0.1:${port + 1}/`);
+  got.length = 0;
+  const other = await viaProxy(proxyPort, "http://github:9999/git/org/repo.git");
   assert.equal(other.status, 403);
-  assert.deepEqual(asked, [["127.0.0.1", "127.0.0.1", false]]);
+  assert.deepEqual(asked, [["127.0.0.1", "github", false]]);
   assert.deepEqual(got, []);
 });
 
-test("a path to the broker never names another host, nor reaches its policy that way", async (t) => {
-  // The broker, and another host on the same machine, which nothing may reach this way.
+test("a path to a service never names another host", async (t) => {
+  // The github service, and another host on the same machine, which nothing may reach this way.
   const got = [];
-  const { url, port } = await serve(t, (req, res) => (got.push(req.url), res.end("broker")));
+  const { url } = await serve(t, (req, res) => (got.push(req.url), res.end("github")));
   const elsewhere = [];
   const { port: otherPort } = await serve(t, (req, res) => (elsewhere.push(req.url), res.end()));
-  const proxy = createProxy({ policy: async () => ({ allowed: true }), brokerUrl: url });
+  const proxy = createProxy({
+    policy: async () => ({ allowed: true }),
+    githubService: { url, header: async () => "Bearer proxy" },
+  });
   const proxyPort = await listening(proxy);
   t.after(() => proxy.close());
-  // Read as URLs, these paths would name localhost:<otherPort>, or the broker's /egress.
-  for (const path of [
-    `//localhost:${otherPort}/x`,
-    `/a/..//localhost:${otherPort}/x`,
-    `//127.0.0.1:${port}/egress?ip=10.0.0.3&host=x.test`,
-  ]) {
-    const answer = await viaProxy(proxyPort, `${url}${path}`);
+  const github = SANDBOX_URLS.github;
+  // Read as URLs, these paths would name localhost:<otherPort>.
+  for (const path of [`/git//localhost:${otherPort}/x`, `/git/a/..//localhost:${otherPort}/x`]) {
+    const answer = await viaProxy(proxyPort, `${github}${path}`);
     assert.equal(answer.status, 200, path);
-    assert.equal(answer.body, "broker", path);
+    assert.equal(answer.body, "github", path);
   }
-  // The broker got them as paths of its own, none of them its /egress.
-  assert.deepEqual(got, [
-    `//localhost:${otherPort}/x`,
-    `//localhost:${otherPort}/x`,
-    `//127.0.0.1:${port}/egress?ip=10.0.0.3&host=x.test`,
-  ]);
-  assert.ok(got.every((path) => !path.startsWith("/egress")));
+  // The service got them as paths of its own; one outside its sandboxes' paths goes nowhere.
+  assert.equal((await viaProxy(proxyPort, `${github}//localhost:${otherPort}/x`)).status, 404);
+  assert.deepEqual(got, [`/git//localhost:${otherPort}/x`, `/git//localhost:${otherPort}/x`]);
   assert.deepEqual(elsewhere, []);
 });
 
-test("the broker through the proxy only for whom the policy allows: a build or an install, refused", async (t) => {
+test("a service's name through the proxy only for whom the policy allows: a build or an install, refused", async (t) => {
   const got = [];
   const { url } = await serve(t, (req, res) => (got.push(req.url), res.end()));
-  const proxy = createProxy({ policy: async () => ({ allowed: false }), brokerUrl: url });
+  const proxy = createProxy({
+    policy: async () => ({ allowed: false }),
+    modelsService: { url, header: async () => "Bearer proxy" },
+  });
   const proxyPort = await listening(proxy);
   t.after(() => proxy.close());
-  const answer = await viaProxy(proxyPort, `${url}/anthropic/v1/messages`, { method: "POST" });
+  const answer = await viaProxy(proxyPort, `${SANDBOX_URLS.models}/anthropic/v1/messages`, {
+    method: "POST",
+  });
   assert.equal(answer.status, 403);
-  assert.match(answer.body, /only a running sandbox reaches the listener's broker/);
+  assert.match(answer.body, /only a running sandbox reaches the models service/);
   assert.deepEqual(got, []);
-});
-
-test("the broker the proxy forwards to is BROKER_URL, else RELAY_URL's origin; its policy's path", () => {
-  assert.equal(defaultBrokerUrl("http://listener:8081/relay"), "http://listener:8081");
-  for (const path of ["/egress", "/egress?ip=1", "/Egress/", "/EGRESS"]) {
-    assert.equal(policyPath(path), true, path);
-  }
-  for (const path of ["/egressive", "/run/egress", "/git/egress", "/"]) {
-    assert.equal(policyPath(path), false, path);
-  }
 });

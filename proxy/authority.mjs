@@ -1,18 +1,18 @@
-// Deckhand's CA, with which the egress proxy terminates TLS for the hosts the listener says
-// may be cached (proxy.mjs): sandboxes trust its certificate (ca.crt), never see its key
+// Deckhand's CA, with which the egress proxy terminates TLS for the hosts the orchestrator's
+// egress policy says may be cached (proxy.mjs): sandboxes trust its certificate (ca.crt), never see its key
 // (ca.key), which stays in the proxy's volume. Created once, on the first start, and kept
 // across restarts, for a year: made again a month before its end, which sandboxes pick up at
-// their next start (the listener asks the proxy for it at each run). Each host gets a
+// their next start (the orchestrator asks the proxy for it at each run). Each host gets a
 // short-lived certificate of its own, kept in memory and on disk, made again when it nears its
 // end or the CA changed.
 //
 // The CA can't vouch for the agents' providers (EXCLUDED, its name constraints): the operator's
 // credentials go there, and its key, should it leak, mustn't open that traffic. It does vouch
-// for GitHub, whose calls the proxy relays to the listener's GitHub gateway: no sandbox holds a
-// GitHub token any more, so a leaked key opens none.
+// for GitHub, whose calls the proxy relays to the github service's GitHub gateway: no sandbox
+// holds a GitHub token any more, so a leaked key opens none.
 //
-// Node can't create certificates: the `openssl` CLI does, as the listener uses the docker
-// CLI. No dependencies.
+// Node can't create certificates: the `openssl` CLI does, as the runner uses the docker CLI.
+// No dependencies.
 import { execFile } from "node:child_process";
 import { createHash, randomBytes, X509Certificate } from "node:crypto";
 import { mkdirSync } from "node:fs";

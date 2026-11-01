@@ -7,9 +7,8 @@
 //   GET  /keys                  the public keys tokens are checked with, offline
 //   GET  /health, /ready        liveness, and readiness (503 once draining)
 //
-//   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), a key of the
-//   listener's from before this service (POST /keys), the `runs` stream (GET /events, POST
-//   /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
+//   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), the `runs` stream
+//   (GET /events, POST /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
 //   first tokens (POST /runs/:id/tokens), with the claims it decided. Each of its calls but a
 //   GET carries its fencing epoch (../lib/fence.mjs, #506): one older than the newest seen is
 //   refused (409), so a copy that lost its lease ends no run and gets no token signed;
@@ -20,11 +19,6 @@
 //   run token on in `x-deckhand-run-token`: renewal (POST /run/token), the inbox (GET
 //   /run/inbox?from=<byte>), the CA and digest (GET /run/ca, /run/digest), screenshots (PUT
 //   /run/shots/<file>).
-//
-// The orchestrator copies the inbox of a run from before the runner kept them, so the runner's
-// endpoints take it too. It also relays the calls of sandboxes that reach it rather than this
-// service (a proxy from before it, a sandbox from before #511), vouching for them as the proxy
-// does.
 import { createServer } from "node:http";
 import { drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, sendJson } from "../lib/http.mjs";
@@ -33,14 +27,13 @@ import { issueServiceTokens, serviceGuard } from "../lib/service-token.mjs";
 import { FILES } from "./files.mjs";
 import { runFields, STREAM } from "./runs.mjs";
 
-// The headers the proxy (or the listener, relaying) sets on a sandbox's call: whatever the
-// sandbox sent in them was replaced.
+// The headers the proxy sets on a sandbox's call: whatever the sandbox sent in them was
+// replaced.
 import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 export { RUN_TOKEN_HEADER, SANDBOX_HEADER };
 
-// The runner's endpoints take the orchestrator too, and the sandboxes' (its relay): above.
-const RUNNER = ["runner", "orchestrator"];
-const SANDBOX = ["proxy", "orchestrator"];
+const RUNNER = ["runner"];
+const SANDBOX = ["proxy"];
 
 export const ROUTES = {
   "GET /runs": ["orchestrator"],
@@ -54,7 +47,6 @@ export const ROUTES = {
   "POST /runs/:id/tokens": ["orchestrator"],
   "POST /runs/:id/inbox": RUNNER,
   "PUT /runs/:id/files/:name": RUNNER,
-  "POST /keys": ["orchestrator"],
   "GET /events": ["orchestrator"],
   "POST /events/ack": ["orchestrator"],
   "GET /shots/:folder/:name": ["orchestrator"],
@@ -210,15 +202,6 @@ export function createBrokerHandler({
       if (!FILES.includes(file)) return sendJson(res, { message: `no file ${file}` }, 404);
       await files.putFile(run, file, await readBody(req, FILE_MAX));
       return res.writeHead(204).end();
-    }
-    if (req.method === "POST" && path === "/keys") {
-      const { pem } = (await readJsonBody(req, BODY_MAX)) ?? {};
-      const imported = await runs.importKey(pem);
-      if (!imported.kid) return sendJson(res, { message: imported.message }, imported.status);
-      log(
-        `Broker: a key of the listener's from before this service, ${imported.kid}, checks run tokens`,
-      );
-      return sendJson(res, imported);
     }
     if (req.method === "GET" && path === "/events") return events(res, url);
     if (req.method === "POST" && path === "/events/ack") {

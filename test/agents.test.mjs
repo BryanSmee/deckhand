@@ -203,14 +203,13 @@ test("tiers and efforts resolve per agent; other names pass through", () => {
 test("Claude Code's env: the run's secret in place of the credential, calls to the listener", () => {
   const config = {
     claudeCredential: "ANTHROPIC_API_KEY",
-    brokerUrl: "http://listener:8081",
     modelAliases: { ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5" },
     claudeCodeVolume: "deckhand-claude-code",
     claudeCodeVersion: "9.9.9",
   };
   assert.deepEqual(claude.env(config, "run-secret"), {
     ANTHROPIC_API_KEY: "run-secret",
-    ANTHROPIC_BASE_URL: "http://listener:8081/anthropic",
+    ANTHROPIC_BASE_URL: "http://models:8080/anthropic",
     ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5",
   });
   assert.deepEqual(
@@ -345,7 +344,6 @@ test("normalize: Codex's other items, failed edits and MCP errors, and what isn'
 
 test("Codex: installed like Claude Code, the run's secret as its key, no mid-run messages", () => {
   const config = {
-    brokerUrl: "http://listener:8081",
     codexVolume: "deckhand-codex",
     codexVersion: "0.162.1",
   };
@@ -360,7 +358,7 @@ test("Codex: installed like Claude Code, the run's secret as its key, no mid-run
   });
   assert.deepEqual(codex.env(config, "run-secret"), {
     OPENAI_API_KEY: "run-secret",
-    OPENAI_BASE_URL: "http://listener:8081/openai",
+    OPENAI_BASE_URL: "http://models:8080/openai",
   });
   assert.deepEqual(codex.secrets, ["OPENAI_API_KEY", "CODEX_AUTH_FILE"]);
   assert.deepEqual(codex.hosts, []);
@@ -496,7 +494,6 @@ test("providerError: a provider's failure, from the result or the endpoint's las
 
 test("each agent's env on a provider: OpenRouter's token as a bearer, with its model names", () => {
   const config = {
-    brokerUrl: "http://listener:8081",
     claudeCredential: "CLAUDE_CODE_OAUTH_TOKEN",
     modelAliases: { ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5" },
     openrouterAliases: { ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5" },
@@ -504,13 +501,13 @@ test("each agent's env on a provider: OpenRouter's token as a bearer, with its m
   };
   assert.deepEqual(claude.env(config, "s3cret"), {
     CLAUDE_CODE_OAUTH_TOKEN: "s3cret",
-    ANTHROPIC_BASE_URL: "http://listener:8081/anthropic",
+    ANTHROPIC_BASE_URL: "http://models:8080/anthropic",
     ANTHROPIC_DEFAULT_OPUS_MODEL: "claude-opus-5-5",
     SANDBOX_FALLBACK_MODEL: "sonnet",
   });
   assert.deepEqual(claude.env({ ...config, claudeFallbackModel: null }, "s3cret", "openrouter"), {
     ANTHROPIC_AUTH_TOKEN: "s3cret",
-    ANTHROPIC_BASE_URL: "http://listener:8081/anthropic",
+    ANTHROPIC_BASE_URL: "http://models:8080/anthropic",
     ANTHROPIC_DEFAULT_OPUS_MODEL: "anthropic/claude-opus-5.5",
   });
 });

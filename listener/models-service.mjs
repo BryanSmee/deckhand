@@ -2,12 +2,8 @@
 // credentials, as the orchestrator: which of them the operator set (names only, for its
 // settings), what redacts them from runs' output (their fingerprints), a run's API state at its
 // end (its provider's last status, a plan's reset, its last failure: the reply and the
-// fallbacks read it), the `models` stream (the calls it refused a run, for its log), and the
-// agents' calls that reach the listener rather than the service (a proxy from before it),
-// relayed on as they stream.
-import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+// fallbacks read it) and the `models` stream (the calls it refused a run, for its log).
 import { serviceClient } from "../lib/service-client.mjs";
-import { forward, forwarded } from "../lib/upstream.mjs";
 
 // How often the fingerprints are read again (a plan's login refreshed), and how long a set is
 // kept: a token refreshed away may still show in a run's output for a while.
@@ -35,14 +31,6 @@ export function createModelsService({
   clearTimer = clearTimeout,
 }) {
   const client = serviceClient({ service: "models", urls, token, fetch, log });
-  // Its copies, for relay(), which can't send a call twice (its body streams on as it comes):
-  // one that can't be reached fails that call (502, which the agent's CLI retries), and the
-  // next ones go to the next copy.
-  const bases = String(urls)
-    .split(",")
-    .map((u) => u.trim().replace(/\/$/, ""))
-    .filter(Boolean);
-  let current = 0;
   let stopped = false;
   const timers = new Set();
   const later = (fn, ms) => {
@@ -159,41 +147,11 @@ export function createModelsService({
     return consuming;
   }
 
-  // An agent's call that came here, on to the service as it streams, with the listener's service
-  // token, the run's agent token and the network (or pod) `sandbox` it came from, as the proxy
-  // would. `path`: the call's, as sent.
-  async function relay(req, res, { sandbox, token: agentToken, path }) {
-    const at = current;
-    const target = new URL(`${bases[at]}${path}`);
-    const headers = {
-      ...forwarded(req.headers, AGENT_TOKEN_HEADERS),
-      host: target.host,
-      authorization: await token(),
-      [RUN_TOKEN_HEADER]: agentToken,
-      [SANDBOX_HEADER]: sandbox ?? "",
-    };
-    await forward(req, res, {
-      target,
-      headers,
-      unreachable: () => {
-        if (current === at) current = (at + 1) % bases.length;
-        res
-          .writeHead(502, { "content-type": "application/json" })
-          .end(
-            JSON.stringify({ error: { message: "Deckhand: the models service can't be reached" } }),
-          );
-      },
-      log,
-      what: "Models",
-    });
-  }
-
   return {
     credentials,
     prints,
     apiOf,
     consume,
-    relay,
     start,
     stop() {
       stopped = true;

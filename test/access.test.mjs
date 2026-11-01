@@ -355,7 +355,7 @@ test("egressCache: an agent whose calls the proxy relays gets the CA, a research
     /the egress proxy has no CA, and its calls to its provider go through it/,
   );
   // On a Gemini API key its calls go to the listener directly: nothing to trust.
-  const key = { agyCredential: "GEMINI_API_KEY", brokerUrl: "http://listener:8081" };
+  const key = { agyCredential: "GEMINI_API_KEY" };
   assert.deepEqual(await egressCache(grant, async () => "PEM", note, agy, key, false), {
     ca: null,
     cached: [],

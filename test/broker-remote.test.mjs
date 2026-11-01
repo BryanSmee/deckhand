@@ -1,9 +1,8 @@
-// The listener's calls to the broker service (listener/broker-service.mjs, #505): the key it
-// signed tokens with before, handed over as a public key only; the runs' inboxes copied from the
-// runner's files, a lost answer or a broker away caught up with; the stream's screenshots copied
-// into the shots folder; the runs that ended while the listener was down ended there too.
+// The calls to the broker service (listener/broker-service.mjs, #505), the orchestrator's and the
+// runner's: the runs' inboxes copied from the runner's files, a lost answer or a broker away
+// caught up with; the stream's screenshots copied into the shots folder; the runs that ended
+// while the orchestrator was down ended there too.
 import assert from "node:assert/strict";
-import { generateKeyPairSync } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -11,25 +10,28 @@ import { createCallers } from "../broker/callers.mjs";
 import { createBroker, storeSecrets } from "../broker/server.mjs";
 import { createRuns } from "../broker/runs.mjs";
 import { createBroker as createListenerBroker } from "../listener/broker.mjs";
-import { createBrokerService, legacyKey } from "../listener/broker-service.mjs";
+import { createBrokerService } from "../listener/broker-service.mjs";
 import { createInbox } from "../listener/runner/inbox.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
-import { keyId, LEGACY_KEY_MS, signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
+import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
 import { tempDir, testKey } from "./helpers.mjs";
 
 const FOLDER = "0123456789abcdef01234567";
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 
-// The broker service on loopback, the listener calling it as the orchestrator; on `port` (0:
+// Where each caller reaches the broker: the address a call arrives at tells them apart.
+const AT = { orchestrator: "127.0.0.1", runner: "127.0.0.2" };
+
+// The broker service on loopback, called as the orchestrator and as the runner; on `port` (0:
 // one the OS picks), so a test can stop it and start it again where it was.
 async function service(t, { store = openStore("memory:"), key = testKey(), port = 0 } = {}) {
   const broker = createBroker({
     store,
     key,
-    callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+    callers: createCallers({ networks: "orchestrator=127.0.0.1/32,runner=127.0.0.2/32" }),
   });
-  await new Promise((resolve) => broker.server.listen(port, "127.0.0.1", resolve));
+  await new Promise((resolve) => broker.server.listen(port, "0.0.0.0", resolve));
   broker.server.unref();
   const stop = () =>
     new Promise((resolve) => {
@@ -40,10 +42,11 @@ async function service(t, { store = openStore("memory:"), key = testKey(), port 
   return { ...broker, store, key, port: broker.server.address().port, stop };
 }
 
-function remote(t, broker, { legacy = null, logged = [] } = {}) {
+// `as`: the service calling, the orchestrator (its runs, its stream) or the runner (the inboxes
+// and files it copies there).
+function remote(t, broker, { as = "orchestrator", logged = [] } = {}) {
   const made = createBrokerService({
-    caller: createBrokerCaller({ url: `http://127.0.0.1:${broker.port}` }),
-    legacy,
+    caller: createBrokerCaller({ url: `http://${AT[as]}:${broker.port}` }),
     epoch: () => 1,
     log: (line) => logged.push(line),
   });
@@ -59,40 +62,12 @@ async function until(check, ms = 12_000) {
   }
 }
 
-test("the listener's old key: its private part removed, its public part handed to the broker for the tokens it signed", async (t) => {
-  const dir = tempDir(t);
-  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
-  writeFileSync(join(dir, "run-token.key"), privateKey.export({ type: "pkcs8", format: "pem" }));
-  const logged = [];
-  const pem = legacyKey(dir, { now: () => 1000, log: (line) => logged.push(line) });
-  assert.equal(existsSync(join(dir, "run-token.key")), false);
-  assert.match(pem, /BEGIN PUBLIC KEY/);
-  assert.match(logged[0], /run-token\.key removed/);
-  // The next start finds the public part alone; past its last token's life, nothing.
-  assert.equal(legacyKey(dir, { now: () => 2000 }), pem);
-  assert.equal(legacyKey(dir, { now: () => 1000 + LEGACY_KEY_MS + 1 }), null);
-  assert.equal(existsSync(join(dir, "run-token.pub")), false);
-  assert.equal(legacyKey(tempDir(t)), null);
-
-  // Handed over: a token it signed for a running sandbox checks here and renews there.
-  const broker = await service(t);
-  const listener = remote(t, broker, { legacy: pem });
-  await listener.start();
-  const old = { privateKey, publicKey, kid: keyId(publicKey) };
-  const claims = { ver: TOKEN_VERSION, jti: "old", repo: "org/a", sandbox: "net-o", caps: [] };
-  const token = signToken(claims, { ...old, audience: "deckhand:broker", ttlMs: 60_000 });
-  assert.ok(listener.keys().has(old.kid));
-  assert.ok(listener.keys().has(broker.key.kid));
-  await listener.issuer.put("old", { repo: "org/a", sandbox: "net-o" });
-  assert.ok((await broker.runs.renew(token, "net-o")).token);
-});
-
 test("an inbox: the runner's file copied from the offset the broker has, a broker away caught up with", async (t) => {
   const store = openStore("memory:");
   const key = testKey();
   let broker = await service(t, { store, key });
   const logged = [];
-  const listener = remote(t, broker, { logged });
+  const listener = remote(t, broker, { as: "runner", logged });
   const file = join(tempDir(t), "inbox.jsonl");
   writeFileSync(file, "");
   const bytesFrom = (from) => readFileSync(file).subarray(from);
@@ -212,10 +187,6 @@ test("the runner's inbox: a token's shape in a message redacted before it is wri
   JSON.parse(file);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(copied.at(-1), file);
-  // A run's from before: its file redacted in place before it is copied whole.
-  writeFileSync(join(inboxDir, "r1", "inbox.jsonl"), `{"t":"ghp_${"c".repeat(36)}"}\n`);
-  await inbox.resync("r1");
-  assert.equal(copied.at(-1), '{"t":"[redacted]"}\n');
 });
 
 test("a message quoting a PEM's armour goes through send() and the broker whole; the broker's own key never does", async (t) => {
@@ -223,7 +194,7 @@ test("a message quoting a PEM's armour goes through send() and the broker whole;
   const key = testKey();
   const store = openStore("memory:", { secrets: () => storeSecrets(key) });
   const broker = await service(t, { store, key });
-  const listener = remote(t, broker);
+  const listener = remote(t, broker, { as: "runner" });
   const inboxDir = tempDir(t);
   const inbox = createInbox({ inboxDir, mirror: listener.mirror });
   await inbox.write("r1", null, null);
@@ -258,7 +229,7 @@ test("an expired run's files go, unless its id started again before they did", a
   assert.deepEqual(removed, ["gone"]);
 });
 
-test("an inbox over the broker's limit: a restarted listener asks what the broker has, then sends the rest in parts", async (t) => {
+test("an inbox over the broker's limit: a restarted runner asks what the broker has, then sends the rest in parts", async (t) => {
   const store = openStore("memory:");
   const broker = await service(t, { store });
   const file = join(tempDir(t), "inbox.jsonl");
@@ -266,10 +237,10 @@ test("an inbox over the broker's limit: a restarted listener asks what the broke
   const line = `${JSON.stringify({ text: "x".repeat(1000) })}\n`;
   writeFileSync(file, line.repeat(Math.ceil((9 * 1024 * 1024) / line.length)));
   const bytesFrom = (from) => readFileSync(file).subarray(from);
-  const first = remote(t, broker);
+  const first = remote(t, broker, { as: "runner" });
   await first.mirror.sync("run-a", bytesFrom);
   assert.deepEqual(await store.readBlob("inbox:run-a"), readFileSync(file));
-  // The next listener knows nothing of it: a line more, and only it goes.
+  // The next runner knows nothing of it: a line more, and only it goes.
   writeFileSync(file, '{"text":"after"}\n', { flag: "a" });
   const appended = [];
   const appendBlobAt = store.appendBlobAt;
@@ -277,24 +248,10 @@ test("an inbox over the broker's limit: a restarted listener asks what the broke
     appended.push(data.length),
     appendBlobAt(key, at, data)
   );
-  const next = remote(t, broker);
+  const next = remote(t, broker, { as: "runner" });
   await next.mirror.sync("run-a", bytesFrom);
   assert.deepEqual(await store.readBlob("inbox:run-a"), readFileSync(file));
   assert.deepEqual(appended, [0, 17]);
-});
-
-test("the listener's old key refused for good is said once, not asked for again", async (t) => {
-  // A store whose first broker started long ago.
-  const store = openStore("memory:");
-  await store.set("first-start", 0);
-  const broker = await service(t, { store });
-  const logged = [];
-  const pem = generateKeyPairSync("ed25519").publicKey.export({ type: "spki", format: "pem" });
-  const listener = remote(t, broker, { legacy: pem, logged });
-  await listener.start();
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  assert.equal(logged.filter((line) => /old key refused/.test(line)).length, 1);
-  assert.ok(!logged.some((line) => /trying again/.test(line)));
 });
 
 test("a renewal from a run's old sandbox, the run started again elsewhere meanwhile, is refused", async () => {

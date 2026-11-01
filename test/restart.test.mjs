@@ -15,22 +15,20 @@ import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
 import { fileLogs, localBroker, tempDir } from "./helpers.mjs";
 
-// A run's saved state, as saveLive() writes it.
+// A run's saved state, as saveLive() writes it. → its id, the broker's handle once restored.
 function saveRun(dir, id, issue, record, more = {}) {
-  const secret = `secret-${id}`;
   const saved = {
     task: { repo: "org/repo", id: issue, kind: "issue" },
     id,
     mode: "work",
     light: false,
-    secret,
     record: { id, key: `org/repo#${issue}`, ...record },
     handled: [],
     unanswered: [],
     ...more,
   };
   writeFileSync(join(dir, `${id}.live.json`), JSON.stringify(saved));
-  return secret;
+  return id;
 }
 
 test("a restored run's calls go to its provider, or its agent's own when none was saved", async (t) => {
@@ -138,7 +136,7 @@ test("a restored run keeps the issues it created, the comments it posted and the
   // What github-writes.mjs answered() does for the next one: the live state's own list.
   run.created.push({ number: 31, at: 6 }, { comment: 3000000002, at: 6 });
   run.changed();
-  const task = [...ctx.tasks.values()].find((t) => t.live.secret === secret);
+  const task = [...ctx.tasks.values()].find((t) => t.live.id === secret);
   await task.live.saving;
   const again = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
   assert.deepEqual(again.created, [
@@ -178,7 +176,7 @@ test("a restored run keeps the network its tokens are bound to, and saves it aga
   // Saved before runs kept it: looked up when asked (broker-http.mjs sandboxOfTask()).
   const old = saveRun(dir, "r2", 2, { agent: "claude" });
   await createRestart(ctx).restoreRuns();
-  const of = (s) => [...ctx.tasks.values()].find((task) => task.live.secret === s).live;
+  const of = (s) => [...ctx.tasks.values()].find((task) => task.live.id === s).live;
   assert.equal(of(secret).sandbox, "net-1");
   assert.equal(broker.runOf("r1").sandbox, "net-1");
   assert.equal(of(old).sandbox, undefined);
@@ -469,18 +467,13 @@ test("queued comments keep when they were queued through a restart: the run orde
   );
 });
 
-test("across a restart, a run's tokens still check, and a run from before them keeps its secret", async (t) => {
+test("across a restart, a run's tokens still check", async (t) => {
   const dir = tempDir(t);
   // The broker service outlives the listener's restart: both listeners ask the same one.
   const service = localBroker();
   const networks = { "10.9.0.5": "net-new", "10.9.1.5": "net-old" };
   const make = () => {
-    // The old run's sandbox at 10.9.1.5, as broker-http.mjs runAt() tells.
-    const broker = createBroker({
-      ...service,
-      sandboxOf: async (ip) => networks[ip] ?? null,
-      sentFrom: async (run, ip) => run.id === "old" && ip === "10.9.1.5",
-    });
+    const broker = createBroker({ ...service, sandboxOf: async (ip) => networks[ip] ?? null });
     const ctx = {
       config: { dataDir: dir },
       log: () => {},
@@ -517,9 +510,7 @@ test("across a restart, a run's tokens still check, and a run from before them k
       unanswered: [],
     }),
   );
-  // And one a listener from before tokens started: its secret, and no renewal.
-  const secret = saveRun(dir, "old", 2, { agent: "claude" });
-  // The broker service lost the run meanwhile (one from before it, #505).
+  // The broker service lost the run meanwhile (its store, say).
   await service.runs.end("new");
 
   const { broker, restart } = make();
@@ -542,11 +533,6 @@ test("across a restart, a run's tokens still check, and a run from before them k
   assert.deepEqual(broker.runOf("new").branches, ["issue-1-*"]);
   // Its agent token is redacted from its output still: the live state kept it.
   assert.ok(broker.secretsOf("new").includes(agentToken));
-  // The old run's secret works from its own sandbox alone, and the broker service has nothing
-  // of it.
-  assert.equal((await broker.check(secret, "10.9.1.5")).run.id, "old");
-  assert.equal((await broker.check(secret, "10.9.0.5")).status, 403);
-  assert.equal(await service.runs.get("old"), null);
 });
 
 test("a runner slow to say whether a restored run's inbox is open: the start goes on, the run takes comments once it says", async (t) => {

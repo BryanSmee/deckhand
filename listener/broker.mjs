@@ -16,14 +16,10 @@
 // What changes during a run (the issues it created, its pushes, the installation tokens it got,
 // its provider's last answer) stays here, by the run's id, the token's `jti`. Its first tokens
 // come from the broker service (`issuer`), which is told when the run ends.
-//
-// Runs started before tokens hold a random secret instead, found here by its hash and bound to
-// its sandbox by address (sentBy()), until they end: that path goes in a later release
-// (docs/architecture.md, Restarts).
 import { createHash, randomBytes } from "node:crypto";
 import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mjs";
 
-// What a run's token or secret sent from elsewhere than its sandbox gets.
+// What a run's token sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
 
 // A token's `exp` (ms), unchecked: for the list of a run's tokens to redact, never to trust one.
@@ -36,9 +32,9 @@ function expOf(token) {
   }
 }
 
-// Secrets are kept by hash: the map never holds a usable one, and lookups don't compare secrets.
-// Each run's entry does hold the installation tokens the GitHub gateway used for it (`tokens`),
-// for redaction: github-app.mjs caches them anyway.
+// What the broker service is told of a restored run's tokens (restore()). Each run's entry does
+// hold the installation tokens the GitHub gateway used for it (`tokens`), for redaction:
+// github-app.mjs caches them anyway.
 function hash(secret) {
   return createHash("sha256").update(secret).digest("hex");
 }
@@ -72,15 +68,11 @@ export function addressOf(req) {
 }
 
 export function createBroker({
-  // (run, address) → whether that address is the run's sandbox's or its engine's
-  // (broker-http.mjs runAt()), for the secrets of runs from before tokens. None: every such
-  // request is refused.
-  sentFrom = async () => false,
-  // req → the address of the sandbox that sent it: the one the egress proxy names when it
-  // relayed or forwarded the call (broker-http.mjs clientAddress()), else its source address.
+  // What check() reads, the tests' alone (below), with `keys` and `unknownKey`: req → the
+  // address of the sandbox that sent it, its source address by default; address → the ID of
+  // the network (or pod) it is on, or null, what binds a token to its sandbox (none: every
+  // token is refused).
   clientOf = async (req) => addressOf(req),
-  // address → the ID of the network (or pod) it is on, as the runner tells (runner/), or null:
-  // what binds a token to its sandbox. None: every token is refused.
   sandboxOf = async () => null,
   // The broker service (broker-service.mjs createBrokerService()): { issue(id, fields) →
   // { token, agentToken }, put(id, fields), end(id) }.
@@ -89,8 +81,7 @@ export function createBroker({
   // calls: { put(id, fields), end(id) }, told each run with what its gateways check, once its
   // sandbox is known, and its end. None: nowhere (the tests').
   gateway = NO_GATEWAY,
-  // () → kid → public key: what run tokens are checked with, the broker service's (and a key
-  // of the listener's from before it, while its tokens may still be presented).
+  // () → kid → public key: what check() verifies run tokens with.
   keys = () => new Map(),
   // () → a promise, once the keys were read again: called when a token names an unknown key.
   unknownKey = async () => {},
@@ -109,8 +100,6 @@ export function createBroker({
   // installation tokens the GitHub gateway used for it, which its output must not publish
   // (runs.mjs).
   const runs = new Map();
-  // hash(secret) → the same entry, for a run from before tokens (register()'s `secret`).
-  const secrets = new Map();
 
   // What its token reads is its capabilities' (`caps`, github-app.mjs readsOf()); each write
   // the GitHub gateway checked gets the one permission it needs besides (github-writes.mjs
@@ -129,9 +118,8 @@ export function createBroker({
   // `id`: the run's (runs.mjs), its tokens' `jti`; a restarted listener passes the same one, so
   // they still name it, with its agent token (`agentToken`) and run tokens (`issued`), for
   // redaction, and the network or
-  // pod they are bound to (`sandbox`), which its renewed ones carry. `secret`: a run's from before tokens, when a restarted listener picks
-  // it up; without an `id`, a new one (the tests' runs). → the handle the other calls take: the
-  // run's id, or its secret.
+  // pod they are bound to (`sandbox`), which its renewed ones carry; without an `id`, a new one
+  // (the tests' runs). → the handle the other calls take: the run's id.
   function register(
     repo,
     {
@@ -143,7 +131,6 @@ export function createBroker({
       reruns = [],
       reason = null,
       id = null,
-      secret = id ? null : random(),
       agentToken = null,
       sandbox = null,
       issued = [],
@@ -178,18 +165,14 @@ export function createBroker({
     };
     if (Array.isArray(caps)) withCaps(run, caps);
     runs.set(run.id, run);
-    if (secret) {
-      run.secret = hash(secret);
-      secrets.set(run.secret, run);
-    }
-    return secret ?? run.id;
+    return run.id;
   }
 
   // The live run of a handle (register()'s), or undefined. For the listener's own lookups
   // only: a service finds a call's run with check(), as a run's id is no secret.
   function runOf(handle) {
     if (!handle) return undefined;
-    return runs.get(handle) ?? secrets.get(hash(handle));
+    return runs.get(handle);
   }
 
   // The provider of the run's agent (agents/), once its settings are read: before issue(), its
@@ -263,9 +246,8 @@ export function createBroker({
   }
 
   // What the github service is told of the run (../github/runs.mjs runFields()): what its
-  // gateways check its calls against, the network or pod its calls come from, and, for a run
-  // from before tokens, its secret's hash (never the secret). `created` and `reruns`: taken only
-  // when the service has none (a run restored from before it).
+  // gateways check its calls against and the network or pod its calls come from. `created` and
+  // `reruns`: taken only when the service has none.
   function gatewayFields(run) {
     return {
       repo: run.repo,
@@ -279,7 +261,6 @@ export function createBroker({
       caps: run.caps,
       decided: run.decided,
       sandbox: run.sandbox,
-      secretHash: run.secret ?? null,
       created: run.created,
       reruns: run.reruns,
     };
@@ -319,13 +300,11 @@ export function createBroker({
   }
 
   // A run a restarted listener picked up: the broker service is told it still goes, with what
-  // its tokens claim, so they still renew there (a run from before the broker service, whose
-  // listener signed them, too). A run from before tokens has nothing there.
+  // its tokens claim, so they still renew there.
   async function restore(handle, shots = null) {
     const run = runOf(handle);
     if (!run) return;
     await gateway.put(run.id, gatewayFields(run));
-    if (run.secret) return;
     run.shots = shots;
     // The hashes of the tokens it handed the sandbox, for the broker's rule past their expiry
     // (only the newest renews), should it not have the run yet.
@@ -333,20 +312,16 @@ export function createBroker({
     await issuer.put(run.id, { ...fieldsOf(run), issued });
   }
 
-  // The run a call's credential (a token, or a secret from before tokens) names, once checked:
-  // { run, claims } or { status, message }. `from`: the call (its request: the address is
-  // clientOf()'s, the one the egress proxy names for a call it relayed or forwarded) or the
-  // address it came from; `audience`: the service's.
+  // The run a call's run token names, once checked: { run, claims } or { status, message }.
+  // `from`: the call (its request: the address is clientOf()'s) or the address it came from;
+  // `audience`: the service's. No service calls it: the gateways check a run's tokens in the
+  // github service (../github/runs.mjs check()), the models service its agent token
+  // (../models/runs.mjs). It stands in for those in the gateways' and endpoints' tests, which
+  // run on this broker.
   async function check(credential, from, audience = RUN_AUDIENCE) {
     const ip = typeof from === "string" ? from : from ? await clientOf(from) : "";
     const unknown = { status: 401, message: "unknown or finished run" };
-    if (!credential) return unknown;
-    if (!isToken(credential)) {
-      const run = secrets.get(hash(credential));
-      if (!run) return unknown;
-      if (!(await sentBy(run, null, ip))) return { status: 403, message: NOT_ITS_SANDBOX };
-      return { run, claims: null };
-    }
+    if (!credential || !isToken(credential)) return unknown;
     const verify = () => verifyToken(credential, { keys: keys(), audience, now: now() });
     let claims;
     try {
@@ -383,24 +358,14 @@ export function createBroker({
     return (runOf(handle)?.issued ?? []).map((t) => t.token);
   }
 
-  // Whether `req` comes from `run`'s own sandbox: its source address, not just the secret.
-  // `ip`: the sandbox's address, when the caller already has it; else clientOf()'s, the one the
-  // egress proxy vouches for when the call came through it. For the secrets of runs from before
-  // tokens.
-  async function sentBy(run, req, ip) {
-    ip ??= await clientOf(req);
-    return !!ip && (await sentFrom(run, ip)) === true;
-  }
-
-  // The run is over: its tokens and secret name nothing here from now on, and the broker
-  // service is told (`issuer.end()`, which tries again until it hears), so they renew nowhere.
+  // The run is over: its tokens name nothing here from now on, and the broker service is told
+  // (`issuer.end()`, which tries again until it hears), so they renew nowhere.
   function revoke(handle) {
     const run = runOf(handle);
     if (!run) return Promise.resolve();
     runs.delete(run.id);
-    if (run.secret) secrets.delete(run.secret);
     gateway.end(run.id);
-    return run.secret ? Promise.resolve() : issuer.end(run.id);
+    return issuer.end(run.id);
   }
 
   return {
@@ -418,7 +383,6 @@ export function createBroker({
     revoke,
     runOf,
     gatewayFields: (handle) => (runOf(handle) ? gatewayFields(runOf(handle)) : null),
-    sentBy,
     size: () => runs.size,
   };
 }
