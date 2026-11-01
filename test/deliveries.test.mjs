@@ -135,13 +135,14 @@ test("readDelivery: a body, or a stalled one dropped after the idle timeout", as
 });
 
 test("readDelivery: dropped past its total time, however steady, or past its size", async (t) => {
-  const steady = await serveReads(t, { limit: 100, idleMs: 100, totalMs: 200 });
+  // A chunk every 30 ms, well inside the idle timeout even on a loaded runner: the total ends it.
+  const steady = await serveReads(t, { limit: 100, idleMs: 300, totalMs: 600 });
   const trickle = steady.send();
   const timer = setInterval(() => trickle.write(" "), 30);
   t.after(() => clearInterval(timer));
   await until(() => steady.results.length === 1);
   clearInterval(timer);
-  assert.deepEqual(steady.results, ["body not received in 200 ms"]);
+  assert.deepEqual(steady.results, ["body not received in 600 ms"]);
   const small = await serveReads(t, { limit: 10, idleMs: 100, totalMs: 5000 });
   small.send().end("x".repeat(11));
   await until(() => small.results.length === 1);
