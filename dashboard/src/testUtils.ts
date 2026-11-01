@@ -9,6 +9,7 @@ import type {
   Capabilities,
   CapabilityInfo,
   ModeCapabilities,
+  PlanUsage,
   PolicyFile,
   Run,
   State,
@@ -63,6 +64,21 @@ export const makeState = (partial: Partial<State> = {}, added: Task[] = []): Sta
   const state = { ...(fixture as State), ...partial };
   return { ...state, tasks: [...state.tasks, ...added] };
 };
+
+// A plan's usage as api/state gives it: Claude's, its 5-hour window 42 % used and its week 18 %,
+// read at `now`, resetting after it.
+export const makePlan = (partial: Partial<PlanUsage> = {}, now = 1_800_000_000_000): PlanUsage => ({
+  plan: "claude",
+  label: "Claude",
+  windows: [
+    { name: "5h", used: 0.42, resetsAt: now + 3_600_000, at: now },
+    { name: "7d", used: 0.18, resetsAt: now + 3 * 86_400_000, at: now },
+  ],
+  updatedAt: now,
+  limited: false,
+  limitedUntil: null,
+  ...partial,
+});
 
 // A task as board.mjs lists it: an open issue of acme/app at work, with no run yet.
 export const makeTask = (partial: Partial<Task> = {}): Task => {

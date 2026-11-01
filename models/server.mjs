@@ -44,12 +44,13 @@ import {
 import { createRunnerClient } from "../runner/client.mjs";
 import { createAnthropicProxy } from "./anthropic.mjs";
 import { createAntigravityLogin } from "./antigravity-login.mjs";
-import { createChatgptLogin } from "./chatgpt.mjs";
-import { createGoogleRelay } from "./google.mjs";
+import { CHATGPT_URL, createChatgptLogin } from "./chatgpt.mjs";
+import { CLOUDCODE_HOST, createGoogleRelay } from "./google.mjs";
 import { createModelsServer } from "./http.mjs";
 import { fingerprintSalt, loginKey, loginSeal } from "./logins.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
 import { createRuns } from "./runs.mjs";
+import { antigravityPoll, claudePoll, codexPoll, createUsage } from "./usage.mjs";
 
 // An agent call streams for up to 10 minutes (lib/upstream.mjs IDLE_MS): a stopping copy lets
 // those in flight finish.
@@ -138,6 +139,8 @@ export function createModels({
   // The fingerprints' salt (logins.mjs fingerprintSalt()); none: one of this copy's own.
   salt,
   now = Date.now,
+  // The plans' usage calls' (usage.mjs), Anthropic's, ChatGPT's and Google's.
+  fetch = globalThis.fetch,
   log = () => {},
 }) {
   const runs = createRuns({
@@ -156,41 +159,13 @@ export function createModels({
     log,
   });
 
-  // Their Claude Code's API calls, with the operator's credential that they never see.
-  const anthropic = createAnthropicProxy({
-    runs,
-    name: config.claudeCredential,
-    credential: config.claudeCredential && env[config.claudeCredential],
-    // For runs on a credential their entry names (`claude@anthropic:key`, FALLBACKS).
-    named: Object.fromEntries(
-      config.credentials["claude@anthropic"].set.map((c) => [c, env[NAMED[c].variable]]),
-    ),
-    upstream: config.anthropicUrl,
-    // claude@openrouter, for runs that fall back to it (FALLBACKS).
-    providers: {
-      openrouter: {
-        name: "OPENROUTER_API_KEY",
-        credential: env.OPENROUTER_API_KEY,
-        upstream: config.openrouterUrl,
-      },
-    },
-    log,
-  });
-  // Their Codex's, likewise: with a ChatGPT plan's login, this service holds and refreshes it.
+  // The plans' logins, which their endpoints and the usage calls share.
   const chatgptLogin =
     config.openaiCredential === "CODEX_AUTH_FILE"
       ? createChatgptLogin({ file: env.CODEX_AUTH_FILE, store, seal, holder, now, log })
       : null;
-  const openai = createOpenAiProxy({
-    runs,
-    credential: config.openaiCredential === "OPENAI_API_KEY" ? env.OPENAI_API_KEY : null,
-    login: chatgptLogin,
-    upstream: config.openaiUrl,
-    log,
-  });
-  // Their Antigravity CLI's: a Gemini API key, or a Google AI plan's login (relayed by the
-  // egress proxy), refreshed with `agy` itself, in a container the runner starts
-  // (runner/service.mjs loginRefresh()).
+  // Refreshed with `agy` itself, in a container the runner starts (runner/service.mjs
+  // loginRefresh()).
   const agyLogin =
     config.agyCredential === "AGY_AUTH_FILE"
       ? createAntigravityLogin({
@@ -204,6 +179,61 @@ export function createModels({
           log,
         })
       : null;
+  // How much of each plan the runs used, for the dashboard (GET /usage): a Claude plan's
+  // token, by default or named in FALLBACKS, a ChatGPT plan's or a Google AI plan's login.
+  const claudePlan = env[NAMED.plan.variable];
+  const usage = createUsage({
+    plans: {
+      claude:
+        claudePlan &&
+        claudePoll({ token: claudePlan, upstream: config.anthropicUrl || undefined, fetch }),
+      codex:
+        chatgptLogin && codexPoll({ login: chatgptLogin, chatgptUrl: CHATGPT_URL, fetch, now }),
+      antigravity:
+        agyLogin &&
+        antigravityPoll({
+          login: agyLogin,
+          host: `https://${CLOUDCODE_HOST}`,
+          fetch,
+        }),
+    },
+    store,
+    now,
+    log,
+  });
+
+  // Their Claude Code's API calls, with the operator's credential that they never see.
+  const anthropic = createAnthropicProxy({
+    runs,
+    name: config.claudeCredential,
+    credential: config.claudeCredential && env[config.claudeCredential],
+    // For runs on a credential their entry names (`claude@anthropic:key`, FALLBACKS).
+    named: Object.fromEntries(
+      config.credentials["claude@anthropic"].set.map((c) => [c, env[NAMED[c].variable]]),
+    ),
+    upstream: config.anthropicUrl,
+    usage,
+    // claude@openrouter, for runs that fall back to it (FALLBACKS).
+    providers: {
+      openrouter: {
+        name: "OPENROUTER_API_KEY",
+        credential: env.OPENROUTER_API_KEY,
+        upstream: config.openrouterUrl,
+      },
+    },
+    log,
+  });
+  // Their Codex's, likewise: with a ChatGPT plan's login, this service holds and refreshes it.
+  const openai = createOpenAiProxy({
+    runs,
+    credential: config.openaiCredential === "OPENAI_API_KEY" ? env.OPENAI_API_KEY : null,
+    login: chatgptLogin,
+    upstream: config.openaiUrl,
+    usage,
+    log,
+  });
+  // Their Antigravity CLI's: a Gemini API key, or a Google AI plan's login (relayed by the
+  // egress proxy).
   const google = createGoogleRelay({
     runs,
     credential: config.agyCredential === "GEMINI_API_KEY" ? env.GEMINI_API_KEY : null,
@@ -216,6 +246,7 @@ export function createModels({
   const server = createModelsServer({
     endpoints: { anthropic, openai, google },
     runs,
+    usage,
     store,
     credentials: credentialNames(env),
     ...(salt && { salt }),
@@ -241,7 +272,7 @@ export function createModels({
       .catch((error) => log(`Antigravity CLI: ${error.message}`));
   }
 
-  return { server, runs, endpoints: { anthropic, openai, google }, ready };
+  return { server, runs, usage, endpoints: { anthropic, openai, google }, ready };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

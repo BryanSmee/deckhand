@@ -359,6 +359,27 @@
   margin-left: auto;
 }
 
+/* The plans' usage, at the header's right, before its controls. */
+.headerPlans {
+  margin-left: auto;
+}
+
+.headerPlans ~ .controls {
+  margin-left: 8px;
+}
+
+.header:has(.headerPlans) .hint {
+  margin-left: 0;
+}
+
+/* The repositories sheet: every window, a card like the run slots'. */
+.sheetPlans {
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  background: var(--bg);
+}
+
 /* The phone's top bar. */
 .topbar {
   display: flex;

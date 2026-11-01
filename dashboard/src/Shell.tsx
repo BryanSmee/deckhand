@@ -29,6 +29,7 @@ import * as Icon from "./ui/icons";
 import { NavItem } from "./ui/NavItem";
 import { Sheet } from "./ui/Sheet";
 import { Meter } from "./ui/Meter";
+import { PlanBars } from "./ui/PlanUsage";
 import { StatusDot } from "./ui/Status";
 import { usePopup } from "./ui/popup";
 import { ThemeSwitch } from "./ui/ThemeSwitch";
@@ -361,18 +362,20 @@ function NewRequest({
   );
 }
 
-// The page's title, its GitHub link, its views and the page's own controls (`children`: the
-// board's Start in); Settings' tabs under its title. `needs`: the repositories that need you,
-// on the Repositories tab.
+// The page's title, its GitHub link, its views, the plans' usage and the page's own controls
+// (`children`: the board's Start in); Settings' tabs under its title. `needs`: the repositories
+// that need you, on the Repositories tab.
 export function PageHeader({
   route,
   github,
   needs = 0,
+  state = null,
   children,
 }: {
   route: Route;
   github: string;
   needs?: number;
+  state?: State | null;
   children?: ComponentChildren;
 }) {
   const settings = route.page === "settings";
@@ -434,6 +437,9 @@ export function PageHeader({
       {!settings && !repo && (
         <span class={styles.hint}>The board is per repository: open one to plan its work.</span>
       )}
+      {!settings && state && (
+        <PlanBars plans={state.plans} now={state.now} form="compact" class={styles.headerPlans} />
+      )}
       {children && <div class={styles.controls}>{children}</div>}
     </header>
   );
@@ -472,6 +478,7 @@ export function TopBar(props: TopBarProps) {
           <span class={styles.switcherLabel}>{label}</span>
           <Icon.ChevronDown class={styles.chevron} />
         </button>
+        {state && <PlanBars plans={state.plans} now={state.now} form="phone" />}
         {onSearch && (
           <IconButton
             variant="ghost"
@@ -486,6 +493,7 @@ export function TopBar(props: TopBarProps) {
           <Sheet title="Repositories" onClose={() => setSheet(false)}>
             <RepoLinks counts={counts} route={route} touch />
             <RunSlots {...props} />
+            {state && <PlanBars plans={state.plans} now={state.now} class={styles.sheetPlans} />}
             {state && <User user={state.user} />}
           </Sheet>
         )}

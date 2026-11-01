@@ -140,6 +140,7 @@ export function createHttp(ctx) {
     const { shown, queued } = shownTasks(user);
     const { edges, blockers } = waitEdges(shown, ctx.waits.list());
     const keys = [...shown.map((t) => t.key), ...blockers];
+    const plans = ctx.models?.plans?.() ?? [];
     // Titles and parents the orchestrator doesn't have yet show on a later poll; a lane's parent's
     // title names it.
     if (ctx.app) {
@@ -195,6 +196,9 @@ export function createHttp(ctx) {
       githubUrl: config.githubUrl,
       // Which Deckhand runs and since when (status.mjs serverInfo()): the Repositories page.
       server: ctx.server,
+      // How much of each plan the runs used (models-service.mjs plans()): only with a plan's
+      // credential set, and only its numbers and times.
+      ...(plans.length && { plans }),
       // The last catch-up with GitHub, at start or from a Sync (sync.mjs); null before one.
       lastSync: ctx.lastSync?.() ?? null,
       now: Date.now(),

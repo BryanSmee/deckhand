@@ -301,6 +301,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
             route={route}
             github={github}
             needs={needingYou(repos?.repos ?? null, tasks)}
+            state={state}
           />
         )}
         {overview ? (
@@ -325,7 +326,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
               view={wide ? view : phoneView}
               onView={selectView}
               header={(controls) => (
-                <PageHeader route={route} github={github}>
+                <PageHeader route={route} github={github} state={state}>
                   {controls}
                 </PageHeader>
               )}
