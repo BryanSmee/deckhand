@@ -527,16 +527,28 @@ test("runs: a log holding a token goes redacted, whole, its bytes otherwise as t
   writeFileSync(join(dir, `${clean}.log`), `${meta(clean)}\n`);
   const calls = [];
   const runner = {
-    logs: new Map(),
     // A part a try before sent of the file as it was.
-    remove: async (id) => calls.push(`remove ${id}`),
+    logs: new Map([[dirty, Buffer.from(meta(dirty))]]),
+    remove: async (id) => {
+      calls.push(`remove ${id}`);
+      runner.logs.delete(id);
+    },
     upload: async (id, path) => {
       calls.push(`upload ${id}`);
       runner.logs.set(id, readFileSync(path));
     },
   };
   await moveLogs(dir, runner, { log: () => {} }).done;
-  assert.deepEqual(calls.sort(), [`remove ${dirty}`, `upload ${dirty}`, `upload ${clean}`]);
+  // Removed before it is sent, not after: the runner's log would be gone. The two logs' order is
+  // the folder's.
+  assert.deepEqual(
+    calls.filter((c) => c.endsWith(dirty)),
+    [`remove ${dirty}`, `upload ${dirty}`],
+  );
+  assert.deepEqual(
+    calls.filter((c) => c.endsWith(clean)),
+    [`upload ${clean}`],
+  );
   assert.deepEqual(
     runner.logs.get(dirty),
     Buffer.concat([
@@ -550,6 +562,28 @@ test("runs: a log holding a token goes redacted, whole, its bytes otherwise as t
     assert.equal(existsSync(join(dir, `${id}.log`)), false);
     assert.equal(existsSync(join(dir, `${id}.log.redacted`)), false);
   }
+});
+
+test("runs: a log longer than a read, a token across two of them and in a long line, goes redacted", async (t) => {
+  const dir = tempDir(t);
+  const id = "deckhand-org-repo-16-1000";
+  const first = `${line({ type: "listener", key: id, startedAt: 1000 })}\n`;
+  const token = `ghs_${"c".repeat(36)}`;
+  const read = 4 * 1024 * 1024; // runlog.mjs REDACT_READ
+  // A line of words longer than a read, the token across the end of the first read; then one
+  // more past a read's length, with no newline at the end and a token near its own end.
+  const words = (n) => "word ".repeat(Math.ceil(n / 5)).slice(0, n);
+  const before = words(read - first.length - 10);
+  const long = `${before}${token} ${words(read)}\n`;
+  const last = `${words(read + 100)}${token}`;
+  writeFileSync(join(dir, `${id}.log`), first + long + last);
+  const runner = fakeRunner();
+  runner.remove = async () => {};
+  await moveLogs(dir, runner, { log: () => {} }).done;
+  assert.equal(
+    runner.logs.get(id),
+    `${first}${before}[redacted] ${words(read)}\n${words(read + 100)}[redacted]`,
+  );
 });
 
 test("runs: a log to redact whose runner copy can't be removed stays as it was, for the next start", async (t) => {

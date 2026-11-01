@@ -14,8 +14,8 @@ import {
   renameSync,
   rmSync,
   statSync,
-  writeSync,
 } from "node:fs";
+import { open } from "node:fs/promises";
 import { join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { idOf } from "./agents/common.mjs";
@@ -24,7 +24,7 @@ import { entryLabel } from "./agents/select.mjs";
 import { kindOf } from "./modes.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
-import { redact } from "../lib/redact.mjs";
+import { partEnd, redact } from "../lib/redact.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
@@ -195,7 +195,7 @@ export function moveLogs(
     const path = join(logDir, file);
     for (let wait = retryMs; ; wait = Math.min(wait * 2, 60_000)) {
       try {
-        const clean = redactedCopy(path);
+        const clean = await redactedCopy(path);
         if (clean) {
           // What the runner holds of it, from an earlier try, is of the file as it was: the
           // file is sent again whole.
@@ -241,52 +241,77 @@ export function moveLogs(
 
 // A log a listener kept may hold a GitHub token or a run token: it was written before
 // lib/redact.mjs knew their every shape. The runner refuses an append holding one rather than
-// redact it (its offsets are the writer's, lib/store.mjs appendBlobAt), so such a log would be
-// refused at every start. Redacted here first, line by line as runs.mjs redacts a run's output
-// (no secrets: the runner's store knows none, only their shapes), into `<file>.redacted`: its
-// path, or null when nothing was. Bytes as latin1, as the store's blobs: one character per
-// byte, so the bytes around a token come back as they were.
-const REDACT_CHUNK = 4 * 1024 * 1024;
-// A line longer than this is redacted in parts: a string can't hold a log's every byte.
-const REDACT_LINE_MAX = 64 * 1024 * 1024;
-function redactedCopy(path) {
+// redact it (its offsets are the writer's, lib/store.mjs appendBlobAt), and checks each part
+// ../runner/client.mjs upload() sends (4 MB at most), so such a log would be refused at every
+// start. Redacted here first, with no secrets (the runner's store knows none, only their
+// shapes), line by line as runs.mjs redacts a run's output, a line longer than a read in parts
+// that end where upload()'s do (partEnd()). Read a part at a time, between which the listener
+// goes on. A copy, `<file>.redacted`, is written only from the first token found, the bytes
+// before it copied then: → its path, or null when the log holds none (most do). Bytes as
+// latin1, as the store's blobs: one character per byte, so the bytes around a token come back
+// as they were.
+const REDACT_READ = 4 * 1024 * 1024;
+// A run of token bytes longer than this, with no place to end a part, is redacted in parts
+// anyway: a string can't hold a log's every byte.
+const REDACT_PART_MAX = 64 * 1024 * 1024;
+async function redactedCopy(path) {
   const out = `${path}.redacted`;
-  let changed = false;
-  const input = openSync(path, "r");
+  const input = await open(path, "r");
+  let output = null;
   try {
-    const output = openSync(out, "w");
-    try {
-      const write = (text) => {
-        const clean = redact(text, []);
-        if (clean !== text) changed = true;
-        writeSync(output, Buffer.from(clean, "latin1"));
-      };
-      const buffer = Buffer.alloc(REDACT_CHUNK);
-      let pending = "";
-      for (let n; (n = readSync(input, buffer, 0, buffer.length, null));) {
-        pending += buffer.toString("latin1", 0, n);
-        const end = pending.lastIndexOf("\n") + 1;
-        if (end) {
-          for (const one of pending.slice(0, end).split(/(?<=\n)/)) write(one);
-          pending = pending.slice(end);
-        } else if (pending.length > REDACT_LINE_MAX) {
-          write(pending);
-          pending = "";
+    const buffer = Buffer.alloc(REDACT_READ);
+    let carry = Buffer.alloc(0);
+    let read = 0; // the file's bytes read
+    let done = 0; // and handled
+    for (;;) {
+      const { bytesRead } = await input.read(buffer, 0, buffer.length, read);
+      read += bytesRead;
+      const data = Buffer.concat([carry, buffer.subarray(0, bytesRead)]);
+      // At the file's end, all that is left.
+      let end = data.length;
+      if (bytesRead) {
+        end = partEnd(data);
+        if (!end && data.length < REDACT_PART_MAX) {
+          carry = data;
+          continue;
+        }
+        end ||= data.length;
+      }
+      const text = data.toString("latin1", 0, end);
+      carry = data.subarray(end);
+      const clean = text
+        .split(/(?<=\n)/)
+        .map((line) => redact(line, []))
+        .join("");
+      if (clean !== text && !output) {
+        output = await open(out, "w");
+        for (let at = 0; at < done;) {
+          const { bytesRead: n } = await input.read(
+            buffer,
+            0,
+            Math.min(buffer.length, done - at),
+            at,
+          );
+          if (!n) throw new Error(`${path} got shorter while it was read`);
+          await output.write(buffer.subarray(0, n));
+          at += n;
         }
       }
-      if (pending) write(pending);
-    } finally {
-      closeSync(output);
+      if (output) await output.write(Buffer.from(clean, "latin1"));
+      done += end;
+      if (!bytesRead) break;
     }
   } catch (error) {
+    await output?.close();
+    output = null;
     rmSync(out, { force: true });
     throw error;
   } finally {
-    closeSync(input);
+    await input.close();
   }
-  if (changed) return out;
-  rmSync(out, { force: true });
-  return null;
+  if (!output) return null;
+  await output.close();
+  return out;
 }
 
 // A wait that keeps no process up: a listener stopping doesn't wait for a retry.
