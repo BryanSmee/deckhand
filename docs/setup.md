@@ -1316,6 +1316,10 @@ otherwise; edge and the orchestrator start in its place.
   `edge-data` volume; to keep edge's, remove `/data/app.json` from the `data` volume. Then
   restart edge and the orchestrator.
 
+Releases no longer publish `deckhand-listener`: its tags already pulled get no update (`edge`
+ends on a placeholder that only says to move to edge and the orchestrator). Once updated,
+remove its image (`docker image rm` it).
+
 ### Two copies
 
 Edge and the orchestrator can each run two copies, so an update stops nothing.

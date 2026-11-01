@@ -14,7 +14,8 @@ setup: >-
   (cd dashboard && npm ci --no-audit --no-fund) &&
   cd listener/vendor && npm ci --no-audit --no-fund && npm run build
 
-# A container engine for building and starting listener/Dockerfile and the other images.
+# A container engine for building and starting edge/Dockerfile, orchestrator/Dockerfile and the
+# other images.
 docker:
   cache: true
 
