@@ -35,6 +35,8 @@ export function createOpenAiProxy({
   upstream = "https://api.openai.com/v1", // OPENAI_BASE_URL, if any
   login = null, // without a key: chatgpt.mjs's login, and where its calls go
   chatgptUrl = CHATGPT_URL,
+  // usage.mjs's: the plan's answers' rate limit headers, for the dashboard's bars.
+  usage = null,
   log = () => {},
 }) {
   const plan = !credential && login;
@@ -62,9 +64,11 @@ export function createOpenAiProxy({
     // A spent login refuses the call with its status: a bad credential, for a fallback
     // (agents/ providerError()).
     authHeaders: async () => (plan ? login.headers() : { authorization: `Bearer ${credential}` }),
-    answered: (run, status, headers) => {
+    answered: (run, status, headers, answer) => {
+      if (!plan) return;
       // Expired early or revoked: the next call refreshes it first.
-      if (plan && status === 401) login.refused(headers.authorization);
+      if (status === 401) login.refused(headers.authorization);
+      usage?.codexAnswered(status, answer);
     },
     secrets: () => (plan ? login.secrets() : [credential]),
     log,

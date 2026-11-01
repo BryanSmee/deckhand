@@ -2,7 +2,8 @@
 // credentials, as the orchestrator: which of them the operator set (names only, for its
 // settings), what redacts them from runs' output (their fingerprints), a run's API state at its
 // end (its provider's last status, a plan's reset, its last failure: the reply and the
-// fallbacks read it) and the `models` stream (the calls it refused a run, for its log).
+// fallbacks read it), how much of each plan the runs used (the dashboard's bars, plans()) and the
+// `models` stream (the calls it refused a run, for its log).
 import { serviceClient } from "../lib/service-client.mjs";
 
 // How often the fingerprints are read again (a plan's login refreshed), and how long a set is
@@ -10,6 +11,10 @@ import { serviceClient } from "../lib/service-client.mjs";
 const PRINTS_EVERY_MS = 60_000;
 const PRINTS_KEPT_MS = 24 * 60 * 60_000;
 const RETRY_MS = 5_000;
+// How often the plans' usage is read again while a dashboard asks for it (api/state, every few
+// seconds): the readings change with the runs' calls, and a poll of the plans is the models
+// service's to pace (../models/usage.mjs POLL_MS).
+export const USAGE_MS = 15_000;
 
 // `before` (a list, or none) with `fresh` last, those of `fresh` taken out of it first (by
 // `keyOf`), then the oldest dropped past `max`: `fresh` stays whole.
@@ -17,6 +22,31 @@ function newestLast(before = [], fresh = [], keyOf, max) {
   const now = new Set((fresh ?? []).map(keyOf));
   const old = (before ?? []).filter((x) => !now.has(keyOf(x)));
   return [...old.slice(Math.max(0, old.length - Math.max(0, max - now.size))), ...(fresh ?? [])];
+}
+
+const num = (n) => (typeof n === "number" && Number.isFinite(n) ? n : null);
+const text = (t) => (typeof t === "string" ? t.slice(0, 80) : null);
+
+// A plan's usage as api/state gives it: its numbers, times and names, nothing else.
+export function planOf(plan) {
+  if (!plan || typeof plan.plan !== "string") return null;
+  const windows = (Array.isArray(plan.windows) ? plan.windows : [])
+    .filter((w) => typeof w?.name === "string" && num(w.used) !== null)
+    .map((w) => ({
+      name: text(w.name),
+      ...(text(w.label) && { label: text(w.label) }),
+      used: Math.min(Math.max(w.used, 0), 1),
+      resetsAt: num(w.resetsAt),
+      at: num(w.at),
+    }));
+  return {
+    plan: text(plan.plan),
+    label: text(plan.label) ?? text(plan.plan),
+    windows,
+    updatedAt: num(plan.updatedAt),
+    limited: plan.limited === true,
+    limitedUntil: num(plan.limitedUntil),
+  };
 }
 
 // `urls`: MODELS_SERVICE_URL (its copies, comma-separated); `token()`: the Authorization
@@ -118,6 +148,28 @@ export function createModelsService({
     }
   }
 
+  // The plans' usage as last read, for api/state: [] before a read, or without a plan. Asked again
+  // in the background, USAGE_MS after the last read: only while a dashboard asks, so the plans
+  // are polled only then (`?poll=1`). A failed read keeps the last one.
+  let usage = { at: -Infinity, plans: [], reading: null };
+  function plans() {
+    if (!usage.reading && now() - usage.at >= USAGE_MS) {
+      usage.reading = client
+        .json("GET", "/usage?poll=1", { waitMs: 10_000 })
+        .then((answer) => {
+          if (Array.isArray(answer?.plans)) usage.plans = answer.plans.map(planOf).filter(Boolean);
+        })
+        .catch((error) => log(`Models: the plans' usage (${error.message})`))
+        .finally(() => {
+          usage.at = now();
+          usage.reading = null;
+        });
+    }
+    return usage.plans;
+  }
+  // The read under way, for the tests.
+  const usageRead = () => usage.reading ?? Promise.resolve();
+
   // The `models` stream: `note(event)` for each line a run's log gets, acknowledged once
   // handled.
   let consuming = null;
@@ -151,6 +203,8 @@ export function createModelsService({
     credentials,
     prints,
     apiOf,
+    plans,
+    usageRead,
     consume,
     start,
     stop() {

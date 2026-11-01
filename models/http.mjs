@@ -8,7 +8,8 @@
 //   they came from in `x-deckhand-sandbox` (lib/broker-client.mjs);
 //   the orchestrator's: which credentials the operator set (GET /credentials, names only), what
 //   redacts them from runs' output without them (GET /fingerprints), a run's API state (GET
-//   /runs/:id/api), and the `models` stream (GET /events, POST /events/ack);
+//   /runs/:id/api), how much of each plan the runs used (GET /usage, `?poll=1` while a dashboard
+//   is open: usage.mjs), and the `models` stream (GET /events, POST /events/ack);
 //   GET /health, /ready: liveness, and readiness (503 once draining).
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
@@ -32,6 +33,7 @@ export const ROUTES = {
   "GET /credentials": ["orchestrator"],
   "GET /fingerprints": ["orchestrator"],
   "GET /runs/:id/api": ["orchestrator"],
+  "GET /usage": ["orchestrator"],
   "GET /events": ["orchestrator"],
   "POST /events/ack": ["orchestrator"],
 };
@@ -47,12 +49,14 @@ export { fingerprints };
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
 // `endpoints`: { anthropic, openai, google }, each { handle(req, res) }; `runs`: runs.mjs's;
+// `usage`: usage.mjs's;
 // `credentials`: the names of those the operator set; `secrets()`: their values, and the plan
 // logins' tokens as last used; `keys`: the broker's public keys, for the service tokens;
 // `bound`: lib/service-token.mjs networkCallers()'s, or null (Kubernetes).
 export function createModelsHandler({
   endpoints,
   runs,
+  usage = null,
   store,
   credentials,
   secrets,
@@ -116,6 +120,10 @@ export function createModelsHandler({
         throw new Refused(400, "not a plain path");
       }
       return sendJson(res, await runs.state(id));
+    }
+    if (req.method === "GET" && url.pathname === "/usage") {
+      const poll = url.searchParams.get("poll") === "1";
+      return sendJson(res, { plans: usage ? await usage.read({ poll }) : [] });
     }
     if (req.method === "GET" && url.pathname === "/events") return events(res, url);
     if (req.method === "POST" && url.pathname === "/events/ack") {

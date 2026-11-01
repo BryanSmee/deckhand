@@ -27,8 +27,11 @@ const GEMINI_ROUTES = [
 
 // The calls each relayed host serves to `agy` (checked against agy 1.4.0), nothing else: the
 // plan's token opens more than the CLI's API, and a sandbox mustn't reach the rest with it.
+// The Antigravity CLI's Cloud Code host: its API, and its quota (usage.mjs).
+export const CLOUDCODE_HOST = "daily-cloudcode-pa.googleapis.com";
+
 export const RELAYED_PATHS = {
-  "daily-cloudcode-pa.googleapis.com": ["POST", "v1internal:[A-Za-z]+"],
+  [CLOUDCODE_HOST]: ["POST", "v1internal:[A-Za-z]+"],
   "www.googleapis.com": ["GET", "oauth2/v2/userinfo"],
 };
 

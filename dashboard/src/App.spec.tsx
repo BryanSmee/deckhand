@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/pre
 import { beforeEach, expect, test, vi } from "vitest";
 import type { RepoList } from "./api";
 import { Dashboard } from "./App";
-import { FakeSource, makeState, makeTask } from "./testUtils";
+import { FakeSource, makePlan, makeState, makeTask } from "./testUtils";
 import type { Entry } from "./types";
 
 const state = makeState();
@@ -620,4 +620,22 @@ test("on a phone: the tab bar marks the page, and the switcher's sheet lists the
   // Following a link closes it.
   fireEvent.click(links[1]);
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+test("the plans' usage: in the page header on a wide screen, in the top bar on a phone", () => {
+  history.replaceState(null, "", "#/tasks");
+  const now = 1_800_000_000_000;
+  const { unmount } = render(<Dashboard state={makeState({ now })} error={null} />);
+  // No plan set: nothing new.
+  expect(screen.queryByRole("group", { name: "Plan usage" })).toBeNull();
+  unmount();
+  const withPlan = makeState({ now, plans: [makePlan({}, now)] });
+  const wideView = render(<Dashboard state={withPlan} error={null} />);
+  const group = screen.getByRole("group", { name: "Plan usage" });
+  expect(group.closest("header")).toBeTruthy();
+  expect(within(group).getAllByRole("img", { name: /^Claude (5h|week): / })).toHaveLength(2);
+  wideView.unmount();
+  wide = false;
+  render(<Dashboard state={withPlan} error={null} />);
+  expect(screen.getAllByRole("img", { name: /^Claude 5h: 42 % used/ })).toHaveLength(1);
 });

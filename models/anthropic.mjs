@@ -53,6 +53,8 @@ export function createAnthropicProxy({
   // Other providers (agents/claude.mjs), for runs that name one: { openrouter: { name,
   // credential, upstream } }.
   providers = {},
+  // usage.mjs's: the plan's answers' rate limit headers, for the dashboard's bars.
+  usage = null,
   log = () => {},
 }) {
   const own = { name, credential, upstream };
@@ -108,6 +110,7 @@ export function createAnthropicProxy({
     answered: (run, status, _headers, answer) => {
       if (settingsOf(run)?.name !== NAMED.plan.variable) return;
       run.apiReset = status === 429 ? resetOf(answer) : null;
+      usage?.claudeAnswered(status, answer, run.apiReset);
     },
     secrets: () =>
       [
