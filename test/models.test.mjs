@@ -578,8 +578,9 @@ test("redacting with fingerprints stays cheap: a few windows hashed per MB, not 
   const out = redact(`${text} ${KEY.slice(2, 33)}`, prints);
   const ms = performance.now() - started;
   assert.ok(out.endsWith(" [redacted]"));
-  // What hashing every window took (#504's first fix): 500 ms and more per MB and set.
-  assert.ok(ms < 250, `${Math.round(ms)} ms`);
+  // What hashing every window took (#504's first fix): 500 ms and more per MB and set. Below
+  // that by enough for a busy CI runner (256 ms seen), not by half.
+  assert.ok(ms < 400, `${Math.round(ms)} ms`);
 });
 
 // A fake models service's GET /fingerprints for createModelsService(): `answer(n)` for the n-th.
