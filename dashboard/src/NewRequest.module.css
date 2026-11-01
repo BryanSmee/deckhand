@@ -10,8 +10,7 @@
   border: 0;
 }
 
-.note,
-.preview {
+.note {
   margin: 0;
   font-size: 13px;
   color: var(--text-2);

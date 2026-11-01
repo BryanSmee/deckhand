@@ -345,19 +345,6 @@ export interface OrderMove {
   first?: boolean;
 }
 
-// A preview hook waiting or running (listener/previews.mjs status()). Sent, not shown: the
-// top bar counts them.
-export interface Preview {
-  // Its container's name.
-  name: string;
-  repo: string;
-  // pull_request or workflow_run, and the payload's action.
-  event: string;
-  action: string | null;
-  state: "waiting" | "running";
-  since: number;
-}
-
 // A catch-up with GitHub (listener/sync.mjs), the last one in State, the one it did from
 // POST api/sync: deliveries GitHub couldn't hand over, asked for again, pull requests whose
 // state changed, and, from the dashboard only, the rebase runs its conflict pass started.
@@ -426,7 +413,6 @@ export interface State {
   // AUTO_PICKUP_SLOTS, within maxParallel, and how many auto-picked runs hold them now; absent
   // while it is off (or from a listener from before it).
   autoPickup?: { slots: number; running: number };
-  previews?: Preview[];
   // Each repo's inbox issues and discussions category, for the repos whose config the
   // listener has read: New request offers those it has (listener/work.mjs
   // sendToInbox(), listener/discussions.mjs).
@@ -544,7 +530,7 @@ export interface Onboarded {
 export type Source = "repo" | "operator" | "refused" | "unknown";
 
 // One setting a run reads (listener/repo-view.mjs settingRows()); `key` is its YAML key.
-// Refused: it needs a grant the operator doesn't give (dockerfile, preview, docker).
+// Refused: it needs a grant the operator doesn't give (dockerfile, docker).
 // `line`: where .deckhand.yaml sets it (null: it doesn't).
 export interface SettingRow {
   key: string;
@@ -579,7 +565,6 @@ export interface MountRow {
 export interface Grant {
   files: string[];
   grantFiles: string[];
-  allowPreview: boolean;
   allowDockerfile: boolean;
   allowBranchDockerImages: boolean;
   allowDocker: boolean;
@@ -590,9 +575,6 @@ export interface Grant {
   // `review.merge` may merge Deckhand's pull requests (`auto_merge`); "public": on a public
   // repository too (`auto_merge_public`).
   allowAutoMerge: boolean | "public";
-  // acknowledge_automerge_and_preview_is_highly_dangerous: auto-merge with a granted preview
-  // hook, which runs the default branch as root on the host.
-  acknowledgeAutoMergePreview: boolean;
   hosts: string[];
   // Those whose plain HTTP answers the egress proxy keeps in its cache.
   cachedHosts: string[];

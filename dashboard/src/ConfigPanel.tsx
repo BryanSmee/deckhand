@@ -306,12 +306,7 @@ function Body({ config, opened, toggle, setOpened }: BodyProps) {
   return (
     <div class={styles.layout}>
       <main class={styles.main}>
-        {config.repo.autoMerge && (
-          <AutoMergeBox
-            isPrivate={config.repo.private}
-            preview={!!grant?.allowPreview && !!grant.acknowledgeAutoMergePreview}
-          />
-        )}
+        {config.repo.autoMerge && <AutoMergeBox isPrivate={config.repo.private} />}
         {problems.length > 0 && (
           <section id={anchor("problems")} class={styles.problems} role="alert">
             <h2>
@@ -681,16 +676,11 @@ function GrantCard({ grant }: { grant: Grant }) {
   const flags: [string, boolean | string][] = [
     ["dockerfile", grant.allowDockerfile],
     ["branch_docker_images", grant.allowBranchDockerImages],
-    ["preview", grant.allowPreview],
     ["docker", grant.allowDocker],
     ["research", grant.allowResearch],
     ["workflows", grant.allowWorkflows],
     ["auto_merge", grant.allowAutoMerge],
   ];
-  // Only said when set: it acknowledges what auto-merge with a preview hook risks.
-  if (grant.acknowledgeAutoMergePreview) {
-    flags.push(["acknowledge_automerge_and_preview_is_highly_dangerous", true]);
-  }
   const policies = grant.grantFiles.length
     ? grant.grantFiles.map((f) => `policy/${f}`).join(", ")
     : "none: no allow_grant rule, nothing granted";
@@ -776,8 +766,7 @@ const AUTO_MERGE_DOCS =
   "https://github.com/BryanSmee/deckhand/blob/main/docs/security.md#auto-merge";
 
 // What auto-merge gives up, at the top of the panel: it is on (granted and in the config).
-// `preview`: its preview hook is granted, and acknowledged with auto-merge.
-function AutoMergeBox({ isPrivate, preview }: { isPrivate: boolean; preview: boolean }) {
+function AutoMergeBox({ isPrivate }: { isPrivate: boolean }) {
   return (
     <section class={styles.autoMerge} role="note">
       <h2>
@@ -794,13 +783,6 @@ function AutoMergeBox({ isPrivate, preview }: { isPrivate: boolean; preview: boo
         <p>
           <strong>This repository is public:</strong> anyone can comment, so anyone can try to steer
           what gets merged.
-        </p>
-      )}
-      {preview && (
-        <p>
-          <strong>Its preview hook runs the default branch as root on the host</strong>{" "}
-          (acknowledge_automerge_and_preview_is_highly_dangerous): an auto-merged change can reach
-          root on the host with nobody reading it.
         </p>
       )}
       <p>

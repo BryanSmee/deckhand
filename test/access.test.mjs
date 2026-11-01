@@ -96,11 +96,11 @@ test("a broken policy stops the repo's runs as a broken grant file does", async 
   assert.match(logged.join("\n"), /the operator's policies can't decide org\/repo's: policy error/);
 });
 
-test("a preview hook, Dockerfile or engine without its grant: one reply listing them", async (t) => {
-  const yaml = "preview: ./preview.sh\ndockerfile: docker/Dockerfile\ndocker: true\n";
+test("a Dockerfile or engine without its grant: one reply listing them", async (t) => {
+  const yaml = "dockerfile: docker/Dockerfile\ndocker: true\n";
   const { error, logged } = await refusal(t, "hosts: [pypi.org]\n", yaml);
   assert.match(error, /^Claude can't run here: `\.deckhand\.yaml` on `trunk` has errors\./);
-  for (const name of ["preview", "dockerfile", "docker"]) {
+  for (const name of ["dockerfile", "docker"]) {
     assert.match(
       error,
       new RegExp(
@@ -116,7 +116,7 @@ test("a preview hook, Dockerfile or engine without its grant: one reply listing 
     agent: claude,
     note: () => {},
     log: () => {},
-    granted: grantedOf(["preview", "dockerfile", "docker"]),
+    granted: grantedOf(["dockerfile", "docker"]),
   });
   assert.equal(access.grant.allowDocker, true);
   assert.deepEqual(access.grant.grantFiles, ["grants.rego"]);

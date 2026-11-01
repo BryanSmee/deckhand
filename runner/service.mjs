@@ -1,8 +1,7 @@
 // The runner service (#503): the only one holding the Docker socket or the Kubernetes API. It
 // starts, follows, talks to and removes sandboxes (../listener/runner/: the backends), builds
-// repo images and installs agents (../listener/images.mjs), runs preview hooks
-// (../listener/previews.mjs) and the plan logins' refresh, and keeps the runs' logs and events in
-// its store. Its callers say what they want; what decides a sandbox's spec (branches, mode,
+// repo images and installs agents (../listener/images.mjs), runs the plan logins' refresh, and
+// keeps the runs' logs and events in its store. Its callers say what they want; what decides a sandbox's spec (branches, mode,
 // caches, tokens' claims) stays with the orchestrator (../listener/preparation.mjs).
 //
 // Each endpoint names the callers it takes (ROUTES, lib/service-token.mjs serviceGuard()): the
@@ -31,15 +30,7 @@ import { agentFor } from "../listener/agents/index.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { createEvents } from "./events.mjs";
 import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
-import {
-  buildPlan,
-  buildProblem,
-  grantOrRefuse,
-  previewEventProblem,
-  previewJob,
-  validRepo,
-} from "./hooks.mjs";
-import { notGranted } from "../listener/grants.mjs";
+import { buildPlan, buildProblem, validRepo } from "./builds.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId } from "./logs.mjs";
 
@@ -67,8 +58,6 @@ export const ROUTES = {
   "POST /images": ["orchestrator"],
   "POST /agents/:agent/install": ["orchestrator"],
   "POST /caches": ["orchestrator"],
-  "POST /previews": ["orchestrator"],
-  "GET /previews": ["orchestrator"],
   "GET /logs/:id": ["orchestrator"],
   "POST /logs/:id": ["orchestrator"],
   "DELETE /logs/:id": ["orchestrator"],
@@ -162,8 +151,8 @@ function route(key) {
 }
 
 // `backend`: ../listener/runner/index.mjs createBackend()'s { runner, images, jobs } as the
-// runner wraps them; `images`: ../listener/images.mjs's, `previews`: ../listener/previews.mjs's,
-// `logs`: logs.mjs's; `broker.runTokens(run, sandbox)`: the run's first tokens, as variables, once
+// runner wraps them; `images`: ../listener/images.mjs's, `logs`: logs.mjs's;
+// `broker.runTokens(run, sandbox)`: the run's first tokens, as variables, once
 // its network or pod exists (the orchestrator has the broker service sign them, #493); `refresh`: the Antigravity login's
 // refresh job, or null. `keys()`: the broker's public keys (kid → key); `bound`: the callers'
 // networks (lib/service-token.mjs networkCallers()), or null on Kubernetes.
@@ -171,7 +160,6 @@ export function createRunnerService({
   config,
   runner,
   images,
-  previews,
   logs,
   store,
   broker,
@@ -188,9 +176,6 @@ export function createRunnerService({
   checkSpec = (spec) => specProblems(config, spec, { granted }),
   // The grants folder, read now (the tests' own).
   grants,
-  // (repo, ref) → a folder of the repo's files (checkout.mjs, from the github service's
-  // tarball; `ref` null: its default branch).
-  checkout,
   // (repo, path, ref) → a file's blob id at `ref` (null: its default branch), or null: the
   // github service's.
   blobOf = async () => null,
@@ -203,8 +188,6 @@ export function createRunnerService({
     now,
   });
   const table = Object.keys(ROUTES).map((key) => ({ key, match: route(key) }));
-  const previewsGranted = async (repo) =>
-    (await grantOrRefuse(config, repo, grants, granted)).allowPreview;
   const events = createEvents({ store, runner, log });
   // Output streams and log reads in flight: ended first on SIGTERM, their callers come back.
   const streams = new Set();
@@ -317,7 +300,6 @@ export function createRunnerService({
       runner: config.runner,
       keepsCaches: images.keepsCaches,
       noCaches: images.noCaches,
-      previews: await previews.runs(),
       refresh: Boolean(refresh),
     }),
     "GET /sandboxes": async () => {
@@ -451,7 +433,7 @@ export function createRunnerService({
       const asked = await readJsonBody(req, MAX_JSON);
       // What the grants allow, whatever the orchestrator asks; and what it builds from, the
       // runner's to decide: the default branch unless a branch is granted, the Dockerfile's
-      // blob as GitHub says it, the hosts the grants give (hooks.mjs).
+      // blob as GitHub says it, the hosts the grants give (builds.mjs).
       const problem = await buildProblem(config, asked, grants, granted);
       if (problem) throw new Refused(403, `no build: ${problem}`);
       const plan = await buildPlan(config, asked, { grants, blobOf });
@@ -489,34 +471,6 @@ export function createRunnerService({
       }
       return { caches: await images.caches(repo, paths, image) };
     },
-    "POST /previews": async ({ req, res }) => {
-      // The repository and the event only: its command and image are read here (hooks.mjs).
-      const { id, repo, event, payload } = await readJsonBody(req, MAX_JSON);
-      if (!validRepo(repo)) throw new Refused(400, "repo?");
-      const problem = previewEventProblem(repo, event, payload);
-      if (problem) throw new Refused(400, problem);
-      // Refused now when the grants don't allow it; the config is read once queued.
-      if (!(await previewsGranted(repo))) {
-        throw new Refused(403, `${repo}: ${notGranted("preview")}`);
-      }
-      // Sent again (its answer lost): queued once.
-      if (
-        id &&
-        !(await store.setIfAbsent(`previews/${named(id, "id")}`, true, { ttlMs: SENT_TTL_MS }))
-      ) {
-        return send(res, 202, {});
-      }
-      // Queued: it may build an image and run for minutes; why it didn't, logged here.
-      previewJob(
-        config,
-        { repo, event, payload },
-        { checkout, imageFor: images.imageFor, grants, granted },
-      )
-        .then((job) => previews.run(job))
-        .catch((error) => log(`${repo}: preview hook not run: ${error.message}`));
-      send(res, 202, {});
-    },
-    "GET /previews": () => previews.status(),
     "GET /logs/:id": async ({ params, url, res, req }) => {
       const id = params.id;
       if (!validLogId(id)) throw new Refused(400, "id?");
@@ -635,31 +589,14 @@ export function createRunnerService({
       watching = null;
     },
     // SIGTERM: output streams end now (their callers follow again, from the next copy), the
-    // other calls finish, then the lease goes to the other copy at once: a preview hook needs
-    // none. The hooks running still end here, within what is left of `graceMs`, and are cut
-    // (killed, removed) past it; those waiting are dropped, logged (previews.mjs drain()).
+    // other calls finish, then the lease goes to the other copy at once.
     async stop({ graceMs = DRAIN_MS } = {}) {
       stopping = true;
-      const deadline = now() + graceMs;
       clearInterval(watching);
       for (const res of streams) res.destroy();
-      const hooks = Promise.resolve(previews.drain?.()).then(() => true);
       const calls = await drain(server, { graceMs });
       await lease.stop();
-      let timer;
-      const ran = await Promise.race([
-        hooks,
-        new Promise((resolve) => {
-          timer = setTimeout(() => resolve(false), Math.max(0, deadline - now()));
-          timer.unref?.();
-        }),
-      ]);
-      clearTimeout(timer);
-      if (!ran) {
-        log("Stopping: a preview hook still running at the end of the grace period, cut");
-        await previews.cut?.();
-      }
-      return calls && ran;
+      return calls;
     },
   };
 }

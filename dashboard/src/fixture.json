@@ -633,7 +633,6 @@
   "running": 2,
   "queued": 1,
   "maxParallel": 4,
-  "previews": [],
   "githubUrl": "https://github.example.com",
   "server": {
     "version": "edge-1713fa6",

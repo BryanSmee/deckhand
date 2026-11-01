@@ -65,7 +65,7 @@ export function grantsDirOf(env, read = undefined) {
 }
 
 // What the runner may ask (#498): a repository's grants, of the operator's layer alone. It
-// checks specs, builds and preview hooks against them, and has no business with a run's writes or
+// checks specs and builds against them, and has no business with a run's writes or
 // a repository's own files. Throws a Refused otherwise.
 export function runnerAsks(body) {
   if (body.decision !== "grant" || body.repo != null || body.repoAllow) {

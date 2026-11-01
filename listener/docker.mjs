@@ -25,7 +25,7 @@ export function docker(args, { input, onData, env } = {}) {
 }
 
 // No capabilities but `caps`, no privilege gain through setuid binaries: every container
-// Deckhand starts but the engine sidecar (runner/engine.mjs) and preview hooks (runner/jobs.mjs).
+// Deckhand starts but the engine sidecar (runner/engine.mjs).
 export function hardening(...caps) {
   return [
     ...["--cap-drop", "ALL"],

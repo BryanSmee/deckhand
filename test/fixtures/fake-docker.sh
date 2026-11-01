@@ -163,7 +163,6 @@ case "$1" in
     # The base image exists; repo images don't, until built.
     [ "$2" = inspect ] && case "$*" in *-repo-*) exit 1 ;; *) echo sha256:base ;; esac ;;
   create|cp|start)
-    # A preview hook's container.
     echo "$*" >> "$dir/docker-calls" ;;
   build)
     echo "$*" >> "$dir/docker-calls"

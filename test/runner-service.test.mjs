@@ -5,8 +5,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { activePassive } from "../lib/active.mjs";
@@ -88,23 +86,13 @@ function host({ lines = ['{"type":"result","result":"Done."}'] } = {}) {
 
 // One copy of the runner service, listening; its lease on `store` (shared by the copies).
 // `bound`: its callers' networks; `brokerTokens`: what the broker gives a run being started.
-// The grants folder, and what the operator's policies grant: org/repo may run preview hooks and
-// build its Dockerfile; and its default branch's files, as the github service's tarball unpacks
-// them.
+// The grants folder, and what the operator's policies grant: org/repo may build its Dockerfile.
 const grants = () => grantsFrom({ "org/repo.yaml": "hosts: [pypi.org]\n" }, config);
-const granted = grantedOf(["preview", "dockerfile"], "org/repo");
-const checkout = async () => {
-  const dir = tempDir(null, "deckhand-checkout-");
-  writeFileSync(
-    join(dir, ".deckhand.yaml"),
-    "preview:\n  command: ./preview.sh\n  image: docker:cli\n",
-  );
-  return dir;
-};
+const granted = grantedOf(["dockerfile"], "org/repo");
 
 async function copy(
   t,
-  { store, backend, ttlMs = 400, bound, brokerTokens, previews = {}, imageFor, blobOf } = {},
+  { store, backend, ttlMs = 400, bound, brokerTokens, imageFor, blobOf } = {},
 ) {
   let service;
   const lease = activePassive({
@@ -117,7 +105,6 @@ async function copy(
     onPassive: () => service.deactivate(),
   });
   const asked = [];
-  const previewed = [];
   const built = [];
   service = createRunnerService({
     config,
@@ -129,12 +116,6 @@ async function copy(
       imageFor: imageFor ?? (async (plan) => (built.push(plan), "dh-sandbox")),
       installAgent: async () => {},
       caches: async () => [],
-    },
-    previews: {
-      runs: async () => false,
-      status: () => [],
-      run: async (job) => (previewed.push(job), null),
-      ...previews,
     },
     logs: createLogs({ store }),
     store,
@@ -150,7 +131,6 @@ async function copy(
     watchMs: 50,
     grants,
     granted,
-    checkout,
     blobOf:
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
   });
@@ -163,7 +143,7 @@ async function copy(
     await new Promise((resolve) => service.server.close(resolve));
   });
   const url = `http://127.0.0.1:${service.server.address().port}`;
-  return { url, service, lease, asked, previewed, built };
+  return { url, service, lease, asked, built };
 }
 
 // A call to `url` as `sub` (the orchestrator's with `epoch`).
@@ -255,52 +235,8 @@ test("each caller gets its own endpoints only, from its own network, with a vali
   }
 });
 
-test("a preview hook sent again with its key is queued once", async (t) => {
-  const store = fileStore();
-  const { url, previewed } = await copy(t, { store, backend: host() });
-  const payload = { repository: { full_name: "org/repo" }, pull_request: { number: 1 } };
-  const job = { id: "p1", repo: "org/repo", event: "pull_request", payload };
-  for (let i = 0; i < 2; i++) {
-    assert.equal(
-      (await call(url, "POST", "/previews", { sub: "orchestrator", body: job })).status,
-      202,
-    );
-  }
-  await until(() => previewed.length, "the hook");
-  // Its command and image from the repository's default branch, not from the call, run in the
-  // checkout they were read from.
-  assert.match(previewed[0].dir, /deckhand-checkout-/);
-  delete previewed[0].dir;
-  assert.deepEqual(previewed, [
-    {
-      repo: "org/repo",
-      event: "pull_request",
-      payload,
-      ref: null,
-      hook: {
-        command: "./preview.sh",
-        image: "docker:cli",
-        timeoutMinutes: previewed[0].hook.timeoutMinutes,
-      },
-      image: "docker:cli",
-    },
-  ]);
-  // A repository its grants don't allow: refused now, nothing queued; a build likewise.
-  const other = {
-    ...job,
-    id: "p2",
-    repo: "org/other",
-    payload: { ...payload, repository: { full_name: "org/other" } },
-  };
-  assert.equal(
-    (await call(url, "POST", "/previews", { sub: "orchestrator", body: other })).status,
-    403,
-  );
-  // An event about another repository than the one named: refused before anything is queued.
-  const forged = { ...job, id: "p3", payload: { ...payload, repository: { full_name: "o/x" } } };
-  const answer = await call(url, "POST", "/previews", { sub: "orchestrator", body: forged });
-  assert.equal(answer.status, 400);
-  assert.match((await answer.json()).message, /isn't about org\/repo/);
+test("a build its grants don't allow is refused", async (t) => {
+  const { url } = await copy(t, { store: fileStore(), backend: host() });
   const build = { repo: "org/other", ref: "main", dockerfile: "Dockerfile", blob: "b" };
   const refused = await call(url, "POST", "/images", { sub: "orchestrator", body: build });
   assert.equal(refused.status, 403);
@@ -642,7 +578,6 @@ test("a log written while the runner is away is sent once it is back, in order",
     config,
     runner: backend.runner,
     images: {},
-    previews: { runs: async () => false, status: () => [] },
     logs: createLogs({ store }),
     store,
     broker: {},
@@ -891,38 +826,14 @@ test("logs: the same append through two copies at once is written once", async (
   assert.equal((await store.readBlob(`logs/${id}`)).toString(), "one line\n");
 });
 
-// An update stops a copy: its lease goes once its calls are done, so the other copy acts at once;
-// a preview hook running, which needs no lease, still ends there, and is cut past the grace.
-test("stop: the lease goes at once, the preview hooks running end after it or are cut", async (t) => {
+// An update stops a copy: its lease goes once its calls are done, so the other copy acts at once.
+test("stop: the lease goes once the calls are done", async (t) => {
   const store = fileStore();
   const backend = host();
-  let release;
-  const running = new Promise((resolve) => (release = resolve));
-  let drained = 0;
-  const a = await copy(t, {
-    store,
-    backend,
-    previews: { drain: () => (drained++, running), cut: async () => assert.fail("not cut") },
-  });
+  const a = await copy(t, { store, backend });
   const b = await copy(t, { store, backend });
-  let stopped = false;
-  const stopping = a.service.stop({ graceMs: 5000 }).then((all) => ((stopped = true), all));
-  await until(() => b.lease.active(), "the other copy's lease, while the hook runs");
-  assert.equal(drained, 1);
-  assert.equal(stopped, false, "the hook is waited for");
-  release();
-  assert.equal(await stopping, true);
-  // One still running at the end of the grace: cut, and said.
-  let cut = 0;
-  const c = await copy(t, {
-    store,
-    backend,
-    previews: { drain: () => new Promise(() => {}), cut: async () => cut++ },
-  });
-  await b.service.stop({ graceMs: 10 });
-  await until(() => c.lease.active(), "the third copy's lease");
-  assert.equal(await c.service.stop({ graceMs: 20 }), false);
-  assert.equal(cut, 1);
+  assert.equal(await a.service.stop({ graceMs: 5000 }), true);
+  await until(() => b.lease.active(), "the other copy's lease");
 });
 
 // A push between the Dockerfile's lookup and the download of the files: planned again, once.

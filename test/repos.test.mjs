@@ -519,7 +519,7 @@ test("an invalid config shows as such in the list", async () => {
 function refusedCases(root) {
   return {
     dockerfile: ["dockerfile: .deckhand/Dockerfile\n", "", ["dockerfile"]],
-    preview: ["preview:\n  command: ./preview.sh\n", "", ["preview"]],
+    docker: ["docker: true\n", "", ["docker"]],
     mounts: [`mounts: [${root}/data]\n`, `mounts: [${root}]`, []],
   };
 }
@@ -548,9 +548,9 @@ test("a config the operator's grants refuse is invalid: no run starts there", as
   const { api, cases } = refusedSetup(t);
   // Each file parses: only the grants refuse it.
   assert.deepEqual(await statuses(api), {
+    "org/docker": "invalid",
     "org/dockerfile": "invalid",
     "org/mounts": "invalid",
-    "org/preview": "invalid",
   });
   for (const repo of Object.keys(cases)) {
     const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
@@ -570,9 +570,9 @@ test("a fully granted config is configured; editing a grant shows without GitHub
     Object.entries(cases).map(([repo, [, , names]]) => [`org/${repo}`, names]),
   );
   assert.deepEqual(await statuses(api), {
+    "org/docker": "configured",
     "org/dockerfile": "configured",
     "org/mounts": "configured",
-    "org/preview": "configured",
   });
   for (const repo of Object.keys(cases)) {
     const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
@@ -582,7 +582,7 @@ test("a fully granted config is configured; editing a grant shows without GitHub
   assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
   grants.files = {};
   grants.names = {};
-  assert.equal((await statuses(api))["org/preview"], "invalid");
+  assert.equal((await statuses(api))["org/docker"], "invalid");
 });
 
 test("a repo's broken grant makes that repo invalid only", async () => {
@@ -835,14 +835,12 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   assert.deepEqual(body.effective.grant, {
     files: ["default.yaml"],
     grantFiles: [],
-    allowPreview: false,
     allowDockerfile: false,
     allowBranchDockerImages: false,
     allowDocker: false,
     allowResearch: false,
     allowWorkflows: false,
     allowAutoMerge: false,
-    acknowledgeAutoMergePreview: false,
     hosts: ["registry.npmjs.org"],
     cachedHosts: [],
     mounts: [],
@@ -851,19 +849,15 @@ test("GET config: raw text, errors, warnings and what runs get; its row updated"
   });
 });
 
-test("auto-merge: the row's badge and the config's warnings follow the grant, visibility and hook", async () => {
+test("auto-merge: the row's badge and the config's warnings follow the grant and visibility", async () => {
   const merge = "review:\n  on: ready\n  fix: true\n  merge: true\n";
   const repos = {
     "org/priv": [{}, ["auto_merge"], merge],
     "org/pub": [{ private: false }, ["auto_merge"], merge],
     "org/pubok": [{ private: false }, ["auto_merge_public"], merge],
     "org/none": [{}, [], merge],
+    // A preview hook left in the config, from before #574: ignored, it no longer stops a merge.
     "org/hook": [{}, ["auto_merge", "preview"], `${merge}preview: ./x.sh\n`],
-    "org/ack": [
-      {},
-      ["auto_merge", "preview", "acknowledge_automerge_and_preview_is_highly_dangerous"],
-      `${merge}preview: ./x.sh\n`,
-    ],
     "org/manual": [{}, ["auto_merge"], "review:\n  merge: true\n"],
   };
   const { api } = apiSetup({
@@ -874,8 +868,7 @@ test("auto-merge: the row's badge and the config's warnings follow the grant, vi
   const { body } = await call(api, "GET", "/api/repos");
   const on = Object.fromEntries(body.repos.map((r) => [r.repo, r.autoMerge]));
   assert.deepEqual(on, {
-    "org/ack": true,
-    "org/hook": false,
+    "org/hook": true,
     "org/manual": false,
     "org/none": false,
     "org/priv": true,
@@ -886,17 +879,15 @@ test("auto-merge: the row's badge and the config's warnings follow the grant, vi
     (await call(api, "GET", `/api/repos/${repo}/config`)).body.warnings.map(
       (w) => `${w.key ? `${w.key}: ` : ""}${w.message}`,
     );
-  for (const repo of ["org/priv", "org/pubok", "org/ack"])
-    assert.deepEqual(await warnings(repo), [], repo);
+  for (const repo of ["org/priv", "org/pubok"]) assert.deepEqual(await warnings(repo), [], repo);
   assert.match((await warnings("org/none"))[0], /don't grant `auto_merge`/);
   assert.match(
     (await warnings("org/pub"))[0],
     /is public.*grant it `auto_merge`, not `auto_merge_public`/,
   );
-  assert.match(
-    (await warnings("org/hook"))[0],
-    /don't grant `acknowledge_automerge_and_preview_is_highly_dangerous` to this repository \(`allow_grant`\), nothing is merged/,
-  );
+  assert.deepEqual(await warnings("org/hook"), [
+    "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config.md)",
+  ]);
   // The parse's own warning, once.
   assert.deepEqual(await warnings("org/manual"), [
     "review.merge: needs `review.on: ready`, nothing is merged",

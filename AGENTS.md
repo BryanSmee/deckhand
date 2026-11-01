@@ -59,8 +59,8 @@ git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
    node --test --test-force-exit"'
 ```
 
-The engine is slower than the sandbox: a timing test failing there alone (`deliveries`,
-`previews`) passes on its own, so rerun its file before you suspect the change. Build the images a change touches (Dockerfiles, and the files they `COPY`), and stop what you
+The engine is slower than the sandbox: a timing test failing there alone (`deliveries`)
+passes on its own, so rerun its file before you suspect the change. Build the images a change touches (Dockerfiles, and the files they `COPY`), and stop what you
 started before you finish.
 
 ## Layout (target; build it as the issues land)
@@ -89,7 +89,7 @@ github/       the github service (#502): the only one with the GitHub App's key;
 runner/       the runner service (#503): the only one with the Docker socket or the Kubernetes
               API; server.mjs (wiring), service.mjs (its API, who may call what), client.mjs
               (what the orchestrator calls it with), logs.mjs, events.mjs, spec-check.mjs,
-              hooks.mjs; it runs listener/runner/'s backends, images.mjs and previews.mjs
+              builds.mjs; it runs listener/runner/'s backends and images.mjs
 policy-service/ the policy service (#501): long-lived `opa` servers evaluating the operator's and
               the repos' policies for the orchestrator; its own image, no network but its callers'
 policy/       Deckhand's default policies (*.rego), copied into the policy service's image
@@ -150,9 +150,8 @@ docs/         setup, per-repo config reference, security model, architecture
   operator's settings (users, parallel runs), never widen them. What would widen them is a
   request the operator's grants folder must grant: `mounts` only under a granted root. Hosts
   are the grants folder's only (`default.yaml`, `<owner>/<repo>.yaml`): a repo can't add
-  any (issue #151). A repo's `dockerfile` is built only with the `dockerfile` grant, its
-  `preview` hook runs only with `preview`, branch Dockerfiles only with `branch_docker_images`,
-  never for fork pull requests. The yes-or-no grants are the operator's policies' (#498:
+  any (issue #151). A repo's `dockerfile` is built only with the `dockerfile` grant, branch
+  Dockerfiles only with `branch_docker_images`, never for fork pull requests. The yes-or-no grants are the operator's policies' (#498:
   `allow_grant`, asked per repository of the operator's layer alone, nothing granted by default,
   `listener/grants.mjs` GRANTS); `docker`, `workflows` and auto-merge only one repository at a
   time (best effort: a rule that also gives them to `*/*` or `<owner>/*` gives them to none;

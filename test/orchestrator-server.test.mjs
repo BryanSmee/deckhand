@@ -145,7 +145,7 @@ async function fakeGitHub(files = {}) {
         const sha = gitBlob(Buffer.from(text));
         return res.end(JSON.stringify({ type: "file", sha, content }));
       }
-      // The default branch's, by name or without a ref (the runner's preview hooks).
+      // The default branch's, by name or without a ref (the runner's builds).
       if (
         ["/repos/org/repo/tarball/trunk", "/repos/org/repo/tarball"].includes(req.url) &&
         tarball
@@ -1597,7 +1597,25 @@ caches:
     assert.match(JSON.parse(reply.body).body, /🤖 Claude opus · medium effort · fast/);
   });
 
-  test("a preview hook runs only with the `preview` grant", async (t) => {
+  test("a `preview` left in the config: the run goes on, its log says it is ignored", async (t) => {
+    const { dir, github, send } = await listen(t, { ".deckhand.yaml": "preview: ./preview.sh\n" });
+    await send(comment("alice", "Deckhand\nPatch the CVE"));
+    const reply = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues/12/comments",
+    );
+    assert.doesNotMatch(JSON.parse(reply.body).body, /can't run here/);
+    assert.ok(readFileSync(join(dir, "run-args"), "utf8"));
+    assert.ok(
+      (await onlyLog(dir)).includes(
+        "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config.md)",
+      ),
+    );
+  });
+
+  test("a pull request's delivery starts no container, even with a `preview` left in the config", async (t) => {
+    const { dir, listener, send } = await listen(t, {
+      ".deckhand.yaml": "preview:\n  command: ./preview.sh\n  image: docker:cli\n",
+    });
     const delivery = {
       action: "opened",
       installation: { id: 7 },
@@ -1605,26 +1623,15 @@ caches:
       pull_request: { number: 13 },
       sender: { login: "mallory" },
     };
-    const { dir, listener, send } = await listen(t, {
-      ".deckhand.yaml": "preview:\n  command: ./preview.sh\n  image: docker:cli\n",
-      Dockerfile: "FROM scratch\n",
-    });
-    const calls = () => {
-      try {
-        return readFileSync(join(dir, "docker-calls"), "utf8");
-      } catch {
-        return "";
-      }
-    };
     assert.equal((await send(delivery, "pull_request")).status, 202);
-    await listener.until(
-      "preview hook of org/repo not run: preview: the operator's policies don't grant `preview` to this repository",
-    );
-    assert.doesNotMatch(calls(), /^create /m);
-    writeGrants(dir, ["preview"]);
-    await send({ ...delivery, action: "synchronize" }, "pull_request");
-    await listener.until("preview hook deckhand-preview-org-repo-");
-    assert.match(calls(), /^create .*docker\.sock.* docker:cli .*\.\/preview\.sh$/m);
+    await listener.until("ignored: pull_request: nothing to run");
+    let calls = "";
+    try {
+      calls = readFileSync(join(dir, "docker-calls"), "utf8");
+    } catch {
+      // No docker call at all.
+    }
+    assert.doesNotMatch(calls, /^(create|run|start) /m);
   });
 
   test("projects: a run refused as it starts (an agent the operator hasn't configured) moves nothing", async (t) => {
@@ -5556,7 +5563,7 @@ mounts:
       "lastSync",
       "now",
     ],
-    ["previews", "inboxes", "lanes"],
+    ["inboxes", "lanes"],
   ];
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const SYNC_KEYS = [["at", "by", "redelivered", "pulls", "conflicts"], ["error"]];

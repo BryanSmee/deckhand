@@ -1,5 +1,5 @@
 // A repo's files at one ref, without git: GitHub's tarball, unpacked into a new temporary
-// folder (its top folder stripped). Build contexts and preview hooks start from it, in the
+// folder (its top folder stripped). Build contexts start from it, in the
 // runner service (../runner/), which downloads it through the github service: it holds no
 // GitHub token (#503).
 import { spawn } from "node:child_process";

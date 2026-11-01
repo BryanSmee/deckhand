@@ -12,7 +12,6 @@ work_capabilities := {
   "image:repo",
   "image:branch",
   "docker",
-  "preview",
   "read:issues",
   "read:pulls",
   "read:actions",

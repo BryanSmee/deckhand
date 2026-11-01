@@ -17,7 +17,7 @@
 //     /events, POST /events/ack): pushes, a run's notes, the pull requests runs changed;
 //   - the App itself: its public parts (GET /app), /setup's manifest conversion (POST
 //     /app/manifest), a listener's key from before this service (PUT /app);
-//   - the runner's repos' tarballs and blobs (build contexts, preview hooks, image tags).
+//   - the runner's repos' tarballs and blobs (build contexts, image tags).
 //
 // Each route names its callers (ROUTES, ../lib/service-token.mjs serviceGuard()). The
 // orchestrator's calls that change something carry its fencing epoch, refused when stale (409,

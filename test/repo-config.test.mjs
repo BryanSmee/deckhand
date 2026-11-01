@@ -109,9 +109,6 @@ mounts:
   - path: /nfs/work/api
     read_only: false
 inbox: { ideas: 3, bugs: 4, discussions: "💬 Ask Claude" }
-preview:
-  command: ./deploy/preview.sh
-  image: docker:27-cli
 colour: blue
 `,
     config,
@@ -134,11 +131,6 @@ colour: blue
   assert.equal("hosts" in settings, false);
   assert.deepEqual(settings.mounts, [{ path: "/nfs/work/api", readOnly: false }]);
   assert.deepEqual(settings.inbox, { ideas: 3, bugs: 4, discussions: "ask claude" });
-  assert.deepEqual(settings.preview, {
-    command: "./deploy/preview.sh",
-    image: "docker:27-cli",
-    timeoutMinutes: 30,
-  });
 });
 
 test("wrong values are errors, each named", () => {
@@ -160,15 +152,18 @@ inbox: { ideas: three, discussions: 5 }
   assert.match(parseRepoConfig("- a", config).errors[0], /top level/);
 });
 
-test("a preview hook's timeout: two hours at most", () => {
-  const preview = (minutes) =>
-    parseRepoConfig(`preview:\n  command: ./x.sh\n  timeout_minutes: ${minutes}\n`, config);
-  assert.equal(preview(120).settings.preview.timeoutMinutes, 120);
-  for (const bad of [0, 121, 100000]) {
-    assert.match(
-      preview(bad).errors.join("\n"),
-      /timeout_minutes: expected a whole number from 1 to 120/,
-    );
+test("`preview`, removed (#574): ignored with its own warning, whatever its value", () => {
+  for (const value of [
+    "./x.sh",
+    "\n  command: ./x.sh\n  image: docker:cli\n  timeout_minutes: 500",
+    "[1, 2]",
+  ]) {
+    const { settings, errors, warnings } = parseRepoConfig(`preview: ${value}\n`, config);
+    assert.deepEqual(errors, [], value);
+    assert.deepEqual(warnings, [
+      "preview: removed, ignored (a GitHub webhook does this now, see docs/repo-config.md)",
+    ]);
+    assert.equal("preview" in settings, false);
   }
 });
 
