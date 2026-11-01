@@ -38,7 +38,6 @@ const config = {
   githubApi: "https://api.github.com",
   brokerUrl: "http://listener:8081",
   egressProxy: "http://egress:3128",
-  listenerContainer: "me",
   egressContainer: "",
   engine: null,
 };
@@ -433,7 +432,7 @@ test("a start a copy left halfway is done again; a sandbox that started stands",
   const runner = client(a.url).runner;
   // A copy that crashed after it said so, before its sandbox (its network left behind).
   await store.set("starts/dh-o-a-1-1", { state: "starting" });
-  backend.nets.set("dh-o-a-1-1", new Set(["me"]));
+  backend.nets.set("dh-o-a-1-1", new Set(["egress-id"]));
   backend.netLabels.set("dh-o-a-1-1", { "deckhand.owner": "dh", "deckhand.run": "dh-o-a-1-1" });
   await runner.start(SPEC);
   assert.equal(backend.runs(), 1);

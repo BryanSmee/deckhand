@@ -155,7 +155,7 @@ test("root, capabilities, another image, another's volumes: refused, each said",
     ["its environment's LD_PRELOAD", "its environment's DOCKER_HOST", "its environment's a=b"],
   );
   // The operator's limits, never lifted by the spec; its task's label only (the runner finds the
-  // listener and the proxy by theirs).
+  // proxy by its own).
   assert.deepEqual(
     await specProblems(
       config,
@@ -163,7 +163,7 @@ test("root, capabilities, another image, another's volumes: refused, each said",
         limits: { cpus: "2", memory: "0", pids: -1 },
         labels: {
           "deckhand.task": "org/repo#12",
-          "deckhand.role": "broker",
+          "deckhand.role": "egress",
           "com.docker.compose.project": "x",
         },
       }),

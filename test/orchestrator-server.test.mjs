@@ -2494,7 +2494,7 @@ mounts:
     assert.deepEqual(leftovers(dir), []);
   });
 
-  test("a recreated listener and proxy join the running sandbox's network again", async (t) => {
+  test("a recreated proxy joins the running sandbox's network again", async (t) => {
     const ctx = await holding(t);
     const { dir } = ctx;
     const [net] = readdirSync(join(dir, "nets"));
@@ -2502,21 +2502,20 @@ mounts:
       readFileSync(join(dir, "nets", net), "utf8")
         .split("\n")
         .filter(Boolean);
-    // Its own network: the sandbox, the listener (its host name) and the proxy.
-    assert.equal(joined().length, 3);
+    // Its own network: the sandbox and the proxy, nothing else.
+    assert.equal(joined().length, 2);
     assert.ok(joined().includes("egress-1"));
     // Left by a run nobody knows about any more.
     writeFileSync(join(dir, "nets", "deckhand-gone-1"), "egress-1\n");
     // `docker compose up -d`: new containers, on none of the runs' networks.
     writeFileSync(join(dir, "nets", net), joined()[0] + "\n");
-    // The runner's settings: it joins them.
-    await ctx.restartRunner({ LISTENER_CONTAINER: "listener-2", EGRESS_CONTAINER: "egress-2" });
+    // The runner's settings: it joins it.
+    await ctx.restartRunner({ EGRESS_CONTAINER: "egress-2" });
     await ctx.restart();
     await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
-    assert.ok(joined().includes("listener-2"));
-    assert.ok(joined().includes("egress-2"));
+    assert.deepEqual(joined().slice(1), ["egress-2"]);
     const calls = readFileSync(join(dir, "docker-calls"), "utf8");
-    assert.match(calls, new RegExp(`^network connect ${net} listener-2$`, "m"));
+    assert.match(calls, new RegExp(`^network connect ${net} egress-2$`, "m"));
     assert.deepEqual(readdirSync(join(dir, "nets")), [net]);
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");

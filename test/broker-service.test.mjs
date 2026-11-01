@@ -22,9 +22,9 @@ const AT = {
   orchestrator: "127.0.0.2",
   proxy: "127.0.0.3",
   edge: "127.0.0.4",
-  listener: "127.0.0.5",
+  shared: "127.0.0.5",
 };
-// The listener's services share one network (`listener`), until #506.
+// Services may share one network (here the runner and the models service, at `shared`).
 const NETWORKS =
   "orchestrator=127.0.0.2/32,proxy=127.0.0.3/32,edge=127.0.0.4/32,runner+models=127.0.0.5/32";
 const FOLDER = "0123456789abcdef01234567";
@@ -167,7 +167,7 @@ test("service tokens: to the service its network proves, for the services it cal
   assert.equal(named.status, 403);
   // Two services on one network: each asks as itself, by name, and only as one of them.
   const asked = async (service) =>
-    call(broker, "listener", "POST", "/service-tokens", {
+    call(broker, "shared", "POST", "/service-tokens", {
       body: { audiences: ["broker"], ...(service && { service }) },
     });
   for (const service of ["runner", "models"]) {
@@ -207,11 +207,11 @@ test("each endpoint takes its callers only, from their own network", async (t) =
   assert.equal((await edge("POST", "/run/token")).status, 403);
   // The runner's token copies inboxes and files, never signs a run's tokens: their claims are
   // the orchestrator's (#503).
-  const asRunner = await call(broker, "listener", "POST", "/service-tokens", {
+  const asRunner = await call(broker, "shared", "POST", "/service-tokens", {
     body: { audiences: ["broker"], service: "runner" },
   });
   const runnerToken = asRunner.json.tokens.broker;
-  const minted = await call(broker, "listener", "POST", "/runs/run-a/tokens", {
+  const minted = await call(broker, "shared", "POST", "/runs/run-a/tokens", {
     body: { repo: "o/r", mode: "work", sandbox: "x" },
     headers: { authorization: `Bearer ${runnerToken}`, "content-type": "application/json" },
   });
@@ -556,9 +556,13 @@ test("the live runs: the orchestrator's list, what it ended gone, a restored run
 
 test("on Kubernetes, the pod's service account names the caller, once the API server reviewed its token", async () => {
   assert.deepEqual(
-    [...accountCallers("orchestrator=deckhand:deckhand-listener, proxy=deckhand:deckhand-egress")],
     [
-      ["system:serviceaccount:deckhand:deckhand-listener", ["orchestrator"]],
+      ...accountCallers(
+        "orchestrator=deckhand:deckhand-orchestrator, proxy=deckhand:deckhand-egress",
+      ),
+    ],
+    [
+      ["system:serviceaccount:deckhand:deckhand-orchestrator", ["orchestrator"]],
       ["system:serviceaccount:deckhand:deckhand-egress", ["proxy"]],
     ],
   );
@@ -566,10 +570,10 @@ test("on Kubernetes, the pod's service account names the caller, once the API se
   assert.throws(() => accountCallers("proxy=deckhand"), /SERVICE_ACCOUNTS/);
   const reviewed = [];
   const callers = createCallers({
-    accounts: "orchestrator=deckhand:deckhand-listener",
+    accounts: "orchestrator=deckhand:deckhand-orchestrator",
     review: async (token) => {
       reviewed.push(token);
-      return token === "good" ? "system:serviceaccount:deckhand:deckhand-listener" : null;
+      return token === "good" ? "system:serviceaccount:deckhand:deckhand-orchestrator" : null;
     },
   });
   assert.equal(callers.bound, null);
@@ -583,21 +587,21 @@ test("on Kubernetes, the pod's service account names the caller, once the API se
 });
 
 test("services that share a network or an account: each asks as itself among them, never as another", async () => {
-  const listener = createCallers({
-    accounts: "edge+orchestrator+models=deckhand:deckhand-listener,runner=deckhand:deckhand-runner",
+  const shared = createCallers({
+    accounts: "edge+orchestrator+models=deckhand:deckhand-control,runner=deckhand:deckhand-runner",
     review: async (token) => `system:serviceaccount:deckhand:${token}`,
   });
   const req = (token) => ({ headers: { "x-deckhand-pod-token": token }, socket: {} });
-  assert.equal(await listener.callerOf(req("deckhand-listener"), "edge"), "edge");
-  assert.equal(await listener.callerOf(req("deckhand-listener"), "models"), "models");
+  assert.equal(await shared.callerOf(req("deckhand-control"), "edge"), "edge");
+  assert.equal(await shared.callerOf(req("deckhand-control"), "models"), "models");
   // More than one it may be: it has to say which; one it may not be, never.
-  assert.equal(await listener.callerOf(req("deckhand-listener")), null);
-  assert.equal(await listener.callerOf(req("deckhand-listener"), "runner"), null);
-  assert.equal(await listener.callerOf(req("deckhand-listener"), "broker"), null);
+  assert.equal(await shared.callerOf(req("deckhand-control")), null);
+  assert.equal(await shared.callerOf(req("deckhand-control"), "runner"), null);
+  assert.equal(await shared.callerOf(req("deckhand-control"), "broker"), null);
   // The one it is: with its name or without.
-  assert.equal(await listener.callerOf(req("deckhand-runner")), "runner");
-  assert.equal(await listener.callerOf(req("deckhand-runner"), "runner"), "runner");
-  assert.equal(await listener.callerOf(req("deckhand-runner"), "orchestrator"), null);
+  assert.equal(await shared.callerOf(req("deckhand-runner")), "runner");
+  assert.equal(await shared.callerOf(req("deckhand-runner"), "runner"), "runner");
+  assert.equal(await shared.callerOf(req("deckhand-runner"), "orchestrator"), null);
   assert.throws(() => accountCallers("edge+sandbox=deckhand:x"), /SERVICE_ACCOUNTS/);
   // By network, the same.
   const byNetwork = createCallers({

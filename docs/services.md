@@ -1,11 +1,12 @@
 # Services
 
-The listener, split (#499, its parts #500 to #509): edge and the orchestrator (#506,
-[Edge and the orchestrator](#edge-and-the-orchestrator)) took its place, beside the policy
-service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505), the
+Deckhand runs as services (#499, its parts #500 to #509): edge and the orchestrator (#506,
+[Edge and the orchestrator](#edge-and-the-orchestrator)), beside the policy
+service (#501, [architecture.md](architecture.md#the-policy-service)), the broker (#505,
+[architecture.md](architecture.md#the-broker-service)), the
 runner (#503, [architecture.md](architecture.md#the-runner-service)), the github service (#502,
 [architecture.md](architecture.md#the-github-service)), the models service (#504,
-[The models service](#the-models-service)) and the egress proxy, each from its own image:
+[architecture.md](architecture.md#the-models-service)) and the egress proxy, each from its own image:
 [architecture.md](architecture.md) describes what each module does.
 
 The split follows who holds which secret and who can reach what. The only service the internet
@@ -144,8 +145,7 @@ copy takes the connections the old one no longer accepts.
 
 ### Edge and the orchestrator
 
-What the listener was, in two (#506): the part the internet reaches, and the queue and the runs'
-logic.
+Two services (#506): the part the internet reaches, and the queue and the runs' logic.
 
 **Edge** (`edge/`) takes GitHub's webhooks (their HMAC checked), `/setup`, sign-in and sessions,
 and serves the dashboard's files. It holds the webhook secret, the session key and the OAuth
@@ -202,8 +202,8 @@ Its two copies are active/passive:
 On one node, the store's file backend is shared by the processes using its folder
 (`lib/store-file.mjs`: a lock file, and `state.json` read again once another process wrote it),
 so two copies of the orchestrator on one volume work with Compose too (`docker compose up -d
---scale orchestrator=2`); Redis, on several nodes. Both copies are joined to each run's network
-and the proxy's under the name `listener`, and Docker's DNS answers it with either: the waiting
+--scale orchestrator=2`); Redis, on several nodes. Both copies are on the proxy's network
+under the name `listener`, and Docker's DNS answers it with either: the waiting
 copy refuses those connections, and the proxy tries them again until the acting one takes them
 (Kubernetes keeps the waiting copy out of its Service by `/ready` instead). With one copy
 (Compose's default), an update is a stop, then a start: the next copy takes the lease at once, as
@@ -211,7 +211,7 @@ the old one released it.
 
 ### The models service
 
-Out of the listener with the operator's agent credentials (#504, `models/`): the agents' API
+The only service with the operator's agent credentials (#504, `models/`): the agents' API
 endpoints (`models/upstream.mjs`, `anthropic.mjs`, `openai.mjs`, `google.mjs`) and the plans'
 logins (`chatgpt.mjs`, `antigravity-login.mjs`). The egress proxy sends the sandboxes' agent
 calls there, with their agent token and the network it vouches they came from; the service
@@ -235,12 +235,11 @@ a Deployment with two replicas, `maxUnavailable: 0`, a readiness probe on `/read
 `terminationGracePeriodSeconds` of 630. With Docker Compose, one copy (above).
 
 **Sandboxes outlive the update**: their agents keep the base URL they started with (the
-broker's host), which the new proxy sends on to the models service; a proxy from before it sends
-them to the orchestrator, which relays them there, streaming (`listener/models-service.mjs`).
+broker's host), which the proxy sends on to the models service.
 
 ### The policy service
 
-The first service out of the listener (#501): long-lived `opa` servers behind a small HTTP service
+The policy decisions' service (#501): long-lived `opa` servers behind a small HTTP service
 (`policy-service/`), with no network but its callers', no secret and no state. Its callers send
 a repository's policy files with each decision (it can't read GitHub); it reads the operator's
 from the grants folder, mounted read-only. With Docker Compose, the orchestrator and the runner each

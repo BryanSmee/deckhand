@@ -104,8 +104,7 @@ function problems(compose) {
 }
 
 // The compose services the runner joins to each run's network: the one labelled as the proxy
-// (runner/networks.mjs). The orchestrator joins them too (deckhand.role=broker), for the gateways
-// sandboxes from before the services call it for.
+// (runner/networks.mjs), and no other.
 function runsNetworkPeers(services) {
   return Object.entries(services)
     .filter(([, s]) => s.labels?.["deckhand.role"] === "egress")
@@ -116,6 +115,12 @@ test("compose.yaml: each network joins services that call each other, the runs' 
   const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
   assert.deepEqual(problems(compose), []);
   assert.deepEqual(runsNetworkPeers(compose.services), ["egress"]);
+  // No other role either: the runner joined the orchestrator by `broker` before #511.
+  const roles = Object.entries(compose.services).filter(([, s]) => s.labels?.["deckhand.role"]);
+  assert.deepEqual(
+    roles.map(([name, s]) => `${name}=${s.labels["deckhand.role"]}`),
+    ["egress=egress"],
+  );
 });
 
 // The broker, the runner, the models service and the github service tell their callers apart by
@@ -295,7 +300,7 @@ test("the check fails on a network that joins too much", () => {
   ]);
 });
 
-test("a run's network: the runner joins the proxy to it, and the listener until its broker moves out", async () => {
+test("a run's network: the runner joins the proxy to it, and nothing else", async () => {
   const connected = [];
   const docker = async (args) => {
     if (args[0] === "network" && args[1] === "connect") connected.push(args.at(-1));
@@ -306,7 +311,6 @@ test("a run's network: the runner joins the proxy to it, and the listener until 
     config: {
       prefix: "deckhand",
       subnets: null,
-      listenerContainer: "listener-container",
       egressContainer: "egress-container",
       brokerUrl: "http://listener:8081",
       egressProxy: "http://egress:3128",
@@ -316,6 +320,5 @@ test("a run's network: the runner joins the proxy to it, and the listener until 
     now: () => 0,
   });
   await networks.create("deckhand-run-1");
-  // The listener: for the endpoints its broker serves sandboxes directly (#505 removes it).
-  assert.deepEqual(connected, ["listener-container", "egress-container"]);
+  assert.deepEqual(connected, ["egress-container"]);
 });

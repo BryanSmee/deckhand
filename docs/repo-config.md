@@ -3,7 +3,7 @@
 Each repository can tune its runs with a `.deckhand.yaml` file at its root. Without one, its
 runs use the operator's settings and the base image.
 
-The listener always reads it from the repository's **default branch**, at every run: a
+Deckhand always reads it from the repository's **default branch**, at every run: a
 change on a branch or in a pull request has no effect until it is merged, so nobody can
 change a run's permissions from the code it runs on. The file can only **narrow** the
 operator's settings (users, parallel runs), never widen them.
@@ -15,7 +15,7 @@ on the dashboard.
 
 ## Onboarding
 
-When the App is installed on a repository without this file, the listener opens an
+When the App is installed on a repository without this file, Deckhand opens an
 onboarding issue there (see [Setting up](setup.md#3-use-it)), and Claude proposes the file
 in its comments: it reads the repository (package managers, CI workflows, `AGENTS.md`, test
 and lint commands, services) and gives each key a reason, within the users and mount roots
@@ -23,7 +23,7 @@ the operator allows, and names the hosts to ask the operator for. Each comment o
 read-only token. Claude may suggest inboxes; they are created only if you agree.
 
 The trigger line (`Deckhand`) or `/mode work` confirms: a work run on the issue's branch
-writes only the agreed files and marks its pull request ready. The listener then reads the
+writes only the agreed files and marks its pull request ready. Deckhand then reads the
 branch's `.deckhand.yaml` as it would on the default branch, checks that the files it names
 are there, and adds its errors and warnings to the reply, so a broken config isn't merged by
 mistake.
@@ -149,42 +149,42 @@ projects:
 
 ## Keys
 
-| Key                                     | Default                                 | What                                                                                                                                                |
-| --------------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored                                                                    |
-| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode                                                                     |
-| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)                                                               |
-| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)                                                                  |
-| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                                                                             |
-| `fast_mode`                             | `SANDBOX_FAST_MODE`                     | `false`: `/speed fast` and a mode's `speed: fast` run at normal speed here; `true` can't turn it on when the operator hasn't                        |
-| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                                                                                 |
-| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                                                                                    |
-| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                                                     |
-| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `dockerfile` grant                                                                 |
-| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                                               |
-| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                                                    |
-| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots                                                               |
-| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                                                                                        |
-| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                                               |
-| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                                                      |
-| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                                                  |
-| `review.fix`                            | `false`                                 | a review that requests changes starts a work run that addresses it; `true` or a number of rounds (see Reviews)                                      |
-| `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `auto_merge` (see Auto-merge)                                          |
-| `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                                                  |
-| `review.max_allowed_severity`           | `low`                                   | the most severe finding a review in the fix loop or deciding an auto-merge may have: `low` or `medium` (see Auto-merge)                             |
-| `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)                          |
-| `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)                                      |
-| `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                                             |
-| `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                                  |
-| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                         |
-| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                          |
-| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `preview` grant                                                            |
-| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                                                    |
-| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                                        |
-| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                      |
-| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                                                |
-| `auto_pickup`                           | `false`                                 | `true`: the listener starts this repo's open issues labelled `AUTO_PICKUP_LABEL` by itself, in the operator's `AUTO_PICKUP_SLOTS` (see Auto-pickup) |
-| `projects`                              | none                                    | organization projects (v2) the listener moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see Projects)                          |
+| Key                                     | Default                                 | What                                                                                                                                            |
+| --------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`                                 | `ALLOWED_USERS`                         | GitHub logins that may start runs here; those not in `ALLOWED_USERS` are ignored                                                                |
+| `trigger`                               | `TRIGGER`                               | the whole first line of a comment that starts a run; `/mode` picks another mode                                                                 |
+| `agent`, `brainstorm_agent`             | `SANDBOX_AGENT`, `BRAINSTORM_AGENT`     | the agent of work runs, and of brainstorms, inbox entries and discussions (see Agent)                                                           |
+| `model`, `effort`                       | `SANDBOX_MODEL`, `SANDBOX_EFFORT`       | work runs' model (`best`, `balanced`, `fast` or a name) and effort (`low` … `max`)                                                              |
+| `brainstorm_model`, `brainstorm_effort` | `BRAINSTORM_MODEL`, `BRAINSTORM_EFFORT` | the same for brainstorms, inbox entries and discussions                                                                                         |
+| `fast_mode`                             | `SANDBOX_FAST_MODE`                     | `false`: `/speed fast` and a mode's `speed: fast` run at normal speed here; `true` can't turn it on when the operator hasn't                    |
+| `max_parallel`                          | `MAX_PARALLEL`                          | runs of this repo at once; capped by `MAX_PARALLEL`                                                                                             |
+| `setup`                                 | none                                    | shell command run in `/workspace` before the agent, on work runs                                                                                |
+| `instructions`                          | none                                    | Markdown file of the repo, appended to the agent's instructions                                                                                 |
+| `dockerfile`                            | none: the base image                    | Dockerfile of the repo for its runs' image; needs the operator's `dockerfile` grant                                                             |
+| `docker`                                | none                                    | a container engine for work runs (`true`, or `cache: true`); needs the `docker` grant                                                           |
+| `caches`                                | none                                    | absolute paths in the sandbox kept in a volume per repo and path                                                                                |
+| `mounts`                                | none                                    | host paths requested (`- path: /nfs/work/api`, `read_only`); only under granted roots                                                           |
+| `modes.<name>`                          | none                                    | the repo's own modes, picked with `/mode <name>` (see Modes)                                                                                    |
+| `review.on`                             | none: off; `manual` with the block      | `ready`: a pull request that turns ready gets a review; `manual`: `/mode review` only                                                           |
+| `review.instructions`                   | none                                    | Markdown file of the repo, added to the built-in review prompt                                                                                  |
+| `review.agent`, `.model`, `.effort`     | `brainstorm_agent`, `_model`, `_effort` | the reviews' agent, model and effort (see Reviews)                                                                                              |
+| `review.fix`                            | `false`                                 | a review that requests changes starts a work run that addresses it; `true` or a number of rounds (see Reviews)                                  |
+| `review.merge`                          | `false`                                 | **unsafe**: Deckhand merges its own pull request after a clean review; needs `auto_merge` (see Auto-merge)                                      |
+| `review.merge_method`                   | `squash`                                | how an auto-merge merges: `squash`, `merge` or `rebase`, one the repository allows                                                              |
+| `review.max_allowed_severity`           | `low`                                   | the most severe finding a review in the fix loop or deciding an auto-merge may have: `low` or `medium` (see Auto-merge)                         |
+| `review.merge_wait`                     | `60`                                    | minutes an auto-merge waits for the GitHub Actions runs still going on the reviewed commit, `0` to `1440` (see Auto-merge)                      |
+| `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)                                  |
+| `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                                         |
+| `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                              |
+| `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                     |
+| `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                      |
+| `preview.command`                       | none                                    | preview hook command (`preview: ./x.sh` works too); needs the operator's `preview` grant                                                        |
+| `preview.image`                         | the repo's image                        | image the hook runs in; it needs a Docker client                                                                                                |
+| `preview.timeout_minutes`               | `30`                                    | the hook is stopped after that (120 at most)                                                                                                    |
+| `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                  |
+| `wait_for_answers`                      | `true`                                  | an issue's work runs wait until its open questions are answered (see Open questions)                                                            |
+| `auto_pickup`                           | `false`                                 | `true`: Deckhand starts this repo's open issues labelled `AUTO_PICKUP_LABEL` by itself, in the operator's `AUTO_PICKUP_SLOTS` (see Auto-pickup) |
+| `projects`                              | none                                    | organization projects (v2) Deckhand moves the issues on: `project`, `field`, `start`, `ready`, `merged` (see Projects)                          |
 
 ## Network and mounts
 
@@ -205,7 +205,7 @@ says which path was refused and why. See [Security model](security.md).
 
 ### YAML
 
-The listener has no dependencies, so it reads the part of YAML a config needs: mappings,
+Deckhand has no dependencies, so it reads the part of YAML a config needs: mappings,
 lists (block and `[a, b]`), `{ a: 1 }` on one line, quoted and plain values, `|` and `>`
 blocks, comments. Anchors, aliases, tags and several documents in one file are refused
 with the line number.
@@ -242,12 +242,12 @@ Every run starts from an image:
 - **The base image** (`SANDBOX_IMAGE`, `deckhand-sandbox`): the harness only: `git`, `gh`
   (through the github service's GitHub gateway), `jq`, `ripgrep`, Node 26, Playwright with Chromium, the
   entrypoint and the draft pull request hooks. No project toolchain, and **no Claude Code**:
-  before the first run that needs it, the listener installs the pinned
+  before the first run that needs it, Deckhand installs the pinned
   `CLAUDE_CODE_VERSION` in a short container of its own, into the shared
   `deckhand-claude-code` volume; later runs reuse it.
 - **The repo's image**, when `dockerfile` is set and the operator's policies grant the
   repository `dockerfile` (otherwise its runs stop, and the reply says
-  so): built `FROM` the base image, by the listener, from the default branch, with normal
+  so): built `FROM` the base image, by Deckhand, from the default branch, with normal
   network access (not through the egress proxy: install the toolchain there rather than in
   `setup`). Name the base with a build argument, so the operator's image name isn't written
   in the repo:
@@ -269,7 +269,7 @@ The build context is the repository at the default branch (downloaded from GitHu
 Dockerfile can `COPY` files from it. The image is tagged
 `deckhand-repo-<owner>-<repo>-<repo hash>:<hash>`: the repo's hash keeps repos whose names
 read alike (`acme/x.y`, `acme/x-y`) apart, and the tag's covers the repo, the base image and
-the Dockerfile: the listener builds again when either changes, and otherwise reuses the
+the Dockerfile: Deckhand builds again when either changes, and otherwise reuses the
 image. It keeps the three most recent tags per repo and removes older ones, the default
 branch's newest first among those kept, and the tags of the name from before the repo hash. While an image builds, the run shows "building image" on the
 dashboard, and the build log is in the run's log. A failed build fails the run, with a
@@ -475,9 +475,9 @@ docs, a vendor's changelog or terms. Its sandbox reaches any public host (`curl`
 Code's `WebFetch`, the browser), so it gets nothing of the repository's to leak:
 
 - **No code**: no clone, `/workspace` starts empty. Its input is the issue's thread (title,
-  description, the last 50 comments), which the listener writes into the run's inbox.
+  description, the last 50 comments), which Deckhand writes into the run's inbox.
 - **No GitHub token**: the broker refuses it one, so `gh` and `git` can't reach the
-  repository, and it can't push. Its final message is its reply, posted by the listener.
+  repository, and it can't push. Its final message is its reply, posted by Deckhand.
 - **Nothing else of the repo's**: the base image (never `dockerfile` or a branch's), no
   `setup`, `caches`, `instructions`, host mounts, container engine or screenshots.
 - **Its own session**, apart from work's and the light runs' (a page could leave anything
@@ -493,7 +493,7 @@ those of brainstorms (`brainstorm_agent`, `brainstorm_model`).
 The built-in review reads a pull request and posts **one GitHub review**: its findings grouped
 by severity (`critical`, `high`, `medium`, `low`), each with its file and line and a suggested
 fix, a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
-token only reads, and the listener posts the review.
+token only reads, and Deckhand posts the review.
 
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in
@@ -503,7 +503,7 @@ token only reads, and the listener posts the review.
   verify (a check it can't run) is said in the summary, not filed as a finding. Unsure
   between two severities, it picks the higher one.
 - **The rating follows the findings**: at most 3/10 with a critical finding, 5 with a high
-  one, 8 with a medium one; 10 only with no finding above low. The listener caps the rating
+  one, 8 with a medium one; 10 only with no finding above low. Deckhand caps the rating
   it posts by these numbers, whatever the review wrote; below the cap, it is shown as
   written.
 
@@ -523,7 +523,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   finding, a comment otherwise; the verdict in the review's text says "request changes" then
   too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
   doesn't let the App request changes on its own pull requests: those get a comment review, the
-  verdict in its text. A reply whose format the listener can't read is posted as a comment
+  verdict in its text. A reply whose format Deckhand can't read is posted as a comment
   review, as it is. An automatic review in the fix loop, or the one that decides an
   auto-merge, may tolerate medium findings (`max_allowed_severity`, under Auto-merge): its
   prompt says so before it starts.
@@ -535,7 +535,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   (medium and low too), with the instruction to fix each one or say why not, rerun the checks
   and push; it pushes like any work run, and replies on the pull request. Not while the issue
   has a run going or queued (a maintainer's comment came first) or the pull request or its
-  issue has the needs-input label. With `merge`, once it is over, the listener reviews the
+  issue has the needs-input label. With `merge`, once it is over, Deckhand reviews the
   commit it pushed (a review that starts by itself, so `deny_review` applies), which decides
   the merge; without `merge`, `fix: true` stops there, as one fix run leaves nothing for
   another review to start.
@@ -559,7 +559,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   **Bounded**: `n` fix runs and `n` reviews after them at most per pull request (`fix: true`
   without `merge`: one fix run, no review after it), each counted
   in `reviews.json` before it is queued, across restarts: the fix's push doesn't start a
-  review by itself (only turning ready does, and the listener's review of it), and a later
+  review by itself (only turning ready does, and Deckhand's review of it), and a later
   review (`/mode review`) starts no fix past the count. Other pull requests' reviews, and
   reviews that only comment, start nothing. To act again, comment with the trigger, or use
   the dashboard's buttons (below). A `/mode review` a maintainer asks for isn't part of the
@@ -601,7 +601,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   those who comment are trusted, and read what a fix pushed before merging
   ([Security model](security.md#review-fix-runs)).
 - **What it reads**: the diff, and the thread (the pull request's description, comments and
-  reviews, and the issue it closes) as the listener hands it over: only what allowed users
+  reviews, and the issue it closes) as Deckhand hands it over: only what allowed users
   and Deckhand wrote. Anyone else's comment is left out, its place saying so: an allowed user
   who wants the review to take it into account quotes it.
 - **The run**: fresh, in a clone and session of its own like a brainstorm's, and with
@@ -621,8 +621,8 @@ keys: any other, or a bad value, is an error.
 #### Reviewers
 
 `request: [alice, bob]` asks people to review Deckhand's pull requests, so a pull request that
-turns ready doesn't wait for someone to notice it. A run never picks who gets notified: the
-listener requests them itself, with its own token (runs still can't use `gh pr create
+turns ready doesn't wait for someone to notice it. A run never picks who gets notified:
+Deckhand requests them itself, with its own token (runs still can't use `gh pr create
 --reviewer` or `gh pr edit --add-reviewer`).
 
 - **Who**: the logins listed, lower-cased, a leading `@` dropped, only those in the operator's
@@ -644,7 +644,7 @@ listener requests them itself, with its own token (runs still can't use `gh pr c
   work runs' pull requests, and on those of the repository's own modes it allows
   (`allow_request_review`).
 - **GitHub decides the rest**: a login that isn't a collaborator makes GitHub refuse the
-  request (the listener's log says so); requesting someone who already reviewed asks them
+  request (Deckhand's log says so); requesting someone who already reviewed asks them
   again, which is the point after a fix.
 
 Requesting a review notifies people: keep the list to those who want every one of Deckhand's
@@ -653,12 +653,12 @@ pull requests.
 #### CI before the review
 
 With `ci: wait` (and `on: ready`), an automatic review waits for the repository's CI first: a
-failing CI then costs a cheap CI fix run instead of a full review that misses the failure. The
-listener decides each step itself, without a model call, from the GitHub Actions runs on the
+failing CI then costs a cheap CI fix run instead of a full review that misses the failure.
+Deckhand decides each step itself, without a model call, from the GitHub Actions runs on the
 pull request's head commit (other checks and commit statuses aren't read, as for auto-merge):
 
 - **Waiting**: when a review would start (the pull request turned ready, or a fix run pushed),
-  nothing is queued while runs are going. The listener decides again when a run completes on
+  nothing is queued while runs are going. Deckhand decides again when a run completes on
   that commit (a `workflow_run` delivery), and every 5 minutes for a lost one; the wait
   survives a restart. A push while it waits moves the wait to the new head commit: runs
   completing on the old one decide nothing. Without any run yet, it waits a minute (GitHub
@@ -676,7 +676,7 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   review's fix run (Deckhand's own open pull request, no run going or queued on the issue, no
   needs-input label, and `deny_fix`, its input with `ci: true`). A run going or queued on the
   issue (often the work run that marked the pull request ready, after a quick failure) doesn't
-  stop it: the pull request goes on waiting, and the listener decides again once a run is over.
+  stop it: the pull request goes on waiting, and Deckhand decides again once a run is over.
   Its message names the failed
   runs and jobs (name, conclusion, run id, link), never their logs: the run reads them itself
   (`gh run view <id> --log-failed`, through Deckhand's GitHub gateway, which follows GitHub's
@@ -710,7 +710,7 @@ the operator's `workflows` grant.
 > it only on private repositories where everyone who can comment is trusted. See
 > [Security model](security.md#auto-merge).
 
-With `merge: true`, the listener merges Deckhand's own pull request once its review finds
+With `merge: true`, Deckhand merges Deckhand's own pull request once its review finds
 nothing blocking. It takes both sides:
 
 - **The operator's grant**: `auto_merge`, an `allow_grant` rule of their policies naming the
@@ -726,7 +726,7 @@ nothing blocking. It takes both sides:
   on, an auto-merged change can reach root on the host with nobody reading it. Without the
   acknowledgement, the config check warns, and each review's merge is refused with a comment.
 
-**The flow**, all in the listener (never in a sandbox, whose token can't merge):
+**The flow**, all in Deckhand (never in a sandbox, whose token can't merge):
 
 1. The pull request turns ready, and the review runs as usual.
 2. Nothing blocking (no critical, high or medium finding; medium allowed with
@@ -791,7 +791,7 @@ it, and it is still one decision per pull request.
 The merge is `PUT /pulls/{n}/merge` with the reviewed commit as `sha`, so a push after the
 review makes GitHub refuse it. A comment then says Deckhand merged it, and why; the dashboard
 shows "Merged by Deckhand" on its task and in the graph, a red "Auto-merge: no human review"
-badge on the repository, and a red box at the top of its config panel. The listener logs a
+badge on the repository, and a red box at the top of its config panel. Deckhand logs a
 warning at start for each of its policy files that grants auto-merge. The issue is closed by the
 pull request's `Closes #n`, as for any merge.
 
@@ -857,7 +857,7 @@ running one: deliveries past that are dropped (and logged), since anyone can ope
 requests. A newer delivery for a pull request (or a workflow run) whose hook still waits
 replaces it, so the hook may not see every event: have it bring the preview to the state the
 event describes (open, updated, closed) rather than react to each action. A hook is **busy** for as
-long as its command runs: the listener's `/status` lists it and isn't idle meanwhile, so a
+long as its command runs: Deckhand's `/status` lists it and isn't idle meanwhile, so a
 restart that waits for it doesn't cut a deployment short. The runner, stopping for an update,
 lets a running hook finish within its grace period (`DRAIN_SECONDS`, 280 s by default), then
 stops and removes it, and drops the hooks still waiting, saying so in its log: the next event
@@ -869,7 +869,7 @@ should wait until it is up before exiting. Its output is kept in the runner's vo
 ## Conflicts
 
 When the base branch moves, a pull request can go into conflict and stay there until someone
-notices. With `conflicts.check_minutes`, the listener looks at the repository's open pull
+notices. With `conflicts.check_minutes`, Deckhand looks at the repository's open pull
 requests every that many minutes, and starts a work run on any that conflicts with its base.
 It is off without the key, and each conflict found is a run, so a bill.
 
@@ -885,7 +885,7 @@ It is off without the key, and each conflict found is a run, so a bill.
 - A task with a run going or comments waiting is skipped, and so is a pull request (or its
   issue) labelled `NEEDS_INPUT_LABEL`.
 - Each pull request is tried once per pair of its head commit and its base branch's latest
-  commit, across listener restarts: a rebase that failed or stopped to ask isn't tried again
+  commit, across restarts: a rebase that failed or stopped to ask isn't tried again
   until someone pushes to the pull request or the base branch moves.
 - A conflict run is a fix run too: the [policies](#policies) are asked first (`deny_fix`,
   with [`reason: "conflict"`](#the-review-and-fix-input)). A refusal starts nothing: a "No
@@ -930,7 +930,7 @@ projects:
     merged: Done
 ```
 
-The listener then moves the items, with the App's own token:
+Deckhand then moves the items, with the App's own token:
 
 - **`start`**: when a work run starts on the issue (a work run, or one of the repository's
   modes; not a brainstorm or any light run), once its checks let it start (a run
@@ -948,7 +948,7 @@ The listener then moves the items, with the App's own token:
 Each step is optional: one without an option moves nothing at that step. Options are matched
 by name, whatever their case. A `.deckhand.yaml` with errors moves nothing. A project the
 grant doesn't list, a field or an option that isn't there, or a GitHub error never stops a
-run: the move is skipped, said in the listener's log and the run's, and the dashboard's config
+run: the move is skipped, said in Deckhand's log and the run's, and the dashboard's config
 panel names the projects the grant lacks. A task on a pull request with no issue isn't on any
 project.
 
@@ -1007,7 +1007,7 @@ template strings (`$"…"`):
 - **The operator's**: [Deckhand's defaults](#the-default-policies), in the policy service's image,
   under the operator's grants folder `policy/` ([security model](security.md#policies)), where
   a file **with the same name** replaces Deckhand's (one with only `package deckhand` drops it).
-  Its allow rules are the ceiling: Deckhand's `allow.rego` allows the listener's own decisions,
+  Its allow rules are the ceiling: Deckhand's `allow.rego` allows Deckhand's own decisions,
   each `mode-<mode>.rego` what a mode's runs get and do.
 - **The repository's**: its deny rules apply to every run; its allow rules count only for its
   own `modes:` (`custom_mode`), whose runs need **the operator's allow and its own**. Its allow
@@ -1015,7 +1015,7 @@ template strings (`$"…"`):
   error). Its file named as one of Deckhand's or the operator's replaces nothing (a warning).
 
 When only Deckhand's files apply, allowing the decision and none defining its deny rule, the
-policy service isn't asked (and the task's page keeps nothing); for `run`, the listener decides as
+policy service isn't asked (and the task's page keeps nothing); for `run`, Deckhand decides as
 `run.rego` would. The repository's folder is listed once, then
 again after a push to its default branch (or 10 minutes).
 
@@ -1047,12 +1047,12 @@ repository's). Eight decisions:
 | --------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `deny_run`            | A [run a person asks for](#the-run-input), before it is queued.                                                                                                                                          | Starts nothing: a reply quotes the messages.                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `deny_merge`          | An [auto-merge](#auto-merge), after every other gate passed, right before the merge. Only with `review.merge` and its grant.                                                                             | Refuses the merge: the "Not merged automatically" comment quotes the messages (5 at most, 200 characters each).                                                                                                                                                                                                                                                                                                                                                 |
-| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for.                                 | Skips the review: the listener's log says why, nothing is posted; a policy error (not a rule's message) is asked again 10 seconds later first, then, on a pull request that turned ready, 5 minutes apart, 3 times. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                      |
+| `deny_review`         | A review that starts by itself ([`review.on: ready`](#reviews)), after its own checks, and the review after each fix run. Never a `/mode review` a maintainer asked for.                                 | Skips the review: Deckhand's log says why, nothing is posted; a policy error (not a rule's message) is asked again 10 seconds later first, then, on a pull request that turned ready, 5 minutes apart, 3 times. After a fix run, the fix loop stops; in auto-merge mode the merge waits for a maintainer, the "Not merged automatically" comment quoting the messages.                                                                                          |
 | `deny_fix`            | A [`review.fix`](#reviews) run, a [CI fix run](#ci-before-the-review), or a [conflict](#conflicts)'s rebase run, after its own checks, right before it is queued (`input.reason` tells them apart).      | Starts no fix run: a "No fix run" comment on the pull request quotes the messages. With `review.merge`, nothing is merged: the refusal quotes them too. The round isn't used: a later review may start it. A CI fix run refused: the "CI failed" comment ends with "No CI fix run" and the messages, no review runs, and its round isn't used either. A conflict run refused: a "No rebase run" comment quotes them, and that head and base aren't tried again. |
-| `deny_link_branch`    | A work run on an issue that has no branch yet, as it starts: the listener creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).                                  | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                                                                                                                             |
-| `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before the listener requests them on Deckhand's ready pull request, and again after a fix pushed to it.                                                 | Requests nobody at that head commit: the listener's log says why, nothing is posted.                                                                                                                                                                                                                                                                                                                                                                            |
+| `deny_link_branch`    | A work run on an issue that has no branch yet, as it starts: Deckhand creates the run's `issue-<n>-…` branch and [links it to the issue](#the-linked-branch-input).                                      | Links no branch: the sandbox creates its branch itself, unlinked, as before, and the run's log quotes the messages.                                                                                                                                                                                                                                                                                                                                             |
+| `deny_request_review` | The [reviewers](#reviewers) of `review.request`, before Deckhand requests them on Deckhand's ready pull request, and again after a fix pushed to it.                                                     | Requests nobody at that head commit: Deckhand's log says why, nothing is posted.                                                                                                                                                                                                                                                                                                                                                                                |
 | `deny_github`         | Each write a run makes to GitHub (a comment, an issue edit, a label…), REST or a GraphQL mutation's field, after [the built-in checks](#the-github-input); a run's reads of CI's checks and of projects. | Refuses the write: GitHub's error shape with the messages, which `gh` prints to the agent, and a line in the run's log.                                                                                                                                                                                                                                                                                                                                         |
-| `deny_push`           | Each branch a push updates, after the git gateway's built-in checks ([the push input](#the-push-input)).                                                                                                 | Refuses the whole push: git prints the messages for each ref, and a line in the listener's log.                                                                                                                                                                                                                                                                                                                                                                 |
+| `deny_push`           | Each branch a push updates, after the git gateway's built-in checks ([the push input](#the-push-input)).                                                                                                 | Refuses the whole push: git prints the messages for each ref, and a line in Deckhand's log.                                                                                                                                                                                                                                                                                                                                                                     |
 
 Each has its allow rule (`allow_merge`…), and [capabilities](#capabilities) two of their own.
 Another `allow_*` or `deny_*` rule is reported by the
@@ -1098,8 +1098,8 @@ allow_capabilities contains c if {
 
 ### The run input
 
-`input` of `deny_run`, asked once per run a person asks for, before it is queued (not the
-listener's reviews and fix runs): `version`, `decision: "run"`, `time`, `repo` (`"owner/repo"`,
+`input` of `deny_run`, asked once per run a person asks for, before it is queued (not
+Deckhand's reviews and fix runs): `version`, `decision: "run"`, `time`, `repo` (`"owner/repo"`,
 lower case), `mode`, `custom_mode`, `fresh`, `trigger` (`comment`, `dashboard`, `auto-pickup`,
 `inbox`, `discussion`), `continues` (`true` for a comment without a trigger or `/mode` line,
 going on in the issue's current mode), `sender` (a login), `target` (where the comment is:
@@ -1107,7 +1107,7 @@ going on in the issue's current mode), `sender` (a login), `target` (where the c
 `null`) and `pr` (`draft`, `base`, `head`; else `null`). Deckhand's `run.rego` allows every
 mode on issues, all but `brainstorm`, `stop` and `onboarding` elsewhere unless the comment
 `continues` (the onboarding pull request's comments go on in onboarding). With Deckhand's
-files alone and no repository file, the listener decides as `run.rego` would, without `opa` or
+files alone and no repository file, Deckhand decides as `run.rego` would, without `opa` or
 reading the comment's issue: it only lists the repository's policy folder (kept 10 minutes,
 and up to an hour when GitHub can't list it again).
 
@@ -1192,14 +1192,14 @@ deny_fix contains "too large to rebase unattended" if {
 `repo`, `pr` (with `pr.files[]`) and `issue`, read from GitHub when the decision is made (only
 when a policy applies), with `review: null`, without `fixed`, `fixes` or `checks`, and:
 
-| Field         | What                                                                                                                                                                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decision`    | `"request_review"`.                                                                                                                                                                                                           |
-| `reviewers`   | The logins the listener would request: `review.request`, those in `ALLOWED_USERS`, without the author.                                                                                                                        |
-| `when`        | `"ready"`: the pull request turned ready (or is asked about for the first time); `"fix"`: a run that pushed to it ended well (not a push of someone else's).                                                                  |
-| `mode`        | The mode of the run that opened the pull request (the newest on its task that could push and had started when GitHub created it): `"work"`, or one of the repository's `modes:`; `null` when the listener no longer knows it. |
-| `custom_mode` | `true` for a mode of the repository's `modes:`, as in [the GitHub input](#the-github-input).                                                                                                                                  |
-| `reason`      | Why the listener started that run: `"review-fix"`, `"ci-fix"`, `"conflict"`, or `null` for a comment's.                                                                                                                       |
+| Field         | What                                                                                                                                                                                                                      |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decision`    | `"request_review"`.                                                                                                                                                                                                       |
+| `reviewers`   | The logins Deckhand would request: `review.request`, those in `ALLOWED_USERS`, without the author.                                                                                                                        |
+| `when`        | `"ready"`: the pull request turned ready (or is asked about for the first time); `"fix"`: a run that pushed to it ended well (not a push of someone else's).                                                              |
+| `mode`        | The mode of the run that opened the pull request (the newest on its task that could push and had started when GitHub created it): `"work"`, or one of the repository's `modes:`; `null` when Deckhand no longer knows it. |
+| `custom_mode` | `true` for a mode of the repository's `modes:`, as in [the GitHub input](#the-github-input).                                                                                                                              |
+| `reason`      | Why Deckhand started that run: `"review-fix"`, `"ci-fix"`, `"conflict"`, or `null` for a comment's.                                                                                                                       |
 
 ```rego
 deny_request_review contains "not on docs-only changes" if {
@@ -1232,7 +1232,7 @@ tool sends it: `gh`, `gh api`, curl) is checked there, in this order:
    rule matches it and no deny rule does. Deckhand's defaults allow each mode what it writes,
    one file per mode ([the default policies](#the-default-policies)); no rule, no write.
 
-A write's target is looked up on GitHub (with the listener's token, whose rate limit every run
+A write's target is looked up on GitHub (with Deckhand's token, whose rate limit every run
 shares) before the policies are asked: once the writes a rule or a built-in check refused have
 cost a run 100 look-ups in the last hour, its next writes are refused (`429`) before any, until
 the hour has room again, so a run steered into writes no rule allows can't spend that limit.
@@ -1244,9 +1244,9 @@ issues: the parent, its target, and the child, by its id: the child must be an i
 created, or one already under the run's issue, and moving an issue from another parent
 (`replace_parent` with any value but `false`) is refused. A link can't take someone else's
 issue under the run's, where its policies would let it edit it. The issues the App's bot files
-for other runs or for the listener (an analysis, an onboarding issue) aren't the run's, even
+for other runs or for Deckhand (an analysis, an onboarding issue) aren't the run's, even
 while it runs: only the answers to its own calls say what it created, and they are saved with
-the run, so a listener restart keeps them. A GraphQL answer counts only under the response
+the run, so a restart keeps them. A GraphQL answer counts only under the response
 key of a `createIssue` field the gateway parsed, selecting GitHub's own `issue { url }`
 (unaliased), and the issue must be the App's bot's.
 
@@ -1259,7 +1259,7 @@ repository's issue, though GitHub allows those). A REST blocker, named by its id
 looked for among the repository's 1,000 newest open issues and pull requests (GitHub lists
 them together) past the run's own (GitHub can't
 look an issue up by its id); GraphQL's, by its node ID, is looked up wherever it is. A call
-without its blocker is refused. The listener reads these links to order a plan
+without its blocker is refused. Deckhand reads these links to order a plan
 ([architecture](architecture.md)): a sub-issue waits on the graph until its blockers close.
 
 A **review thread** is answered with a `reply` (`POST …/pulls/<n>/comments/<id>/replies`, or
@@ -1306,7 +1306,7 @@ commands) goes through the same checks, field by field:
    `subIssueId` only): any other is refused before any policy runs, even sent as `null`, which
    GitHub may read as clearing it.
 3. **Its targets are GitHub's:** the node IDs it names, inline or in its variables, are looked
-   up with the listener's token, to a repository, a kind and a number. A create's
+   up with Deckhand's token, to a repository, a kind and a number. A create's
    `repositoryId` must be the run's repository, and its labels' IDs labels of it.
 4. **Each field is then a write as above**, held to the built-in checks, `allow_github` and
    `deny_github` with the same input. One refusal refuses the whole call, its message starting with the field's
@@ -1355,7 +1355,7 @@ repository's modes) read the organization's projects (`gh` looks a project
 up before it adds to it); the others (reviews, inbox entries, discussions, analyses) don't.
 Setting an item's fields
 (`updateProjectV2ItemFieldValue`), removing or archiving one, and the project's own settings
-are refused: [the listener moves the items](#projects).
+are refused: [Deckhand moves the items](#projects).
 
 What each mode writes is its file's, in Deckhand's default policies ([the default
 policies](#the-default-policies)); the repository's settings page on the dashboard shows the
@@ -1375,7 +1375,7 @@ files that apply, the operator's replacing Deckhand's:
 A run's label writes neither add nor remove `NEEDS_INPUT_LABEL` on its sub-issues and the issues
 it created: taking it off would answer their questions and start what waited for them. That
 covers the label only: a run that may edit those issues (a work run, a brainstorm) can still
-drop their questions section from the description, which the listener takes for an answer too.
+drop their questions section from the description, which Deckhand takes for an answer too.
 
 No default rule allows closing or reopening (GitHub closes an issue when its pull request
 merges), merging, locks, deleting anything but a comment the run posted, or a label's
@@ -1396,7 +1396,7 @@ and a write the gateway can't classify.
 | `repo`                                                                                                                | `"owner/repo"`, in lower case.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `mode`                                                                                                                | The run's: `work`, `brainstorm`, `stop`, `idea`, `bug`, `discussion`, or one of the repository's `modes:`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `custom_mode`                                                                                                         | `true` for one of the repository's `modes:`, `false` for Deckhand's own: a rule needn't list the built-in modes, which change as Deckhand adds some. It needs the repository's `allow_github` too.                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `reason`                                                                                                              | Why the listener started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                                                                                                                                                                                                                                                                                                                |
+| `reason`                                                                                                              | Why Deckhand started the run itself: `"review-fix"` (a review's fix run), `"ci-fix"` (a CI fix run), `"conflict"` (a rebase), `null` for a comment's run. The defaults don't read it: a repository can narrow one of them.                                                                                                                                                                                                                                                                                                                                                                                    |
 | `issue`                                                                                                               | The number of the run's issue (or pull request).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | `action`                                                                                                              | What the write does: `create`, `edit`, `comment`, `label`, `link`, `assign`, `milestone`, `ready`, `draft`, `delete` (a comment the run posted), `react`, `unreact` (a reaction), `reply`, `resolve`, `unresolve` (a review thread), `update_branch`, `rerun` (failed GitHub Actions jobs: [Reruns](#reruns)), `project` (adding it to a project), `close`, `reopen`, `lock`, `merge`; `read_checks` and `read_projects` for [a run's reads](#reading-cis-checks), which have no `target` or `change`. A write doing several (a `PATCH` of labels and a title) has them all in `actions`, `action` the first. |
 | `actions`                                                                                                             | All of them: `close` or `reopen` first, then `label`, `assign`, `milestone`, then `edit`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -1509,7 +1509,7 @@ deny_push contains "a run doesn't delete branches here" if input.deleted
 
 A work run's branch shows in its issue's Development sidebar from the run's start, not only
 once its pull request says `Closes #n`. GitHub links a branch to an issue only as it creates
-it (`createLinkedBranch`, what `gh issue develop` calls), so the **listener** does it as a work
+it (`createLinkedBranch`, what `gh issue develop` calls), so **Deckhand** does it as a work
 run starts, once nothing else can stop the run (its image built, its access checked), before
 its sandbox does: when the run may push its issue's branch (`issue-<n>-*`: a run with `push`, not
 a fork's) and the issue has no `issue-<n>-…` branch yet. A fix or conflict run's branch, or a
@@ -1522,18 +1522,18 @@ a failure links nothing and fails no run: the sandbox creates the branch itself,
 
 `input` of `deny_link_branch`:
 
-| Field         | What                                                                                                        |
-| ------------- | ----------------------------------------------------------------------------------------------------------- |
-| `version`     | `1`.                                                                                                        |
-| `repo`        | `"owner/repo"`, in lower case.                                                                              |
-| `mode`        | The run's mode: `work`, one of the repository's `modes:`, or any other the policies give `push`.            |
-| `custom_mode` | `true` for one of the repository's `modes:`, as in [the GitHub input](#the-github-input).                   |
-| `reason`      | Why the listener started the run itself (`"review-fix"`, `"ci-fix"`, `"conflict"`), `null` for a comment's. |
-| `issue`       | The issue's number.                                                                                         |
-| `labels`      | The issue's labels (names).                                                                                 |
-| `branch`      | The branch it would create: `issue-<n>-<slug of the title>`.                                                |
-| `base`        | The base branch.                                                                                            |
-| `oid`         | The base branch's head commit, where the branch is created.                                                 |
+| Field         | What                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
+| `version`     | `1`.                                                                                                    |
+| `repo`        | `"owner/repo"`, in lower case.                                                                          |
+| `mode`        | The run's mode: `work`, one of the repository's `modes:`, or any other the policies give `push`.        |
+| `custom_mode` | `true` for one of the repository's `modes:`, as in [the GitHub input](#the-github-input).               |
+| `reason`      | Why Deckhand started the run itself (`"review-fix"`, `"ci-fix"`, `"conflict"`), `null` for a comment's. |
+| `issue`       | The issue's number.                                                                                     |
+| `labels`      | The issue's labels (names).                                                                             |
+| `branch`      | The branch it would create: `issue-<n>-<slug of the title>`.                                            |
+| `base`        | The base branch.                                                                                        |
+| `oid`         | The base branch's head commit, where the branch is created.                                             |
 
 Deckhand's default, `gh-linked-branch.rego`, links work runs' branches only among the built-in
 modes:
@@ -1555,7 +1555,7 @@ Deckhand's default policies say what each kind of run gets and does. They ship i
 service's image (`policy/` in Deckhand's repository) and hold without any setup, in the
 operator's layer, under the operator's files:
 
-- **`allow.rego`** allows the listener's own decisions (`merge`, `review`, `fix`,
+- **`allow.rego`** allows Deckhand's own decisions (`merge`, `review`, `fix`,
   `link_branch`, `request_review`), which the deny rules of the other files narrow. The
   operator's `policy/allow.rego` replaces it (one without `allow_merge` refuses every
   auto-merge).
@@ -1583,7 +1583,7 @@ operator's layer, under the operator's files:
   input](#the-github-input)).
 - **Each default file is evaluated with the real `opa`** by Deckhand's tests, on every kind of
   mode, write and target: the built-in modes write what they wrote when these were ceilings
-  built into the listener.
+  built into Deckhand.
 
 The Policies tab lists them as `deckhand/policy/<name>`, with the operator's file that replaces
 one; the repository's settings show, for each mode, the file that decided each of its
@@ -1596,7 +1596,7 @@ capabilities.
 | `mode-*.rego`       | `allow_github` (`project`, [Projects](#projects)) | ✅ its issue, pull request, sub-issues, filed issues, to a granted project                    | ✅ the issues it files     | ❌ (no token) | ✅ once the repository's `allow_github`         |
 
 Setting a project item's field, removing or archiving one is refused whatever a policy says:
-the listener moves items.
+Deckhand moves items.
 
 Teams are never requested, whatever a policy says: `review.request` takes logins only.
 
@@ -1654,15 +1654,15 @@ reviewed, at the operator's cost. The config check warns of one that never names
 A work run corrects a comment it posted rather than posting another (issue #455): `PATCH` or
 `DELETE …/issues/comments/<id>`, or GraphQL's `updateIssueComment` and `deleteIssueComment`
 (`gh issue comment --edit-last`, `--delete-last`, `gh pr comment` likewise). The App's bot
-writes every run's comments and the listener's own (its live progress comment, its replies,
+writes every run's comments and Deckhand's own (its live progress comment, its replies,
 its reviews), so a comment's author says nothing: the gateway keeps the comments GitHub said
 the run posted, from the answers to its own calls (a REST `201` on `…/issues/<n>/comments`, its
 `url`; GraphQL's `addComment`, only under the response key of a field the gateway parsed,
 selecting GitHub's own `commentEdge { node { url } }`, unaliased), saved with the run so a
-listener restart keeps them. Such a comment, in the run's repository and still the bot's on
-GitHub, is a `created_comment`; any other is refused before any look-up or policy: the
-listener's, another run's, a person's, a review's. `--edit-last` picks the bot's last comment
-on the issue, which may be the listener's: its refusal says to send
+restart keeps them. Such a comment, in the run's repository and still the bot's on
+GitHub, is a `created_comment`; any other is refused before any look-up or policy:
+Deckhand's, another run's, a person's, a review's. `--edit-last` picks the bot's last comment
+on the issue, which may be Deckhand's: its refusal says to send
 `gh api -X PATCH repos/<owner>/<repo>/issues/comments/<id> -f body=…` instead, with the id
 that ends the URL gh printed when the run posted it (`#issuecomment-<id>`). An edit's body is
 redacted as any write's.
@@ -1670,10 +1670,10 @@ redacted as any write's.
 Deckhand's default, `mode-work.rego`, allows `edit` on `created_comment` to work runs and the
 repository's modes, and denies `delete`:
 
-|                              | work, fix, conflict                 | brainstorm                                   | research    | repository modes                    |
-| ---------------------------- | ----------------------------------- | -------------------------------------------- | ----------- | ----------------------------------- |
-| `edit` a comment it posted   | ✅ allowed                          | ❌ (its replies are the listener's: no rule) | ❌ no token | ✅ once the repository allows them  |
-| `delete` a comment it posted | ❌ denied, the operator may broaden | ❌                                           | ❌ no token | ❌ denied, the operator may broaden |
+|                              | work, fix, conflict                 | brainstorm                               | research    | repository modes                    |
+| ---------------------------- | ----------------------------------- | ---------------------------------------- | ----------- | ----------------------------------- |
+| `edit` a comment it posted   | ✅ allowed                          | ❌ (its replies are Deckhand's: no rule) | ❌ no token | ✅ once the repository allows them  |
+| `delete` a comment it posted | ❌ denied, the operator may broaden | ❌                                       | ❌ no token | ❌ denied, the operator may broaden |
 
 The file ships in the policy service's image ([The default policies](#the-default-policies)), so
 this holds without any setup. The operator's `policy/mode-work.rego` replaces it for every
@@ -1690,15 +1690,15 @@ it starts on a maintainer's request, 👍 on a suggestion it applied. `POST …/
 issue or pull request the comment is on, looked up on GitHub (in the run's repository), and its input names
 the comment (`target.comment`, `comment_author`, `comment_deckhand`). Reactions on a commit's comment or a review are refused.
 
-The App's bot adds the listener's reactions too (👀 on a comment that starts a run, then 🚀,
+The App's bot adds Deckhand's reactions too (👀 on a comment that starts a run, then 🚀,
 😕 or 👎 when it is over), so a run removes only the reactions GitHub said it added, saved with
 the run like the issues it created: a REST `201` (a `200` says the bot had it already), or an
 `addReaction` field the gateway parsed whose content the bot hadn't on that subject, which
-GitHub ran. A reaction the run removed is no longer its own (the listener may add the same one
-since), and it keeps its 100 newest. A reaction the listener added, on any comment of the
+GitHub ran. A reaction the run removed is no longer its own (Deckhand may add the same one
+since), and it keeps its 100 newest. A reaction Deckhand added, on any comment of the
 repository (whichever task it went to, a waiting `/after`, a held comment's 😕, a finished run's
 outcome), is never the run's, even where the run's came first: GitHub keeps one reaction per
-user and content, so the listener's `POST` answers with the run's. The listener notes each one
+user and content, so Deckhand's `POST` answers with the run's. Deckhand notes each one
 before it asks GitHub, in `reactions.json` (its 5,000 newest), and drops its 👀 once it takes it
 off. Any other removal is refused before any policy. One added over GraphQL is removed
 with `removeReaction` (REST's `DELETE` names a reaction by an id the gateway didn't keep for it).
@@ -1814,7 +1814,7 @@ request to turn ready. The task's page shows its last one: who asked, when, how 
 and a link to the reply. The input is the merge's, read now, with `review: null` (no review
 ran); `deny_review` and `deny_fix` get it with their own `decision`, without `checks`,
 `deny_fix` with the `round` and `rounds` the next fix run would have (a review's: `reason: "review"`), `deny_request_review`
-with its `reviewers`, `when: "ready"` and the run that opened the pull request, as the listener would ask; its "allowed" adds "but nobody would be requested" when the listener wouldn't ask (`review.request` names no allowed user, or it isn't Deckhand's own ready pull request). It works without a `review` block, and doesn't ask `grant` (the config page says the
+with its `reviewers`, `when: "ready"` and the run that opened the pull request, as Deckhand would ask; its "allowed" adds "but nobody would be requested" when Deckhand wouldn't ask (`review.request` names no allowed user, or it isn't Deckhand's own ready pull request). It works without a `review` block, and doesn't ask `grant` (the config page says the
 repository's grants). On an issue, a reply says to comment it on the
 pull request.
 
@@ -1865,7 +1865,7 @@ panel).
 
 `auto_pickup: true` opts the repository in to the operator's auto-pickup
 ([setup.md](setup.md#auto-pickup)): its open issues labelled `AUTO_PICKUP_LABEL`
-(`auto-pickup` by default) are started by the listener itself, oldest created first across
+(`auto-pickup` by default) are started by Deckhand itself, oldest created first across
 every repository that opted in, in `work` mode, in the slots the operator reserves
 (`AUTO_PICKUP_SLOTS`). Without those slots (the default), or without this key, nothing is
 picked. Like the rest of this file, only the default branch's says it, and `max_parallel`
