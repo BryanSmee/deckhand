@@ -406,7 +406,7 @@ export function Detail({
                   icon={<Icon.Stop size={11} />}
                   pending={stopping === t.key}
                   pendingLabel="Removing…"
-                  title="Takes it out of the queue: what was asked is dropped, nothing ran yet"
+                  title="Takes it out of the queue: its queued comments are dropped"
                   shortcut="stop"
                   onClick={stop}
                 >

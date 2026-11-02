@@ -319,8 +319,14 @@ export function ordinal(n: number): string {
 export const reorderable = (t: Task) => t.state === "queued" && !!t.position && !t.startsFirst;
 
 // Whether a queued task can leave the queue for a wait (Queue after…) or the backlog: an
-// issue's, in the run order.
-export const unqueueable = (t: Task) => reorderable(t) && t.kind === "issue" && t.number !== null;
+// issue's (research's too), waiting for a slot, whether it moves in the run order or starts
+// first (another mode apart from work's). Not a brainstorm's reply: its task stays a
+// brainstorm, not back in the backlog.
+export const unqueueable = (t: Task) =>
+  t.state === "queued" &&
+  !!t.position &&
+  t.number !== null &&
+  (t.kind === "issue" || t.kind === "research");
 
 // Whether it can wait for another issue instead (Queue after…, a drop on a node's middle): not
 // when its queued comments only reply to its last run (the listener's `canWait`).
@@ -371,12 +377,15 @@ export function alreadyThere(line: Task[], key: string, onto: Task, before: bool
   return at >= 0 && movers[at + (before ? 1 : -1)]?.key === onto.key;
 }
 
-// Whether `side` (0 its left edge, 1 its right) is on the edges of `target`, a queued node that
-// moves in the run order (`line`: inLine()'s): a queued task let go there moves in line, not
-// after it.
-export function onEdge(line: Task[], target: string, side: number): boolean {
+// Whether queued task `key` let go at `side` (0 its left edge, 1 its right) of `target` moves
+// in line: both move in the run order (`line`: inLine()'s), and it is on the target's edges.
+// Elsewhere it queues after the target, if anything.
+export function onEdge(line: Task[], key: string, target: string, side: number): boolean {
+  const dragged = line.find((t) => t.key === key);
   const onto = line.find((t) => t.key === target);
-  return !!onto && reorderable(onto) && !(side > 0.3 && side < 0.7);
+  return (
+    !!dragged && reorderable(dragged) && !!onto && reorderable(onto) && !(side > 0.3 && side < 0.7)
+  );
 }
 
 // Where a queued node dropped on another queued one moves it: on its left edge before it, on
@@ -388,7 +397,7 @@ export function moveOnto(
   target: string,
   side: number,
 ): OrderMove | null {
-  if (key === target || !onEdge(line, target, side)) return null;
+  if (key === target || !onEdge(line, key, target, side)) return null;
   const onto = line.find((t) => t.key === target)!;
   const before = side <= 0.3;
   if (alreadyThere(line, key, onto, before)) return null;
@@ -423,7 +432,7 @@ export const movable = (
     ? n.kind === "issue"
     : stopped(n.task)
       ? n.kind === "issue" && listed.has(n.number)
-      : reorderable(n.task) || waitsForAnswers(n.task));
+      : reorderable(n.task) || waitable(n.task) || waitsForAnswers(n.task));
 
 // An open issue's task whose last run was stopped, failed or cut short by a restart.
 const stopped = (t: Task) =>

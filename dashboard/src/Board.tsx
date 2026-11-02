@@ -262,7 +262,7 @@ export function Board({
   const droppedQueued = (key: string, target: string | null, side: number) => {
     setNotice(null);
     if (order.moving || !target) return;
-    if (onEdge(everyLine, target, side)) {
+    if (onEdge(everyLine, key, target, side)) {
       const move = moveOnto(everyLine, key, target, side);
       if (move) reorder(move);
       return;
@@ -280,7 +280,7 @@ export function Board({
       const box = node && shape.boxes.find((b) => b.key === node.key);
       if (!node || !box || !h.key || order.moving) return null;
       let text: string;
-      if (onEdge(everyLine, node.key, h.side)) {
+      if (onEdge(everyLine, h.key, node.key, h.side)) {
         const move = moveOnto(everyLine, h.key, node.key, h.side);
         if (!move) return null;
         text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;

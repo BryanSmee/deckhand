@@ -186,6 +186,56 @@ test("a queued task with replies to its last run only: Back to backlog, but no Q
   expect(api.bodies()).toEqual([]);
 });
 
+test("a queued issue that starts first (a mode apart from work's) can leave the line, not move in it", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  // An analyze run on #45: kind "issue", before the work runs.
+  const first = queued(45, 1, { startsFirst: true, mode: "analyze" });
+  render(<Dashboard state={makeState({}, [first, queued(41, 2), queued(42, 3)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  const list = screen.getByRole("list", { name: "Tasks waiting for a slot, in run order" });
+  const card = () => within(list).getByText("Queued 45").closest("li")!;
+  expect(within(card()).queryByRole("button", { name: "Run #45 next" })).toBeNull();
+  expect(within(card()).queryByRole("button", { name: "Move #45 down" })).toBeNull();
+  expect(within(card()).getByRole("button", { name: "Queue #45 after…" })).toBeTruthy();
+  // Dropped on another card: it doesn't move in line.
+  const data = transfer();
+  fireEvent.dragStart(card(), { dataTransfer: data });
+  const other = within(list).getByText("Queued 42").closest("li")!;
+  fireEvent.dragOver(other, { dataTransfer: data, clientY: 10 });
+  fireEvent.drop(other, { dataTransfer: data, clientY: 10 });
+  fireEvent.dragEnd(card());
+  expect(api.bodies()).toEqual([]);
+  // On the graph, onto another queued node's edge: queued after it, not moved in line.
+  const from = screen.getByRole("listitem", { name: /^#45 Queued 45:/ });
+  const start = boxOf(from);
+  const target = boxOf(screen.getByRole("listitem", { name: /^#42 Queued 42:/ }));
+  const edge = { clientX: target.x + target.w * 0.9, clientY: target.y + target.h / 2 };
+  fireEvent.pointerDown(from, {
+    button: 0,
+    pointerId: 1,
+    clientX: start.x + 5,
+    clientY: start.y + 5,
+  });
+  fireEvent.pointerMove(from, { pointerId: 1, ...edge });
+  expect(screen.getByText("Queue #45 after #42: it leaves the line")).toBeTruthy();
+  fireEvent.pointerUp(from, { pointerId: 1, ...edge });
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 45, after: 42 }]));
+  // Answered (the fake listener's state doesn't change): back in line. On the Backlog tab, it
+  // goes back to the backlog.
+  const take = /^Take #45 out of the queue/;
+  await waitFor(() =>
+    expect(within(list).getByRole<HTMLButtonElement>("button", { name: take }).disabled).toBe(
+      false,
+    ),
+  );
+  const again = transfer();
+  fireEvent.dragStart(card(), { dataTransfer: again });
+  const tab = screen.getByRole("tab", { name: /^Backlog/ });
+  fireEvent.dragOver(tab, { dataTransfer: again });
+  fireEvent.drop(tab, { dataTransfer: again });
+  await waitFor(() => expect(api.bodies().at(-1)).toEqual({ action: "cancel", number: 45 }));
+});
+
 test("a Queued card dropped on the Backlog tab goes back to the backlog", async () => {
   const list = open();
   const card = within(list).getByText("Queued 41").closest("li")!;

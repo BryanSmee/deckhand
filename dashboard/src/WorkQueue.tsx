@@ -241,38 +241,44 @@ export function WorkQueue({
   };
   const queuedActions = (t: Task): RowAction[] => {
     const i = movers.indexOf(t);
-    if (i < 0) return [];
     const ref = `#${t.number}`;
     const still = moving || blocked;
     // First of the work runs of every repo shown: Run next has nothing to pass.
     const next = t.key === nextKey;
+    // Those that start first (a mode apart from work's) don't move in line, but may leave it.
+    const moves: RowAction[] =
+      i < 0
+        ? []
+        : [
+            {
+              label: "Run next",
+              shortcut: "start",
+              aria: `Run ${ref} next`,
+              // A phone's row: three icons leave its title some room.
+              iconOnly: touch,
+              icon: touch ? <Icon.ToTop size={16} /> : <Icon.Play size={11} />,
+              run: () => move({ key: t.key, first: true }),
+              disabled: still || next,
+            },
+            {
+              label: "Move up",
+              aria: `Move ${ref} up`,
+              iconOnly: true,
+              icon: <Icon.ChevronUp size={touch ? 18 : 14} />,
+              run: () => move({ key: t.key, before: movers[i - 1].key }),
+              disabled: still || i === 0,
+            },
+            {
+              label: "Move down",
+              aria: `Move ${ref} down`,
+              iconOnly: true,
+              icon: <Icon.ChevronDown size={touch ? 18 : 14} />,
+              run: () => move({ key: t.key, after: movers[i + 1].key }),
+              disabled: still || i === movers.length - 1,
+            },
+          ];
     return [
-      {
-        label: "Run next",
-        shortcut: "start",
-        aria: `Run ${ref} next`,
-        // A phone's row: three icons leave its title some room.
-        iconOnly: touch,
-        icon: touch ? <Icon.ToTop size={16} /> : <Icon.Play size={11} />,
-        run: () => move({ key: t.key, first: true }),
-        disabled: still || next,
-      },
-      {
-        label: "Move up",
-        aria: `Move ${ref} up`,
-        iconOnly: true,
-        icon: <Icon.ChevronUp size={touch ? 18 : 14} />,
-        run: () => move({ key: t.key, before: movers[i - 1].key }),
-        disabled: still || i === 0,
-      },
-      {
-        label: "Move down",
-        aria: `Move ${ref} down`,
-        iconOnly: true,
-        icon: <Icon.ChevronDown size={touch ? 18 : 14} />,
-        run: () => move({ key: t.key, after: movers[i + 1].key }),
-        disabled: still || i === movers.length - 1,
-      },
+      ...moves,
       // An issue's: it leaves the queue, to wait for another issue or for nothing.
       ...(waitable(t)
         ? [
@@ -304,14 +310,16 @@ export function WorkQueue({
   // A Queued card let go over `onto`: above it, right before it; below it, right after it.
   // Where it is already, nothing.
   const dropOnto = (key: string, onto: Task, above: boolean) => {
-    if (key === onto.key || !reorderable(onto) || alreadyThere(everyLine, key, onto, above)) return;
+    const dragged = line.find((t) => t.key === key);
+    if (key === onto.key || !dragged || !reorderable(dragged) || !reorderable(onto)) return;
+    if (alreadyThere(everyLine, key, onto, above)) return;
     move(above ? { key, before: onto.key } : { key, after: onto.key });
   };
   const queuedRows: Row[] = line.map((t) => {
     const mode = t.mode && t.mode !== "work" ? t.mode : null;
     const first = t.startsFirst ? "starts first" : null;
     const auto = t.autoPickup ? "auto-pickup" : null;
-    const can = !blocked && !moving && reorderable(t);
+    const can = !blocked && !moving && (reorderable(t) || unqueueable(t));
     return {
       key: t.key,
       number: t.number!,
