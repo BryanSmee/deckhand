@@ -10,9 +10,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openStore } from "../lib/store.mjs";
 import { createAntigravityLogin } from "../models/antigravity-login.mjs";
-import { loginSeal } from "../models/logins.mjs";
+import { loginSeal, REFRESH_MS } from "../models/logins.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
-import { loginRefresh } from "../runner/service.mjs";
+import { LOGIN_REFRESH_MARGIN_MS, LOGIN_REFRESH_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
+import { createRunnerClient } from "../runner/client.mjs";
+import { loginRefresh, REFRESH_BUDGET_MS } from "../runner/service.mjs";
 import { createGoogleRelay } from "../models/google.mjs";
 import { serve, tempDir, tokenBroker } from "./helpers.mjs";
 
@@ -550,7 +552,7 @@ test("with GEMINI_API_KEY: only agy's calls go on, not files, cached contents or
 test("a runner without short containers refuses the refresh, naming itself: nothing installed", async (t) => {
   const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
   let installs = 0;
-  // The runner has none (Kubernetes): no refresh, so nothing to install for one.
+  // The runner has none: no refresh, so nothing to install for one.
   const refresh = loginRefresh({ config, images: { installAgent: () => installs++ }, jobs: {} });
   assert.equal(refresh, null);
   const login = createAntigravityLogin({
@@ -561,4 +563,164 @@ test("a runner without short containers refuses the refresh, naming itself: noth
   });
   await assert.rejects(login.headers(), /the other runner runs no login refresh/);
   assert.equal(installs, 0);
+});
+
+test("the refresh's job ends within the models service's lease, its agent's install counted", async () => {
+  let at = 0;
+  const jobs = [];
+  const refresh = loginRefresh({
+    config,
+    // A first install takes a minute.
+    images: { installAgent: async () => (at += 60_000) },
+    jobs: { run: async (job) => (jobs.push(job), { code: 0, out: "{}", err: "" }) },
+    now: () => at,
+  });
+  await refresh("{}");
+  assert.equal(jobs[0].timeoutMs, REFRESH_BUDGET_MS - 60_000);
+  assert.ok(REFRESH_BUDGET_MS < LOGIN_REFRESH_MS);
+  assert.equal(REFRESH_MS, LOGIN_REFRESH_MS);
+  // What it may reach: Google's OAuth and the CLI's own hosts, never its telemetry.
+  assert.ok(jobs[0].hosts.includes("oauth2.googleapis.com"));
+  assert.ok(!jobs[0].hosts.includes("play.googleapis.com"));
+});
+
+test("a refresh that reaches the runner late gets what is left of the lease, none with too little", async () => {
+  let at = 0;
+  const jobs = [];
+  let installs = 0;
+  let installMs = 0;
+  const refresh = loginRefresh({
+    config,
+    images: { installAgent: async () => (installs++, (at += installMs)) },
+    jobs: { run: async (job) => (jobs.push(job), { code: 0, out: "{}", err: "" }) },
+    now: () => at,
+  });
+  // Half the lease spent on a runner handover's 503s: the rest, less the margin.
+  await refresh("{}", { timeoutMs: 150_000 });
+  assert.equal(jobs.at(-1).timeoutMs, 150_000 - LOGIN_REFRESH_MARGIN_MS);
+  // More than the runner's own budget: its budget.
+  await refresh("{}", { timeoutMs: 10 * 60_000 });
+  assert.equal(jobs.at(-1).timeoutMs, REFRESH_BUDGET_MS);
+  // Too little left: nothing installed, no job, a failure the models service retries later.
+  const late = await refresh("{}", {
+    timeoutMs: LOGIN_REFRESH_MARGIN_MS + MIN_REFRESH_MS - 1000,
+  });
+  assert.equal(late.code, -1);
+  assert.match(late.err, /too little of the models service's hold on the login is left/);
+  assert.equal(jobs.length, 2);
+  assert.equal(installs, 2);
+  // Enough at first, but the agent's install takes it: no job either.
+  installMs = 40_000;
+  const installed = await refresh("{}", {
+    timeoutMs: LOGIN_REFRESH_MARGIN_MS + MIN_REFRESH_MS + 20_000,
+  });
+  assert.equal(installed.code, -1);
+  assert.equal(jobs.length, 2);
+});
+
+test("the models service tells the runner what is left of its lease, and asks again only within it", async (t) => {
+  // The lease taken at NOW: the refresh is asked with all of it left.
+  const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
+  const asked = [];
+  const login = createAntigravityLogin({
+    file,
+    config,
+    refresh: async (input, options) => {
+      asked.push(options);
+      return refreshed(JSON.parse(input));
+    },
+    now: () => NOW,
+  });
+  await login.headers();
+  assert.deepEqual(asked, [{ timeoutMs: REFRESH_MS }]);
+
+  // The runner answers 503 (a handover): asked again only while the job could still start,
+  // each try saying what is left of the lease then.
+  let at = 0;
+  const tries = [];
+  const runner = createRunnerClient({
+    urls: "http://runner.test",
+    token: async () => "Bearer t",
+    epoch: () => null,
+    now: () => at,
+    sleep: async (ms) => (at += ms),
+    fetch: async (url, init) => {
+      tries.push({ at, body: JSON.parse(init.body) });
+      return new Response("draining", { status: 503 });
+    },
+  });
+  await assert.rejects(runner.refreshLogin("{}", { timeoutMs: REFRESH_MS }), /didn't answer/);
+  assert.ok(tries.length > 3, `${tries.length} tries`);
+  for (const { at: sent, body } of tries) {
+    // What is left at that try, never the lease's whole length again.
+    assert.equal(body.timeoutMs, REFRESH_MS - sent);
+    assert.ok(body.timeoutMs >= LOGIN_REFRESH_MARGIN_MS + MIN_REFRESH_MS, `${body.timeoutMs} ms`);
+  }
+  // No try once too little is left for the job.
+  assert.ok(at <= REFRESH_MS - LOGIN_REFRESH_MARGIN_MS - MIN_REFRESH_MS, `${at} ms`);
+});
+
+test("a refresh that waits on a runner handover still ends within the models service's lease", async () => {
+  // The models service takes the lease at 0; the runner answers 503 for 3 minutes, then
+  // takes the call: the job it starts must end before the lease does, its margin kept.
+  let at = 0;
+  const handover = 180_000;
+  const jobs = [];
+  const refresh = loginRefresh({
+    config,
+    images: { installAgent: async () => {} },
+    jobs: { run: async (job) => (jobs.push({ at, ...job }), { code: 0, out: "{}", err: "" }) },
+    now: () => at,
+  });
+  const runner = createRunnerClient({
+    urls: "http://runner.test",
+    token: async () => "Bearer t",
+    epoch: () => null,
+    now: () => at,
+    sleep: async (ms) => (at += ms),
+    fetch: async (url, init) => {
+      if (at < handover) return new Response("draining", { status: 503 });
+      const { input, timeoutMs } = JSON.parse(init.body);
+      return Response.json(await refresh(input, { timeoutMs }));
+    },
+  });
+  const result = await runner.refreshLogin("{}", { timeoutMs: REFRESH_MS });
+  assert.equal(result.code, 0);
+  const [job] = jobs;
+  assert.ok(job.at >= handover);
+  assert.ok(
+    job.at + job.timeoutMs <= REFRESH_MS - LOGIN_REFRESH_MARGIN_MS,
+    `ends at ${job.at + job.timeoutMs} ms`,
+  );
+});
+
+test("the refresh moves on to the runner's next copy when the first doesn't answer", async () => {
+  let at = 0;
+  const tries = [];
+  const runner = createRunnerClient({
+    // Two copies: the first passive (or gone after a handover), the second acting.
+    urls: "http://a.test:8080,http://b.test:8080",
+    token: async () => "Bearer t",
+    epoch: () => null,
+    now: () => at,
+    sleep: async (ms) => (at += ms),
+    fetch: async (url, init) => {
+      tries.push({ host: new URL(url).host, body: JSON.parse(init.body) });
+      if (url.startsWith("http://a.test")) return new Response("passive", { status: 503 });
+      return Response.json({ code: 0, out: "{}", err: "" });
+    },
+  });
+  assert.deepEqual(await runner.refreshLogin("{}", { timeoutMs: REFRESH_MS }), {
+    code: 0,
+    out: "{}",
+    err: "",
+  });
+  assert.deepEqual(
+    tries.map((t) => t.host),
+    ["a.test:8080", "b.test:8080"],
+  );
+  // The second try says what is left then, less than at the first.
+  assert.equal(tries[0].body.timeoutMs, REFRESH_MS);
+  assert.equal(tries[1].body.timeoutMs, REFRESH_MS - at);
+  assert.ok(tries[1].body.timeoutMs < REFRESH_MS);
 });

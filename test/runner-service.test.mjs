@@ -108,7 +108,7 @@ const granted = grantedOf(["dockerfile"], "org/repo");
 
 async function copy(
   t,
-  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf, log } = {},
+  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf, log, refresh } = {},
 ) {
   let service;
   const lease = activePassive({
@@ -150,6 +150,7 @@ async function copy(
     blobOf:
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
     ...(log && { log }),
+    ...(refresh && { refresh }),
   });
   // Where a test may start it again (a runner away, then back).
   await listenToRestart(service.server);
@@ -319,6 +320,32 @@ test("a caller's token from another network is refused", async (t) => {
     body: {},
   });
   assert.equal(refresh.status, 501);
+});
+
+test("the login's refresh gets what is left of the models service's lease, a bad one refused", async (t) => {
+  const store = fileStore();
+  const asked = [];
+  const { url } = await copy(t, {
+    store,
+    backend: host(),
+    refresh: async (input, options) => (
+      asked.push([input, options]),
+      { code: 0, out: "{}", err: "" }
+    ),
+  });
+  const refresh = (body) =>
+    call(url, "POST", "/logins/antigravity/refresh", { sub: "models", body });
+  assert.equal((await refresh({ input: "file", timeoutMs: 150_000 })).status, 200);
+  // A models service older than this runner sends none: the runner's own budget.
+  assert.equal((await refresh({ input: "file" })).status, 200);
+  assert.deepEqual(asked, [
+    ["file", { timeoutMs: 150_000 }],
+    ["file", {}],
+  ]);
+  for (const timeoutMs of ["soon", -1, null]) {
+    assert.equal((await refresh({ input: "file", timeoutMs })).status, 400, String(timeoutMs));
+  }
+  assert.equal(asked.length, 2);
 });
 
 test("the orchestrator's fencing epoch: none refused, a stale one refused, the newest kept by both copies", async (t) => {

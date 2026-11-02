@@ -1,6 +1,6 @@
 // The runner the operator picks (RUNNER, config.mjs): its sandboxes (runner), its images and
-// volumes (images) and its short containers (jobs). config.mjs refuses an unknown name at
-// start, and so does this, should one get past it.
+// volumes (images) and its short containers (jobs: a pod each on Kubernetes). config.mjs
+// refuses an unknown name at start, and so does this, should one get past it.
 import { readFileSync } from "node:fs";
 import { ConfigError } from "../config.mjs";
 import { docker as dockerCli } from "../docker.mjs";
@@ -32,12 +32,13 @@ export function createBackend({
       ? { api: kubeApi, services: servicesApi }
       : inCluster(config, readNamespace, makeApi);
     const pullSecret = createPullSecret({ config, api, services });
+    const images = createKubernetesImages({ config, api, services, pullSecret, log });
     return {
       runner: createKubernetesRunner({ config, api, services, pullSecret, inboxDir, mirror, log }),
-      images: createKubernetesImages({ config, api, services, pullSecret, log }),
-      // No short containers: what needs them (an agent's install, a cache's chown, the
-      // Antigravity login's refresh) says so.
-      jobs: {},
+      images,
+      // A pod of its own for the one job that needs it, the Antigravity login's refresh
+      // (kube-images.mjs runJob()): agents install their way and caches need no chown here.
+      jobs: { run: images.runJob },
     };
   }
   if (config.runner !== "docker") {

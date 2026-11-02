@@ -351,7 +351,6 @@ warning of every pod that isn't `restricted`). The sandboxes' namespace stays `r
 
 - **Host mounts** (`mounts`): a run of a repository with some is refused, with a reply naming
   the runner.
-- **The Antigravity CLI's plan login** (#572), which the runner refreshes in a container.
 - **A repository's own image** (`dockerfile`) without `KUBERNETES_REGISTRY`
   ([Repo images](#repo-images)).
 
@@ -366,7 +365,9 @@ saying why. What it expects, and the manifests give it:
 
 - **RBAC** (`rbac.yaml`): a Role for the runner's ServiceAccount in the sandboxes' namespace,
   `create`, `get`, `list` and `delete` on `pods` and `secrets`, `create`, `get` and `delete` on
-  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and `list`
+  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, `create`
+  and `get` on `pods/attach` (the Antigravity CLI's login refresh, [Agents](#agents-on-kubernetes):
+  Kubernetes checks `create` from 1.35, `get` before), and `list`
   on `events` (why a pod is stuck) and `networkpolicies`; and in the services' namespace, `get`
   on `pods` (BuildKit's), `get` and `list` on `services` (the proxy's Service, and every one
   for [the network probe](#the-network-probe)), `list` on `networkpolicies` and
@@ -627,6 +628,33 @@ every sandbox mounts read-only, as on Docker:
   Pending (the init container running), the egress proxy lets it reach the agent's install
   hosts only, nothing of the run's own; once the sandbox starts, those hosts are gone again.
   A failed install fails the run, with the installer's output in the run's log.
+
+The Antigravity CLI's plan login ([setup.md](setup.md#antigravity-cli)) is refreshed by a pod of its
+own, `<NAME_PREFIX>-job-antigravity-refresh`, in the sandboxes' namespace, at the models service's
+call (the runner's NetworkPolicy lets it in for that). It meets Pod Security `restricted` as the
+sandbox's user, with no ServiceAccount token and no Secret. The runner sends it the token file on
+its stdin and reads back the refreshed one from its stdout, through the API server (`pods/attach`,
+over WebSocket, `v5.channel.k8s.io`: Kubernetes 1.30 or later), never through its spec; `~/.gemini`
+is an `emptyDir` there, no claim. It mounts the agent's claim read-only (or, without one, installs
+the CLI in an init container, as sandboxes do: a failed install's last line is in the refresh's
+error, which the runs on the login fail with). It is labelled `deckhand.role: install`, so
+`deckhand-installs` (`sandboxes.yaml`) covers it: the egress proxy lets it reach Google's OAuth
+(`oauth2.googleapis.com`) and the CLI's own hosts only, tunnelled (and GitHub's releases while its
+init container installs the CLI, never once `agy` runs). It has 4 minutes in all, the CLI's install
+included, and never more than what is left of the models service's 5-minute hold on the login, a
+minute to spare: each try of the service's call says what is left at that moment (and the service
+stops asking a runner that doesn't answer, during a handover, once too little is), and a refresh
+with under 30 seconds to go isn't started. So no other copy of the service refreshes the login
+meanwhile. It is removed once it ends, whatever its outcome.
+
+What the pod prints to stdout reaches its log on the node (`/var/log/pods`), which a log agent
+(Fluent Bit, Promtail, a cloud's own logging) may ship elsewhere before the pod goes. So the
+refreshed file never goes there as it is: the runner sends a one-time key first on the pod's
+stdin (which no log keeps), and a wrapper of its own in the pod (`node -e`, from
+`listener/runner/kube-seal.mjs`) encrypts the refresh's stdout with it (AES-256-GCM). The log
+holds only that ciphertext, which nothing but the runner's memory, during that call, can open;
+an output that isn't sealed with the key isn't read. Its stderr, which holds no token, stays as
+it is.
 
 The shared claims (agents', caches') are written by their pods' users, uid 1001 for the
 installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim theirs. That

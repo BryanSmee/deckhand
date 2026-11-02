@@ -340,6 +340,8 @@ test("deploy/kubernetes: nothing cluster-wide but the broker's TokenReviews; the
   assert.deepEqual(rules(SANDBOXES_NS), [
     "pods: create,get,list,delete",
     "pods/log: get",
+    // The Antigravity login refresh's stdin and stdout (kube-attach.mjs).
+    "pods/attach: create,get",
     "secrets: create,get,list,delete",
     "persistentvolumeclaims: create,get,delete",
     "events: list",

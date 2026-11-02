@@ -86,7 +86,7 @@ export const INSTALL_USER = { uid: 1001, gid: 1001 };
 // The annotation of a pod whose init container installs its agent (installing()), and that
 // container's name.
 const AGENT_INIT = "deckhand.agent-init";
-const INIT_CONTAINER = "agent-install";
+export const INIT_CONTAINER = "agent-install";
 
 // The engine's sidecar (podSpec()), and its storage's volume.
 const ENGINE_CONTAINER = "engine";
@@ -249,6 +249,42 @@ export async function proxyService(services, config) {
 // proxyService()'s answer as a pod's hostAliases.
 export const aliasesOf = (proxy) => (proxy ? [{ ip: proxy.ip, hostnames: proxy.hostnames }] : []);
 
+// Pod Security `restricted`, the pod's side (the container's: kube-names.mjs
+// restrictedContainer()), for the sandboxes and kube-images.mjs's installs, checks and jobs, so
+// that none drifts from the others: as `user`, whose group its claims (and emptyDirs) become, where
+// their storage applies it. Only when the claim's root isn't the group's already: by default the
+// kubelet walks the whole volume at every mount, while the pod is Pending
+// (KUBERNETES_PENDING_MINUTES).
+export function restrictedPod(user) {
+  return {
+    runAsNonRoot: true,
+    runAsUser: user.uid,
+    runAsGroup: user.gid ?? user.uid,
+    fsGroup: user.gid ?? user.uid,
+    fsGroupChangePolicy: "OnRootMismatch",
+    seccompProfile: { type: "RuntimeDefault" },
+  };
+}
+
+// The init container that installs an agent (its install spec's `command` and `env`) into
+// `volumeMounts` (an emptyDir the pod's main container then mounts read-only), as INSTALL_USER:
+// a sandbox's (podSpec()) and a job's whose agent has no claim (kube-images.mjs runJob()).
+export function agentInitContainer({ image, command, env, resources, volumeMounts }) {
+  return {
+    name: INIT_CONTAINER,
+    image,
+    command: [command],
+    env: envList(env),
+    resources: { limits: resources, requests: resources },
+    securityContext: {
+      ...restrictedContainer(),
+      runAsUser: INSTALL_USER.uid,
+      runAsGroup: INSTALL_USER.gid,
+    },
+    volumeMounts,
+  };
+}
+
 // A sandbox spec (sandbox-spec.mjs) as a Pod, Pod Security `restricted` throughout: its user,
 // no privilege gain, no capability, the runtime's seccomp profile. `secret`: the Secret its
 // environment comes from; `env`: values that aren't secrets (where the run's files are);
@@ -277,7 +313,6 @@ export function podSpec(
   if (caps.length) throw new Error(`the kubernetes runner adds no capabilities (${caps})`);
   const resources = { cpu: String(limits.cpus), memory: quantity(limits.memory) };
   const claimed = [...new Set(volumes.map((v) => v.name))];
-  const hardened = restrictedContainer();
   const init = agentInit && claimed.includes(agentInit.volume) ? agentInit : null;
   const mountOf = (v) => ({
     name: `v${claimed.indexOf(v.name)}`,
@@ -307,17 +342,8 @@ export function podSpec(
       // every search domain.
       dnsPolicy: "None",
       dnsConfig: { nameservers: ["127.0.0.1"] },
-      securityContext: {
-        runAsNonRoot: true,
-        runAsUser: user.uid,
-        runAsGroup: user.gid ?? user.uid,
-        // Its claims are the sandbox user's to write.
-        fsGroup: user.gid ?? user.uid,
-        // Only when the claim's root isn't the group's already: by default the kubelet walks
-        // the whole workspace at every mount, while the pod is Pending (KUBERNETES_PENDING_MINUTES).
-        fsGroupChangePolicy: "OnRootMismatch",
-        seccompProfile: { type: "RuntimeDefault" },
-      },
+      // Its claims are the sandbox user's to write.
+      securityContext: restrictedPod(user),
       // The engine's: every container of the pod under Sysbox's runtime, in a user namespace
       // of the pod's own, root there an unprivileged user on the node.
       ...(engine ? { runtimeClassName: engine.runtimeClass, hostUsers: false } : {}),
@@ -326,24 +352,18 @@ export function podSpec(
             initContainers: [
               ...(init
                 ? [
-                    {
-                      name: INIT_CONTAINER,
+                    agentInitContainer({
                       image: init.image,
-                      command: [init.command],
-                      env: envList(init.env),
-                      resources: { limits: resources, requests: resources },
-                      securityContext: {
-                        ...hardened,
-                        runAsUser: INSTALL_USER.uid,
-                        runAsGroup: INSTALL_USER.gid,
-                      },
+                      command: init.command,
+                      env: init.env,
+                      resources,
                       volumeMounts: volumes
                         .filter((v) => v.name === init.volume)
                         .map((v) => ({ ...mountOf(v), readOnly: false })),
-                    },
+                    }),
                   ]
                 : []),
-              ...(engine ? [engineContainer(engine, resources, hardened)] : []),
+              ...(engine ? [engineContainer(engine, resources)] : []),
             ],
           }
         : {}),
@@ -359,7 +379,7 @@ export function podSpec(
           // As much as it may use is held for it: a node without the room leaves it Pending
           // rather than starving it later.
           resources: { limits: resources, requests: resources },
-          securityContext: hardened,
+          securityContext: restrictedContainer(),
           volumeMounts: volumes.map(mountOf),
         },
       ],
@@ -391,9 +411,9 @@ const envList = (env) => Object.entries(env).map(([k, v]) => ({ name: k, value: 
 // it is up before the sandbox starts and stopped once the sandbox exits, the pod's phase the
 // sandbox's alone. Root, which dockerd needs, only inside the pod's user namespace
 // (`hostUsers: false`): Pod Security `restricted` allows that from Kubernetes 1.35, and the rest
-// of `hardened` holds. Sysbox gives root its capabilities and the syscalls it needs in that
+// of restrictedContainer() holds. Sysbox gives root its capabilities and the syscalls it needs in that
 // namespace alone, whatever the spec drops. As much as the sandbox may use, as on Docker.
-function engineContainer({ image, env }, resources, hardened) {
+function engineContainer({ image, env }, resources) {
   return {
     name: ENGINE_CONTAINER,
     image,
@@ -405,7 +425,7 @@ function engineContainer({ image, env }, resources, hardened) {
     env: envList(env),
     resources: { limits: resources, requests: resources },
     securityContext: {
-      ...hardened,
+      ...restrictedContainer(),
       runAsNonRoot: false,
       runAsUser: 0,
       runAsGroup: 0,

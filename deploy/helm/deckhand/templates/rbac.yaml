@@ -27,6 +27,11 @@ rules:
   - apiGroups: [""]
     resources: [pods/log]
     verbs: [get]
+  # The Antigravity login refresh's pod's stdin and stdout: `get` until Kubernetes 1.34,
+  # `create` from 1.35.
+  - apiGroups: [""]
+    resources: [pods/attach]
+    verbs: [create, get]
   - apiGroups: [""]
     resources: [secrets]
     verbs: [create, get, list, delete]
