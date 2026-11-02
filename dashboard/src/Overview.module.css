@@ -187,7 +187,8 @@
   justify-self: end;
 }
 
-/* A ready pull request whose review-and-fix loop left blocking findings: a line under it. */
+/* A ready pull request whose review-and-fix loop left blocking findings, or whose last review
+   is outdated: a line under it. */
 .need.warned {
   grid-template-areas:
     "badge title repo age action"

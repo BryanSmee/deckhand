@@ -128,7 +128,12 @@ test("its row says the round while in review, then what the loop left", () => {
     within(rounds)
       .getAllByRole("listitem")
       .map((li) => li.textContent),
-  ).toEqual(["R0 1 critical · 3 high · 1 low", "R1 2 high", "R2 2 high · 1 mediumno progress"]);
+  ).toEqual([
+    "R0 1 critical · 3 high · 1 low",
+    "R1 2 high",
+    // The last one's commit in plain text, not just its tooltip.
+    "R2 2 high · 1 mediumno progresssha-2",
+  ]);
 });
 
 test("a clean loop: plain Ready for review, its rounds still listed", () => {

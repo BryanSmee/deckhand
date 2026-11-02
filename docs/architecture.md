@@ -311,7 +311,10 @@ queued on it, posts the App's comment on the pull request and queues the run its
 `/mode review` would; Fix (not on a draft) through `reviews.mjs` `startFix()`, which refuses
 while the loop goes on, on the findings of the App's latest review read back from GitHub
 (`latestReview()`), one round more than `review.fix` when they are used up (`grantedTo` in
-`reviews.json`, saved before the run is queued).
+`reviews.json`, saved before the run is queued). Each task's pull request in `api/state` has
+its head commit (`head`, from its deliveries, `synchronize` included, the start-up listing and
+Sync: `pulls.mjs`): the dashboard marks a review outdated when the loop is over and the last
+round's `head` differs (`reviewOutdated()`).
 
 A failed or interrupted task stops asking for attention (Waiting on you, the Failed tile, the
 Error chip, its repository card's "failed" count) once its issue is closed or its pull request

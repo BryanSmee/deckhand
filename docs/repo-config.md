@@ -574,11 +574,14 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
     needs-input label, the loop not going on (no review, CI or checks awaited), and GitHub's
     latest review the loop's last; `deny_fix` applies, its refusal shown on the dashboard.
 
-  A review a maintainer asks for (`/mode review`, or Review) on a pull request whose loop the
-  dashboard shows is listed in its history as the latest round, its blocking findings counted
-  with the loop's own tolerance (`max_allowed_severity` with `fix` or auto-merge), so the
-  buttons follow it, and a CI step that stopped without a review shows it. It still isn't a
-  loop round: it counts no fix run, tolerates nothing itself, and may start a fix run while
+  A review a maintainer asks for (`/mode review`, or Review) is listed in the pull request's
+  history as the latest round, its blocking findings counted with the loop's own tolerance
+  (`max_allowed_severity` with `fix` or auto-merge), so the buttons follow it, and a CI step
+  that stopped without a review shows it. Without a loop before it (`review.on` off, say), the
+  section is called Reviews, and offers the same buttons. Once a commit is pushed after the
+  last review, the section says "Outdated: reviewed `abc1234`, head is now `def5678`" and the
+  task's rows "Review outdated" (until the loop is over, a new head is expected: nothing is
+  said): press Review for the new head. It still isn't a loop round: it counts no fix run, tolerates nothing itself, and may start a fix run while
   rounds are left. Both requests are refused, the dashboard saying why, for someone outside
   the repo's `users`, a closed pull request, or one with a run going or queued.
 
