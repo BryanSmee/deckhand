@@ -20,7 +20,6 @@ import {
   latestWarning,
   pendingReason,
   podSpec,
-  SESSION_FOLDER,
   quantity,
   selects,
 } from "../listener/runner/kubernetes.mjs";
@@ -378,6 +377,8 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
     resources: { requests: { storage: "10Gi" } },
     storageClassName: "fast",
   });
+  // Their session in their folder (SESSION_FOLDER), from the start.
+  assert.equal(claim.metadata.annotations["deckhand.layout"], "folder");
   assert.ok(!objects.persistentvolumeclaims.has("dh-claude-code"));
   // The policy checked first, the Pod, then its Secret, last.
   assert.match(calls[0], /networkpolicies$/);
@@ -458,22 +459,40 @@ test("start: a failure removes the Pod, Secret and claims it made, keeps the old
   assert.deepEqual([...objects.persistentvolumeclaims.keys()], ["dh-org-repo-12-abc-claude"]);
 });
 
-// A claim from before #643 holds a clone or an agent's home at its root: the folder mounted is
-// one neither holds (a repository's `session/` would be a clone without .git), so its run
-// starts afresh beside them, its claim kept.
-test("start: a claim made before mounts a folder its old files don't hold", async (t) => {
+// A claim from before #643 holds its files at its root, out of the folder its next run mounts:
+// no session to continue there (runs.mjs records a `start`), until that run marks it. The
+// claim itself is kept, never made again.
+test("hasSession: a claim from before its folder has none, until a run marks it", async (t) => {
   const { runner, objects } = setup(t);
   for (const name of ["dh-org-repo-12-abc-workspace", "dh-org-repo-12-abc-claude"]) {
-    objects.persistentvolumeclaims.set(name, { metadata: { name } });
+    objects.persistentvolumeclaims.set(name, {
+      metadata: { name, resourceVersion: "7", annotations: { "deckhand.volume": name } },
+    });
   }
+  assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), false);
   await runner.start(spec());
-  const [, ...sessions] = objects.pods.get("dh-org-repo-12-abc").spec.containers[0].volumeMounts;
-  assert.deepEqual(
-    sessions.map((m) => m.subPath),
-    [SESSION_FOLDER, SESSION_FOLDER],
-  );
-  assert.match(SESSION_FOLDER, /^\.deckhand-/);
+  assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
+  for (const claim of objects.persistentvolumeclaims.values()) {
+    assert.equal(claim.metadata.annotations["deckhand.volume"], claim.metadata.name);
+    assert.equal(claim.metadata.annotations["deckhand.layout"], "folder");
+  }
   assert.equal(objects.persistentvolumeclaims.size, 2);
+});
+
+// Without `update` on claims (an operator's Role from before), the run goes on: its issue's
+// later runs start afresh too, which the folder they mount says anyway.
+test("start: a claim it may not mark still runs, without a session", async (t) => {
+  const { runner, objects, logged } = setup(t, {
+    fail: ({ method }) =>
+      method === "PUT" ? Response.json({ message: "forbidden" }, { status: 403 }) : null,
+  });
+  objects.persistentvolumeclaims.set("dh-org-repo-12-abc-claude", {
+    metadata: { name: "dh-org-repo-12-abc-claude" },
+  });
+  await runner.start(spec());
+  assert.ok(objects.pods.has("dh-org-repo-12-abc"));
+  assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), false);
+  assert.ok(logged.some((l) => /Marking dh-org-repo-12-abc-claude's layout: .*forbidden/.test(l)));
 });
 
 test("start: a Secret refused removes the Pod made before it", async (t) => {

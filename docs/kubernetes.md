@@ -369,8 +369,9 @@ The runner checks the cluster before every run and refuses to start one it can't
 saying why. What it expects, and the manifests give it:
 
 - **RBAC** (`rbac.yaml`): a Role for the runner's ServiceAccount in the sandboxes' namespace,
-  `create`, `get`, `list` and `delete` on `pods` and `secrets`, `create`, `get` and `delete` on
-  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, `create`
+  `create`, `get`, `list` and `delete` on `pods` and `secrets`, `create`, `get`, `update` and
+  `delete` on `persistentvolumeclaims` (the agents', caches' and sessions'; `update` marks a
+  session claim made before its folder, below), `get` on `pods/log`, `create`
   and `get` on `pods/attach` (the Antigravity CLI's login refresh, [Agents](#agents-on-kubernetes):
   Kubernetes checks `create` from 1.35, `get` before), and `list`
   on `events` (why a pod is stuck) and `networkpolicies`; and in the services' namespace, `get`

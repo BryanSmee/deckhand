@@ -94,8 +94,11 @@ export const INIT_CONTAINER = "agent-install";
 // entrypoint.sh's clone wants an empty /workspace (#643). Made by the kubelet at the first
 // mount. A claim from before kept its files at its root (a clone, an agent's home): its next
 // run starts afresh, as after a lost claim, so the name is one neither of them holds, where
-// a repository's `session/` would be mounted as a clone without .git (#644).
+// a repository's `session/` would be mounted as a clone without .git (#644). LAYOUT marks the
+// claims whose folder holds their session (ensureClaim()): hasSession() counts no other.
 export const SESSION_FOLDER = ".deckhand-session";
+const LAYOUT = "deckhand.layout";
+const FOLDER = "folder";
 
 // The engine's sidecar (podSpec()), and its storage's volume.
 const ENGINE_CONTAINER = "engine";
@@ -740,16 +743,30 @@ export function createKubernetesRunner({
     }
   }
 
-  // The session volume's claim, made when missing. → true when it was made now.
+  // The session volume's claim, made when missing. → true when it was made now. One from
+  // before SESSION_FOLDER gets its LAYOUT now, as its run mounts the folder: kept on a failure
+  // (an operator's Role without `update` on claims), which only leaves its issue's later runs
+  // starting afresh, as this one does.
   async function ensureClaim(volume) {
-    if (await api.find(claimPath(volume))) return false;
+    const claim = await api.find(claimPath(volume));
+    if (claim) {
+      const annotations = claim.metadata?.annotations ?? {};
+      if (annotations[LAYOUT] === FOLDER) return false;
+      await api
+        .replace(claimPath(volume), {
+          ...claim,
+          metadata: { ...claim.metadata, annotations: { ...annotations, [LAYOUT]: FOLDER } },
+        })
+        .catch((e) => log(`Marking ${kubeName(volume)}'s layout: ${e.message}`));
+      return false;
+    }
     await api.create("persistentvolumeclaims", {
       apiVersion: "v1",
       kind: "PersistentVolumeClaim",
       metadata: {
         name: kubeName(volume),
         labels: { ...owner, [ROLE]: "session" },
-        annotations: { "deckhand.volume": volume },
+        annotations: { "deckhand.volume": volume, [LAYOUT]: FOLDER },
       },
       spec: {
         accessModes: ["ReadWriteOnce"],
@@ -1053,9 +1070,11 @@ export function createKubernetesRunner({
     if (run) inbox.remove(run);
   }
 
-  // The agent's session claim (its `session`), kept by the issue's runs.
+  // The agent's session claim (its `session`), kept by the issue's runs: one from before
+  // SESSION_FOLDER has none in the folder its next run mounts.
   async function hasSession(name, agent = agentFor()) {
-    return Boolean(await api.find(claimPath(`${name}-${agent.session.volume}`)));
+    const claim = await api.find(claimPath(`${name}-${agent.session.volume}`));
+    return claim?.metadata?.annotations?.[LAYOUT] === FOLDER;
   }
 
   // Whether the sandbox's init container is installing its agent: its pod has one, and it

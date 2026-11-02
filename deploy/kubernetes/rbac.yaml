@@ -84,7 +84,7 @@ rules:
     verbs: [create, get, list, delete]
   - apiGroups: [""]
     resources: [persistentvolumeclaims]
-    verbs: [create, get, delete]
+    verbs: [create, get, update, delete]
   - apiGroups: [""]
     resources: [events]
     verbs: [list]
