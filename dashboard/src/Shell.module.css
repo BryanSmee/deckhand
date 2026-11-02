@@ -28,8 +28,18 @@
 }
 
 .rail .brand {
+  position: relative;
   padding: 0;
   margin-bottom: 6px;
+}
+
+/* The services' alert (Health.tsx), on the rail: on the logo's corner. */
+.railAlert {
+  position: absolute;
+  top: -9px;
+  right: -13px;
+  width: 20px;
+  height: 20px;
 }
 
 .logo {

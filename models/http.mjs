@@ -10,7 +10,8 @@
 //   redacts them from runs' output without them (GET /fingerprints), a run's API state (GET
 //   /runs/:id/api), how much of each plan the runs used (GET /usage, `?poll=1` while a dashboard
 //   is open: usage.mjs), and the `models` stream (GET /events, POST /events/ack);
-//   GET /health, /ready: liveness, and readiness (503 once draining).
+//   GET /health, /ready: liveness ({ ok, startedAt, version }, ../lib/health.mjs), and readiness
+//   (503 once draining).
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER } from "../lib/broker-client.mjs";

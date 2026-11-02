@@ -5,7 +5,8 @@
 //   POST /service-tokens        any service, proven by its network or pod (callers.mjs): its
 //                               tokens for the services it calls
 //   GET  /keys                  the public keys tokens are checked with, offline
-//   GET  /health, /ready        liveness, and readiness (503 once draining)
+//   GET  /health, /ready        liveness ({ ok, startedAt, version }, ../lib/health.mjs), and
+//                               readiness (503 once draining)
 //
 //   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), the `runs` stream
 //   (GET /events, POST /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's

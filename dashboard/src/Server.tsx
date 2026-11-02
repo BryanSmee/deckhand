@@ -1,13 +1,15 @@
 // Settings › Server (docs/design/dashboard-redesign.md › Pages › Settings › Server): what this
 // Deckhand is and how it is set up, read-only. The listener's status and version (api/state's
-// `server`), its run slots (api/state), the engine, proxy, grants and access
+// `server`), the services' health under it (api/health, Health.tsx), its run slots (api/state),
+// the engine, proxy, grants and access
 // (api/server, read when the page opens), and the GitHub App (api/repos's `app`) with the last sync
 // and Sync now.
 import { Fragment } from "preact";
 import { usePolled } from "./api";
 import { ago, AUTH_NAMES, dayTime, plural, uptime, versionUrl } from "./format";
+import { Services } from "./Health";
 import { useSync, syncMessage } from "./Sync";
-import type { AppLinks, Auth, ServerSetup, State, SyncResult } from "./types";
+import type { AppLinks, Auth, Health, ServerSetup, State, SyncResult } from "./types";
 import { Button, buttonClass } from "./ui/Button";
 import * as Icon from "./ui/icons";
 import { Meter } from "./ui/Meter";
@@ -22,13 +24,27 @@ interface Props {
   app: AppLinks | null;
   // Reads api/state again: after Sync now, its last sync.
   refresh?: () => Promise<void>;
+  // api/health, which the shell polls (every 15 s while this page is open), and why it can't.
+  health?: Health | null;
+  healthError?: string | null;
+  // A phone: the services as a list.
+  narrow?: boolean;
 }
 
-export function Server({ state, error = null, app, refresh }: Props) {
+export function Server({
+  state,
+  error = null,
+  app,
+  refresh,
+  health = null,
+  healthError = null,
+  narrow = false,
+}: Props) {
   const setup = usePolled<ServerSetup>("api/server", null);
   return (
     <div class={styles.page}>
       <Status state={state} error={error} />
+      <Services health={health} error={healthError} narrow={narrow} />
       <Runs state={state} setup={setup.data} error={setup.error} />
       <App
         app={app}

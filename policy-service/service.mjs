@@ -5,7 +5,8 @@
 //
 // Every call carries a service token (../lib/service-token.mjs) the broker signed, checked
 // offline with its public keys (SERVICE_KEYS_DIR), and ROUTES says which callers may call each
-// endpoint. /health and /ready alone answer without one, for the probes: they say nothing.
+// endpoint. /health and /ready alone answer without one, for the probes and the status page:
+// they say when it started and its version (../lib/health.mjs), nothing else.
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { drainable, drainOnSigterm } from "../lib/drain.mjs";
