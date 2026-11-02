@@ -10,9 +10,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { openStore } from "../lib/store.mjs";
 import { createAntigravityLogin } from "../models/antigravity-login.mjs";
-import { loginSeal } from "../models/logins.mjs";
+import { loginSeal, REFRESH_MS } from "../models/logins.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
-import { loginRefresh } from "../runner/service.mjs";
+import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
+import { loginRefresh, REFRESH_BUDGET_MS } from "../runner/service.mjs";
 import { createGoogleRelay } from "../models/google.mjs";
 import { serve, tempDir, tokenBroker } from "./helpers.mjs";
 
@@ -561,4 +562,23 @@ test("a runner without short containers refuses the refresh, naming itself: noth
   });
   await assert.rejects(login.headers(), /the other runner runs no login refresh/);
   assert.equal(installs, 0);
+});
+
+test("the refresh's job ends within the models service's lease, its agent's install counted", async () => {
+  let at = 0;
+  const jobs = [];
+  const refresh = loginRefresh({
+    config,
+    // A first install takes a minute.
+    images: { installAgent: async () => (at += 60_000) },
+    jobs: { run: async (job) => (jobs.push(job), { code: 0, out: "{}", err: "" }) },
+    now: () => at,
+  });
+  await refresh("{}");
+  assert.equal(jobs[0].timeoutMs, REFRESH_BUDGET_MS - 60_000);
+  assert.ok(REFRESH_BUDGET_MS < LOGIN_REFRESH_MS);
+  assert.equal(REFRESH_MS, LOGIN_REFRESH_MS);
+  // What it may reach: Google's OAuth and the CLI's own hosts, never its telemetry.
+  assert.ok(jobs[0].hosts.includes("oauth2.googleapis.com"));
+  assert.ok(!jobs[0].hosts.includes("play.googleapis.com"));
 });

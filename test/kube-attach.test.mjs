@@ -21,8 +21,13 @@ function serverFrame(opcode, payload) {
 }
 
 // An API server whose attach upgrades: `container(stdin)` → { out, err } once stdin ended.
-// `protocol`: what it answers in Sec-WebSocket-Protocol. Every request is in `requests`.
-async function fakeAttach(t, { container, protocol = PROTOCOL, status = 101 } = {}) {
+// `protocol`: what it answers in Sec-WebSocket-Protocol. `ending`: "close" (channel 3's
+// Success, then a close frame, as the API server ends it), "cut" (the connection dropped
+// without a close frame) or a Status channel 3 says instead. Every request is in `requests`.
+async function fakeAttach(
+  t,
+  { container, protocol = PROTOCOL, status = 101, ending = "close" } = {},
+) {
   const requests = [];
   const { url, server } = await serve(t, (req, res) => {
     res.writeHead(403, { "content-type": "application/json" });
@@ -68,8 +73,10 @@ async function fakeAttach(t, { container, protocol = PROTOCOL, status = 101 } = 
           const rest = Buffer.from(out.slice(half));
           socket.write(Buffer.concat([Buffer.from([0x80, rest.length]), rest]));
           socket.write(serverFrame(2, Buffer.concat([Buffer.from([2]), Buffer.from(err)])));
-          socket.write(serverFrame(2, Buffer.from([3, ...Buffer.from('{"status":"Success"}')])));
           requests.at(-1).seen = seen;
+          if (ending === "cut") return socket.destroy();
+          const said = ending === "close" ? { metadata: {}, status: "Success" } : ending;
+          socket.write(serverFrame(2, Buffer.from([3, ...Buffer.from(JSON.stringify(said))])));
           socket.write(serverFrame(8, Buffer.from([0x03, 0xe8])));
         }
       }
@@ -97,7 +104,6 @@ test("attach: the input on stdin then its end, stdout and stderr back apart", as
   assert.deepEqual(result, {
     out: '{"read":"{\\"token\\":\\"ya29.old\\"}"}',
     err: "agy: done\n",
-    error: { status: "Success" },
   });
   const [req] = requests;
   assert.equal(
@@ -123,6 +129,23 @@ test("attach: a refused upgrade is the API's error, an older protocol is said", 
   await assert.rejects(
     older.api.attach("pods/p/attach", {}, { input: "x" }),
     /speaks v4\.channel\.k8s\.io, not v5\.channel\.k8s\.io \(Kubernetes 1\.30 or later\)/,
+  );
+});
+
+test("attach: a stream cut before its close frame, or a Status that isn't Success, fails", async (t) => {
+  const container = () => ({ out: '{"token":"half', err: "" });
+  const cut = await fakeAttach(t, { container, ending: "cut" });
+  await assert.rejects(
+    cut.api.attach("pods/p/attach", {}, { input: "x" }),
+    /the attach stream ended before its close frame/,
+  );
+  const failed = await fakeAttach(t, {
+    container,
+    ending: { status: "Failure", message: "error attaching to container: container not found" },
+  });
+  await assert.rejects(
+    failed.api.attach("pods/p/attach", {}, { input: "x" }),
+    /the API server said: error attaching to container: container not found/,
   );
 });
 

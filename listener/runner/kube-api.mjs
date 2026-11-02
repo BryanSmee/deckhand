@@ -139,7 +139,7 @@ export function createKubeApi({
     // no time limit of its own.
     stream: (path, query, signal) => call("GET", path, { query, signal }),
     // A container's stdin, stdout and stderr (`path`: pods/<name>/attach, kube-attach.mjs):
-    // `input`, then its end; → { out, err, error } once the container ended. Until `signal`
+    // `input`, then its end; → { out, err } once the container ended. Until `signal`
     // aborts, as stream().
     attach: async (path, query, { input, signal } = {}) => {
       const { key, headers } = handshake();

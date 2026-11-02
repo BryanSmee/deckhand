@@ -24,6 +24,7 @@ import { DRAIN_MS, drain, drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, send, sendJson } from "../lib/http.mjs";
 import { createFence } from "../lib/fence.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
+import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
@@ -102,6 +103,12 @@ function named(value, what) {
 // refused, as for runs.
 export const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
 
+// How long the refresh may take on Kubernetes, its agent's install included: within the models
+// service's lease on the login (../lib/services.mjs LOGIN_REFRESH_MS), a minute to spare, so
+// that no other copy of it refreshes the same login meanwhile. Past it, the pod goes and the
+// refresh fails; the next one starts afresh.
+export const REFRESH_BUDGET_MS = LOGIN_REFRESH_MS - 60_000;
+
 // The Antigravity login's refresh (../models/antigravity-login.mjs, the models service's, #504):
 // `agy models` in a short container of its own on the login's volume, the token file in on
 // stdin (its expiry in the past, so that `agy` refreshes it) and the one `agy` left out. Outside
@@ -111,9 +118,10 @@ export const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
 // and `hosts` what it reaches through the egress proxy (Google's OAuth, then `agy`'s own
 // calls); its agent installed by an init container when it has no claim (`agent`).
 // → { code, out, err }, or null for a backend without short containers.
-export function loginRefresh({ config, images, jobs }) {
+export function loginRefresh({ config, images, jobs, now = Date.now }) {
   if (!jobs?.run) return null;
   return async (input) => {
+    const since = now();
     await images.installAgent(antigravity, () => {});
     const { code, out, err } = await jobs.run({
       name: "antigravity-refresh",
@@ -129,6 +137,7 @@ export function loginRefresh({ config, images, jobs }) {
       input,
       hosts: REFRESH_HOSTS,
       agent: antigravity.install(config),
+      timeoutMs: REFRESH_BUDGET_MS - (now() - since),
     });
     return { code, out: String(out ?? ""), err: String(err ?? "") };
   };

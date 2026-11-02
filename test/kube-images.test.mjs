@@ -23,6 +23,7 @@ import {
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
+import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
 import { loginRefresh } from "../runner/service.mjs";
 import { buildContext, contextBlob, isRoot, needsBash, tempDir, withBlobs } from "./helpers.mjs";
 
@@ -1175,15 +1176,32 @@ test("builderIsolationProblem: a DNS rule without `to` is DNS, nothing more", ()
 });
 
 // The Antigravity login's refresh on Kubernetes (runner/service.mjs loginRefresh(), with
-// runJob() as its jobs): the job's pod runs until it is attached to, then ends with
-// `exitCode`; `attach(input)` answers what the container printed. `attached`: the inputs sent.
-function refreshOn(t, { exitCode = 0, attach, ...options } = {}) {
+// runJob() as its jobs): the job's pod goes through `starting` (statuses, one per look at it,
+// each seen by `looked(status)`), then runs until it is attached to, then ends with
+// `exitCode`; `attach(input)` answers what the container printed. `attached`: the inputs
+// sent; `logs`: the log reads' queries.
+function refreshOn(t, { exitCode = 0, attach, starting = [], looked = () => {}, ...options } = {}) {
   const s = setup(t, options);
   const find = s.api.find;
   const ended = new Set();
+  const looks = new Map(); // pod → how many times it was looked at
+  // A pod made again under the same name starts afresh.
+  const create = s.api.create;
+  s.api.create = async (kind, body) => {
+    ended.delete(`pods/${body.metadata.name}`);
+    looks.delete(`pods/${body.metadata.name}`);
+    return create(kind, body);
+  };
   s.api.find = async (path) => {
     const found = await find(path);
     if (!found || !path.startsWith("pods/dh-job-")) return found;
+    const look = looks.get(path) ?? 0;
+    looks.set(path, look + 1);
+    if (look < starting.length) {
+      const status = { podIP: "10.244.2.9", ...starting[look] };
+      await looked(status);
+      return { ...found, status };
+    }
     const done = ended.has(path);
     return {
       ...found,
@@ -1203,13 +1221,26 @@ function refreshOn(t, { exitCode = 0, attach, ...options } = {}) {
       ended.add(path.replace(/\/attach$/, ""));
     }
   };
+  const logs = [];
+  const stream = s.api.stream;
+  s.api.stream = async (path, query) => {
+    logs.push({ path, query });
+    return stream(path, query);
+  };
   const refresh = loginRefresh({
     config: { ...config, agyLoginVolume: "dh-antigravity-login" },
     images: s.images,
     jobs: { run: s.backend.runJob },
   });
-  return { ...s, refresh, attached };
+  return { ...s, refresh, attached, logs };
 }
+
+// A pod Pending while its init container installs the agent.
+const INSTALLING = {
+  phase: "Pending",
+  initContainerStatuses: [{ name: "agent-install", state: { running: {} } }],
+  containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+};
 
 test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, no Secret, no token, removed", async (t) => {
   const reached = {};
@@ -1306,10 +1337,15 @@ test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, n
 });
 
 test("Kubernetes: without an agent claim, the refresh pod installs the CLI in an init container", async (t) => {
-  let reached;
+  const reached = {};
   const { refresh, created, images } = refreshOn(t, {
+    starting: [INSTALLING],
+    looked: async () => {
+      reached.installing = await images.egressFor("10.244.2.9", "github.com");
+    },
     attach: async () => {
-      reached = await images.egressFor("10.244.2.9", "github.com");
+      reached.running = await images.egressFor("10.244.2.9", "github.com");
+      reached.oauth = await images.egressFor("10.244.2.9", "oauth2.googleapis.com");
       return { out: "{}", err: "" };
     },
   });
@@ -1323,8 +1359,93 @@ test("Kubernetes: without an agent claim, the refresh pod installs the CLI in an
   assert.equal(env.AGY_VERSION, "1.4.0");
   assert.equal(env.AGY_SHA256, "x64:ab");
   assert.deepEqual(spec.volumes[0], { name: "v0", emptyDir: {} });
-  // Its install's hosts too, for its init container.
-  assert.equal(reached.allowed, true);
+  // Its install's hosts while its init container runs, never once `agy` does with the login.
+  assert.equal(reached.installing.allowed, true);
+  assert.equal(reached.running.allowed, false);
+  assert.equal(reached.oauth.allowed, true);
+});
+
+test("Kubernetes: a refresh whose agent's install fails says why, with the installer's output, and its pod goes", async (t) => {
+  const { refresh, attached, logs, removed, objects } = refreshOn(t, {
+    api: { installLog: "release-install: sha256 mismatch\n" },
+    starting: [
+      INSTALLING,
+      {
+        phase: "Failed",
+        initContainerStatuses: [{ name: "agent-install", state: { terminated: { exitCode: 1 } } }],
+        containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+      },
+    ],
+    attach: async () => assert.fail("never attached"),
+  });
+  const result = await refresh("{}");
+  assert.equal(result.code, -1);
+  assert.equal(result.out, "");
+  assert.match(
+    result.err,
+    /^release-install: sha256 mismatch\ninstalling the agent in its init container failed \(exit 1\): release-install: sha256 mismatch$/,
+  );
+  assert.deepEqual(attached, []);
+  assert.deepEqual(logs, [
+    { path: "pods/dh-job-antigravity-refresh/log", query: { container: "agent-install" } },
+  ]);
+  assert.ok(removed.includes("pods/dh-job-antigravity-refresh"));
+  assert.equal(objects.pods.size, 0);
+});
+
+test("Kubernetes: a refresh pod that never starts fails within the models service's lease, and goes", async (t) => {
+  const pending = {
+    phase: "Pending",
+    containerStatuses: [
+      { state: { waiting: { reason: "ImagePullBackOff", message: "no such tag" } } },
+    ],
+  };
+  const { refresh, removed, objects, clock } = refreshOn(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    starting: Array(1000).fill(pending),
+    attach: async () => assert.fail("never attached"),
+  });
+  const since = clock.at;
+  const result = await refresh("{}");
+  assert.equal(result.code, -1);
+  assert.match(result.err, /didn't start in time \(ImagePullBackOff: no such tag\)/);
+  // Before another copy of the models service may take the login over.
+  assert.ok(clock.at - since < LOGIN_REFRESH_MS, `${clock.at - since} ms`);
+  assert.ok(removed.includes("pods/dh-job-antigravity-refresh"));
+  assert.equal(objects.pods.size, 0);
+});
+
+test("Kubernetes: refreshes at once take turns on their one pod, each answered", async (t) => {
+  let release;
+  const held = new Promise((resolve) => (release = resolve));
+  const live = [];
+  const { refresh, attached, objects, created } = refreshOn(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    attach: async (input) => {
+      live.push(objects.pods.size);
+      if (input === "first") await held;
+      return { out: `${input} refreshed`, err: "" };
+    },
+  });
+  const first = refresh("first");
+  const second = refresh("second");
+  for (let i = 0; i < 20; i++) await new Promise((resolve) => setImmediate(resolve));
+  // The second waits for the first's pod to go.
+  assert.deepEqual(
+    attached.map((a) => a.input),
+    ["first"],
+  );
+  release();
+  assert.deepEqual(await first, { code: 0, out: "first refreshed", err: "" });
+  assert.deepEqual(await second, { code: 0, out: "second refreshed", err: "" });
+  assert.deepEqual(
+    attached.map((a) => a.input),
+    ["first", "second"],
+  );
+  // One pod at a time, each made after the last went.
+  assert.deepEqual(live, [1, 1]);
+  assert.equal(created.filter((o) => o.metadata.name === "dh-job-antigravity-refresh").length, 2);
+  assert.equal(objects.pods.size, 0);
 });
 
 test("Kubernetes: a refresh that fails or can't be attached to says so, and its pod goes all the same", async (t) => {

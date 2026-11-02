@@ -124,8 +124,10 @@ export function parseFrame(buffer) {
 }
 
 // `input` on the attached container's stdin, then its end; its stdout and stderr until the
-// server closes (the container ended). → { out, err, error }: `error`, what channel 3 said
-// (a Status), or null. `signal` cuts it short, rejecting.
+// server's close frame (the container ended: the API server sends one, then channel 3's Status
+// before it, `Success` whatever the exit code). → { out, err }. Rejects when the stream ends
+// without that frame (an API server restarted, a connection cut: the output would be
+// truncated), when channel 3 says anything but `Success`, or when `signal` aborts.
 export function exchange({ socket, head = Buffer.alloc(0) }, { input, signal } = {}) {
   return new Promise((resolve, reject) => {
     const out = [];
@@ -142,18 +144,21 @@ export function exchange({ socket, head = Buffer.alloc(0) }, { input, signal } =
       signal?.removeEventListener("abort", aborted);
       socket.destroy();
       if (failure) return reject(failure);
-      let status = null;
-      try {
-        status = error.length ? JSON.parse(Buffer.concat(error).toString()) : null;
-      } catch {
-        status = { message: Buffer.concat(error).toString() };
+      const said = Buffer.concat(error).toString();
+      if (said) {
+        let status;
+        try {
+          status = JSON.parse(said);
+        } catch {
+          status = { message: said };
+        }
+        if (status.status !== "Success") {
+          return reject(new Error(`the API server said: ${status.message || said}`));
+        }
       }
-      resolve({
-        out: Buffer.concat(out).toString(),
-        err: Buffer.concat(err).toString(),
-        error: status,
-      });
+      resolve({ out: Buffer.concat(out).toString(), err: Buffer.concat(err).toString() });
     }
+    const cut = () => finish(new Error("the attach stream ended before its close frame"));
     const aborted = () => finish(signal.reason ?? new Error("aborted"));
 
     function onMessage(payload) {
@@ -191,8 +196,8 @@ export function exchange({ socket, head = Buffer.alloc(0) }, { input, signal } =
     if (signal?.aborted) return aborted();
     signal?.addEventListener("abort", aborted, { once: true });
     socket.on("data", onData);
-    socket.on("end", () => finish());
-    socket.on("close", () => finish());
+    socket.on("end", cut);
+    socket.on("close", cut);
     socket.on("error", (e) => finish(e));
     if (input !== undefined && input !== null && String(input).length) {
       socket.write(frame(BINARY, Buffer.concat([Buffer.from([STDIN]), Buffer.from(input)])));

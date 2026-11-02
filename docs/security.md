@@ -1292,7 +1292,9 @@ point at the models service, and its calls go to Google directly, so it is kept 
   Kubernetes it is a pod of its own (Pod Security `restricted`, no ServiceAccount token, no
   Secret, `~/.gemini` an `emptyDir`): the file goes in on its stdin and comes back on its
   stdout through the API server's `pods/attach`, never in its spec, and the egress proxy lets
-  it reach Google's OAuth and the CLI's own hosts only, tunnelled. It is removed once it ends,
+  it reach Google's OAuth and the CLI's own hosts only, tunnelled (and GitHub's releases while
+  an init container installs the CLI, when it has no claim, never once `agy` runs with the
+  login). It is removed once it ends,
   whatever its outcome. One
   refresh at a time, for all runs and every copy of the service. The login's tokens are redacted
   from runs' output like the other credentials.

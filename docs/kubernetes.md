@@ -261,7 +261,6 @@ warning of every pod that isn't `restricted`). The sandboxes' namespace stays `r
 
 - **Host mounts** (`mounts`): a run of a repository with some is refused, with a reply naming
   the runner.
-- **The Antigravity CLI's plan login** (#572), which the runner refreshes in a container.
 - **A repository's own image** (`dockerfile`) without `KUBERNETES_REGISTRY`
   ([Repo images](#repo-images)).
 
@@ -276,7 +275,9 @@ saying why. What it expects, and the manifests give it:
 
 - **RBAC** (`rbac.yaml`): a Role for the runner's ServiceAccount in the sandboxes' namespace,
   `create`, `get`, `list` and `delete` on `pods` and `secrets`, `create`, `get` and `delete` on
-  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and `list`
+  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, `create`
+  and `get` on `pods/attach` (the Antigravity CLI's login refresh, [Agents](#agents-on-kubernetes):
+  Kubernetes checks `create` from 1.35, `get` before), and `list`
   on `events` (why a pod is stuck) and `networkpolicies`; and in the services' namespace, `get`
   on `services` and `pods` (the proxy's Service, BuildKit's pods), `list` on `networkpolicies`
   and `endpointslices`. The `buildkit` component adds `get` on the registry's pull Secret alone
@@ -498,6 +499,23 @@ every sandbox mounts read-only, as on Docker:
   Pending (the init container running), the egress proxy lets it reach the agent's install
   hosts only, nothing of the run's own; once the sandbox starts, those hosts are gone again.
   A failed install fails the run, with the installer's output in the run's log.
+
+The Antigravity CLI's plan login ([setup.md](setup.md#antigravity-cli)) is refreshed by a pod of
+its own, `<NAME_PREFIX>-job-antigravity-refresh`, in the sandboxes' namespace, at the models
+service's call (the runner's NetworkPolicy lets it in for that). It meets Pod Security
+`restricted` as the sandbox's user, with no ServiceAccount token and no Secret. The runner sends
+it the token file on its stdin and reads back the refreshed one from its stdout, through the API
+server (`pods/attach`, over WebSocket, `v5.channel.k8s.io`: Kubernetes 1.30 or later), never
+through its spec; `~/.gemini` is an `emptyDir` there, no claim. It mounts the agent's claim
+read-only (or, without one, installs the CLI in an init container, as sandboxes do: a failed
+install's last line is in the refresh's error, which the runs on the login fail with). It is
+labelled `deckhand.role: install`, so `deckhand-installs` (`sandboxes.yaml`) covers it: the
+egress proxy lets it reach Google's OAuth (`oauth2.googleapis.com`) and the CLI's own hosts
+only, tunnelled (and GitHub's releases while its init container installs the CLI, never once
+`agy` runs). It has 4 minutes in all, the CLI's install included, within the models service's
+5-minute hold on the login, so that no other copy of the service refreshes it meanwhile. It is
+removed once it ends, whatever its outcome; the kubelet's copy of its log (which holds the
+refreshed file) goes with it.
 
 The shared claims (agents', caches') are written by their pods' users, uid 1001 for the
 installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim theirs. That

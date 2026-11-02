@@ -23,12 +23,16 @@ import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit
 import { kubeName, labelValue } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import {
+  agentInitContainer,
   aliasesOf,
   excludesSandboxes,
+  hardened,
+  INIT_CONTAINER,
   INSTALL_USER,
   pendingReason,
   proxyService,
   quantity,
+  restrictedPod,
   selects,
 } from "./kubernetes.mjs";
 import { aliasOf } from "./networks.mjs";
@@ -138,10 +142,10 @@ const notWritable = (claim, user, storageClass) =>
   `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/kubernetes.md)`;
 // An install pod that hasn't ended by then (stuck Pending, npm hanging) fails, and goes.
 const INSTALL_MS = 15 * 60_000;
-// How long a job's pod may take to start (its image pulled, its agent installed by its init
-// container), then its container to end.
-const JOB_START_MS = 15 * 60_000;
-const JOB_MS = 5 * 60_000;
+// How long a job may take in all, by default (runJob(): its caller's `timeoutMs`), and how
+// long its pod's status may take to say its container ended, once its output has.
+const JOB_MS = 4 * 60_000;
+const ENDED_MS = 30_000;
 // A job's container, in its pod and in its attach's URL.
 const JOB_CONTAINER = "job";
 // The BuildKit pods' addresses, read again after this long.
@@ -488,9 +492,49 @@ export function createKubernetesImages({
     }
   }
 
+  // The limits of a pod of Deckhand's own, as a sandbox's.
+  const podLimits = () => ({
+    cpu: String(config.limits.cpus),
+    memory: quantity(config.limits.memory),
+  });
+
+  // A short pod of the base image's in the sandboxes' namespace, as `user`: Pod Security
+  // `restricted` (kubernetes.mjs restrictedPod(), hardened() for its containers in `spec`), no
+  // ServiceAccount token, the registry's pull Secret; a leftover of the same name goes first.
+  // One that goes out through the egress proxy (`proxied`), apart from the services, gets the
+  // proxy's Service's IP (hostAliases), as sandboxes do: the cluster's DNS doesn't know its
+  // short name in the sandboxes' namespace. `spec`: its containers and volumes.
+  async function startPod(pod, { role, labels = {}, user, proxied, spec }) {
+    await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
+    await waitGone(pod);
+    const pullName = await pullSecret.forPods();
+    const aliases = apart && proxied ? aliasesOf(await proxyService(services, config)) : [];
+    await api.create("pods", {
+      apiVersion: "v1",
+      kind: "Pod",
+      metadata: { name: pod, labels: { ...owner, "deckhand.role": role, ...labels } },
+      spec: {
+        restartPolicy: "Never",
+        automountServiceAccountToken: false,
+        enableServiceLinks: false,
+        ...(pullName ? { imagePullSecrets: [{ name: pullName }] } : {}),
+        ...(aliases.length ? { hostAliases: aliases } : {}),
+        securityContext: restrictedPod(user),
+        ...spec,
+      },
+    });
+  }
+
+  // The pod gone, whatever its outcome; logged when the API refuses.
+  async function removePod(pod) {
+    await api
+      .remove(`pods/${pod}`, { gracePeriodSeconds: 0 })
+      .catch((e) => log(`Removing ${pod}: ${e.message}`));
+  }
+
   // A short pod of the base image with `claim` at `mount`, as `user` (its group the claim's),
-  // Pod Security `restricted`, removed once it ended; a leftover of the same name goes first.
-  // `hosts`: what it may reach through the egress proxy (egressFor()), none without.
+  // removed once it ended (startPod()). `hosts`: what it may reach through the egress proxy
+  // (egressFor()), none without: a cache's check reaches nothing, no proxy to look up.
   // → { code, why }: its exit code (-1 when it didn't end within `timeoutMs`) and why it
   // failed. Its log goes to `output`.
   async function runPod({
@@ -505,33 +549,12 @@ export function createKubernetesImages({
     output,
     timeoutMs,
   }) {
-    await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
-    await waitGone(pod);
-    const limits = { cpu: String(config.limits.cpus), memory: quantity(config.limits.memory) };
-    const pullName = await pullSecret.forPods();
-    // An install pod (`hosts`), apart from the services: the cluster's DNS doesn't know the
-    // proxy's short name in the sandboxes' namespace, so its Service's IP, as sandboxes have it.
-    // A cache's check reaches nothing: no proxy to look up.
-    const aliases = apart && hosts ? aliasesOf(await proxyService(services, config)) : [];
-    await api.create("pods", {
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: { name: pod, labels: { ...owner, "deckhand.role": role } },
+    const limits = podLimits();
+    await startPod(pod, {
+      role,
+      user,
+      proxied: Boolean(hosts),
       spec: {
-        restartPolicy: "Never",
-        automountServiceAccountToken: false,
-        enableServiceLinks: false,
-        ...(pullName ? { imagePullSecrets: [{ name: pullName }] } : {}),
-        ...(aliases.length ? { hostAliases: aliases } : {}),
-        securityContext: {
-          runAsNonRoot: true,
-          runAsUser: user.uid,
-          runAsGroup: user.gid,
-          // The claim becomes the user's group's to write, where its storage applies it.
-          fsGroup: user.gid,
-          fsGroupChangePolicy: "OnRootMismatch",
-          seccompProfile: { type: "RuntimeDefault" },
-        },
         containers: [
           {
             name: role,
@@ -539,12 +562,7 @@ export function createKubernetesImages({
             command,
             env: Object.entries(env).map(([key, value]) => ({ name: key, value: String(value) })),
             resources: { limits, requests: limits },
-            securityContext: {
-              allowPrivilegeEscalation: false,
-              capabilities: { drop: ["ALL"] },
-              runAsNonRoot: true,
-              seccompProfile: { type: "RuntimeDefault" },
-            },
+            securityContext: hardened(),
             volumeMounts: [{ name: "claim", mountPath: mount }],
           },
         ],
@@ -561,9 +579,7 @@ export function createKubernetesImages({
       return { code: code ?? -1, why: `exit ${code ?? ended.status?.phase}` };
     } finally {
       installs.delete(pod);
-      await api
-        .remove(`pods/${pod}`, { gracePeriodSeconds: 0 })
-        .catch((e) => log(`Removing ${pod}: ${e.message}`));
+      await removePod(pod);
     }
   }
 
@@ -571,8 +587,7 @@ export function createKubernetesImages({
   const jobs = new Map();
 
   // ../jobs.mjs's run(), on Kubernetes, for what can't do without one: the Antigravity login's
-  // refresh (../../runner/service.mjs loginRefresh()). A pod of the base image in the
-  // sandboxes' namespace, Pod Security `restricted`, without a ServiceAccount token or a
+  // refresh (../../runner/service.mjs loginRefresh()). A pod of its own (startPod()) without a
   // Secret: `input` goes in on its stdin, and its stdout and stderr come back, through the API
   // server (pods/attach, kube-attach.mjs), never through its spec or a claim. It goes out as an
   // install pod (`deckhand.role: install`, so their NetworkPolicies cover it): through the
@@ -580,12 +595,15 @@ export function createKubernetesImages({
   // a writable one an emptyDir, gone with the pod: a job keeps nothing here, its caller keeps
   // what it gives back. `agent`: the install spec of the agent a read-only volume holds,
   // installed by an init container into an emptyDir when that agent has no claim (no
-  // KUBERNETES_AGENT_STORAGE_CLASS), as a sandbox's is. `name`: its pod's, after the prefix.
+  // KUBERNETES_AGENT_STORAGE_CLASS), as a sandbox's is: its install's hosts too, only until it
+  // is done. `name`: its pod's, after the prefix. `timeoutMs`: how long it may take in all,
+  // from this call (waiting for another of its name, starting, running), whose end fails it.
   // The pod goes once it ended, whatever the outcome. → { code, out, err }.
   function runJob(job) {
+    const until = now() + (job.timeoutMs ?? JOB_MS);
     const pod = kubeName(`${config.prefix}-job-${job.name}`);
     const before = jobs.get(pod) ?? Promise.resolve();
-    const doing = before.catch(() => {}).then(() => jobPod(pod, job));
+    const doing = before.catch(() => {}).then(() => jobPod(pod, job, until));
     jobs.set(pod, doing);
     doing.finally(() => jobs.get(pod) === doing && jobs.delete(pod)).catch(() => {});
     return doing;
@@ -606,20 +624,15 @@ export function createKubernetesImages({
       hosts = [],
       agent = null,
     },
+    until,
   ) {
     if (caps.length) throw new Error(`the kubernetes runner adds no capabilities (${caps})`);
     if (!user?.uid) throw new Error("a job on the kubernetes runner runs as a user, never root");
     if (network !== "install") {
       throw new Error(`the kubernetes runner's jobs run on the install network, not ${network}`);
     }
-    const hardened = {
-      allowPrivilegeEscalation: false,
-      capabilities: { drop: ["ALL"] },
-      runAsNonRoot: true,
-      seccompProfile: { type: "RuntimeDefault" },
-    };
-    const limits = { cpu: String(config.limits.cpus), memory: quantity(config.limits.memory) };
-    const reached = [...hosts];
+    if (now() >= until) return { code: -1, out: "", err: `no time left to start the pod ${pod}` };
+    const limits = podLimits();
     let init = null;
     const podVolumes = [];
     const mounts = [];
@@ -634,53 +647,23 @@ export function createKubernetesImages({
         });
       } else if (agent?.volume === v.name) {
         podVolumes.push({ name, emptyDir: {} });
-        reached.push(...(agent.hosts ?? []));
-        init = {
-          name: "agent-install",
+        init = agentInitContainer({
           image: config.image,
-          command: [agent.command],
-          env: Object.entries({
-            [agent.versionVar]: agent.version,
-            ...agent.env,
-            ...proxyEnv(config),
-          }).map(([key, value]) => ({ name: key, value: String(value) })),
-          resources: { limits, requests: limits },
-          securityContext: {
-            ...hardened,
-            runAsUser: INSTALL_USER.uid,
-            runAsGroup: INSTALL_USER.gid,
-          },
+          command: agent.command,
+          env: { [agent.versionVar]: agent.version, ...agent.env, ...proxyEnv(config) },
+          resources: limits,
           volumeMounts: [{ name, mountPath: v.path }],
-        };
+        });
       } else {
         throw new Error(`no claim ${kubeName(v.name)} for ${v.path} in ${api.namespace}`);
       }
     }
-    await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
-    await waitGone(pod);
-    const pullName = await pullSecret.forPods();
-    const aliases = apart ? aliasesOf(await proxyService(services, config)) : [];
-    await api.create("pods", {
-      apiVersion: "v1",
-      kind: "Pod",
-      metadata: {
-        name: pod,
-        labels: { ...owner, "deckhand.role": "install", "deckhand.job": labelValue(pod) },
-      },
+    await startPod(pod, {
+      role: "install",
+      labels: { "deckhand.job": labelValue(pod) },
+      user,
+      proxied: true,
       spec: {
-        restartPolicy: "Never",
-        automountServiceAccountToken: false,
-        enableServiceLinks: false,
-        ...(pullName ? { imagePullSecrets: [{ name: pullName }] } : {}),
-        ...(aliases.length ? { hostAliases: aliases } : {}),
-        securityContext: {
-          runAsNonRoot: true,
-          runAsUser: user.uid,
-          runAsGroup: user.gid ?? user.uid,
-          fsGroup: user.gid ?? user.uid,
-          fsGroupChangePolicy: "OnRootMismatch",
-          seccompProfile: { type: "RuntimeDefault" },
-        },
         ...(init ? { initContainers: [init] } : {}),
         containers: [
           {
@@ -695,16 +678,19 @@ export function createKubernetesImages({
               value: String(value),
             })),
             resources: { limits, requests: limits },
-            securityContext: hardened,
+            securityContext: hardened(),
             volumeMounts: mounts,
           },
         ],
         volumes: podVolumes,
       },
     });
-    installs.set(pod, reached);
+    // The install's hosts while its init container runs, if it has one: never once the job's
+    // own container does.
+    installs.set(pod, init ? [...hosts, ...(agent.hosts ?? [])] : hosts);
     try {
-      const started = await jobStarted(pod);
+      const started = await jobStarted(pod, until);
+      installs.set(pod, hosts);
       if (started.problem) return { code: -1, out: "", err: started.problem };
       // Ended before it could take its input: whatever it printed is in its log, unread.
       let result = { out: "", err: `the pod ${pod} ended before its input went in` };
@@ -713,13 +699,14 @@ export function createKubernetesImages({
           result = await api.attach(
             `pods/${pod}/attach`,
             { container: JOB_CONTAINER, stdin: "true", stdout: "true", stderr: "true" },
-            { input, signal: AbortSignal.timeout(JOB_MS) },
+            { input, signal: AbortSignal.timeout(Math.max(until - now(), 1000)) },
           );
         } catch (error) {
           return { code: -1, out: "", err: `attaching to the pod ${pod}: ${error.message}` };
         }
       }
-      const ended = await ending(pod, 60_000);
+      // Its container has ended: its status says so within moments.
+      const ended = await ending(pod, ENDED_MS);
       const code = ended?.status?.containerStatuses?.[0]?.state?.terminated?.exitCode;
       if (code === undefined) {
         return { code: -1, out: result.out, err: result.err || `no end of the pod ${pod}` };
@@ -727,25 +714,29 @@ export function createKubernetesImages({
       return { code, out: result.out, err: result.err };
     } finally {
       installs.delete(pod);
-      await api
-        .remove(`pods/${pod}`, { gracePeriodSeconds: 0 })
-        .catch((e) => log(`Removing ${pod}: ${e.message}`));
+      await removePod(pod);
     }
   }
 
   // A job's pod once its container runs ({}), or ended before it could be attached to
-  // ({ ended: true }); { problem } when its init container failed, or it didn't start within
-  // JOB_START_MS (with Kubernetes' reason, when it gives one).
-  async function jobStarted(pod) {
-    const since = now();
+  // ({ ended: true }); { problem } when its init container failed (with the installer's
+  // output, as a sandbox's run log has it), or it didn't start by `until` (with Kubernetes'
+  // reason, when it gives one).
+  async function jobStarted(pod, until) {
     let found;
-    while (now() - since < JOB_START_MS) {
+    while (now() < until) {
       found = await api.find(`pods/${pod}`);
       if (!found) throw new Error(`the pod ${pod} is gone`);
       const init = found.status?.initContainerStatuses?.[0]?.state?.terminated;
       if (init && init.exitCode !== 0) {
+        const output = [];
+        await readLog(pod, (chunk) => output.push(chunk), { container: INIT_CONTAINER });
+        // Its output, then a last line saying what failed with the installer's own last one:
+        // the models service quotes a refresh's last line of stderr (antigravity-login.mjs).
+        const said = Buffer.concat(output).toString().trim().slice(-2000);
+        const last = said.split("\n").at(-1);
         return {
-          problem: `installing the agent in its init container failed (exit ${init.exitCode})`,
+          problem: `${said ? `${said}\n` : ""}installing the agent in its init container failed (exit ${init.exitCode})${last ? `: ${last}` : ""}`,
         };
       }
       const state = found.status?.containerStatuses?.[0]?.state ?? {};
@@ -756,9 +747,7 @@ export function createKubernetesImages({
       await sleep(POLL_MS);
     }
     const why = found && pendingReason(found);
-    return {
-      problem: `the pod ${pod} didn't start in ${JOB_START_MS / 60_000} min${why ? ` (${why})` : ""}`,
-    };
+    return { problem: `the pod ${pod} didn't start in time${why ? ` (${why})` : ""}` };
   }
 
   // The pod once it has ended, or null when it doesn't within `timeoutMs`.
@@ -778,9 +767,9 @@ export function createKubernetesImages({
     while ((await api.find(`pods/${pod}`)) && now() - since < 60_000) await sleep(POLL_MS);
   }
 
-  async function readLog(pod, output = () => {}) {
+  async function readLog(pod, output = () => {}, query = {}) {
     try {
-      const res = await api.stream(`pods/${pod}/log`, {}, AbortSignal.timeout(30_000));
+      const res = await api.stream(`pods/${pod}/log`, query, AbortSignal.timeout(30_000));
       for await (const chunk of res.body ?? []) output(Buffer.from(chunk));
     } catch (error) {
       log(`The log of ${pod}: ${error.message}`);

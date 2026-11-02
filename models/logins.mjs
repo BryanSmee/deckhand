@@ -13,10 +13,12 @@ import { linkSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { sealWith } from "../lib/seal.mjs";
+import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
 
-// How long a refresh may take before another copy takes over: `agy models` in a container the
-// runner starts, its image installed first.
-export const REFRESH_MS = 5 * 60_000;
+// How long a refresh may take before another copy takes over: `agy models` in a container (a pod
+// on Kubernetes) the runner starts, its agent installed first, which the runner ends within it
+// (../lib/services.mjs LOGIN_REFRESH_MS, ../runner/service.mjs loginRefresh()).
+export const REFRESH_MS = LOGIN_REFRESH_MS;
 // How often a copy waiting for another's refresh looks at the store.
 const WAIT_EVERY_MS = 500;
 
