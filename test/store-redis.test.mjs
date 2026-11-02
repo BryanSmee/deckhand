@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { encode, parseRedisUrl, RedisError, redisClient, replyParser } from "../lib/resp.mjs";
 import { openStore } from "../lib/store.mjs";
 import { redisStore } from "../lib/store-redis.mjs";
-import { asidePort, listening } from "./helpers.mjs";
+import { asidePort, listening, until } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
 test("resp: commands encoded as bulk strings, bytes kept", () => {
@@ -177,7 +177,7 @@ test("resp: a dropped connection fails the calls in flight, the next call reconn
   t.after(() => client.close());
   const lost = client.call("ECHO", "x");
   // Once the server has read it, after the AUTH: the connection dropped is the one it was on.
-  for (let i = 0; i < 500 && !redis.got.some(([name]) => name === "ECHO"); i++) await sleep(10);
+  await until(() => redis.got.some(([name]) => name === "ECHO"), { what: "the ECHO" });
   redis.drop();
   await assert.rejects(lost, /closed|ECONNRESET/);
   hang = false;

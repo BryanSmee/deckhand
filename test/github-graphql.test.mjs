@@ -1274,7 +1274,7 @@ test("a document the worker can't validate in time is refused alone; the others 
   // also timed the quick one out on a paused runner, its answer read after its timer.
   let armed = 0;
   const setTimer = (fn) => (armed++ === 0 && queueMicrotask(fn), { unref() {} });
-  const validator = createValidator({ timeoutMs: 150, setTimer });
+  const validator = createValidator({ timeoutMs: 150, setTimer, clearTimer: () => {} });
   t.after(validator.close);
   const [slow, quick] = await Promise.all([
     validator.check(SLOW, "a"),

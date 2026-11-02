@@ -7,7 +7,7 @@ import { connect } from "node:net";
 import { test } from "node:test";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createProxy, drainMs } from "../proxy/proxy.mjs";
-import { listening, serve } from "./helpers.mjs";
+import { listening, serve, until } from "./helpers.mjs";
 
 // A proxy whose models service is `modelsUrl`, the fake agents' API below: agents call their API
 // at the models service's name (SANDBOX_URLS, listener/agents/claude.mjs), which the proxy
@@ -114,9 +114,7 @@ test("two proxies: the old one's agent stream finishes as it drains, new connect
   assert.equal(drained, null);
   streams[0].end("data: 3\n\n");
   assert.equal(await stream.body(), "data: 1\n\ndata: 2\n\ndata: 3\n\n");
-  for (let i = 0; i < 500 && drained === null; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await until(() => drained !== null, { what: "the drain's end" });
   assert.equal(drained, true);
   assert.deepEqual(clients, ["net-1", "net-1"]);
 });

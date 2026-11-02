@@ -13,7 +13,7 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
-import { assertMode, fileLogs, localBroker, tempDir } from "./helpers.mjs";
+import { assertMode, fileLogs, localBroker, tempDir, until } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it. → its id, the broker's handle once restored.
 function saveRun(dir, id, issue, record, more = {}) {
@@ -1141,9 +1141,7 @@ test("tasks.mjs: a pause armed from a saved deadline ends at it, not after a pau
   ctx.startLater(task, dueAt);
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.deepEqual(started, []);
-  for (let i = 0; i < 500 && !started.length; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
+  await until(() => started.length, { what: "the run's start" });
   assert.equal(started.length, 1);
   // Its own pause would end a minute on: well before that, however late a busy runner fires
   // the timer (over 150 ms seen).

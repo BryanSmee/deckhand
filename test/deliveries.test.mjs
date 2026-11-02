@@ -123,15 +123,15 @@ test("readDelivery: a body, or a stalled one dropped after the idle timeout", as
   whole.end("{}");
   await until(() => results.length === 1);
   assert.deepEqual(results, ["{}"]);
-  // Chunks closer than the idle timeout keep it going; then nothing comes. Far closer: with
-  // 60 ms of 100, a runner pausing the process 40 ms read the second chunk too late.
+  // Chunks closer than the idle timeout keep it going past it; then nothing comes. Far closer:
+  // with 60 ms of 100, a runner pausing the process 40 ms read the second chunk too late.
   const slow = send();
-  slow.write("{");
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  slow.write('"a"');
-  await new Promise((resolve) => setTimeout(resolve, 300));
-  slow.write("}");
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  const started = Date.now();
+  for (const chunk of ["{", '"a"', ":", "1", " "]) {
+    slow.write(chunk);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  assert.ok(Date.now() - started > 1000);
   assert.equal(results.length, 1);
   await until(() => results.length === 2);
   assert.equal(results[1], "no data for 1000 ms");

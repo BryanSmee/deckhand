@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createCache, lifetime, parseSize } from "../proxy/cache.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
-import { listening, serve, tempDir } from "./helpers.mjs";
+import { listening, serve, tempDir, until } from "./helpers.mjs";
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -27,6 +27,11 @@ async function setup(t, routes = {}, { max = 1024 * 1024, entryMax = 1024 * 1024
   const clock = { now: 1_000_000 };
   const dir = tempDir(t, "deckhand-egress-cache-");
   const cache = createCache({ dir, max, entryMax, now: () => clock.now });
+  // The downloads the proxy asked it to keep (their URL's path): "never stored" is none asked,
+  // not no file seen a while later.
+  const written = [];
+  const writer = cache.writer;
+  cache.writer = (key, meta) => (written.push(new URL(meta.url).pathname), writer(key, meta));
   const proxy = createProxy({
     policy: async (ip, host) => ({ allowed: true, private: true, cache: host === "cached.test" }),
     lookup: async () => [{ address: "127.0.0.1", family: 4 }],
@@ -60,11 +65,11 @@ async function setup(t, routes = {}, { max = 1024 * 1024, entryMax = 1024 * 1024
   // Once the download it just served is written (or not) to disk.
   const stored = async (path, encoding) => {
     const key = cache.key(url(path), encoding);
-    for (let i = 0; i < 1000 && !cache.has(key); i++) await wait(5);
-    return cache.has(key);
+    await until(() => cache.has(key), { what: `${path} in the cache` });
+    return true;
   };
   const files = () => readdirSync(dir).sort();
-  return { get, seen, clock, cache, dir, stored, files, url, upstreamPort, proxyPort };
+  return { get, seen, clock, cache, dir, stored, files, written, url, upstreamPort, proxyPort };
 }
 
 test("a second GET on a cached host is answered from disk", async (t) => {
@@ -87,7 +92,7 @@ test("a second GET on a cached host is answered from disk", async (t) => {
 });
 
 test("other hosts, and requests that aren't a plain GET, are forwarded as before", async (t) => {
-  const { get, seen, files, cache } = await setup(t);
+  const { get, seen, files, cache, written } = await setup(t);
   for (let i = 0; i < 2; i++) {
     const answer = await get("/x", {}, "other.test");
     assert.equal(answer.body, "body of /x");
@@ -97,8 +102,9 @@ test("other hosts, and requests that aren't a plain GET, are forwarded as before
   await get("/x", { cookie: "a=b" });
   await get("/x", { range: "bytes=0-3" });
   await get("/x", { "cache-control": "no-store" });
-  await cache.settled();
   assert.equal(seen.length, 6);
+  assert.deepEqual(written, []);
+  await cache.settled();
   assert.deepEqual(files(), []);
   // Credentials reach the host.
   assert.equal(seen[2].headers.authorization, "Bearer t");
@@ -117,7 +123,7 @@ function raw(port, head) {
 }
 
 test("a GET with a body or credential-like headers is forwarded, never stored", async (t) => {
-  const { get, seen, files, cache, proxyPort, url } = await setup(t);
+  const { get, seen, files, cache, written, proxyPort, url } = await setup(t);
   const sent = [
     `content-length: 4\r\n\r\nbody`,
     `transfer-encoding: chunked\r\n\r\n4\r\nbody\r\n0\r\n\r\n`,
@@ -142,8 +148,9 @@ test("a GET with a body or credential-like headers is forwarded, never stored", 
     const answer = await get("/x", headers);
     assert.equal(answer.headers["x-deckhand-cache"], undefined, Object.keys(headers)[0]);
   }
-  await cache.settled();
   assert.equal(seen.length, sent.length + credentials.length);
+  assert.deepEqual(written, []);
+  await cache.settled();
   assert.deepEqual(files(), []);
   // They reach the host, as before.
   assert.equal(seen.at(-1).headers["x-goog-api-key"], "k");
@@ -230,7 +237,7 @@ test("a host that answers before reading the body can't be made to poison an ent
     `GET ${url("/victim")} HTTP/1.1\r\nhost: x\r\nx-a: GET /evil HTTP/1.1\r\n` +
       `connection: close\r\n\r\n`,
   );
-  for (let i = 0; i < 1000 && !cache.has(cache.key(url("/victim"))); i++) await wait(5);
+  await until(() => cache.has(cache.key(url("/victim"))), { what: "/victim in the cache" });
   // Another repository's sandbox.
   const answer = await raw(
     proxyPort,
@@ -334,7 +341,7 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
       res.end("x".repeat(40));
     },
   };
-  const { get, seen, files, cache } = await setup(t, routes, { entryMax: 99 });
+  const { get, seen, files, cache, written } = await setup(t, routes, { entryMax: 99 });
   for (const path of Object.keys(routes)) {
     for (let i = 0; i < 2; i++) {
       const got = await get(path, { "user-agent": "apt" });
@@ -342,8 +349,11 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
       assert.equal(got.headers["x-deckhand-cache"], "miss", path);
     }
   }
-  await cache.settled();
   assert.equal(seen.length, Object.keys(routes).length * 2);
+  // Only the one without a Content-Length is started, then dropped past its size: its file
+  // removed in the background.
+  assert.deepEqual(written, ["/big-chunked", "/big-chunked"]);
+  await cache.settled();
   assert.deepEqual(files(), []);
 });
 

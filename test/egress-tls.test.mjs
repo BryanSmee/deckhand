@@ -16,7 +16,7 @@ import { connect as tlsConnect, createSecureContext } from "node:tls";
 import { CA_DAYS, certifiable, createAuthority } from "../proxy/authority.mjs";
 import { createCache } from "../proxy/cache.mjs";
 import { createProxy, relayTarget } from "../proxy/proxy.mjs";
-import { listening, serve, tempDir } from "./helpers.mjs";
+import { listening, serve, tempDir, until } from "./helpers.mjs";
 
 // `t` null: the file's, removed when it ends.
 const temp = (t, name) => tempDir(t, `deckhand-${name}-`);
@@ -177,9 +177,7 @@ test("HTTPS to a cached host: decrypted with Deckhand's CA, and the second GET i
   assert.equal(first.issuer, nameOf(ca));
   // The cache writes behind the client: once it has.
   const key = cache.key(`https://cached.test:${upstreamPort}/pkg.tgz`);
-  for (let i = 0; i < 1000 && !cache.has(key); i++) {
-    await new Promise((resolve) => setTimeout(resolve, 5));
-  }
+  await until(() => cache.has(key), { what: "/pkg.tgz in the cache" });
   const second = await get("cached.test", "/pkg.tgz", ca);
   assert.equal(second.body, "body of /pkg.tgz");
   assert.equal(second.headers["x-deckhand-cache"], "hit");
