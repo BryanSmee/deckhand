@@ -464,12 +464,15 @@ const GRACE = {
   edge: 40,
   orchestrator: 300,
   runner: 300,
-  broker: 35,
+  broker: 45,
   github: 300,
   models: 630,
-  policy: 30,
+  policy: 40,
   proxy: 630,
 };
+// Each active service's drain (s), its DRAIN_SECONDS or its default: edge's and the policy
+// service's 25, the broker's 30, the github service's 280, the models service's 600.
+const DRAINS = { edge: 25, github: 280, broker: 30, models: 600, policy: 25, proxy: 600 };
 // Readiness on /ready, but: edge has none (it stops taking connections as it drains); the
 // orchestrator's and the runner's answer on the acting copy alone, and the next copy only acts
 // once the old one has stopped, so a rolling update waiting for it would never end.
@@ -498,15 +501,17 @@ test("deploy/kubernetes: two copies of each service, one of the proxy, each upda
     );
     assert.equal(pod(service).terminationGracePeriodSeconds, GRACE[service], service);
   }
-  // The proxy drains as long as an agent's call lasts, after its preStop pause, within its
-  // grace period.
-  const pause = Number(container("proxy").lifecycle.preStop.exec.command[1]);
-  assert.ok(pause + Number(env("proxy").DRAIN_SECONDS) < GRACE.proxy);
-  // Edge too, as the internet's callers (GitHub's webhooks, browsers) don't try a refused
-  // connection again: it pauses until the ingress no longer sends it any, then drains (25 s).
-  const edgePause = Number(container("edge").lifecycle?.preStop?.exec?.command?.[1]);
-  assert.ok(edgePause >= 5, "edge pauses before its drain");
-  assert.ok(edgePause + 25 < GRACE.edge);
+  // The services both copies answer for pause before their SIGTERM, until the Service no longer
+  // sends them connections (a pod leaves its endpoints as it starts terminating, kube-proxy and
+  // the ingress learn it a few seconds later), then drain within their grace period: a refused
+  // connection meanwhile fails the internet's callers and the dashboard's health probe (#560),
+  // which don't try it again. The proxy drains as long as an agent's call lasts.
+  for (const [service, drain] of Object.entries(DRAINS)) {
+    const pause = Number(container(service).lifecycle?.preStop?.exec?.command?.[1]);
+    assert.ok(pause >= 5, `${service} pauses before its drain`);
+    assert.ok(pause + drain < GRACE[service], `${service}: its pause and drain within its grace`);
+  }
+  assert.equal(DRAINS.proxy, Number(env("proxy").DRAIN_SECONDS));
 });
 
 test("deploy/kubernetes: every service as compose runs it: not root, no capability, a read-only root", () => {

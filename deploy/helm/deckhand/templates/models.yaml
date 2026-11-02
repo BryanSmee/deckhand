@@ -50,6 +50,10 @@ spec:
             {{- include "deckhand.redisStore" "models" | nindent 12 }}
             {{- end }}
           {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
           {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
           volumeMounts:
             - name: key

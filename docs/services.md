@@ -166,13 +166,15 @@ state saved and its lease released, then the egress policy's port, `orchestrator
 copies and a rolling update that starts the new copy first, an upgrade fails no call: the new
 copy takes the connections the old one no longer accepts.
 
-That holds for Deckhand's own callers, which try a refused call again (`lib/service-client.mjs`,
-the proxy's `wait.mjs`), not for edge's: GitHub marks a webhook it couldn't deliver failed and
-doesn't send it again on its own, and a browser shows the error. On Kubernetes, a pod leaves its
-Service's endpoints as it starts terminating, but the ingress learns it a few seconds later and
-sends it requests meanwhile. So edge's pod, as the proxy's, pauses 10 s in a `preStop` hook
-before its SIGTERM: it goes on answering until the ingress has moved to the next copy, then
-drains.
+That holds for the calls Deckhand's services make to one another, which try a refused call again
+(`lib/service-client.mjs`, the proxy's `wait.mjs`). It doesn't hold for callers that don't: GitHub,
+whose webhook marked failed isn't sent again on its own, a browser, and the orchestrator's
+health probe, whose one refused `/health` shows the service down on the dashboard's status page
+(#560). On Kubernetes, a pod leaves its Service's endpoints as it starts terminating, but kube-proxy
+and the ingress learn it a few seconds later, and send it connections meanwhile. So the services
+both copies answer for (edge, github, models, broker, policy, the proxy) pause 10 s in a `preStop`
+hook before their SIGTERM: they go on answering until nothing sends them new connections, then
+drain. Their grace periods count the pause.
 
 ### Edge and the orchestrator
 
