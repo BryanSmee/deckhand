@@ -16,6 +16,7 @@ import {
   ciFixMessage,
   createReviews,
   FOLLOW_UP_LABEL,
+  FOLLOW_UPS_MAX,
   fixMessage,
   followUpBody,
   latestReview,
@@ -376,6 +377,8 @@ function setup(
     settings = config,
     policies = null,
     reply = async () => {},
+    // The repo's settings as read later on (its config changed since), when the test sets it.
+    later = null,
   } = {},
 ) {
   let time = 1_800_000_000_000;
@@ -384,7 +387,7 @@ function setup(
   const reviews = createReviews({
     path,
     config: settings,
-    repoSettings: async () => read,
+    repoSettings: async () => later?.() ?? read,
     accept: async (item) => accepted.push(item),
     github,
     busy,
@@ -2642,7 +2645,14 @@ test("review loop: follow-ups and comments counted apart, blocking comments amon
 // follow-up `existing`: what the reviews filed.
 function followUpSetup(
   t,
-  { posted: bodies = [], comments = [], existing = [], refuse = [], failReads = 0 } = {},
+  {
+    posted: bodies = [],
+    comments = [],
+    existing = [],
+    refuse = [],
+    failReads = 0,
+    later = null,
+  } = {},
 ) {
   let fails = failReads;
   const calls = [];
@@ -2685,6 +2695,7 @@ function followUpSetup(
     return new Response("{}", { status: 404 });
   };
   const s = setup(t, "review:\n  on: manual\n", {
+    later,
     github,
     reply: async (repo, number, text) => replies.push([number, text]),
   });
@@ -3033,4 +3044,49 @@ test("follow-ups: a later review at the same head, listing none, doesn't lose th
   );
   assert.deepEqual([entry.hasFollowUps, entry.reviewComments], [true, [1]]);
   assert.deepEqual(await s.merged(), [40, 41]);
+});
+
+test("follow-ups: only bullets with a bold title; none filed from 'No follow-ups.'", () => {
+  for (const line of [
+    "- No follow-ups.",
+    "- None found.",
+    "- Nothing to file.",
+    "- None — the diff stays in scope.",
+    "- Share the helper `a.mjs:1`: twice.",
+  ]) {
+    const review = parseReview(`## Follow-ups\n\n${line}\n\nRating: 10/10\nVerdict: comment`);
+    assert.deepEqual(review.followUps, [], line);
+  }
+});
+
+test("follow-ups: turned off by review.follow_ups: false, a review block gone or a config with errors", async (t) => {
+  for (const yaml of [
+    "review:\n  on: manual\n  follow_ups: false\n",
+    "users: [alice]\n",
+    "review:\n  on: sometimes\n",
+  ]) {
+    const s = followUpSetup(t, {
+      posted: [postedBody(SECTIONS)],
+      later: () => parseRepoConfig(yaml, config),
+    });
+    await s.record(SECTIONS);
+    assert.equal(await s.merged(), null, yaml);
+    // Nothing read nor written on GitHub.
+    assert.deepEqual(s.calls, [], yaml);
+    assert.deepEqual(s.replies, [], yaml);
+  }
+});
+
+test("follow-ups: at most FOLLOW_UPS_MAX filed per pull request, the rest listed", async (t) => {
+  const many = Array.from({ length: FOLLOW_UPS_MAX + 2 }, (_, i) => `- **Follow-up ${i + 1}**: x.`);
+  const message = `## Must fix\n\nNone.\n\n## Follow-ups\n\n${many.join("\n")}\n\nRating: 10/10\nVerdict: comment`;
+  const s = followUpSetup(t, { posted: [postedBody(message)] });
+  await s.record(message);
+  const filed = await s.merged();
+  assert.equal(filed.length, FOLLOW_UPS_MAX);
+  assert.equal(s.filed().length, FOLLOW_UPS_MAX);
+  assert.match(
+    s.replies[0][1],
+    /; not filed, past 10 per pull request: `Follow-up 11`, `Follow-up 12`\.$/,
+  );
 });

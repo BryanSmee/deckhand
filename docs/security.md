@@ -2486,14 +2486,19 @@ opened runs nothing; picking it up is a maintainer's call, or the auto-pickup la
 **A work run started on one** reads that body as its task, as any issue's: it is Deckhand's
 own issue, but its text is no person's request. Read it before starting a run on it, and
 edit it into the task you want (or quote what you keep) when it asks for more than its
-title says; a prompt injection in the reviewed diff could have shaped it. Only the App's own reviews are read back: GitHub
-reviews by the App's login, with its marker, whose body opens with a review's verdict line (a
+title says; a prompt injection in the reviewed diff could have shaped it.
+
+Only the App's own reviews are read back: GitHub reviews by the App's login, with its marker, whose body opens with a review's verdict line (a
 sandbox's token can't post a review), and a review GitHub refused, posted as a plain comment,
 only from the comment whose id its round kept when the orchestrator posted it (`reviews.json`):
 the App's other comments, a run's reply among them, are never read for follow-ups. They are
 read only after a merge (a pull request closed without one files none), and
 once per pull request (`reviews.json`): a redelivered webhook or a restart files nothing twice.
-A review that lists many follow-ups files as many issues; close those that aren't worth it.
+A merge files at most 10, the rest listed by title (as code) in its comment, and only bullets
+with a bold title count. The repository turns it off with `review.follow_ups: false`, read
+again from its default branch at the merge: so does a `review` block that is gone, and a
+config with errors files nothing. There is no policy decision of its own for it (`deny_*`):
+like the review and the comments the orchestrator posts, it is Deckhand's own write.
 
 ### CI fix runs
 

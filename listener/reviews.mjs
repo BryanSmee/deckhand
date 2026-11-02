@@ -203,7 +203,8 @@ export function parseReview(text, { allowed = "low" } = {}) {
 // An unindented bullet or numbered item of `section` → its item, or null. A finding's
 // severity ends in emphasis, a bracket or a separator: not "- Highlights…" in the summary, nor
 // an indented sub-bullet of a finding's text, which would otherwise cap the rating, block and,
-// with `review.fix`, start the fix run. A follow-up starts with its title in bold; a comment
+// with `review.fix`, start the fix run. A follow-up starts with its title in bold (none
+// without); a comment
 // with its kind, `blocking` or `note` (`non-blocking`, `nit` too), in bold, italics, backticks
 // or brackets, or bare before a separator. A comment without one is a note marked `unmarked`:
 // it doesn't block, but parseReview() keeps the model's verdict then, as missing a blocking
@@ -220,12 +221,10 @@ function bullet(section, line) {
     return m && { severity: m[1].toLowerCase(), ...located(m[2]) };
   }
   if (section === "follow-ups") {
+    // Only with its title in bold: each one becomes a public issue after the merge, so a bullet
+    // in another form ("- No follow-ups.") is no follow-up, rather than an issue of that title.
     const m = /^(?:\*\*|__)(.+?)(?:\*\*|__)\s*[:–—-]?\s*(.*)$/.exec(rest);
-    if (!m) {
-      const { text, ...at } = located(rest);
-      return { title: titleOf(text), ...at, text: "" };
-    }
-    return { title: titleOf(m[1]), ...located(m[2]) };
+    return m && { title: titleOf(m[1]), ...located(m[2]) };
   }
   const kind = String.raw`(blocking|non[- ]blocking|note|nit)(?:\s+(?:comment|remark|question))?`;
   const m =
@@ -1410,13 +1409,25 @@ export function followUpBody(f, { number, issue = null, site = null }) {
   return parts.join("\n\n");
 }
 
-// The comment listing the follow-ups filed (`filed`) and those an issue already had (`linked`).
-export function followUpsText(filed, linked = []) {
+// The most follow-up issues a merged pull request files: a review is a model's output, which
+// a steered diff could fill with dozens.
+export const FOLLOW_UPS_MAX = 10;
+
+// The comment listing the follow-ups filed (`filed`), those an issue already had (`linked`),
+// and the titles left past FOLLOW_UPS_MAX (`left`), quoted as code: a model wrote them, and
+// they mustn't mention anyone or format the comment.
+export function followUpsText(filed, linked = [], left = []) {
   const list = (ns) => ns.map((n) => `#${n}`).join(", ");
   const parts = [];
   if (filed.length) parts.push(`filed ${list(filed)}`);
   if (linked.length) parts.push(`already filed in ${list(linked)}`);
-  return `**Follow-ups** (\`${FOLLOW_UP_LABEL}\`): the reviews of this pull request listed ${filed.length + linked.length > 1 ? "these" : "this one"} for other issues: ${parts.join("; ")}.`;
+  if (left.length) {
+    parts.push(
+      `not filed, past ${FOLLOW_UPS_MAX} per pull request: ${left.map((t) => quote(t)).join(", ")}`,
+    );
+  }
+  const n = filed.length + linked.length + left.length;
+  return `**Follow-ups** (\`${FOLLOW_UP_LABEL}\`): the reviews of this pull request listed ${n > 1 ? "these" : "this one"} for other issues: ${parts.join("; ")}.`;
 }
 
 // A `pull_request` delivery that may start a review by itself → { repo, base, pr, author, own,
@@ -2306,7 +2317,7 @@ export function createReviews({
     const repo = p.repository?.full_name;
     const number = p.pull_request.number;
     if (!p.installation?.id || !repo || !number || !repoAllowed(config, repo)) return null;
-    return fileFollowUps(repo, p.pull_request);
+    return fileFollowUps(repo, p.pull_request, p.repository.default_branch || "main");
   }
 
   // The follow-ups of the App's reviews of merged pull request `pr` (GitHub's), each filed as an
@@ -2317,13 +2328,25 @@ export function createReviews({
   // same title in several reviews is filed once; one an issue with the label already has is
   // linked, not filed.
   // → the issues' numbers, or null.
-  async function fileFollowUps(repo, pr) {
+  async function fileFollowUps(repo, pr, base) {
     const key = taskKey(repo, prId(pr.number));
     const entry = reviewed.get(key);
     const listed = entry?.hasFollowUps || entry?.rounds?.some((r) => r.followUps);
     if (!listed || entry.followUpsAt) return null;
     const bot = config.bot?.toLowerCase();
     if (!bot) return null;
+    // The repo's settings now, from its default branch: a `review` block still there, without
+    // `follow_ups: false`. A config with errors files nothing (fail closed).
+    const { settings, errors } = await repoSettings(repo, base);
+    if (errors.length || !settings.review || settings.review.followUps === false) {
+      const why = errors.length
+        ? "its config has errors"
+        : !settings.review
+          ? "reviews are off now"
+          : "`review.follow_ups: false`";
+      log(`${key}: merged, its follow-ups not filed: ${why}`);
+      return null;
+    }
     const get = (path) => github(repo, "GET", path);
     // The App's, opening with a review's head line: another body of the App's (a run's reply
     // quoting one) never counts.
@@ -2382,9 +2405,15 @@ export function createReviews({
     const issue = linkedIssue(pr, repo, config.bot);
     const filed = [];
     const linked = [];
+    // Past FOLLOW_UPS_MAX filed, the titles only, listed for the maintainer.
+    const left = [];
     for (const [id, f] of found) {
       if (known.has(id)) {
         linked.push(known.get(id));
+        continue;
+      }
+      if (filed.length >= FOLLOW_UPS_MAX) {
+        left.push(f.title);
         continue;
       }
       const body = followUpBody(f, { number: pr.number, issue, site });
@@ -2401,9 +2430,9 @@ export function createReviews({
       known.set(id, made.number);
       filed.push(made.number);
     }
-    log(`${key}: merged, ${filed.length} follow-up issue(s) filed`);
-    if (!filed.length && !linked.length) return filed;
-    await reply(repo, pr.number, followUpsText(filed, linked));
+    log(`${key}: merged, ${filed.length} follow-up issue(s) filed, ${left.length} left`);
+    if (!filed.length && !linked.length && !left.length) return filed;
+    await reply(repo, pr.number, followUpsText(filed, linked, left));
     return filed;
   }
 

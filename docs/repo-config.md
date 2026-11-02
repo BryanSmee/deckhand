@@ -113,6 +113,7 @@ review:
   # ci_fix: 1 # CI fix runs per pull request, with fix (0 to the operator's MAX_FIX_ROUNDS)
   # request: [alice] # reviewers asked on Deckhand's pull request once it is ready, and again
   #                  # after a fix pushed (see Reviewers below); allowed users only
+  # follow_ups: false # don't file the reviews' follow-ups as issues after a merge (on by default)
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -170,6 +171,7 @@ projects:
 | `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)                                  |
 | `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                                         |
 | `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                              |
+| `review.follow_ups`                     | `true`                                  | `false`: the reviews' follow-ups aren't filed as issues once a pull request is merged (see Reviews)                                             |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                     |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                      |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                  |
@@ -504,10 +506,14 @@ token only reads, and Deckhand posts the review.
   reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
   (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
-  comments (only the comments Deckhand posted them as, recorded in `reviews.json`). A section
-  with nothing in it says `None.`, which is no item. A pull request closed without a merge files none. The issue's body says the text
-  is a review model's output, to check against the code, and quotes it. The review is told not
-  to list again a follow-up an earlier review of Deckhand's listed.
+  comments (only the comments Deckhand posted them as, recorded in `reviews.json`). Only a
+  bullet with its title in bold is a follow-up: `- No follow-ups.` or `None.` files nothing.
+  A pull request closed without a merge files none, and a merge files at most 10 (the rest
+  listed by title in the comment). The issue's body says the text is a review model's
+  output, to check against the code, and quotes it. The review is told not to list again a
+  follow-up an earlier review of Deckhand's listed. **`follow_ups: false`** turns the filing
+  off: the repository's config is read again from the default branch at the merge, and a
+  `review` block that is gone, or a config with errors, files nothing either.
 - **Comments**: remarks that aren't defects (a naming choice, a question, a suggestion, a
   nit), each marked **blocking** or **note**. A note never blocks nor caps the rating; the fix
   run applies it only when it is cheap and in scope, and a note alone never starts one. Nits
@@ -657,7 +663,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   run, so `fix: 3` can cost up to four reviews and three work runs per pull request.
 
 `on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
-`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix` and `request` are its only
+`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix`, `request` and `follow_ups` are its only
 keys: any other, or a bad value, is an error.
 
 #### Reviewers
