@@ -105,7 +105,8 @@ test("signed in, back to an MCP client's authorize page; never to another site",
   assert.match(value(back, "deckhand_next"), /^deckhand_next=$/);
   for (const elsewhere of ["https://evil.example.com/", "//evil.example.com/", "/api/state"]) {
     const asked = await s.get(`/auth/login?next=${encodeURIComponent(elsewhere)}`);
-    assert.equal(value(asked, "deckhand_next"), undefined);
+    // An earlier one, from an authorize page left half-way, goes too.
+    assert.match(value(asked, "deckhand_next"), /^deckhand_next=$/);
     const forged = await s.get(
       "/auth/callback?code=good&state=state1",
       `deckhand_oauth_state=state1; deckhand_next=${encodeURIComponent(elsewhere)}`,

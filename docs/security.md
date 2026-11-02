@@ -1981,8 +1981,12 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
 - **Registration** (`POST /oauth/register`, RFC 7591): public clients only (no client secret,
   whatever the client asks for), 1 to 5 redirect URIs, each `https://` or `http://` to
   `localhost`, `127.0.0.1` or `[::1]` (on the loopback, any port matches, RFC 8252); a custom
-  scheme (`cursor://`) is refused. At most 60 registrations an hour, all clients together; one
-  no one signs in with is gone after a day.
+  scheme (`cursor://`) is refused. At most 20 registrations an hour per source address (its /64
+  for IPv6), and 300 from all of them together; one no one signs in with is gone after a day.
+  What remains: someone with many addresses can still use up the 300 for an hour at a time,
+  stopping new clients from registering (those already registered sign in, and refresh,
+  as before); and behind a reverse proxy edge sees the proxy's address alone, so every client
+  shares one address's 20.
 - **Authorization** (`/oauth/authorize`): PKCE with `S256` is required (`plain`, or none, is
   refused); the client and its redirect URI must be registered, else the page says so and sends
   nobody anywhere. Someone not signed in goes through GitHub (`/auth/login?next=…`, which only
@@ -1991,9 +1995,11 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   allowed login gets that page, and so a code: a login outside `ALLOWED_USERS` is refused at
   GitHub's callback, as on the dashboard. The consent is a form posted once (its request,
   in edge's store for 10 minutes, bound to the login), from edge's own origin (`Origin`
-  checked, the session cookie `SameSite=Lax`); the page can't be framed.
+  checked: the page is served with `Referrer-Policy: same-origin`, under which the browser sends
+  it; the session cookie is `SameSite=Lax`); the page can't be framed.
 - **Tokens** (`/oauth/token`): the code (5 minutes, once; a code used twice ends the tokens it
-  gave) with its verifier, its client's id and redirect URI, becomes an opaque access token (an
+  gave; bound to the login's session epoch at the consent, so a sign-out before the exchange
+  voids it) with its verifier, its client's id and redirect URI, becomes an opaque access token (an
   hour) and a refresh token (30 days), bound to the login, the client and the resource
   (`<PUBLIC_URL>/mcp`, RFC 8707: a client naming another is refused). A refresh rotates the
   refresh token; one used twice (or two refreshes at once) ends its whole family, the client

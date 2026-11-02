@@ -23,6 +23,7 @@
 // user removed, signed out everywhere, or a client revoked in Settings is cut off at once.
 import { createHash, randomBytes } from "node:crypto";
 import { escape, page, same } from "../listener/html.mjs";
+import { sourceOf } from "../listener/deliveries.mjs";
 import { sameOrigin } from "../listener/web.mjs";
 import { readBody, send } from "../lib/http.mjs";
 
@@ -32,12 +33,15 @@ export const REFRESH_MS = 30 * 24 * 3600_000;
 const UNUSED_MS = 24 * 3600_000;
 const REQUEST_MS = 10 * 60_000;
 const CODE_MS = 5 * 60_000;
-// Registrations per hour, all clients together: a public endpoint, so capped. At most a day's
-// worth of unused ones are kept.
-const REGISTRATIONS_PER_HOUR = 60;
+// Registrations per hour: a public endpoint, so capped, per source address (its /64 for IPv6),
+// and all together as a backstop against many addresses. At most a day's worth of unused ones
+// are kept.
+const REGISTRATIONS_PER_SOURCE = 20;
+const REGISTRATIONS_PER_HOUR = 300;
 // Connected clients per login: a new one past that ends the oldest.
 const FAMILIES_PER_LOGIN = 20;
-// How often a token's use is written down (Settings' "last used").
+// How often a token's use is written down (Settings' "last used"), in a key of its own: never
+// in its family, whose value a refresh compares and sets.
 const USED_EVERY_MS = 60_000;
 const MAX_BODY = 16 * 1024;
 const MAX_REDIRECTS = 5;
@@ -54,10 +58,11 @@ const OFFERED = ["deckhand:read", "deckhand:work"];
 
 const key = {
   client: (id) => `mcp/clients/${id}`,
-  registrations: (hour) => `mcp/registrations/${hour}`,
+  registrations: (hour, source = "") => `mcp/registrations/${hour}${source && `/${source}`}`,
   request: (id) => `mcp/requests/${id}`,
   code: (hash) => `mcp/codes/${hash}`,
   family: (id) => `mcp/families/${id}`,
+  used: (id) => `mcp/used/${id}`,
   access: (hash) => `mcp/access/${hash}`,
   refresh: (hash) => `mcp/refresh/${hash}`,
   login: (login) => `mcp/logins/${login}`,
@@ -68,11 +73,12 @@ const digest = (token) => createHash("sha256").update(String(token)).digest("bas
 // The scopes asked for that Deckhand knows (others, `offline_access`…, are ignored), else the
 // offered ones.
 export function scopesOf(asked) {
-  const known = [...new Set(String(asked ?? "").split(/\s+/))].filter((s) =>
-    Object.hasOwn(SCOPES, s),
-  );
+  const known = knownScopes(asked);
   return known.length ? known : [...OFFERED];
 }
+
+const knownScopes = (asked) =>
+  [...new Set(String(asked ?? "").split(/\s+/))].filter((s) => Object.hasOwn(SCOPES, s));
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
@@ -214,9 +220,17 @@ export function createOAuth({
       return oauthError(res, "invalid_client_metadata", `grant_types: ${GRANTS.join(" and ")}.`);
     }
     const hour = Math.floor(now() / 3600_000);
-    const count = await store.increment(key.registrations(hour), 1, { ttlMs: 3600_000 });
-    if (count > REGISTRATIONS_PER_HOUR) {
-      log("MCP: a registration refused, too many this hour");
+    const source = sourceOf(req.socket.remoteAddress);
+    const fromSource = await store.increment(key.registrations(hour, source), 1, {
+      ttlMs: 3600_000,
+    });
+    // One address over its share isn't counted against everyone's.
+    const count =
+      fromSource > REGISTRATIONS_PER_SOURCE
+        ? 0
+        : await store.increment(key.registrations(hour), 1, { ttlMs: 3600_000 });
+    if (fromSource > REGISTRATIONS_PER_SOURCE || count > REGISTRATIONS_PER_HOUR) {
+      log(`MCP: a registration from ${source} refused, too many this hour`);
       return oauthError(
         res,
         "temporarily_unavailable",
@@ -258,7 +272,10 @@ export function createOAuth({
       button { padding: 0.6rem 1.2rem; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
       button.allow { border-color: var(--accent); background: var(--accent); color: #fff; }
       ul { padding-left: 1.2rem; } code { overflow-wrap: anywhere; }`;
-  const authPage = (res, status, title, html) => page(res, status, title, html, { css: CSS });
+  // `same-origin`, not page()'s `no-referrer`: under that one, a browser posts the consent form
+  // with `Origin: null`, which sameOrigin() refuses.
+  const authPage = (res, status, title, html) =>
+    page(res, status, title, html, { css: CSS, headers: { "referrer-policy": "same-origin" } });
 
   async function authorizeGet(req, res, url) {
     const p = url.searchParams;
@@ -298,7 +315,16 @@ Connect it again from the client.</p>`,
     const id = random(24);
     await store.set(
       key.request(id),
-      { login, client: client.id, redirect: to, challenge, scopes, state },
+      // The login's epoch now: a sign-out everywhere before the exchange voids the code too.
+      {
+        login,
+        client: client.id,
+        redirect: to,
+        challenge,
+        scopes,
+        state,
+        epoch: await auth.epoch(login),
+      },
       { ttlMs: REQUEST_MS },
     );
     const items = scopes.map((s) => `<li><code>${s}</code>: ${escape(SCOPES[s])}</li>`).join("");
@@ -378,6 +404,7 @@ on this Deckhand, with your rights on its dashboard:</p>
   async function revokeFamily(id, why) {
     const family = await store.get(key.family(id));
     await store.delete(key.family(id));
+    await store.delete(key.used(id));
     if (!family) return false;
     await changeList(family.login, (ids) => ids.filter((x) => x !== id));
     log(`MCP: ${family.login}'s client ${family.client} (${JSON.stringify(family.name)}) ${why}`);
@@ -390,7 +417,7 @@ on this Deckhand, with your rights on its dashboard:</p>
     const access = random(32);
     const refresh = random(32);
     const at = now();
-    const next = { ...family, refresh: digest(refresh), used: at, expires: at + REFRESH_MS };
+    const next = { ...family, refresh: digest(refresh), expires: at + REFRESH_MS };
     await store.set(
       key.access(digest(access)),
       { family: family.id, exp: at + ACCESS_MS },
@@ -432,11 +459,17 @@ on this Deckhand, with your rights on its dashboard:</p>
       return oauthError(res, "invalid_target", `The resource is ${resource()}.`);
     }
     const id = random(16);
-    if (!(await store.compareAndSet(key.code(hash), code, { ...code, used: true, family: id }))) {
+    // Kept as used for the rest of its life alone: a reuse within it ends the family.
+    const left = Math.max(1, code.issued + CODE_MS - now());
+    const used = { ...code, used: true, family: id };
+    if (!(await store.compareAndSet(key.code(hash), code, used, { ttlMs: left }))) {
       return oauthError(res, "invalid_grant", "This code was used already.");
     }
     if (!allowed(code.login)) {
       return oauthError(res, "invalid_grant", "This login isn't one of Deckhand's users.");
+    }
+    if (code.epoch !== (await auth.epoch(code.login))) {
+      return oauthError(res, "invalid_grant", "Signed out since this code was given.");
     }
     const client = await store.get(key.client(code.client));
     if (!client) return oauthError(res, "invalid_grant", "This client's registration expired.");
@@ -448,7 +481,7 @@ on this Deckhand, with your rights on its dashboard:</p>
       redirect: code.redirect,
       scopes: code.scopes,
       resource: resource(),
-      epoch: await auth.epoch(code.login),
+      epoch: code.epoch,
       created: now(),
     };
     // Past the cap, the oldest of the login's clients goes.
@@ -478,9 +511,9 @@ on this Deckhand, with your rights on its dashboard:</p>
     if (!ours(p.get("resource"))) {
       return oauthError(res, "invalid_target", `The resource is ${resource()}.`);
     }
-    // Fewer scopes may be asked for, never more.
-    const asked = p.get("scope");
-    const scopes = asked ? scopesOf(asked) : family.scopes;
+    // Fewer scopes may be asked for, never more; none Deckhand knows: those it has.
+    const asked = knownScopes(p.get("scope"));
+    const scopes = asked.length ? asked : family.scopes;
     if (scopes.some((s) => !family.scopes.includes(s))) {
       return oauthError(res, "invalid_scope", "More scopes than were granted.");
     }
@@ -526,18 +559,9 @@ on this Deckhand, with your rights on its dashboard:</p>
     if (!access || !(access.exp > now())) return null;
     const family = await live(access.family);
     if (!family || family.resource !== resource()) return null;
-    if (now() - (family.used ?? 0) > USED_EVERY_MS) {
-      // Best effort: a refresh that rotated it meanwhile wins.
-      await store
-        .compareAndSet(
-          key.family(family.id),
-          family,
-          { ...family, used: now() },
-          {
-            ttlMs: Math.max(1, (family.expires ?? now() + REFRESH_MS) - now()),
-          },
-        )
-        .catch(() => false);
+    const used = await store.get(key.used(family.id));
+    if (now() - (used ?? 0) > USED_EVERY_MS) {
+      await store.set(key.used(family.id), now(), { ttlMs: REFRESH_MS }).catch(() => false);
     }
     return { login: family.login, scopes: family.scopes, client: family.client };
   }
@@ -564,11 +588,16 @@ on this Deckhand, with your rights on its dashboard:</p>
   // Settings: the login's clients, the newest first.
   async function clients(login) {
     const ids = (await store.get(key.login(login))) ?? [];
-    const all = await Promise.all(ids.map((id) => live(id)));
+    const all = await Promise.all(
+      ids.map(async (id) => {
+        const family = await live(id);
+        return family && { family, used: await store.get(key.used(id)) };
+      }),
+    );
     return all
       .filter(Boolean)
       .reverse()
-      .map(({ id, name, client, redirect, scopes, created, used }) => ({
+      .map(({ family: { id, name, client, redirect, scopes, created }, used }) => ({
         id,
         name,
         client,

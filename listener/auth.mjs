@@ -168,7 +168,8 @@ from edge's logs.</p>`,
       location: target.href,
       "set-cookie": [
         cookie(STATE_COOKIE, state, STATE_MS),
-        ...(next ? [cookie(NEXT_COOKIE, encodeURIComponent(next), STATE_MS)] : []),
+        // None: an earlier one, from an authorize page left half-way, goes.
+        next ? cookie(NEXT_COOKIE, encodeURIComponent(next), STATE_MS) : cookie(NEXT_COOKIE, "", 0),
       ],
       "cache-control": "no-store",
     });

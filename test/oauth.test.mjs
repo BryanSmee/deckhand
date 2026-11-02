@@ -2,6 +2,7 @@
 // GitHub's answers injected, edge's store in memory, and one clock for both.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { request } from "node:http";
 import { test } from "node:test";
 import { createOAuth, redirectUri, registeredRedirect, scopesOf } from "../edge/oauth.mjs";
 import { createAuth, SESSION_COOKIE } from "../listener/auth.mjs";
@@ -88,13 +89,29 @@ async function serveOAuth(t, { storeUrl = "memory:", clock: start = 1_000_000_00
     return set?.split(";")[0] ?? null;
   }
 
-  async function register(redirect_uris = [REDIRECT], extra = {}) {
-    const res = await call("/oauth/register", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ client_name: "Claude Code", redirect_uris, ...extra }),
+  // `from`: the address it registers from, 127.0.0.1 by default.
+  async function register(redirect_uris = [REDIRECT], extra = {}, from = "127.0.0.1") {
+    const body = JSON.stringify({ client_name: "Claude Code", redirect_uris, ...extra });
+    const { port } = new URL(base);
+    return new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port,
+          method: "POST",
+          path: "/oauth/register",
+          localAddress: from,
+          headers: { "content-type": "application/json" },
+        },
+        (res) => {
+          let text = "";
+          res.on("data", (d) => (text += d));
+          res.on("end", () => resolve({ status: res.statusCode, body: JSON.parse(text) }));
+        },
+      );
+      req.on("error", reject);
+      req.end(body);
     });
-    return { status: res.status, body: await res.json() };
   }
 
   const authorizeQuery = (client, extra = {}) =>
@@ -230,10 +247,11 @@ test("registration: public clients, loopback or https:// redirect URIs only", as
   assert.match(await page.text(), /Unknown client/);
 });
 
-test("registrations are capped per hour", async (t) => {
+test("registrations are capped per hour and source address: another's still get through", async (t) => {
   const s = await serveOAuth(t);
-  for (let i = 0; i < 60; i++) assert.equal((await s.register()).status, 201);
+  for (let i = 0; i < 20; i++) assert.equal((await s.register()).status, 201);
   assert.equal((await s.register()).status, 429);
+  assert.equal((await s.register([REDIRECT], {}, "127.0.0.2")).status, 201);
   s.later(3600_000);
   assert.equal((await s.register()).status, 201);
 });
@@ -472,6 +490,83 @@ test("the client's own revocation ends its family", async (t) => {
   const res = await s.form("/oauth/revoke", { token: tokens.access_token, client_id: client });
   assert.equal(res.status, 200);
   assert.equal((await s.mcp(tokens.access_token)).status, 401);
+});
+
+test("the consent page lets the browser send its Origin; a post without one is refused", async (t) => {
+  const s = await serveOAuth(t);
+  const cookie = await s.signIn();
+  const client = (await s.register()).body.client_id;
+  const page = await s.call(`/oauth/authorize?${s.authorizeQuery(client)}`, { cookie });
+  // Under no-referrer, a browser posts the form with `Origin: null`.
+  assert.equal(page.headers.get("referrer-policy"), "same-origin");
+  const request = /name="request" value="([^"]+)"/.exec(await page.text())[1];
+  for (const origin of ["null", undefined]) {
+    const res = await s.call("/oauth/authorize", {
+      method: "POST",
+      cookie,
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        ...(origin && { origin }),
+      },
+      body: new URLSearchParams({ request, decision: "allow" }).toString(),
+    });
+    assert.equal(res.status, 403);
+  }
+});
+
+test("a sign-out everywhere between the consent and the exchange voids the code", async (t) => {
+  const s = await serveOAuth(t);
+  const cookie = await s.signIn();
+  const client = (await s.register()).body.client_id;
+  const code = (await s.consent(cookie, client)).searchParams.get("code");
+  await s.call("/auth/logout", { method: "POST", cookie });
+  const res = await s.exchange(client, code);
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_grant");
+});
+
+test("a used code is kept only for the rest of its life", async (t) => {
+  const s = await serveOAuth(t);
+  const cookie = await s.signIn();
+  const client = (await s.register()).body.client_id;
+  const code = (await s.consent(cookie, client)).searchParams.get("code");
+  assert.equal((await s.exchange(client, code)).status, 200);
+  const stored = `mcp/codes/${createHash("sha256").update(code).digest("base64url")}`;
+  assert.equal((await s.store.get(stored)).used, true);
+  s.later(5 * 60_000);
+  assert.equal(await s.store.get(stored), null);
+});
+
+test("using a token never changes its family: a refresh racing a /mcp call goes through", async (t) => {
+  const s = await serveOAuth(t);
+  const { client, cookie, tokens } = await s.connect();
+  const list = async () => (await (await s.call("/api/mcp/clients", { cookie })).json()).clients[0];
+  // Not used yet: no "last used".
+  assert.equal((await list()).used, null);
+  const familyKey = `mcp/families/${(await s.store.get("mcp/logins/alice"))[0]}`;
+  const before = await s.store.get(familyKey);
+  s.later(2 * 60_000);
+  assert.equal((await s.mcp(tokens.access_token)).status, 200);
+  assert.deepEqual(await s.store.get(familyKey), before);
+  assert.ok((await list()).used > before.created);
+  assert.equal((await s.refresh(client, tokens.refresh_token)).status, 200);
+});
+
+test("a refresh asking only for scopes Deckhand doesn't know keeps those it has", async (t) => {
+  const s = await serveOAuth(t);
+  const cookie = await s.signIn();
+  const client = (await s.register()).body.client_id;
+  const back = await s.consent(cookie, client, { extra: { scope: "deckhand:read" } });
+  const tokens = await (await s.exchange(client, back.searchParams.get("code"))).json();
+  assert.equal(tokens.scope, "deckhand:read");
+  const res = await s.form("/oauth/token", {
+    grant_type: "refresh_token",
+    refresh_token: tokens.refresh_token,
+    client_id: client,
+    scope: "offline_access",
+  });
+  assert.equal(res.status, 200);
+  assert.equal((await res.json()).scope, "deckhand:read");
 });
 
 test("tokens survive a restart: edge's store keeps them", async (t) => {
