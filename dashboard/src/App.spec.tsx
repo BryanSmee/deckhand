@@ -76,6 +76,17 @@ test("with slots for auto-pickup: the run count says how many auto-picked runs h
   expect(within(row).getByText("Auto-pickup")).toBeTruthy();
 });
 
+test("a reserved slot a pick holds between runs (asking, between loop steps) shows as held", () => {
+  history.replaceState(null, "", "#/tasks");
+  const held = makeState(
+    { running: 1, maxParallel: 4, autoPickup: { slots: 1, running: 0, taken: 1 } },
+    [],
+  );
+  render(<Dashboard state={held} error={null} />);
+  expect(screen.getByText("1 + 0 auto of 4 running")).toBeTruthy();
+  expect(screen.getByText("1 queued · 1 slot for auto-pickup (1 held between runs)")).toBeTruthy();
+});
+
 test("a done task whose pull request is ready shows the ready tone, in the list and open", () => {
   history.replaceState(null, "", `#/?task=${encodeURIComponent("acme/api#131")}`);
   render(<Dashboard state={state} error={null} />);

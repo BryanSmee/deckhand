@@ -580,7 +580,8 @@ const pulls = createPulls({
 // needs-input label taken off), while each is its task's last (dismissals.mjs).
 const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
-// Auto-picked work that is over: its issue closed, its pull request merged or closed (picks.mjs).
+// Auto-picked work that is over: its issue closed, its pull request merged or closed, or the
+// sweep gave its slot to the next issue (picks.mjs, tasks.mjs releasePicks()).
 const picks = createPicks({ path: join(config.dataDir, "picks.json") });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).

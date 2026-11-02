@@ -893,7 +893,10 @@ test("a picked run that asked keeps its slot until answered: the answer is the p
     assert.equal(p.pickedCount(), 1);
     p.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
     assert.equal(p.pickedCount(), 1);
-    const { pickup } = setup({ repos: { "org/a": { issues: [issue(2, 1)] } }, taken: 1 });
+    const { pickup } = setup({
+      repos: { "org/a": { issues: [issue(2, 1)] } },
+      taken: p.pickedCount(),
+    });
     assert.deepEqual(await pickup.sweep(), []);
     // The answer runs in the reserved slot, as the pick's.
     const answer = await p.comment(1);

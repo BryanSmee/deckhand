@@ -183,12 +183,14 @@ export function createHttp(ctx) {
       running: ctx.running,
       queued: queued.length,
       maxParallel: config.maxParallel,
-      // AUTO_PICKUP_SLOTS, within maxParallel, and how many auto-picked runs hold them now;
-      // absent while it is off.
+      // AUTO_PICKUP_SLOTS, within maxParallel, how many auto-picked runs hold them now, and how
+      // many slots the picks hold (tasks.mjs pickedCount()): those running, queued, asking or
+      // between two loop steps, what the sweep counts; absent while it is off.
       ...(config.autoPickupSlots && {
         autoPickup: {
           slots: config.autoPickupSlots,
           running: [...tasks.values()].filter((t) => t.running && pickedTask(t)).length,
+          taken: ctx.pickedCount?.() ?? 0,
         },
       }),
       // Each repo read so far: its inbox issues and discussions category (New request).
