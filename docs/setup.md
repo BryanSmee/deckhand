@@ -659,7 +659,8 @@ auto-picked issue is cancelled.
   CI, its next step on its way), so the next issue isn't picked meanwhile. People's comments
   then are in the slot as well. Once the slot is free (the picked run asked questions or left
   no loop going, the loop is over, the issue closed or its pull request merged or closed), what
-  comes next is a run like any other, a reopened issue too. The policies still see those runs
+  comes next is a run like any other, a reopened issue too. Once a sweep found it free, the
+  pick is over for good: a loop its draft starts later doesn't take the slot back. The policies still see those runs
   as started by the listener or by the comment.
 - **What is skipped.** An issue with something live on the dashboard (running, queued,
   waiting, asking), the needs-input label (`NEEDS_INPUT_LABEL`), an open issue it is "blocked

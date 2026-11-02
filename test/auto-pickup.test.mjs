@@ -63,6 +63,7 @@ function setup({
   stuck = [],
   refuse = false,
   load,
+  release,
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob,carol",
@@ -156,6 +157,7 @@ function setup({
     },
     live: liveNow,
     taken: () => taken,
+    release,
     load,
     log: (line) => p.logs.push(line),
     every: () => null,
@@ -992,4 +994,63 @@ test("between two loop steps of an auto-picked issue, nothing queued, its slot s
     idle(free);
     assert.equal(free.pickedCount(), 0, JSON.stringify(state));
   }
+});
+
+test("a slot the sweep counted free is given up for good: the loop its draft starts later runs in a standard slot", async (t) => {
+  const picks = createPicks({ path: join(tempDir(t), "picks.json") });
+  const draft = { "org/app#1": { number: 5, state: "draft" } };
+  const reviews = {};
+  const p = pickTasks({ runs: [pickedRun(1)], pulls: draft, reviews, picks });
+  // The picked run left a draft, no loop going: its slot is free, and the sweep gives it up
+  // before it picks #2.
+  assert.equal(p.pickedCount(), 0);
+  const released = [];
+  const { pickup } = setup({
+    repos: { "org/a": { issues: [issue(2, 1)] } },
+    taken: p.pickedCount(),
+    release: () => (released.push(true), p.releasePicks()),
+  });
+  assert.equal((await pickup.sweep()).length, 1);
+  assert.equal(released.length, 1);
+  assert.ok(picks.ended("org/app#1", "run-1"));
+  await p.queue(2, { trigger: "work", author: "alice", autoPickup: true });
+  p.schedule();
+  assert.deepEqual(p.started, ["2"]);
+  // The draft marked ready: its review, decided, isn't the pick's, and starts at once.
+  draft["org/app#1"].state = "ready";
+  reviews["org/app#pr-5"] = { deciding: "review" };
+  const review = await p.review(1);
+  assert.equal(review.autoPickup, undefined);
+  p.schedule();
+  assert.deepEqual(p.started, ["2", "1"]);
+  // A full sweep gives nothing up.
+  const full = setup({ taken: 1, release: () => released.push(true) });
+  assert.deepEqual(await full.pickup.sweep(), []);
+  assert.equal(released.length, 1);
+});
+
+test("releasePicks(): a pick still holding its slot (queued, running, its loop going) is kept", async (t) => {
+  const picks = createPicks({ path: join(tempDir(t), "picks.json") });
+  const runs = [pickedRun(1), pickedRun(2), pickedRun(3, { status: "needs-input" })];
+  const p = pickTasks(looping({ runs, picks }));
+  // #1's loop waits for CI; #2 has its picked item queued; #3 asked: given up.
+  await p.queue(2, { trigger: "work", author: "alice", autoPickup: true });
+  p.releasePicks();
+  assert.deepEqual(
+    [1, 2, 3].map((n) => picks.ended(`org/app#${n}`, `run-${n}`)),
+    [false, false, true],
+  );
+});
+
+test("picks.mjs prune(): an entry whose run is no longer its task's last goes", (t) => {
+  const path = join(tempDir(t), "picks.json");
+  const picks = createPicks({ path });
+  picks.end("Org/App#1", "run-1");
+  picks.end("org/app#2", "run-2");
+  picks.prune([pickedRun(1, { id: "run-7" }), pickedRun(1), pickedRun(2)]);
+  const read = createPicks({ path });
+  assert.deepEqual(
+    [read.ended("org/app#1", "run-1"), read.ended("org/app#2", "run-2")],
+    [false, true],
+  );
 });

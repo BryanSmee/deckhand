@@ -911,6 +911,7 @@ ctx.autoPickup = createAutoPickup({
     return (key) => taskBusy(key) || keys.has(key.toLowerCase());
   },
   taken: () => ctx.pickedCount(),
+  release: () => ctx.releasePicks(),
   load: (repo) => ctx.repoLoad(repo),
   log,
 });
@@ -970,6 +971,7 @@ const spelled = await ctx.unifySpellings({
 for (const state of keyed) state.respell(spelled);
 // A run since a dismissal shows its task again: its entry is stale.
 dismissals.prune(ctx.runs);
+picks.prune(ctx.runs);
 // Issues and pull requests that closed or merged after their run asked, while no listener heard
 // it: their questions set aside, as the `closed` delivery would have (http.mjs). GitHub says
 // when each closed; a run that asked after that still waits.

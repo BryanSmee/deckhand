@@ -139,7 +139,8 @@ export function pulledIssues(pulls, repo, bot) {
 // `live()`: a predicate of task keys, whether the task has something live (the dashboard's
 // tasks, or a run going or queued), as things are now: it rebuilds the dashboard's tasks, so
 // a sweep builds one for all its candidates, and start() another right before its comment. `taken()`: how many reserved slots auto-picked tasks hold, running or queued
-// (tasks.mjs pickedCount()). `load(repo)`: how many of the repo's tasks are running or queued
+// (tasks.mjs pickedCount()); `release()`: the picks that hold none of them end for good before
+// they are offered (tasks.mjs releasePicks()). `load(repo)`: how many of the repo's tasks are running or queued
 // (tasks.mjs repoLoad()).
 export function createAutoPickup({
   config,
@@ -150,6 +151,7 @@ export function createAutoPickup({
   reply,
   live,
   taken,
+  release = () => {},
   load = () => 0,
   log = () => {},
   every = (fn, ms) => setInterval(fn, ms),
@@ -201,6 +203,8 @@ export function createAutoPickup({
   async function pick() {
     let free = slots - taken();
     if (free <= 0) return [];
+    // What no longer holds its slot gives it up for good, before it is offered.
+    release();
     const candidates = [];
     // Those whose list couldn't be read this sweep: what is kept of their issues stays.
     const unread = new Set();

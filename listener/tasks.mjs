@@ -540,6 +540,27 @@ export function createTasks(ctx) {
     return counted + between.length;
   }
 
+  // Before the sweep offers the reserved slots it counted free (auto-pickup.mjs): the picks
+  // that hold none any more end for good (picks.mjs), their task's last run then. A loop their
+  // pull request starts later (a draft marked ready, a CI step that stopped run again) is then
+  // a run like any other: it can't take back a slot the sweep gave to the next issue.
+  function releasePicks() {
+    if (!ctx.picks) return;
+    const byId = new Map([...tasks].map(([key, t]) => [taskId(key), t]));
+    const seen = new Set();
+    for (const r of ctx.runs ?? []) {
+      const id = taskId(r.key);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      if (!r.autoPickup || ctx.picks.ended(r.key, r.id)) continue;
+      const t = byId.get(id);
+      if (t && pickedTask(t) && (t.running || t.pending.length)) continue;
+      const repo = r.repo ?? parseKey(r.key)?.repo;
+      if (repo && loopHolds(r.key, repo)) continue;
+      ctx.picks.end(r.key, r.id);
+    }
+  }
+
   // How many of `repo`'s tasks are running or queued: what its max_parallel is held against
   // before the sweep picks one of its issues (auto-pickup.mjs).
   function repoLoad(repo) {
@@ -560,6 +581,7 @@ export function createTasks(ctx) {
     schedule,
     queueOrder,
     pickedCount,
+    releasePicks,
     repoLoad,
   };
 }
