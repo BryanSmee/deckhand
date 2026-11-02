@@ -913,7 +913,36 @@ test("logs: the same append through two copies at once is written once", async (
   const id = "dh-a-1000";
   const data = Buffer.from("one line\n");
   assert.deepEqual(await Promise.all([a.append(id, 0, data), b.append(id, 0, data)]), [9, 9]);
-  assert.equal((await store.readBlob(`logs/${id}`)).toString(), "one line\n");
+  assert.equal((await store.readBlob(`logs/${id}/0`)).toString(), "one line\n");
+});
+
+// The orchestrator marks a phase's first line (a step of the run) and the run's end: the
+// runner's segments close there (logs.mjs), and the log reads back whole.
+test("a run's log through the client: a step starts a segment, the run's end closes the last", async (t) => {
+  const store = fileStore();
+  const a = await copy(t, { store, backend: host() });
+  const { logs } = client(a.url);
+  const id = "dh-o-a-1-1";
+  const file = logs.open(id);
+  file.write("setup\n");
+  file.write("more setup\n");
+  file.write('{"phase":"work"}\n', { step: true });
+  file.write("work\n");
+  file.close();
+  assert.equal(await file.flushed(), true);
+  assert.deepEqual(await store.get(`logs/${id}/index`), {
+    segments: [
+      { at: 0, size: 17, where: "store" },
+      { at: 17, size: 22, where: "store" },
+    ],
+    open: 39,
+  });
+  assert.equal(await logs.text(id), 'setup\nmore setup\n{"phase":"work"}\nwork\n');
+  // A read answers from one segment only: the dashboard goes on from where it ends.
+  assert.equal((await logs.read(id, { offset: 11 })).data.toString(), "setup\n");
+  assert.equal(await logs.remove(id), true);
+  assert.equal(await store.get(`logs/${id}/index`), null);
+  assert.equal(await store.blobSize(`logs/${id}/0`), null);
 });
 
 // An update stops a copy: its lease goes once its calls are done, so the other copy acts at once.

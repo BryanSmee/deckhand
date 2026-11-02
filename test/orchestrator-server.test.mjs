@@ -407,16 +407,26 @@ async function fakeGitHub(files = {}) {
 }
 
 // The runs' logs, as the runner keeps them (its store's blobs, runner/logs.mjs): their texts, by
-// run id. Asked again until `ready(texts)` holds, for one still on its way to the runner.
+// run id, their segments (`logs/<run>/<n>`) in order. Asked again until `ready(texts)` holds,
+// for one still on its way to the runner.
 function runLogs(dir) {
   const blobs = join(dir, "runner-store", "blobs");
   if (!existsSync(blobs)) return new Map();
-  return new Map(
-    readdirSync(blobs)
-      .map((file) => [decodeURIComponent(file), file])
-      .filter(([key]) => key.startsWith("logs/"))
-      .map(([key, file]) => [key.slice("logs/".length), readFileSync(join(blobs, file), "utf8")]),
-  );
+  const segments = readdirSync(blobs)
+    .map((file) => [decodeURIComponent(file).match(/^logs\/([^/]+)(?:\/(\d+))?$/), file])
+    .filter(([key]) => key)
+    .map(([[, id, n], file]) => ({ id, n: n === undefined ? -1 : Number(n), file }))
+    .sort((a, b) => a.n - b.n);
+  const texts = new Map();
+  const shapes = new Map();
+  for (const { id, n, file } of segments) {
+    // A log is one blob (before segments, n -1) or segments, never both.
+    const shape = n < 0 ? "blob" : "segments";
+    if (shapes.get(id) && shapes.get(id) !== shape) throw new Error(`${id}: a blob and segments`);
+    shapes.set(id, shape);
+    texts.set(id, (texts.get(id) ?? "") + readFileSync(join(blobs, file), "utf8"));
+  }
+  return texts;
 }
 
 // The one run's log of a test with a single run, once it is all at the runner: its live state
@@ -1140,6 +1150,18 @@ describe("listener", options, () => {
       [header.provider, header.credential, header.auth],
       ["anthropic", null, "plan"],
     );
+    // At the runner, in segments: one per step of the run (its phases), the last closed at its
+    // end (runner/logs.mjs).
+    const [[id, text]] = runLogs(dir);
+    const store = openStore(`file://${join(dir, "runner-store")}`);
+    t.after(() => store.close());
+    const index = () => store.get(`logs/${id}/index`);
+    await waitUntil(async () => (await index())?.open === Buffer.byteLength(text), {
+      what: "its last segment closed",
+    });
+    const { segments } = await index();
+    assert.ok(segments.length >= 2, `${segments.length} segments`);
+    assert.ok(segments.every((s) => s.size > 0));
   });
 
   test("through a gateway: its token stays out too, and opus means the gateway's model", async (t) => {
@@ -1512,6 +1534,14 @@ describe("listener", options, () => {
     await until(
       () => [...runLogs(dir).values()][0]?.includes("Its sandbox exited with code 3"),
       "its note",
+    );
+    // That note came after the run's end: its log's last segment is closed after it all the same.
+    const [[id, text]] = runLogs(dir);
+    const store = openStore(`file://${join(dir, "runner-store")}`);
+    t.after(() => store.close());
+    await waitUntil(
+      async () => (await store.get(`logs/${id}/index`))?.open === Buffer.byteLength(text),
+      { what: "its last segment closed" },
     );
   });
 

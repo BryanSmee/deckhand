@@ -393,6 +393,8 @@ services:
       # against again (runner/spec-check.mjs, runner/builds.mjs), with what its
       # policies grant, asked of the policy service (POLICY_SERVICE_URL, its default).
       GRANTS_DIR: ${GRANTS_DIR:-}
+      # Megabytes a run's log keeps in one segment of the runner's store at most.
+      LOG_SEGMENT_MB: ${LOG_SEGMENT_MB:-}
       NAME_PREFIX: ${NAME_PREFIX:-}
       RUNNER: ${RUNNER:-}
       SANDBOX_ENGINE: ${SANDBOX_ENGINE:-}
