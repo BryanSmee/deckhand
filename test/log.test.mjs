@@ -1,6 +1,9 @@
 // The services' own log lines (lib/log.mjs, #547): JSON or text, levels, redaction, and the
 // request, repository, issue and run they belong to.
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import {
   createLogger,
@@ -14,6 +17,7 @@ import {
   withRequest,
 } from "../lib/log.mjs";
 import { REDACTED } from "../lib/redact.mjs";
+import { needsSignals } from "./helpers.mjs";
 
 const NOW = () => new Date("2026-11-02T10:00:00.000Z");
 
@@ -218,3 +222,32 @@ test("deliveryContext: edge's request ID, the repository and the issue, pull req
   assert.deepEqual([old.repo, old.issue], [null, null]);
   assert.match(deliveryContext(undefined).request, /^[0-9a-f]{16}$/);
 });
+
+// A service whose stdout's reader went away (a pipe closed, a log reader restarting) goes on:
+// its lines are lost, the service isn't (#547).
+test(
+  "a line written once stdout's reader is gone: the process goes on",
+  { skip: needsSignals },
+  async () => {
+    const log = pathToFileURL(join(import.meta.dirname, "..", "lib", "log.mjs")).href;
+    const script = `
+    const { createLogger } = await import(${JSON.stringify(log)});
+    const log = createLogger({ service: "test", env: {} });
+    process.stdin.once("data", () => {
+      for (let i = 0; i < 1000; i++) log.info("line " + i);
+      setTimeout(() => (process.stderr.write("alive"), process.exit(0)), 100);
+    });
+  `;
+    const child = spawn(process.execPath, ["--input-type=module", "-e", script], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let err = "";
+    child.stderr.on("data", (d) => (err += d));
+    // The reader gone before the first line, then the child told to write.
+    child.stdout.destroy();
+    child.stdin.end("go");
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 0, err);
+    assert.equal(err, "alive");
+  },
+);
