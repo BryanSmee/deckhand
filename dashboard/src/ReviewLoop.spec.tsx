@@ -128,7 +128,12 @@ test("its row says the round while in review, then what the loop left", () => {
     within(rounds)
       .getAllByRole("listitem")
       .map((li) => li.textContent),
-  ).toEqual(["R0 1 critical · 3 high · 1 low", "R1 2 high", "R2 2 high · 1 mediumno progress"]);
+  ).toEqual([
+    "R0 1 critical · 3 high · 1 low",
+    "R1 2 high",
+    // The last one's commit in plain text, not just its tooltip.
+    "R2 2 high · 1 mediumno progresssha-2",
+  ]);
 });
 
 test("a clean loop: plain Ready for review, its rounds still listed", () => {
@@ -241,4 +246,25 @@ test("ready before its loop began (no review yet), the loop's end still notifies
     <Dashboard state={at({ state: "done", pr, review: loop() }, state.now + 8000)} error={null} />,
   );
   expect(FakeNotification.shown).toHaveLength(2);
+});
+
+test("a maintainer's own review brings no second ready notification", () => {
+  vi.stubGlobal("Notification", FakeNotification);
+  FakeNotification.shown = [];
+  const pr = {
+    ...state.tasks.find((t) => t.key === KEY)!.pr!,
+    state: "ready" as const,
+    readyAt: state.now + 1000,
+  };
+  const { rerender } = render(<Dashboard state={state} error={null} />);
+  const at = (over: Partial<Task>, now: number) => ({ ...withReview(state, over), now });
+  rerender(<Dashboard state={at({ state: "done", pr }, state.now + 2000)} error={null} />);
+  expect(FakeNotification.shown).toHaveLength(1);
+  // Reviewed from the dashboard, no loop: a round of theirs, nothing new to say.
+  const theirs = { ...round(0, { high: 1 }, 1), at: state.now + 3000, manual: true };
+  const manual = loop({ loop: "rounds-out", round: 0, rounds: 0, history: [theirs], manual: true });
+  rerender(
+    <Dashboard state={at({ state: "done", pr, review: manual }, state.now + 4000)} error={null} />,
+  );
+  expect(FakeNotification.shown).toHaveLength(1);
 });

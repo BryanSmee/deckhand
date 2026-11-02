@@ -16,7 +16,7 @@ import { createPreparation } from "./preparation.mjs";
 import { openingMessages, promptFor } from "./prompts.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { askAfterRun } from "./reviewers.mjs";
-import { postReview } from "./reviews.mjs";
+import { postReview, reviewStart } from "./reviews.mjs";
 import {
   addRun,
   enterPhase,
@@ -361,6 +361,11 @@ export function createRuns(ctx) {
     // A review is told what it may find without requesting changes.
     const allowed =
       live.mode === "review" ? (await reviewTolerance(task, items)).allowed : undefined;
+    // The commit it reviews, the pull request's head at its start: its prompt pins it there
+    // (reviewPrompt()) and its review is posted there (postReview()), so a push while it runs
+    // is left for the next review.
+    const start = live.mode === "review" ? await reviewStart(ctx, task.repo, live.replyTo) : null;
+    if (live.mode === "review") live.reviewFrom = start?.sha ?? null;
     const prompt = promptFor(task, {
       mode: live.mode,
       text,
@@ -375,6 +380,7 @@ export function createRuns(ctx) {
       allowed,
       // A review the CI step queued before CI passed (reviews.mjs ciDecide()).
       ciNote: live.mode === "review" ? (items.findLast((i) => i.ciNote)?.ciNote ?? null) : null,
+      reviewed: start,
       capabilities: live.capabilities,
     });
     // A run without `pull` mounts nothing (access.mjs bareAccess()), nor one with the open
@@ -816,7 +822,7 @@ export function createRuns(ctx) {
         live.replyTo,
         hidden(live, result.text),
         footer,
-        { allowed, full: runLink(task) },
+        { allowed, full: runLink(task), from: live.reviewFrom ?? null },
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
       live.reviewed = { number: live.replyTo, posted, auto };

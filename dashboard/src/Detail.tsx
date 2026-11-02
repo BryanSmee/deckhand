@@ -24,7 +24,9 @@ import {
   modeOf,
   PR_NAMES,
   reviewOffers,
+  reviewOutdated,
   runName,
+  shortSha,
   taskTone,
   titleOf,
 } from "./format";
@@ -174,6 +176,7 @@ export function Detail({
   };
   // Review or Fix of its pull request, its review loop over.
   const offers = reviewOffers(t);
+  const outdated = reviewOutdated(t);
   const pending = reviewing?.key === t.key ? reviewing.action : null;
   const review = async (action: "review" | "fix") => {
     setReviewing({ key: t.key, action });
@@ -204,7 +207,11 @@ export function Detail({
         pending={pending === "review"}
         pendingLabel="Reviewing…"
         disabled={pending === "fix"}
-        title="Reviews the pull request's head now, as /mode review does"
+        title={
+          outdated
+            ? `Reviews the new head, ${shortSha(outdated.head)}, as /mode review does`
+            : "Reviews the pull request's head now, as /mode review does"
+        }
         shortcut="review"
         onClick={() => review("review")}
       >

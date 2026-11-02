@@ -237,6 +237,38 @@ test("postReview: one review at the head commit, its event from the findings", a
   assert.deepEqual(gh.replies, []);
 });
 
+test("postReview: on the commit the run started from, when a push came meanwhile (#535)", async () => {
+  const gh = fakeGitHub();
+  const posted = await postReview(gh, "org/repo", 5, MESSAGE, "f", { from: "start1" });
+  const post = gh.calls.find((c) => c.method === "POST");
+  assert.equal(post.body.commit_id, "start1");
+  // Its places linked at that commit too; the pull request as it is now kept for the rest.
+  assert.match(post.body.body, /blob\/start1\//);
+  assert.deepEqual([posted.head, posted.pr.head.sha], ["start1", "abc123"]);
+  // Not known: the head now, as before.
+  assert.equal((await postReview(fakeGitHub(), "org/repo", 5, MESSAGE, "f")).head, "abc123");
+  // GitHub refusing that commit (force-pushed away, say): a review at the head now, not a plain
+  // comment; still the commit reviewed for its round, so the dashboard says it is outdated.
+  const gone = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": [422, 422, 200] });
+  const moved = await postReview(gone, "org/repo", 5, MESSAGE, "f", { from: "start1" });
+  const posts = gone.calls.filter((c) => c.method === "POST");
+  assert.deepEqual(
+    posts.map((c) => [c.body.event, c.body.commit_id]),
+    [
+      ["REQUEST_CHANGES", "start1"],
+      ["COMMENT", "start1"],
+      ["REQUEST_CHANGES", "abc123"],
+    ],
+  );
+  assert.deepEqual([moved.event, moved.head], ["REQUEST_CHANGES", "start1"]);
+  assert.deepEqual(gone.replies, []);
+  // At the head already: no second try, the plain comment as before.
+  const refused = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": 422 });
+  const same = await postReview(refused, "org/repo", 5, MESSAGE, "f", { from: "abc123" });
+  assert.equal(refused.calls.filter((c) => c.method === "POST").length, 2);
+  assert.deepEqual([same.event, refused.replies.length], [null, 1]);
+});
+
 test("postReview: the App's own pull request, unparsed messages, refusals", async () => {
   // GitHub refuses changes requested by a pull request's author (the App's own): a comment.
   const own = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": [422, 200] });
@@ -950,13 +982,49 @@ test("review loop: clean, or stopped when no fix run follows a blocking review",
   await failed.review(HIGH_ONE);
   await failed.fixed("sha-2", "error");
   assert.equal(failed.loop().loop, "stopped");
-  // A maintainer's review (`/mode review`) isn't the loop's.
-  const manual = await loopSetup(t);
+  // A maintainer's review (`/mode review`) isn't the loop's: recorded all the same (#535),
+  // marked as theirs, so the dashboard shows it as "Reviews" and a commit pushed after it.
+  const manual = await loopSetup(t, "review:\n  on: ready\n");
   await manual.reviews.settle(
     { repo: "org/repo", number: 5, base: "trunk", settings: manual.read.settings, auto: false },
     posted(HIGH_ONE),
   );
-  assert.equal(manual.loop(), null);
+  const reviewed = manual.loop();
+  assert.deepEqual([reviewed.loop, reviewed.manual], ["rounds-out", true]);
+  assert.deepEqual(
+    reviewed.history.map((r) => [r.round, r.head, r.blocking, r.manual]),
+    [[0, "sha-1", 1, true]],
+  );
+  // The loop's own review after it: no longer only a maintainer's.
+  await manual.review(HIGH_ONE);
+  assert.equal(manual.loop().manual, undefined);
+  // A maintainer's review of the head the loop reviewed replaces its round: a loop still ran.
+  await manual.reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: manual.read.settings, auto: false },
+    posted(CLEAN),
+  );
+  const replaced = manual.loop();
+  assert.deepEqual(
+    [replaced.loop, replaced.manual, replaced.history.map((r) => [r.blocking, r.manual])],
+    ["clean", undefined, [[0, undefined]]],
+  );
+  // Its round is at the commit the run started from (postReview() `head`), not a later one.
+  await manual.reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: manual.read.settings, auto: false },
+    { ...posted(HIGH_ONE), head: "sha-0" },
+  );
+  assert.equal(manual.loop().history.at(-1).head, "sha-0");
+  // A repo without any `review` settings: recorded all the same, no fix round.
+  const bare = await loopSetup(t, "");
+  await bare.reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: bare.read.settings, auto: false },
+    posted(HIGH_ONE),
+  );
+  const alone = bare.loop();
+  assert.deepEqual(
+    [alone.loop, alone.manual, alone.rounds, alone.history.map((r) => [r.head, r.manual])],
+    ["rounds-out", true, 0, [["sha-1", true]]],
+  );
   // Without review.fix, a review that blocks has no fix round to wait for.
   const single = await loopSetup(t, "review:\n  on: ready\n");
   await single.review(HIGH_ONE);

@@ -163,6 +163,24 @@ export function reviewOffers(t: Pick<Task, "review" | "pr" | "state">): {
   return { review: true, fix: blocking && ready && r.rounds > 0 && t.state !== "needs-input" };
 }
 
+// A commit pushed after the last review, once the loop is over: { reviewed, head }, the
+// reviewed sha and the pull request's head now; null when they match, either one isn't known
+// (older entries: never a false alarm), the loop still goes on (a new head is expected) or the
+// pull request is merged or closed.
+export function reviewOutdated(
+  t: Pick<Task, "review" | "pr">,
+): { reviewed: string; head: string } | null {
+  const r = t.review;
+  const open = t.pr?.state === "draft" || t.pr?.state === "ready";
+  if (!r || !open || !LOOP_OVER.includes(r.loop)) return null;
+  const reviewed = r.history.at(-1)?.head;
+  const head = t.pr?.head;
+  return reviewed && head && reviewed !== head ? { reviewed, head } : null;
+}
+
+// A commit's short sha, as GitHub shows it.
+export const shortSha = (sha: string) => sha.slice(0, 7);
+
 // A review's findings by severity: "1 critical · 3 high", "no findings".
 export function roundCounts(r: ReviewRound): string {
   const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) => `${r.counts[s]} ${s}`);

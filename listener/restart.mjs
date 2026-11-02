@@ -394,6 +394,8 @@ export function createRestart(ctx) {
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
             .concat(["graceUntil"])
             .concat(["capabilities"])
+            // A review's commit (runs.mjs launch()): its review is posted there.
+            .concat(["reviewFrom"])
             .map((k) => [k, live[k]]),
         ),
         // Its run tokens still valid, for its output's redaction after a restart (broker.mjs).
