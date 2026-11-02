@@ -2394,7 +2394,7 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   something can't make it write anything: the most it can do is change the review's text
   (with `fix`, see [Review fix runs](#review-fix-runs)). The review never
   approves (an App's approval may count toward branch protection): it requests changes on a
-  critical, high or medium finding, and comments otherwise (on medium ones too, in the review
+  critical, high or medium finding or a blocking comment, and comments otherwise (on medium ones too, in the review
   that decides an auto-merge with `review.max_allowed_severity: medium`). A review that requests
   changes, on GitHub or in its verdict, never auto-merges.
 - **No sandbox reviews or approves**, a work run's included: their tokens only read pull
@@ -2471,6 +2471,41 @@ its token against its instructions. Turn `fix` on where the people who may comme
 request or its issue are trusted (a private repository, or `users` narrowed to them), read
 what a fix run pushed before merging, and keep `fix` off on public repositories with outside
 contributors whose threads you don't watch.
+
+### Review follow-ups
+
+A review's follow-ups (problems it found outside the pull request's scope,
+[Reviews](repo-config.md#reviews)) are filed as issues by the orchestrator, with the App's
+token, once the pull request is merged: no sandbox writes them, and the review's token still
+only reads. Their titles and text are the review's, a model's output that read the diff and
+the thread, so they are posted as data, the same text the review already showed on the pull
+request: each issue's body opens by saying the text is a review model's output, claims to
+check against the code and never instructions, quotes it (its `@` mentions broken, so the
+model can't make the App's new issue notify anyone), and says which pull request and
+review it came from. Each is labelled `follow-up` and starts nothing by itself (an issue being
+opened runs nothing; picking it up is a maintainer's call, or the auto-pickup label's).
+**A work run started on one** reads that body as its task, as any issue's: it is Deckhand's
+own issue, but its text is no person's request. Read it before starting a run on it, and
+edit it into the task you want (or quote what you keep) when it asks for more than its
+title says; a prompt injection in the reviewed diff could have shaped it.
+
+Only the App's own reviews are read back: GitHub reviews by the App's login, with its marker, whose body opens with a review's verdict line (a
+sandbox's token can't post a review), and a review GitHub refused, posted as a plain comment,
+only from the comment whose id its round kept when the orchestrator posted it (`reviews.json`):
+the App's other comments, a run's reply among them, are never read for follow-ups. They are
+read only after a merge (a pull request closed without one files none), and
+once per pull request (`reviews.json`): a redelivered webhook or a restart files nothing twice.
+A review posted after the merge's delivery (it was still running) files its own follow-ups once
+it is recorded, linking those an issue already has.
+A merge files at most 10, the rest listed by title (as code) in its comment, and only bullets
+with a bold title count (not one saying there is none, nor one led by a comment's kind or a
+severity: an item under the wrong heading, never filed; a blocking comment there blocks, an
+unclear item there blocks when the review's own verdict asks for changes, and a note there
+keeps the review's own verdict). Only the bullets under `## Follow-ups` count: any other
+heading as deep or less after it ends its section, and nothing under such a heading is filed. The repository turns it off with `review.follow_ups: false`, read
+again from its default branch at the merge: so does a `review` block that is gone, and a
+config with errors files nothing. There is no policy decision of its own for it (`deny_*`):
+like the review and the comments the orchestrator posts, it is Deckhand's own write.
 
 ### CI fix runs
 

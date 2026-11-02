@@ -80,6 +80,24 @@ test("a loop's lines: its round while it goes on, what it left once it ended blo
   expect(HISTORY.map((_, i) => noProgress(HISTORY, i))).toEqual([false, false, true]);
 });
 
+test("a round's comments and follow-ups: counted apart, the blocking comments among what is left", () => {
+  const sections: ReviewRound = {
+    ...round(1, { high: 1, low: 1 }, 2),
+    followUps: 2,
+    comments: { blocking: 1, notes: 3 },
+  };
+  expect(roundCounts(sections)).toBe(
+    "1 high · 1 low · 1 blocking comment · 3 notes · 2 follow-ups",
+  );
+  expect(findingsLeft({ review: loop({ loop: "stopped", history: [sections] }) })).toBe(
+    "1 high finding and 1 blocking comment left after 1 fix round",
+  );
+  const onlyComment = { ...round(0, { low: 1 }, 1), comments: { blocking: 1, notes: 0 } };
+  expect(findingsLeft({ review: loop({ loop: "stopped", history: [onlyComment] }) })).toBe(
+    "1 blocking comment left after the review",
+  );
+});
+
 test("in review: on its way, not ready nor waiting on you until the loop ends", () => {
   const reviewing = ready(loop({ loop: "fixing", round: 1 }), { state: "in-review" });
   expect(isReady(reviewing)).toBe(false);
@@ -272,6 +290,13 @@ test("hovering previews every review; focus or a click pins them, until Escape, 
 test("a review's points: low 1, medium 3, high 5, critical 8, every finding counted", () => {
   expect(reviewScore(HISTORY[0])).toBe(24);
   expect(reviewScore(HISTORY[2])).toBe(13);
+  // A blocking comment weighs as a medium finding; notes and follow-ups nothing.
+  const sections: ReviewRound = {
+    ...HISTORY[2],
+    followUps: 4,
+    comments: { blocking: 1, notes: 5 },
+  };
+  expect(reviewScore(sections)).toBe(16);
   expect(reviewScore(round(3, {}, 0))).toBe(0);
   expect(reviewTrend(HISTORY)).toBe("worse");
   expect(reviewTrend(HISTORY.slice(0, 2))).toBe("better");

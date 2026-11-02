@@ -680,11 +680,11 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request, follow_ups)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request, follow_ups",
   ]);
 });
 
@@ -735,6 +735,17 @@ test("review.merge_wait: 60 minutes by default, 0 to a day", () => {
       "review.merge_wait: expected a whole number of minutes from 0 to 1440",
     ]);
   }
+});
+
+test("review.follow_ups: on by default, false turns it off, checked", () => {
+  assert.equal(parseRepoConfig("review: true\n", config).settings.review.followUps, true);
+  assert.equal(parseRepoConfig("review:\n  on: ready\n", config).settings.review.followUps, true);
+  const off = parseRepoConfig("review:\n  follow_ups: false\n", config);
+  assert.deepEqual([off.errors, off.settings.review.followUps], [[], false]);
+  assert.deepEqual(parseRepoConfig("review:\n  follow_ups: some\n", config).errors, [
+    "review.follow_ups: expected true or false",
+  ]);
+  assert.match(reviewText(off.settings.review), / · follow-ups not filed$/);
 });
 
 test("review.ci, ci_wait and ci_fix: off, 30 minutes and one CI fix run by default, checked", () => {

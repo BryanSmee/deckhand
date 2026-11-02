@@ -66,6 +66,7 @@ import {
   needsModes,
   tempDir,
   testKey,
+  until as waitUntil,
 } from "./helpers.mjs";
 
 // The policy service's opa allowing a brainstorm's GitHub writes on its own issue only, as
@@ -3602,7 +3603,10 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /Review commit `head-1`/);
     assert.match(runEnv, /git diff origin\/trunk\.\.\.head-1/);
     // No auto-merge to decide: medium findings request changes, as the prompt says.
-    assert.match(runEnv, /when there is a\s+critical, high or medium finding/);
+    assert.match(
+      runEnv,
+      /when there is a\s+blocking comment or a critical, high or medium finding/,
+    );
     assert.doesNotMatch(runEnv, /This review tolerates/);
     // Its thread from the listener (reviews.mjs reviewThread(), unit-tested there).
     const args = readFileSync(join(dir, "run-args"), "utf8");
@@ -3625,6 +3629,63 @@ allow_capabilities contains "read:pulls"
     await send(ready, "pull_request");
     await listener.until("was reviewed already");
     assert.equal(github.requests.filter((r) => r.path.endsWith("/pulls/13/reviews")).length, 1);
+  });
+
+  test("follow-ups: a merged pull request's review follow-ups filed as labelled issues", async (t) => {
+    const pr = {
+      number: 13,
+      body: "Closes #12",
+      state: "open",
+      draft: false,
+      user: { login: "deckhand-x[bot]", type: "Bot" },
+      head: { sha: "head-1", ref: "issue-12-fix", repo: { full_name: "org/repo" } },
+    };
+    const files = {
+      ".deckhand.yaml": "wait_for_answers: false\nreview:\n  on: ready\n",
+      "pull:13": JSON.stringify(pr),
+      labelled: "[]",
+    };
+    const { dir, github, send } = await listen(t, files, (dir) => {
+      writeFileSync(
+        join(dir, "result"),
+        "Fine.\n\n## Must fix\n\nNone.\n\n## Follow-ups\n\n- **Share the retry helper** `a.mjs:3`: twice.\n\nRating: 9/10\nVerdict: comment\n",
+      );
+      return {};
+    });
+    const delivery = (action, pull) => ({
+      action,
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "trunk" },
+      pull_request: pull,
+      sender: { login: "deckhand-x[bot]", type: "Bot" },
+    });
+    await send(delivery("ready_for_review", pr), "pull_request");
+    const review = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/pulls/13/reviews",
+    );
+    const { body, event } = JSON.parse(review.body);
+    assert.equal(event, "COMMENT");
+    assert.match(body, /## Follow-ups \(1\)/);
+    // Its round recorded (the run's end, after the review is posted), with its follow-up.
+    const round = () => {
+      const kept = JSON.parse(readFileSync(join(dir, "reviews.json"), "utf8"));
+      return kept["org/repo#pr-13"]?.rounds?.at(-1);
+    };
+    await waitUntil(() => existsSync(join(dir, "reviews.json")) && round()?.followUps === 1, {
+      what: "the review's round",
+    });
+    // GitHub has it now; the pull request is merged.
+    const app = { login: "deckhand-x[bot]", type: "Bot" };
+    files["reviews:13"] = JSON.stringify([{ user: app, body, commit_id: "head-1" }]);
+    const merged = { ...pr, state: "closed", merged_at: "2026-11-02T10:00:00Z" };
+    await send(delivery("closed", merged), "pull_request");
+    const filed = await github.waitFor(
+      (r) => r.method === "POST" && r.path === "/repos/org/repo/issues",
+    );
+    const issue = JSON.parse(filed.body);
+    assert.equal(issue.title, "Share the retry helper");
+    assert.deepEqual(issue.labels, ["follow-up"]);
+    assert.match(issue.body, /Follow-up of #13, the pull request of #12/);
   });
 
   test("review.fix: a review that requests changes starts one work run with its findings", async (t) => {
@@ -3801,7 +3862,7 @@ allow_capabilities contains "read:pulls"
     assert.ok(!github.requests.some((r) => r.method === "PUT"));
     // The prompt was told the tolerance worked out for the run (reviews' tolerance()).
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
-    assert.match(runEnv, /when there is a\s+critical or high finding/);
+    assert.match(runEnv, /when there is a\s+blocking comment or a critical or high finding/);
     assert.match(runEnv, /This review tolerates medium findings/);
     // The run completes: its delivery decides again.
     files.runs = JSON.stringify({
