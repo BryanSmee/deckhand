@@ -524,7 +524,9 @@ token only reads, and Deckhand posts the review.
   are notes, not low findings. A blocking comment blocks like a finding, **whatever
   `max_allowed_severity` says** (the reviewer marked it on purpose), caps the rating at 8, and
   goes to the fix run. The kind is read in bold, italics, backticks or brackets, or bare
-  before a separator (`blocking: …`). A comment whose kind can't be read counts as a note,
+  before a separator (`blocking: …`). A blocking comment put under Must fix
+  blocks as one under Comments does, and a note there keeps the review's own verdict. A
+  comment whose kind can't be read counts as a note,
   but the review's own verdict then stands: a "request changes" it wrote isn't turned into a
   comment, so an auto-merge still refuses it. A review's verdict reads "comment" on follow-ups
   and notes alone only when its Must fix section says `None.` and everything under Must fix

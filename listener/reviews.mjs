@@ -166,7 +166,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
     }
     const found = bullet(section, line);
     if (found) {
-      const { unmarked, misplaced, ...item } = found;
+      const { unmarked, misplaced, comment, ...item } = found;
       if (unmarked || misplaced) unsure = doubtful = true;
       started = true;
       if (misplaced) {
@@ -174,7 +174,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
         continue;
       }
       current = item;
-      ({ findings, "follow-ups": followUps, comments })[section].push(item);
+      ({ findings, "follow-ups": followUps, comments })[comment ? "comments" : section].push(item);
       continue;
     }
     if (/^\W*(rating|verdict)\W/i.test(line)) {
@@ -228,7 +228,13 @@ function bullet(section, line) {
       /^[*_`]*\[?(critical|high|medium|low)(?:\][*_`]*|[*_`]+|\s*[:–—])\s*[:–—-]?\s*(.*)$/i.exec(
         rest,
       );
-    return m && { severity: m[1].toLowerCase(), ...located(m[2]) };
+    if (m) return { severity: m[1].toLowerCase(), ...located(m[2]) };
+    // A comment under Must fix: a blocking one blocks there as anywhere (a comment, moved to
+    // its section); a note is misplaced, and the model's verdict stands.
+    const kind = commentKind(rest);
+    if (!kind) return null;
+    if (kind[1].toLowerCase() !== "blocking") return { misplaced: true };
+    return { comment: true, blocking: true, ...located(kind[2]) };
   }
   if (section === "follow-ups") {
     // A comment's kind or a severity as its lead, in any form the Comments section reads: a
@@ -291,7 +297,6 @@ const REVIEW_HEAD =
 // links taken off; a review posted before the sections has findings only. The summary isn't
 // kept: a fix run's message has the items only (fixMessage()). `allowed`: the tolerance it is
 // read with now.
-
 export function parsePostedReview(body, { allowed = "low" } = {}) {
   const text = String(body ?? "");
   const head = new RegExp(REVIEW_HEAD.source, "m").exec(text);
@@ -2428,7 +2433,9 @@ export function createReviews({
       labelled.filter((i) => !i.pull_request).map((i) => [titleKey(i.title), i.number]),
     );
     // Before the first write: a read that failed above is tried again by a redelivery, but
-    // nothing is filed twice.
+    // nothing is filed twice. Asked again here, with no wait before the mark: a redelivery that
+    // came during the reads above may have marked it since.
+    if (reviewed.get(key)?.followUpsAt) return null;
     keep(key, { followUpsAt: now() });
     // Its colour and description, should the repo not have it yet (422: it has).
     await github(

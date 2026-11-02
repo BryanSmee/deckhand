@@ -3201,3 +3201,38 @@ test("followUpBody: the model's mentions don't notify anyone", () => {
   );
   assert.match(body, /> Ask @\u200dalice and @\u200dorg\/team, not me@example\.com\./);
 });
+
+test("parseReview: a blocking comment under Must fix blocks; a note there keeps the verdict", () => {
+  const reply = (line, verdict = "request-changes") =>
+    `## Must fix\n\n- **medium** \`a.mjs:1\`: slow.\n${line}\n\nRating: 7/10\nVerdict: ${verdict}`;
+  const blocking = parseReview(reply("- **blocking** `b.mjs:2`: must not merge as is."), {
+    allowed: "medium",
+  });
+  assert.deepEqual(
+    [blocking.findings.length, blocking.comments, blocking.verdict, reviewEvent(blocking)],
+    [
+      1,
+      [{ blocking: true, path: "b.mjs", line: 2, text: "must not merge as is." }],
+      "request-changes",
+      "REQUEST_CHANGES",
+    ],
+  );
+  // Whatever the model's own verdict says.
+  assert.equal(
+    parseReview(reply("- [blocking] why?", "comment"), { allowed: "medium" }).verdict,
+    "request-changes",
+  );
+  const note = parseReview(reply("- **note** rename it."), { allowed: "medium" });
+  assert.deepEqual([note.comments, note.verdict], [[], "request-changes"]);
+});
+
+test("follow-ups: two deliveries of one merge at once file once", async (t) => {
+  const s = followUpSetup(t, { posted: [postedBody(SECTIONS)] });
+  await s.record(SECTIONS);
+  const both = await Promise.all([s.merged(), s.merged()]);
+  assert.deepEqual(
+    both.filter(Boolean).map((filed) => filed.length),
+    [2],
+  );
+  assert.equal(s.filed().length, 2);
+});
