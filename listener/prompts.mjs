@@ -308,8 +308,8 @@ function issueBranches(n, branches) {
 function workflowsNote(task, grant, branches) {
   if (task.kind === "pr" && !branches.length) return "";
   return grant?.allowWorkflows
-    ? "Pushes may add or change files under `.github/workflows/` (the operator grants `workflows`),\nbut Deckhand refuses a changed workflow unless it has a top-level `permissions:` (`read-all`, `{}`,\nor scopes set to `read` or `none`), no `write` scope in any job, and doesn't mention `secrets`\nanywhere or call a reusable workflow from another repository, and no job has an\n`environment:`; it reads a strict YAML subset (no anchors, aliases, tags, merge keys, duplicate keys or\nmulti-line quoted scalars). It checks the branch merged with the default branch too: rebase on it\nfirst. Say in the pull request what a workflow would need beyond that."
-    : "GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn't grant `workflows`): leave them out and say in the pull request what they need.";
+    ? 'Pushes may add or change files under `.github/workflows/` (the operator grants `workflows`),\nbut Deckhand refuses a changed workflow unless it has a top-level `permissions:` (`read-all`, `{}`,\nor scopes set to `read` or `none`), no `write` scope in any job, and doesn\'t mention `secrets`\nanywhere or call a reusable workflow from another repository, and no job has an\n`environment:`; it reads a strict YAML subset (no anchors, aliases, tags, merge keys, duplicate keys or\nmulti-line quoted scalars). It checks the branch merged with the default branch too: rebase on it\nfirst. Say in the pull request what a workflow would need beyond that, and ask the maintainer\nfor it when the task needs it (see "Stopping to ask" in your instructions).'
+    : 'GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn\'t grant `workflows`): leave them out, say in the pull request what they need, and ask the\nmaintainer for them when the task needs them (see "Stopping to ask" in your instructions).';
 }
 
 // The projects (v2) the run may add its issue and pull request to (github-writes.mjs), so it
@@ -328,7 +328,9 @@ function initialPrompt(task, branches = [], grant = null) {
 code has them, and run the checks they list before pushing. Never push to ${base}. When
 something is ambiguous, pick the reasonable option and say so rather than stopping, unless it
 is a blocker only the maintainer can resolve: then push your work in progress and end with
-your questions (see "Stopping to ask" in your instructions).
+your questions (see "Stopping to ask" in your instructions). A step only the maintainer can
+take that still blocks the merge once the rest is done (a write Deckhand refuses, say) is a
+question too, the pull request ready, not something left open in prose.
 Don't post comments on GitHub yourself: your final message is posted for you as a reply, so
 end with a short summary (what you did, the pull request link, anything left open).`;
   if (task.kind === "pr") {

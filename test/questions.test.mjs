@@ -13,6 +13,7 @@ import {
   replyQuestions,
   stillAsks,
 } from "../listener/questions.mjs";
+import { outcome } from "../listener/runlog.mjs";
 import { Refused } from "../lib/http.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -311,6 +312,36 @@ test("a run's questions: after its needs-input heading, up to the next heading",
     null,
   );
   assert.equal(replyQuestions(null), null);
+});
+
+test("a run done but for a step only the maintainer can take asks it as a question", () => {
+  // Issue #551: the pull request is ready, one blocker is left, asked rather than listed.
+  const reply = [
+    "<!-- needs-input -->",
+    "## Needs your input",
+    "",
+    "The pull request is ready for review: only this step is left.",
+    "",
+    "1. **Release workflow**: add `deckhand-models` to `.github/workflows/release-workflow.yml` (Deckhand refused the edit: `packages: write`).",
+    "   - [ ] Done, carry on",
+    "   - [ ] Drop it",
+    "",
+    "### What I checked",
+    "",
+    "Tests pass; PR #537 is ready.",
+  ].join("\n");
+  assert.deepEqual(replyQuestions(reply).items, [
+    {
+      title: "Release workflow",
+      text: "add `deckhand-models` to `.github/workflows/release-workflow.yml` (Deckhand refused the edit: `packages: write`).",
+      options: [
+        { label: "Done, carry on", recommended: false, checked: false },
+        { label: "Drop it", recommended: false, checked: false },
+      ],
+    },
+  ]);
+  assert.equal(allTicked(replyQuestions(reply).items), false);
+  assert.equal(outcome({ ok: true, text: reply }), "needs-input");
 });
 
 // An `issues` delivery on org/repo by `user`; `sender` defaults to them.
