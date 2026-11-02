@@ -22,6 +22,22 @@ app.kubernetes.io/part-of: deckhand
 {{ $.Values.image.repository }}-{{ index . 1 }}:{{ $.Values.image.tag | default $.Chart.AppVersion }}
 {{- end }}
 
+{{/* The settings deckhand-env takes from the chart's values, which the objects (Roles, policies,
+namespaces) agree with: `env` can't set them apart, by the value that does. */}}
+{{- define "deckhand.managedEnv" -}}
+RUNNER: the chart itself (kubernetes)
+KUBERNETES_NAMESPACE: namespaces.sandboxes
+KUBERNETES_SERVICES_NAMESPACE: namespaces.services
+SANDBOX_IMAGE: image.sandbox
+KUBERNETES_STORAGE_CLASS: sandboxes.storageClass
+KUBERNETES_CACHE_STORAGE_CLASS: sandboxes.cacheStorageClass
+KUBERNETES_AGENT_STORAGE_CLASS: sandboxes.agentStorageClass
+KUBERNETES_REGISTRY: registry.url
+KUBERNETES_REGISTRY_SECRET: registry.secretName
+KUBERNETES_BUILDKIT: buildkit.enabled
+STORE_URL: store
+{{- end }}
+
 {{/* deckhand-env's data: the base's literals, the components', then the values'. */}}
 {{- define "deckhand.envData" -}}
 {{- $env := dict
@@ -38,7 +54,12 @@ app.kubernetes.io/part-of: deckhand
 {{- $_ := set $env "KUBERNETES_BUILDKIT" "tcp://buildkitd:1234" }}
 {{- with .Values.registry.url }}{{ $_ := set $env "KUBERNETES_REGISTRY" . }}{{ end }}
 {{- end }}
-{{- range $name, $value := .Values.env }}{{ $_ := set $env $name (toString $value) }}{{ end }}
+{{- range $name, $value := .Values.env }}
+{{- with get (include "deckhand.managedEnv" $ | fromYaml) $name }}
+{{- fail (printf "env.%s: the chart sets it from %s" $name .) }}
+{{- end }}
+{{- $_ := set $env $name (toString $value) }}
+{{- end }}
 {{- toYaml $env }}
 {{- end }}
 

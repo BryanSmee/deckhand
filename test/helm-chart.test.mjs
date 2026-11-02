@@ -371,4 +371,13 @@ test("helm: values that can't work are refused", { skip }, (t) => {
     helmFails(t, { namespaces: { services: "deckhand", sandboxes: "deckhand" } }),
     /namespace each/,
   );
+  // What the chart sets in deckhand-env itself, which its Roles and policies agree with.
+  for (const [name, value] of [
+    ["KUBERNETES_NAMESPACE", "namespaces.sandboxes"],
+    ["KUBERNETES_REGISTRY_SECRET", "registry.secretName"],
+    ["SANDBOX_IMAGE", "image.sandbox"],
+    ["RUNNER", "the chart itself"],
+  ]) {
+    assert.match(helmFails(t, { env: { [name]: "x" } }), new RegExp(`env\\.${name}: .*${value}`));
+  }
 });

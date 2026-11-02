@@ -42,6 +42,7 @@ server:
 
 # Any other setting of the orchestrator, the runner and the models service, in deckhand-env
 # (docs/setup.md#settings): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…
+# One the values below set (KUBERNETES_NAMESPACE, SANDBOX_IMAGE…) is refused, naming the value.
 env: {}
 
 # The API server's addresses, the runner's and the broker's only way out (docs/kubernetes.md,
@@ -49,7 +50,8 @@ env: {}
 apiServer:
   cidrs: [192.0.2.1/32]
 
-# Where the services keep their stores: `file`, each on its own claim, its copies on one node;
+# Fixed at install, as the claims' storage classes below: a claim's access mode and class can't
+# change (docs/kubernetes.md#install-with-helm says how to move). Where the services keep their stores: `file`, each on its own claim, its copies on one node;
 # or `redis`, in Valkey (components/redis), for copies on several nodes, with the deckhand-redis
 # Secret made beforehand (docs/kubernetes.md#several-nodes).
 store: file

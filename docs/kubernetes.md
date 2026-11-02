@@ -234,21 +234,27 @@ carry on with [Install](#install)'s steps 3 to 5: the Secrets, the GitHub App an
 check, as the chart holds no Secret either. The pods wait for them: don't pass `--wait` to the
 first install.
 
-| Value                                | Default                      | What it sets                                                                                                                                                         |
-| ------------------------------------ | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image.repository`, `image.tag`      | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                     |
-| `image.sandbox`                      | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                 |
-| `namespaces`                         | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                         |
-| `server.config`, `server.grants`     | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                 |
-| `env`                                | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings))                                                                                                  |
-| `apiServer.cidrs`                    | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                             |
-| `store`                              | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                       |
-| `persistence.storageClass`, `.sizes` | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                    |
-| `sandboxes.storageClass`, …          | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes)) |
-| `buildkit.enabled`, `registry`       | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY`, `registry.secretName` its pull Secret                               |
-| `ingress`                            | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                         |
+| Value                                | Default                      | What it sets                                                                                                                                                                 |
+| ------------------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image.repository`, `image.tag`      | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                             |
+| `image.sandbox`                      | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                         |
+| `namespaces`                         | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                                 |
+| `server.config`, `server.grants`     | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                         |
+| `env`                                | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use |
+| `apiServer.cidrs`                    | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                                     |
+| `store`                              | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                               |
+| `persistence.storageClass`, `.sizes` | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                            |
+| `sandboxes.storageClass`, …          | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes))         |
+| `buildkit.enabled`, `registry`       | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY`, `registry.secretName` its pull Secret                                       |
+| `ingress`                            | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                                 |
 
-`values.yaml` in the chart says more of each. To update, change `image.tag` and
+`values.yaml` in the chart says more of each. `store`, `persistence.storageClass`,
+`persistence.sharedStorageClass` and `redis.storageClass` are fixed at install: a claim's access
+mode and class can't change, so an upgrade that changes them fails on the claims it would
+change, and going to `redis` leaves the stores' claims (kept, with what they hold) unused. To
+move, scale the services to 0, copy what the claims hold (or let the stores start empty,
+losing what they hold: [setup.md](setup.md#the-store)), delete the claims that change, then
+upgrade. To update, change `image.tag` and
 `helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from a checkout at the new release:
 the services update as [below](#updating). A change of `server` or `env` renames its ConfigMap,
 as kustomize's hash does, and the pods that read it restart. The old one stays, as
