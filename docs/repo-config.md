@@ -503,7 +503,9 @@ token only reads, and Deckhand posts the review.
   came from, then lists them in one comment on the pull request. The same title in several
   reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
-  (`reviews.json`). A pull request closed without a merge files none. The review is told not
+  (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
+  comments. A pull request closed without a merge files none. The issue's body says the text
+  is a review model's output, to check against the code, and quotes it. The review is told not
   to list again a follow-up an earlier review of Deckhand's listed.
 - **Comments**: remarks that aren't defects (a naming choice, a question, a suggestion, a
   nit), each marked **blocking** or **note**. A note never blocks nor caps the rating; the fix
@@ -541,7 +543,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
   adds is what the review should look at. On an issue it is refused, with a reply.
 - **The verdict on GitHub**: changes requested when there is a critical, high or medium
-  finding or a blocking comment, a comment otherwise (follow-ups and notes alone included); the verdict in the review's text says "request changes" then
+  finding or a blocking comment, a comment otherwise (follow-ups and notes alone included,
+  whose "request changes" verdict, should the review write one, reads "comment"); the verdict in the review's text says "request changes" then
   too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
   doesn't let the App request changes on its own pull requests: those get a comment review, the
   verdict in its text. A reply whose format Deckhand can't read is posted as a comment
