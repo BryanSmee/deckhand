@@ -98,11 +98,22 @@ buildkit:
   noProxy: ""
 
 registry:
-  # KUBERNETES_REGISTRY (registry.example.com/deckhand): required for repo images.
+  # KUBERNETES_REGISTRY (registry.example.com/deckhand): required for repo images, and read with
+  # buildkit.enabled alone (refused without it).
   url: ""
   # KUBERNETES_REGISTRY_SECRET, a kubernetes.io/dockerconfigjson Secret in the services'
   # namespace.
   secretName: deckhand-registry
+
+# A container engine for the runs granted one (docs/kubernetes.md#container-engine-on-kubernetes):
+# the engine component, Sysbox's dockerd as a sidecar under its RuntimeClass, and the egress
+# proxy's engines' port (3129). Once Sysbox runs on the nodes.
+engine:
+  enabled: false
+  # ENGINE_IMAGE; empty: <image.repository>-engine:<image.tag>, the services' release.
+  image: ""
+  # KUBERNETES_ENGINE_RUNTIME_CLASS: the RuntimeClass Sysbox's install makes.
+  runtimeClass: sysbox-runc
 
 # Your ingress, to edge's port 8080 alone: GitHub's webhooks and the dashboard, over HTTPS.
 ingress:

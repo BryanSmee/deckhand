@@ -195,12 +195,13 @@ jobs:
           set -o pipefail
           chart=deploy/helm/deckhand
           helm lint --strict "$chart"
-          for values in "" "store=redis" "buildkit.enabled=true" "store=redis,buildkit.enabled=true"; do
+          for values in "" "store=redis" "buildkit.enabled=true" "engine.enabled=true" \
+            "store=redis,buildkit.enabled=true,engine.enabled=true"; do
             echo "chart${values:+ with $values}:"
             helm template deckhand "$chart" ${values:+--set "$values"} | kubeconform -strict -summary
           done
           echo "chart with every value:"
-          helm template deckhand "$chart" --set store=redis,buildkit.enabled=true \
+          helm template deckhand "$chart" --set store=redis,buildkit.enabled=true,engine.enabled=true \
             --set image.tag=v1.2.3,persistence.storageClass=ssd,sandboxes.storageClass=ssd \
             --set registry.url=registry.example.com/deckhand,ingress.enabled=true \
             --set ingress.host=deckhand.example.com,ingress.tlsSecretName=deckhand-tls \

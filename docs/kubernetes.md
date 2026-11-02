@@ -234,19 +234,20 @@ carry on with [Install](#install)'s steps 3 to 5: the Secrets, the GitHub App an
 check, as the chart holds no Secret either. The pods wait for them: don't pass `--wait` to the
 first install.
 
-| Value                                | Default                      | What it sets                                                                                                                                                                 |
-| ------------------------------------ | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `image.repository`, `image.tag`      | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                             |
-| `image.sandbox`                      | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                         |
-| `namespaces`                         | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                                 |
-| `server.config`, `server.grants`     | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                         |
-| `env`                                | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use |
-| `apiServer.cidrs`                    | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                                     |
-| `store`                              | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                               |
-| `persistence.storageClass`, `.sizes` | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                            |
-| `sandboxes.storageClass`, …          | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes))         |
-| `buildkit.enabled`, `registry`       | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY`, `registry.secretName` its pull Secret                                       |
-| `ingress`                            | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                                 |
+| Value                                       | Default                      | What it sets                                                                                                                                                                                                      |
+| ------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image.repository`, `image.tag`             | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                                                                  |
+| `image.sandbox`                             | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                                                              |
+| `namespaces`                                | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                                                                      |
+| `server.config`, `server.grants`            | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                                                              |
+| `env`                                       | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use                                      |
+| `apiServer.cidrs`                           | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                                                                          |
+| `store`                                     | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                                                                    |
+| `persistence.storageClass`, `.sizes`        | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                                                                 |
+| `sandboxes.storageClass`, …                 | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes))                                              |
+| `buildkit.enabled`, `registry`              | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY` (refused without BuildKit), `registry.secretName` its pull Secret                                                 |
+| `engine.enabled`, `.image`, `.runtimeClass` | off                          | the `engine` component ([Container engine](#container-engine-on-kubernetes)): `SANDBOX_ENGINE=sysbox`, `ENGINE_IMAGE` (`<repository>-engine:<tag>` when empty), `KUBERNETES_ENGINE_RUNTIME_CLASS` (`sysbox-runc`) |
+| `ingress`                                   | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                                                                      |
 
 `values.yaml` in the chart says more of each. `store`, `persistence.storageClass`,
 `persistence.sharedStorageClass` and `redis.storageClass` are fixed at install: a claim's access
@@ -675,8 +676,8 @@ What it takes:
   `docker build` and a published port answering on `engine`, under `restricted:latest`.
 
 - **The `engine` component** (`deploy/kubernetes/components/engine`, in your overlay's
-  `components`): it sets `SANDBOX_ENGINE=sysbox`, `KUBERNETES_ENGINE_RUNTIME_CLASS=sysbox-runc`
-  (that RuntimeClass) and `ENGINE_IMAGE` (pin it to your version, a reference the nodes can
+  `components`; `engine.enabled` with the chart): it sets `SANDBOX_ENGINE=sysbox`,
+  `KUBERNETES_ENGINE_RUNTIME_CLASS=sysbox-runc` (that RuntimeClass) and `ENGINE_IMAGE` (pin it to your version, a reference the nodes can
   pull, as `SANDBOX_IMAGE` is) in `deckhand-env`, which the orchestrator and the runner read,
   and opens the engines' port below. Without the RuntimeClass, runs that would get an engine
   are refused, as before.

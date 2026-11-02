@@ -31,6 +31,11 @@ spec:
           ports:
             - name: proxy
               containerPort: 3128
+            {{- if .Values.engine.enabled }}
+            # The engines' port (components/engine): an engine shares its sandbox's address.
+            - name: engines
+              containerPort: 3129
+            {{- end }}
           env:
             - name: DRAIN_SECONDS
               value: "600"
@@ -71,3 +76,8 @@ spec:
     - name: proxy
       port: 3128
       targetPort: proxy
+    {{- if .Values.engine.enabled }}
+    - name: engines
+      port: 3129
+      targetPort: engines
+    {{- end }}

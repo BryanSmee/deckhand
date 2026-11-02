@@ -5,7 +5,7 @@
 // (pinned) and where a skip fails the job; elsewhere these tests skip.
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { test } from "node:test";
 import { parseYaml } from "../lib/yaml.mjs";
@@ -88,12 +88,23 @@ const deployments = (list) => list.filter((o) => o.kind === "Deployment");
 const envOf = (list) =>
   list.find((o) => o.kind === "ConfigMap" && o.metadata.name.startsWith("deckhand-env-")).data;
 
-for (const [values, components] of [
-  [{}, []],
-  [{ store: "redis" }, ["redis"]],
-  [{ buildkit: { enabled: true } }, ["buildkit"]],
-  [{ store: "redis", buildkit: { enabled: true } }, ["redis", "buildkit"]],
-]) {
+// Each component's values, and the combinations rendered: each alone, and all of them.
+const COMPONENTS = {
+  redis: { store: "redis" },
+  buildkit: { buildkit: { enabled: true } },
+  engine: { engine: { enabled: true } },
+};
+const COMBINATIONS = [[], ["redis"], ["buildkit"], ["engine"], ["redis", "buildkit", "engine"]];
+
+test("helm: every component of the base has its values in the chart", () => {
+  const dirs = readdirSync(join(base, "components"), { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => d.name);
+  assert.deepEqual(dirs.sort(), Object.keys(COMPONENTS).sort());
+});
+
+for (const components of COMBINATIONS) {
+  const values = Object.assign({}, ...components.map((c) => COMPONENTS[c]));
   const what = components.length ? `with ${components.join(" and ")}` : "alone";
   test(`helm: the chart renders what kustomize does, the base ${what}`, { skip }, (t) => {
     const expected = byKey(kustomize(t, components));
@@ -139,6 +150,9 @@ test("helm: image.tag is every service's tag and the sandboxes'", { skip }, (t) 
   }
   assert.equal(images.filter((c) => c.image.endsWith(":v1.2.3")).length, 8);
   assert.equal(envOf(objects).SANDBOX_IMAGE, "ghcr.io/bryansmee/deckhand-sandbox:v1.2.3");
+  // The engine's image too, at the same release.
+  const engine = helm(t, { image: { tag: "v1.2.3" }, engine: { enabled: true } });
+  assert.equal(envOf(engine).ENGINE_IMAGE, "ghcr.io/bryansmee/deckhand-engine:v1.2.3");
   // One of its own, from a mirror.
   const mirrored = helm(t, { image: { sandbox: "registry.example.com/sandbox@sha256:abc" } });
   assert.equal(envOf(mirrored).SANDBOX_IMAGE, "registry.example.com/sandbox@sha256:abc");
@@ -371,12 +385,20 @@ test("helm: values that can't work are refused", { skip }, (t) => {
     helmFails(t, { namespaces: { services: "deckhand", sandboxes: "deckhand" } }),
     /namespace each/,
   );
+  // The registry without BuildKit, which alone reads it; an engine without its RuntimeClass.
+  assert.match(helmFails(t, { registry: { url: "registry.example.com" } }), /buildkit\.enabled/);
+  assert.match(
+    helmFails(t, { engine: { enabled: true, runtimeClass: "" } }),
+    /engine\.runtimeClass/,
+  );
   // What the chart sets in deckhand-env itself, which its Roles and policies agree with.
   for (const [name, value] of [
     ["KUBERNETES_NAMESPACE", "namespaces.sandboxes"],
     ["KUBERNETES_REGISTRY_SECRET", "registry.secretName"],
     ["SANDBOX_IMAGE", "image.sandbox"],
     ["RUNNER", "the chart itself"],
+    ["SANDBOX_ENGINE", "engine.enabled"],
+    ["ENGINE_IMAGE", "engine.image"],
   ]) {
     assert.match(helmFails(t, { env: { [name]: "x" } }), new RegExp(`env\\.${name}: .*${value}`));
   }

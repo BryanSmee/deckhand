@@ -447,6 +447,19 @@ spec:
       ports:
         - port: 3128
           protocol: TCP
+    {{- if .Values.engine.enabled }}
+    # The sandboxes' engines, on their port (components/engine).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "deckhand.sandboxesNs" . }}
+          podSelector:
+            matchLabels:
+              deckhand.role: sandbox
+      ports:
+        - port: 3129
+          protocol: TCP
+    {{- end }}
   egress:
     - to:
         - podSelector:

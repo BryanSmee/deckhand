@@ -31,7 +31,7 @@ real `opa` that `policy-service/Dockerfile` pins, so none of its tests skips the
 `kubernetes` job renders `deploy/kubernetes` with kustomize, alone and with each component, and
 the Helm chart, validates both with kubeconform, and runs `test/helm-chart.test.mjs` (the chart
 held to the base; it skips without `helm` and `kustomize` on the PATH, and fails the job if it
-does there). A change to the base goes to the chart too. A pull request's checks can
+does there). A change to the base goes to the chart too, a new component with its values. A pull request's checks can
 point at that run. Work runs on this
 repository start with the dashboard's packages installed and graphql-js bundled (`setup` in
 `.deckhand.yaml`) and the npm cache kept between runs.

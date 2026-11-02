@@ -35,6 +35,9 @@ KUBERNETES_AGENT_STORAGE_CLASS: sandboxes.agentStorageClass
 KUBERNETES_REGISTRY: registry.url
 KUBERNETES_REGISTRY_SECRET: registry.secretName
 KUBERNETES_BUILDKIT: buildkit.enabled
+SANDBOX_ENGINE: engine.enabled
+KUBERNETES_ENGINE_RUNTIME_CLASS: engine.runtimeClass
+ENGINE_IMAGE: engine.image
 STORE_URL: store
 {{- end }}
 
@@ -53,6 +56,11 @@ STORE_URL: store
 {{- $_ := set $env "KUBERNETES_REGISTRY_SECRET" .Values.registry.secretName }}
 {{- $_ := set $env "KUBERNETES_BUILDKIT" "tcp://buildkitd:1234" }}
 {{- with .Values.registry.url }}{{ $_ := set $env "KUBERNETES_REGISTRY" . }}{{ end }}
+{{- end }}
+{{- if .Values.engine.enabled }}
+{{- $_ := set $env "SANDBOX_ENGINE" "sysbox" }}
+{{- $_ := set $env "KUBERNETES_ENGINE_RUNTIME_CLASS" .Values.engine.runtimeClass }}
+{{- $_ := set $env "ENGINE_IMAGE" (.Values.engine.image | default (include "deckhand.image" (list . "engine"))) }}
 {{- end }}
 {{- range $name, $value := .Values.env }}
 {{- with get (include "deckhand.managedEnv" $ | fromYaml) $name }}
@@ -219,6 +227,12 @@ spec:
 
 {{/* The values the templates can't do without, checked once (namespaces.yaml). */}}
 {{- define "deckhand.check" -}}
+{{- if and .Values.registry.url (not .Values.buildkit.enabled) }}
+{{- fail "registry.url: read with buildkit.enabled alone, which builds the images it holds" }}
+{{- end }}
+{{- if and .Values.engine.enabled (not .Values.engine.runtimeClass) }}
+{{- fail "engine.runtimeClass: Sysbox's RuntimeClass, required with engine.enabled" }}
+{{- end }}
 {{- if not (has .Values.store (list "file" "redis")) }}
 {{- fail (printf "store: %q, where file or redis is expected" .Values.store) }}
 {{- end }}
