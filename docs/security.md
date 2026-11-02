@@ -2480,7 +2480,8 @@ token, once the pull request is merged: no sandbox writes them, and the review's
 only reads. Their titles and text are the review's, a model's output that read the diff and
 the thread, so they are posted as data, the same text the review already showed on the pull
 request: each issue's body opens by saying the text is a review model's output, claims to
-check against the code and never instructions, quotes it, and says which pull request and
+check against the code and never instructions, quotes it (its `@` mentions broken, so the
+model can't make the App's new issue notify anyone), and says which pull request and
 review it came from. Each is labelled `follow-up` and starts nothing by itself (an issue being
 opened runs nothing; picking it up is a maintainer's call, or the auto-pickup label's).
 **A work run started on one** reads that body as its task, as any issue's: it is Deckhand's

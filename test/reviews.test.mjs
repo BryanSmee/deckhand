@@ -3162,3 +3162,42 @@ test("follow-ups: a misplaced blocking comment or finding in any form keeps the 
     ["High memory use", "Note taking app"],
   );
 });
+
+test("parseReview: tolerated findings beside an unreadable comment keep request-changes", () => {
+  const reply = (comment) =>
+    `## Must fix\n\n- **medium** \`a.mjs:1\`: slow.\n\n## Comments\n\n${comment}\n\nRating: 7/10\nVerdict: request-changes`;
+  for (const comment of [
+    "- BLOCKING this must not merge",
+    "- (blocking) must not merge",
+    "- 🔴 **blocking** must not merge",
+    "- Blocking. Must not merge",
+  ]) {
+    const review = parseReview(reply(comment), { allowed: "medium" });
+    assert.equal(review.verdict, "request-changes", comment);
+  }
+  // A readable note beside them: tolerated, as before.
+  assert.equal(
+    parseReview(reply("- **note** rename it."), { allowed: "medium" }).verdict,
+    "comment",
+  );
+  // A misplaced item under Follow-ups too.
+  const misplaced = parseReview(
+    "## Must fix\n\n- **medium** `a.mjs:1`: slow.\n\n## Follow-ups\n\n- [blocking] why?\n\nRating: 7/10\nVerdict: request-changes",
+    { allowed: "medium" },
+  );
+  assert.equal(misplaced.verdict, "request-changes");
+  // Stray text under Must fix doesn't change it (#288): tolerated findings still read comment.
+  const stray = parseReview(
+    "## Must fix\n\n- **medium** `a.mjs:1`: slow.\nAlso worth a look.\n\nRating: 7/10\nVerdict: request-changes",
+    { allowed: "medium" },
+  );
+  assert.equal(stray.verdict, "comment");
+});
+
+test("followUpBody: the model's mentions don't notify anyone", () => {
+  const body = followUpBody(
+    { title: "T", path: null, line: null, text: "Ask @alice and @org/team, not me@example.com." },
+    { number: 5 },
+  );
+  assert.match(body, /> Ask @\u200dalice and @\u200dorg\/team, not me@example\.com\./);
+});

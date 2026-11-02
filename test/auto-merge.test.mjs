@@ -163,13 +163,20 @@ function setup(
   };
 }
 
-test("mergeBlockers: critical and high always, medium unless allowed, low never", () => {
+test("mergeBlockers: critical and high always, medium unless allowed, low never, blocking comments always", () => {
   const review = parseReview(`${HIGH}\n- **medium** b: x.\n- **low** c: y.`);
   const severities = (list) => list.map((f) => f.severity);
   assert.deepEqual(severities(mergeBlockers(review)), ["high", "medium"]);
   assert.deepEqual(severities(mergeBlockers(review, "medium")), ["high"]);
   assert.deepEqual(mergeBlockers(parseReview(MEDIUM), "medium"), []);
   assert.deepEqual(mergeBlockers(parseReview(CLEAN)), []);
+  const comments = parseReview(
+    `${MEDIUM.split("\n\n")[0]}\n\n## Comments\n\n- **blocking** why?\n- **note** fine.\n\nRating: 7/10\nVerdict: comment`,
+  );
+  assert.deepEqual(
+    mergeBlockers(comments, "medium").map((b) => [b.blocking, b.text]),
+    [[true, "why?"]],
+  );
 });
 
 test("trustedFile: the config, .deckhand/, .github/, CODEOWNERS and the files it names", () => {
