@@ -2,6 +2,7 @@
 // counts what reaches it, with a temp dir and a fake clock.
 import assert from "node:assert/strict";
 import { readdirSync, statSync, writeFileSync } from "node:fs";
+import { unlink as unlinkFile } from "node:fs/promises";
 import { request } from "node:http";
 import { connect, createServer } from "node:net";
 import { join } from "node:path";
@@ -241,10 +242,15 @@ test("a host that answers before reading the body can't be made to poison an ent
 
 // A cache of 400 bytes (200 at most per entry, and being written) holding three entries of
 // 100, each used after the one before; `onDisk()`: the bodies' bytes, temporary files too.
-async function smallCache(t) {
+// `unlinkDelay`: each file removed that many ms late, as on a slow disk.
+async function smallCache(t, { unlinkDelay = 0 } = {}) {
   const dir = tempDir(t, "deckhand-egress-cache-");
   const clock = { now: 1000 };
-  const cache = createCache({ dir, max: 400, entryMax: 200, now: () => clock.now++ });
+  const unlink = async (path) => {
+    await wait(unlinkDelay);
+    return unlinkFile(path);
+  };
+  const cache = createCache({ dir, max: 400, entryMax: 200, now: () => clock.now++, unlink });
   const onDisk = () =>
     readdirSync(dir)
       .filter((name) => !name.endsWith(".json"))
@@ -260,31 +266,34 @@ async function smallCache(t) {
   return { cache, onDisk, write, kept };
 }
 
-test("parallel downloads stay under the cache's size, and evict half of it at most", async (t) => {
-  const { cache, onDisk, write, kept } = await smallCache(t);
-  // Three downloads of 100 bytes without a Content-Length at once, chunk by chunk.
-  const writers = ["/a", "/b", "/c"].map((path) => write(path));
-  const taken = [];
-  for (let i = 0; i < 10; i++) {
-    for (const writer of writers) {
-      taken.push(writer.write(Buffer.alloc(10)));
-      assert.ok(cache.size <= 400, `${cache.size} bytes`);
+for (const unlinkDelay of [0, 50]) {
+  test(`parallel downloads stay under the cache's size, and evict half of it at most (files removed ${unlinkDelay} ms late)`, async (t) => {
+    const { cache, onDisk, write, kept } = await smallCache(t, { unlinkDelay });
+    // Three downloads of 100 bytes without a Content-Length at once, chunk by chunk.
+    const writers = ["/a", "/b", "/c"].map((path) => write(path));
+    const taken = [];
+    for (let i = 0; i < 10; i++) {
+      for (const writer of writers) {
+        taken.push(writer.write(Buffer.alloc(10)));
+        assert.ok(cache.size <= 400, `${cache.size} bytes`);
+      }
+      // An aborted download's file, and the entries evicted, are removed meanwhile: their bytes
+      // no longer counted.
+      await cache.settled();
+      assert.ok(onDisk() <= 400, `${onDisk()} bytes on disk`);
     }
-    // An aborted download's file is removed meanwhile, then no longer counted.
-    await wait(5);
+    // The oldest entry went to make room; the downloads' share full, the last one was dropped.
+    assert.equal(kept("/old1"), false);
+    assert.ok(taken.includes(false));
+    // Half of the cache is never evicted for downloads under way.
+    assert.ok(kept("/old2") && kept("/old3"));
+    const done = await Promise.all(writers.map((writer) => writer.commit()));
+    assert.deepEqual(done, [true, true, false]);
+    await cache.settled();
+    assert.equal(cache.size, 400);
     assert.ok(onDisk() <= 400, `${onDisk()} bytes on disk`);
-  }
-  // The oldest entry went to make room; the downloads' share full, the last one was dropped.
-  assert.equal(kept("/old1"), false);
-  assert.ok(taken.includes(false));
-  // Half of the cache is never evicted for downloads under way.
-  assert.ok(kept("/old2") && kept("/old3"));
-  const done = await Promise.all(writers.map((writer) => writer.commit()));
-  assert.deepEqual(done, [true, true, false]);
-  await wait(30);
-  assert.equal(cache.size, 400);
-  assert.ok(onDisk() <= 400, `${onDisk()} bytes on disk`);
-});
+  });
+}
 
 test("a download's Content-Length is reserved as it starts, and evicts no more", async (t) => {
   const { cache, write, kept } = await smallCache(t);
@@ -300,8 +309,8 @@ test("a download's Content-Length is reserved as it starts, and evicts no more",
   assert.equal(write("/more", { "content-length": "100" }), null);
   assert.ok(kept("/old2") && kept("/old3"));
   // Dropped before its end: its reservation is given back.
-  big.abort();
-  await wait(30);
+  await big.abort();
+  await cache.settled();
   assert.equal(cache.size, 200);
 });
 
