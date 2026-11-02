@@ -183,8 +183,11 @@ export function createPulls({
   // The open pull requests' states asked again from GitHub (one listing per repo, then those it
   // doesn't have or whose size isn't known one by one), and the tasks without one looked up
   // again at the next fill(). Resolves to how many changed state. One at a time: a second call shares it.
-  function resync() {
-    if (resyncing) return resyncing;
+  // `allCi`: the dashboard's Sync, which reads the CI of every open pull request again (a CI
+  // delivery lost on a settled head); at start, only those not settled.
+  function resync({ allCi = false } = {}) {
+    // One going (the one at start): shared, then every CI read too if asked.
+    if (resyncing) return allCi ? resyncing.then((n) => (catchUp(openHeads()), n)) : resyncing;
     listed.clear();
     resyncing = (async () => {
       const byRepo = new Map();
@@ -229,6 +232,11 @@ export function createPulls({
             state,
             url: found.html_url ?? pr.url,
             ...(head && { head }),
+            // GitHub's time with the head it gave: a delivery older than it doesn't move it back.
+            ...(head !== pr.head &&
+              Number.isFinite(Date.parse(found.updated_at)) && {
+                updatedAt: Date.parse(found.updated_at),
+              }),
             ...(moved && { ci: { sha: head, state: "none", runs: [] } }),
           });
           dirty = true;
@@ -242,15 +250,23 @@ export function createPulls({
       // What CI deliveries lost meanwhile (the listener down, a delivery that failed): read
       // again for the open pull requests whose CI isn't settled for their head, after, so the
       // dashboard's Sync doesn't wait for them.
-      catchUp(
-        openPulls()
-          .filter(([, pr]) => ciStale(pr))
-          .map(([key]) => key),
-      );
+      catchUp(allCi ? openHeads() : stalePulls());
       return changed;
     })().finally(() => (resyncing = null));
     return resyncing;
   }
+
+  // The open pull requests whose CI isn't settled, read again at start.
+  const stalePulls = () =>
+    openPulls()
+      .filter(([, pr]) => ciStale(pr))
+      .map(([key]) => key);
+
+  // The open pull requests with a head, whose CI a user's Sync reads again.
+  const openHeads = () =>
+    openPulls()
+      .filter(([, pr]) => !!pr.head)
+      .map(([key]) => key);
 
   // The CI of the tasks in `keys` read again, CI_AT_ONCE at a time; resolves once all are read.
   // A catch-up still going takes the new keys after its own.
@@ -271,7 +287,8 @@ export function createPulls({
   // Whether an open pull request's CI is worth reading again from GitHub: never read for its
   // head (a new head's `none` included, as a delivery may have been lost), or still running.
   const ciStale = (pr) =>
-    !!pr.head && (pr.ci?.sha !== pr.head || pr.ci.state === "none" || pr.ci.state === "running");
+    !!pr.head &&
+    (pr.ciFailed || pr.ci?.sha !== pr.head || pr.ci.state === "none" || pr.ci.state === "running");
 
   // A delivery said CI changed on commit `sha` of `repo` (events.mjs ciDelivery()): the open
   // pull requests at that head read theirs again. A commit no pull request is at (an older head,
@@ -302,15 +319,22 @@ export function createPulls({
         try {
           ci = await readCi(repo, pr.head);
         } catch (error) {
-          // A delivery since asks again: the error may have passed.
+          // A delivery since asks again: the error may have passed. Else the next Sync does,
+          // the CI shown maybe out of date (ciFailed, ciStale()): no delivery may come again.
           log(`${key}: CI of #${pr.number}: ${error.message ?? error}`);
+          const now = pulls.get(key);
+          if (now?.head === pr.head && !now.ciFailed) {
+            pulls.set(key, { ...now, ciFailed: true });
+            pulls.save();
+          }
           continue;
         }
         const now = pulls.get(key);
         // Moved to another head meanwhile: that one's CI is the one shown.
         if (!ci || now?.head !== ci.sha) continue;
-        if (JSON.stringify(now.ci) === JSON.stringify(ci)) continue;
-        pulls.set(key, { ...now, ci });
+        if (JSON.stringify(now.ci) === JSON.stringify(ci) && !now.ciFailed) continue;
+        const { ciFailed, ...rest } = now;
+        pulls.set(key, { ...rest, ci });
         pulls.save();
         if (now.ci?.state !== ci.state) log(`${key}: CI of #${now.number} ${ci.state}`);
       } while (entry.again);
@@ -352,12 +376,12 @@ function mergePulls(kept, moved) {
   };
 }
 
-// Whether entries `a` and `b` are the same, but for their CI: readCiOf() writes only that, and
-// the lookups that were going meanwhile still apply.
+// Whether entries `a` and `b` are the same, but for their CI: readCiOf() writes only that (and
+// whether its last read failed), and the lookups that were going meanwhile still apply.
 function sameBesidesCi(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
-  const rest = ({ ci, ...other }) => other;
+  const rest = ({ ci, ciFailed, ...other }) => other;
   return JSON.stringify(rest(a)) === JSON.stringify(rest(b));
 }
 

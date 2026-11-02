@@ -768,3 +768,78 @@ test("pulls: an open pull request fill() finds for an older task gets its CI rea
   assert.equal(pulls.get("org/repo#32").state, "merged");
   assert.equal(pulls.get("org/repo#32").ci, undefined);
 });
+
+test("pulls: a failed CI read on a settled head is read again at the next resync, kept across a restart", async (t) => {
+  const path = tempPath(t);
+  let fail = false;
+  const read = [];
+  const readCi = async (repo, sha) => {
+    read.push(sha);
+    if (fail) throw new Error("GitHub GET /repos/org/repo/commits/a1/status: 403");
+    return ci(sha, read.length > 2 ? "failed" : "passed");
+  };
+  const listPulls = async () => [];
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  const pulls = createPulls({ path, listPulls, readCi });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  await settled();
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+  // Settled: the next resync at start leaves it.
+  await pulls.resync();
+  await pulls.caughtUp();
+  assert.deepEqual(read, ["a1"]);
+  // A failure was posted, and its read failed: the green check may be wrong now.
+  fail = true;
+  await pulls.ciChanged("org/repo", "a1");
+  assert.equal(pulls.get("org/repo#30").ciFailed, true);
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+  fail = false;
+  const next = createPulls({ path, listPulls, readCi });
+  await next.resync();
+  await next.caughtUp();
+  assert.equal(next.get("org/repo#30").ci.state, "failed");
+  assert.equal("ciFailed" in next.get("org/repo#30"), false);
+});
+
+test("pulls: resync({ allCi }) reads the CI of every open pull request, settled ones too", async (t) => {
+  const read = [];
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  const passed = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [],
+    readCi: async (repo, sha) => (read.push(sha), ci(sha, "passed")),
+  });
+  passed.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  passed.record("org/repo#32", sized({ ...pr(33, "merged"), head: "b2" }));
+  await settled();
+  read.length = 0;
+  await passed.resync();
+  await passed.caughtUp();
+  assert.deepEqual(read, []);
+  await passed.resync({ allCi: true });
+  await passed.caughtUp();
+  assert.deepEqual(read, ["a1"]);
+});
+
+test("pulls: the head resync found keeps GitHub's time: an older synchronize handled after doesn't move it back", async (t) => {
+  const listPulls = async () => [
+    {
+      number: 31,
+      html_url: "u31",
+      state: "open",
+      draft: false,
+      head: { sha: "c3" },
+      updated_at: "2026-11-02T10:00:00Z",
+    },
+  ];
+  const pulls = createPulls({ path: tempPath(t), listPulls, readCi: async () => null });
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1", updatedAt: 1000 }));
+  await pulls.resync();
+  assert.equal(pulls.get("org/repo#30").head, "c3");
+  assert.equal(pulls.get("org/repo#30").updatedAt, Date.parse("2026-11-02T10:00:00Z"));
+  // The synchronize of b2, between a1 and c3, redelivered by the same Sync.
+  const b2 = Date.parse("2026-11-02T09:00:00Z");
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2", updatedAt: b2 });
+  assert.equal(pulls.get("org/repo#30").head, "c3");
+});

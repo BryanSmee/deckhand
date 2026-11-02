@@ -25,6 +25,13 @@ const ACTIONS_APP = "github-actions";
 //
 // An array alone is `runs`.
 export function ciState(input = {}) {
+  const { state, failed, going } = decided(input);
+  return { state, failed, going };
+}
+
+// ciState()'s decision, with what it counted of each kind (`counted`: { runs, checks,
+// statuses }), which ciSummary() lists: the badge and the merge gate count the same ones.
+function decided(input) {
   const { runs, checks = [], statuses = [] } = Array.isArray(input) ? { runs: input } : input;
   const counted = countedRuns(runs ?? []);
   const others = checks.filter((c) => runs === undefined || c.app?.slug !== ACTIONS_APP);
@@ -42,7 +49,7 @@ export function ciState(input = {}) {
   ];
   const all = counted.length + others.length + contexts.length;
   const state = failed.length ? "failed" : going.length ? "running" : all ? "passed" : "none";
-  return { state, failed, going };
+  return { state, failed, going, counted: { runs: counted, checks: others, statuses: contexts } };
 }
 
 // `runs` without those cancelled and replaced: a newer run of the same workflow and event (by
@@ -83,23 +90,20 @@ function newer(x, y) {
 // A commit's CI for the dashboard (pulls.mjs, #436) → { state, runs: [{ name, state, url }] },
 // over ciState()'s input: its state, and each run, check run and status that counts, as running,
 // failed or passed, failed ones first. A cancelled run replaced by a newer one isn't listed, nor
-// the check runs of GitHub Actions when its runs are given: ciState() leaves them out too.
+// the check runs of GitHub Actions when its runs are given: the ones ciState() counts (decided()).
 export function ciSummary(input = {}) {
-  const { runs, checks = [], statuses = [] } = Array.isArray(input) ? { runs: input } : input;
-  const counted = countedRuns(runs ?? []);
-  const others = checks.filter((c) => runs === undefined || c.app?.slug !== ACTIONS_APP);
-  const contexts = latestStatuses(statuses);
-  const { state, failed, going } = ciState({ runs, checks, statuses });
+  const { state, failed, going, counted } = decided(input);
+  const { runs, checks, statuses } = counted;
   const of = (x) => (failed.includes(x) ? "failed" : going.includes(x) ? "running" : "passed");
   const RANK = { failed: 0, running: 1, passed: 2 };
   const items = [
-    ...counted.map((r) => ({
+    ...runs.map((r) => ({
       name: r.name ?? r.display_title ?? "?",
       state: of(r),
       url: r.html_url,
     })),
-    ...others.map((c) => ({ name: c.name ?? "?", state: of(c), url: c.html_url ?? c.details_url })),
-    ...contexts.map((s) => ({ name: s.context ?? "?", state: of(s), url: s.target_url })),
+    ...checks.map((c) => ({ name: c.name ?? "?", state: of(c), url: c.html_url ?? c.details_url })),
+    ...statuses.map((s) => ({ name: s.context ?? "?", state: of(s), url: s.target_url })),
   ]
     .map(({ url, ...item }) => ({ ...item, url: webUrl(url) }))
     .sort((a, b) => RANK[a.state] - RANK[b.state]);

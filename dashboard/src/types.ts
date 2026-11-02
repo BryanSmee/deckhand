@@ -122,6 +122,9 @@ export interface PullRequest {
   ci?: Ci;
   // When GitHub last changed it, as the delivery that recorded it said. Sent, not shown.
   updatedAt?: number;
+  // Its last CI read failed (a 5xx, a rate limit): `ci` may be out of date until the next one
+  // (listener/pulls.mjs ciStale()). Sent, not shown.
+  ciFailed?: boolean;
 }
 
 // failed when one run failed, else running while one hasn't finished, else passed; none

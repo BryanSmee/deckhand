@@ -1303,7 +1303,7 @@ per commit the orchestrator hasn't read yet (`ciWaitingKey()`, cleared when it r
 handling reads the commit's CI after the ones left out), so they never crowd the stream. The
 orchestrator handles them without a log line, and the redeliveries skip them: `resync()`
 starts, once it resolved and four at a time, a read of the CI of each open pull request not
-settled for its head (never read, `none` or still running). A merged or closed one keeps the
+settled for its head (never read, `none`, still running, or whose last read failed, `ciFailed`: a 5xx or a rate limit records nothing), at start; a user's Sync reads every open one's again (`allCi`), for a delivery lost on a settled head. A merged or closed one keeps the
 last CI known.
 
 ## Agents
