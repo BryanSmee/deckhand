@@ -40,7 +40,7 @@ import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
 import { proxyEnv } from "../egress.mjs";
 import { createInbox } from "./inbox.mjs";
-import { kubeName, labelValue } from "./kube-names.mjs";
+import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
 import { createNetworkProbe, PROBE } from "./kube-probe.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import { splitLines } from "./lines.mjs";
@@ -277,12 +277,7 @@ export function podSpec(
   if (caps.length) throw new Error(`the kubernetes runner adds no capabilities (${caps})`);
   const resources = { cpu: String(limits.cpus), memory: quantity(limits.memory) };
   const claimed = [...new Set(volumes.map((v) => v.name))];
-  const hardened = {
-    allowPrivilegeEscalation: false,
-    capabilities: { drop: ["ALL"] },
-    runAsNonRoot: true,
-    seccompProfile: { type: "RuntimeDefault" },
-  };
+  const hardened = restrictedContainer();
   const init = agentInit && claimed.includes(agentInit.volume) ? agentInit : null;
   const mountOf = (v) => ({
     name: `v${claimed.indexOf(v.name)}`,

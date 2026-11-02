@@ -16,15 +16,17 @@
 //   - a public address (PUBLIC).
 //
 // Every one has to fail, and the egress proxy's Service has to answer: a pod with no network at
-// all doesn't pass as isolated. The verdict is kept until the namespaces' NetworkPolicies change
-// or the runner takes its lease again (reset()); a probe that couldn't run (its pod didn't end,
-// an API error) isn't, and the next run's start tries again. Fail closed either way.
+// all doesn't pass as isolated. A target reached is a verdict, kept until the namespaces'
+// NetworkPolicies change or the runner takes its lease again (reset()); a probe that couldn't
+// tell (its pod didn't end, an API error, the proxy not answering: not ready yet, evicted) isn't,
+// and the next run's start tries again. Fail closed either way.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { SANDBOX_USER } from "../sandbox-spec.mjs";
-import { kubeName, labelValue } from "./kube-names.mjs";
+import { kubeName, restrictedContainer } from "./kube-names.mjs";
 
 // How long a connection is tried before it counts as out of reach.
 export const CONNECT_MS = 3000;
@@ -77,38 +79,24 @@ Promise.all(targets.map((t) => (t.proto === "udp" ? udp(t) : tcp(t)))).then((rea
 const at = ({ host, port, proto }) =>
   `${isIP(host) === 6 ? `[${host}]` : host}:${port}${proto === "udp" ? "/udp" : ""}`;
 
-// Which targets answered that mustn't have, and which that must didn't: `targets` are
-// { what, host, port, proto, reach }, `reached` the probe's booleans, in their order. Null when
-// a sandbox reaches the egress proxy alone.
+const says = (list) => list.map((t) => `${t.what} (${at(t)})`).join(", ");
+
+// The targets that answered and mustn't have, as the reason runs are refused, or null: `targets`
+// are { what, host, port, proto, reach }, `reached` the probe's booleans, in their order.
 export function probeProblem(targets, reached) {
-  const says = (list) => list.map((t) => `${t.what} (${at(t)})`).join(", ");
   const leaks = targets.filter((t, i) => !t.reach && reached[i]);
-  const missed = targets.filter((t, i) => t.reach && !reached[i]);
-  const problems = [];
-  if (leaks.length) {
-    problems.push(
-      `a pod labelled as a sandbox reached ${says(leaks)}: does the network plugin enforce NetworkPolicies? (Calico and Cilium do, Flannel alone doesn't)`,
-    );
-  }
-  if (missed.length) {
-    problems.push(
-      `a pod labelled as a sandbox couldn't reach ${says(missed)}, which sandboxes go out through`,
-    );
-  }
-  return problems.length ? problems.join("; ") : null;
+  if (!leaks.length) return null;
+  return `a pod labelled as a sandbox reached ${says(leaks)}: does the network plugin enforce NetworkPolicies? (Calico and Cilium do, Flannel alone doesn't)`;
 }
+
+// The targets that had to answer and didn't (the egress proxy).
+export const probeMissed = (targets, reached) => targets.filter((t, i) => t.reach && !reached[i]);
 
 // The probe pod: a sandbox's labels (`labels`), so the policies that pick sandboxes pick it,
 // and Pod Security `restricted`, as podSpec() (kubernetes.mjs) has them; no Secret, claim,
 // ServiceAccount token, Service links or DNS. `pullSecret`: the registry's, for the kubelet to
 // pull the base image with, never mounted.
 export function probePod({ pod, image, labels, targets, pullSecret = null }) {
-  const hardened = {
-    allowPrivilegeEscalation: false,
-    capabilities: { drop: ["ALL"] },
-    runAsNonRoot: true,
-    seccompProfile: { type: "RuntimeDefault" },
-  };
   const resources = { cpu: "100m", memory: "128Mi" };
   return {
     apiVersion: "v1",
@@ -139,7 +127,7 @@ export function probePod({ pod, image, labels, targets, pullSecret = null }) {
             JSON.stringify(targets.map(({ what, reach, ...t }) => t)),
           ],
           resources: { limits: resources, requests: resources },
-          securityContext: hardened,
+          securityContext: restrictedContainer(),
         },
       ],
     },
@@ -170,8 +158,6 @@ export function createNetworkProbe({
   lookup = (host) => dnsLookup(host, { all: true }),
   resolvConf = () => readFileSync("/etc/resolv.conf", "utf8"),
 }) {
-  const pod = kubeName(`${config.prefix}-network-probe`);
-  const podPath = `pods/${pod}`;
   const apart = services.namespace !== api.namespace;
   // The probe's verdict, for the policies it was made under.
   let kept = null; // { key, verdict: Promise<problem | null> }
@@ -254,14 +240,31 @@ export function createNetworkProbe({
     return list;
   }
 
+  // Probe pods older than any probe lasts: a runner's that stopped mid-probe. A younger one may
+  // be the other copy's, still probing during a handover: each probe's pod has a name of its own.
+  async function removeLeftovers(waitMs) {
+    const selector = Object.entries(labels)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(",");
+    const { items = [] } = await api.get("pods", { labelSelector: selector });
+    for (const left of items) {
+      const born = Date.parse(left.metadata?.creationTimestamp ?? "");
+      if (!left.metadata?.annotations?.[PROBE] || !(now() - born > waitMs)) continue;
+      await api
+        .remove(`pods/${left.metadata.name}`, { gracePeriodSeconds: 0 })
+        .catch((error) => log(`Network probe: removing ${left.metadata.name}: ${error.message}`));
+    }
+  }
+
   // Runs the probe pod once: its problem, or null. Throws when it couldn't tell.
   async function probe() {
     const list = await targets();
-    // A leftover of a runner that stopped mid-probe goes first.
-    await api.remove(podPath, { gracePeriodSeconds: 0 }).catch(() => {});
     // As long as a sandbox may stay Pending (KUBERNETES_PENDING_MINUTES), and a minute to run.
     const waitMs = config.kubernetes.pendingMs + 60_000;
+    await removeLeftovers(waitMs);
     const deadline = now() + waitMs;
+    const pod = kubeName(`${config.prefix}-network-probe-${randomBytes(4).toString("hex")}`);
+    const podPath = `pods/${pod}`;
     const spec = probePod({
       pod,
       image: config.image,
@@ -269,17 +272,8 @@ export function createNetworkProbe({
       targets: list,
       pullSecret: await pullSecret.forPods(),
     });
+    await api.create("pods", spec);
     try {
-      for (;;) {
-        try {
-          await api.create("pods", spec);
-          break;
-        } catch (error) {
-          // The leftover still terminating.
-          if (error.status !== 409 || now() >= deadline) throw error;
-          await sleep(POLL_MS);
-        }
-      }
       let found;
       for (;;) {
         found = await api.find(podPath);
@@ -313,7 +307,15 @@ export function createNetworkProbe({
           `its probe pod ended ${found.status.phase}${code === undefined ? "" : ` (exit ${code})`}, saying ${JSON.stringify(out.slice(-300))}`,
         );
       }
-      return probeProblem(list, reached);
+      const problem = probeProblem(list, reached);
+      const missed = probeMissed(list, reached);
+      // No network at all, or a proxy not ready: nothing proven either way, unless a leak.
+      if (!problem && missed.length) {
+        throw new Error(
+          `its probe pod couldn't reach ${says(missed)}, which sandboxes go out through: is it ready?`,
+        );
+      }
+      return problem;
     } finally {
       await api
         .remove(podPath, { gracePeriodSeconds: 0 })

@@ -1830,8 +1830,10 @@ test("remove: never a pod or a Secret of the namespace that isn't this deploymen
   assert.equal(objects.secrets.has("dh-org-repo-12-abc-1730000000-env"), false);
 });
 
-// The network probe (kube-probe.mjs): its pod's name, and what the cluster around it has.
-const PROBE_POD = "dh-network-probe";
+// The network probe (kube-probe.mjs): its pods (one name each), and what the cluster around it
+// has.
+const isProbe = (pod) => Boolean(pod?.metadata?.annotations?.["deckhand.probe"]);
+const probeIn = (objects) => [...objects.pods.values()].find(isProbe);
 const CLUSTER_SERVICES = {
   broker: {
     metadata: { name: "broker" },
@@ -1862,9 +1864,22 @@ const PROXY = "10.96.0.11:3128";
 
 // A runner whose network probe answers `reach(target)` for each of its targets ("host:port",
 // "/udp" after a UDP one), its pod ending `phase` (null: never). `targets()`: what the last
-// probe pod was asked to try; `probes()`: how many were made.
+// probe pod was asked to try; `probes()`: how many were made; `answers.reach` may change.
 function probed(t, { reach = (target) => target === PROXY, phase = "Succeeded", kubernetes } = {}) {
-  const logs = {};
+  const answers = { reach };
+  // Whatever the probe pod's name, its log is what it would print.
+  const logs = new Proxy(
+    {},
+    {
+      get: (_, name) =>
+        String(name).startsWith("dh-network-probe-")
+          ? () =>
+              new Response(
+                `${JSON.stringify(asked(s.objects.pods.get(name)).map((t) => answers.reach(t)))}\n`,
+              )
+          : undefined,
+    },
+  );
   const policies = [structuredClone(POLICY)];
   const env = {
     KUBERNETES_SERVICE_HOST: "10.96.0.1",
@@ -1888,18 +1903,18 @@ function probed(t, { reach = (target) => target === PROXY, phase = "Succeeded", 
         resolvConf: () => "search svc.cluster.local\nnameserver 10.96.0.10\n",
         sleep: async (ms) => {
           s.clock.at += ms;
-          const pod = s.objects.pods.get(PROBE_POD);
-          if (pod && phase) pod.status = { phase };
+          for (const pod of s.objects.pods.values()) {
+            if (isProbe(pod) && phase) pod.status = { phase };
+          }
         },
       },
     },
   );
   for (const [name, svc] of Object.entries(CLUSTER_SERVICES)) s.objects.services.set(name, svc);
-  logs[PROBE_POD] = () =>
-    new Response(`${JSON.stringify(asked(s.objects.pods.get(PROBE_POD)).map(reach))}\n`);
-  const made = () => s.bodies.filter((b) => b.metadata?.name === PROBE_POD);
+  const made = () => s.bodies.filter(isProbe);
   return {
     ...s,
+    answers,
     policies,
     looked,
     probes: () => made().length,
@@ -1917,7 +1932,8 @@ test("network probe: reaching the egress proxy alone, runs start; the verdict ke
   });
   await p.runner.start(spec());
   assert.ok(p.objects.pods.has("dh-org-repo-12-abc"));
-  assert.ok(!p.objects.pods.has(PROBE_POD), "the probe pod is removed");
+  assert.ok(!probeIn(p.objects), "the probe pod is removed");
+  assert.match(p.probePod().metadata.name, /^dh-network-probe-[0-9a-f]{8}$/);
   assert.deepEqual(p.targets(), [
     PROXY,
     "10.96.0.20:8081",
@@ -1943,11 +1959,9 @@ test("network probe: reaching the egress proxy alone, runs start; the verdict ke
   await p.runner.start(spec({ run: "dh-org-repo-12-abc-4", name: "dh-org-repo-15-abc" }));
   assert.equal(p.probes(), 3);
   // Labelled as a sandbox, it is none: never listed nor located.
-  p.objects.pods.set(PROBE_POD, {
-    ...p.probePod(),
-    status: { phase: "Running", podIP: "10.244.1.99" },
-  });
-  assert.ok(!(await p.runner.list()).some((s) => s.name === PROBE_POD));
+  const { name } = p.probePod().metadata;
+  p.objects.pods.set(name, { ...p.probePod(), status: { phase: "Running", podIP: "10.244.1.99" } });
+  assert.ok(!(await p.runner.list()).some((s) => s.name === name));
   assert.equal(await p.runner.locate("10.244.1.99"), null);
 });
 
@@ -1983,13 +1997,47 @@ test("network probe: a service, Redis, the registry, the cluster's DNS, the API 
   }
 });
 
-test("network probe: a pod that can't reach the egress proxy isn't isolated, it has no network", async (t) => {
+test("network probe: a pod that can't reach the egress proxy proves nothing: that run is refused, the next probes again", async (t) => {
+  // No network at all, or a proxy not ready yet (a fresh install, an evicted pod).
   const p = probed(t, { reach: () => false });
   await assert.rejects(
     p.runner.start(spec()),
-    /couldn't reach the egress proxy \(10\.96\.0\.11:3128\), which sandboxes go out through/,
+    /couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its probe pod couldn't reach the egress proxy \(10\.96\.0\.11:3128\), which sandboxes go out through/,
   );
   assert.equal(p.objects.pods.size, 0);
+  // The proxy back: the next run probes again, and starts.
+  p.answers.reach = (target) => target === PROXY;
+  await p.runner.start(spec());
+  assert.equal(p.probes(), 2);
+  assert.ok(p.objects.pods.has("dh-org-repo-12-abc"));
+  // A leak with the proxy missed is a leak all the same: kept.
+  const leaky = probed(t, { reach: (target) => target === "1.1.1.1:443" });
+  await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
+  await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
+  assert.equal(leaky.probes(), 1);
+});
+
+test("network probe: a leftover older than any probe is removed, a younger one (the other copy's, mid-handover) left alone", async (t) => {
+  const p = probed(t);
+  const left = (name, at) =>
+    p.objects.pods.set(name, {
+      metadata: {
+        name,
+        creationTimestamp: new Date(at).toISOString(),
+        labels: {
+          "deckhand.owner": "dh",
+          "deckhand.run": "network-probe",
+          "deckhand.role": "sandbox",
+        },
+        annotations: { "deckhand.probe": "network" },
+      },
+      status: { phase: "Running" },
+    });
+  left("dh-network-probe-old", p.clock.at - 60 * 60_000);
+  left("dh-network-probe-other", p.clock.at - 1000);
+  await p.runner.start(spec());
+  assert.ok(!p.objects.pods.has("dh-network-probe-old"));
+  assert.ok(p.objects.pods.has("dh-network-probe-other"));
 });
 
 test("network probe: a probe pod that fails or never ends refuses the run, is removed, and is tried again", async (t) => {
@@ -1998,7 +2046,7 @@ test("network probe: a probe pod that fails or never ends refuses the run, is re
     failed.runner.start(spec()),
     /couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its probe pod ended Failed/,
   );
-  assert.ok(!failed.objects.pods.has(PROBE_POD));
+  assert.ok(!probeIn(failed.objects));
   await assert.rejects(failed.runner.start(spec()), /its probe pod ended Failed/);
   assert.equal(failed.probes(), 2, "not kept: probed again");
 

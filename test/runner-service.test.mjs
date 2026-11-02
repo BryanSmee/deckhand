@@ -926,3 +926,22 @@ test("a build whose Dockerfile moved in between is planned again once", async (t
   assert.deepEqual(lines.at(-1), { type: "done", value: "dh-repo-org-repo:abc" });
   assert.deepEqual([looked, tries], [2, 2]);
 });
+
+test("activate: a runner with leased() (Kubernetes': its network probe) is told at each lease taken; Docker's has none", async (t) => {
+  const store = fileStore();
+  let leases = 0;
+  const kube = host();
+  kube.runner = { ...kube.runner, leased: () => leases++ };
+  const a = await copy(t, { store, backend: kube, ttlMs: 5000 });
+  assert.equal(a.lease.active(), true);
+  assert.equal(leases, 1);
+  // The other copy takes the lease over: told once more.
+  const b = await copy(t, { store, backend: kube, ttlMs: 5000 });
+  await a.lease.stop();
+  await until(() => b.lease.active(), { what: "the handover" });
+  assert.equal(leases, 2);
+  // Docker's runner: no leased(), and activating is no error.
+  const docker = await copy(t, { store: fileStore(), backend: host() });
+  assert.equal(docker.lease.active(), true);
+  assert.equal(docker.service.activate() instanceof Promise, true);
+});
