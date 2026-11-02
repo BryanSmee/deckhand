@@ -3562,6 +3562,7 @@ allow_capabilities contains "read:pulls"
           return JSON.stringify({
             ...ready.pull_request,
             head: { ...ready.pull_request.head, sha },
+            base: { ref: "trunk" },
           });
         },
       }),
@@ -3593,6 +3594,9 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /^SANDBOX_MODEL=sonnet$/m);
     assert.match(runEnv, /^SANDBOX_EFFORT=high$/m);
     assert.match(runEnv, /^TASK_PROMPT=Review pull request #13 of org\/repo\./m);
+    // Pinned to the commit it is posted on, whatever the head is when the agent reads it.
+    assert.match(runEnv, /Review commit `head-1`/);
+    assert.match(runEnv, /git diff origin\/trunk\.\.\.head-1/);
     // No auto-merge to decide: medium findings request changes, as the prompt says.
     assert.match(runEnv, /when there is a\s+critical, high or medium finding/);
     assert.doesNotMatch(runEnv, /This review tolerates/);

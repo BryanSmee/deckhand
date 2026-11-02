@@ -247,6 +247,26 @@ test("postReview: on the commit the run started from, when a push came meanwhile
   assert.deepEqual([posted.head, posted.pr.head.sha], ["start1", "abc123"]);
   // Not known: the head now, as before.
   assert.equal((await postReview(fakeGitHub(), "org/repo", 5, MESSAGE, "f")).head, "abc123");
+  // GitHub refusing that commit (force-pushed away, say): a review at the head now, not a plain
+  // comment; still the commit reviewed for its round, so the dashboard says it is outdated.
+  const gone = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": [422, 422, 200] });
+  const moved = await postReview(gone, "org/repo", 5, MESSAGE, "f", { from: "start1" });
+  const posts = gone.calls.filter((c) => c.method === "POST");
+  assert.deepEqual(
+    posts.map((c) => [c.body.event, c.body.commit_id]),
+    [
+      ["REQUEST_CHANGES", "start1"],
+      ["COMMENT", "start1"],
+      ["REQUEST_CHANGES", "abc123"],
+    ],
+  );
+  assert.deepEqual([moved.event, moved.head], ["REQUEST_CHANGES", "start1"]);
+  assert.deepEqual(gone.replies, []);
+  // At the head already: no second try, the plain comment as before.
+  const refused = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": 422 });
+  const same = await postReview(refused, "org/repo", 5, MESSAGE, "f", { from: "abc123" });
+  assert.equal(refused.calls.filter((c) => c.method === "POST").length, 2);
+  assert.deepEqual([same.event, refused.replies.length], [null, 1]);
 });
 
 test("postReview: the App's own pull request, unparsed messages, refusals", async () => {

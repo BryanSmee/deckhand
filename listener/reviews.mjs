@@ -284,12 +284,13 @@ function where({ path, line }, blob) {
 // Replies longer than GitHub takes are cut (as comments.mjs's).
 const cut = (text) => (text.length > 60000 ? `${text.slice(0, 60000)}\n\n…` : text);
 
-// The head commit of pull request `number` now, or null when GitHub can't say: where a review
-// run starts from (runs.mjs launch()), the commit its review is posted on (postReview() `from`).
+// Pull request `number` as GitHub has it now, { sha, base } (its head commit, its base branch),
+// or null when GitHub can't say: the commit a review run is pinned to (runs.mjs launch(),
+// prompts.mjs reviewPrompt()), which its review is posted on (postReview() `from`).
 export async function reviewStart({ github, log = () => {} }, repo, number) {
   try {
     const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
-    return pr?.head?.sha ?? null;
+    return pr?.head?.sha ? { sha: pr.head.sha, base: pr.base?.ref ?? null } : null;
   } catch (error) {
     log(`${repo}#${number}: looking the pull request's head up for its review: ${error.message}`);
     return null;
@@ -297,15 +298,16 @@ export async function reviewStart({ github, log = () => {} }, repo, number) {
 }
 
 // Posts the run's final message `text` on pull request `number` as one review (POST
-// /repos/{repo}/pulls/{n}/reviews), at the commit the run started from (`from`, reviewStart()),
+// /repos/{repo}/pulls/{n}/reviews), at the commit the run reviewed (`from`, reviewStart()),
 // else its current head: a commit pushed while it ran stays unreviewed, and the dashboard says
-// so (issue #535). `pr`: the pull request as it is now, `head`: the commit it was posted on.
-// The App can't request changes
-// on its own pull request (GitHub answers 422): then a comment review, the verdict in its
-// text. A review GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost.
-// `github`: the App's calls (server.mjs); `allowed`: the review's tolerance (reviews'
-// tolerance()); `full`: where the whole text is, should GitHub take only its start. The
-// comment fallback throws when GitHub refuses it too (comments.mjs reply()).
+// so (issue #535). `pr`: the pull request as it is now; `head`: the commit reviewed, its places
+// linked there. The App can't request changes on its own pull request (GitHub answers 422):
+// then a comment review, the verdict in its text. GitHub refusing `from` (gone from the pull
+// request after a force push, say): the same at its current head, `head` still `from`. A review
+// GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost. `github`: the
+// App's calls (server.mjs); `allowed`: the review's tolerance (reviews' tolerance()); `full`:
+// where the whole text is, should GitHub take only its start. The comment fallback throws when
+// GitHub refuses it too (comments.mjs reply()).
 export async function postReview(
   { github, reply, log = () => {} },
   repo,
@@ -321,21 +323,31 @@ export async function postReview(
   } catch (error) {
     log(`${repo}#${number}: looking the pull request up for its review: ${error.message}`);
   }
-  const sha = from ?? pr?.head?.sha ?? null;
+  const now = pr?.head?.sha ?? null;
+  const sha = from ?? now;
   const site = pr?.base?.repo?.html_url;
   const blob = sha && site ? `${site}/blob/${sha}` : null;
   const body = `${cut(reviewBody(review, text, footer, blob))}\n\n${MARKER}`;
-  const post = (event) =>
+  const post = (event, at) =>
     github(
       repo,
       "POST",
       `/repos/${repo}/pulls/${number}/reviews`,
-      { body, event, ...(sha ? { commit_id: sha } : {}) },
+      { body, event, ...(at ? { commit_id: at } : {}) },
       [422],
     );
-  let event = reviewEvent(review);
-  let res = await post(event);
-  if (res.status === 422 && event !== "COMMENT") res = await post((event = "COMMENT"));
+  // Its verdict, else a comment review, at commit `at`.
+  const attempt = async (at) => {
+    let event = reviewEvent(review);
+    let res = await post(event, at);
+    if (res.status === 422 && event !== "COMMENT") res = await post((event = "COMMENT"), at);
+    return { res, event };
+  };
+  let { res, event } = await attempt(sha);
+  if (res.status === 422 && from && now && from !== now) {
+    log(`${repo}#${number}: the review was refused at ${short(from)}, posted at ${short(now)}`);
+    ({ res, event } = await attempt(now));
+  }
   if (res.ok) return { event, review, pr, head: sha };
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
   await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
