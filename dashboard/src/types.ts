@@ -968,7 +968,8 @@ export interface McpClient {
 // left out. `up`: answered, started 5 minutes ago or more; `starting`: answered, started less
 // than 5 minutes ago (a restart, an update); `down`: no answer, `reason` says why in a word
 // ("timeout", "refused", "HTTP 503"). Times in ms, by the orchestrator's clock; `startedAt` and
-// `version` null when down, or from a service that doesn't say.
+// `version` null when down, or from a service that doesn't say. `warnings`: what a service said
+// of its setup at start (its blobs taking Redis's memory, lib/blobs.mjs), when it said any.
 export type ServiceName =
   "edge" | "orchestrator" | "runner" | "broker" | "github" | "models" | "policy" | "proxy";
 
@@ -981,6 +982,7 @@ export interface ServiceHealth {
   version: string | null;
   checkedAt: number;
   reason?: string;
+  warnings?: string[];
 }
 
 export interface Health {

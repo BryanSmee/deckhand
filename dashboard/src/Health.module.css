@@ -130,6 +130,36 @@
   font-size: 13px;
 }
 
+/* What the services said of their setup: a soft notice in the warning tone. */
+.warnings {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--s-solid);
+  border-radius: 8px;
+  background: var(--s-bg);
+  color: var(--text);
+  font-size: 13px;
+  list-style: none;
+}
+
+.warnings li {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.warnings li > span:first-child {
+  flex: none;
+  transform: translateY(-1px);
+}
+
+.warningName {
+  font-weight: 600;
+}
+
 .legend {
   display: flex;
   flex-wrap: wrap;
