@@ -3,7 +3,7 @@
 // (everything under test/ matches its patterns), where it finds no test.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { generateKeyPairSync } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -40,6 +40,7 @@ import { opaBinary } from "../policy-service/opa.mjs";
 import { createPolicyService, ROUTES } from "../policy-service/service.mjs";
 import { openLog } from "../listener/runlog.mjs";
 import { overlaps } from "../lib/subnets.mjs";
+import { signer } from "../lib/s3.mjs";
 
 // Whether the real `opa` is on the PATH (the listener's image has it): the tests that evaluate
 // Deckhand's policies as written skip without it, the fakes cover the listener's side. Asked
@@ -700,6 +701,138 @@ export function withBlobs(images, readFile) {
           ? ((await readFile(asked.repo, asked.dockerfile, asked.ref))?.sha ?? null)
           : null,
       }),
+  };
+}
+
+// An S3-compatible server of one bucket, in memory (lib/s3.mjs's tests): PUT, GET (a `Range`
+// too), HEAD and DELETE, path-style or virtual-hosted (`<bucket>.<host>`). It checks each
+// request's signature against its key pair, and the payload's hash, and refuses one that
+// doesn't match as S3 does (403 SignatureDoesNotMatch, its body quoting the signature).
+// `fail(...modes)`: the next requests, one mode each, fail instead: { status, code } (a 503
+// SlowDown), "hang" (never answers), "reset" (the connection dropped). `ignoreRange`: answers a
+// ranged GET with the whole object, as a server that doesn't do ranges; `overRange`, with a byte
+// more than asked; `headWithoutSize`, a HEAD without its content-length. `objects`: key →
+// Buffer; `requests`: { method, key, headers } of each one that came, failed or not;
+// `arrived(n)`: once `n` of them came. `basePath`: where it answers on its host (`/s3`).
+export async function fakeS3(
+  t,
+  {
+    accessKeyId = "AKIDFAKES3TEST",
+    secretAccessKey = "fake-s3-secret-key-0123456789abcdefABCDEF",
+    region = "us-east-1",
+    bucket = "deckhand",
+    ignoreRange = false,
+    basePath = "",
+    overRange = false,
+    headWithoutSize = false,
+  } = {},
+) {
+  const sign = signer({ accessKeyId, secretAccessKey, region });
+  const objects = new Map();
+  const requests = [];
+  const arrivals = []; // { count, resolve }
+  const failures = [];
+  const AUTH =
+    /^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=([0-9a-f]{64})$/;
+  const xml = (res, status, code, extra = "") => {
+    res.writeHead(status, { "content-type": "application/xml" });
+    res.end(`<?xml version="1.0"?><Error><Code>${code}</Code>${extra}</Error>`);
+  };
+
+  const { url, server } = await serve(t, async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const body = Buffer.concat(chunks);
+    const host = req.headers.host ?? "";
+    const [path] = req.url.split("?");
+    const parts = path.slice(basePath.length + 1).split("/");
+    const named = host.startsWith(`${bucket}.`) ? bucket : parts.shift();
+    const key = parts.map(decodeURIComponent).join("/");
+    requests.push({ method: req.method, key, headers: req.headers });
+    for (const waiting of arrivals) if (requests.length >= waiting.count) waiting.resolve();
+
+    const failure = failures.shift();
+    if (failure === "hang") return;
+    if (failure === "reset") return req.socket.destroy();
+    if (failure) return xml(res, failure.status, failure.code);
+
+    const auth = AUTH.exec(req.headers.authorization ?? "");
+    const signedNames = auth?.[4].split(";") ?? [];
+    const required = ["host", "x-amz-content-sha256", "x-amz-date"];
+    if (!auth || auth[1] !== accessKeyId || auth[3] !== region) {
+      return xml(res, 403, "InvalidAccessKeyId");
+    }
+    if (!required.every((name) => signedNames.includes(name))) {
+      return xml(res, 403, "AccessDenied");
+    }
+    const payloadHash = createHash("sha256").update(body).digest("hex");
+    if (req.headers["x-amz-content-sha256"] !== payloadHash) {
+      return xml(res, 400, "XAmzContentSHA256Mismatch");
+    }
+    const headers = Object.fromEntries(signedNames.map((name) => [name, req.headers[name] ?? ""]));
+    const expected = sign({ method: req.method, path, headers, payloadHash });
+    if (expected !== req.headers.authorization) {
+      return xml(
+        res,
+        403,
+        "SignatureDoesNotMatch",
+        `<SignatureProvided>${auth[5]}</SignatureProvided>`,
+      );
+    }
+    if (named !== bucket) return xml(res, 404, "NoSuchBucket");
+
+    const object = objects.get(key);
+    switch (req.method) {
+      case "PUT":
+        objects.set(key, body);
+        res.writeHead(200, { etag: `"${createHash("md5").update(body).digest("hex")}"` });
+        return res.end();
+      case "DELETE":
+        objects.delete(key);
+        res.writeHead(204);
+        return res.end();
+      case "HEAD":
+        res.writeHead(
+          object ? 200 : 404,
+          object && !headWithoutSize ? { "content-length": object.length } : {},
+        );
+        return res.end();
+      case "GET": {
+        if (!object) return xml(res, 404, "NoSuchKey");
+        const range = /^bytes=(\d+)-(\d*)$/.exec(req.headers.range ?? "");
+        if (!range || ignoreRange) {
+          res.writeHead(200, { "content-length": object.length });
+          return res.end(object);
+        }
+        const start = Number(range[1]);
+        if (start >= object.length) return xml(res, 416, "InvalidRange");
+        const asked = (range[2] ? Number(range[2]) : Infinity) + (overRange ? 1 : 0);
+        const end = Math.min(asked, object.length - 1);
+        res.writeHead(206, {
+          "content-length": end - start + 1,
+          "content-range": `bytes ${start}-${end}/${object.length}`,
+        });
+        return res.end(object.subarray(start, end + 1));
+      }
+      default:
+        return xml(res, 405, "MethodNotAllowed");
+    }
+  });
+  // A hanging request's connection doesn't hold the server's close back.
+  t.after(() => server.closeAllConnections());
+  return {
+    endpoint: url,
+    bucket,
+    accessKeyId,
+    secretAccessKey,
+    region,
+    objects,
+    requests,
+    fail: (...modes) => failures.push(...modes),
+    arrived: (count) =>
+      requests.length >= count
+        ? Promise.resolve()
+        : new Promise((resolve) => arrivals.push({ count, resolve })),
   };
 }
 
