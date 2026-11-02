@@ -50,6 +50,7 @@ import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
 import { openStore } from "../lib/store.mjs";
 import { readJson } from "../lib/files.mjs";
+import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
 import { createEdgeClient } from "../edge/client.mjs";
 import { checkAppSettings, loadCredentials, saveCredentials } from "../listener/github-app.mjs";
 import { hasLabel, pullEntry, taskKey } from "../listener/events.mjs";
@@ -133,9 +134,8 @@ const NO_APP_MS = 5000;
 
 const env = process.env;
 
-function log(...args) {
-  console.log(new Date().toISOString(), ...args);
-}
+// Its lines redact the operator's secrets too, once known (storeSecrets, below).
+const log = createLogger({ service: "orchestrator", secrets: () => storeSecrets() });
 
 // The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
 // its stream of their events. Its calls carry the orchestrator's service tokens: for the broker, the policy service, the
@@ -159,7 +159,7 @@ try {
     log,
   });
 } catch (error) {
-  console.error(error.message);
+  log.error(error.message);
   process.exit(1);
 }
 const held = await models.credentials();
@@ -179,9 +179,9 @@ try {
   // now; a broken repo file stops that repo's runs only, so the others start.
   const grants = loadGrants(config);
   for (const error of grantErrors(grants)) {
-    console.error(`${error.message} (no run starts in that repository until it is fixed)`);
+    log.error(`${error.message} (no run starts in that repository until it is fixed)`);
   }
-  for (const warning of grantWarnings(grants)) console.error(`Warning: grants: ${warning}`);
+  for (const warning of grantWarnings(grants)) log.warn(`Grants: ${warning}`);
   // Loud on purpose: model output reaches these default branches with no human reading it.
   let files = new Map();
   try {
@@ -190,19 +190,19 @@ try {
     // The policies' own check says it (policies.checkOperator()).
   }
   for (const file of autoMergeFiles(files)) {
-    console.error(
-      `WARNING: policy/${file} in the grants folder grants auto-merge: with review.merge in their .deckhand.yaml, Deckhand merges its own pull requests in those repositories with no human review (docs/security.md#auto-merge)`,
+    log.warn(
+      `policy/${file} in the grants folder grants auto-merge: with review.merge in their .deckhand.yaml, Deckhand merges its own pull requests in those repositories with no human review (docs/security.md#auto-merge)`,
     );
   }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
-  console.error(error.message);
+  log.error(error.message);
   process.exit(1);
 }
 // Not root (#536): a data volume it can't write would fail run after run, so it doesn't start.
 const unwritable = unwritableData(config.dataDir);
 if (unwritable.length) {
-  for (const line of unwritable) console.error(line);
+  for (const line of unwritable) log.error(line);
   process.exit(1);
 }
 const logDir = join(config.dataDir, "logs");
@@ -257,7 +257,8 @@ let acting = false;
 const services = createServicesHttp({
   // The broker service's keys.
   keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
-  bound: networkCallers(config.serviceNetworks),
+  // none on Kubernetes: the callers' service tokens, and NetworkPolicies (deploy/kubernetes/).
+  bound: config.serviceNetworks === "none" ? null : networkCallers(config.serviceNetworks),
   pendingTokens,
   edge: () => edgeReady,
   active: () => acting,
@@ -312,7 +313,7 @@ sigterm = () => {
 };
 await servicesListening;
 leaseLost = () => {
-  console.error("The orchestrator's lease is lost: another copy acts now. Exiting.");
+  log.error("The orchestrator's lease is lost: another copy acts now. Exiting.");
   process.exit(1);
 };
 
@@ -463,7 +464,7 @@ let handedOver = Promise.resolve();
             // asking again changes nothing. Anything else (a service not up yet, its keys not
             // read: 401, 503) is asked again.
             if (error.status !== 409 && error.status !== 400) throw error;
-            console.error(
+            log.error(
               `The GitHub App's key: the github service refused it (${error.message}). It stays in /data/app.json until resolved by hand: remove the github service's app.json (its github-key volume) to take this App's, or this one's key from /data/app.json to keep the service's (docs/setup.md#the-github-service)`,
             );
           }
@@ -500,7 +501,7 @@ async function handOverToEdge(kept) {
       return true;
     } catch (error) {
       if (error.status !== 409 && error.status !== 400) throw error;
-      console.error(
+      log.error(
         `The GitHub App's credentials: edge refused them (${error.message}). They stay in /data/app.json until resolved by hand: remove edge's app.json (its edge-data volume) to take this App's, or /data/app.json to keep edge's (docs/setup.md#from-the-listener)`,
       );
       return false;
@@ -666,12 +667,12 @@ const policies = createPolicies({
 });
 policies.checkOperator().then(({ errors, warnings }) => {
   for (const error of errors) {
-    console.error(
+    log.error(
       `Policies (Deckhand's and GRANTS_DIR/policy): ${error} (every decision a policy is asked for refuses until it is fixed)`,
     );
   }
   for (const warning of warnings)
-    console.error(`Policies (Deckhand's and GRANTS_DIR/policy): ${warning}`);
+    log.warn(`Policies (Deckhand's and GRANTS_DIR/policy): ${warning}`);
 });
 
 // The names of the board's lanes: one a maintainer typed, or a parent's title (lanes.mjs).
@@ -1237,14 +1238,17 @@ sigterm = () => {
 // (an acknowledgement isn't lost for longer: edge's stream keeps the delivery until then).
 const handledKey = (id) => `deliveries/handled/${id}`;
 const HANDLED_TTL_MS = 3600_000;
+// Each one handled under the request ID edge gave it, with its repository and issue: what it
+// logs here, and the calls it makes to the other services, carry them.
 edge.consume(
-  async (entry) => {
-    if (entry?.id && (await store.get(handledKey(entry.id)))) return;
-    // Edge took it with an App this copy hasn't heard of yet (set up a moment ago): asked now,
-    // and the delivery read again later without one.
-    if (!ctx.app && !(await refreshApp())) throw new Error("no GitHub App known yet");
-    await http.deliver(entry ?? {});
-    if (entry?.id) await store.set(handledKey(entry.id), 1, { ttlMs: HANDLED_TTL_MS });
-  },
+  (entry) =>
+    withLogContext(deliveryContext(entry), async () => {
+      if (entry?.id && (await store.get(handledKey(entry.id)))) return;
+      // Edge took it with an App this copy hasn't heard of yet (set up a moment ago): asked now,
+      // and the delivery read again later without one.
+      if (!ctx.app && !(await refreshApp())) throw new Error("no GitHub App known yet");
+      await http.deliver(entry ?? {});
+      if (entry?.id) await store.set(handledKey(entry.id), 1, { ttlMs: HANDLED_TTL_MS });
+    }),
   { active: () => !ctx.stopping },
 );

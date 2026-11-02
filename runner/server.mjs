@@ -7,6 +7,7 @@ import { hostname } from "node:os";
 import { join } from "node:path";
 import { activePassive } from "../lib/active.mjs";
 import { DRAIN_MS } from "../lib/drain.mjs";
+import { createLogger } from "../lib/log.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
@@ -24,9 +25,7 @@ import { createLogs } from "./logs.mjs";
 import { createRunnerService, loginRefresh } from "./service.mjs";
 
 const env = process.env;
-function log(...args) {
-  console.log(new Date().toISOString(), ...args);
-}
+const log = createLogger({ service: "runner" });
 
 let config;
 let backend;
@@ -54,11 +53,13 @@ try {
   backend = createBackend({ config, inboxDir: join(config.dataDir, "runs"), mirror, log });
 } catch (error) {
   if (!(error instanceof ConfigError) && !/SERVICE_NETWORKS/.test(error.message)) throw error;
-  console.error(error.message);
+  log.error(error.message);
   process.exit(1);
 }
 
-const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`);
+const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
+  password: env.REDIS_PASSWORD,
+});
 
 // The orchestrator's services port: a run's first tokens (which the orchestrator has the broker service sign, with the claims it decided). The
 // github service (#502): the repos' tarballs and blobs.

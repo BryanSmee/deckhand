@@ -227,7 +227,7 @@ export function Preferences({ notify, user }: { notify: Notify; user?: string })
         {user && (
           <Row
             title={`Signed in as @${user}`}
-            help="Through GitHub. The operator's ALLOWED_USERS lets you in."
+            help="Through GitHub. The operator's ALLOWED_USERS lets you in. Signing out ends your sessions on every device, and your MCP clients'."
           >
             <form method="post" action="auth/logout">
               <Button type="submit">Sign out</Button>

@@ -28,6 +28,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drainOnSigterm } from "../lib/drain.mjs";
+import { createLogger } from "../lib/log.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
@@ -276,10 +277,15 @@ export function createModels({
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const log = (...args) => console.log(new Date().toISOString(), ...args);
   // With the plans' logins found in the credentials folder (/data/credentials) when their
   // variables are unset.
   const env = withCredentialFiles(process.env);
+  // Its lines redact the agents' credentials too, and the plans' refreshed logins once known.
+  let logins = () => [];
+  const log = createLogger({
+    service: "models",
+    secrets: () => [...credentialValues(env), ...logins()],
+  });
   let started;
   try {
     const config = loadConfig(env, readConfigFile(env), { service: "models" });
@@ -326,10 +332,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       !/SERVICE_NETWORKS|DRAIN_SECONDS|key/.test(error.message)
     )
       throw error;
-    console.error(`Models: ${error.message}`);
+    log.error(`Models: ${error.message}`);
     process.exit(1);
   }
-  const { server, config, broker, caller, store, graceMs, ready } = started;
+  const { server, config, broker, caller, store, graceMs, ready, endpoints } = started;
+  logins = () => [...endpoints.openai.secrets(), ...endpoints.google.secrets()];
   const port = Number(env.PORT ?? 8080);
   server.listen(port, () => log(`Models on :${server.address().port}`));
   for (const name of [config.claudeCredential, config.openaiCredential, config.agyCredential]) {

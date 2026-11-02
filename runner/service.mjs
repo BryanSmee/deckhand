@@ -32,6 +32,7 @@ import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
 import { buildPlan, buildProblem, validRepo } from "./builds.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId } from "./logs.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 // Who may call what. A route that isn't here is refused to everyone.
 export const ROUTES = {
@@ -534,22 +535,25 @@ export function createRunnerService({
       if (!res.headersSent && value !== undefined) sendJson(res, value);
     } catch (error) {
       if (res.headersSent) {
-        log(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
+        (log.error ?? log)(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
         return res.destroy();
       }
       if (error instanceof Refused) {
+        // Not this copy's to answer (it waits, or stops): the connection isn't kept for the next
+        // call, which then reaches the copy that acts, behind one Service on Kubernetes.
+        if (error.status === 503) res.setHeader("connection", "close");
         return sendJson(
           res,
           { message: error.message, ...(error.size !== undefined && { size: error.size }) },
           error.status,
         );
       }
-      log(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
+      (log.error ?? log)(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
       sendJson(res, { message: error.message ?? String(error) }, 500);
     }
   }
 
-  const server = drainable(createServer((req, res) => void handle(req, res)));
+  const server = drainable(createServer(withRequest((req, res) => void handle(req, res))));
   let stopping = false;
   let watching = null;
 

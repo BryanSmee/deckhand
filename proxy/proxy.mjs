@@ -27,6 +27,8 @@
 // vouched for with the proxy's own service token: the network (or pod) it came from, as the
 // policy said.
 // Everything else, and every CONNECT to another host, is forwarded as is: a raw tunnel.
+// A second port (ENGINE_PROXY_PORT) is the container engines', where one shares its sandbox's
+// address (a Kubernetes pod): the policy is told, and answers as for an engine on Docker.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { createServer, request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
@@ -48,7 +50,8 @@ import {
   SANDBOX_HEADER,
 } from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
-import { SANDBOX_URLS } from "../lib/services.mjs";
+import { createLogger, REQUEST_HEADER } from "../lib/log.mjs";
+import { ENGINE_PROXY_PORT, SANDBOX_URLS } from "../lib/services.mjs";
 import { untilReached } from "./wait.mjs";
 
 // Where they were first: the tests import them from here.
@@ -72,9 +75,10 @@ export function drainMs(text) {
 // service reads it, and a client's own is dropped.
 export const CLIENT_HEADER = "x-deckhand-client";
 
-// What the services read a sandbox's call by (lib/broker-client.mjs): whatever the client sent
-// in them is dropped.
-const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER];
+// What the services read a sandbox's call by (lib/broker-client.mjs), and the request ID their
+// lines are logged under (lib/log.mjs): whatever the client sent in them is dropped, so a
+// sandbox's call gets an ID of its own at the service, never another webhook's.
+const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER, REQUEST_HEADER];
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.
 export function target(authority) {
@@ -88,11 +92,17 @@ export function target(authority) {
 // `decrypt`, a tunnel. An orchestrator restarting is waited for (wait.mjs; `wait`: its clock, in
 // the tests), unless the client left (`gone()`). `forward`: the host is a service's name, whose
 // plain HTTP the proxy forwards (SANDBOX_URLS): the policy allows it for the runs' sandboxes
-// and engines only.
+// and engines only. `engine`: it came in on the engines' port (ENGINE_PROXY_PORT), so it is the
+// engine's of the run at that address.
 export function egressPolicy(url, timeoutMs = 5000, wait = {}) {
-  return async (ip, host, { gone, forward } = {}) => {
+  return async (ip, host, { gone, forward, engine } = {}) => {
     try {
-      const query = new URLSearchParams({ ip, host, ...(forward && { forward: "1" }) });
+      const query = new URLSearchParams({
+        ip,
+        host,
+        ...(forward && { forward: "1" }),
+        ...(engine && { engine: "1" }),
+      });
       const res = await untilReached(
         () => fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) }),
         { ...wait, ...(gone && { gone }) },
@@ -214,7 +224,10 @@ export function createProxy({
   wait = {},
   now = Date.now,
   log = () => {},
+  // Its connections are a run's container engine's (ENGINE_PROXY_PORT): the policy is told.
+  engine = false,
 }) {
+  const asEngine = engine ? { engine: true } : {};
   // { address to connect to, whether its answers may be cached, and its HTTPS decrypted to do
   // so, or relayed }, or a Refused saying why not.
   async function decide(client, host, gone) {
@@ -228,7 +241,7 @@ export function createProxy({
       service,
       models,
       sandbox,
-    } = await policy(ip, host, { gone });
+    } = await policy(ip, host, { gone, ...asEngine });
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
       throw new Refused(
@@ -522,7 +535,7 @@ export function createProxy({
     const { allowed, sandbox } = await policy(
       req.socket.remoteAddress.replace(/^::ffff:/, ""),
       url.hostname,
-      { gone: () => req.socket.readableEnded || req.socket.destroyed, forward: true },
+      { gone: () => req.socket.readableEnded || req.socket.destroyed, forward: true, ...asEngine },
     );
     if (req.socket.destroyed) return;
     if (!allowed) return forbid(403, `only a running sandbox reaches the ${name} service`);
@@ -719,7 +732,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The orchestrator's egress policy, on its own port.
   const url = process.env.POLICY_URL || "http://orchestrator:8082/egress";
   const port = Number(process.env.PORT ?? 3128);
-  const log = (...args) => console.log(new Date().toISOString(), ...args);
+  const log = createLogger({ service: "egress" });
   const dir = process.env.EGRESS_CACHE_DIR || "/cache";
   const cache = createCache({
     dir,
@@ -750,7 +763,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   };
   for (const [name, value] of Object.entries(urls)) {
     if (!/^https?:\/\/[^,\s]+$/.test(value)) {
-      console.error(
+      log.error(
         `${name}: ${value} is not one http(s) URL: the egress proxy takes one address, which balances between the service's copies`,
       );
       process.exit(1);
@@ -768,7 +781,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const githubService = { url: urls.GITHUB_SERVICE_URL, header: () => caller.header("github") };
   const modelsService = { url: urls.MODELS_SERVICE_URL, header: () => caller.header("models") };
   const https = authority ? ", HTTPS too" : "";
-  const proxy = createProxy({
+  const options = {
     policy: egressPolicy(url),
     cache,
     authority,
@@ -776,14 +789,20 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     githubService,
     modelsService,
     log,
-  });
+  };
+  const proxy = createProxy(options);
   proxy.listen(port, () =>
     log(`Egress proxy on :${port}, asking ${url}; cache ${cache.enabled ? `on${https}` : "off"}`),
+  );
+  // The same, for the container engines that share their sandbox's address (#573).
+  const engines = createProxy({ ...options, engine: true });
+  engines.listen(ENGINE_PROXY_PORT, () =>
+    log(`Container engines' egress on :${ENGINE_PROXY_PORT}`),
   );
   // On SIGTERM, the requests in flight get DRAIN_SECONDS, then what is still open (long-lived
   // tunnels: a raw one is never known to be idle) is cut. Alone, a short grace, before compose's
   // stop_grace_period (30 s): `docker compose up` starts the next proxy only once this one
   // exited, and nothing in a sandbox tries a refused connection again. Beside a second copy,
   // which takes the new connections, as long as an agent call.
-  drainOnSigterm([proxy], { graceMs: drainMs(process.env.DRAIN_SECONDS), log });
+  drainOnSigterm([proxy, engines], { graceMs: drainMs(process.env.DRAIN_SECONDS), log });
 }

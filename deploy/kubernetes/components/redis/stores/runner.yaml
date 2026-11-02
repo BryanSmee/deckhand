@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner
+  namespace: deckhand
+spec:
+  template:
+    spec:
+      containers:
+        - name: runner
+          env:
+            - name: STORE_URL
+              value: "redis://runner@redis:6379?prefix=deckhand:runner:"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deckhand-redis
+                  key: runner
+      # Its claims are ReadWriteMany (kustomization.yaml): its copies on any node.
+      affinity: null

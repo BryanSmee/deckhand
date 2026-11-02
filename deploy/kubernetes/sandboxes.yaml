@@ -1,0 +1,64 @@
+# The sandboxes' namespace's NetworkPolicies (docs/kubernetes.md): nothing comes
+# in, and the egress proxy's port is the only way out. The runner checks them before every run
+# and refuses to start one otherwise (listener/runner/kubernetes.mjs isolationProblem()). They
+# isolate nothing on a network plugin that doesn't enforce them: check yours with
+# check-isolation.sh (docs/kubernetes.md).
+#
+# Everything in the namespace, the caches' check pods included: no way in or out.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-default-deny
+  namespace: deckhand-sandboxes
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The sandboxes: to the proxy's pods alone, on its port. The peer names the services'
+# namespace and every label of the egress Service's selector (egress.yaml), so it picks no
+# other pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-sandboxes
+  namespace: deckhand-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      deckhand.role: sandbox
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: deckhand
+          podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 3128
+          protocol: TCP
+---
+# The agents' installs (docs/kubernetes.md#agents-on-kubernetes): the proxy too, which lets them
+# reach their agent's install hosts only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-installs
+  namespace: deckhand-sandboxes
+spec:
+  podSelector:
+    matchLabels:
+      deckhand.role: install
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: deckhand
+          podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 3128
+          protocol: TCP

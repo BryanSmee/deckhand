@@ -230,6 +230,30 @@ test("CONNECT to a hex IPv4-mapped literal is refused", async (t) => {
   assert.match(answer, /^HTTP\/1\.1 403[^]*private address/);
 });
 
+test("the engines' proxy tells the policy its connections are an engine's; the sandboxes' doesn't", async (t) => {
+  const asked = [];
+  const policy = async (ip, host, options) => (asked.push(options), { allowed: false });
+  for (const engine of [false, true]) {
+    const proxy = createProxy({ policy, engine });
+    await listening(proxy);
+    t.after(() => proxy.close());
+    const port = proxy.address().port;
+    assert.match(await raw(port, "CONNECT example.com:443 HTTP/1.1\r\n\r\n"), /^HTTP\/1\.1 403/);
+    const get =
+      "GET http://broker:8081/run/inbox HTTP/1.1\r\nhost: broker\r\nconnection: close\r\n\r\n";
+    assert.match(await raw(port, get), /^HTTP\/1\.1 403/);
+  }
+  assert.deepEqual(
+    asked.map((o) => [!!o.engine, !!o.forward]),
+    [
+      [false, false],
+      [false, true],
+      [true, false],
+      [true, true],
+    ],
+  );
+});
+
 test("CONNECT targets", () => {
   assert.deepEqual(target("GitHub.com:443"), { host: "github.com", port: 443 });
   assert.deepEqual(target("[2606:4700::1]:443"), { host: "2606:4700::1", port: 443 });
@@ -264,6 +288,9 @@ test("the orchestrator's policy: its answer, or refused when it can't answer", a
   });
   assert.equal((await policy("10.0.0.5", "good.broker", { forward: true })).sandbox, "net-a");
   assert.equal(asked.at(-1), "/egress?ip=10.0.0.5&host=good.broker&forward=1");
+  // A connection on the engines' port says so (#573).
+  await policy("10.0.0.5", "good.com", { engine: true });
+  assert.equal(asked.at(-1), "/egress?ip=10.0.0.5&host=good.com&engine=1");
   assert.equal((await policy("10.0.0.5", "good.cached.com")).cache, true);
   assert.equal((await policy("10.0.0.5", "good.cached.com")).decrypt, false);
   assert.equal((await policy("10.0.0.5", "good.cached.decrypt.com")).decrypt, true);
@@ -305,7 +332,7 @@ test("a push to the github service's name goes there, with the network the polic
   const basic = `Basic ${Buffer.from("x:run-token").toString("base64")}`;
   const text = await via(
     `${SANDBOX_URLS.github}/git/org/repo.git/info/refs?service=git-receive-pack`,
-    { authorization: basic, "x-deckhand-sandbox": "net-other" },
+    { authorization: basic, "x-deckhand-sandbox": "net-other", "x-deckhand-request": "chosen" },
   );
   assert.match(text, /^HTTP\/1\.1 200/);
   assert.deepEqual(asked, ["github"]);
@@ -315,6 +342,8 @@ test("a push to the github service's name goes there, with the network the polic
   assert.equal(pushed.headers.authorization, "Bearer proxy-token");
   assert.equal(pushed.headers["x-deckhand-run-authorization"], basic);
   assert.equal(pushed.headers["x-deckhand-sandbox"], "net-1");
+  // The request ID the service logs it under is the service's own, never the sandbox's (#547).
+  assert.equal(pushed.headers["x-deckhand-request"], undefined);
   // Another path of its (the GitHub gateway's relay, its runs), or one climbing out of it: the
   // proxy's own service token never goes with them.
   for (const path of ["/relay/api.github.com/user", "/runs/r1", "/git/../runs/r1"]) {

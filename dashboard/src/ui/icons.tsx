@@ -158,6 +158,7 @@ export const Copy = stroke(
 );
 export const Download = stroke(1.8, <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />);
 export const ArrowDown = stroke(1.8, <path d="M12 5v14M6 13l6 6 6-6" />);
+export const ArrowUp = stroke(1.8, <path d="M12 19V5M6 11l6-6 6 6" />);
 export const Expand = stroke(1.8, <path d="M7 10l5-5 5 5M7 14l5 5 5-5" />);
 export const Bug = stroke(
   1.8,

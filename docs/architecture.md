@@ -177,9 +177,15 @@ false).
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
 `prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
-request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts. Its questions stop
-waiting earlier when nobody will answer them. `dismissals.mjs` `setAside()` then keeps them
-aside in `dismissed.json` while that run is the task's last:
+request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts. A run asks too
+when its work is done but a step only the maintainer can take still blocks the merge (a write
+Deckhand refused, a file it may not edit, a secret to add; issue #551): its pull request stays
+ready, and each blocker is a question (`Done, carry on` / `Drop it`). A fix run (`review.fix`)
+asks the same of a finding whose fix the issue needs but it may not make, which ends the loop as
+waiting for input rather than leaving the finding for the next review (a change only a finding
+asks for is left, never asked). Its questions stop waiting earlier when
+nobody will answer them. `dismissals.mjs` `setAside()` then keeps them aside in
+`dismissed.json` while that run is the task's last:
 
 - someone other than the App's bot takes the label off the task's issue or pull request: an
   `issues` or `pull_request` `unlabeled` delivery, or, for an issue's label taken off unheard (edge
@@ -551,8 +557,11 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   config and the operator's `SANDBOX_ENGINE`) gets a second container on its network,
   `engine` (`runner/engine.mjs`: dockerd under Sysbox, or rootless Podman), started before
   the sandbox and removed with it; the sandbox's `docker` CLI talks to it (`DOCKER_HOST`),
-  and its address counts as the sandbox's for the egress proxy. Never for a fork's pull request;
-  Deckhand's default policies give it to work runs only.
+  and its address counts as the sandbox's for the egress proxy. On Kubernetes (#573), Sysbox's
+  dockerd is a sidecar in the sandbox's pod instead (`runner/kubernetes.mjs`, under
+  `KUBERNETES_ENGINE_RUNTIME_CLASS`), which shares the sandbox's address: it reaches the proxy on
+  its engines' port (3129), which the proxy tells the policy (`engine=1`). Never for a fork's
+  pull request; Deckhand's default policies give it to work runs only.
 - **Who may run**: only comments from `ALLOWED_USERS`, on repos where the App is installed
   (narrowed by `ALLOWED_REPOS` if set), are acted on: the sandbox runs without permission
   prompts and can push.
@@ -1024,9 +1033,9 @@ in it gives: [The broker service](security.md#the-broker-service) in security.md
 **The broker service's own update.** Compose runs one copy, which drains on SIGTERM for 30 s
 (`DRAIN_SECONDS`: the inboxes' long polls, uploads in flight), then the next one starts on the
 same store and key: the proxy waits for it meanwhile, as for the orchestrator (`proxy/wait.mjs`). On
-Kubernetes (#396, which also has to give every copy the same key), two copies on one store,
-both active (Redis, #509): a rolling update would start the new one first, then the old one, out
-of rotation (`/ready` answers `503`), drains. Either copy would answer any call: the live runs, their files and their events are in the store, so a run
+Kubernetes (`deploy/kubernetes/broker.yaml`, both mounting the key's Secret), two copies on one
+store, both active: a rolling update starts the new one first, then the old one, out of rotation
+(`/ready` answers `503`), drains. Either copy would answer any call: the live runs, their files and their events are in the store, so a run
 ended through one renews through neither, and an inbox read through one goes on from the same
 offset through the other.
 

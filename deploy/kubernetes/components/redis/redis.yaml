@@ -1,0 +1,174 @@
+# The services' stores on Redis (Valkey, which speaks it: docs/setup.md#the-store), for their
+# copies on several nodes. One primary, kept on disk (append-only, fsync every second: a crash
+# loses at most the last second), never evicting, and one user per service, each with its own
+# password (the deckhand-redis Secret, docs/kubernetes.md), allowed the store's commands on its
+# own keys alone (`deckhand:<service>:`): a service reads no other's store.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: deckhand
+  labels:
+    app: deckhand-redis
+spec:
+  serviceName: redis
+  replicas: 1
+  selector:
+    matchLabels:
+      app: deckhand-redis
+  template:
+    metadata:
+      labels:
+        app: deckhand-redis
+    spec:
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Its users, written from the Secret at each start: the passwords never go in a
+      # ConfigMap, and a new one applies at the next restart.
+      initContainers:
+        - name: config
+          image: valkey/valkey:8.1-alpine
+          command:
+            - sh
+            - -ec
+            - |
+              conf=/conf/valkey.conf
+              umask 077
+              cat > "$conf" <<EOF
+              dir /data
+              appendonly yes
+              appendfsync everysec
+              maxmemory-policy noeviction
+              user default off
+              EOF
+              for service in edge orchestrator runner broker github models; do
+                password=$(cat "/passwords/$service")
+                [ -n "$password" ] || { echo "deckhand-redis: no password for $service" >&2; exit 1; }
+                echo "user $service on >$password ~deckhand:$service:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit" >> "$conf"
+              done
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: conf
+              mountPath: /conf
+            - name: passwords
+              mountPath: /passwords
+              readOnly: true
+      containers:
+        - name: redis
+          image: valkey/valkey:8.1-alpine
+          args: [/conf/valkey.conf]
+          ports:
+            - name: redis
+              containerPort: 6379
+          readinessProbe:
+            tcpSocket:
+              port: redis
+            periodSeconds: 5
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: conf
+              mountPath: /conf
+              readOnly: true
+      volumes:
+        - name: conf
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: passwords
+          secret:
+            secretName: deckhand-redis
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+# The services that keep a store reach it; nothing else does, and it reaches nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-redis
+  namespace: deckhand
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-redis
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values:
+                  - deckhand-edge
+                  - deckhand-orchestrator
+                  - deckhand-runner
+                  - deckhand-broker
+                  - deckhand-github
+                  - deckhand-models
+      ports:
+        - port: 6379
+          protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-redis-clients
+  namespace: deckhand
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values:
+          - deckhand-edge
+          - deckhand-orchestrator
+          - deckhand-runner
+          - deckhand-broker
+          - deckhand-github
+          - deckhand-models
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-redis
+      ports:
+        - port: 6379
+          protocol: TCP

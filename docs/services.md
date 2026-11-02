@@ -263,7 +263,7 @@ needed.
 
 On Kubernetes, that's a Deployment with one replica, `strategy: RollingUpdate`, `maxSurge: 1`,
 `maxUnavailable: 0`, a readiness probe on `/ready`, and `terminationGracePeriodSeconds` covering
-the drain (630 for a 600 s drain, #396).
+the drain (630 for a 600 s drain: `deploy/kubernetes/egress.yaml`).
 
 With Docker Compose, which stops a container before it starts the next, nothing changes: the
 proxy drains for 25 s (`DRAIN_SECONDS`' default, under its `stop_grace_period` of 30 s), and the
@@ -288,7 +288,7 @@ gap stays (above). The Compose test server keeps it.
   compromised edge, already inside the internal network, gets no more.
 - **The network has to be closed**: with Docker, only the proxy sits on the runs' networks (a
   test reads `compose.yaml`); on Kubernetes, NetworkPolicies need a network plugin that enforces
-  them (#396).
+  them ([kubernetes.md](kubernetes.md), `deploy/kubernetes/check-isolation.sh`).
 
 ## Rules
 

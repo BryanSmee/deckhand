@@ -1,0 +1,115 @@
+# The broker (docs/setup.md#the-broker-service): the key that signs the runs' tokens and the
+# services' own, the live runs and their files. Its key is a Secret you make once
+# (deckhand-broker-key, docs/kubernetes.md), which both copies mount: a copy with another key
+# would sign tokens the other refuses. Its public key is the deckhand-service-keys ConfigMap,
+# for the services that check tokens offline.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+  namespace: deckhand
+  labels:
+    app: deckhand-broker
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-broker
+  template:
+    metadata:
+      labels:
+        app: deckhand-broker
+    spec:
+      serviceAccountName: deckhand-broker
+      # Its own pods only: the API's token, to review its callers' (TokenReview).
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: true
+      # Its drain (30 s, over an inbox's long poll of 25 s).
+      terminationGracePeriodSeconds: 35
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-broker
+      containers:
+        - name: broker
+          image: ghcr.io/bryansmee/deckhand-broker:latest
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            # Who calls, by its pod's service account (rbac.yaml): each service its own.
+            - name: SERVICE_ACCOUNTS
+              value: edge=deckhand:deckhand-edge,orchestrator=deckhand:deckhand-orchestrator,runner=deckhand:deckhand-runner,github=deckhand:deckhand-github,models=deckhand:deckhand-models,proxy=deckhand:deckhand-egress
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+          # Its process answers: restarted after a minute without.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: key
+              mountPath: /keys
+              readOnly: true
+            - name: store
+              mountPath: /data
+      volumes:
+        # run-token.key: read only, so never made again in its place.
+        - name: key
+          secret:
+            secretName: deckhand-broker-key
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        # The live runs, their files and events (STORE_URL's default, file:///data/store).
+        - name: store
+          persistentVolumeClaim:
+            claimName: broker-store
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: broker-store
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-broker
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

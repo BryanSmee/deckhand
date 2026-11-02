@@ -17,6 +17,7 @@
 import { hasLabel, headInRepo, issueItem, linkedIssue, MARKER, taskKey } from "./events.mjs";
 import { graphql, paginate } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
+import { newLogContext, newRequestId } from "../lib/log.mjs";
 
 export const SWEEP_MS = 5 * 60000;
 // After a picked run ends or the label is added: a short wait, so a burst is one sweep, and an
@@ -180,7 +181,12 @@ export function createAutoPickup({
 
   // The free reserved slots, filled with the oldest eligible labelled issues. → the keys
   // started.
+  // Under a request of its own: every repository's, not that of what asked for it (a run's end).
   function sweep() {
+    return newLogContext({ request: newRequestId() }, sweepNow);
+  }
+
+  function sweepNow() {
     if (!slots) return Promise.resolve([]);
     if (sweeping) {
       again = true;

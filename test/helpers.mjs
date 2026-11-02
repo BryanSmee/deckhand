@@ -165,6 +165,15 @@ export async function forwarder(t, target, { waitMs = 60_000 } = {}) {
   return port;
 }
 
+// Once `check()` (sync or async) is true, looked at every 10 ms: a wait for what a test asserts
+// on, not a fixed delay (#563). Past `ms`, an error naming `what`, not a later assertion's.
+export async function until(check, { ms = 5000, what = "the condition" } = {}) {
+  for (const end = Date.now() + ms; !(await check());) {
+    if (Date.now() > end) throw new Error(`timed out waiting for ${what}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 // A signing key of the test's own: { privateKey, publicKey, kid }.
 export function testKey() {
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");

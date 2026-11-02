@@ -13,7 +13,8 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
-import { assertMode, fileLogs, localBroker, tempDir } from "./helpers.mjs";
+import { logContext, withLogContext } from "../lib/log.mjs";
+import { assertMode, fileLogs, localBroker, tempDir, until } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it. → its id, the broker's handle once restored.
 function saveRun(dir, id, issue, record, more = {}) {
@@ -81,8 +82,9 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
     broker,
     running: 0,
   };
-  // A review's commit (runs.mjs launch()) goes along too: its review is posted there.
-  const secret = saveRun(dir, "r1", 1, { agent: "claude" }, { reviewFrom: "start1" });
+  // A review's commit (runs.mjs launch()) goes along too: its review is posted there. And
+  // whether it has a container engine: the proxy's engines' port answers for it (#573).
+  const secret = saveRun(dir, "r1", 1, { agent: "claude" }, { reviewFrom: "start1", engine: true });
   await createRestart(ctx).restoreRuns();
   // What the git gateway calls once GitHub took a push.
   broker.runOf(secret).pushed({ branch: "issue-1-x", at: 1234 });
@@ -93,6 +95,7 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
   const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
   assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
   assert.deepEqual([task.live.reviewFrom, saved.reviewFrom], ["start1", "start1"]);
+  assert.deepEqual([task.live.engine, saved.engine], [true, true]);
 });
 
 test("a restored run keeps the issues it created, the comments it posted and the workflow runs it reran, and saves those it adds next", async (t) => {
@@ -570,10 +573,10 @@ test("a runner slow to say whether a restored run's inbox is open: the start goe
 // A listener's context for the queue's tests: its tasks (tasks.mjs) and restart.mjs on `store`,
 // with a pause of a minute (`debounceMs`). `startLater` records what is re-armed rather than
 // arming it, unless `real`.
-function queueContext(t, dir, store, { real = false } = {}) {
+function queueContext(t, dir, store, { real = false, log = () => {} } = {}) {
   const ctx = {
     config: { dataDir: dir, users: ["alice"], repos: ["org/repo"], debounceMs: 60_000 },
-    log: () => {},
+    log,
     tasks: new Map(),
     logDir: dir,
     runs: [],
@@ -1141,9 +1144,11 @@ test("tasks.mjs: a pause armed from a saved deadline ends at it, not after a pau
   ctx.startLater(task, dueAt);
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.deepEqual(started, []);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  await until(() => started.length, { ms: 10_000, what: "the run's start" });
   assert.equal(started.length, 1);
-  assert.ok(started[0][1] >= dueAt - 5 && started[0][1] < dueAt + 150);
+  // Its own pause would end a minute on: well before that, however late a busy runner fires
+  // the timer (over 150 ms seen).
+  assert.ok(started[0][1] >= dueAt - 5 && started[0][1] < dueAt + 10_000);
   // Saved with it.
   assert.equal((await ctx.store.get(QUEUE_KEY))["org/repo#7"].dueAt, dueAt);
 });
@@ -1193,4 +1198,75 @@ test("a restored run pushes as its saved capabilities say; one saved before them
     [reads, pushes, work, light].map((h) => broker.runOf(h).push),
     [false, true, true, false],
   );
+});
+
+// Its lines and calls name it (#547): a run started, or picked up again after a restart, logs
+// under its repository, issue and run, and a request ID of its own, not its starter's.
+test("a run's lines carry its repository, issue and run, from its start and once picked up again", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  // A run started under another run's context (its end freed a place, schedule()).
+  const said = [];
+  const started = queueContext(t, dir, store, {
+    log: (line) => said.push({ line, ...logContext() }),
+  });
+  const seen = [];
+  Object.assign(started, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    // Its start reads them (begin()): what the context says then.
+    repoSettings: async () => (
+      seen.push(logContext()),
+      { settings: null, errors: [], warnings: [] }
+    ),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(started, createRuns(started), { config: { ...started.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  // A comment its author may no longer run: dropped before the run starts (dropRefused()).
+  task.pending.push(queued("1", { queueId: "q-0", author: "mallory" }));
+  task.pending.push(queued("1", { queueId: "q-1", replyTo: 1 }));
+  started.tasks.set("org/repo#1", task);
+  const other = { request: "another", repo: "else/where", issue: 9, run: "dh-else-where-9-1" };
+  await withLogContext(other, () => started.run(task).catch(() => {}));
+  // Before it has a run: its own repository and issue, none of the other run's fields.
+  const before = seen[0];
+  assert.deepEqual([before.repo, before.issue, before.run], ["org/repo", 1, undefined]);
+  assert.match(before.request, /^[0-9a-f]{16}$/);
+  const dropped = said.find((l) => /a queued comment dropped/.test(l.line));
+  assert.deepEqual([dropped.repo, dropped.issue, dropped.run], ["org/repo", 1, undefined]);
+  assert.equal(dropped.request, before.request);
+  const during = seen.at(-1);
+  assert.deepEqual([during.repo, during.issue], ["org/repo", 1]);
+  assert.match(during.run, /^deckhand-org-repo-1-\d+$/);
+  assert.equal(during.request, before.request);
+  // Picked up again by the next orchestrator: the same fields, its own request ID.
+  const id = saveRun(
+    dir,
+    "r2",
+    "2",
+    { agent: "claude" },
+    { task: { repo: "org/repo", id: "2", kind: "issue", number: 2 } },
+  );
+  const lines = [];
+  const log = (line) => lines.push({ line, ...logContext() });
+  const next = queueContext(t, dir, store, { log });
+  next.broker = createBroker({});
+  next.runner = {
+    closed: () => false,
+    relink: async () => {},
+    list: async () => [{ name: "deckhand-org-repo-2", run: id, running: true }],
+    remove: async () => {},
+  };
+  const followed = [];
+  next.follow = () => followed.push(logContext());
+  await next.reattach(await next.restoreRuns());
+  assert.equal(followed.length, 1);
+  assert.deepEqual([followed[0].repo, followed[0].issue, followed[0].run], ["org/repo", 2, id]);
+  assert.match(followed[0].request, /^[0-9a-f]{16}$/);
+  const picked = lines.find((l) => /picked up/.test(l.line));
+  assert.equal(picked.run, id);
 });

@@ -137,7 +137,7 @@ function fakeRegistry({ deletes = true, tagDeletes = true } = {}) {
   return { fetch, images, calls, undated };
 }
 
-// Deckhand's policies for the BuildKit daemon, as docs/setup.md describes them: out to the
+// Deckhand's policies for the BuildKit daemon, as docs/kubernetes.md describes them: out to the
 // egress proxy and DNS, in from the listener.
 const BUILDER_POLICY = {
   metadata: { name: "deckhand-buildkit" },

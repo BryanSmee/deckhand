@@ -18,7 +18,16 @@ import { createEdgeHttp } from "../edge/http.mjs";
 import { createEdgeInternal, DELIVERIES } from "../edge/internal.mjs";
 import { fromDashboard, fromKey, postOf, tagger } from "../listener/discussions.mjs";
 import { createRedeliveries } from "../listener/redeliveries.mjs";
-import { listening, recordingFetch, serve, tempDir, testConfig, testKey } from "./helpers.mjs";
+import {
+  listening,
+  recordingFetch,
+  serve,
+  tempDir,
+  testConfig,
+  testKey,
+  until,
+} from "./helpers.mjs";
+import { createLogger, withLogContext } from "../lib/log.mjs";
 
 // As long as a real one: redact() leaves out shorter ones (lib/redact.mjs MIN_LENGTH).
 const SECRET = "webhook-secret-0123456789abcdef";
@@ -92,6 +101,10 @@ test("two copies: a delivery GitHub sends to both, or twice, goes on the stream 
     ],
   );
   assert.ok(two.logs.includes("Delivery guid-1 again: already handled"));
+  // Each with the ID of the request that brought it, for the orchestrator's lines (#547).
+  const requests = events.map(({ event }) => event.request);
+  for (const id of requests) assert.match(id, /^[0-9a-f]{16}$/);
+  assert.notEqual(requests[0], requests[1]);
 });
 
 test("a delivery: unsigned, badly signed or without an App refused; a secret in it kept out of the store", async (t) => {
@@ -168,7 +181,7 @@ test("a delivery a copy died taking is taken again a minute on; one being taken,
 // Edge's internal port, the orchestrator calling it with its service token.
 async function internal(
   t,
-  { store = openStore("memory:"), dir = tempDir(t), redeliveries, handOver = null } = {},
+  { store = openStore("memory:"), dir = tempDir(t), redeliveries, handOver = null, log } = {},
 ) {
   const key = testKey();
   const app = createEdgeApp({ dir });
@@ -184,6 +197,7 @@ async function internal(
       handedOver.push(body);
     },
     sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 20))),
+    ...(log && { log }),
   });
   const url = `http://127.0.0.1:${await listening(server)}`;
   server.unref();
@@ -278,16 +292,12 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
     }
     handled.push(entry.id);
   });
-  for (let i = 0; i < 200 && !handled.includes("d3"); i++) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  await until(() => handled.includes("d3"), { what: "d3" });
   // Started in the stream's order, d3 handled while d1 still goes.
   assert.deepEqual(started.slice(0, 3), ["d1", "d2", "d3"]);
   assert.deepEqual(handled, ["d3"]);
   release();
-  for (let i = 0; i < 200 && handled.length < 3; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  await until(() => handled.length >= 3, { what: "d1 and d2" });
   // d1 once; d2 read again after its failure, and handled then.
   assert.deepEqual(handled, ["d3", "d1", "d2"]);
   assert.deepEqual(started, ["d1", "d2", "d3", "d2"]);
@@ -363,14 +373,23 @@ test("a listener's App handed over: taken once with its sessions, another App re
 test("a handover whose sessions fail to move takes nothing: asked again, they move then", async (t) => {
   const dir = tempDir(t);
   let fail = true;
+  const lines = [];
+  const log = createLogger({ service: "edge", env: {}, write: (line) => lines.push(line) });
   const { client, handedOver, app } = await internal(t, {
     dir,
+    log,
     handOver: async () => {
       if (fail) throw new Error("the store is away");
     },
   });
   const body = { credentials: CREDENTIALS, sessionKey: null, epochs: { alice: 2 } };
-  await assert.rejects(client.handOver(body), { status: 500 });
+  await withLogContext({ request: "from-the-orchestrator" }, () =>
+    assert.rejects(client.handOver(body), { status: 500 }),
+  );
+  // Said as an error (#547), under the orchestrator's request.
+  const failed = lines.map((l) => JSON.parse(l)).find((l) => /the store is away/.test(l.msg));
+  assert.equal(failed.level, "error");
+  assert.equal(failed.request, "from-the-orchestrator");
   // Not taken: the orchestrator keeps the listener's files and asks again.
   assert.equal(app.get(), null);
   fail = false;
@@ -396,7 +415,8 @@ test("two copies: the redeliveries' poller runs on the one holding its lease, th
       store,
       name: "edge/redeliveries",
       holder: name,
-      ttlMs: 300,
+      // Long enough that a paused runner doesn't let it expire: stop() hands it over.
+      ttlMs: 10_000,
       pollMs: 10,
       onActive: () => redeliveries.start(),
       onPassive: () => redeliveries.stop(),
@@ -405,13 +425,12 @@ test("two copies: the redeliveries' poller runs on the one holding its lease, th
   });
   for (const { poller } of copies) await poller.start();
   t.after(() => Promise.all(copies.map(({ poller }) => poller.stop())));
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.ok(listed.length >= 3, `scans: ${listed.length}`);
+  await until(() => listed.length >= 3, { what: "the first copy's scans" });
   assert.deepEqual([...new Set(listed)], ["one"]);
   // The first copy stops: the other takes the lease at once, and scans from then on.
   await copies[0].poller.stop();
   const before = listed.length;
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await until(() => listed.length >= before + 3, { what: "the other copy's scans" });
   assert.deepEqual([...new Set(listed.slice(before))], ["two"]);
 });
 

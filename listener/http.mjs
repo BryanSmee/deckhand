@@ -287,7 +287,9 @@ export function createHttp(ctx) {
         replayIssue(event, payload, work);
       } else dispatch(event, payload, work);
     } catch (error) {
-      log(`Delivery ${event} ${payload?.action ?? ""} failed: ${error.stack ?? error}`);
+      (log.error ?? log)(
+        `Delivery ${event} ${payload?.action ?? ""} failed: ${error.stack ?? error}`,
+      );
     }
     return Promise.all(work);
   }
@@ -488,7 +490,7 @@ export function createHttp(ctx) {
     try {
       route(req, res, user, local);
     } catch (error) {
-      log(`${req.method} ${req.url}: ${error.stack ?? error}`);
+      (log.error ?? log)(`${req.method} ${req.url}: ${error.stack ?? error}`);
       if (!res.headersSent) res.writeHead(500);
       res.end();
     }

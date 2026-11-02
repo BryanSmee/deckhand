@@ -1,11 +1,11 @@
-// Edge's entry point (#506): the only service the internet reaches. GitHub's webhooks (their
-// HMAC checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and
-// sessions, the dashboard's files, and its API, /status and the screenshots, which the
-// orchestrator answers (forward.mjs). It holds the webhook secret, the session key and the
-// OAuth client's, nothing else: no App key (the github service's), no agent credential (the
-// models service's), no Docker socket (the runner's). Two copies may run side by side on one
-// store, both active: either takes any request, the deliveries are taken once, a sign-out ends
-// the login's sessions on both, and the redeliveries' poller runs on the one holding its lease.
+// Edge's entry point (#506): the only service the internet reaches. GitHub's webhooks (their HMAC
+// checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and sessions
+// (MCP clients' too, oauth.mjs), the dashboard's files, and its API, /status and the screenshots,
+// which the orchestrator answers (forward.mjs). It holds the webhook secret, the session key and
+// the OAuth client's, nothing else: no App key (the github service's), no agent credential (the
+// models service's), no Docker socket (the runner's). Two copies may run side by side on one store,
+// both active: either takes any request, the deliveries are taken once, a sign-out ends the login's
+// sessions on both, and the redeliveries' poller runs on the one holding its lease.
 //
 // Settings, from the environment (and config.yaml, as the orchestrator reads them):
 //   PORT                8080: webhooks, /setup, sign-in, the dashboard (published)
@@ -29,6 +29,7 @@ import { activePassive } from "../lib/active.mjs";
 import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
+import { createLogger } from "../lib/log.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createGithubClient } from "../github/client.mjs";
@@ -42,9 +43,11 @@ import { createEdgeApp } from "./app.mjs";
 import { createForwarder } from "./forward.mjs";
 import { createEdgeHttp, takenDelivery } from "./http.mjs";
 import { createEdgeInternal } from "./internal.mjs";
+import { createOAuth } from "./oauth.mjs";
 
 const env = process.env;
-const log = (...args) => console.log(new Date().toISOString(), ...args);
+// Its lines redact its own secrets too (below), once it has read them.
+const log = createLogger({ service: "edge", secrets: () => secrets() });
 
 let config;
 let internalPort;
@@ -59,7 +62,7 @@ try {
   }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
-  console.error(`Edge: ${error.message}`);
+  log.error(`Edge: ${error.message}`);
   process.exit(1);
 }
 const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : 25_000;
@@ -130,6 +133,9 @@ const auth = createAuth({
   log,
 });
 
+// MCP clients' sign-in (#481): GitHub's, through `auth`; their tokens hashed in the store.
+const oauth = createOAuth({ config, auth, store, publicUrl, log });
+
 const redeliveries = createRedeliveries({
   store,
   app: appClient,
@@ -149,6 +155,7 @@ const http = createEdgeHttp({
   app,
   auth,
   setup,
+  oauth,
   store,
   orchestrator,
   redeliveries,

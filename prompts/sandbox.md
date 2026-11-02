@@ -55,6 +55,14 @@ When you stop:
 The maintainer's reply continues this session: carry on with their answers, then finish the
 pull request (final description, `gh pr ready`) as when you don't stop.
 
+Stop and ask after the work too, when it is done but something only the maintainer can do
+still blocks merging it: a write the task needs that Deckhand refused (`Deckhand: …`), a file
+you may not edit, a secret, setting or grant to add. Don't leave it in prose ("Left for you",
+a section of the pull request's description): nothing then shows the task waiting. Finish the
+pull request as usual, ready for review (only the maintainer's step is left; no WIP commit),
+then start your final message as in step 2, with one question per blocker saying what to do
+and where, and options such as `- [ ] Done, carry on` and `- [ ] Drop it`.
+
 ## Open questions
 
 Questions for the maintainer, wherever you ask them (a run that stops to ask, an issue's
@@ -146,7 +154,8 @@ Skip screenshots for changes with nothing visible (API, tests, tooling).
   comment, an issue edit, a `gh api` call) with `[redacted]`. It also refuses writes beyond
   what this kind of run may do (a work run writes only its own issue, its pull requests, its
   issue's sub-issues and the issues it created): a refusal starts with `Deckhand:` and says why; don't look for a
-  way around it.
+  way around it. When the task needs that write, it is a blocker for the maintainer (see
+  "Stopping to ask").
 - What `git` and `gh` send Deckhand in place of that token is this run's token, which
   `deckhand-token` prints: a tool that needs one of its own (`curl` to the API, another
   process's `GH_TOKEN`) calls `deckhand-token` each time it runs. The token changes every few

@@ -20,7 +20,7 @@ and shares a network only with the services it calls or is called by
 | -------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [edge](#edge)                                | the webhook secret, the session key, the OAuth client's | forged deliveries and sessions (any allowed user's dashboard); through the github service, reads, the redeliveries and /setup's conversion (refused once an App is held) only: no token minted, no write                                                                                                                                                                                                                                                     |
 | [orchestrator](#the-orchestrator)            | nothing secret                                          | what it decides: runs started (each spec checked again by the runner against the grants), the App's writes through the github service, a run's first tokens with the claims it picks; no way out but the services it calls; no sandbox calls it (the egress proxy asks its egress policy)                                                                                                                                                                    |
-| [runner](#the-runner-service)                | the Docker socket or the Kubernetes API                 | with Docker, the host (the socket is root on it), and with it every service's secrets on that host (the App's key, the signing key, the agents' credentials, in their volumes); on Kubernetes, the sandboxes' namespace (with the services in another, only the registry's pull Secret of theirs, [Namespaces](setup.md#namespaces)). It holds no credential itself                                                                                          |
+| [runner](#the-runner-service)                | the Docker socket or the Kubernetes API                 | with Docker, the host (the socket is root on it), and with it every service's secrets on that host (the App's key, the signing key, the agents' credentials, in their volumes); on Kubernetes, the sandboxes' namespace (with the services in another, only the registry's pull Secret of theirs, [Namespaces](kubernetes.md#namespaces)). It holds no credential itself                                                                                     |
 | [broker](#the-broker-service)                | the tokens' signing key                                 | every live run's inbox and digest, so it can direct their agents; tokens with any claims for a live run, handed to its sandbox at renewal, and so pushes through it to any repository the App is installed on (any branch but the default, as the push policies allow) and any of the operator's agent credentials; the `runs` stream the orchestrator reads (run ends, screenshots). Outside a live run's own network (or pod), none of its tokens is taken |
 | [github](#the-github-service)                | the App's key, its installation tokens                  | the App, on every repository it is installed on                                                                                                                                                                                                                                                                                                                                                                                                              |
 | [models](#the-models-service)                | the operator's agent credentials                        | those credentials                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -480,7 +480,8 @@ agent found elsewhere.
 
 The internet reaches one service only: **edge** (`edge/`, #506, [services.md](services.md)).
 Compose publishes its port (`PORT`, 8080) on `edge-out`, a network of its own. It serves GitHub's
-webhooks (`POST /webhook`), /setup, sign-in and sessions (`listener/auth.mjs`), the dashboard's
+webhooks (`POST /webhook`), /setup, sign-in and sessions (`listener/auth.mjs`; MCP clients' too,
+[MCP clients](#mcp-clients)), the dashboard's
 files and `/health`, and passes the rest on to the orchestrator. It holds three secrets and
 nothing else: the webhook secret, the session key and the OAuth client's (its id and secret), in
 its own volume (`edge-data`, [Edge's and the orchestrator's data](#edges-and-the-orchestrators-data)).
@@ -577,7 +578,7 @@ The host's Docker socket is root on the host, and the Kubernetes API's credentia
 any pod in the sandboxes' namespace (`KUBERNETES_NAMESPACE`; with the services in a namespace
 of their own, `KUBERNETES_SERVICES_NAMESPACE`, its Role there reads no Secret but the
 registry's pull Secret, so none of the services' keys, and that namespace may enforce Pod
-Security `restricted`, [Namespaces](setup.md#namespaces)): only the runner service holds either (`runner/`, #503,
+Security `restricted`, [Namespaces](kubernetes.md#namespaces)): only the runner service holds either (`runner/`, #503,
 [architecture.md](architecture.md#the-runner-service)). Edge, which the internet reaches
 (webhooks, the dashboard), has neither, nor does the orchestrator: a hole in either doesn't give
 the host. What the runner
@@ -740,8 +741,8 @@ own network to the service it calls. The broker is on none of those: with Docker
 network per caller (`broker-orchestrator`, `broker-edge`, `broker-proxy`, `broker-runner`,
 `broker-models`, `broker-github`), internal, with no way out, where the service on the other
 side takes no call that arrives from the broker's address as another caller's; on Kubernetes,
-NetworkPolicies would have to keep it there (#396, the Kubernetes deployment, which also has
-to give every copy the same key). With Compose, one copy runs
+NetworkPolicies keep it there, and both copies mount the same key's Secret
+([On Kubernetes](#on-kubernetes)). With Compose, one copy runs
 ([architecture.md](architecture.md#the-broker-service)).
 
 ### Service tokens
@@ -770,7 +771,7 @@ mechanism: Ed25519, checked offline with its public key, the same strict checks 
   which network a call arrived on (its own address on it, `SERVICE_NETWORKS`:
   `edge=172.30.1.0/24,…`) against `sub`. A token stolen from one service and replayed from
   another arrives on the wrong network: `403`. On Kubernetes, NetworkPolicies do it (with a
-  network plugin that enforces them, #396).
+  network plugin that enforces them: [On Kubernetes](#on-kubernetes)).
 
 **What each caller may do.** `aud` isn't enough: each service declares, for each of its
 endpoints, which callers may call it, in **one table per service**, checked in code
@@ -1344,6 +1345,38 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 - So a provider's `401` on one of these paths, the only ones a run reaches, is what marks a
   plan's token for a refresh: a sandbox can't force refreshes through some other path.
 
+## On Kubernetes
+
+`deploy/kubernetes/` ([kubernetes.md](kubernetes.md)) keeps each rule above, in Kubernetes'
+terms:
+
+| Rule                                                        | With Docker Compose                                                              | On Kubernetes                                                                                                                                                                                                      |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The Docker socket, or the API's credentials, in one service | the runner alone mounts the socket                                               | the runner's pods alone mount their ServiceAccount's token (`automountServiceAccountToken: false` on the others but the broker's, which reviews tokens), for Roles in two namespaces, nothing cluster-wide         |
+| Each secret in its service alone                            | its own volume or environment                                                    | its own Secret, mounted read only by its pods alone: edge's, the github service's, the broker's key, the models service's credentials and key; the orchestrator mounts none                                        |
+| Who calls a service                                         | one internal network per caller and callee (`SERVICE_NETWORKS`)                  | one NetworkPolicy per service letting in its callers' pods alone (`CALLS`), default deny in both namespaces; `SERVICE_NETWORKS=none`                                                                               |
+| A service token bound to its caller                         | the network it arrives on                                                        | the pod's service account: a token projected for the broker (audience `deckhand-broker`), reviewed by the API server (`SERVICE_ACCOUNTS`)                                                                          |
+| Sandboxes reach the egress proxy alone                      | each run's internal network, the proxy alone on it                               | their namespace's NetworkPolicies, which the runner checks before every run (`isolationProblem()`); no DNS server, the proxy's address in `hostAliases`                                                            |
+| No way out but the services' own                            | internal networks, a way out for edge, the github and models services, the proxy | egress rules: 443 for edge, the github and models services, the API server's addresses alone for the runner and the broker, any public host for the proxy (not the private ranges), nothing for the policy service |
+| Hardened containers                                         | `cap_drop: ALL`, `no-new-privileges`, uid 1000, read-only roots                  | the same in each pod's security context; the sandboxes' namespace enforces Pod Security `restricted`, and every sandbox pod meets it                                                                               |
+| The broker's public key, read only                          | the `service-keys` volume, which the broker writes                               | a ConfigMap the operator makes beside the signing key's Secret: no volume shared between services                                                                                                                  |
+
+**NetworkPolicies need a network plugin that enforces them** (Calico, Cilium, k3s's own). One
+that doesn't (Flannel alone) takes them and enforces nothing: a sandbox could then call the
+services directly, the orchestrator's services port among them, and get what only the runner
+may. `deploy/kubernetes/check-isolation.sh` checks it from a pod labelled as a sandbox; the runner
+checks only that the policies are there. Each service's own ingress policy is a second line: with
+the sandboxes' policies gone, a sandbox reaches edge's public port alone.
+
+**The API server** is no pod: the runner's and the broker's way to it is an `ipBlock` of its
+addresses, which the operator sets (`deckhand-api-server`, [kubernetes.md](kubernetes.md#install)),
+and which reaches nothing until then. With `buildkit`, the runner also reaches any address on 443
+(the registries).
+
+**What isn't covered**: a service
+mesh that rewrites source addresses breaks the orchestrator's check of the proxy's calls (by its
+pods' addresses), and refuses them: run Deckhand's namespaces outside it.
+
 ## Mounts
 
 A sandbox only gets Docker named volumes:
@@ -1618,7 +1651,7 @@ shared claim, or each sandbox's init container into an `emptyDir`): still not th
 user, and the sandbox mounts it read-only all the same. Through the egress proxy, it reaches
 its agent's install hosts only, tunnelled; an init container gets them only while its pod is
 Pending, never the run's own hosts, and the sandbox never gets them
-([Agents on Kubernetes](setup.md#agents-on-kubernetes)).
+([Agents on Kubernetes](kubernetes.md#agents-on-kubernetes)).
 
 What is installed is pinned: Claude Code and Codex by their npm version, the Antigravity CLI
 by the sha256 of its release's tarball (`AGY_SHA256`, the operator's setting, not the
@@ -1804,7 +1837,7 @@ egress proxy with the repo's hosts only, and pushed to the operator's registry; 
 refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
 runner can't see. The registry has to require credentials to pull, push and delete (Deckhand doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
-[Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
+[Repo images on Kubernetes](kubernetes.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
 without the `dockerfile` grant doesn't get it: its runs stop and the reply on the issue says
 which grant is missing, like refused mounts. Grant it to repositories whose default branch you
 trust as much as the host itself. `branch_docker_images`
@@ -1970,17 +2003,78 @@ proxy on the host's network calls from loopback too: a request carrying `Forward
 `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` needs a session. If your proxy adds none
 of them, keep `/status` from it.
 
+### MCP clients
+
+MCP clients (Claude Code, Codex, an editor) sign in to Deckhand as one of its users, through
+edge, which is a small OAuth 2.1 authorization server for the `/mcp` resource, as the
+[MCP authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization)
+asks (`edge/oauth.mjs`, #481). It signs its users in with GitHub as the dashboard does: no
+identity provider of its own, nor a secret beyond edge's three.
+
+- **Discovery.** `/mcp` answers `401` without a valid token, with `WWW-Authenticate: Bearer
+resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 9728), which
+  names edge as the authorization server (`/.well-known/oauth-authorization-server`, RFC 8414).
+  Both point at Deckhand's public URL (`PUBLIC_URL`, else the App's).
+- **Registration** (`POST /oauth/register`, RFC 7591): public clients only (no client secret,
+  whatever the client asks for), 1 to 5 redirect URIs, each `https://` or `http://` to
+  `localhost`, `127.0.0.1` or `[::1]` (on the loopback, any port matches, RFC 8252); a custom
+  scheme (`cursor://`) is refused. At most 20 registrations an hour per source address (its /64
+  for IPv6), and 300 from all of them together; one no one signs in with is gone after a day.
+  What remains: someone with many addresses can still use up the 300 for an hour at a time,
+  stopping new clients from registering (those already registered sign in, and refresh,
+  as before); and behind a reverse proxy edge sees the proxy's address alone, so every client
+  shares one address's 20.
+- **Authorization** (`/oauth/authorize`): PKCE with `S256` is required (`plain`, or none, is
+  refused); the client and its redirect URI must be registered, else the page says so and sends
+  nobody anywhere. Nobody is sent to a client's redirect URI before signing in, an error
+  included, and a request refused before the consent page (`response_type`, PKCE, `resource`)
+  goes back only to a loopback redirect URI, the user's own machine; for an `https://` one, a
+  page says what was refused. Anyone may register a client, so sending someone there unasked
+  would be an open redirect (RFC 9700 §4.11.2). A Deny is sent back, once the consent page
+  has shown where to. Someone not signed in goes through GitHub (`/auth/login?next=…`, which only
+  ever returns to `/oauth/authorize`), and an allowed login then sees a consent page naming the
+  client (its own claim), the login it will act as, the scopes and the redirect URI. Only an
+  allowed login gets that page, and so a code: a login outside `ALLOWED_USERS` is refused at
+  GitHub's callback, as on the dashboard. The consent is a form posted once (its request,
+  in edge's store for 10 minutes, bound to the login), from edge's own origin (`Origin`
+  checked: the page is served with `Referrer-Policy: same-origin`, under which the browser sends
+  it; the session cookie is `SameSite=Lax`); the page can't be framed.
+- **Tokens** (`/oauth/token`): the code (5 minutes, once; a code used twice ends the tokens it
+  gave; bound to the login's session epoch at the consent, so a sign-out before the exchange
+  voids it) with its verifier, its client's id and redirect URI, becomes an opaque access token (an
+  hour) and a refresh token (30 days), bound to the login, the client and the resource
+  (`<PUBLIC_URL>/mcp`, RFC 8707: a client naming another is refused). A refresh rotates the
+  refresh token; one used twice (or two refreshes at once) ends its whole family, the client
+  signing in again. Each write of a family's tokens is a compare-and-set on its current value,
+  and a revoked family leaves a mark (`mcp/revoked/<id>`, 30 days) its creation checks: a
+  refresh, an exchange or a code used twice racing a revocation never brings the family back. A
+  refresh may ask for fewer scopes: its access token gets those, its refresh token keeps the
+  grant (RFC 6749 §6). Scopes: `deckhand:read` and `deckhand:work` (what a client gets when it
+  asks for neither), and `deckhand:machine`, granted only when asked for (machines, #595);
+  others (`offline_access`) are ignored.
+- **Kept hashed.** Codes, access and refresh tokens are random (256 bits) and kept as their
+  SHA-256 in edge's store (`mcp/…`), which its two copies share: they survive a restart and a
+  handover, and neither the store nor the logs ever hold one.
+- **Every use is checked again**: the token's family still there, its login still in
+  `ALLOWED_USERS`, and its session epoch unchanged. Signing out on the dashboard (which ends
+  that login's sessions everywhere) ends its MCP clients' tokens too; so does Revoke in
+  Settings › MCP clients (the login's own clients, posted from the dashboard's origin), or the
+  client's own `POST /oauth/revoke` (RFC 7009). A login keeps 20 clients at most: a 21st ends
+  the oldest.
+- What a client may then do is its login's, as on the dashboard: `/mcp`'s tools (#482, #483)
+  check `ALLOWED_REPOS` and each repository's `users` on every call.
+
 ## Edge's and the orchestrator's data
 
 **Edge's volume** (`edge-data`, its `/data`) holds its three secrets: whoever reads it can sign
 deliveries as GitHub and sign in users, but not act as the App (its key is the github
 service's). The files holding secrets are the owner's only (`0600`):
 
-| File          | What                                                                                                                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.json`    | the App's names, its webhook secret and its OAuth client's (never its key)                                                                                                    |
-| `session.key` | signs dashboard sessions                                                                                                                                                      |
-| `store/`      | its store: the delivery ids taken, each login's session epoch, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
+| File          | What                                                                                                                                                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.json`    | the App's names, its webhook secret and its OAuth client's (never its key)                                                                                                                                                         |
+| `session.key` | signs dashboard sessions                                                                                                                                                                                                           |
+| `store/`      | its store: the delivery ids taken, each login's session epoch, MCP clients' registrations and their tokens' hashes, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
 
 **The orchestrator's volume** (`data`) holds nothing that signs deliveries or sessions; whoever reads it reads the queue and what the runs did, and a running run's
 agent token. The files holding one are the owner's only (`0600`):
@@ -2255,6 +2349,34 @@ in the engine only:
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
   orchestrator's check every minute removes those whose run is gone, after a restart too.
 
+On Kubernetes ([kubernetes.md](kubernetes.md#container-engine-on-kubernetes)), Sysbox alone, and the
+sandboxes' namespace stays Pod Security `restricted`:
+
+- **A sidecar in the sandbox's pod**, under Sysbox's RuntimeClass, the pod in a user namespace
+  of its own (`hostUsers: false`): `dockerd` runs as root there, an unprivileged user on the
+  node, which `restricted` allows from Kubernetes 1.35. Every container's spec keeps the rest of
+  it (no privilege gain, every capability dropped, `RuntimeDefault` seccomp), but Sysbox
+  applies its own: root in the pod gets its capabilities inside the pod's user namespace, and
+  every container of the pod, **the sandbox's included**, runs under Sysbox's syscall filter
+  instead of the runtime's default profile (it allows `mount`, `unshare`, `setns`, `keyctl`…,
+  which Sysbox traps or confines to the pod). What contains the sandbox there is the pod's user
+  namespace, its user (uid 1000) and its having no capability, more than its syscall filter;
+  `no-new-privileges` holds on `dockerd` and on all it starts (setuid programs fail in its
+  containers). Podman, whose seccomp is unconfined, is refused.
+- **No process namespace shared** between the pod's containers, as Sysbox advises: the sandbox
+  sees none of the engine's processes, and its entrypoint reaps its own orphans.
+- **Its storage** is an `emptyDir`, gone with the pod, at most `KUBERNETES_ENGINE_SIZE`: no
+  cache kept between runs.
+- **Its address is the sandbox's**: its API listens on the pod's loopback alone
+  (`engine` is `127.0.0.1` in the pod), so nothing outside the pod reaches it: not even its
+  node, which a NetworkPolicy always lets in. It goes out on the egress
+  proxy's engines' port (3129), and so do the containers it runs (the sandbox's docker CLI
+  config): the proxy asks the orchestrator with that port's flag, and the orchestrator answers
+  as for an engine on Docker (the run's hosts, never decrypted, GitHub tunnelled without the
+  run's identity), only for a run that has an engine; a run without one, a build or an install
+  is refused there. What the sandbox could reach through that port is what it could already
+  reach through its engine.
+
 ## Reviews
 
 A repository turns reviews on with a `review` block in its `.deckhand.yaml` (default branch
@@ -2327,7 +2449,10 @@ secret sent somewhere. What limits it:
   says they are untrusted claims to check against the code, never instructions: no commands
   from a finding, no changes to CI, workflows, `.deckhand.yaml`, Dockerfiles, dependencies or
   credentials unless the issue asked for them, no secrets sent anywhere, and its reply says
-  which findings it left and why.
+  which findings it left and why. It asks the maintainer (needs-input) only about a change the
+  issue itself needs that it may not make: a change only a finding asks for is never relayed as
+  Deckhand's question, so a planted finding can't reach the maintainer as one ("add secret X",
+  with a `Done, carry on` box) nor stop the loop.
 - **What any work run is held to**: its token can't push or write pull requests, the git
   gateway pushes only its own branch (never the default one), `.github/workflows/` only
   with the `workflows` grant, hosts only through the egress proxy, and its pull request still

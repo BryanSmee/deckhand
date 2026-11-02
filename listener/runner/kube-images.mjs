@@ -135,7 +135,7 @@ export const writable = (path, ...command) => ["sh", "-c", WRITABLE, "sh", path,
 
 // What NOT_WRITABLE means, for an error: a claim the storage class doesn't hand to the pod.
 const notWritable = (claim, user, storageClass) =>
-  `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/setup.md, Kubernetes runner)`;
+  `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/kubernetes.md)`;
 // An install pod that hasn't ended by then (stuck Pending, npm hanging) fails, and goes.
 const INSTALL_MS = 15 * 60_000;
 // How long a job's pod may take to start (its image pulled, its agent installed by its init
@@ -216,7 +216,7 @@ export function createKubernetesImages({
 
   // `hosts` and `trusted`: what the run may reach (access.mjs). Its RUN steps go through the
   // egress proxy; the daemon's own pulls and pushes do as its Deployment's environment says
-  // (docs/setup.md, Kubernetes runner), with the registries' hosts (builderHosts()). Not
+  // (docs/kubernetes.md), with the registries' hosts (builderHosts()). Not
   // without the NetworkPolicies that make the proxy its only way out (builderIsolation()).
   async function build({ dir, dockerfile, tag, labels = {}, output, hosts = [], trusted = [] }) {
     const problem = await builderIsolation();
@@ -297,7 +297,7 @@ export function createKubernetesImages({
       }
     }
     if (problem) {
-      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the runner reach it (see docs/setup.md, Repo images on Kubernetes)`;
+      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the runner reach it (see docs/kubernetes.md, Repo images on Kubernetes)`;
     }
     isolation = { at: now(), problem };
     return problem;

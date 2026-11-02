@@ -11,10 +11,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { calls } from "../lib/services.mjs";
+import { CALLS, calls } from "../lib/services.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { createNetworks } from "../listener/runner/networks.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
+import { overlaps, parseCidr } from "../lib/subnets.mjs";
 
 const root = join(import.meta.dirname, "..");
 
@@ -34,11 +35,11 @@ const RUNS = {
 // (the agents' APIs), the runner (registries) and the proxy (the hosts granted to runs).
 const INTERNET = ["edge", "github", "models", "runner", "proxy"];
 
-// compose.yaml as lib/yaml.mjs reads it: without its anchors and aliases (the image names),
-// which it refuses, and nothing here needs.
+// compose.yaml as lib/yaml.mjs reads it, which refuses anchors and aliases: each anchor dropped
+// (the image names', the logging's), each alias read as `alias-<name>`.
 function readCompose(text) {
   return parseYaml(
-    text.replace(/^(x-[\w-]+:\s*)&[\w-]+\s+/gm, "$1").replace(/:\s+\*([\w-]+)\s*$/gm, ": alias-$1"),
+    text.replace(/^(x-[\w-]+:)[ \t]*&[\w-]+/gm, "$1").replace(/:\s+\*([\w-]+)\s*$/gm, ": alias-$1"),
   );
 }
 
@@ -358,4 +359,139 @@ test("compose.yaml: edge gets ALLOWED_REPOS, as the orchestrator does: it passes
       `${name}'s ALLOWED_REPOS`,
     );
   }
+});
+
+// Docker's default address pools (`default-address-pools`: 172.17–172.31 in /16s, 192.168 in
+// /20s), where `docker network create` and other compose projects take their subnets, and the
+// rest of 172.16.0.0/12 with them, where hosts' own networks (VPNs, other bridges) often are. A fixed subnet there clashes on a busy host:
+// `Pool overlaps with other one on this address space`, and compose doesn't come up (#543).
+const DOCKER_POOLS = ["172.16.0.0/12", "192.168.0.0/16"];
+
+// Every `${NAME_SUBNET:-default}` in compose.yaml → its defaults, in the order they appear.
+function subnetDefaults(text) {
+  const found = new Map();
+  for (const [, name, cidr] of text.matchAll(/\$\{([A-Z_]+_SUBNET):-([^}]+)\}/g)) {
+    found.set(name, [...(found.get(name) ?? []), cidr]);
+  }
+  return found;
+}
+
+// What is wrong with compose.yaml's fixed subnets: [] when nothing.
+function subnetProblems(text) {
+  const found = [];
+  const compose = readCompose(text);
+  // A subnet is written once on its network and once in each SERVICE_NETWORKS naming it: one
+  // edited alone, and the services on that network refuse each other's calls.
+  for (const [name, cidrs] of subnetDefaults(text)) {
+    const distinct = [...new Set(cidrs)].sort();
+    if (distinct.length > 1) found.push(`${name}: written as ${distinct.join(" and ")}`);
+  }
+  const fixed = Object.entries(compose.networks ?? {}).flatMap(([net, options]) =>
+    (options?.ipam?.config ?? []).map(({ subnet }) => [
+      net,
+      String(subnet).replace(/^\$\{[A-Z_]+:-(.+)\}$/, "$1"),
+    ]),
+  );
+  for (const [i, [net, cidr]] of fixed.entries()) {
+    if (!parseCidr(cidr)) found.push(`${net}: ${cidr} isn't an IPv4 range`);
+    for (const pool of DOCKER_POOLS) {
+      if (overlaps(cidr, pool)) found.push(`${net}: ${cidr} is in Docker's pool ${pool}`);
+    }
+    for (const [other, theirs] of fixed.slice(i + 1)) {
+      if (overlaps(cidr, theirs)) found.push(`${net} and ${other} overlap: ${cidr}, ${theirs}`);
+    }
+  }
+  return found;
+}
+
+test("compose.yaml: each fixed subnet is written the same everywhere, apart from the others and Docker's pools", () => {
+  const text = readFileSync(join(root, "compose.yaml"), "utf8");
+  assert.deepEqual(subnetProblems(text), []);
+  // The runner network's, named on both sides: the orchestrator's calls to the runner, the
+  // runner's from the orchestrator.
+  const compose = readCompose(text);
+  const runner = compose.networks.runner.ipam.config[0].subnet;
+  const { orchestrator, runner: service } = compose.services;
+  assert.ok(orchestrator.environment.SERVICE_NETWORKS.includes(`runner=${runner},`));
+  assert.ok(service.environment.SERVICE_NETWORKS.includes(`orchestrator=${runner},`));
+  // Each network with a fixed subnet has a variable of its own, which the first check reads.
+  const fixed = Object.values(compose.networks).filter((n) => n?.ipam);
+  assert.equal(subnetDefaults(text).size, fixed.length);
+});
+
+test("the subnet check fails on one written apart, two that overlap, one in Docker's pools", () => {
+  const text = readFileSync(join(root, "compose.yaml"), "utf8");
+  // Each of the runner network's three, edited alone.
+  const runner = "${RUNNER_SUBNET:-10.231.250.48/28}";
+  const at = [...text.matchAll(RegExp(RegExp.escape(runner), "g"))].map((m) => m.index);
+  assert.equal(at.length, 3);
+  for (const index of at) {
+    const edited =
+      text.slice(0, index) +
+      "${RUNNER_SUBNET:-10.231.251.48/28}" +
+      text.slice(index + runner.length);
+    assert.deepEqual(subnetProblems(edited), [
+      "RUNNER_SUBNET: written as 10.231.250.48/28 and 10.231.251.48/28",
+    ]);
+  }
+  // The runner network everywhere on its old default, in Docker's pools (#543).
+  assert.deepEqual(subnetProblems(text.replaceAll("10.231.250.48/28", "172.31.253.0/24")), [
+    "runner: 172.31.253.0/24 is in Docker's pool 172.16.0.0/12",
+  ]);
+  assert.deepEqual(subnetProblems(text.replaceAll("10.231.250.0/28", "192.168.7.0/28")), [
+    "broker-orchestrator: 192.168.7.0/28 is in Docker's pool 192.168.0.0/16",
+  ]);
+  // Two networks on one subnet.
+  assert.deepEqual(subnetProblems(text.replaceAll("10.231.250.224/28", "10.231.250.192/28")), [
+    "github-edge and edge-orchestrator overlap: 10.231.250.192/28, 10.231.250.192/28",
+  ]);
+});
+
+// Text for `docker compose logs`, JSON with one line in .env for a collector (#547): the
+// services' own default, unset, is JSON (lib/log.mjs).
+test("compose.yaml: every Deckhand service logs as LOG_FORMAT says, text by default", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  for (const name of Object.keys(RUNS)) {
+    const { environment = {} } = compose.services[name];
+    assert.equal(environment.LOG_FORMAT, "${LOG_FORMAT:-text}", `${name}'s LOG_FORMAT`);
+    assert.equal(environment.LOG_LEVEL, "${LOG_LEVEL:-}", `${name}'s LOG_LEVEL`);
+  }
+});
+
+// The ports compose.yaml's services are reached on: those their callers' URLs name
+// (http://broker:8081), and those it publishes.
+function portsOf(compose, name) {
+  const ports = new Set();
+  const text = JSON.stringify(compose.services);
+  for (const [, port] of text.matchAll(new RegExp(`http://${name}:(\\d+)`, "g"))) ports.add(port);
+  for (const port of compose.services[name].ports ?? []) ports.add(String(port).split(":").at(-1));
+  return ports;
+}
+
+test("compose.yaml: every long-running service has a health check on its own port, the others wait for it, and its logs rotate", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const { options } = compose["x-logging"];
+  assert.equal(compose["x-logging"].driver, "json-file");
+  assert.ok(options["max-size"] && options["max-file"], "the logs rotate");
+  const running = Object.entries(compose.services).filter(([, s]) => s.restart !== "no");
+  assert.deepEqual(running.map(([name]) => name).sort(), Object.keys(RUNS).sort());
+  for (const [name, service] of running) {
+    assert.equal(service.logging, "alias-logging", `${name}: the logging anchor`);
+    const probe = /fetch\('http:\/\/127\.0\.0\.1:(\d+)(\/health|\/ready)'\)/.exec(
+      service.healthcheck?.test ?? "",
+    );
+    assert.ok(probe, `${name}: a health check calling its /health or /ready`);
+    assert.ok(portsOf(compose, name).has(probe[1]), `${name}: ${probe[1]} isn't its port`);
+    // A copy waiting for its lease answers /ready with 503 and is still up.
+    if (["orchestrator", "runner"].includes(name)) assert.equal(probe[2], "/health", name);
+    assert.ok(service.healthcheck.start_interval, `${name}: checked often while it starts`);
+    for (const [on, wait] of Object.entries(service.depends_on ?? {})) {
+      assert.equal(wait?.condition, "service_healthy", `${name} waits for ${on} to be healthy`);
+    }
+  }
+  // The orchestrator starts once every service it calls is ready.
+  assert.deepEqual(
+    Object.keys(compose.services.orchestrator.depends_on).sort(),
+    [...CALLS.orchestrator].sort(),
+  );
 });

@@ -1,0 +1,7 @@
+# Deckhand's settings, as server.example/config.yaml (every key: docs/setup.md#settings), under
+# the key config.yaml. In your own overlay, replace the deckhand-server ConfigMap with your
+# config.yaml and grants (docs/kubernetes.md, Install). Read at start: the pods restart when it
+# changes, as its name has a hash of it.
+
+# GitHub logins allowed to start runs and sign in: required, none starts otherwise.
+allowed_users: []

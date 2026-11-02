@@ -1,0 +1,101 @@
+# The policy service (docs/services.md#the-policy-service): long-lived opa servers, no secret,
+# no state, no way out. It reads your policies in the grants folder's policy/ (deckhand-server's
+# items, as the orchestrator has them: it refuses every decision when they differ).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy
+  namespace: deckhand
+  labels:
+    app: deckhand-policy
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-policy
+  template:
+    metadata:
+      labels:
+        app: deckhand-policy
+    spec:
+      serviceAccountName: deckhand-policy
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # Its drain (25 s, decisions of 2 s at most).
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: policy
+          image: ghcr.io/bryansmee/deckhand-policy:latest
+          ports:
+            - name: http
+              containerPort: 8181
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+          # Its process answers: restarted after a minute without.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            # Each policy set is staged there while its opa runs.
+            - name: tmp
+              mountPath: /tmp
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            # SERVICE_KEYS_DIR's default: the broker's public key.
+            - name: service-keys
+              mountPath: /keys
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
+                    - key: default.yaml
+                      path: grants/default.yaml
+        - name: service-keys
+          configMap:
+            name: deckhand-service-keys
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: policy
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-policy
+  ports:
+    - name: http
+      port: 8181
+      targetPort: http

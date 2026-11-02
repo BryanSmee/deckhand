@@ -20,7 +20,7 @@ export function publicPart(credentials) {
 }
 
 // The credentials without the App's key, whoever sent it along.
-function withoutKey(credentials) {
+export function withoutKey(credentials) {
   const { pem: _, ...kept } = credentials ?? {};
   return kept;
 }

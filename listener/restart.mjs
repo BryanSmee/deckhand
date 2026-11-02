@@ -12,8 +12,10 @@ import { agentFor } from "./agents/index.mjs";
 import { parseKey, taskKey } from "./events.mjs";
 import { RESEARCH } from "./modes.mjs";
 import { addRun, writeEvent } from "./runlog.mjs";
+import { runLogContext } from "./runs.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { newLogContext } from "../lib/log.mjs";
 import { storable } from "../lib/store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
@@ -393,7 +395,7 @@ export function createRestart(ctx) {
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
             .concat(["graceUntil"])
-            .concat(["capabilities"])
+            .concat(["capabilities", "engine"])
             // A review's commit (runs.mjs launch()): its review is posted there.
             .concat(["reviewFrom"])
             .map((k) => [k, live[k]]),
@@ -587,13 +589,18 @@ export function createRestart(ctx) {
       if (live.replied || live.cancelled || live.overflow || sandbox) {
         // Where its log goes on from: its size at the runner.
         await live.logFile.ready;
-        log(`${live.key}: picked up ${task.name} again`);
-        if ((live.cancelled || live.overflow) && sandbox?.running) {
-          ctx.runner
-            .kill(task.name)
-            .catch((error) => log(`${live.key}: stopping its sandbox: ${error.message ?? error}`));
-        }
-        ctx.follow(task);
+        // Followed under its own context again, as from its start (runs.mjs).
+        newLogContext(runLogContext(task), () => {
+          log(`${live.key}: picked up ${task.name} again`);
+          if ((live.cancelled || live.overflow) && sandbox?.running) {
+            ctx.runner
+              .kill(task.name)
+              .catch((error) =>
+                log(`${live.key}: stopping its sandbox: ${error.message ?? error}`),
+              );
+          }
+          ctx.follow(task);
+        });
         continue;
       }
       log(`${live.key}: its sandbox never started: its comments are queued again`);

@@ -21,8 +21,9 @@
   min-width: 0;
 }
 
-/* A commit pushed after the last review, next to the state. */
+/* A commit pushed after the last review, beside its line. */
 .outdated {
+  font-size: 12px;
   font-weight: 500;
   color: var(--warn);
 }
@@ -43,9 +44,8 @@ a.sha {
   text-underline-offset: 2px;
 }
 
-/* The last review's commit, on its chip. */
+/* A review's commit, in the list. */
 .head {
-  margin-left: 6px;
   font-family: var(--mono);
   font-size: 11.5px;
   color: var(--text-3);
@@ -70,22 +70,110 @@ a.sha {
   color: var(--text-3);
 }
 
-/* R0 → R1 → R2 on one line, wrapping on a phone. */
-.chain {
+/* The last review's line, and beside it the Outdated mark, wrapping on a phone. */
+.lastRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px 0;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12.5px;
+}
+
+/* "Last review: 2 high ↓", the list of every review under it. */
+/* Its padding out in the margin: the text lines up with the heading's. */
+.last {
+  position: relative;
+  align-self: flex-start;
+  max-width: calc(100% + 12px);
+  margin: -2px -6px;
+}
+
+.line {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.line:hover,
+.line[aria-expanded="true"] {
+  background: var(--surface-2);
+}
+
+.line:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 0;
+}
+
+.label {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.better,
+.worse {
+  display: inline-flex;
+  vertical-align: -2px;
+}
+
+.better {
+  color: var(--ok);
+}
+
+.worse {
+  color: var(--err);
+}
+
+.list {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 4px);
+  left: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  width: max-content;
+  max-width: min(480px, calc(100vw - 32px));
   margin: 0;
-  padding: 0;
+  padding: 8px 10px;
   list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow);
   font-size: 12.5px;
   color: var(--text-2);
 }
 
-.chain li + li::before {
-  content: "→";
-  margin: 0 8px;
-  color: var(--text-3);
+/* The 4 px between the line and the list, part of the list: the mouse on its way down
+   doesn't leave them and close it. */
+.list::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: 0;
+  left: 0;
+  height: 5px;
+}
+
+/* One review a row, its columns lined up with the others' (display: contents would cost
+   the rows their listitem role in some browsers). */
+.list li {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: subgrid;
+  align-items: baseline;
+}
+
+.counts {
+  min-width: 0;
 }
 
 .round {
