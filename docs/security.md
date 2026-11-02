@@ -2499,8 +2499,10 @@ A review posted after the merge's delivery (it was still running) files its own 
 it is recorded, linking those an issue already has.
 A merge files at most 10, the rest listed by title (as code) in its comment, and only bullets
 with a bold title count (not one saying there is none, nor one led by a comment's kind or a
-severity: an item under the wrong heading, never filed; a blocking comment or an unclear item
-there blocks, and a note there keeps the review's own verdict). The repository turns it off with `review.follow_ups: false`, read
+severity: an item under the wrong heading, never filed; a blocking comment there blocks, an
+unclear item there blocks when the review's own verdict asks for changes, and a note there
+keeps the review's own verdict). Only the bullets under `## Follow-ups` count: any other
+heading after it ends its section. The repository turns it off with `review.follow_ups: false`, read
 again from its default branch at the merge: so does a `review` block that is gone, and a
 config with errors files nothing. There is no policy decision of its own for it (`deny_*`):
 like the review and the comments the orchestrator posts, it is Deckhand's own write.

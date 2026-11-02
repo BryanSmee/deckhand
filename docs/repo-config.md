@@ -512,7 +512,7 @@ token only reads, and Deckhand posts the review.
   never filed, but posted under Comments: a blocking comment there (`- **blocking** …`, in
   any form Comments reads) blocks as one under Comments does; a note stays a note and keeps
   the review's own verdict; a finding (`- high: …`) there, and any other bullet without a bold
-  title, is posted as **unclear**, which blocks (below).
+  title, is posted as **unclear** (below).
   A pull request closed without a merge files none, and a merge files at most 10 (the rest
   listed by title in the comment). The issue's body says the text is a review model's
   output, to check against the code, and quotes it. The review is told not to list again a
@@ -529,9 +529,11 @@ token only reads, and Deckhand posts the review.
   parentheses, or bare before a separator (`blocking: …`). A blocking comment put under Must fix
   blocks as one under Comments does, and a note there is posted under Comments and keeps the
   review's own verdict. A comment whose kind can't be read is posted as **unclear**, and
-  so is an item under Must fix that is no finding, or one under a heading Deckhand doesn't
-  know: it blocks as a blocking comment does (failing closed: the reviewer may have meant it
-  so), and the fix run is told to treat it as blocking. A review's verdict reads "comment" on follow-ups
+  so is an item under Must fix that is no finding: when the review's own verdict asks for
+  changes, it blocks as a blocking comment does (it may be why), and the fix run is told to
+  treat it as blocking; with the review's "comment", it is shown and doesn't block. Any other
+  heading after the review's own (`## Checks`, `## Acceptance criteria`, `## Out of scope`)
+  ends its section: what is under it is no item, never filed nor blocking. A review's verdict reads "comment" on follow-ups
   and notes alone only when its Must fix section says `None.` and everything under Must fix
   and Comments could be read.
 

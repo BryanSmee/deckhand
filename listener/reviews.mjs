@@ -154,6 +154,13 @@ export function parseReview(text, { allowed = "low" } = {}) {
           : "findings";
       continue;
     }
+    // Any other heading after the review's own (`## Checks`, `## Acceptance criteria`, `## Out
+    // of scope`) ends the section: what is under it is no item, never filed nor blocking.
+    if (started && /^#+\s/.test(line.trim())) {
+      section = "other";
+      current = null;
+      continue;
+    }
     // "None." under a heading, as a bullet or not: no item. Under Must fix, the review says it
     // has no finding (`none`), which lets its verdict read `comment` below.
     if (
@@ -182,12 +189,23 @@ export function parseReview(text, { allowed = "low" } = {}) {
     if (current && /^\s+\S/.test(line)) current.text += `\n${line.trim()}`;
     else if (line.trim()) {
       current = null;
-      if (started && section !== "follow-ups" && /^\S/.test(line)) unsure = true;
+      if (started && ["findings", "comments"].includes(section) && /^\S/.test(line)) {
+        unsure = true;
+      }
     }
     if (!started) summary.push(line);
   }
   const said = verdict[1].toLowerCase().replace(" ", "-");
-  const review = { summary: summary.join("\n").trim(), findings, followUps, comments, allowed };
+  // An `unclear` comment blocks when the model asked for changes (its kind unread, it may be
+  // why); with the model's `comment`, it is shown, not blocking.
+  const review = {
+    summary: summary.join("\n").trim(),
+    findings,
+    followUps,
+    comments,
+    unclearBlocks: said === "request-changes",
+    allowed,
+  };
   const tolerated = findings.some((f) => BLOCKING.has(f.severity));
   const caps = [
     ...findings.map((f) => RATING_CAPS[f.severity]),
@@ -219,7 +237,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
 // is no summary's either.
 function bullet(section, line, started = true) {
   const lead = /^(?:[-*+]|\d+[.)])\s+(?=\S)/.exec(line);
-  if (!lead) return null;
+  if (!lead || section === "other") return null;
   const rest = line.slice(lead[0].length);
   if (section === "findings") {
     const m =
@@ -304,10 +322,12 @@ const titleOf = (text) =>
     .slice(0, 256);
 
 // The comments of `review` that block (all of its blocking ones, whatever its tolerance).
-// An `unclear` one (its kind unread, or an item under the wrong heading) blocks too: the fix
-// run is told to treat it as blocking (fixMessage()), so the loop, the event and the merge
-// do the same (fail closed).
-const blockingComments = (review) => (review.comments ?? []).filter((c) => c.blocking || c.unclear);
+// An `unclear` one (its kind unread, or an item under the wrong heading) blocks too when the
+// model asked for changes (`unclearBlocks`: it may be why): the fix run is told to treat it as
+// blocking (fixMessage()), so the loop, the event and the merge do the same. With the model's
+// `comment`, it is shown, not blocking.
+const blockingComments = (review) =>
+  (review.comments ?? []).filter((c) => c.blocking || (c.unclear && review.unclearBlocks));
 
 // Whether `review` blocks with `allowed`: a finding above it, or a blocking comment.
 const blocks = (review, allowed = "low") =>
@@ -359,6 +379,7 @@ export function parsePostedReview(body, { allowed = "low" } = {}) {
     comments,
     rating: Number(head[2]),
     verdict: head[1].replace(" ", "-"),
+    unclearBlocks: head[1] === "request changes",
     allowed,
   };
 }

@@ -3429,33 +3429,63 @@ test("follow-ups: a late review after some were filed files only its new ones, i
   assert.deepEqual([s.filed().length, s.replies.length], [3, 2]);
 });
 
-test("an item under Must fix that is no finding, or under a heading the parser doesn't know, is an unclear comment", () => {
-  for (const reply of [
-    "## Must fix\n\n- **Share the retry helper** `a.mjs:3`: duplicated with b.mjs\n\nRating: 9/10\nVerdict: comment",
-    "## Must fix\n\nNone.\n\n## Out of scope\n\n- **Share the retry helper** `a.mjs:3`: duplicated with b.mjs\n\nRating: 9/10\nVerdict: comment",
-  ]) {
-    const review = parseReview(reply);
-    assert.deepEqual(
-      review.comments.map((c) => [c.blocking, c.unclear, c.text]),
-      [[false, true, "**Share the retry helper** `a.mjs:3`: duplicated with b.mjs"]],
-      reply,
-    );
-    // Posted, and blocking: the fix run treats it so, and the review does too.
-    assert.match(
-      reviewBody(review, reply, "f"),
-      /- \*\*unclear\*\* \*\*Share the retry helper\*\*/,
-    );
-    assert.deepEqual(
-      [review.verdict, reviewEvent(review), review.rating],
-      ["request-changes", "REQUEST_CHANGES", 8],
-      reply,
-    );
-  }
+test("an item under Must fix that is no finding is an unclear comment, blocking only on the model's request-changes", () => {
+  const reply = (verdict) =>
+    `## Must fix\n\n- **Share the retry helper** \`a.mjs:3\`: duplicated with b.mjs\n\nRating: 9/10\nVerdict: ${verdict}`;
+  const shown = parseReview(reply("comment"));
+  assert.deepEqual(
+    shown.comments.map((c) => [c.blocking, c.unclear, c.text]),
+    [[false, true, "**Share the retry helper** `a.mjs:3`: duplicated with b.mjs"]],
+  );
+  assert.match(reviewBody(shown, "", "f"), /- \*\*unclear\*\* \*\*Share the retry helper\*\*/);
+  // The model's comment: shown, not blocking.
+  assert.deepEqual([shown.verdict, reviewEvent(shown), shown.rating], ["comment", "COMMENT", 9]);
+  // Its request-changes: blocking, so the event and the fix run follow it.
+  const asked = parseReview(reply("request-changes"));
+  assert.deepEqual(
+    [asked.verdict, reviewEvent(asked), asked.rating],
+    ["request-changes", "REQUEST_CHANGES", 8],
+  );
+  // Read back as posted, the same.
+  assert.equal(reviewEvent(parsePostedReview(reviewBody(asked, "", "f"))), "REQUEST_CHANGES");
+  assert.equal(reviewEvent(parsePostedReview(reviewBody(shown, "", "f"))), "COMMENT");
   // A summary's bullets, before any heading, stay the summary's.
   const summary = parseReview(
     "Adds X.\n- Highlights: the cache.\n\n## Must fix\n\nNone.\n\nRating: 10/10\nVerdict: comment",
   );
   assert.deepEqual([summary.comments, summary.verdict], [[], "comment"]);
+});
+
+test("a heading the parser doesn't know ends the section: its bullets are no items, never filed nor blocking", () => {
+  for (const reply of [
+    "## Findings\n\nNone.\n\n## Acceptance criteria\n\n- [x] criterion one\n- [x] criterion two\n\nRating: 10/10\nVerdict: comment",
+    "## Must fix\n\nNone.\n\n## Follow-ups\n\nNone.\n\n## Comments\n\nNone.\n\n## Checks\n\n- `node --test`: pass\n\nRating: 10/10\nVerdict: comment",
+    "## Follow-ups\n\n- **Share helper** `a.mjs:1`: twice.\n\n## Out of scope\n\n- **Rewrite everything** `b.mjs:1`: big.\n\n## Questions\n\n- **Why retry 3 times?** x.\n\nRating: 10/10\nVerdict: comment",
+  ]) {
+    const review = parseReview(reply);
+    assert.deepEqual(
+      [review.findings, review.comments, review.verdict, reviewEvent(review), review.rating],
+      [[], [], "comment", "COMMENT", 10],
+      reply,
+    );
+    assert.ok(
+      review.followUps.every((f) => f.title === "Share helper"),
+      reply,
+    );
+  }
+});
+
+test("a nit without its lead, with the model's comment: shown as unclear, not blocking", async (t) => {
+  const reply =
+    "## Must fix\n\nNone.\n\n## Comments\n\n- Consider renaming `x`.\n\nRating: 9/10\nVerdict: comment";
+  const review = parseReview(reply);
+  assert.deepEqual(
+    [review.comments.map((c) => c.unclear), review.verdict, reviewEvent(review), review.rating],
+    [[true], "comment", "COMMENT", 9],
+  );
+  const { fix, accepted } = fixSetup(t);
+  assert.equal(await fix(posted(reply)), null);
+  assert.equal(accepted.length, 0);
 });
 
 test("an unclear comment blocks: the event, the fix run, the merge and the round's count", async (t) => {
