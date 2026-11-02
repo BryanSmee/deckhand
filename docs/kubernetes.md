@@ -177,7 +177,8 @@ sh deploy/kubernetes/check-isolation.sh
 ```
 
 It starts a pod labelled as a sandbox in `deckhand-sandboxes`, tries every port of every service's
-pod from there and the egress proxy's, and expects the proxy's alone to answer. A plugin that
+pod from there and the egress proxy's, and expects the proxy's alone to answer: 3128, and 3129
+too when its Service publishes it (the `engine` component). A plugin that
 doesn't enforce NetworkPolicies fails it. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
 

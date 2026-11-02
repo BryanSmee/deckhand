@@ -2,7 +2,8 @@
 # Whether the cluster enforces the sandboxes' NetworkPolicies (docs/kubernetes.md): a network
 # plugin that doesn't (Flannel alone, say) takes them and isolates nothing. From a pod labelled
 # as a sandbox, in the sandboxes' namespace, every port of every service's pod must be out of
-# reach, and the egress proxy's port the only one reached; the internet too stays out of reach.
+# reach, and the egress proxy's port the only one reached (its engines' port, 3129, too when its
+# Service publishes it: the engine component); the internet too stays out of reach.
 #
 #   sh deploy/kubernetes/check-isolation.sh [services' namespace] [sandboxes' namespace]
 #
@@ -16,6 +17,9 @@ sandboxes=${2:-deckhand-sandboxes}
 pod=deckhand-isolation-check
 image=$(kubectl -n "$services" get deployment egress -o jsonpath='{.spec.template.spec.containers[0].image}')
 proxy=$(kubectl -n "$services" get service egress -o jsonpath='{.spec.clusterIP}')
+# The engines' port, when the proxy's Service publishes it (components/engine): the sandboxes
+# reach it too, their engines sharing their address.
+engines=$(kubectl -n "$services" get service egress -o jsonpath='{.spec.ports[?(@.port==3129)].port}')
 
 # Every port of every pod in the services' namespace, as pod@ip:port.
 targets=$(kubectl -n "$services" get pods --field-selector=status.phase=Running -o \
@@ -83,7 +87,7 @@ listens() {
 }
 
 addresses=$(for t in $targets; do printf '%s ' "${t#*@}"; done)
-results=$(kubectl -n "$sandboxes" exec "$pod" -- node -e "$TRY" "$proxy:3128" 1.1.1.1:443 $addresses)
+results=$(kubectl -n "$sandboxes" exec "$pod" -- node -e "$TRY" "$proxy:3128" ${engines:+"$proxy:3129"} 1.1.1.1:443 $addresses)
 
 failed=0
 check() { # target, result, expected
@@ -94,28 +98,36 @@ while read -r address result; do
   for t in $targets; do [ "${t#*@}" = "$address" ] && owner=${t%@*}; done
   case "$address" in
     # The proxy, by its Service's address (the sandboxes' hostAliases) and its pods'.
-    *:3128) check "$address" "$result" reached ;;
-    *)
-      if [ "$result" = refused ] && [ -n "$owner" ]; then
-        case "$(listens "$owner" "${address##*:}")" in
-          yes) result=out-of-reach ;; # it listens: a policy refused the sandbox
-          no)
-            echo "ok    $address not listening ($owner): not checked"
-            continue
-            ;;
-          *)
-            # Fail closed: an unchecked port could be one the plugin lets through.
-            echo "FAIL  $address refused, and $owner has neither node nor nc to say whether it listens: check it by hand"
-            failed=1
-            continue
-            ;;
-        esac
-      elif [ "$result" = refused ]; then
-        result=out-of-reach # the internet's address, which listens: a policy refused it
+    *:3128)
+      check "$address" "$result" reached
+      continue
+      ;;
+    # Its engines' port, published: the proxy's alone, any other pod's on 3129 still checked below.
+    *:3129)
+      if [ -n "$engines" ] && { [ "$address" = "$proxy:3129" ] || [ "${owner#egress-}" != "$owner" ]; }; then
+        check "$address" "$result" reached
+        continue
       fi
-      check "$address" "$result" out-of-reach
       ;;
   esac
+  if [ "$result" = refused ] && [ -n "$owner" ]; then
+    case "$(listens "$owner" "${address##*:}")" in
+      yes) result=out-of-reach ;; # it listens: a policy refused the sandbox
+      no)
+        echo "ok    $address not listening ($owner): not checked"
+        continue
+        ;;
+      *)
+        # Fail closed: an unchecked port could be one the plugin lets through.
+        echo "FAIL  $address refused, and $owner has neither node nor nc to say whether it listens: check it by hand"
+        failed=1
+        continue
+        ;;
+    esac
+  elif [ "$result" = refused ]; then
+    result=out-of-reach # the internet's address, which listens: a policy refused it
+  fi
+  check "$address" "$result" out-of-reach
 done <<EOF
 $results
 EOF
