@@ -8,6 +8,7 @@ import { createDockerRunner } from "./docker.mjs";
 import { createDockerImages } from "./images.mjs";
 import { createDockerJobs } from "./jobs.mjs";
 import { createKubeApi, inClusterFetch, SERVICE_ACCOUNT } from "./kube-api.mjs";
+import { createNetworkGate } from "./kube-gate.mjs";
 import { createKubernetesImages } from "./kube-images.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import { createKubernetesRunner } from "./kubernetes.mjs";
@@ -32,9 +33,20 @@ export function createBackend({
       ? { api: kubeApi, services: servicesApi }
       : inCluster(config, readNamespace, makeApi);
     const pullSecret = createPullSecret({ config, api, services });
-    const images = createKubernetesImages({ config, api, services, pullSecret, log });
+    // Every pod's network gate (kube-gate.mjs): the addresses it waits on, read once.
+    const networkGate = createNetworkGate({ config });
+    const images = createKubernetesImages({ config, api, services, pullSecret, log, networkGate });
     return {
-      runner: createKubernetesRunner({ config, api, services, pullSecret, inboxDir, mirror, log }),
+      runner: createKubernetesRunner({
+        config,
+        api,
+        services,
+        pullSecret,
+        inboxDir,
+        mirror,
+        log,
+        networkGate,
+      }),
       images,
       // A pod of its own for the one job that needs it, the Antigravity login's refresh
       // (kube-images.mjs runJob()): agents install their way and caches need no chown here.

@@ -15,12 +15,22 @@
 //   - A repo's caches are claims of a ReadWriteMany class (KUBERNETES_CACHE_STORAGE_CLASS),
 //     which concurrent runs mount; without one, runs go without (preparation.mjs says so).
 //
+// Every pod here waits, in its first init container, until its NetworkPolicies apply
+// (kube-gate.mjs), as a sandbox's does.
+//
 // The installs run as INSTALL_USER, neither root nor the sandbox's user: Pod Security
 // `restricted` allows no root, and a sandbox mustn't own what the next one runs.
 import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
 import { sealing, unseal, WRAPPER } from "./kube-seal.mjs";
+import {
+  createNetworkGate,
+  failedGate,
+  GATE_CONTAINER,
+  gateProblem,
+  proxyTarget,
+} from "./kube-gate.mjs";
 import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import {
@@ -163,6 +173,7 @@ export function createKubernetesImages({
   now = Date.now,
   sleep = delay,
   buildMs = BUILD_MS,
+  networkGate = createNetworkGate({ config, now }), // kube-gate.mjs's, shared with the runner's (index.mjs)
 }) {
   const k = config.kubernetes;
   const owner = { "deckhand.owner": labelValue(config.prefix) };
@@ -503,12 +514,19 @@ export function createKubernetesImages({
   // `spec`), no ServiceAccount token, the registry's pull Secret; a leftover of the same name goes
   // first. One that goes out through the egress proxy (`proxied`), apart from the services, gets
   // the proxy's Service's IP (hostAliases), as sandboxes do: the cluster's DNS doesn't know its
-  // short name in the sandboxes' namespace. `spec`: its containers and volumes.
-  async function startPod(pod, { role, labels = {}, user, proxied, spec }) {
+  // short name in the sandboxes' namespace. `spec`: its containers and volumes. Its network
+  // gate first, before `spec`'s init containers: waiting for the proxy too when `proxied`, and
+  // giving up before `withinMs` from now, when its caller stops waiting for the pod.
+  async function startPod(pod, { role, labels = {}, user, proxied, withinMs, spec }) {
     await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
     await waitGone(pod);
     const pullName = await pullSecret.forPods();
-    const aliases = apart && proxied ? aliasesOf(await proxyService(services, config)) : [];
+    const proxySvc = proxied ? await proxyService(services, config) : null;
+    const aliases = apart && proxied ? aliasesOf(proxySvc) : [];
+    const gateInit = networkGate.container({
+      proxy: proxied ? proxyTarget(config, proxySvc) : null,
+      withinMs: Math.min(withinMs, k.pendingMs),
+    });
     await api.create("pods", {
       apiVersion: "v1",
       kind: "Pod",
@@ -521,8 +539,19 @@ export function createKubernetesImages({
         ...(aliases.length ? { hostAliases: aliases } : {}),
         securityContext: restrictedPod(user),
         ...spec,
+        initContainers: [gateInit, ...(spec.initContainers ?? [])],
       },
     });
+  }
+
+  // Why its network gate failed, when it did (the pod `found`), else null.
+  async function gateFailure(pod, found) {
+    const code = failedGate(found);
+    if (code === null) return null;
+    const said = [];
+    await readLog(pod, (chunk) => said.push(chunk), { container: GATE_CONTAINER });
+    const last = Buffer.concat(said).toString().trim().split("\n").at(-1);
+    return gateProblem(code, last);
   }
 
   // The pod gone, whatever its outcome; logged when the API refuses.
@@ -554,6 +583,8 @@ export function createKubernetesImages({
       role,
       user,
       proxied: Boolean(hosts),
+      // ending() waits that long from now.
+      withinMs: timeoutMs,
       spec: {
         containers: [
           {
@@ -572,7 +603,9 @@ export function createKubernetesImages({
     if (hosts) installs.set(pod, hosts);
     try {
       const ended = await ending(pod, timeoutMs);
-      await readLog(pod, output);
+      const gated = ended && (await gateFailure(pod, ended));
+      if (gated) return { code: -1, why: gated };
+      await readLog(pod, output, { container: role });
       if (!ended) return { code: -1, why: `no end in ${timeoutMs / 60000} min` };
       const code = ended.status?.containerStatuses?.[0]?.state?.terminated?.exitCode;
       if (ended.status?.phase === "Succeeded") return { code: 0, why: null };
@@ -663,6 +696,7 @@ export function createKubernetesImages({
       labels: { "deckhand.job": labelValue(pod) },
       user,
       proxied: true,
+      withinMs: until - now(),
       spec: {
         ...(init ? { initContainers: [init] } : {}),
         containers: [
@@ -739,7 +773,11 @@ export function createKubernetesImages({
     while (now() < until) {
       found = await api.find(`pods/${pod}`);
       if (!found) throw new Error(`the pod ${pod} is gone`);
-      const init = found.status?.initContainerStatuses?.[0]?.state?.terminated;
+      const gated = await gateFailure(pod, found);
+      if (gated) return { problem: `the pod ${pod}: ${gated}` };
+      const init = (found.status?.initContainerStatuses ?? []).find(
+        (s) => s.name === INIT_CONTAINER,
+      )?.state?.terminated;
       if (init && init.exitCode !== 0) {
         const output = [];
         await readLog(pod, (chunk) => output.push(chunk), { container: INIT_CONTAINER });

@@ -16,20 +16,34 @@
 //   - a public address (PUBLIC).
 //
 // Every one has to fail, and the egress proxy's Service has to answer: a pod with no network at
-// all doesn't pass as isolated. A target reached is a verdict, kept until the namespaces'
-// NetworkPolicies change or the runner takes its lease again (reset()); a probe that couldn't
-// tell (its pod didn't end, an API error, the proxy not answering: not ready yet, evicted) isn't,
-// and the next run's start tries again. Fail closed either way.
+// all doesn't pass as isolated. It tries them once its network gate (kube-gate.mjs) has seen
+// its NetworkPolicies apply: a verdict on what the cluster enforces rather than on how fast it
+// applies it. A target reached is a verdict, and so is a gate that still reached the API server
+// or the DNS at its deadline: kept until the namespaces' NetworkPolicies change or the runner
+// takes its lease again (reset()). A probe that couldn't tell (its pod didn't end, an API error,
+// the proxy not answering: not ready yet, evicted) isn't, and the next run's start tries again.
+// Fail closed either way.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { isIP } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import { SANDBOX_USER } from "../sandbox-spec.mjs";
+import {
+  CLOSED,
+  CONNECT_MS,
+  createNetworkGate,
+  failedGate,
+  GATE_CONTAINER,
+  gateProblem,
+  LEAK,
+  nameservers,
+  TCP_TRY,
+} from "./kube-gate.mjs";
 import { kubeName, restrictedContainer } from "./kube-names.mjs";
 
-// How long a connection is tried before it counts as out of reach.
-export const CONNECT_MS = 3000;
+// How long a connection is tried before it counts as out of reach: the gate's (kube-gate.mjs).
+export { CONNECT_MS };
 
 // An address of the internet that answers on 443 (Cloudflare's resolver).
 export const PUBLIC = { host: "1.1.1.1", port: 443 };
@@ -48,14 +62,7 @@ export const PROBE_SCRIPT = `
 const net = require("node:net");
 const dgram = require("node:dgram");
 const ms = ${CONNECT_MS};
-const tcp = ({ host, port }) => new Promise((resolve) => {
-  const socket = net.connect({ host, port, timeout: ms });
-  const done = (reached) => { socket.destroy(); resolve(reached); };
-  socket.on("connect", () => done(true));
-  socket.on("timeout", () => done(false));
-  socket.on("error", () => done(false));
-});
-const udp = ({ host, port }) => new Promise((resolve) => {
+${TCP_TRY}const udp = ({ host, port }) => new Promise((resolve) => {
   const socket = dgram.createSocket(net.isIPv6(host) ? "udp6" : "udp4");
   let over = false;
   const done = (reached) => {
@@ -86,8 +93,11 @@ const says = (list) => list.map((t) => `${t.what} (${at(t)})`).join(", ");
 export function probeProblem(targets, reached) {
   const leaks = targets.filter((t, i) => !t.reach && reached[i]);
   if (!leaks.length) return null;
-  return `a pod labelled as a sandbox reached ${says(leaks)}: does the network plugin enforce NetworkPolicies? (Calico and Cilium do, Flannel alone doesn't)`;
+  return `a pod labelled as a sandbox reached ${says(leaks)}${UNENFORCED}`;
 }
+
+const UNENFORCED =
+  ": does the network plugin enforce NetworkPolicies? (Calico and Cilium do, Flannel alone doesn't)";
 
 // The targets that had to answer and didn't (the egress proxy).
 export const probeMissed = (targets, reached) => targets.filter((t, i) => t.reach && !reached[i]);
@@ -95,8 +105,8 @@ export const probeMissed = (targets, reached) => targets.filter((t, i) => t.reac
 // The probe pod: a sandbox's labels (`labels`), so the policies that pick sandboxes pick it,
 // and Pod Security `restricted`, as podSpec() (kubernetes.mjs) has them; no Secret, claim,
 // ServiceAccount token, Service links or DNS. `pullSecret`: the registry's, for the kubelet to
-// pull the base image with, never mounted.
-export function probePod({ pod, image, labels, targets, pullSecret = null }) {
+// pull the base image with, never mounted. `gate`: kube-gate.mjs's init container.
+export function probePod({ pod, image, labels, targets, pullSecret = null, gate = null }) {
   const resources = { cpu: "100m", memory: "128Mi" };
   return {
     apiVersion: "v1",
@@ -116,6 +126,7 @@ export function probePod({ pod, image, labels, targets, pullSecret = null }) {
         runAsGroup: SANDBOX_USER.gid,
         seccompProfile: { type: "RuntimeDefault" },
       },
+      ...(gate ? { initContainers: [gate] } : {}),
       containers: [
         {
           name: "probe",
@@ -140,10 +151,6 @@ function hostPort(text, port) {
   return { host: url.hostname.replace(/^\[|\]$/g, ""), port: Number(url.port || port) };
 }
 
-// The nameservers of a resolv.conf.
-const nameservers = (text) =>
-  [...text.matchAll(/^\s*nameserver\s+(\S+)/gm)].map((m) => m[1].replace(/%.*$/, ""));
-
 export function createNetworkProbe({
   config,
   api, // kube-api.mjs, in the sandboxes' namespace
@@ -157,6 +164,7 @@ export function createNetworkProbe({
   env = process.env,
   lookup = (host) => dnsLookup(host, { all: true }),
   resolvConf = () => readFileSync("/etc/resolv.conf", "utf8"),
+  gate = createNetworkGate({ config, env, resolvConf, now }), // kube-gate.mjs
 }) {
   const apart = services.namespace !== api.namespace;
   // The probe's verdict, for the policies it was made under.
@@ -261,6 +269,7 @@ export function createNetworkProbe({
   // Runs the probe pod once: its problem, or null. Throws when it couldn't tell.
   async function probe() {
     const list = await targets();
+    const egress = list[0];
     // As long as a sandbox may stay Pending (KUBERNETES_PENDING_MINUTES), and a minute to run.
     const waitMs = config.kubernetes.pendingMs + 60_000;
     await removeLeftovers(waitMs);
@@ -273,6 +282,7 @@ export function createNetworkProbe({
       labels,
       targets: list,
       pullSecret: await pullSecret.forPods(),
+      gate: gate.container({ proxy: { host: egress.host, port: egress.port } }),
     });
     await api.create("pods", spec);
     try {
@@ -288,6 +298,21 @@ export function createNetworkProbe({
           );
         }
         await sleep(POLL_MS);
+      }
+      const gated = failedGate(found);
+      if (gated !== null) {
+        const res = await api.stream(
+          `${podPath}/log`,
+          { container: GATE_CONTAINER },
+          AbortSignal.timeout(30_000),
+        );
+        const said = (await res.text()).trim().split("\n").at(-1);
+        // Its policies never kept it from the API server or the DNS: they aren't enforced.
+        if (gated === LEAK) return `a pod labelled as a sandbox ${said}${UNENFORCED}`;
+        if (gated === CLOSED) {
+          throw new Error(`its probe pod ${said}, which sandboxes go out through: is it ready?`);
+        }
+        throw new Error(`its probe pod's ${gateProblem(gated, said)}`);
       }
       const res = await api.stream(
         `${podPath}/log`,
