@@ -51,6 +51,7 @@ import { createRuns, STREAM } from "./runs.mjs";
 // GitHub's status, the orchestrator's key for a write it may ask again (#506), the statuses a
 // call expects (404, 410: not logged as failures): client.mjs's, which the listener has alone.
 import { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER } from "./client.mjs";
+import { withRequest } from "../lib/log.mjs";
 export { EXPECTED_HEADER, GITHUB_STATUS, IDEMPOTENCY_HEADER };
 
 // Where the operator's credentials' fingerprints are kept, and how often a copy reads them.
@@ -653,20 +654,26 @@ export function createGithubService({
 
   let draining = false;
   const server = drainable(
-    createServer((req, res) =>
-      handle(req, res).catch((error) => {
-        if (res.headersSent) {
-          if (!(error instanceof Refused))
-            log(`GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
-          return res.destroy();
-        }
-        // A body left unread: dropped, so the answer reaches the client.
-        req.resume();
-        if (error instanceof Refused)
-          return sendJson(res, { message: error.message }, error.status);
-        log(`GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
-        sendJson(res, { message: "the github service failed" }, 500);
-      }),
+    createServer(
+      withRequest((req, res) =>
+        handle(req, res).catch((error) => {
+          if (res.headersSent) {
+            if (!(error instanceof Refused))
+              (log.error ?? log)(
+                `GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`,
+              );
+            return res.destroy();
+          }
+          // A body left unread: dropped, so the answer reaches the client.
+          req.resume();
+          if (error instanceof Refused)
+            return sendJson(res, { message: error.message }, error.status);
+          (log.error ?? log)(
+            `GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`,
+          );
+          sendJson(res, { message: "the github service failed" }, 500);
+        }),
+      ),
     ),
   );
   server.startDraining = () => (draining = true);

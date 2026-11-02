@@ -10,6 +10,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import { activePassive } from "../lib/active.mjs";
+import { createLogger, withLogContext } from "../lib/log.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
 import { fileStore } from "../lib/store-file.mjs";
@@ -100,7 +101,7 @@ const granted = grantedOf(["dockerfile"], "org/repo");
 
 async function copy(
   t,
-  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf } = {},
+  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf, log } = {},
 ) {
   let service;
   const lease = activePassive({
@@ -141,6 +142,7 @@ async function copy(
     granted,
     blobOf:
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
+    ...(log && { log }),
   });
   // Where a test may start it again (a runner away, then back).
   await listenToRestart(service.server);
@@ -430,6 +432,31 @@ test("a start a copy left halfway is done again; a sandbox that started stands",
   );
   // Docker was asked twice: the refused name, and the other run of that name above.
   assert.equal(backend.runs(), 3);
+});
+
+// One grep follows a webhook across the services (#547): the request the orchestrator handles
+// goes with its calls (lib/service-client.mjs), and the runner's lines about them carry it.
+test("a request's ID set by the orchestrator shows in the runner's log lines about its call", async (t) => {
+  const lines = [];
+  const log = createLogger({ service: "runner", env: {}, write: (line) => lines.push(line) });
+  const { url } = await copy(t, { store: fileStore(), backend: host(), log });
+  const runner = client(url).runner;
+  const refused = { ...SPEC, user: { uid: 0, gid: 0 } };
+  const fields = { request: "4f1c2a9e0b7d6e35", repo: "o/a", issue: 1 };
+  await assert.rejects(
+    withLogContext(fields, () => runner.start(refused)),
+    /refuses its spec/,
+  );
+  const said = lines.map((l) => JSON.parse(l)).find((l) => /not started/.test(l.msg));
+  assert.equal(said?.request, "4f1c2a9e0b7d6e35");
+  assert.equal(said.service, "runner");
+  // Only the request crosses: the repository and issue are the caller's context.
+  assert.equal(said.repo, undefined);
+  // A call outside any request gets an ID of its own.
+  await assert.rejects(runner.start({ ...refused, run: "dh-o-a-1-2" }), /refuses its spec/);
+  const own = lines.map((l) => JSON.parse(l)).filter((l) => /not started/.test(l.msg))[1];
+  assert.match(own.request, /^[0-9a-f]{16}$/);
+  assert.notEqual(own.request, said.request);
 });
 
 test("output, messages and the inbox through the client: what was read is skipped, its catching up said, a message keyed is sent once", async (t) => {

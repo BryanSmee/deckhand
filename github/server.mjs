@@ -16,6 +16,7 @@
 import { join } from "node:path";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { DRAIN_MS, drainOnSigterm } from "../lib/drain.mjs";
+import { createLogger } from "../lib/log.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
@@ -28,7 +29,8 @@ import { createAppHolder } from "./app.mjs";
 import { createGithubService } from "./service.mjs";
 
 const env = process.env;
-const log = (...args) => console.log(new Date().toISOString(), ...args);
+// Its lines redact the App's key too, once read (below).
+const log = createLogger({ service: "github", secrets: () => appKey() });
 
 let started;
 try {
@@ -45,7 +47,7 @@ try {
   started = { config, bound, graceMs };
 } catch (error) {
   if (!(error instanceof ConfigError) && !/SERVICE_NETWORKS/.test(error.message)) throw error;
-  console.error(`GitHub service: ${error.message}`);
+  log.error(`GitHub service: ${error.message}`);
   process.exit(1);
 }
 const { config, bound, graceMs } = started;
@@ -62,13 +64,14 @@ const brokerCaller = createBrokerCaller({
 const broker = createBrokerService({ caller: brokerCaller, log });
 
 const app = createAppHolder({ dir: env.APP_DIR || "/app-key", api: config.githubApi, log });
+function appKey() {
+  const pem = app.get()?.credentials.pem;
+  return pem ? [pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "")] : [];
+}
 // The App's key never goes in the store: a value holding it is refused there, a blob redacted.
 const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
   password: env.REDIS_PASSWORD,
-  secrets: () => {
-    const pem = app.get()?.credentials.pem;
-    return pem ? [pem.replace(/-----[A-Z ]+-----/g, "").replace(/\s+/g, "")] : [];
-  },
+  secrets: () => appKey(),
 });
 
 const { github } = createGitHub(() => app.get());

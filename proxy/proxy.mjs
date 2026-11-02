@@ -48,6 +48,7 @@ import {
   SANDBOX_HEADER,
 } from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
+import { createLogger, REQUEST_HEADER } from "../lib/log.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -72,9 +73,10 @@ export function drainMs(text) {
 // service reads it, and a client's own is dropped.
 export const CLIENT_HEADER = "x-deckhand-client";
 
-// What the services read a sandbox's call by (lib/broker-client.mjs): whatever the client sent
-// in them is dropped.
-const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER];
+// What the services read a sandbox's call by (lib/broker-client.mjs), and the request ID their
+// lines are logged under (lib/log.mjs): whatever the client sent in them is dropped, so a
+// sandbox's call gets an ID of its own at the service, never another webhook's.
+const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER, REQUEST_HEADER];
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.
 export function target(authority) {
@@ -719,7 +721,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   // The orchestrator's egress policy, on its own port.
   const url = process.env.POLICY_URL || "http://orchestrator:8082/egress";
   const port = Number(process.env.PORT ?? 3128);
-  const log = (...args) => console.log(new Date().toISOString(), ...args);
+  const log = createLogger({ service: "egress" });
   const dir = process.env.EGRESS_CACHE_DIR || "/cache";
   const cache = createCache({
     dir,
@@ -750,7 +752,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   };
   for (const [name, value] of Object.entries(urls)) {
     if (!/^https?:\/\/[^,\s]+$/.test(value)) {
-      console.error(
+      log.error(
         `${name}: ${value} is not one http(s) URL: the egress proxy takes one address, which balances between the service's copies`,
       );
       process.exit(1);
