@@ -142,6 +142,17 @@ a.sha {
   color: var(--text-2);
 }
 
+/* The 4 px between the line and the list, part of the list: the mouse on its way down
+   doesn't leave them and close it. */
+.list::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: 0;
+  left: 0;
+  height: 5px;
+}
+
 /* One review a row, its columns lined up with the others' (display: contents would cost
    the rows their listitem role in some browsers). */
 .list li {
@@ -153,6 +164,12 @@ a.sha {
 
 .counts {
   min-width: 0;
+}
+
+.round {
+  font-family: var(--mono);
+  font-weight: 600;
+  color: var(--text);
 }
 
 .stuck {

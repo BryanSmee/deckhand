@@ -213,6 +213,18 @@ test("hovering, focusing or clicking the line lists every review; Escape, Tab, a
   fireEvent.click(line);
   fireEvent.keyDown(document, { key: "Tab" });
   expect(within(rounds).queryByRole("list")).toBeNull();
+
+  // Opened by the mouse, focus elsewhere: Escape closes it, though it focuses the line.
+  act(() => line.blur());
+  expect(document.activeElement).toBe(document.body);
+  fireEvent.mouseEnter(line.parentElement!);
+  expect(rows()).toEqual(ALL);
+  act(() => {
+    fireEvent.keyDown(document, { key: "Escape" });
+  });
+  expect(within(rounds).queryByRole("list")).toBeNull();
+  expect(document.activeElement).toBe(line);
+  expect(line.getAttribute("aria-expanded")).toBe("false");
 });
 
 test("a review's points: low 1, medium 3, high 5, critical 8, every finding counted", () => {

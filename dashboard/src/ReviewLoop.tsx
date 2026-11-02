@@ -122,7 +122,15 @@ function LastReview({ task }: { task: Task }) {
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const id = useId();
-  usePopup(open, () => setOpen(false), { box, button: () => button.current });
+  // Escape closes the list, then focuses the line (ui/popup.ts): that focus mustn't open it
+  // again. Set while the popup closes, cleared once its handler is done.
+  const closing = useRef(false);
+  const close = () => {
+    closing.current = true;
+    setOpen(false);
+    queueMicrotask(() => (closing.current = false));
+  };
+  usePopup(open, close, { box, button: () => button.current });
   const last = r.history.length - 1;
   const trend = reviewTrend(r.history);
   const of = r.rounds ? ` of ${r.rounds}` : "";
@@ -142,7 +150,7 @@ function LastReview({ task }: { task: Task }) {
         class={styles.line}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
-        onFocus={() => setOpen(true)}
+        onFocus={() => !closing.current && setOpen(true)}
         onClick={() => {
           // Safari doesn't focus a button clicked: the popup's Escape brings focus back here.
           button.current?.focus();
