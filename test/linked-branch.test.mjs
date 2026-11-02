@@ -97,13 +97,15 @@ function linker({
   return { link, calls, mutations, notes, logs, decided };
 }
 
-test("branchName: draft-pr.sh's slug, from the title", { skip: needsBash }, (t) => {
+test("branchName: a slug from the title, never empty", () => {
   assert.equal(branchName(12, "Café : bientôt"), "issue-12-cafe-bientot");
   assert.equal(branchName(3, "修复登录"), "issue-3-task");
   assert.equal(branchName(3, "🔥 !"), "issue-3-task");
   const long = branchName(4, `${"a".repeat(49)} b c`);
   assert.equal(long, `issue-4-${"a".repeat(49)}`);
-  // The same as the sandbox's own slug().
+});
+
+test("branchName: the same as draft-pr.sh's slug()", { skip: needsBash }, (t) => {
   const script = readFileSync(join(import.meta.dirname, "..", "sandbox", "draft-pr.sh"), "utf8");
   const slug = /^slug\(\) \{[^]*?^\}$/m.exec(script)[0];
   for (const title of [

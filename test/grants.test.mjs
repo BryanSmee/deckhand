@@ -35,11 +35,9 @@ import {
 } from "../listener/grants.mjs";
 import {
   defaultPolicies,
-  escapeRegExp,
   grantedOf,
   hasOpa,
   needsPosixPaths,
-  needsSymlinks,
   tempDir,
   testConfig,
 } from "./helpers.mjs";
@@ -292,36 +290,31 @@ test("a broken default.yaml or a misplaced file stops every run", (t) => {
   assert.throws(() => loadGrants(c), /default\.yaml: limits\.cpus/);
 });
 
-test(
-  "symlinks: followed inside the folder, an error leading outside it",
-  { skip: needsSymlinks },
-  (t) => {
-    const outside = realpathSync(tempDir(t, "deckhand-outside-"));
-    writeFileSync(join(outside, "api.yaml"), "hosts: [pypi.org]\n");
-    mkdirSync(join(outside, "globex"));
-    writeFileSync(join(outside, "globex", "tools.yaml"), "hosts: [pypi.org]\n");
-    const { dir, config: c } = folder(t, { "acme/api.yaml": "hosts: [pypi.org]\n" });
-    symlinkSync(join(dir, "acme", "api.yaml"), join(dir, "acme", "web.yaml"));
-    symlinkSync(join(outside, "api.yaml"), join(dir, "acme", "leak.yaml"));
-    symlinkSync(join(dir, "nowhere.yaml"), join(dir, "acme", "dangling.yaml"));
-    symlinkSync(join(outside, "README.md"), join(dir, "README.md")); // not a grant: skipped
-    const grants = loadGrants(c);
-    assert.deepEqual(grantFor(grants, c, "acme/web").hosts, ["pypi.org"]);
-    assert.throws(
-      () => grantFor(grants, c, "acme/leak"),
-      (e) =>
-        e.file === "acme/leak.yaml" &&
-        /a symlink leading outside the grants folder/.test(e.message),
-    );
-    assert.throws(
-      () => grantFor(grants, c, "acme/dangling"),
-      /acme\/dangling\.yaml: a broken symlink/,
-    );
-    // An owner's folder leading outside: every run stops.
-    symlinkSync(join(outside, "globex"), join(dir, "globex"));
-    assert.throws(() => loadGrants(c), /globex: a symlink leading outside the grants folder/);
-  },
-);
+test("symlinks: followed inside the folder, an error leading outside it", (t) => {
+  const outside = realpathSync(tempDir(t, "deckhand-outside-"));
+  writeFileSync(join(outside, "api.yaml"), "hosts: [pypi.org]\n");
+  mkdirSync(join(outside, "globex"));
+  writeFileSync(join(outside, "globex", "tools.yaml"), "hosts: [pypi.org]\n");
+  const { dir, config: c } = folder(t, { "acme/api.yaml": "hosts: [pypi.org]\n" });
+  symlinkSync(join(dir, "acme", "api.yaml"), join(dir, "acme", "web.yaml"));
+  symlinkSync(join(outside, "api.yaml"), join(dir, "acme", "leak.yaml"));
+  symlinkSync(join(dir, "nowhere.yaml"), join(dir, "acme", "dangling.yaml"));
+  symlinkSync(join(outside, "README.md"), join(dir, "README.md")); // not a grant: skipped
+  const grants = loadGrants(c);
+  assert.deepEqual(grantFor(grants, c, "acme/web").hosts, ["pypi.org"]);
+  assert.throws(
+    () => grantFor(grants, c, "acme/leak"),
+    (e) =>
+      e.file === "acme/leak.yaml" && /a symlink leading outside the grants folder/.test(e.message),
+  );
+  assert.throws(
+    () => grantFor(grants, c, "acme/dangling"),
+    /acme\/dangling\.yaml: a broken symlink/,
+  );
+  // An owner's folder leading outside: every run stops.
+  symlinkSync(join(outside, "globex"), join(dir, "globex"));
+  assert.throws(() => loadGrants(c), /globex: a symlink leading outside the grants folder/);
+});
 
 test("an edit applies to the next load, without a restart; a repo's file is read when asked for", (t) => {
   const { dir, config: c } = folder(t, {
@@ -484,15 +477,15 @@ test(
       resolveMounts([{ path, readOnly: true }], g).refused.join("");
     assert.match(
       refusedFor(`${dir}/work/../secret`),
-      new RegExp(`resolves to ${escapeRegExp(join(dir, "secret"))}, outside the roots`),
+      new RegExp(`resolves to ${RegExp.escape(join(dir, "secret"))}, outside the roots`),
     );
     assert.match(
       refusedFor(`${dir}/work/escape`),
-      new RegExp(`resolves to ${escapeRegExp(join(dir, "secret"))}, outside the roots`),
+      new RegExp(`resolves to ${RegExp.escape(join(dir, "secret"))}, outside the roots`),
     );
     assert.match(
       refusedFor(`${dir}/work/../nothing`),
-      new RegExp(`resolves to ${escapeRegExp(join(dir, "nothing"))}, outside`),
+      new RegExp(`resolves to ${RegExp.escape(join(dir, "nothing"))}, outside`),
     );
     assert.match(refusedFor(`${dir}/work/missing`), /doesn't exist, or the listener can't see it/);
     assert.match(refusedFor(`${dir}/work-other`), /outside the roots/);
@@ -546,7 +539,7 @@ test(
     const resolve = (path, readOnly = false) =>
       resolveMounts([{ path, readOnly }], grant, { stat });
     // The refusal naming `path` as a directory the sandbox can write.
-    const writes = (path) => new RegExp(`can write \`${escapeRegExp(path)}\` on its way`);
+    const writes = (path) => new RegExp(`can write \`${RegExp.escape(path)}\` on its way`);
     // /work/team can be written: a sandbox could swap /work/team/api for a symlink to /.
     const [team] = resolve(join(root, "team", "api")).refused;
     assert.match(team, /: read-write, but the sandbox's user \(uid 1000\) can write /);

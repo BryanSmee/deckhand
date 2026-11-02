@@ -33,7 +33,7 @@ import {
 } from "../models/server.mjs";
 import { RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
-import { assertMode, escapeRegExp, listening, serve, tempDir, testKey } from "./helpers.mjs";
+import { assertMode, listening, serve, tempDir, testKey } from "./helpers.mjs";
 
 // Each service reaches the others at an address of its own, as over a network of its own with
 // Docker.
@@ -742,7 +742,7 @@ test("a credentials folder or login the models service can't read is said at sta
     lines[0],
     /AGY_AUTH_FILE, \/elsewhere\/agy\.json can't be read \(EACCES\): it runs as uid 1000/,
   );
-  assert.match(lines[1], new RegExp(`the login ${escapeRegExp(codex)} can't be read`));
+  assert.match(lines[1], new RegExp(`the login ${RegExp.escape(codex)} can't be read`));
   // The folder itself: said once, not for each file in it.
   const folder = unreadableCredentials(
     { DATA_DIR: "/data" },
@@ -753,7 +753,7 @@ test("a credentials folder or login the models service can't read is said at sta
     },
   );
   assert.equal(folder.length, 1);
-  assert.match(folder[0], new RegExp(`the credentials folder ${escapeRegExp(credentials)}`));
+  assert.match(folder[0], new RegExp(`the credentials folder ${RegExp.escape(credentials)}`));
   assert.deepEqual(unreadableCredentials({ DATA_DIR: "/data" }, { access: () => {} }), []);
 });
 

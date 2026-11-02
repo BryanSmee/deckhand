@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
-import { needsBash, needsSymlinks, tempDir } from "./helpers.mjs";
+import { needsBash, tempDir } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
 let base, server;
@@ -20,17 +20,15 @@ before(async () => {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dataDir, "app.json"), '{"privateKey":"secret"}');
   writeFileSync(join(dir, "page.png"), "PNG");
-  // Not on Windows (their tests skip there): links need its developer mode, and it has no FIFO.
-  if (!needsSymlinks) {
-    symlinkSync(join(dataDir, "app.json"), join(dir, "absolute.png"));
-    symlinkSync("../../app.json", join(dir, "relative.png"));
-    symlinkSync("page.png", join(dir, "sibling.png"));
-    symlinkSync(dataDir, join(dir, "dir.png"));
-    linkSync(join(dataDir, "app.json"), join(dir, "hard.png"));
-    // The folder itself as a link: the run can't do that, but nothing should follow it either.
-    symlinkSync(dir, join(shotsDir, "fedcba9876543210fedcba98"));
-  }
+  symlinkSync(join(dataDir, "app.json"), join(dir, "absolute.png"));
+  symlinkSync("../../app.json", join(dir, "relative.png"));
+  symlinkSync("page.png", join(dir, "sibling.png"));
+  symlinkSync(dataDir, join(dir, "dir.png"));
+  linkSync(join(dataDir, "app.json"), join(dir, "hard.png"));
+  // Not on Windows, which has no FIFO (its test skips there).
   if (!needsBash) execFileSync("mkfifo", [join(dir, "fifo.png")]);
+  // The folder itself as a link: the run can't do that, but nothing should follow it either.
+  symlinkSync(dir, join(shotsDir, "fedcba9876543210fedcba98"));
 
   const ctx = {
     config: { port: 0 },
@@ -55,7 +53,7 @@ test("serves a run's regular image files", async () => {
   assert.equal(await res.text(), "PNG");
 });
 
-test("a link in a run's folder is a 404, wherever it points", { skip: needsSymlinks }, async () => {
+test("a link in a run's folder is a 404, wherever it points", async () => {
   for (const name of ["absolute.png", "relative.png", "sibling.png", "dir.png", "hard.png"]) {
     const res = await fetch(`${base}/${folder}/${name}`);
     assert.equal(res.status, 404, name);

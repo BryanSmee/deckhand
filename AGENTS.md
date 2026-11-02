@@ -223,10 +223,10 @@ docs/         setup, per-repo config reference, security model, architecture
   tests' own environment: in a sandbox that one holds the run's settings, and
   `DECKHAND_TOKEN_FILE` unset would read the run's real token.
 - The pure-Node tests pass on native Windows too (#565), which no CI job runs: what only
-  POSIX has (bash and the sh fakes, file modes, Linux's mount paths, symlinks, signals) skips
+  POSIX has (bash and the sh fakes, file modes, Linux's mount paths, signals) skips
   there with a reason from `test/helpers.mjs` (`{ skip: needsBash }`, `needsModes`,
-  `needsPosixPaths`, `needsSymlinks`…; `assertMode()` for a mode checked in passing). Paths are
-  built with `join()` and compared through `posix()` or `escapeRegExp()`, never with a
+  `needsPosixPaths`…; `assertMode()` for a mode checked in passing). Paths are
+  built with `join()` and compared through `posix()` or `RegExp.escape()`, never with a
   hard-coded `/`; a Node script is spawned through `process.execPath`, not its shebang; and
   `.gitattributes` checks every file out with LF.
 - Flaky is a bug, fixed at its cause, never retried away (#563). Ports: the OS's (port 0),

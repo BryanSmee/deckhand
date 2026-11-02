@@ -284,9 +284,6 @@ export const resetsUnread =
   isWindows && "Windows resets a connection closed with a body unread: its answer is lost";
 // SIGTERM caught: Windows has no signals, a kill ends the process there.
 export const needsSignals = isWindows && "needs POSIX signals: on Windows a kill ends the process";
-// Symlinks, which Windows creates only in developer mode.
-export const needsSymlinks =
-  isWindows && "needs symlinks, which Windows creates only in developer mode";
 
 // Asserts `path`'s permission bits (0o600) where the system keeps them: not on Windows, where a
 // test that checks a mode in passing still checks the rest.
@@ -296,9 +293,6 @@ export function assertMode(path, mode) {
 
 // A path in POSIX form (`a/b`, never `a\b`), for assertions written with `/`.
 export const posix = (path) => path.split(sep).join("/");
-
-// `text` escaped for a RegExp: a path, whatever its separator.
-export const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The environment of a sandbox script a test spawns: never the tests' own, which inside a
 // Deckhand sandbox (Deckhand testing itself) holds the run's real settings, and a run token

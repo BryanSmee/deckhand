@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { grantFor, grantsFrom, withGrants } from "../listener/grants.mjs";
 import { KEYS, parseRepoConfig } from "../listener/repo-config.mjs";
 import { effectiveView } from "../listener/repo-view.mjs";
-import { escapeRegExp, needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
+import { needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({
   ALLOWED_USERS: "alice,bob",
@@ -121,7 +121,7 @@ test(
     assert.equal(mounts[1].source, "refused");
     assert.match(
       mounts[1].note,
-      new RegExp(`^resolves to ${escapeRegExp(join(dir, "secret"))}, outside the roots`),
+      new RegExp(`^resolves to ${RegExp.escape(join(dir, "secret"))}, outside the roots`),
     );
     assert.equal(mounts[2].source, "refused");
     assert.deepEqual(grant.mounts, [{ root: `${dir}/work`, readOnly: true }]);
