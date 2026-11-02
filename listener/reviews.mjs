@@ -891,7 +891,8 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   if (!step && entry?.deciding) step = entry.deciding;
   const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
   if (!step && own && entry?.next === settling.reason) step = settling.reason;
-  const looping = LOOP_STEPS.includes(step) || !!entry?.ciWaiting;
+  // "ci": the CI step being decided (ciRecheck()), its wait cleared before what follows is queued.
+  const looping = LOOP_STEPS.includes(step) || step === "ci" || !!entry?.ciWaiting;
   if (!history.length && !looping && !entry?.ciStopped) return null;
   const fixes = fixesOf(entry);
   const rounds = entry?.fixRounds ?? 0;
@@ -2169,7 +2170,12 @@ export function createReviews({
   // pull request still waiting or decided.
   const ciQueue = new Map();
   function ciRecheck(key) {
-    const next = (ciQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(() => ciDecide(key));
+    // The loop is on its CI step until what follows the wait is queued: ciDecide() clears the
+    // wait before it queues the review or the CI fix run, and an auto-picked task keeps its
+    // reserved slot only while its loop goes on (tasks.mjs loopHolds()).
+    const decide = () =>
+      reviewed.get(key)?.ciWaiting ? deciding(key, "ci", () => ciDecide(key)) : ciDecide(key);
+    const next = (ciQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(decide);
     ciQueue.set(key, next);
     next
       .finally(() => {

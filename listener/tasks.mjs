@@ -11,6 +11,7 @@ import {
   linkedIssue,
   linkTo,
   parseKey,
+  prId,
   takeOptions,
   taskKey,
   workItem,
@@ -79,9 +80,6 @@ export function busyTask(tasks, key) {
 export function pickedTask(t) {
   return t.live ? !!t.live.record?.autoPickup : !!t.pending?.[0]?.autoPickup;
 }
-
-// How a picked run ends that, without a pull request, ends its pick (followsPick()).
-const GAVE_UP = ["error", "cancelled"];
 
 // `fn()` once the calls `chains` holds for `key` before it have settled, failed or not: → its
 // promise. The key is dropped once its last call is done.
@@ -303,35 +301,49 @@ export function createTasks(ctx) {
   // Task `key`'s last run record, under any spelling: ctx.runs is newest first.
   const lastRun = (key) => ctx.runs?.find((r) => taskId(r.key) === taskId(key)) ?? null;
 
-  // Whether what is queued now on `task` (null: not in `tasks`) follows an auto-picked run
-  // (#591), until the picked work is done: its run or first queued item is picked, or its last
-  // run was (the records keep it through a restart) while its issue is open and its pull
-  // request neither merged nor closed. Then it holds one of AUTO_PICKUP_SLOTS too, the review
-  // loop's runs and people's comments alike: the sweep doesn't see the slot free while the loop
-  // goes on. Done is for good: a close or merge seen since that run (picks.mjs) holds after a
-  // reopen. A pick that failed or was stopped before any pull request is done too: it isn't
-  // picked again (auto-pickup.mjs), and a comment on its issue later is a run of its own.
-  function followsPick(task, key) {
-    if (task && pickedTask(task)) return true;
+  // The review loop's entry of pull request `number` (reviews.mjs entry()), under any spelling
+  // of `repo`: reviews.json's may be another's until a restart unifies them.
+  function reviewEntry(repo, number) {
+    const found = ctx.reviews?.entry?.(repo, number);
+    if (found || !ctx.reviews?.keys) return found ?? null;
+    const key = taskKey(repo, prId(number));
+    const other = ctx.reviews.keys().find((k) => k !== key && sameTask(k, key));
+    const spelled = other && parseKey(other)?.repo;
+    return spelled ? (ctx.reviews.entry(spelled, number) ?? null) : null;
+  }
+
+  // Whether auto-picked task `key` of `repo` still holds its reserved slot with no run of its
+  // own going nor queued: its last run was picked (or followed a pick), and its pull request,
+  // open, is between two steps of its review loop (reviews.mjs loopState(), the dashboard's
+  // in-review): waiting for CI, the next step being decided or on its way. The records and the
+  // loop's entry are kept through a restart. Not once its work is done: the issue closed, the
+  // pull request merged or closed, or a close seen since that run (picks.mjs), a reopen
+  // included. Nor while it asks, nor once the loop is over: the slot is free then.
+  function loopHolds(key, repo) {
     const last = lastRun(key);
     if (!last?.autoPickup || ctx.picks?.ended(key, last.id)) return false;
     const titles = ctx.titles?.closed && { get: ctx.titles.closed, keys: ctx.titles.keys };
     if (spelledGet(titles, key)) return false;
     const pr = spelledGet(ctx.pulls, key);
-    if (!pr) return !GAVE_UP.includes(last.status);
-    return pr.state !== "merged" && pr.state !== "closed";
+    if (pr?.state !== "draft" && pr?.state !== "ready") return false;
+    return LOOPING.includes(loopState(reviewEntry(repo, pr.number), last)?.loop);
+  }
+
+  // Whether what is queued now on `task` (null: not in `tasks`) follows an auto-picked run
+  // (#591): only while the task holds its reserved slot, so what it queues can't wait for a slot
+  // the sweep gave away. Its run or first queued item is picked, or its loop holds the slot
+  // between steps (loopHolds()). Then it holds the slot too, the review loop's runs and people's
+  // comments alike.
+  function followsPick(task, key, repo) {
+    return (!!task && pickedTask(task)) || loopHolds(key, repo);
   }
 
   // Whether auto-picked task `key` of `repo`, nothing of it running nor queued (`task`, null
-  // when it isn't in `tasks`, as after a restart), is between two steps of its pull request's
-  // review loop (reviews.mjs loopState(), the dashboard's in-review): waiting for CI, the next
-  // step being decided or on its way. It keeps its reserved slot meanwhile.
+  // when it isn't in `tasks`, as after a restart), keeps its reserved slot between two steps of
+  // its loop.
   function loopGoing(key, repo, task = null) {
     if (task?.running || task?.pending.length) return false;
-    const pr = spelledGet(ctx.pulls, key);
-    if (!pr || !followsPick(task, key)) return false;
-    const entry = ctx.reviews?.entry?.(repo, pr.number) ?? null;
-    return LOOPING.includes(loopState(entry, lastRun(key))?.loop);
+    return loopHolds(key, repo);
   }
 
   async function queue(item) {
@@ -351,7 +363,7 @@ export function createTasks(ctx) {
     if (item.settings) task.settings = item.settings;
     // Its pick's follow-up (the review loop, a comment): in the reserved slot too, and still
     // started by what started it for the policies (run-policy.mjs runTrigger()).
-    if (!item.autoPickup && followsPick(task, key)) {
+    if (!item.autoPickup && followsPick(task, key, item.repo)) {
       Object.assign(item, { autoPickup: true, followsPick: true });
     }
     // A comment that waited (resume()) has its 👀 already.

@@ -759,8 +759,9 @@ test("soon(): one sweep a moment later for a burst, none without slots", async (
 
 // createTasks() over org/app's tasks, with MAX_PARALLEL 2 and one reserved slot: `runs`, the
 // run records newest first (what a restart keeps); `closed` and `pulls`, task key → how its
-// issue closed and its pull request (titles.mjs, pulls.mjs); `reviews`, pull request number →
-// its review loop's entry (reviews.mjs). Nothing starts by itself: the test calls schedule().
+// issue closed and its pull request (titles.mjs, pulls.mjs); `reviews`, pull request key
+// ("org/app#pr-5", spelled as reviews.json has it) → its review loop's entry (reviews.mjs).
+// Nothing starts by itself: the test calls schedule().
 // `picks`: picks.mjs's store of ended picks.
 function pickTasks({ runs = [], closed = {}, pulls = {}, reviews = {}, picks = null } = {}) {
   const started = [];
@@ -785,7 +786,10 @@ function pickTasks({ runs = [], closed = {}, pulls = {}, reviews = {}, picks = n
       keys: () => Object.keys(closed),
     },
     pulls: { get: (key) => pulls[key] ?? null, keys: () => Object.keys(pulls) },
-    reviews: { entry: (repo, number) => reviews[number] ?? null },
+    reviews: {
+      entry: (repo, number) => reviews[`${repo}#pr-${number}`] ?? null,
+      keys: () => Object.keys(reviews),
+    },
     picks,
     received: () => {},
     answer: async () => {},
@@ -827,10 +831,20 @@ const pickedRun = (n, fields = {}) => ({
   ...fields,
 });
 
+// Issue #1's pull request, open, and its loop waiting for CI: the picked run is over.
+const READY = { "org/app#1": { number: 5, state: "ready" } };
+const WAITS = { "org/app#pr-5": { ciWaiting: { sha: "abc", since: 1 } } };
+const looping = (fields = {}) => ({
+  runs: [pickedRun(1)],
+  pulls: READY,
+  reviews: WAITS,
+  ...fields,
+});
+
 test("the review loop of an auto-picked issue holds its reserved slot: counted, scheduled there, still the listener's", async () => {
   // The picked run is over (its record is all there is, as after a restart); its review is
   // queued after a person's comment on another issue, which waits for a standard slot.
-  const p = pickTasks({ runs: [pickedRun(1)] });
+  const p = pickTasks(looping());
   const busy = newTask({ repo: "org/app", id: "9", kind: "issue", number: 9 });
   busy.running = true;
   p.ctx.tasks.set("org/app#9", busy);
@@ -862,23 +876,50 @@ test("a person's comment on an auto-picked task holds the slot too, started by t
   task.live = { record: { autoPickup: true } };
   task.running = true;
   assert.equal((await p.review(1)).autoPickup, true);
+  // As do the loop's steps being decided (`deciding`: a webhook's review, a CI decision).
+  for (const deciding of ["review", "ci"]) {
+    const decided = pickTasks(looping({ reviews: { "org/app#pr-5": { deciding } } }));
+    assert.equal((await decided.review(1)).autoPickup, true, deciding);
+  }
 });
 
-test("once the picked work is done, or another run came last, what is queued isn't auto-picked", async (t) => {
+test("a picked run that asked: its slot is free, the sweep picks the next issue, the answer runs in a standard slot", async () => {
+  for (const pulls of [{}, { "org/app#1": { number: 5, state: "draft" } }]) {
+    const p = pickTasks({ runs: [pickedRun(1, { status: "needs-input" })], pulls });
+    p.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
+    assert.equal(p.pickedCount(), 0);
+    // The sweep picks #2, which runs in the reserved slot.
+    await p.queue(2, { trigger: "work", author: "alice", autoPickup: true });
+    p.schedule();
+    assert.deepEqual(p.started, ["2"]);
+    // The answer isn't the pick's: a standard slot, at once.
+    const answer = await p.comment(1);
+    assert.equal(answer.autoPickup, undefined);
+    p.schedule();
+    assert.deepEqual(p.started, ["2", "1"]);
+  }
+});
+
+test("once the picked work is done, its loop over, or another run came last, what is queued isn't auto-picked", async (t) => {
   const cases = [
     // The issue closed, its pull request merged or closed.
-    { runs: [pickedRun(1)], closed: { "org/app#1": "completed" } },
-    { runs: [pickedRun(1)], pulls: { "org/app#1": { number: 5, state: "merged" } } },
-    { runs: [pickedRun(1)], pulls: { "org/app#1": { number: 5, state: "closed" } } },
-    // The picked run failed or was stopped before any pull request.
-    { runs: [pickedRun(1, { status: "error" })] },
-    { runs: [pickedRun(1, { status: "cancelled" })] },
+    looping({ closed: { "org/app#1": "completed" } }),
+    looping({ pulls: { "org/app#1": { number: 5, state: "merged" } } }),
+    looping({ pulls: { "org/app#1": { number: 5, state: "closed" } } }),
     // Merged, or the issue closed, under another spelling of the key.
-    { runs: [pickedRun(1)], pulls: { "Org/App#1": { number: 5, state: "merged" } } },
-    { runs: [pickedRun(1)], closed: { "Org/App#1": "completed" } },
+    looping({ pulls: { "Org/App#1": { number: 5, state: "merged" } } }),
+    looping({ closed: { "Org/App#1": "completed" } }),
+    // No pull request: the picked run answered, failed, was stopped, or its pull request is a
+    // task of its own (it doesn't close the issue).
+    looping({ pulls: {} }),
+    looping({ runs: [pickedRun(1, { status: "error" })], pulls: {} }),
+    looping({ runs: [pickedRun(1, { status: "cancelled" })], pulls: {} }),
+    // Its loop over: a clean review, or none ever started (a draft left).
+    looping({ reviews: { "org/app#pr-5": { rounds: [{ round: 0 }] } } }),
+    looping({ reviews: {}, pulls: { "org/app#1": { number: 5, state: "draft" } } }),
     // Its last run wasn't picked (an earlier one was), or another task's was.
-    { runs: [pickedRun(1, { id: "run-2", autoPickup: undefined }), pickedRun(1)] },
-    { runs: [pickedRun(3)] },
+    looping({ runs: [pickedRun(1, { id: "run-2", autoPickup: undefined }), pickedRun(1)] }),
+    looping({ runs: [pickedRun(3)] }),
   ];
   for (const state of cases) {
     const p = pickTasks(state);
@@ -886,39 +927,39 @@ test("once the picked work is done, or another run came last, what is queued isn
     assert.equal(loop.autoPickup, undefined, JSON.stringify(state));
     assert.equal(p.pickedCount(), 0);
   }
-  // Closed, then reopened with no run between: the close ended the pick for good.
+  // Closed, then reopened with no run between, its pull request reopened in its loop: the close
+  // ended the pick for good.
   const path = join(tempDir(t), "picks.json");
   const picks = createPicks({ path });
-  const runs = [pickedRun(1), pickedRun(2)];
+  const runs = [pickedRun(1)];
   endPicks(picks, runs, ["Org/App#1", "org/app#pr-5"]);
   // Read back as after a restart.
-  const reopened = pickTasks({ runs, picks: createPicks({ path }) });
+  const reopened = pickTasks(looping({ picks: createPicks({ path }) }));
   assert.equal((await reopened.review(1)).autoPickup, undefined);
-  // Another picked task, never closed: still picked.
-  assert.equal((await reopened.review(2)).autoPickup, true);
   // A run after the close (a new pick): the end was the earlier run's.
-  const again = pickTasks({ runs: [pickedRun(1, { id: "run-9" }), ...runs], picks });
+  const again = pickTasks(looping({ runs: [pickedRun(1, { id: "run-9" }), ...runs], picks }));
   assert.equal((await again.review(1)).autoPickup, true);
-  // Its pull request still open, under another spelling of the key: still picked.
-  const p = pickTasks({
-    runs: [pickedRun(1, { key: "Org/App#1" })],
-    pulls: { "org/app#1": { number: 5, state: "ready" } },
-  });
+  // Its run's record, its pull request and its loop's entry under other spellings: still picked.
+  const p = pickTasks(
+    looping({
+      runs: [pickedRun(1, { key: "Org/App#1" })],
+      reviews: { "Org/App#pr-5": WAITS["org/app#pr-5"] },
+    }),
+  );
   assert.equal((await p.review(1)).autoPickup, true);
-  // A fix run that failed with its pull request open: the loop's, still picked.
-  const fix = pickTasks({
-    runs: [pickedRun(1, { status: "error", reason: "review-fix" })],
-    pulls: { "org/app#1": { number: 5, state: "ready" } },
-  });
+  // A fix run that failed with its loop going: still picked.
+  const fix = pickTasks(
+    looping({ runs: [pickedRun(1, { status: "error", reason: "review-fix" })] }),
+  );
   assert.equal((await fix.review(1)).autoPickup, true);
 });
 
 test("between two loop steps of an auto-picked issue, nothing queued, its slot stays taken: the sweep picks nothing", async () => {
-  const ready = { "org/app#1": { number: 5, state: "ready" } };
-  const waits = { 5: { ciWaiting: { sha: "abc", since: 1 } } };
+  const idle = (p, repo = "org/app") =>
+    p.ctx.tasks.set(`${repo}#1`, newTask({ repo, id: "1", kind: "issue", number: 1 }));
   // The picked run is over, its pull request ready, the review waiting for CI.
-  const p = pickTasks({ runs: [pickedRun(1)], pulls: ready, reviews: waits });
-  p.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
+  const p = pickTasks(looping());
+  idle(p);
   assert.equal(p.pickedCount(), 1);
   const { pickup } = setup({
     repos: { "org/a": { issues: [issue(2, 1)] } },
@@ -926,37 +967,29 @@ test("between two loop steps of an auto-picked issue, nothing queued, its slot s
   });
   assert.deepEqual(await pickup.sweep(), []);
   // A fix run's end, what follows it being decided (`next`): still taken.
-  const fixed = pickTasks({
-    runs: [pickedRun(1, { reason: "review-fix", startedAt: 10 })],
-    pulls: ready,
-    reviews: { 5: { rounds: [{ round: 1, blocking: true }], next: "review-fix", nextAt: 5 } },
-  });
-  fixed.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
+  const next = { rounds: [{ round: 1, blocking: true }], next: "review-fix", nextAt: 5 };
+  const fixed = pickTasks(
+    looping({
+      runs: [pickedRun(1, { reason: "review-fix", startedAt: 10 })],
+      reviews: { "org/app#pr-5": next },
+    }),
+  );
+  idle(fixed);
   assert.equal(fixed.pickedCount(), 1);
   // After a restart, the task between its steps isn't in `tasks`: its pull request finds it,
   // once whatever its spelling.
-  const restarted = pickTasks({ runs: [pickedRun(1)], pulls: ready, reviews: waits });
+  const restarted = pickTasks(looping());
   assert.equal(restarted.pickedCount(), 1);
-  restarted.ctx.tasks.set(
-    "Org/App#1",
-    newTask({ repo: "Org/App", id: "1", kind: "issue", number: 1 }),
-  );
+  idle(restarted, "Org/App");
   assert.equal(restarted.pickedCount(), 1);
   // The loop over (a clean review), the pull request merged, or the task never picked: free.
   for (const state of [
-    { runs: [pickedRun(1)], pulls: ready, reviews: { 5: { rounds: [{ round: 0 }] } } },
-    {
-      runs: [pickedRun(1)],
-      pulls: { "org/app#1": { number: 5, state: "merged" } },
-      reviews: waits,
-    },
-    { runs: [pickedRun(1, { autoPickup: undefined })], pulls: ready, reviews: waits },
+    looping({ reviews: { "org/app#pr-5": { rounds: [{ round: 0 }] } } }),
+    looping({ pulls: { "org/app#1": { number: 5, state: "merged" } } }),
+    looping({ runs: [pickedRun(1, { autoPickup: undefined })] }),
   ]) {
     const free = pickTasks(state);
-    free.ctx.tasks.set(
-      "org/app#1",
-      newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }),
-    );
+    idle(free);
     assert.equal(free.pickedCount(), 0, JSON.stringify(state));
   }
 });
