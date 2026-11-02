@@ -2394,7 +2394,7 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   something can't make it write anything: the most it can do is change the review's text
   (with `fix`, see [Review fix runs](#review-fix-runs)). The review never
   approves (an App's approval may count toward branch protection): it requests changes on a
-  critical, high or medium finding, and comments otherwise (on medium ones too, in the review
+  critical, high or medium finding or a blocking comment, and comments otherwise (on medium ones too, in the review
   that decides an auto-merge with `review.max_allowed_severity: medium`). A review that requests
   changes, on GitHub or in its verdict, never auto-merges.
 - **No sandbox reviews or approves**, a work run's included: their tokens only read pull
@@ -2471,6 +2471,20 @@ its token against its instructions. Turn `fix` on where the people who may comme
 request or its issue are trusted (a private repository, or `users` narrowed to them), read
 what a fix run pushed before merging, and keep `fix` off on public repositories with outside
 contributors whose threads you don't watch.
+
+### Review follow-ups
+
+A review's follow-ups (problems it found outside the pull request's scope,
+[Reviews](repo-config.md#reviews)) are filed as issues by the orchestrator, with the App's
+token, once the pull request is merged: no sandbox writes them, and the review's token still
+only reads. Their titles and text are the review's, a model's output that read the diff and
+the thread, so they are posted as data, the same text the review already showed on the pull
+request: each issue is labelled `follow-up`, says which pull request and review it came from,
+and starts nothing by itself (an issue being opened runs nothing; picking it up is a
+maintainer's call, or the auto-pickup label's). Only the App's own reviews (its marker, its
+login) are read back, only after a merge (a pull request closed without one files none), and
+once per pull request (`reviews.json`): a redelivered webhook or a restart files nothing twice.
+A review that lists many follow-ups files as many issues; close those that aren't worth it.
 
 ### CI fix runs
 

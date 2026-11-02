@@ -3602,7 +3602,10 @@ allow_capabilities contains "read:pulls"
     assert.match(runEnv, /Review commit `head-1`/);
     assert.match(runEnv, /git diff origin\/trunk\.\.\.head-1/);
     // No auto-merge to decide: medium findings request changes, as the prompt says.
-    assert.match(runEnv, /when there is a\s+critical, high or medium finding/);
+    assert.match(
+      runEnv,
+      /when there is a\s+blocking comment or a critical, high or medium finding/,
+    );
     assert.doesNotMatch(runEnv, /This review tolerates/);
     // Its thread from the listener (reviews.mjs reviewThread(), unit-tested there).
     const args = readFileSync(join(dir, "run-args"), "utf8");
@@ -3801,7 +3804,7 @@ allow_capabilities contains "read:pulls"
     assert.ok(!github.requests.some((r) => r.method === "PUT"));
     // The prompt was told the tolerance worked out for the run (reviews' tolerance()).
     const runEnv = readFileSync(join(dir, "run-env"), "utf8");
-    assert.match(runEnv, /when there is a\s+critical or high finding/);
+    assert.match(runEnv, /when there is a\s+blocking comment or a critical or high finding/);
     assert.match(runEnv, /This review tolerates medium findings/);
     // The run completes: its delivery decides again.
     files.runs = JSON.stringify({

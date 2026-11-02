@@ -788,14 +788,16 @@ test("prompts: a review's verdict rule says what its tolerance lets through", ()
   assert.equal(low, promptFor(issue, { mode: "review", pull: 31 }));
   assert.match(
     low,
-    /`request-changes` when there is a\n {2}critical, high or medium finding \(the listener posts it so whatever you write\)\. The listener\n {2}requests changes on GitHub when there is a critical, high or medium finding, and otherwise\n {2}posts a comment: it never approves\.$/m,
+    /`request-changes` when there is a\n {2}blocking comment or a critical, high or medium finding \(the listener posts it so whatever you\n {2}write\)\. The listener requests changes on GitHub when there is one, and otherwise posts a\n {2}comment: it never approves\.$/m,
   );
   assert.doesNotMatch(low, /<blocking>|<tolerated>|tolerates/);
   // medium (the review that decides an auto-merge): only critical or high block; medium
   // findings are still reported, still cap the rating, and the summary says they don't block.
   const medium = promptFor(issue, { mode: "review", pull: 31, allowed: "medium" });
-  assert.match(medium, /`request-changes` when there is a\n {2}critical or high finding/);
-  assert.match(medium, /requests changes on GitHub when there is a critical or high finding/);
+  assert.match(
+    medium,
+    /`request-changes` when there is a\n {2}blocking comment or a critical or high finding/,
+  );
   assert.doesNotMatch(medium, /critical, high or medium/);
   assert.match(
     medium,
@@ -805,7 +807,7 @@ test("prompts: a review's verdict rule says what its tolerance lets through", ()
   assert.match(medium, /8 with a medium one/);
   assert.match(
     medium,
-    /With medium\n {2}findings and no critical or high one, the verdict is `comment`, and the summary\n {2}says the medium findings don't block it\./,
+    /With medium\n {2}findings and no critical or high one nor blocking comment, the verdict is\n {2}`comment`, and the summary says the medium findings don't block it\. A\n {2}blocking comment still blocks\./,
   );
   assert.doesNotMatch(medium, /<blocking>|<tolerated>/);
 });

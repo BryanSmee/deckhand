@@ -15,7 +15,9 @@ import {
   ciFailedText,
   ciFixMessage,
   createReviews,
+  FOLLOW_UP_LABEL,
   fixMessage,
+  followUpBody,
   latestReview,
   parsePostedReview,
   parseReview,
@@ -25,6 +27,7 @@ import {
   reviewCandidate,
   reviewEvent,
   reviewLoop,
+  blockingText,
   stepsGoing,
 } from "../listener/reviews.mjs";
 import {
@@ -946,6 +949,8 @@ test("review loop: each automatic review's counts, and where the loop is", async
     head: "sha-1",
     counts: { critical: 0, high: 2, medium: 0, low: 1 },
     blocking: 2,
+    followUps: 0,
+    comments: { blocking: 0, notes: 0 },
   });
   // Counts only: no finding's text in reviews.json.
   assert.doesNotMatch(readFileSync(s.path, "utf8"), /hole/);
@@ -2442,4 +2447,329 @@ test("review.ci: a second CI fix run on what the first pushed is told so; on ano
   const third = await s.reviews.tick().then(() => s.of("ci-fix").at(-1));
   assert.equal(third.round, 3);
   assert.doesNotMatch(third.text, /previous one/);
+});
+
+// A review in the three sections (#622): a low finding, two follow-ups and two comments.
+const SECTIONS = `Adds the cache. One question is open.
+All 3 acceptance criteria met.
+
+## Must fix
+
+- **low** \`lib/cache.mjs:9\`: an off-by-one in the log line. Fix: count from 1.
+
+## Follow-ups
+
+- **Share the retry helper with the uploader** \`lib/upload.mjs:30\`: the same loop twice.
+  Both back off the same way.
+- **Docs: the cache's limits**: nothing says how big it gets.
+
+## Comments
+
+- **note** \`lib/cache.mjs:3\`: \`store\` reads better than \`bag\`.
+- **blocking** \`lib/cache.mjs:20\`: should a miss go to the network at all?
+
+Rating: 9/10
+Verdict: request-changes
+`;
+
+// The same without its blocking comment: follow-ups and a note alone, beside a low finding.
+const NOTES = SECTIONS.replace(/^- \*\*blocking\*\*.*\n/m, "").replace(
+  "request-changes",
+  "comment",
+);
+
+test("parseReview: the three sections, Must fix, Follow-ups and Comments", () => {
+  const review = parseReview(SECTIONS);
+  assert.equal(
+    review.summary,
+    "Adds the cache. One question is open.\nAll 3 acceptance criteria met.",
+  );
+  assert.deepEqual(review.findings, [
+    {
+      severity: "low",
+      path: "lib/cache.mjs",
+      line: 9,
+      text: "an off-by-one in the log line. Fix: count from 1.",
+    },
+  ]);
+  assert.deepEqual(review.followUps, [
+    {
+      title: "Share the retry helper with the uploader",
+      path: "lib/upload.mjs",
+      line: 30,
+      text: "the same loop twice.\nBoth back off the same way.",
+    },
+    {
+      title: "Docs: the cache's limits",
+      path: null,
+      line: null,
+      text: "nothing says how big it gets.",
+    },
+  ]);
+  assert.deepEqual(review.comments, [
+    { blocking: false, path: "lib/cache.mjs", line: 3, text: "`store` reads better than `bag`." },
+    {
+      blocking: true,
+      path: "lib/cache.mjs",
+      line: 20,
+      text: "should a miss go to the network at all?",
+    },
+  ]);
+  // A reply with only `## Findings`, as before the sections: its findings are the must-fix ones.
+  const old = parseReview(MESSAGE);
+  assert.deepEqual(
+    old.findings.map((f) => f.severity),
+    ["high", "low", "medium"],
+  );
+  assert.deepEqual([old.followUps, old.comments], [[], []]);
+  // A severity bullet under Follow-ups or Comments is no finding.
+  const elsewhere = parseReview(
+    "## Comments\n\n- **high** level idea, a note.\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual([elsewhere.findings, elsewhere.comments.length], [[], 1]);
+});
+
+test("parseReview: follow-ups and notes never block nor cap the rating; a blocking comment does", () => {
+  const notes = parseReview(NOTES);
+  assert.deepEqual([notes.rating, notes.verdict, reviewEvent(notes)], [9, "comment", "COMMENT"]);
+  const blocking = parseReview(SECTIONS);
+  // Capped as a medium finding, and changes requested.
+  assert.deepEqual(
+    [blocking.rating, blocking.verdict, reviewEvent(blocking)],
+    [8, "request-changes", "REQUEST_CHANGES"],
+  );
+  // Whatever the review tolerates: medium allowed changes nothing for it.
+  const medium = parseReview(SECTIONS.replace("Verdict: request-changes", "Verdict: comment"), {
+    allowed: "medium",
+  });
+  assert.deepEqual([medium.verdict, reviewEvent(medium)], ["request-changes", "REQUEST_CHANGES"]);
+  assert.equal(blockingText(medium), "1 blocking comment");
+  const both = parseReview(
+    `${HIGH_ONE.split("\n\n")[0]}\n\n## Comments\n\n- **blocking** why?\n\nRating: 4/10\nVerdict: request-changes`,
+  );
+  assert.equal(blockingText(both), "1 high finding and 1 blocking comment");
+});
+
+test("reviewBody: the three sections posted, and read back with the review from before them", () => {
+  const review = parseReview(SECTIONS);
+  const blob = "https://github.com/org/repo/blob/abc";
+  const body = `${reviewBody(review, SECTIONS, "Footer.\n- not an item", blob)}\n\n<!-- deckhand -->`;
+  const mustFix = body.indexOf("## Must fix\n\n### ⚪ Low (1)");
+  const followUps = body.indexOf("## Follow-ups (2)");
+  const comments = body.indexOf("## Comments (2)");
+  assert.ok(mustFix > 0 && followUps > mustFix && comments > followUps, body);
+  assert.match(
+    body,
+    /Deckhand files each one as an issue labelled `follow-up` once this pull request is merged/,
+  );
+  assert.match(
+    body,
+    /- \*\*Share the retry helper with the uploader\*\* \[`lib\/upload\.mjs:30`\]\(https:\/\/github\.com\/org\/repo\/blob\/abc\/lib\/upload\.mjs#L30\): the same loop twice\.\n {2}Both back off/,
+  );
+  // The blocking comment first.
+  assert.ok(body.indexOf("- **blocking**") < body.indexOf("- **note**"), body);
+  const back = parsePostedReview(body);
+  assert.deepEqual([back.rating, back.verdict], [8, "request-changes"]);
+  const sorted = (list) => [...list].sort((a, b) => a.text.localeCompare(b.text));
+  assert.deepEqual(back.findings, review.findings);
+  assert.deepEqual(back.followUps, review.followUps);
+  assert.deepEqual(sorted(back.comments), sorted(review.comments));
+  assert.equal(reviewEvent(back), "REQUEST_CHANGES");
+  assert.equal(fixMessage(back, 5), fixMessage(review, 5));
+  // No must-fix finding: said so under its heading.
+  const none = parseReview(
+    "## Must fix\n\nNone.\n\n## Comments\n\n- **note** fine.\n\nRating: 10/10\nVerdict: comment",
+  );
+  assert.match(
+    reviewBody(none, "", "f"),
+    /## Must fix\n\nNone\.\n\n## Comments \(1\)\n\n- \*\*note\*\* fine\./,
+  );
+  // A review posted before the sections reads as it did: findings only.
+  const old = parsePostedReview(reviewBody(parseReview(MESSAGE), MESSAGE, "f"));
+  assert.deepEqual([old.findings.length, old.followUps, old.comments], [3, [], []]);
+});
+
+test("fixMessage: findings and blocking comments to fix, notes if cheap, follow-ups left alone", () => {
+  const text = fixMessage(parseReview(SECTIONS), 5);
+  assert.match(
+    text,
+    /Fix the findings and the \*\*blocking\*\* comments\. Apply a \*\*note\*\* only when it is cheap and in the pull request's scope; otherwise leave it, and say why in your reply\./,
+  );
+  assert.match(
+    text,
+    /The review also listed 2 follow-ups for other issues, not below: Deckhand files them as issues once the pull request is merged\. Don't work on them here, nor file them yourself\./,
+  );
+  // Every item fenced as data; the follow-ups' text isn't there at all.
+  const [before, inside, after] = text.split(/^```(?:text)?$/m);
+  assert.doesNotMatch(before, /network at all|reads better/);
+  assert.match(inside, /^\n## Must fix\n\n### ⚪ Low \(1\)/);
+  assert.match(
+    inside,
+    /## Comments \(2\)\n\n- \*\*blocking\*\* `lib\/cache\.mjs:20`: should a miss/,
+  );
+  assert.equal(after, "");
+  assert.doesNotMatch(text, /retry helper|how big/);
+  // Without comments or follow-ups: as before the sections.
+  assert.doesNotMatch(fixMessage(parseReview(MESSAGE), 5), /## Must fix|note\*\*|follow-up/);
+});
+
+test("review.fix: follow-ups and notes alone start no fix run; a blocking comment does", async (t) => {
+  const { fix, accepted } = fixSetup(t);
+  assert.equal(await fix(posted(NOTES)), null);
+  assert.equal(accepted.length, 0);
+  const item = await fix(posted(SECTIONS));
+  assert.equal(item?.reason, "review-fix");
+  assert.equal(item.text, fixMessage(parseReview(SECTIONS), 5));
+});
+
+test("review loop: follow-ups and comments counted apart, blocking comments among the blocking", async (t) => {
+  const s = await loopSetup(t);
+  assert.equal(await s.review(NOTES), null);
+  const [round] = s.loop().history;
+  assert.deepEqual(
+    [round.counts, round.blocking, round.followUps, round.comments],
+    [{ critical: 0, high: 0, medium: 0, low: 1 }, 0, 2, { blocking: 0, notes: 1 }],
+  );
+  assert.equal(s.loop().loop, "clean");
+  // The same head again, with its blocking comment: a fix run.
+  assert.equal((await s.review(SECTIONS))?.reason, "review-fix");
+  const again = s.loop().history.at(-1);
+  assert.deepEqual([again.blocking, again.comments], [1, { blocking: 1, notes: 1 }]);
+  assert.doesNotMatch(readFileSync(s.path, "utf8"), /retry helper|network/);
+});
+
+// Pull request #5 merged, its reviews on GitHub `posted` (the App's bodies), the issues labelled
+// follow-up `existing`: what the reviews filed.
+function followUpSetup(t, { posted: bodies = [], existing = [], refuse = [] } = {}) {
+  const calls = [];
+  const replies = [];
+  let next = 40;
+  const app = { login: "deckhand-app[bot]", type: "Bot" };
+  const github = async (repo, method, path, body) => {
+    calls.push({ method, path, body });
+    if (method === "GET" && path.startsWith("/repos/org/repo/pulls/5/reviews?")) {
+      const list = bodies.map((b, i) => ({
+        user: app,
+        body: b,
+        commit_id: `sha-${i + 1}`,
+        html_url: `https://github.com/org/repo/pull/5#pullrequestreview-${i + 1}`,
+      }));
+      return Response.json(path.includes("page=1") ? list : []);
+    }
+    if (method === "GET" && path.startsWith("/repos/org/repo/issues?")) {
+      return Response.json(path.includes("page=1") ? existing : []);
+    }
+    if (method === "POST" && path === "/repos/org/repo/labels")
+      return new Response("{}", { status: 422 });
+    if (method === "POST" && path === "/repos/org/repo/issues") {
+      if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
+      return Response.json({ number: next++ }, { status: 201 });
+    }
+    return new Response("{}", { status: 404 });
+  };
+  const s = setup(t, "review:\n  on: manual\n", {
+    github,
+    reply: async (repo, number, text) => replies.push([number, text]),
+  });
+  const run = {
+    repo: "org/repo",
+    number: 5,
+    base: "trunk",
+    settings: s.read.settings,
+    auto: false,
+  };
+  const record = (message) => s.reviews.settle(run, posted(message));
+  const merged = (pr = {}) =>
+    s.reviews.closed(
+      "pull_request",
+      delivery("closed", {
+        state: "closed",
+        merged_at: "2026-11-02T10:00:00Z",
+        body: "Closes #12",
+        user: app,
+        base: { repo: { html_url: "https://github.com/org/repo" } },
+        ...pr,
+      }),
+    );
+  const filed = () =>
+    calls.filter((c) => c.method === "POST" && c.path === "/repos/org/repo/issues");
+  return { ...s, calls, replies, record, merged, filed };
+}
+
+const postedBody = (message) =>
+  `${reviewBody(parseReview(message), message, "f")}\n\n<!-- deckhand -->`;
+
+test("follow-ups: filed as labelled issues once the pull request is merged, linked to it, once", async (t) => {
+  // The second review lists one again, in other words' case, and a new one.
+  const second = SECTIONS.replace(
+    /## Follow-ups[\s\S]*?## Comments/,
+    "## Follow-ups\n\n- **share the retry helper  with the uploader**: again.\n- **Log the misses**: none are.\n\n## Comments",
+  );
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS), postedBody(second)],
+    existing: [
+      { number: 7, title: "Docs: the cache's limits" },
+      { number: 8, title: "Log the misses", pull_request: {} },
+    ],
+  });
+  await s.record(SECTIONS);
+  // Closed without a merge: nothing.
+  assert.equal(
+    await s.reviews.closed(
+      "pull_request",
+      delivery("closed", { state: "closed", merged_at: null }),
+    ),
+    null,
+  );
+  assert.equal(s.calls.length, 0);
+  assert.deepEqual(await s.merged(), [40, 41]);
+  const [helper, misses] = s.filed().map((c) => c.body);
+  assert.equal(helper.title, "Share the retry helper with the uploader");
+  assert.deepEqual(helper.labels, [FOLLOW_UP_LABEL]);
+  assert.match(helper.body, /^the same loop twice\.\nBoth back off the same way\./);
+  assert.match(
+    helper.body,
+    /Where: \[`lib\/upload\.mjs:30`\]\(https:\/\/github\.com\/org\/repo\/blob\/sha-1\/lib\/upload\.mjs#L30\), as reviewed\./,
+  );
+  assert.match(
+    helper.body,
+    /Follow-up of #5, the pull request of #12: Deckhand's review of it \(\[the review\]\(https:\/\/github\.com\/org\/repo\/pull\/5#pullrequestreview-1\)\)/,
+  );
+  // A pull request with that title isn't an issue that has it.
+  assert.equal(misses.title, "Log the misses");
+  assert.deepEqual(s.replies, [
+    [
+      5,
+      "**Follow-ups** (`follow-up`): the reviews of this pull request listed these for other issues: filed #40, #41; already filed in #7.",
+    ],
+  ]);
+  // Redelivered: nothing twice.
+  assert.equal(await s.merged(), null);
+  assert.equal(s.filed().length, 2);
+});
+
+test("follow-ups: none counted, nothing read; a refused issue is left out", async (t) => {
+  const quiet = followUpSetup(t, { posted: [postedBody(HIGH_ONE)] });
+  await quiet.record(HIGH_ONE);
+  assert.equal(await quiet.merged(), null);
+  assert.equal(quiet.calls.length, 0);
+  const refused = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    refuse: ["Docs: the cache's limits"],
+  });
+  await refused.record(SECTIONS);
+  assert.deepEqual(await refused.merged(), [40]);
+  assert.match(refused.replies[0][1], /listed this one for other issues: filed #40\.$/);
+  // Another repo's, or one outside the allowlist: nothing.
+  const other = delivery("closed", { merged_at: "2026-11-02T10:00:00Z" });
+  other.repository.full_name = "org/elsewhere";
+  assert.equal(await refused.reviews.closed("pull_request", other), null);
+});
+
+test("followUpBody: no place, no review link, no issue", () => {
+  const body = followUpBody({ title: "T", path: null, line: null, text: "" }, { number: 5 });
+  assert.equal(
+    body,
+    "_No description._\n\nFollow-up of #5: Deckhand's review of it found this outside its scope, and filed it once #5 was merged.",
+  );
 });

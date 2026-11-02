@@ -484,6 +484,22 @@ test("auto-merge: review.max_allowed_severity medium, the deciding review posted
   assert.equal(fixOnly.accepted.length + fixOnly.replies.length, 0);
 });
 
+test("auto-merge: a blocking comment blocks with medium allowed; follow-ups and notes don't", async (t) => {
+  const yaml = "review:\n  on: ready\n  merge: true\n  max_allowed_severity: medium\n";
+  const comments = (kind) =>
+    `${MEDIUM.split("\n\n")[0]}\n\n## Follow-ups\n\n- **Elsewhere**: later.\n\n## Comments\n\n- **${kind}** \`a.mjs:2\`: why this?\n\nRating: 7/10\nVerdict: comment`;
+  const blocked = setup(t, { yaml });
+  const posted = blocked.posted(comments("blocking"), {}, "medium");
+  assert.equal(posted.event, "REQUEST_CHANGES");
+  assert.equal(await blocked.reviews.settle(blocked.run, posted), null);
+  assert.equal(blocked.merges().length, 0);
+  assert.match(blocked.replies[0].text, /the review still has 1 blocking comment\./);
+  const noted = setup(t, { yaml });
+  const note = noted.posted(comments("note"), {}, "medium");
+  assert.equal(note.event, "COMMENT");
+  assert.deepEqual(await noted.reviews.settle(noted.run, note), { sha: "sha-1", method: "squash" });
+});
+
 test("auto-merge: a second review that still blocks merges nothing, starts no fix", async (t) => {
   const path = join(tempDir(t), "reviews.json");
   const pushed = { head: { sha: "sha-2", repo: { full_name: "org/repo" } } };

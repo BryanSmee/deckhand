@@ -115,8 +115,9 @@ function verdictRule(text, allowed) {
   This review tolerates ${severityList(tolerated)} findings (the repository's
   \`review.max_allowed_severity\`): report them at their severity, and they still cap the
   rating as above, but they don't block this pull request. With ${severityList(tolerated)}
-  findings and no ${severityList(blocking)} one, the verdict is \`comment\`, and the summary
-  says the ${severityList(tolerated)} findings don't block it.`
+  findings and no ${severityList(blocking)} one nor blocking comment, the verdict is
+  \`comment\`, and the summary says the ${severityList(tolerated)} findings don't block it. A
+  blocking comment still blocks.`
     : "";
   return text.replaceAll("<blocking>", severityList(blocking)).replace("<tolerated>", note);
 }

@@ -297,10 +297,14 @@ export interface ReviewRound {
   round: number;
   at: number;
   head: string | null;
-  // Its findings by severity; `blocking`: how many are above the tolerance
-  // (`review.max_allowed_severity`).
+  // Its must-fix findings by severity; `blocking`: how many of them are above the tolerance
+  // (`review.max_allowed_severity`), plus its blocking comments.
   counts: Record<Severity, number>;
   blocking: number;
+  // Its follow-ups (for other issues, never blocking) and comments (`blocking` or `notes`);
+  // absent from rounds kept before the review's sections (#622).
+  followUps?: number;
+  comments?: { blocking: number; notes: number };
   // Posted as a plain comment, GitHub having refused the review.
   comment?: boolean;
   // A maintainer's review, not the loop's own.

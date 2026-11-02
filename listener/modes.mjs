@@ -81,6 +81,8 @@ export const MODES = {
   analyze: { volumes: "apart", defaults: "brainstorm", fresh: true, prompt: "analyze.md" },
   // A pull request's review, only in repos with a `review` block (repo-config.mjs): "/mode"
   // picks it there (modeNames()), and reviews.mjs starts it when a pull request turns ready.
+  // Its reply has three sections, read by reviews.mjs parseReview(): must-fix findings,
+  // follow-ups (filed as issues once the pull request is merged) and comments.
   review: { volumes: "apart", defaults: "brainstorm", fresh: true, prompt: "review.md" },
   // A dry run of the repo's policies on a pull request: no run, the listener evaluates them
   // and replies (task-modes.mjs, reviews.mjs dryRun()).
