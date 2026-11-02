@@ -185,8 +185,8 @@ aside in `dismissed.json` while that run is the task's last:
   `issues` or `pull_request` `unlabeled` delivery, or, for an issue's label taken off unheard (edge
   or the orchestrator down), the label's listing at start (every page of it, and the issue itself
   asked once more before anything is set aside, since a listing read page by page can miss one
-  that moved; it lists issues only, so a pull request's task keeps asking until its next run or
-  its close). The listing takes an issue
+  that moved: one still open and labelled keeps its `inputs` entry; it lists issues only, so a
+  pull request's task keeps asking until its next run or its close). The listing takes an issue
   missing from it for one whose label came off: renaming `NEEDS_INPUT_LABEL` sets aside the
   questions of the runs that asked under the old name. The bot's own removals don't count: a
   run starting, or a comment that takes the label off and starts nothing, answers none of the
@@ -201,11 +201,13 @@ aside in `dismissed.json` while that run is the task's last:
   (`closed_at`, `merged_at`, or `updated_at` for a label). A redelivery is also checked
   against the issue or pull request as it is now (`replayedIssue()`, `replayedPull()`): a label
   or close action it no longer matches (the label put back since, or taken off; reopened since,
-  or closed) is an edit, which moves nothing. A pull request's is replayed with the pull request
-  as it is now, so its time is the original payload's (`replayed_updated_at`). A label put back
-  on a closed pull request takes nothing back. An issue left open when its pull
-  request merges keeps the label its run put, which then no longer holds the task; open
-  questions in the issue's body still do.
+  or closed) is an edit, which moves nothing. An `issues` redelivery whose issue can't be looked
+  up (a 5xx, a rate limit) is handled as sent but for the questions, which it leaves as they
+  are: its close still reaches the titles, the waits and the backlog. A pull request's is
+  replayed with the pull request as it is now, so its time is the original payload's
+  (`replayed_updated_at`). A label put back on a closed pull request takes nothing back. An
+  issue left open when its pull request merges keeps the label its run put, which then no
+  longer holds the task; open questions in the issue's body still do.
 
 The task then shows as `done`, and the run keeps its `needs-input` outcome.
 

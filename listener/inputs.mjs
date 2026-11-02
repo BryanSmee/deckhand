@@ -8,12 +8,13 @@ import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { allTicked, parseQuestions, questionsSection } from "./questions.mjs";
-import { respellMap } from "./spelling.mjs";
+import { respellMap, taskId } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
 // has them. `dropped(repo, number)`: an issue sync() found no longer labelled (or no longer
-// open), as an `unlabeled` delivery would have said (questions.mjs applyInput()).
+// open), as an `unlabeled` delivery would have said (questions.mjs applyInput()); keep() puts
+// its entry back if the listing only missed the issue.
 export function createInputs({
   path,
   listLabelled,
@@ -23,29 +24,60 @@ export function createInputs({
 }) {
   const inputs = persistentMap(path);
   const save = inputs.save;
+  // The entries sync() dropped while their issue is looked up, by taskId(), until keep() or
+  // release() says how the lookup ended. A delivery meanwhile that lists the issue again
+  // starts from the entry (set()), so its `since` and ticks hold; one that drops it leaves
+  // nothing for keep() to put back.
+  const dropping = new Map();
 
   // Whether issue `key` waits for input now, its questions and whether the bot ticked them
   // when known (undefined: as they were).
   function set(key, on, questions, ignoredTicks) {
-    const was = inputs.get(key);
+    const held = dropping.get(taskId(key));
+    dropping.delete(taskId(key));
+    const stored = inputs.get(key);
     if (!on) {
       if (inputs.delete(key)) save();
       return;
     }
+    const was = stored ?? held?.entry;
     const next = {
       since: was?.since ?? now(),
       questions: questions === undefined ? (was?.questions ?? null) : questions,
       ...((ignoredTicks ?? was?.ignoredTicks) && { ignoredTicks: true }),
     };
-    if (was && JSON.stringify(was) === JSON.stringify(next)) return;
+    if (stored && JSON.stringify(stored) === JSON.stringify(next)) return;
     inputs.set(key, next);
     save();
   }
 
-  // An edit to the questions of an issue already listed.
+  // An edit to the questions or ticks of an issue already listed. One dropped by sync() and
+  // being looked up keeps the ticks for keep(), with the questions its lookup will say: a
+  // delivery with questions lists the issue again (set()).
   function update(key, questions, ignoredTicks) {
-    if (inputs.has(key)) set(key, true, questions, ignoredTicks);
+    if (inputs.has(key)) return set(key, true, questions, ignoredTicks);
+    const held = dropping.get(taskId(key));
+    if (!held || ignoredTicks === undefined) return;
+    const { ignoredTicks: _, ...entry } = held.entry;
+    held.entry = { ...entry, ...(ignoredTicks && { ignoredTicks: true }) };
   }
+
+  // An entry sync() dropped whose issue, looked up on its own, is still open and labelled: a
+  // listing read page by page can miss an issue that moved between pages. Its `since` and
+  // ticks as they were, its questions as the body had them when looked up. One a delivery
+  // listed again or dropped meanwhile stays as that delivery left it. Whether it was put back.
+  function keep(key, questions) {
+    const held = dropping.get(taskId(key));
+    dropping.delete(taskId(key));
+    if (!held || inputs.has(key)) return false;
+    inputs.set(key, { ...held.entry, questions });
+    save();
+    return true;
+  }
+
+  // A dropped entry whose lookup ended otherwise (the label off, the issue closed or gone, the
+  // lookup failed): forgotten, so the label put back later starts afresh, as it would have.
+  const release = (key) => dropping.delete(taskId(key));
 
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
   // listed keeps what it had. Resolves to [key, title] pairs, for the dashboard's titles.
@@ -73,7 +105,9 @@ export function createInputs({
       }
       for (const key of inputs.keys()) {
         if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
+        const entry = inputs.get(key);
         inputs.delete(key);
+        dropping.set(taskId(key), { entry });
         changed = true;
         dropped(repo, parseKey(key).number);
       }
@@ -106,6 +140,8 @@ export function createInputs({
   return {
     set,
     update,
+    keep,
+    release,
     sync,
     list,
     has: (key) => inputs.has(key),

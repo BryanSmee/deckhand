@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
+import { createInputs } from "../listener/inputs.mjs";
 import {
   allTicked,
   applyInput,
@@ -12,7 +14,7 @@ import {
   stillAsks,
 } from "../listener/questions.mjs";
 import { Refused } from "../lib/http.mjs";
-import { testConfig } from "./helpers.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
 // Real issue bodies: #77, #79, #130 and #134 (filed by an inbox run, questions pending), #67
 // ("None").
@@ -707,6 +709,57 @@ function tick(from, to, { author = BOT, sender = "alice", pull = false } = {}) {
 }
 const reply = (a, b) =>
   `<!-- needs-input -->\n## Needs your input\n\n### Open questions\n\n${ticked(a, b).replace("## Open questions\n\n", "")}\n\n### Checked\n\nThe code.\n\n<sub>🤖 Claude</sub>\n<!-- deckhand -->`;
+
+test("an issue the start's listing missed, edited while it is looked up: the edit's questions, its first `since`", async (t) => {
+  const parsed = (text) => parseQuestions(questionsSection(text));
+  // inputs.mjs's own, between sync() and keep(): #12 was labelled at 1, the listing missed it.
+  const setup = async (settings) => {
+    let clock = 1;
+    const inputs = createInputs({
+      path: join(tempDir(t), "inputs.json"),
+      listLabelled: async () => [],
+      now: () => clock,
+    });
+    inputs.set("org/repo#12", true, parsed(ticked(" ", " ")));
+    clock = 100;
+    await inputs.sync(["org/repo"]);
+    assert.equal(inputs.has("org/repo#12"), false);
+    const { ctx } = inputCtx(settings);
+    ctx.inputs = inputs;
+    return { inputs, ctx };
+  };
+  const edit = (from, to, login) =>
+    inputEvent(
+      config,
+      "issues",
+      issues("edited", {
+        text: to,
+        labels: ["needs-input"],
+        sender: { login, type: "User" },
+        changes: { body: { from } },
+      }),
+      BOT,
+    );
+  // Alice ticks a box: the delivery lists it again, as it was since 1, its questions the edit's.
+  const edited = await setup();
+  await applyInput(edited.ctx, edit(ticked(" ", " "), ticked("x", " "), "alice"));
+  assert.deepEqual(edited.inputs.list(), [
+    { key: "org/repo#12", repo: "org/repo", since: 1, questions: parsed(ticked("x", " ")) },
+  ]);
+  // The lookup answers after: the delivery's word stands.
+  assert.equal(edited.inputs.keep("org/repo#12", parsed(ticked(" ", " "))), false);
+  assert.deepEqual(edited.inputs.list()[0].questions, parsed(ticked("x", " ")));
+  // Bob, not among the repo's users, ticks every box: his ticks answer nothing, and the lookup
+  // still says what the body asks now.
+  const ignored = await setup({ users: ["alice"], trigger: "deckhand", waitForAnswers: true });
+  await applyInput(ignored.ctx, edit(ticked("x", " "), ticked("x", "x"), "bob"));
+  assert.equal(ignored.inputs.has("org/repo#12"), false);
+  assert.equal(ignored.inputs.keep("org/repo#12", parsed(ticked("x", "x"))), true);
+  assert.deepEqual(ignored.inputs.list(), [
+    { key: "org/repo#12", repo: "org/repo", since: 1, questions: parsed(ticked("x", "x")) },
+  ]);
+  assert.equal(ignored.inputs.ticksIgnored("org/repo#12"), true);
+});
 
 test("ticking every question's box in a run's reply answers it, as a reply would", () => {
   const done = tick(reply("x", " "), reply("x", "x"));
