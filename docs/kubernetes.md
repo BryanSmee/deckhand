@@ -32,7 +32,10 @@ the agents): this page is what differs on a cluster.
   ([Install](#install), step 5).
 - **A default storage class** for the services' claims (`ReadWriteOnce`), and for the issues'
   session claims (`KUBERNETES_STORAGE_CLASS`). On several nodes, one with `ReadWriteMany` too
-  ([Several nodes](#several-nodes)). Optional: a `ReadWriteMany` class for the agents' and
+  ([Several nodes](#several-nodes)). A sandbox mounts a folder of each session claim
+  (`session`), never its root, which a block volume's filesystem fills with `lost+found`:
+  claims made before Deckhand did so keep their files at the root, and their issue's next run
+  starts with a new clone and session. Optional: a `ReadWriteMany` class for the agents' and
   caches' claims ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes)).
 - **The kubelet**: a `containerLogMaxSize` above `RUN_LOG_MAX_MB` (the default 10 MiB rotates a
   run's log away, and a runner restarted mid-run then misses or repeats lines: it logs a

@@ -473,6 +473,26 @@ test("the entrypoint's brainstorm note matches the mid-run one", () => {
   assert.ok(liveMessage("brainstorm", "Hi").includes(note.slice(0, -1)));
 });
 
+// A new Kubernetes claim is root's, which git calls dubious ownership (#643): /workspace is
+// trusted before the clone, once however often the entrypoint runs with the same $HOME.
+test("the entrypoint trusts /workspace before cloning into it", { skip: needsBash }, (t) => {
+  const code = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const trust = code.match(/^git config --global --get-all safe\.directory.*\n.*\n/m)?.[0];
+  assert.ok(trust, "no safe.directory in entrypoint.sh");
+  assert.ok(code.indexOf(trust) < code.indexOf("git clone"));
+  const home = tempDir(t, "deckhand-home-");
+  const env = scriptEnv(t, { HOME: home, GIT_CONFIG_NOSYSTEM: "1" });
+  for (let i = 0; i < 2; i++) {
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", trust], { env, encoding: "utf8" });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const all = spawnSync("git", ["config", "--global", "--get-all", "safe.directory"], {
+    env,
+    encoding: "utf8",
+  });
+  assert.equal(all.stdout, "/workspace\n");
+});
+
 // Claude Code's commands live in its agent script only: the entrypoint is the same for every
 // agent.
 test("the entrypoint runs no claude command itself", () => {

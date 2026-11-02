@@ -366,8 +366,9 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
   );
   assert.deepEqual(c.volumeMounts, [
     { name: "v0", mountPath: "/opt/claude-code", readOnly: true },
-    { name: "v1", mountPath: "/workspace" },
-    { name: "v2", mountPath: "/home/node/.claude" },
+    // A folder of each session claim, not its root, which may hold lost+found (#643).
+    { name: "v1", mountPath: "/workspace", subPath: "session" },
+    { name: "v2", mountPath: "/home/node/.claude", subPath: "session" },
   ]);
   // The session claims, of the operator's class and size; the agent's is not the runner's.
   const claim = objects.persistentvolumeclaims.get("dh-org-repo-12-abc-workspace");

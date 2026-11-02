@@ -18,7 +18,8 @@
 //     start() refuses to run without them (isolationProblem()), nor on a cluster that doesn't
 //     enforce them, as a probe pod labelled as a sandbox finds (kube-probe.mjs). The egress
 //     proxy knows a sandbox by its pod IP (locate()).
-//   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs.
+//   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs, a folder of
+//     it mounted (SESSION_FOLDER).
 //   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
 //     fails its run, saying why (follow()), and a leftover one is removed rather than waited
 //     for (wait()).
@@ -87,6 +88,13 @@ export const INSTALL_USER = { uid: 1001, gid: 1001 };
 // container's name.
 const AGENT_INIT = "deckhand.agent-init";
 export const INIT_CONTAINER = "agent-install";
+
+// The folder of a session claim its sandbox mounts (podSpec()), never the claim's root: a block
+// volume's filesystem (ext4 on Longhorn, EBS, Ceph RBD…) holds lost+found there, and
+// entrypoint.sh's clone wants an empty /workspace (#643). Made by the kubelet at the first
+// mount. A claim from before kept its files at its root: its next run starts afresh, as after
+// a lost claim.
+export const SESSION_FOLDER = "session";
 
 // The engine's sidecar (podSpec()), and its storage's volume.
 const ENGINE_CONTAINER = "engine";
@@ -314,12 +322,15 @@ export function podSpec(
   const resources = { cpu: String(limits.cpus), memory: quantity(limits.memory) };
   const claimed = [...new Set(volumes.map((v) => v.name))];
   const init = agentInit && claimed.includes(agentInit.volume) ? agentInit : null;
-  const mountOf = (v) => ({
-    name: `v${claimed.indexOf(v.name)}`,
-    mountPath: v.path,
-    ...(v.readOnly ? { readOnly: true } : {}),
-    ...(v.subpath ? { subPath: v.subpath } : {}),
-  });
+  const mountOf = (v) => {
+    const subPath = v.kind === "session" ? SESSION_FOLDER : v.subpath;
+    return {
+      name: `v${claimed.indexOf(v.name)}`,
+      mountPath: v.path,
+      ...(v.readOnly ? { readOnly: true } : {}),
+      ...(subPath ? { subPath } : {}),
+    };
+  };
   return {
     apiVersion: "v1",
     kind: "Pod",
