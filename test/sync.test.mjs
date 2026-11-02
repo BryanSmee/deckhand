@@ -116,3 +116,14 @@ test("no App yet: no delivery asked again counts as none", async () => {
     conflicts: 0,
   });
 });
+
+test("a user's Sync reads every open pull request's CI again; the one at start, those not settled", async () => {
+  const asked = [];
+  const sync = createSync({
+    scan: async () => 0,
+    resync: async (options) => (asked.push(options), 0),
+  });
+  await sync.sync(null);
+  await sync.sync("alice");
+  assert.deepEqual(asked, [{ allCi: false }, { allCi: true }]);
+});

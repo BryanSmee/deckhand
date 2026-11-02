@@ -29,6 +29,7 @@ import {
   type Waiting,
   waitingOnYou,
 } from "./overview";
+import { CiStatus } from "./CiStatus";
 import { Questions } from "./Questions";
 import { FindingsLeft } from "./ReviewLoop";
 import { RepoBadge } from "./RepoBadge";
@@ -324,13 +325,17 @@ function WaitingOnYou({
                   tone={row.need === "ready" ? "ready" : undefined}
                   label={BADGES[row.need].label || undefined}
                 />
-                <a class={styles.needTitle} href={taskHref(t)}>
-                  {/* Without a title, titleOf() says the number already. */}
-                  {t.title && t.number !== null && (
-                    <span class={styles.number}>{numberOf(t)} </span>
-                  )}
-                  {titleOf(t)}
-                </a>
+                <span class={styles.titleCell}>
+                  <a class={styles.needTitle} href={taskHref(t)}>
+                    {/* Without a title, titleOf() says the number already. */}
+                    {t.title && t.number !== null && (
+                      <span class={styles.number}>{numberOf(t)} </span>
+                    )}
+                    {titleOf(t)}
+                  </a>
+                  {/* Where you decide what to review: its pull request's CI. */}
+                  {row.need === "ready" && t.pr && <CiStatus pr={t.pr} link />}
+                </span>
                 {row.need === "ready" && <FindingsLeft task={t} class={styles.left} />}
                 <span class={styles.needRepo}>{t.repo}</span>
                 <span class={styles.age} title={new Date(row.at).toLocaleString()}>

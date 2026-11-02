@@ -1,7 +1,10 @@
 // Each task's pull request for the dashboard, by task key ("org/repo#12", "org/repo#pr-3"):
-// { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits? },
-// its size and commit count as the last pull request object that had them said (events.mjs
-// pullSize()). `pull_request` webhooks keep it current (events.mjs pullRequest()), and the
+// { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits?,
+// head?, ci? }, its size and commit count as the last pull request object that had them said
+// (events.mjs pullSize()). `ci`: what CI says of its `head` commit, { sha, state, runs }
+// (ci.mjs ciSummary(), #436), kept up to date from CI's deliveries (ciChanged()) while it is
+// open; a new head resets it to `none` until something reports; the last one known stays once
+// it is merged or closed. `pull_request` webhooks keep it current (events.mjs pullRequest()), and the
 // listener's own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per listener
 // start, from the repo's recent pull requests. Kept in pulls.json, so a restart neither forgets
 // nor asks again. The open ones are asked about again at start and from the dashboard's Sync
@@ -19,11 +22,23 @@ import { respellMap, sameTask } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
+// How many open pull requests' CI resync() reads at once (three GitHub calls each).
+const CI_AT_ONCE = 4;
 
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them;
 // `getPull(repo, number)`: one of them, or null.
-export function createPulls({ path, listPulls, getPull = async () => null, log = () => {} }) {
+// `readCi(repo, sha)`: a commit's CI as GitHub has it now (ci.mjs commitCi()), or null.
+export function createPulls({
+  path,
+  listPulls,
+  getPull = async () => null,
+  readCi = async () => null,
+  log = () => {},
+}) {
   const pulls = persistentMap(path);
+  // The tasks whose CI is being read (`key` → whether to read it once more after): deliveries
+  // come by the dozen for one commit, and one read answers them all.
+  const reading = new Map();
   // Listed once per listener: tasks after that get theirs from webhooks.
   const listed = new Set();
   // The pull requests whose size was asked for once ("key#number"), when they had none: one
@@ -57,8 +72,33 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     // A pull request object without its size (the listener's own changes may have none): the
     // one known stays.
     const size = before ? knownSize(before) : {};
-    pulls.set(key, { ...size, ...pr, readyAt, ...(autoMerged && { autoMerged: true }) });
+    // The head and its CI known stay, unless the pull request moved to another head: its CI
+    // starts again, nothing reported yet. Not back to an older one: a delivery older than the
+    // one that set it (a redelivery, two handled at once ending out of order) keeps it.
+    const older =
+      pr.updatedAt != null && before?.updatedAt != null && pr.updatedAt < before.updatedAt;
+    const head = older ? (before.head ?? pr.head) : (pr.head ?? before?.head);
+    const updatedAt = Math.max(pr.updatedAt ?? 0, before?.updatedAt ?? 0) || undefined;
+    const ci = !head
+      ? before?.ci
+      : before?.ci?.sha === head
+        ? before.ci
+        : { sha: head, state: "none", runs: [] };
+    pulls.set(key, {
+      ...size,
+      ...pr,
+      readyAt,
+      ...(autoMerged && { autoMerged: true }),
+      ...(head && { head }),
+      ...(updatedAt && { updatedAt }),
+      ...(ci && { ci }),
+    });
     pulls.save();
+    // Moved to a new head: its CI read now, as the delivery that said it changed may have been
+    // handled before this one, and found no pull request at that commit.
+    if (head && before?.ci?.sha !== head && open(pr)) {
+      readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`));
+    }
     return true;
   }
 
@@ -85,6 +125,8 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     if (fetching || (!missing.length && !unsized(unique).length)) return fetching;
     fetching = (async () => {
       let changed = false;
+      // The open ones found, whose CI is read after: no delivery may come for a CI already done.
+      const opened = [];
       for (const repo of new Set(missing.map((t) => t.repo))) {
         listed.add(repo);
         let list;
@@ -103,8 +145,10 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
             url: pr.html_url,
             state: prState(pr),
             readyAt: null,
+            ...(pr.head?.sha && { head: pr.head.sha }),
           });
           changed = true;
+          if (pr.head?.sha && open(pulls.get(t.key))) opened.push(t.key);
         }
       }
       for (const key of unsized(unique)) {
@@ -119,11 +163,13 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
         }
         const size = pullSize(found);
         // Recorded meanwhile by a delivery: that one is newer.
-        if (!Object.keys(size).length || pulls.get(key) !== pr) continue;
-        pulls.set(key, { ...pr, ...size });
+        const now = pulls.get(key);
+        if (!Object.keys(size).length || !sameBesidesCi(now, pr)) continue;
+        pulls.set(key, { ...now, ...size });
         changed = true;
       }
       if (changed) pulls.save();
+      if (opened.length) catchUp(opened);
     })()
       // Nobody awaits it (http.mjs state()): a failure is logged, never thrown.
       .catch((error) => log(`Pull requests: ${error.message ?? error}`))
@@ -137,8 +183,11 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
   // The open pull requests' states asked again from GitHub (one listing per repo, then those it
   // doesn't have or whose size isn't known one by one), and the tasks without one looked up
   // again at the next fill(). Resolves to how many changed state. One at a time: a second call shares it.
-  function resync() {
-    if (resyncing) return resyncing;
+  // `allCi`: the dashboard's Sync, which reads the CI of every open pull request again (a CI
+  // delivery lost on a settled head); at start, only those not settled.
+  function resync({ allCi = false } = {}) {
+    // One going (the one at start): shared, then every CI read too if asked.
+    if (resyncing) return allCi ? resyncing.then((n) => (catchUp(openHeads()), n)) : resyncing;
     listed.clear();
     resyncing = (async () => {
       const byRepo = new Map();
@@ -166,13 +215,30 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
             found ??= list.find((p) => p.number === pr.number);
           }
           const state = found && prState(found);
-          // Recorded meanwhile by a delivery: that one is newer.
-          if (!state || pulls.get(key) !== pr) continue;
+          // Recorded meanwhile by a delivery: that one is newer. Only its CI read meanwhile
+          // (readCiOf()): what it found stays.
+          const now = pulls.get(key);
+          if (!state || !sameBesidesCi(now, pr)) continue;
           // Only getPull() has its size: a listing's leaves the one known.
           const size = pullSize(found);
           const resized = Object.entries(size).some(([k, v]) => pr[k] !== v);
-          if (state === pr.state && !resized) continue;
-          pulls.set(key, { ...pr, ...size, state, url: found.html_url ?? pr.url });
+          // A head that moved without its delivery: its CI starts again (ciStale()).
+          const head = found.head?.sha ?? pr.head;
+          if (state === pr.state && !resized && head === pr.head) continue;
+          const moved = head && head !== pr.head && now.ci?.sha !== head;
+          pulls.set(key, {
+            ...now,
+            ...size,
+            state,
+            url: found.html_url ?? pr.url,
+            ...(head && { head }),
+            // GitHub's time with the head it gave: a delivery older than it doesn't move it back.
+            ...(head !== pr.head &&
+              Number.isFinite(Date.parse(found.updated_at)) && {
+                updatedAt: Date.parse(found.updated_at),
+              }),
+            ...(moved && { ci: { sha: head, state: "none", runs: [] } }),
+          });
           dirty = true;
           // A size alone isn't what the dashboard's Sync reports.
           if (state === pr.state) continue;
@@ -181,9 +247,99 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
         }
       }
       if (dirty) pulls.save();
+      // What CI deliveries lost meanwhile (the listener down, a delivery that failed): read
+      // again for the open pull requests whose CI isn't settled for their head, after, so the
+      // dashboard's Sync doesn't wait for them.
+      catchUp(allCi ? openHeads() : stalePulls());
       return changed;
     })().finally(() => (resyncing = null));
     return resyncing;
+  }
+
+  // The open pull requests whose CI isn't settled, read again at start.
+  const stalePulls = () =>
+    openPulls()
+      .filter(([, pr]) => ciStale(pr))
+      .map(([key]) => key);
+
+  // The open pull requests with a head, whose CI a user's Sync reads again.
+  const openHeads = () =>
+    openPulls()
+      .filter(([, pr]) => !!pr.head)
+      .map(([key]) => key);
+
+  // The CI of the tasks in `keys` read again, CI_AT_ONCE at a time; resolves once all are read.
+  // A catch-up still going takes the new keys after its own.
+  let catching = Promise.resolve();
+  function catchUp(keys) {
+    const queue = [...keys];
+    const worker = async () => {
+      while (queue.length) {
+        const key = queue.shift();
+        await readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`));
+      }
+    };
+    const run = () => Promise.all(Array.from({ length: CI_AT_ONCE }, worker));
+    catching = catching.then(run, run);
+    return catching;
+  }
+
+  // Whether an open pull request's CI is worth reading again from GitHub: never read for its
+  // head (a new head's `none` included, as a delivery may have been lost), or still running.
+  const ciStale = (pr) =>
+    !!pr.head &&
+    (pr.ciFailed || pr.ci?.sha !== pr.head || pr.ci.state === "none" || pr.ci.state === "running");
+
+  // A delivery said CI changed on commit `sha` of `repo` (events.mjs ciDelivery()): the open
+  // pull requests at that head read theirs again. A commit no pull request is at (an older head,
+  // the default branch) is left alone. Resolves once read.
+  function ciChanged(repo, sha) {
+    const keys = openPulls()
+      .filter(([key, pr]) => pr.head === sha && sameRepo(parseKey(key)?.repo, repo))
+      .map(([key]) => key);
+    return Promise.all(keys.map(readCiOf));
+  }
+
+  // Task `key`'s pull request's CI read from GitHub and recorded, if its head is still the one
+  // read for. One read at a time per task: one asked meanwhile reads once more after it.
+  function readCiOf(key) {
+    if (reading.has(key)) {
+      reading.get(key).again = true;
+      return reading.get(key).done;
+    }
+    const entry = { again: false, done: null };
+    reading.set(key, entry);
+    entry.done = (async () => {
+      do {
+        entry.again = false;
+        const pr = pulls.get(key);
+        if (!pr?.head || !open(pr)) break;
+        const repo = parseKey(key)?.repo;
+        let ci;
+        try {
+          ci = await readCi(repo, pr.head);
+        } catch (error) {
+          // A delivery since asks again: the error may have passed. Else the next Sync does,
+          // the CI shown maybe out of date (ciFailed, ciStale()): no delivery may come again.
+          log(`${key}: CI of #${pr.number}: ${error.message ?? error}`);
+          const now = pulls.get(key);
+          if (now?.head === pr.head && !now.ciFailed) {
+            pulls.set(key, { ...now, ciFailed: true });
+            pulls.save();
+          }
+          continue;
+        }
+        const now = pulls.get(key);
+        // Moved to another head meanwhile: that one's CI is the one shown.
+        if (!ci || now?.head !== ci.sha) continue;
+        if (JSON.stringify(now.ci) === JSON.stringify(ci) && !now.ciFailed) continue;
+        const { ciFailed, ...rest } = now;
+        pulls.set(key, { ...rest, ci });
+        pulls.save();
+        if (now.ci?.state !== ci.state) log(`${key}: CI of #${now.number} ${ci.state}`);
+      } while (entry.again);
+    })().finally(() => reading.delete(key));
+    return entry.done;
   }
 
   // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
@@ -197,6 +353,9 @@ export function createPulls({ path, listPulls, getPull = async () => null, log =
     record,
     fill,
     resync,
+    ciChanged,
+    // The CI reads resync() started, for tests.
+    caughtUp: () => catching,
     open: openPulls,
     keys: () => [...pulls.keys()],
     respell,
@@ -215,6 +374,15 @@ function mergePulls(kept, moved) {
     readyAt: kept.readyAt ?? moved.readyAt ?? null,
     ...(autoMerged && { autoMerged: true }),
   };
+}
+
+// Whether entries `a` and `b` are the same, but for their CI: readCiOf() writes only that (and
+// whether its last read failed), and the lookups that were going meanwhile still apply.
+function sameBesidesCi(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const rest = ({ ci, ciFailed, ...other }) => other;
+  return JSON.stringify(rest(a)) === JSON.stringify(rest(b));
 }
 
 // The size fields of a recorded pull request, those it has.

@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { pipeline } from "node:stream";
 import { board, isLive, runPlaces, STATES } from "./board.mjs";
 import {
+  ciDelivery,
   closedItem,
   parseKey,
   prId,
@@ -19,6 +20,7 @@ import {
   workItem,
 } from "./events.mjs";
 import { fetchPull, getJson } from "./github.mjs";
+import { QUIET_EVENTS } from "./github-app.mjs";
 import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
@@ -345,6 +347,15 @@ export function createHttp(ctx) {
   function dispatch(event, payload, work) {
     const admitted = (promise) => work.push(admittedAs(promise));
     const { app } = ctx;
+    // CI changed on a commit: the dashboard's CI status of the pull requests at it (pulls.mjs).
+    // Not waited for: its GitHub reads would hold the delivery's place, and those behind it (a
+    // burst of statuses before a comment); one lost is read again at the next Sync.
+    const ci = ciDelivery(config, event, payload);
+    if (ci) {
+      ctx.pulls.ciChanged(ci.repo, ci.sha).catch((error) => log(`CI: ${error.stack ?? error}`));
+    }
+    // Nothing else to do for them, nor a line each (github-app.mjs QUIET_EVENTS).
+    if (QUIET_EVENTS.has(event)) return work;
     log(`Delivery: ${event} ${payload.action ?? ""} from ${payload.sender?.login ?? "?"}`);
     app.remember(payload.repository?.full_name, payload.installation?.id);
     // A default branch that moved: the repository list and the policies read it again, and

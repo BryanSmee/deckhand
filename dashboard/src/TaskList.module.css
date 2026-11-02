@@ -110,6 +110,11 @@
   font-family: var(--mono);
 }
 
+/* A pull request's CI (CiStatus.tsx), after its name or number. */
+.ci {
+  margin-left: 4px;
+}
+
 .left {
   grid-column: 2 / 4;
 }

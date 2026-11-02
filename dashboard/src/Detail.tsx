@@ -32,6 +32,7 @@ import { type Handlers, useShortcuts, withKey } from "./keys";
 import { Log } from "./Log";
 import { copyText, downloadText } from "./logExport";
 import { logSections, plainText } from "./logModel";
+import { CiStatus } from "./CiStatus";
 import { AuthTag, Outcome } from "./Outcome";
 import { heldMerge, PolicyTab } from "./Policies";
 import { Questions } from "./Questions";
@@ -426,7 +427,12 @@ export function Detail({
               </span>
             )}
             {!r?.model && thread && <AuthTag auth={r?.auth} />}
-            {t.pr && <PrLink pr={t.pr} />}
+            {t.pr && (
+              <span class={styles.pr}>
+                <PrLink pr={t.pr} />
+                <CiStatus pr={t.pr} link />
+              </span>
+            )}
             {t.dismissed && t.runs[0] && (
               <span class={styles.dismissed}>
                 Dismissed by @{t.dismissed.by} {ago(t.dismissed.at, now)}

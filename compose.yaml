@@ -54,6 +54,9 @@ services:
     environment:
       # Who may sign in to the dashboard, as for runs (or in config.yaml): required.
       ALLOWED_USERS: ${ALLOWED_USERS:-}
+      # The repos CI's deliveries (check suites, statuses) are passed on for, as the
+      # orchestrator's: optional.
+      ALLOWED_REPOS: ${ALLOWED_REPOS:-}
       # Optional: /setup detects it from your browser's address and stores it.
       PUBLIC_URL: ${PUBLIC_URL:-}
       GITHUB_URL: ${GITHUB_URL:-}

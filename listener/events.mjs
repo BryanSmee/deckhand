@@ -532,11 +532,51 @@ export function hasLabel(labels, name) {
 // A pull request as GitHub has it → { key, pr } for the dashboard (pulls.mjs record()): the
 // task of the issue it closes, else its own. `readyAt`: when it turned ready, if it just did.
 // Its size and commit count when GitHub sent them: a single pull request and webhooks have
-// them, listings don't.
+// them, listings don't. `head`: its head commit, whose CI the dashboard shows (pulls.mjs), with
+// `updatedAt`.
 export function pullEntry(repo, pr, readyAt = null) {
   return {
     key: taskKey(repo, linkedIssue(pr, repo) ?? prId(pr.number)),
-    pr: { number: pr.number, url: pr.html_url, state: prState(pr), readyAt, ...pullSize(pr) },
+    pr: {
+      number: pr.number,
+      url: pr.html_url,
+      state: prState(pr),
+      readyAt,
+      ...pullSize(pr),
+      ...(typeof pr.head?.sha === "string" && { head: pr.head.sha }),
+      // When GitHub last changed it: an older delivery handled late doesn't move the head back.
+      ...(Number.isFinite(Date.parse(pr.updated_at)) && { updatedAt: Date.parse(pr.updated_at) }),
+    },
+  };
+}
+
+// A delivery that says CI changed on a commit (an Actions run requested, going or completed, a
+// check suite completed, a commit status posted) → { repo, sha }, or null.
+export function ciDelivery(config, event, p) {
+  const sha =
+    event === "workflow_run"
+      ? p.workflow_run?.head_sha
+      : event === "check_suite"
+        ? p.check_suite?.head_sha
+        : event === "status"
+          ? p.sha
+          : null;
+  const repo = p.repository?.full_name;
+  if (typeof sha !== "string" || !sha || !p.installation?.id || !repo) return null;
+  return repoAllowed(config, repo) ? { repo, sha } : null;
+}
+
+// A `check_suite` or `status` delivery (github-app.mjs QUIET_EVENTS) as edge passes it on: only
+// what ciDelivery() reads of it, or null when it reads nothing (another repo's, no commit). A
+// status's payload holds the whole commit, its branches and repository.
+export function quietPayload(config, event, p) {
+  const ci = ciDelivery(config, event, p);
+  if (!ci) return null;
+  return {
+    ...(p.action && { action: p.action }),
+    installation: { id: p.installation.id },
+    repository: { full_name: ci.repo },
+    ...(event === "check_suite" ? { check_suite: { head_sha: ci.sha } } : { sha: ci.sha }),
   };
 }
 
