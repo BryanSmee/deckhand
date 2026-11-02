@@ -115,13 +115,14 @@ run's project writes are refused with a message naming the permission; nothing e
 changes. A GitHub App can't reach a project owned by a user account.
 
 Checks and Commit statuses let runs read what CI says of a commit beyond GitHub Actions
-(other services' check runs, commit statuses: `gh pr checks`); the `check_suite` and `status`
-events are subscribed for the orchestrator's own use to come (nothing reads them yet). An App created before then lacks
+(other services' check runs, commit statuses: `gh pr checks`), and the dashboard show them in
+each pull request's CI status; the `check_suite` and `status` events keep that status current. An App created before then lacks
 them: add **Checks: read** and **Commit statuses: read** in its settings, turn on **Check
 suite** and **Status** under _Subscribe to events_, then accept the new permissions on each
 installation ([below](#when-the-app-needs-a-new-permission)). Until then, where a commit
 has checks, a run's `gh pr checks`, and `gh pr view` without `--json` (it shows them), fail
-with a message naming the permissions; everything else works as before.
+with a message naming the permissions, and the dashboard's CI status counts GitHub Actions
+only; everything else works as before.
 
 Upgrading: runs' reads of checks and projects are new to `allow_github` and `deny_github`
 (`action: "read_checks"` or `"read_projects"`, without a `target` or `change`). A deny rule of
@@ -307,7 +308,11 @@ how many), done, error. Titles come with the webhooks; for tasks from before the
 had them, the orchestrator asks GitHub once and keeps them in `titles.json` in its data volume.
 
 Each task also links to its pull request (the one that closes its issue, or the pull request
-itself), with a badge for its state: draft, ready for review, merged or closed. The
+itself), with a badge for its state: draft, ready for review, merged or closed, and an icon
+for what CI says of its latest commit: running, failed (a red cross) or passed (a green check),
+over its GitHub Actions runs, other services' check runs and commit statuses. Its title lists
+them; in the task's header and the Overview's **Ready for review** rows it links to the failed
+run, else the pull request's Checks tab. The
 `pull_request` webhooks keep it current, in `pulls.json`, and so do the changes Deckhand
 lets through for runs (a run's `gh pr ready`); for tasks from before, the orchestrator looks through each
 repository's 100 most recently updated pull requests once per start, and asks again about the

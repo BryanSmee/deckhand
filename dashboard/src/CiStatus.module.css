@@ -1,0 +1,52 @@
+/* A pull request's CI (CiStatus.tsx): a small icon in the state's colour, beside its name. */
+.ci {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  vertical-align: middle;
+}
+
+a.ci:hover {
+  outline: 1px solid currentColor;
+}
+
+/* A soft disc behind the mark: a status, not a button that closes something. */
+.failed {
+  color: var(--err);
+  background: var(--err-bg);
+}
+
+.passed {
+  color: var(--done);
+  background: var(--done-bg);
+}
+
+.running {
+  color: var(--run);
+  background: var(--run-bg);
+}
+
+/* Running: a ring turning, as Spinner's. */
+.ring {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Reduced motion (Preferences › Motion, else the system's setting): a still ring. */
+:global(.m-reduced) .ring {
+  animation: none;
+}

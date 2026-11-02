@@ -23,6 +23,7 @@ import {
   whenTitle,
 } from "./format";
 import { useShortcuts, useShortcutsOn, withKey } from "./keys";
+import { CiStatus } from "./CiStatus";
 import { FindingsLeft } from "./ReviewLoop";
 import type { Task } from "./types";
 import { Field } from "./ui/Field";
@@ -189,8 +190,9 @@ function Row({
     kind && <span key="kind">{kind}</span>,
     // A pull request's own task: its number already says it.
     t.pr && !isPrTask(t) && (
-      <span key="pr" title={prTitle(t.pr)}>
-        {prName(t.pr)}
+      <span key="pr">
+        <span title={prTitle(t.pr)}>{prName(t.pr)}</span>
+        <CiStatus pr={t.pr} class={styles.ci} />
       </span>
     ),
     loopLine(t) && <span key="loop">{loopLine(t)}</span>,
@@ -207,6 +209,8 @@ function Row({
       </span>
       <span class={styles.sub}>
         <span class={styles.number}>{numberOf(t)}</span>
+        {/* A pull request's own task: its CI beside its number. */}
+        {t.pr && isPrTask(t) && <CiStatus pr={t.pr} class={styles.ci} />}
         {parts.map((p, i) => (
           <Fragment key={i}>
             {(i > 0 || numberOf(t)) && " · "}

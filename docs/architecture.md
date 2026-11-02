@@ -1288,6 +1288,18 @@ push GitHub took (`branch`, `lastPushAt` on its record): the git gateway reads G
 report for the refs it updated and tells the broker's entry for the run (`watchPushes()`,
 `restart.mjs`), whose record is saved with the run, so a restart keeps them.
 
+A task's pull request carries its `head` commit too, and what CI says of it (`ci`: `{ sha, state, runs }`, #436),
+decided by the rule auto-merge uses (`ci.mjs` `ciState()`) over the commit's Actions runs, check
+runs and commit statuses (`commitCi()`; one GitHub refuses, an installation that hasn't accepted
+`checks` or `statuses`, is left out). A `workflow_run`, `check_suite` or `status` delivery for
+the head of an open pull request reads it again (`ciChanged()`, one read at a time per task, one
+more after those that came meanwhile); one for any other commit (an older head) changes
+nothing. A delivery with a new head resets it to `none`. `check_suite` and `status` are
+`QUIET_EVENTS` (`github-app.mjs`): edge passes them on without their GUID or a log line, the
+orchestrator handles them without one, and the redeliveries skip them: `resync()` reads, at
+start and from Sync, the CI of each open pull request not settled for its head (never read,
+`none` or still running). A merged or closed one keeps the last CI known.
+
 ## Agents
 
 Three agents, Claude Code (`claude`), Codex (`codex`) and the Antigravity CLI (`antigravity`),
