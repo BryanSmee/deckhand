@@ -169,11 +169,13 @@ export const SETTINGS = {
   AUTO_PICKUP_LABEL: { default: "auto-pickup" },
   // Where sandboxes run (runner/index.mjs): the host's Docker, or pods of a Kubernetes cluster.
   RUNNER: { default: "docker", parse: runnerSetting },
-  // The Kubernetes runner's (runner/kubernetes.mjs): its namespace, which holds the listener's
-  // and the egress proxy's pods too (empty: the runner's own, its ServiceAccount's), how long
-  // a pod may stay Pending before its run fails, and its session claims' storage class
-  // (empty: the cluster's default) and size.
+  // The Kubernetes runner's (runner/kubernetes.mjs): the sandboxes' namespace, where their
+  // pods, Secrets and claims go (empty: the runner's own, its ServiceAccount's), the services'
+  // namespace, with the egress proxy's Service, BuildKit and the registry's Secret (empty: the
+  // sandboxes'), how long a pod may stay Pending before its run fails, and its session claims'
+  // storage class (empty: the cluster's default) and size.
   KUBERNETES_NAMESPACE: { default: null },
+  KUBERNETES_SERVICES_NAMESPACE: { default: null },
   KUBERNETES_PENDING_MINUTES: {
     default: 10,
     parse: aboveZero("a whole number of minutes above 0"),
@@ -533,6 +535,7 @@ function sandboxConfig(env, s) {
     runner: s.RUNNER,
     kubernetes: {
       namespace: s.KUBERNETES_NAMESPACE,
+      servicesNamespace: s.KUBERNETES_SERVICES_NAMESPACE,
       pendingMs: s.KUBERNETES_PENDING_MINUTES * 60000,
       storageClass: s.KUBERNETES_STORAGE_CLASS,
       sessionSize: s.KUBERNETES_SESSION_SIZE,
@@ -681,8 +684,8 @@ function registrySetting(text, { label }) {
   );
 }
 
-// "tcp://buildkitd:1234": its host is the name of the daemon's Service in the namespace, which
-// the listener finds its pods by (runner/kube-images.mjs builderIsolation()): a single DNS
+// "tcp://buildkitd:1234": its host is the name of the daemon's Service in the services'
+// namespace, which the runner finds its pods by (runner/kube-images.mjs builderIsolation()): a single DNS
 // label, not a full name or an address, or every build would be refused.
 function buildkitAddress(text, { label }) {
   const value = text.trim();
@@ -698,7 +701,7 @@ function buildkitAddress(text, { label }) {
     return value;
   }
   throw new ConfigError(
-    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the namespace by its short name, got ${text} (docs/setup.md, Repo images on Kubernetes)`,
+    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the services' namespace by its short name, got ${text} (docs/setup.md, Repo images on Kubernetes)`,
   );
 }
 
