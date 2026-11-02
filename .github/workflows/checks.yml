@@ -17,7 +17,8 @@ permissions:
 
 jobs:
   tests:
-    # As the runner's own user, not root: some tests need a directory root could write anyway.
+    # As the runner's own user, not root: the tests that need a directory root could write
+    # anyway run here (they skip as root, below).
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     timeout-minutes: 20
     steps:
@@ -52,6 +53,46 @@ jobs:
             echo "::error::real-opa tests skipped"
             exit 1
           fi
+
+  # The same suite as root, in node:26, as `docker run node:26` runs it: a test that only passes
+  # as a user who can't write somewhere fails here, unless it skips as root with its reason
+  # (test/helpers.mjs isRoot).
+  tests-root:
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    timeout-minutes: 20
+    container:
+      image: node:26
+      options: --user 0
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install jq and opa
+        run: |
+          apt-get update -qq && apt-get install -y -qq jq
+          dockerfile=policy-service/Dockerfile
+          version=$(sed -n 's/^ARG OPA_VERSION=//p' "$dockerfile")
+          sum=$(sed -n 's/^ *amd64) sum=\([0-9a-f]*\) ;;.*/\1/p' "$dockerfile")
+          test -n "$version" && test -n "$sum"
+          curl -fsSLo /tmp/opa "https://github.com/open-policy-agent/opa/releases/download/v${version}/opa_linux_amd64_static"
+          echo "$sum  /tmp/opa" | sha256sum -c -
+          install -m 755 /tmp/opa /usr/local/bin/opa
+      - run: opa version && jq --version && id && test "$(id -u)" = 0
+      - name: Bundle graphql-js
+        working-directory: listener/vendor
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: Tests
+        run: |
+          node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000 \
+            --test-reporter=spec --test-reporter-destination=stdout \
+            --test-reporter=tap --test-reporter-destination=/tmp/tests.tap
+          if grep "# SKIP no opa on the PATH" /tmp/tests.tap; then
+            echo "::error::real-opa tests skipped"
+            exit 1
+          fi
+      # What root wrote in the runner's workspace goes back to its user: the next job's
+      # checkout, not in a container, couldn't clean it otherwise.
+      - name: Give the workspace back
+        if: always()
+        run: chown -R "$(stat -c %u:%g "$GITHUB_WORKSPACE/..")" "$GITHUB_WORKSPACE"
 
   dashboard:
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release

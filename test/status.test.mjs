@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createStatus, serverInfo, serverSetup } from "../listener/status.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { isRoot, tempDir, testConfig } from "./helpers.mjs";
 
 // A grants folder on disk, { "path/in/it": text }, and settings reading it.
 function setupWith(t, files, settings = {}) {
@@ -157,16 +157,20 @@ test("serverSetup: errors in several files name each, and never a path", (t) => 
   assert.match(broken.grants.message, /^the grants folder has errors/);
 });
 
-test("serverSetup: a grants folder that can't be listed names no file", (t) => {
-  const { dir } = setupWith(t, { "acme/api.yaml": "hosts: [cdn.example.org]\n" });
-  // Its error's file is "" (grants.mjs walkGrants()): the folder itself.
-  chmodSync(dir, 0);
-  let setup;
-  try {
-    setup = serverSetup(testConfig({ GRANTS_DIR: dir }));
-  } finally {
-    chmodSync(dir, 0o755);
-  }
-  assert.deepEqual([setup.grants.ok, setup.grants.file], [false, null]);
-  assert.match(setup.grants.message, /^the grants folder has errors/);
-});
+test(
+  "serverSetup: a grants folder that can't be listed names no file",
+  { skip: isRoot && "root lists any folder" },
+  (t) => {
+    const { dir } = setupWith(t, { "acme/api.yaml": "hosts: [cdn.example.org]\n" });
+    // Its error's file is "" (grants.mjs walkGrants()): the folder itself.
+    chmodSync(dir, 0);
+    let setup;
+    try {
+      setup = serverSetup(testConfig({ GRANTS_DIR: dir }));
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+    assert.deepEqual([setup.grants.ok, setup.grants.file], [false, null]);
+    assert.match(setup.grants.message, /^the grants folder has errors/);
+  },
+);
