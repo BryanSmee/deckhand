@@ -1,0 +1,356 @@
+// deploy/helm/deckhand held to deploy/kubernetes (#570): with its default values the chart
+// renders the objects `kustomize build` does, alone and with each component, so the base's
+// rules (test/kubernetes-manifests.test.mjs) hold for it too; its values then change what they
+// say and nothing else. Needs helm and kustomize on the PATH, which CI's kubernetes job installs
+// (pinned) and where a skip fails the job; elsewhere these tests skip.
+import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { join, relative } from "node:path";
+import { test } from "node:test";
+import { parseYaml } from "../lib/yaml.mjs";
+import { isolationProblem } from "../listener/runner/kubernetes.mjs";
+import { posix, tempDir } from "./helpers.mjs";
+
+const repo = join(import.meta.dirname, "..");
+const base = join(repo, "deploy", "kubernetes");
+const chart = join(repo, "deploy", "helm", "deckhand");
+
+const runs = (tool) => !spawnSync(tool, ["version"], { stdio: "ignore" }).error;
+const skip = (!runs("helm") || !runs("kustomize")) && "no helm or kustomize on the PATH";
+
+const documents = (text) =>
+  text
+    .split(/^---$/m)
+    .map((part) => parseYaml(part))
+    .filter(Boolean);
+
+// The base with these components, through an overlay of its own, as an operator's would be:
+// relative paths, as kustomize refuses absolute ones.
+function kustomize(t, components) {
+  const overlay = tempDir(t);
+  const path = (dir) => posix(relative(overlay, dir));
+  let text = `resources: [${path(base)}]\n`;
+  if (components.length) {
+    text += `components: [${components.map((c) => path(join(base, "components", c))).join(", ")}]\n`;
+  }
+  writeFileSync(join(overlay, "kustomization.yaml"), text);
+  const out = execFileSync("kustomize", [
+    "build",
+    "--load-restrictor",
+    "LoadRestrictionsNone",
+    overlay,
+  ]);
+  return documents(out.toString());
+}
+
+// The chart with these values (a file: JSON is YAML).
+function helm(t, values = {}) {
+  const file = join(tempDir(t), "values.yaml");
+  writeFileSync(file, JSON.stringify(values));
+  const out = execFileSync("helm", ["template", "deckhand", chart, "-f", file]);
+  return documents(out.toString());
+}
+
+function helmFails(t, values) {
+  const file = join(tempDir(t), "values.yaml");
+  writeFileSync(file, JSON.stringify(values));
+  const result = spawnSync("helm", ["template", "deckhand", chart, "-f", file]);
+  assert.notEqual(result.status, 0, "helm template should refuse these values");
+  return result.stderr.toString();
+}
+
+// What may differ without changing what Kubernetes does: the generated ConfigMaps' hashes
+// (kustomize's and the chart's, each of its own making), the order of the lists kustomize's
+// strategic merge patches reorder, which Kubernetes merges by name, and the annotation only Helm
+// reads, which keeps the namespaces and claims through `helm uninstall`.
+const BY_NAME = new Set(["env", "volumes", "volumeMounts"]);
+const KEEP = "helm.sh/resource-policy";
+function normalized(object) {
+  const text = JSON.stringify(object).replace(/"(deckhand-(?:server|env))-[0-9a-z]{10}"/g, '"$1"');
+  const copy = JSON.parse(text, (key, value) =>
+    BY_NAME.has(key) && Array.isArray(value)
+      ? value.toSorted((a, b) => a.name.localeCompare(b.name))
+      : value,
+  );
+  const { annotations } = copy.metadata;
+  if (annotations?.[KEEP] === "keep") {
+    delete annotations[KEEP];
+    if (!Object.keys(annotations).length) delete copy.metadata.annotations;
+  }
+  return copy;
+}
+const keyOf = (o) => `${o.kind} ${o.metadata.namespace ?? ""}/${o.metadata.name}`;
+const byKey = (list) => new Map(list.map(normalized).map((o) => [keyOf(o), o]));
+
+const named = (list, kind, name) => list.find((o) => o.kind === kind && o.metadata.name === name);
+const deployments = (list) => list.filter((o) => o.kind === "Deployment");
+const envOf = (list) =>
+  list.find((o) => o.kind === "ConfigMap" && o.metadata.name.startsWith("deckhand-env-")).data;
+
+for (const [values, components] of [
+  [{}, []],
+  [{ store: "redis" }, ["redis"]],
+  [{ buildkit: { enabled: true } }, ["buildkit"]],
+  [{ store: "redis", buildkit: { enabled: true } }, ["redis", "buildkit"]],
+]) {
+  const what = components.length ? `with ${components.join(" and ")}` : "alone";
+  test(`helm: the chart renders what kustomize does, the base ${what}`, { skip }, (t) => {
+    const expected = byKey(kustomize(t, components));
+    const actual = byKey(helm(t, values));
+    assert.deepEqual([...actual.keys()].sort(), [...expected.keys()].sort());
+    for (const [key, object] of expected) assert.deepEqual(actual.get(key), object, key);
+  });
+}
+
+test(
+  "helm: `helm uninstall` keeps the namespaces and the claims, with the Secrets and data in them",
+  { skip },
+  (t) => {
+    const kept = helm(t, { store: "redis" })
+      .filter((o) => o.metadata.annotations?.[KEEP] === "keep")
+      .map(keyOf)
+      .sort();
+    assert.deepEqual(kept, [
+      "Namespace /deckhand",
+      "Namespace /deckhand-sandboxes",
+      "PersistentVolumeClaim deckhand/egress-cache",
+      "PersistentVolumeClaim deckhand/orchestrator-data",
+      "PersistentVolumeClaim deckhand/orchestrator-screenshots",
+      "PersistentVolumeClaim deckhand/runner-data",
+    ]);
+  },
+);
+
+test("helm: image.tag is every service's tag and the sandboxes'", { skip }, (t) => {
+  const objects = helm(t, {
+    image: { tag: "v1.2.3" },
+    store: "redis",
+    buildkit: { enabled: true },
+  });
+  const images = deployments(objects).flatMap((d) => d.spec.template.spec.containers);
+  for (const { image } of images.filter((c) => c.image.startsWith("ghcr.io/bryansmee/"))) {
+    assert.match(image, /^ghcr\.io\/bryansmee\/deckhand-[a-z]+:v1\.2\.3$/);
+  }
+  assert.equal(images.filter((c) => c.image.endsWith(":v1.2.3")).length, 8);
+  assert.equal(envOf(objects).SANDBOX_IMAGE, "ghcr.io/bryansmee/deckhand-sandbox:v1.2.3");
+  // One of its own, from a mirror.
+  const mirrored = helm(t, { image: { sandbox: "registry.example.com/sandbox@sha256:abc" } });
+  assert.equal(envOf(mirrored).SANDBOX_IMAGE, "registry.example.com/sandbox@sha256:abc");
+});
+
+test(
+  "helm: config.yaml and the grants reach the services that read them, and a change restarts them",
+  { skip },
+  (t) => {
+    const server = {
+      config: "allowed_users: [someone]\n",
+      grants: { "default.yaml": "hosts: []\n", "acme/api.yaml": "docker: true\n" },
+    };
+    const objects = helm(t, { server });
+    const map = objects.find(
+      (o) => o.kind === "ConfigMap" && o.metadata.name.startsWith("deckhand-server-"),
+    );
+    assert.deepEqual(map.data, {
+      "config.yaml": server.config,
+      "default.yaml": server.grants["default.yaml"],
+      "acme-api.yaml": server.grants["acme/api.yaml"],
+    });
+    for (const d of deployments(objects)) {
+      const volume = d.spec.template.spec.volumes.find((v) => v.name === "server");
+      if (!volume) continue;
+      const { name, items } = volume.projected.sources[0].configMap;
+      assert.equal(name, map.metadata.name, d.metadata.name);
+      const grants = ["orchestrator", "runner", "github", "policy"].includes(d.metadata.name);
+      assert.deepEqual(
+        items,
+        [
+          { key: "config.yaml", path: "config.yaml" },
+          ...(grants
+            ? [
+                { key: "acme-api.yaml", path: "grants/acme/api.yaml" },
+                { key: "default.yaml", path: "grants/default.yaml" },
+              ]
+            : []),
+        ],
+        d.metadata.name,
+      );
+    }
+    // Another config.yaml, another name: the pods that mount it roll.
+    const changed = helm(t, { server: { ...server, config: "allowed_users: [other]\n" } });
+    const renamed = changed.find(
+      (o) => o.kind === "ConfigMap" && o.metadata.name.startsWith("deckhand-server-"),
+    );
+    assert.notEqual(renamed.metadata.name, map.metadata.name);
+  },
+);
+
+test(
+  "helm: env, the sandboxes' storage classes and the registry go to deckhand-env",
+  { skip },
+  (t) => {
+    const objects = helm(t, {
+      env: { MAX_PARALLEL: 4, KUBERNETES_SESSION_SIZE: "20Gi" },
+      sandboxes: { storageClass: "fast", cacheStorageClass: "nfs", agentStorageClass: "nfs" },
+      buildkit: { enabled: true, noProxy: "registry.deckhand.svc" },
+      registry: { url: "registry.example.com/deckhand", secretName: "pull" },
+    });
+    const env = envOf(objects);
+    assert.equal(env.MAX_PARALLEL, "4");
+    assert.equal(env.KUBERNETES_SESSION_SIZE, "20Gi");
+    assert.equal(env.KUBERNETES_STORAGE_CLASS, "fast");
+    assert.equal(env.KUBERNETES_CACHE_STORAGE_CLASS, "nfs");
+    assert.equal(env.KUBERNETES_AGENT_STORAGE_CLASS, "nfs");
+    assert.equal(env.KUBERNETES_REGISTRY, "registry.example.com/deckhand");
+    assert.equal(env.KUBERNETES_REGISTRY_SECRET, "pull");
+    // The Roles name that Secret alone.
+    const roles = objects.filter((o) => o.kind === "Role");
+    assert.equal(roles.length, 2);
+    for (const role of roles) {
+      assert.deepEqual(role.rules.at(-1).resourceNames, ["pull"], role.metadata.namespace);
+    }
+    const buildkit = named(objects, "Deployment", "buildkitd").spec.template.spec.containers[0];
+    assert.equal(buildkit.env.find((e) => e.name === "NO_PROXY").value, "registry.deckhand.svc");
+    // Unset, none of them is.
+    const defaults = envOf(helm(t));
+    for (const key of ["KUBERNETES_STORAGE_CLASS", "KUBERNETES_REGISTRY", "KUBERNETES_BUILDKIT"]) {
+      assert.equal(defaults[key], undefined, key);
+    }
+  },
+);
+
+test("helm: the services' claims take the storage class and sizes given", { skip }, (t) => {
+  const claims = (values) =>
+    Object.fromEntries(
+      helm(t, values)
+        .filter((o) => o.kind === "PersistentVolumeClaim")
+        .map((c) => [c.metadata.name, c.spec]),
+    );
+  const file = claims({ persistence: { storageClass: "ssd", sizes: { "github-data": "50Gi" } } });
+  assert.equal(Object.keys(file).length, 8);
+  for (const [name, spec] of Object.entries(file)) {
+    assert.equal(spec.storageClassName, "ssd", name);
+    assert.deepEqual(spec.accessModes, ["ReadWriteOnce"], name);
+  }
+  assert.equal(file["github-data"].resources.requests.storage, "50Gi");
+  assert.equal(file["edge-data"].resources.requests.storage, "1Gi");
+  // With Redis: the shared ones ReadWriteMany, on their class; the stores' claims gone.
+  const values = {
+    store: "redis",
+    persistence: { storageClass: "ssd", sharedStorageClass: "nfs" },
+    redis: { storageClass: "fast", size: "8Gi" },
+  };
+  const redis = claims(values);
+  assert.deepEqual(Object.keys(redis).sort(), [
+    "egress-cache",
+    "orchestrator-data",
+    "orchestrator-screenshots",
+    "runner-data",
+  ]);
+  assert.equal(redis["egress-cache"].storageClassName, "ssd");
+  for (const name of ["orchestrator-data", "orchestrator-screenshots", "runner-data"]) {
+    assert.deepEqual(redis[name].accessModes, ["ReadWriteMany"], name);
+    assert.equal(redis[name].storageClassName, "nfs", name);
+  }
+  const [template] = named(helm(t, values), "StatefulSet", "redis").spec.volumeClaimTemplates;
+  assert.equal(template.spec.storageClassName, "fast");
+  assert.equal(template.spec.resources.requests.storage, "8Gi");
+});
+
+test("helm: the ingress sends the host to edge's public port alone", { skip }, (t) => {
+  assert.equal(named(helm(t), "Ingress", "edge"), undefined);
+  const ingress = named(
+    helm(t, {
+      ingress: {
+        enabled: true,
+        className: "nginx",
+        host: "deckhand.example.com",
+        annotations: { "cert-manager.io/cluster-issuer": "letsencrypt" },
+        tlsSecretName: "deckhand-tls",
+      },
+    }),
+    "Ingress",
+    "edge",
+  );
+  assert.equal(ingress.metadata.namespace, "deckhand");
+  assert.equal(ingress.metadata.annotations["cert-manager.io/cluster-issuer"], "letsencrypt");
+  assert.equal(ingress.spec.ingressClassName, "nginx");
+  assert.deepEqual(ingress.spec.tls, [
+    { hosts: ["deckhand.example.com"], secretName: "deckhand-tls" },
+  ]);
+  const [rule] = ingress.spec.rules;
+  assert.equal(rule.host, "deckhand.example.com");
+  assert.deepEqual(rule.http.paths, [
+    {
+      path: "/",
+      pathType: "Prefix",
+      backend: { service: { name: "edge", port: { name: "http" } } },
+    },
+  ]);
+  assert.match(helmFails(t, { ingress: { enabled: true } }), /ingress\.host/);
+});
+
+test(
+  "helm: other namespaces leave none of the defaults' behind, and the sandboxes still pass the runner's check",
+  { skip },
+  (t) => {
+    const objects = helm(t, {
+      namespaces: { services: "dh", sandboxes: "dh-runs" },
+      store: "redis",
+      buildkit: { enabled: true },
+    });
+    // Every namespace named, wherever: the objects', the peers', the subjects'.
+    const text = JSON.stringify(objects);
+    const mentioned = [
+      ...text.matchAll(/"(?:namespace|kubernetes\.io\/metadata\.name)":"([^"]+)"/g),
+    ];
+    assert.deepEqual([...new Set(mentioned.map((m) => m[1]))].sort(), [
+      "dh",
+      "dh-runs",
+      "kube-system",
+    ]);
+    const namespaces = objects.filter((o) => o.kind === "Namespace").map((o) => o.metadata.name);
+    assert.deepEqual(namespaces.sort(), ["dh", "dh-runs"]);
+    for (const o of objects.filter((o) => o.metadata.namespace)) {
+      assert.ok(["dh", "dh-runs"].includes(o.metadata.namespace), keyOf(o));
+    }
+    const policies = objects.filter(
+      (o) => o.kind === "NetworkPolicy" && o.metadata.namespace === "dh-runs",
+    );
+    const proxy = { namespace: "dh", selector: named(objects, "Service", "egress").spec.selector };
+    assert.equal(isolationProblem(policies, { "deckhand.role": "sandbox" }, { proxy }), null);
+    assert.equal(isolationProblem(policies, { "deckhand.role": "install" }, { proxy }), null);
+    const broker = named(objects, "Deployment", "broker").spec.template.spec.containers[0];
+    assert.match(
+      broker.env.find((e) => e.name === "SERVICE_ACCOUNTS").value,
+      /^edge=dh:deckhand-edge,/,
+    );
+    assert.equal(envOf(objects).KUBERNETES_NAMESPACE, "dh-runs");
+    assert.equal(envOf(objects).KUBERNETES_SERVICES_NAMESPACE, "dh");
+    // Made elsewhere: none of the chart's.
+    const without = helm(t, { namespaces: { create: false } });
+    assert.equal(without.filter((o) => o.kind === "Namespace").length, 0);
+  },
+);
+
+test(
+  "helm: the API server's addresses are the runner's and the broker's way out",
+  { skip },
+  (t) => {
+    const objects = helm(t, { apiServer: { cidrs: ["172.18.0.2/32", "172.18.0.3/32"] } });
+    const policy = named(objects, "NetworkPolicy", "deckhand-api-server");
+    assert.deepEqual(policy.spec.egress[0].to, [
+      { ipBlock: { cidr: "172.18.0.2/32" } },
+      { ipBlock: { cidr: "172.18.0.3/32" } },
+    ]);
+    assert.match(helmFails(t, { apiServer: { cidrs: [] } }), /apiServer\.cidrs/);
+  },
+);
+
+test("helm: values that can't work are refused", { skip }, (t) => {
+  assert.match(helmFails(t, { store: "postgres" }), /store/);
+  assert.match(
+    helmFails(t, { namespaces: { services: "deckhand", sandboxes: "deckhand" } }),
+    /namespace each/,
+  );
+});

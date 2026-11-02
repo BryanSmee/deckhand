@@ -1,0 +1,22 @@
+# kustomization.yaml's configMapGenerator: config.yaml and the grants (deckhand-server), and the
+# settings the orchestrator, the runner and the models service share (deckhand-env). Their
+# names carry a hash of their data, so the pods that read them restart when it changes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deckhand.serverName" . }}
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+data:
+  {{- include "deckhand.serverData" . | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deckhand.envName" . }}
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+data:
+  {{- include "deckhand.envData" . | nindent 2 }}

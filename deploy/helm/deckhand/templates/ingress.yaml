@@ -1,0 +1,36 @@
+{{- if .Values.ingress.enabled }}
+# Not in the base, where your ingress is your own (docs/kubernetes.md, Requirements): GitHub's
+# webhooks and the dashboard, to edge's public port alone. Its internal port (8083) is the
+# orchestrator's, never the ingress's.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: edge
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+  {{- with .Values.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .Values.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.ingress.tlsSecretName }}
+  tls:
+    - hosts: [{{ $.Values.ingress.host | quote }}]
+      secretName: {{ . }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: edge
+                port:
+                  name: http
+{{- end }}

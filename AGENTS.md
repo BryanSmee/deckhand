@@ -29,7 +29,9 @@ each, on every pull request and push to `main` (`.github/workflows/checks.yml`, 
 runners): the tests twice, as a user that isn't root and as root in `node:26`, both with the
 real `opa` that `policy-service/Dockerfile` pins, so none of its tests skips there. A
 `kubernetes` job renders `deploy/kubernetes` with kustomize, alone and with each component, and
-validates it with kubeconform. A pull request's checks can
+the Helm chart, validates both with kubeconform, and runs `test/helm-chart.test.mjs` (the chart
+held to the base; it skips without `helm` and `kustomize` on the PATH, and fails the job if it
+does there). A change to the base goes to the chart too. A pull request's checks can
 point at that run. Work runs on this
 repository start with the dashboard's packages installed and graphql-js bundled (`setup` in
 `.deckhand.yaml`) and the npm cache kept between runs.
@@ -120,7 +122,9 @@ engine/       container engine sidecar images (dockerd for Sysbox, podman/ for P
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
 deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base and its components
               (redis, buildkit), secrets.mjs (the Secrets the base doesn't hold) and
-              check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes.md)
+              check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes.md);
+              helm/deckhand/: the same as a Helm chart (#570), whose default values render the
+              base's objects (test/helm-chart.test.mjs)
 docs/         setup, per-repo config reference, security model, architecture
 ```
 

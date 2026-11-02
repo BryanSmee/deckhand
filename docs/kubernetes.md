@@ -2,7 +2,9 @@
 
 `deploy/kubernetes/` runs Deckhand on a cluster: a kustomize base with every service, the
 sandboxes in a namespace of their own, and two optional components, `redis` (the stores, for
-copies on several nodes) and `buildkit` (repositories' own images). Each run's sandbox is a pod
+copies on several nodes) and `buildkit` (repositories' own images). `deploy/helm/deckhand/` is
+the same as a Helm chart, with values instead of patches ([Install with Helm](#install-with-helm)).
+Each run's sandbox is a pod
 (`RUNNER=kubernetes`): runs spread over the cluster's nodes, and `MAX_PARALLEL` still caps how
 many run at once. [setup.md](setup.md) has the rest (the GitHub App's permissions, the settings,
 the agents): this page is what differs on a cluster.
@@ -20,7 +22,8 @@ the agents): this page is what differs on a cluster.
 
 ## Requirements
 
-- **Kubernetes 1.30 or later**, and `kubectl` (its `-k` is kustomize).
+- **Kubernetes 1.30 or later**, and `kubectl` (its `-k` is kustomize), or Helm 3 or 4 for the
+  chart.
 - **A network plugin that enforces NetworkPolicies**: Calico, Cilium, or k3s's own (kube-router).
   One that ignores them (Flannel alone, say) takes them and isolates nothing: a sandbox could
   then call the services directly, the orchestrator's run tokens among them. Check it once
@@ -181,6 +184,79 @@ pod from there and the egress proxy's, and expects the proxy's alone to answer: 
 too when its Service publishes it (the `engine` component). A plugin that
 doesn't enforce NetworkPolicies fails it. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
+
+## Install with Helm
+
+The chart, `deploy/helm/deckhand/`, renders the base's objects: with its default values, the same
+as `kustomize build deploy/kubernetes` (CI checks it, alone and with each component:
+`test/helm-chart.test.mjs`), so everything on this page holds for it. Its values do what an
+overlay's patches do. No chart repository is published yet: install it from a checkout of this
+repository at a release. Keep your values in a file of your own:
+
+```yaml
+# values.yaml
+image:
+  tag: v1.2.3 # every service's image, and SANDBOX_IMAGE's
+apiServer:
+  cidrs: [172.18.0.2/32] # the API server's addresses (Install, step 2)
+server:
+  config: |
+    allowed_users: [your-login]
+  grants: # by their path in the grants folder
+    default.yaml: |
+      hosts: [pypi.org]
+    acme/api.yaml: |
+      hosts: [api.acme.example]
+    policy/grants.rego: |
+      package deckhand
+      allow_grant if {
+        input.repo.name == "acme/api"
+        input.grant == "dockerfile"
+      }
+env: # any other setting of the orchestrator, the runner and the models service
+  MAX_PARALLEL: "4"
+ingress:
+  enabled: true
+  className: nginx
+  host: deckhand.example.com
+  tlsSecretName: deckhand-tls
+```
+
+```sh
+helm install deckhand deploy/helm/deckhand -f values.yaml
+```
+
+The chart makes both namespaces itself, with their Pod Security labels, so its release goes in
+another one (your context's, `default`): not `--namespace deckhand --create-namespace`, which
+would make `deckhand` without them, and then refuse to make it again. With
+`namespaces.create: false`, make them yourself, labelled as `namespaces.yaml` labels them. Then
+carry on with [Install](#install)'s steps 3 to 5: the Secrets, the GitHub App and the isolation's
+check, as the chart holds no Secret either. The pods wait for them: don't pass `--wait` to the
+first install.
+
+| Value                                | Default                      | What it sets                                                                                                                                                         |
+| ------------------------------------ | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image.repository`, `image.tag`      | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                     |
+| `image.sandbox`                      | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                 |
+| `namespaces`                         | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                         |
+| `server.config`, `server.grants`     | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                 |
+| `env`                                | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings))                                                                                                  |
+| `apiServer.cidrs`                    | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                             |
+| `store`                              | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                       |
+| `persistence.storageClass`, `.sizes` | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                    |
+| `sandboxes.storageClass`, …          | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes)) |
+| `buildkit.enabled`, `registry`       | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY`, `registry.secretName` its pull Secret                               |
+| `ingress`                            | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                         |
+
+`values.yaml` in the chart says more of each. To update, change `image.tag` and
+`helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from a checkout at the new release:
+the services update as [below](#updating). A change of `server` renames its ConfigMap, as
+kustomize's hash does, and the pods that read it restart. The base's objects, made by
+`kubectl apply -k`, aren't the chart's: Helm refuses to install over them, so pick one, or let
+Helm adopt them (the `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace`
+annotations and the `app.kubernetes.io/managed-by: Helm` label on each) before the first install.
+`helm uninstall` keeps both namespaces and the services' claims (`helm.sh/resource-policy: keep`),
+with your Secrets and the stores in them: delete the namespaces yourself to remove everything.
 
 ## Updating
 

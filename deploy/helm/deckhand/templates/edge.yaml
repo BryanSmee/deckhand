@@ -1,0 +1,101 @@
+# deploy/kubernetes/edge.yaml: the only pods the internet reaches (your ingress, to the Service's
+# port 8080); 8083 is the orchestrator's alone. Two copies, both active on one store.
+{{- $redis := eq .Values.store "redis" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    app: deckhand-edge
+spec:
+  replicas: 2
+  {{- include "deckhand.strategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      app: deckhand-edge
+  template:
+    metadata:
+      labels:
+        app: deckhand-edge
+    spec:
+      serviceAccountName: deckhand-edge
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      {{- include "deckhand.podSecurityContext" false | nindent 6 }}
+      {{- if not $redis }}
+      {{- include "deckhand.sameNode" "deckhand-edge" | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: edge
+          image: {{ include "deckhand.image" (list . "edge") }}
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: internal
+              containerPort: 8083
+          env:
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            - name: DATA_DIR
+              value: /etc/deckhand-edge
+            {{- if $redis }}
+            {{- include "deckhand.redisStore" "edge" | nindent 12 }}
+            {{- else }}
+            - name: STORE_URL
+              value: file:///data/store
+            {{- end }}
+          {{- include "deckhand.probes" (list "http" "/health" "/health") | nindent 10 }}
+          {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: app
+              mountPath: /etc/deckhand-edge
+              readOnly: true
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        - name: data
+          {{- if $redis }}
+          emptyDir: {}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: edge-data
+          {{- end }}
+        - name: app
+          secret:
+            secretName: deckhand-edge
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        {{- include "deckhand.serverVolume" (list . false) | nindent 8 }}
+        {{- include "deckhand.brokerTokenVolume" . | nindent 8 }}
+{{- if not $redis }}
+---
+{{ include "deckhand.claim" (list . "edge-data" "ReadWriteOnce") }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: deckhand-edge
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: internal
+      port: 8083
+      targetPort: internal
