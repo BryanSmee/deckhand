@@ -6,6 +6,7 @@ import {
   createLogger,
   deliveryContext,
   logContext,
+  newLogContext,
   REQUEST_HEADER,
   requestHeaders,
   TOO_DEEP,
@@ -180,6 +181,13 @@ test("the context: on every line in it, through awaits; nested ones add to it", 
   );
   assert.deepEqual([two.request, two.repo, two.issue, two.run], ["r1", "o/a", 1, "dh-o-a-1-1"]);
   assert.equal(out.request, undefined);
+});
+
+test("newLogContext: its fields alone, none of the context it was started in", () => {
+  const seen = withLogContext({ request: "r1", repo: "o/a", issue: 1, run: "dh-o-a-1-1" }, () =>
+    newLogContext({ repo: "o/b", issue: 2, run: null }, logContext),
+  );
+  assert.deepEqual(seen, { repo: "o/b", issue: 2 });
 });
 
 test("withRequest: the caller's ID taken when it looks like one; edge's public port always a new one", async () => {

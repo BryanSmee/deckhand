@@ -1062,9 +1062,7 @@ test("a run's end the queue couldn't be written for: over, its put-back comments
   assertMode(kept, 0o600);
 
   // A listener killed now: the next one has the comment, once, and no run.
-  const lines = [];
-  const log = (line) => lines.push({ line, ...logContext() });
-  const next = queueContext(t, dir, store, { log });
+  const next = queueContext(t, dir, store);
   next.broker = createBroker({});
   next.runner = { closed: () => false };
   assert.deepEqual(await next.restoreRuns(), []);
@@ -1205,8 +1203,11 @@ test("a restored run pushes as its saved capabilities say; one saved before them
 test("a run's lines carry its repository, issue and run, from its start and once picked up again", async (t) => {
   const dir = tempDir(t);
   const store = fileStore();
-  // A run started, under another request's context (a delivery that freed its place).
-  const started = queueContext(t, dir, store);
+  // A run started under another run's context (its end freed a place, schedule()).
+  const said = [];
+  const started = queueContext(t, dir, store, {
+    log: (line) => said.push({ line, ...logContext() }),
+  });
   const seen = [];
   Object.assign(started, {
     shotsDir: dir,
@@ -1223,13 +1224,23 @@ test("a run's lines carry its repository, issue and run, from its start and once
   });
   Object.assign(started, createRuns(started), { config: { ...started.config, agent: "nobody" } });
   const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  // A comment its author may no longer run: dropped before the run starts (dropRefused()).
+  task.pending.push(queued("1", { queueId: "q-0", author: "mallory" }));
   task.pending.push(queued("1", { queueId: "q-1", replyTo: 1 }));
   started.tasks.set("org/repo#1", task);
-  await withLogContext({ request: "another" }, () => started.run(task).catch(() => {}));
+  const other = { request: "another", repo: "else/where", issue: 9, run: "dh-else-where-9-1" };
+  await withLogContext(other, () => started.run(task).catch(() => {}));
+  // Before it has a run: its own repository and issue, none of the other run's fields.
+  const before = seen[0];
+  assert.deepEqual([before.repo, before.issue, before.run], ["org/repo", 1, undefined]);
+  assert.match(before.request, /^[0-9a-f]{16}$/);
+  const dropped = said.find((l) => /a queued comment dropped/.test(l.line));
+  assert.deepEqual([dropped.repo, dropped.issue, dropped.run], ["org/repo", 1, undefined]);
+  assert.equal(dropped.request, before.request);
   const during = seen.at(-1);
   assert.deepEqual([during.repo, during.issue], ["org/repo", 1]);
   assert.match(during.run, /^deckhand-org-repo-1-\d+$/);
-  assert.match(during.request, /^[0-9a-f]{16}$/);
+  assert.equal(during.request, before.request);
   // Picked up again by the next orchestrator: the same fields, its own request ID.
   const id = saveRun(
     dir,

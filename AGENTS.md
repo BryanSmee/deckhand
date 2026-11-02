@@ -72,8 +72,8 @@ started before you finish.
 
 ```
 lib/          what every service shares, copied into each image: yaml, settings, redact, log
-              (its lines, a request's ID), http, files, drain, tokens, service tokens, the store (store.mjs, store-file.mjs,
-              store-redis.mjs and its client resp.mjs)
+              (its lines, a request's ID), http, files, drain, tokens, service tokens, the
+              store (store.mjs, store-file.mjs, store-redis.mjs and its client resp.mjs)
 edge/         edge (#506), the only service the internet reaches: server.mjs (wiring), http.mjs
               (webhooks, /setup, sign-in, the dashboard's files), forward.mjs (the dashboard's API
               passed on to the orchestrator), internal.mjs (the deliveries' stream and the App's
