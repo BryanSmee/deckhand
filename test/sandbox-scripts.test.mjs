@@ -15,7 +15,7 @@ import {
 import { join } from "node:path";
 import { test } from "node:test";
 import { liveMessage } from "../listener/prompts.mjs";
-import { serve, tempDir } from "./helpers.mjs";
+import { scriptEnv, serve, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
@@ -34,19 +34,19 @@ function sandboxUid(t) {
 }
 
 // Async: a broker the tests serve may answer from this same process.
-function helper(env, input) {
+function helper(t, env, input) {
   return new Promise((resolve) => {
     const child = execFile(
       `${bin}git-credential-deckhand`,
       ["get"],
-      { env: { PATH: `${bin}:${process.env.PATH}`, ...env }, timeout: 10000 },
+      { env: scriptEnv(t, { PATH: `${bin}:${process.env.PATH}`, ...env }), timeout: 10000 },
       (error, stdout) => resolve({ status: error ? (error.code ?? 1) : 0, stdout }),
     );
     child.stdin.end(input);
   });
 }
 
-test("git gets the run token for the repo's host, which the GitHub gateway takes", async () => {
+test("git gets the run token for the repo's host, which the GitHub gateway takes", async (t) => {
   const env = {
     DECKHAND_BROKER_URL: "http://broker:8081",
     DECKHAND_GIT_URL: "http://github:8080",
@@ -54,19 +54,31 @@ test("git gets the run token for the repo's host, which the GitHub gateway takes
     REPO_URL: "https://github.com/org/repo.git",
   };
   const ask = "protocol=https\nhost=github.com\n\n";
-  assert.equal((await helper(env, ask)).stdout, "username=x-access-token\npassword=the-token\n");
+  assert.equal((await helper(t, env, ask)).stdout, "username=x-access-token\npassword=the-token\n");
   // Another host never sees it.
-  assert.equal((await helper(env, "protocol=https\nhost=evil.example\n\n")).stdout, "");
+  assert.equal((await helper(t, env, "protocol=https\nhost=evil.example\n\n")).stdout, "");
   // Outside a run, or without a token: nothing, and git asks elsewhere.
   const none = join(tempDir(null), "none");
   for (const without of [
     { ...env, DECKHAND_BROKER_URL: "" },
     { ...env, DECKHAND_TOKEN_FILE: none },
   ]) {
-    const res = await helper(without, ask);
+    const res = await helper(t, without, ask);
     assert.equal(res.status, 0);
     assert.equal(res.stdout, "");
   }
+});
+
+// Inside a Deckhand sandbox the tests' own environment is a run's, its token in
+// /dev/shm/deckhand/run-token: a script spawned with scriptEnv() finds no token but the test's,
+// and the assertion doesn't print what it found.
+test("scriptEnv: a script finds no run token but the one its test writes", (t) => {
+  const res = spawnSync(`${bin}deckhand-token`, [], { env: scriptEnv(t), encoding: "utf8" });
+  assert.ok(res.status === 1 && res.stdout === "", "deckhand-token found a run token");
+  const env = scriptEnv(t);
+  writeFileSync(env.DECKHAND_TOKEN_FILE, "the-token\n", { mode: 0o600 });
+  const own = spawnSync(`${bin}deckhand-token`, [], { env, encoding: "utf8" });
+  assert.equal(own.stdout, "the-token\n");
 });
 
 // The run token as the broker signs them: three base64url parts.
@@ -91,11 +103,14 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
     DECKHAND_TOKEN_RETRY: "0.1",
   };
   const token = (extra = {}) =>
-    spawnSync(`${bin}deckhand-token`, [], { env: { ...env, ...extra }, encoding: "utf8" });
+    spawnSync(`${bin}deckhand-token`, [], {
+      env: scriptEnv(t, { ...env, ...extra }),
+      encoding: "utf8",
+    });
   // Written once by the entrypoint, owner-only; not a token: refused.
   const init = (value) =>
     spawnSync(`${bin}deckhand-token`, ["--init"], {
-      env: { ...env, DECKHAND_RUN_TOKEN: value },
+      env: scriptEnv(t, { ...env, DECKHAND_RUN_TOKEN: value }),
       encoding: "utf8",
     });
   assert.equal(init("not a token").status, 1);
@@ -104,7 +119,7 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   assert.equal(statSync(join(dir, "deckhand")).mode & 0o777, 0o700);
   assert.equal(token().stdout, `${jwt(0)}\n`);
   // Renewed in the background, presenting the current one, the file replaced whole.
-  const renew = execFile(`${bin}deckhand-token`, ["--renew"], { env });
+  const renew = execFile(`${bin}deckhand-token`, ["--renew"], { env: scriptEnv(t, env) });
   let err = "";
   renew.stderr.on("data", (d) => (err += d));
   const exited = new Promise((resolve) => renew.on("exit", resolve));
@@ -131,7 +146,7 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
       execFile(
         `${bin}deckhand-token`,
         ["--now"],
-        { env: { ...env, ...extra } },
+        { env: scriptEnv(t, { ...env, ...extra }) },
         (error, _, stderr) => resolve({ status: error ? (error.code ?? 1) : 0, stderr }),
       ),
     );
@@ -144,13 +159,13 @@ test("deckhand-token: the run token from its file, written once, renewed in plac
   assert.match(refused.stderr, /couldn't be renewed/);
   // The broker's header, for deckhand-files and deckhand-inbox; outside a run, an empty one.
   const header = (e) =>
-    spawnSync(`${bin}deckhand-token`, ["--header"], { env: e, encoding: "utf8" });
+    spawnSync(`${bin}deckhand-token`, ["--header"], { env: scriptEnv(t, e), encoding: "utf8" });
   assert.match(header(env).stdout, /^Bearer eyJ.*\n$/);
   const outside = header({ PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") });
   assert.deepEqual([outside.status, outside.stdout], [0, "Bearer \n"]);
   // Outside a run: no token, a failure, said.
   const outsideRun = spawnSync(`${bin}deckhand-token`, [], {
-    env: { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") },
+    env: scriptEnv(t, { PATH: env.PATH, DECKHAND_TOKEN_FILE: join(dir, "none") }),
     encoding: "utf8",
   });
   assert.deepEqual([outsideRun.status, outsideRun.stdout], [1, ""]);
@@ -173,12 +188,12 @@ test(
     chmodSync(join(fakes, "sleep"), 0o755);
     const renew = spawn(`${bin}deckhand-token`, ["--renew"], {
       stdio: "ignore",
-      env: {
+      env: scriptEnv(t, {
         PATH: `${fakes}:${bin}:${process.env.PATH}`,
         DECKHAND_TOKEN_FILE: file,
         DECKHAND_BROKER_URL: "http://127.0.0.1:1",
         DECKHAND_TOKEN_RENEW: "300",
-      },
+      }),
     });
     const exited = new Promise((resolve) =>
       renew.on("exit", (code, signal) => resolve({ code, signal })),
@@ -226,14 +241,14 @@ test("deckhand-token --renew: after a failed --now, its first renewal comes afte
   const renew = spawn(`${bin}deckhand-token`, ["--renew"], {
     detached: true,
     stdio: "ignore",
-    env: {
+    env: scriptEnv(t, {
       PATH: `${bin}:${process.env.PATH}`,
       DECKHAND_TOKEN_FILE: file,
       DECKHAND_BROKER_URL: broker.url,
       // A whole interval would be too late: the first token may have expired already.
       DECKHAND_TOKEN_RENEW: "300",
       DECKHAND_TOKEN_FIRST: "0.1",
-    },
+    }),
   });
   const stop = () => {
     try {
@@ -254,27 +269,25 @@ test("deckhand-token --renew: after a failed --now, its first renewal comes afte
 
 // The Claude Code volume is read-only in a sandbox: a missing version is the listener's to
 // install, and the entrypoint says so instead of trying.
-test("a sandbox without its Claude Code version stops with a clear message", () => {
+test("a sandbox without its Claude Code version stops with a clear message", (t) => {
   const result = spawnSync(`${bin}entrypoint.sh`, [], {
-    env: {
-      PATH: process.env.PATH,
+    env: scriptEnv(t, {
       REPO_URL: "https://github.com/org/repo.git",
       CLAUDE_CODE_VERSION: "0.0.0-missing",
-    },
+    }),
     encoding: "utf8",
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /Claude Code 0\.0\.0-missing is not installed in \/opt\/claude-code/);
 });
 
-test("a sandbox without its Codex version says how to install it", () => {
+test("a sandbox without its Codex version says how to install it", (t) => {
   const result = spawnSync(`${bin}entrypoint.sh`, [], {
-    env: {
-      PATH: process.env.PATH,
+    env: scriptEnv(t, {
       REPO_URL: "https://github.com/org/repo.git",
       SANDBOX_AGENT: "codex",
       CODEX_VERSION: "0.0.0-missing",
-    },
+    }),
     encoding: "utf8",
   });
   assert.equal(result.status, 1);
@@ -288,17 +301,17 @@ test("a sandbox without its Codex version says how to install it", () => {
 
 // The Kubernetes runner's pod log has both streams in one: the entrypoint runs under
 // deckhand-tagged there, everything on stdout, stderr's lines tagged.
-test("SANDBOX_TAG_STDERR: the entrypoint's stderr comes tagged on stdout, its status kept", () => {
+test("SANDBOX_TAG_STDERR: the entrypoint's stderr comes tagged on stdout, its status kept", (t) => {
   const env = { PATH: `${bin}:${process.env.PATH}`, REPO_URL: "https://x/o/r.git" };
   const tagged = spawnSync(`${bin}entrypoint.sh`, [], {
-    env: { ...env, SANDBOX_AGENT: "gemini", SANDBOX_TAG_STDERR: "1" },
+    env: scriptEnv(t, { ...env, SANDBOX_AGENT: "gemini", SANDBOX_TAG_STDERR: "1" }),
     encoding: "utf8",
   });
   assert.equal(tagged.status, 1);
   assert.equal(tagged.stderr, "");
   assert.match(tagged.stdout, /^\x1eUnknown agent gemini \(SANDBOX_AGENT\)[^\n]*\n$/);
   const plain = spawnSync(`${bin}entrypoint.sh`, [], {
-    env: { ...env, SANDBOX_AGENT: "gemini" },
+    env: scriptEnv(t, { ...env, SANDBOX_AGENT: "gemini" }),
     encoding: "utf8",
   });
   assert.match(plain.stderr, /^Unknown agent gemini/);
@@ -306,7 +319,7 @@ test("SANDBOX_TAG_STDERR: the entrypoint's stderr comes tagged on stdout, its st
 
 // A line over the runtime's 16 KiB parts, written while the other stream writes: whole, and
 // never spliced with a stderr line, as two writers into one log would.
-test("deckhand-tagged: one writer, whole lines; a long stdout line and stderr lines apart", () => {
+test("deckhand-tagged: one writer, whole lines; a long stdout line and stderr lines apart", (t) => {
   const script = `
     const long = JSON.stringify({ type: "result", result: "x".repeat(200000) });
     let i = 0;
@@ -319,6 +332,7 @@ test("deckhand-tagged: one writer, whole lines; a long stdout line and stderr li
     };
     tick();`;
   const result = spawnSync(`${bin}deckhand-tagged`, [process.execPath, "-e", script], {
+    env: scriptEnv(t),
     encoding: "utf8",
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -337,7 +351,7 @@ test("deckhand-tagged: one writer, whole lines; a long stdout line and stderr li
 
 // A reader slower than the command (the runtime's, a slow disk): the command waits, as on a
 // full pipe, rather than its output piling up in the wrapper, inside the sandbox's memory.
-test("deckhand-tagged: a slow reader holds the command back, the wrapper's memory bounded", async () => {
+test("deckhand-tagged: a slow reader holds the command back, the wrapper's memory bounded", async (t) => {
   const { spawn } = await import("node:child_process");
   const script = `
     const line = "x".repeat(1023) + "\\n";
@@ -350,6 +364,7 @@ test("deckhand-tagged: a slow reader holds the command back, the wrapper's memor
     };
     go();`;
   const wrapper = spawn(`${bin}deckhand-tagged`, [process.execPath, "-e", script], {
+    env: scriptEnv(t),
     stdio: ["ignore", "pipe", "inherit"],
   });
   wrapper.stdout.pause();
@@ -367,7 +382,7 @@ test("deckhand-tagged: a slow reader holds the command back, the wrapper's memor
   assert.equal(bytes, 200000 * 1024);
 });
 
-test("deckhand-tagged: SIGTERM reaches the command, whose status comes back", async () => {
+test("deckhand-tagged: SIGTERM reaches the command, whose status comes back", async (t) => {
   const { spawn } = await import("node:child_process");
   const child = spawn(
     `${bin}deckhand-tagged`,
@@ -376,7 +391,7 @@ test("deckhand-tagged: SIGTERM reaches the command, whose status comes back", as
       "-c",
       'trap "echo bye >&2; exit 7" TERM; echo ready; sleep 30 > /dev/null 2>&1 & wait',
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { env: scriptEnv(t), stdio: ["ignore", "pipe", "pipe"] },
   );
   let out = "";
   await new Promise((resolve) =>
@@ -391,10 +406,13 @@ test("deckhand-tagged: SIGTERM reaches the command, whose status comes back", as
   assert.equal(out, "ready\n\x1ebye\n");
 });
 
-test("an unknown agent stops the sandbox before anything runs", () => {
+test("an unknown agent stops the sandbox before anything runs", (t) => {
   for (const agent of ["gemini", "../claude", "Claude"]) {
     const result = spawnSync(`${bin}entrypoint.sh`, [], {
-      env: { PATH: process.env.PATH, REPO_URL: "https://x/o/r.git", SANDBOX_AGENT: agent },
+      env: scriptEnv(t, {
+        REPO_URL: "https://x/o/r.git",
+        SANDBOX_AGENT: agent,
+      }),
       encoding: "utf8",
     });
     assert.equal(result.status, 1, agent);
@@ -438,13 +456,13 @@ function claudeScript(t, script, env = {}) {
     "bash",
     ["-c", `set -euo pipefail; source "${bin}agents/claude.sh"; ${script}`],
     {
-      env: {
+      env: scriptEnv(t, {
         PATH: `${dir}:${process.env.PATH}`,
         CLAUDE_CODE_VERSION: "9.9.9",
         CLAUDE_CONFIG_DIR: dir,
         AGENT_FILES: `${bin}agents/claude`,
         ...env,
-      },
+      }),
       input: "",
       encoding: "utf8",
     },
@@ -542,14 +560,13 @@ const olderImage = existsSync(imageAgents) && !existsSync(`${imageAgents}/codex.
 test(
   "a sandbox without its Codex version stops with a clear message",
   { skip: olderImage && "this sandbox's image has no codex.sh" },
-  () => {
+  (t) => {
     const result = spawnSync(`${bin}entrypoint.sh`, [], {
-      env: {
-        PATH: process.env.PATH,
+      env: scriptEnv(t, {
         REPO_URL: "https://github.com/org/repo.git",
         SANDBOX_AGENT: "codex",
         CODEX_VERSION: "0.0.0-missing",
-      },
+      }),
       encoding: "utf8",
     });
     assert.equal(result.status, 1);
@@ -581,13 +598,13 @@ fi
     "bash",
     ["-c", `set -euo pipefail; source "${bin}agents/codex.sh"; ${script}`],
     {
-      env: {
+      env: scriptEnv(t, {
         PATH: `${dir}:${process.env.PATH}`,
         CODEX_VERSION: "9.9.9",
         CODEX_HOME: join(dir, "home"),
         AGENT_FILES: `${bin}agents/codex`,
         ...env,
-      },
+      }),
       input: "",
       encoding: "utf8",
     },
@@ -707,7 +724,7 @@ test("Codex's session: its rollouts in the issue's volume, instructions beside",
 
 test("installing Codex refuses to run as the sandbox's user", (t) => {
   const result = spawnSync(`${bin}agents/codex/install`, [], {
-    env: { PATH: sandboxUid(t), CODEX_VERSION: "9.9.9" },
+    env: scriptEnv(t, { PATH: sandboxUid(t), CODEX_VERSION: "9.9.9" }),
     encoding: "utf8",
   });
   assert.equal(result.status, 1);
@@ -733,7 +750,7 @@ test("the prompt says whether the run has a container engine, and whether it ans
     writeFileSync(join(dir, "docker"), `#!/bin/sh\nexit ${answers ? 0 : 1}\n`);
     chmodSync(join(dir, "docker"), 0o755);
     return spawnSync("bash", ["-c", `${fn}\nengine_note`], {
-      env: { PATH: `${dir}:${process.env.PATH}`, ...env },
+      env: scriptEnv(t, { PATH: `${dir}:${process.env.PATH}`, ...env }),
       encoding: "utf8",
     });
   };
@@ -790,7 +807,7 @@ function resetClone(t) {
   const sh = (cwd, command, extra = {}) => {
     const result = spawnSync("bash", ["-c", command], {
       cwd,
-      env: { ...env, ...extra },
+      env: scriptEnv(t, { ...env, ...extra }),
       encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
@@ -977,7 +994,12 @@ test("draft-pr does nothing for a repo's own mode without TASK_BRANCH", (t) => {
   }
   const run = (env) =>
     spawnSync(`${bin}draft-pr.sh`, ["start"], {
-      env: { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5", TASK_MODE: "plan", ...env },
+      env: scriptEnv(t, {
+        PATH: `${fake}:${process.env.PATH}`,
+        TASK_ISSUE: "5",
+        TASK_MODE: "plan",
+        ...env,
+      }),
       encoding: "utf8",
     }).status;
   assert.equal(run({}), 0);
@@ -1065,7 +1087,10 @@ test("the entrypoint fetches the CA and digest from the broker, and stops when i
         "-c",
         `set -euo pipefail\n${fn}\nfetch_run_files "$DIR"\necho "CA=\${DECKHAND_CA:-} DIGEST=\${TASK_DIGEST:-}"`,
       ],
-      { env: { PATH: `${fake}:${process.env.PATH}`, DIR: dir, ...env }, encoding: "utf8" },
+      {
+        env: scriptEnv(t, { PATH: `${fake}:${process.env.PATH}`, DIR: dir, ...env }),
+        encoding: "utf8",
+      },
     );
   const both = run({
     DECKHAND_CA: "http://broker:8081/run/ca",
@@ -1101,7 +1126,7 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   // A brainstorm: draft-pr.sh does nothing else for it.
   const hook = (args, input = "") =>
     spawnSync(`${bin}draft-pr.sh`, ["hook", ...args], {
-      env: { ...env, TASK_MODE: "brainstorm" },
+      env: scriptEnv(t, { ...env, TASK_MODE: "brainstorm" }),
       input,
       encoding: "utf8",
     }).status;
@@ -1116,7 +1141,11 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   assert.equal(count(), 2);
   assert.equal(hook(["Stop"]), 0); // agy's
   assert.equal(count(), 3);
-  const push = spawnSync(`${bin}pre-push`, [], { env, input: "", encoding: "utf8" });
+  const push = spawnSync(`${bin}pre-push`, [], {
+    env: scriptEnv(t, env),
+    input: "",
+    encoding: "utf8",
+  });
   assert.equal(push.status, 0);
   // After the hook's own work (on exit), within 20 s: a work run's Stop hook opens the draft
   // first, whatever the upload takes, and its gh calls (the wrapper) don't upload.
@@ -1135,7 +1164,7 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   const script = readFileSync(`${bin}draft-pr.sh`, "utf8").replace(/\/workspace/g, fake);
   writeFileSync(join(fake, "draft-pr.sh"), script);
   spawnSync("bash", [join(fake, "draft-pr.sh"), "hook", "Stop"], {
-    env: {
+    env: scriptEnv(t, {
       ...env,
       // The image's gh wrapper (sandbox/gh), in front of a fake real gh.
       PATH: `${fake}:${bin}:${process.env.PATH}`,
@@ -1143,7 +1172,7 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
       DECKHAND_BROKER_URL: "http://broker:8081",
       DECKHAND_TOKEN_FILE: tokenFile("s"),
       TASK_ISSUE: "5",
-    },
+    }),
     encoding: "utf8",
   });
   assert.deepEqual(readFileSync(order, "utf8").trim().split("\n"), [
@@ -1159,13 +1188,13 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   // Outside the hooks, gh uploads first, within 20 s.
   rmSync(order);
   spawnSync(`${bin}gh`, ["pr", "view"], {
-    env: {
+    env: scriptEnv(t, {
       ...env,
       DECKHAND_REAL_GH: join(fake, "real-gh"),
       DECKHAND_BROKER_URL: "http://x",
       DECKHAND_TOKEN_FILE: tokenFile("s"),
       PATH: `${fake}:${bin}:${process.env.PATH}`,
-    },
+    }),
   });
   assert.deepEqual(readFileSync(order, "utf8").trim().split("\n"), [
     "timeout 20 deckhand-files",
@@ -1178,7 +1207,11 @@ test("the Stop hook, a git push hook and pre-push upload the screenshots; other 
   assert.equal(readFileSync(calls, "utf8"), "shots --log\n".repeat(3) + "shots\n");
   // A failure blocks no push.
   writeFileSync(join(fake, "deckhand-files"), "#!/bin/sh\nexit 1\n");
-  const failing = spawnSync(`${bin}pre-push`, [], { env, input: "", encoding: "utf8" });
+  const failing = spawnSync(`${bin}pre-push`, [], {
+    env: scriptEnv(t, env),
+    input: "",
+    encoding: "utf8",
+  });
   assert.equal(failing.status, 0);
 });
 
@@ -1203,7 +1236,7 @@ test("draft-pr opens no second pull request while the issue's own branch has an 
   const hook = (env) => {
     rmSync(calls, { force: true });
     const result = spawnSync("bash", [join(fake, "draft-pr.sh"), "hook", "Stop"], {
-      env: { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5", ...env },
+      env: scriptEnv(t, { PATH: `${fake}:${process.env.PATH}`, TASK_ISSUE: "5", ...env }),
       encoding: "utf8",
     });
     return { stderr: result.stderr, calls: readFileSync(calls, "utf8").trim().split("\n") };
@@ -1227,11 +1260,15 @@ test("draft-pr opens no second pull request while the issue's own branch has an 
 
 // The branch's slug, from draft-pr.sh's own slug(): the gateway only takes issue-<n>-<slug>,
 // so it is never empty.
-test("draft-pr's branch slug: accents dropped, and never empty", () => {
+test("draft-pr's branch slug: accents dropped, and never empty", (t) => {
   const script = readFileSync(`${bin}draft-pr.sh`, "utf8");
   const slug = /^slug\(\) \{[^]*?^\}$/m.exec(script)[0];
   const of = (title) =>
-    spawnSync("bash", ["-c", `${slug}\nslug`], { input: title, encoding: "utf8" }).stdout;
+    spawnSync("bash", ["-c", `${slug}\nslug`], {
+      env: scriptEnv(t),
+      input: title,
+      encoding: "utf8",
+    }).stdout;
   assert.equal(of("Café : bientôt"), "cafe-bientot");
   assert.equal(of("修复登录"), "task");
   assert.equal(of("🔥 !"), "task");
@@ -1239,24 +1276,24 @@ test("draft-pr's branch slug: accents dropped, and never empty", () => {
 
 test("installing Claude Code refuses to run as the sandbox's user", (t) => {
   const result = spawnSync(`${bin}agents/claude/install`, [], {
-    env: { PATH: sandboxUid(t), CLAUDE_CODE_VERSION: "9.9.9" },
+    env: scriptEnv(t, { PATH: sandboxUid(t), CLAUDE_CODE_VERSION: "9.9.9" }),
     encoding: "utf8",
   });
   assert.equal(result.status, 1);
   assert.match(result.stderr, /not as the sandbox's user/);
 });
 
-test("for the git gateway's host, git gets the run token: what the git gateway takes", async () => {
+test("for the git gateway's host, git gets the run token: what the git gateway takes", async (t) => {
   const env = {
     DECKHAND_BROKER_URL: "http://broker:8081",
     DECKHAND_GIT_URL: "http://github:8080",
     DECKHAND_TOKEN_FILE: tokenFile("the-token"),
     REPO_URL: "https://github.com/org/repo.git",
   };
-  const res = await helper(env, "protocol=http\nhost=github:8080\n\n");
+  const res = await helper(t, env, "protocol=http\nhost=github:8080\n\n");
   assert.equal(res.stdout, "username=deckhand\npassword=the-token\n");
   // The broker's host isn't the git gateway's: no token for it.
-  assert.equal((await helper(env, "protocol=http\nhost=broker:8081\n\n")).stdout, "");
+  assert.equal((await helper(t, env, "protocol=http\nhost=broker:8081\n\n")).stdout, "");
 });
 
 // --- gh, through the GitHub gateway --------------------------------------------------------------
@@ -1271,12 +1308,12 @@ function fakeGh(t) {
   return { path, calls: () => readFileSync(log, "utf8").trim().split("\n") };
 }
 
-function gh(env, ...args) {
+function gh(t, env, ...args) {
   return new Promise((resolve) => {
     execFile(
       `${bin}gh`,
       args,
-      { env: { PATH: `${bin}:${process.env.PATH}`, ...env }, timeout: 10000 },
+      { env: scriptEnv(t, { PATH: `${bin}:${process.env.PATH}`, ...env }), timeout: 10000 },
       (error, stdout, stderr) => resolve({ status: error ? (error.code ?? 1) : 0, stdout, stderr }),
     );
   });
@@ -1298,7 +1335,7 @@ test("every gh command goes to the real gh, with the run token as its token", as
     ["pr", "ready", "--undo"],
   ];
   for (const args of commands) {
-    const res = await gh(env, ...args);
+    const res = await gh(t, env, ...args);
     assert.equal(res.status, 0, res.stderr);
   }
   assert.deepEqual(
@@ -1306,7 +1343,7 @@ test("every gh command goes to the real gh, with the run token as its token", as
     commands.map((args) => `the-token ${args.join(" ")}`),
   );
   // Outside a run, gh as it is: no run token.
-  const outside = await gh({ DECKHAND_REAL_GH: real.path, GH_TOKEN: "mine" }, "pr", "ready");
+  const outside = await gh(t, { DECKHAND_REAL_GH: real.path, GH_TOKEN: "mine" }, "pr", "ready");
   assert.equal(outside.status, 0);
   assert.equal(real.calls().at(-1), "mine pr ready");
 });
@@ -1355,7 +1392,7 @@ fi
     spawnSync(
       `${bin}agents/npm-install`,
       [root, "@anthropic-ai/claude-code", "9.9.9", "claude", "Claude Code"],
-      { env: { PATH: `${dir}:${process.env.PATH}` }, encoding: "utf8" },
+      { env: scriptEnv(t, { PATH: `${dir}:${process.env.PATH}` }), encoding: "utf8" },
     );
   const first = run();
   assert.equal(first.status, 0, first.stderr);

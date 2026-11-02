@@ -23,7 +23,7 @@ import {
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { buildContext, contextBlob, tempDir, withBlobs } from "./helpers.mjs";
+import { buildContext, contextBlob, isRoot, tempDir, withBlobs } from "./helpers.mjs";
 
 const REGISTRY = "registry.example.com";
 const BASE = "ghcr.io/acme/deckhand-sandbox:1.2";
@@ -693,7 +693,7 @@ test("an agent's claim its storage doesn't hand to the install's user: said, not
   );
 });
 
-test("writable(): a check of the mount point, then the command; a claim filled beforehand needs no write", (t) => {
+test("writable(): a check of the mount point, then the command", (t) => {
   const dir = tempDir(t);
   const run = (...command) => {
     const [shell, ...args] = writable(dir, ...command);
@@ -703,18 +703,29 @@ test("writable(): a check of the mount point, then the command; a claim filled b
   assert.equal(run("sh", "-c", "exit 4"), 4);
   // Nothing left behind by the check.
   assert.deepEqual(readdirSync(dir), []);
-  if (process.getuid() === 0) return; // root writes anywhere
-  chmodSync(dir, 0o555);
-  try {
-    // A claim it can't write: NOT_WRITABLE unless the command manages without (a claim
-    // filled beforehand, which the installer leaves as it is).
-    assert.equal(run(), 97);
-    assert.equal(run("sh", "-c", "exit 4"), 97);
-    assert.equal(run("true"), 0);
-  } finally {
-    chmodSync(dir, 0o755);
-  }
 });
+
+test(
+  "writable(): a mount point it can't write; a claim filled beforehand needs no write",
+  { skip: isRoot && "root writes anywhere" },
+  (t) => {
+    const dir = tempDir(t);
+    const run = (...command) => {
+      const [shell, ...args] = writable(dir, ...command);
+      return spawnSync(shell, args).status;
+    };
+    chmodSync(dir, 0o555);
+    try {
+      // A claim it can't write: NOT_WRITABLE unless the command manages without (a claim
+      // filled beforehand, which the installer leaves as it is).
+      assert.equal(run(), 97);
+      assert.equal(run("sh", "-c", "exit 4"), 97);
+      assert.equal(run("true"), 0);
+    } finally {
+      chmodSync(dir, 0o755);
+    }
+  },
+);
 
 test("caches: none without a class, and the reason for the run's log", async (t) => {
   const { images, created } = setup(t);

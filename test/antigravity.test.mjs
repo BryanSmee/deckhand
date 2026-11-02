@@ -20,7 +20,7 @@ import {
 import { resolveEntry } from "../listener/agents/select.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { lastResult, outcome } from "../listener/runlog.mjs";
-import { tempDir } from "./helpers.mjs";
+import { scriptEnv, tempDir } from "./helpers.mjs";
 
 const bin = new URL("../sandbox/", import.meta.url).pathname;
 
@@ -294,13 +294,13 @@ fi
     "bash",
     ["-c", `set -euo pipefail; source "${bin}agents/antigravity.sh"; ${script}`],
     {
-      env: {
+      env: scriptEnv(t, {
         PATH: `${dir}:${process.env.PATH}`,
         HOME: home,
         AGY_VERSION: "9.9.9",
         AGENT_FILES: `${bin}agents/antigravity`,
         ...env,
-      },
+      }),
       input: "",
       encoding: "utf8",
     },
@@ -540,7 +540,7 @@ esac
         "Antigravity CLI",
         ...(pinned === null ? [] : [pinned ?? sha]),
       ],
-      { env: { PATH: `${dir}:${process.env.PATH}` }, encoding: "utf8" },
+      { env: scriptEnv(t, { PATH: `${dir}:${process.env.PATH}` }), encoding: "utf8" },
     );
   return { root, run };
 }
@@ -599,7 +599,7 @@ test("installing the Antigravity CLI refuses to run as the sandbox's user", (t) 
   const dir = tempDir(t);
   writeFileSync(join(dir, "id"), "#!/bin/sh\necho 1000\n", { mode: 0o755 });
   const result = spawnSync(`${bin}agents/antigravity/install`, [], {
-    env: { PATH: `${dir}:${process.env.PATH}`, AGY_VERSION: "9.9.9" },
+    env: scriptEnv(t, { PATH: `${dir}:${process.env.PATH}`, AGY_VERSION: "9.9.9" }),
     encoding: "utf8",
   });
   assert.equal(result.status, 1);

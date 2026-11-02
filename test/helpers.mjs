@@ -255,6 +255,25 @@ export function tempDir(t, prefix = "deckhand-") {
   return dir;
 }
 
+// Whether the tests run as root, who writes anywhere: a test whose subject is "a user can't
+// write here" skips then (`{ skip: isRoot && "root writes anywhere" }`). CI runs them both ways.
+export const isRoot = process.getuid?.() === 0;
+
+// The environment of a sandbox script a test spawns: never the tests' own, which inside a
+// Deckhand sandbox (Deckhand testing itself) holds the run's real settings, and a run token
+// file in the test's temp dir, absent unless the test writes one there, so a script never falls
+// back to the run's real token (/dev/shm/deckhand/run-token, sandbox/deckhand-token). `extra`
+// adds to it or replaces what it has (PATH, DECKHAND_TOKEN_FILE). `t`: as for tempDir().
+export function scriptEnv(t, extra = {}) {
+  return {
+    PATH: process.env.PATH,
+    ...extra,
+    // A temp dir only when the test doesn't name its own file.
+    DECKHAND_TOKEN_FILE:
+      extra.DECKHAND_TOKEN_FILE ?? join(tempDir(t, "deckhand-env-"), "run-token"),
+  };
+}
+
 // The operator's settings with an allowlist (alice), and `overrides`.
 export function testConfig(overrides = {}) {
   return loadConfig({ ALLOWED_USERS: "alice", ...overrides });
