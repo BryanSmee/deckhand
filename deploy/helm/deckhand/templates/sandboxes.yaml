@@ -1,0 +1,48 @@
+# deploy/kubernetes/sandboxes.yaml: the sandboxes' namespace's NetworkPolicies. Nothing comes in,
+# and the egress proxy's port is the only way out; the runner checks them before every run. Kept
+# by `helm uninstall`, as their namespace is: a sandbox still running there stays isolated.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-default-deny
+  namespace: {{ include "deckhand.sandboxesNs" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+{{- range $role, $name := dict "sandbox" "deckhand-sandboxes" "install" "deckhand-installs" }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  namespace: {{ include "deckhand.sandboxesNs" $ }}
+  labels:
+    {{- include "deckhand.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  podSelector:
+    matchLabels:
+      deckhand.role: {{ $role }}
+  policyTypes: [Ingress, Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "deckhand.ns" $ }}
+          podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 3128
+          protocol: TCP
+        {{- if and (eq $role "sandbox") $.Values.engine.enabled }}
+        # The engines' port: their engine shares their address (components/engine).
+        - port: 3129
+          protocol: TCP
+        {{- end }}
+{{- end }}

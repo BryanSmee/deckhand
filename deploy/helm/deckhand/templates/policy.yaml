@@ -1,0 +1,66 @@
+# deploy/kubernetes/policy.yaml: long-lived opa servers, no secret, no state, no way out. It
+# reads the grants folder's policy/ as the orchestrator does.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: policy
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    app: deckhand-policy
+spec:
+  replicas: 2
+  {{- include "deckhand.strategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      app: deckhand-policy
+  template:
+    metadata:
+      labels:
+        app: deckhand-policy
+    spec:
+      serviceAccountName: deckhand-policy
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      {{- include "deckhand.podSecurityContext" true | nindent 6 }}
+      containers:
+        - name: policy
+          image: {{ include "deckhand.image" (list . "policy") }}
+          ports:
+            - name: http
+              containerPort: 8181
+          {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
+          {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: service-keys
+              mountPath: /keys
+              readOnly: true
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
+        {{- include "deckhand.serverVolume" (list . true) | nindent 8 }}
+        - name: service-keys
+          configMap:
+            name: deckhand-service-keys
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: policy
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: deckhand-policy
+  ports:
+    - name: http
+      port: 8181
+      targetPort: http

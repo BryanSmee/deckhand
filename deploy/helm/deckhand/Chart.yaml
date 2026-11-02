@@ -1,0 +1,15 @@
+# Deckhand on Kubernetes as a Helm chart (docs/kubernetes.md#install-with-helm): the objects of
+# the kustomize base (deploy/kubernetes) and its components, with values instead of patches.
+# With its default values it renders what `kustomize build deploy/kubernetes` does, which
+# test/helm-chart.test.mjs checks (CI's kubernetes job): a change to the base goes here too.
+apiVersion: v2
+name: deckhand
+description: Deckhand runs Claude Code on GitHub issues and pull requests, a pod per run.
+type: application
+version: 0.1.0
+# The images' tag, the sandboxes' too, unless image.tag says otherwise.
+appVersion: latest
+home: https://github.com/BryanSmee/deckhand
+sources:
+  - https://github.com/BryanSmee/deckhand
+kubeVersion: ">=1.30.0-0"
