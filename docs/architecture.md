@@ -462,6 +462,20 @@ one segment holding its offset (`MAX_READ` at most). A log written before segmen
 (`logs/<run>`, one blob) reads as one closed segment and is appended to as it was, and an
 orchestrator of the release before marks no step: its runs' logs close at the size cap only.
 
+With blob storage (`BLOB_URL`, #608), each closed segment leaves the store: copied there under
+the same key and measured (`HEAD`), then the index points at it (`where: "blobs"`, one
+compare-and-set), then it is deleted from the store. It is in one place or the other at every
+moment, and a read takes the index, then the store's blob or a ranged GET; one that finds the
+store's blob gone reads the index again. Each closing is noted in a stream of the runner's store
+(`log-moves`, written before the index says the segment is closed, so a copy stopping in between
+leaves a note too many, never one too few), which the copy holding the runner's lease reads as
+it gets the lease, at each closing, and every five minutes, acknowledging a note once its move is
+done: a move cut short after any step is done again from the start, which does no harm. While
+blob storage fails, the notes stay, tried again after a delay that doubles from 30 s to 30
+minutes, and the runner's `/health` counts them and their bytes (a warning on the dashboard's
+status page). Retention deletes a log's segments in blob storage first, then its index: one that
+fails stays for the next day's pass.
+
 The run's record keeps its phase too, for the dashboard's task state (`board.mjs`
 `runState()`): `scheduled` from the moment the run leaves the queue (`setup`: its settings,
 sandbox, clone and the repo's `setup`), `building-image` while the image builds (a step of
@@ -1110,7 +1124,8 @@ a network of its own (`broker-runner`), and checks its callers' with the broker'
 - **Its output** comes as NDJSON (`GET /sandboxes/<name>/output`), from the lines the orchestrator
   read already: the stream ends when the sandbox does, or when the runner stops, and the
   orchestrator follows again from where it was, as when `docker logs` ended.
-- **Its log** is a blob of the runner's store, written by appends that name the offset they go
+- **Its log** is in segments in the runner's store, the closed ones moved to blob storage when
+  `BLOB_URL` is set ([A run's log](#a-runs-log)), written by appends that name the offset they go
   at: one sent again is taken once, one at another offset refused with the log's size, which
   the writer goes on from. The orchestrator writes a line at once and sends it as it can (in order,
   tried again while the runner is away), and saves a run's state only once what it read is at
