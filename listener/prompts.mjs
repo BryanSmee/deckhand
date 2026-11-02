@@ -125,17 +125,44 @@ function verdictRule(text, allowed) {
 // closes. Its thread is the run's file TASK_DIGEST names (reviews.mjs reviewThread()).
 // `instructions`: the repo's `review.instructions` file, if any; `text`: what the
 // "/mode review" comment adds; `allowed`: the review's tolerance (verdictRule()); `ciNote`: why
-// CI hadn't passed when the listener queued it (`review.ci`, reviews.mjs ciNoteText()).
-function reviewPrompt(task, pull, instructions, text, allowed = "low", ciNote = null) {
+// CI hadn't passed when the listener queued it (`review.ci`, reviews.mjs ciNoteText());
+// `reviewed`: { sha, base } of the pull request at the run's start (reviews.mjs reviewStart()),
+// the commit it reads and its review is posted on; null when GitHub couldn't say: its head
+// whenever it reads it.
+function reviewPrompt(task, pull, instructions, text, allowed = "low", ciNote = null, reviewed) {
   const own = instructions?.trim()
     ? `\n\nThe repository's review instructions:\n\n${instructions.trim()}`
     : "";
   const asked = text ? `\n\nThe maintainer asks:\n\n${text}` : "";
   const ci = ciNote ? `\n\n${ciNote}` : "";
-  const rules = verdictRule(modeInstructions.review.replaceAll("<n>", String(pull)), allowed);
+  const read = pinned(modeInstructions.review, reviewed);
+  const rules = verdictRule(read.replaceAll("<n>", String(pull)), allowed);
   return `Review pull request #${pull} of ${task.repo}.
 
 ${rules}${ci}${own}${asked}`;
+}
+
+// How prompts/review.md says to read the pull request (its head when the agent gets there).
+const READ_HEAD = `Read the diff with
+   \`gh pr diff <n>\`. To read the files around the diff, put its code in a worktree under /tmp:
+   \`git fetch origin pull/<n>/head && git worktree add --detach /tmp/pr-<n> FETCH_HEAD\`.`;
+
+// prompts/review.md with the commit `reviewed` names to read, not whatever the head is when the
+// agent gets there: its review is posted on that commit, its places linked there. Unknown
+// (or its base), or prompts/review.md reworded: as it is.
+function pinned(instructions, reviewed) {
+  const { sha, base } = reviewed ?? {};
+  if (!sha || !base || !instructions.includes(READ_HEAD)) return instructions;
+  const diff = `\`git fetch origin ${base}\`, then \`git diff origin/${base}...${sha}\``;
+  return instructions.replace(
+    READ_HEAD,
+    `Review commit \`${sha}\`, the pull request's head when
+   this run started, even if it has moved since: your review is posted on that commit. Put its
+   code in a worktree under /tmp: \`git fetch origin pull/<n>/head && git worktree add --detach
+   /tmp/pr-<n> ${sha}\`. Read the diff with
+   ${diff}.
+   If that commit is gone (a force push), use \`FETCH_HEAD\` instead and say so in your summary.`,
+  );
 }
 
 function brainstormPrompt(task) {
@@ -368,7 +395,8 @@ ${instructions.trim()}`;
 // `onboardingWork`: a work run on an onboarding issue; `grant`: what the operator grants the
 // repo (grantFor()); `branches`: what the run may push (preparation.mjs pushBranches());
 // `pull`: the issue or pull request the reply goes to, the one a review reads; `allowed`: a
-// review's tolerance (reviews' tolerance()); `ciNote`: a review's CI note (reviewPrompt());
+// review's tolerance (reviews' tolerance()); `ciNote`: a review's CI note, `reviewed` the
+// commit it reads (reviewPrompt());
 // `capabilities`: what its sandbox gets (capabilities.mjs), null when not known.
 export function promptFor(
   task,
@@ -386,6 +414,7 @@ export function promptFor(
     allowed,
     ciNote = null,
     capabilities = null,
+    reviewed = null,
   },
 ) {
   // A run without `pull` (capabilities.mjs) has no clone and no token: whatever its mode, its
@@ -406,7 +435,7 @@ export function promptFor(
   if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "research") return researchPrompt(task);
   if (mode === "review")
-    return reviewPrompt(task, pull ?? task.number, instructions, text, allowed, ciNote);
+    return reviewPrompt(task, pull ?? task.number, instructions, text, allowed, ciNote, reviewed);
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   // Work expects a branch: without `push`, told so. The repo's own modes say it in theirs.
   if (own) return modePrompt(task, own, instructions, branches, grant, caps);

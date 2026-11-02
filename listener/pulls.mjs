@@ -1,14 +1,14 @@
 // Each task's pull request for the dashboard, by task key ("org/repo#12", "org/repo#pr-3"):
 // { number, url, state, readyAt, autoMerged?, additions?, deletions?, changedFiles?, commits?,
 // head?, ci? }, its size and commit count as the last pull request object that had them said
-// (events.mjs pullSize()). `ci`: what CI says of its `head` commit, { sha, state, runs }
-// (ci.mjs ciSummary(), #436), kept up to date from CI's deliveries (ciChanged()) while it is
-// open; a new head resets it to `none` until something reports; the last one known stays once
-// it is merged or closed. `pull_request` webhooks keep it current (events.mjs pullRequest()), and the
-// listener's own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per listener
-// start, from the repo's recent pull requests. Kept in pulls.json, so a restart neither forgets
-// nor asks again. The open ones are asked about again at start and from the dashboard's Sync
-// (resync()): a lost delivery would leave one a draft forever.
+// (events.mjs pullSize()). `ci`: what CI says of its `head` commit, { sha, state, runs } (ci.mjs
+// ciSummary(), #436), kept up to date from CI's deliveries (ciChanged()) while it is open; a new
+// head resets it to `none` until something reports; the last one known stays once it is merged or
+// closed. `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's
+// own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
+// listener start, from the repo's recent pull requests. Kept in pulls.json, so a restart neither
+// forgets nor asks again. The open ones are asked about again at start and from the dashboard's
+// Sync (resync()): a lost delivery would leave one a draft forever.
 import {
   linkedIssue,
   parseKey,

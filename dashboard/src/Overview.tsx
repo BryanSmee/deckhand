@@ -9,6 +9,7 @@ import { type RepoList, sendDismiss, sendRerun } from "./api";
 import {
   type ChipId,
   findingsLeft,
+  reviewOutdated,
   githubUrl,
   heldText,
   inChip,
@@ -31,7 +32,7 @@ import {
 } from "./overview";
 import { CiStatus } from "./CiStatus";
 import { Questions } from "./Questions";
-import { FindingsLeft } from "./ReviewLoop";
+import { ReviewMarks } from "./ReviewLoop";
 import { RepoBadge } from "./RepoBadge";
 import { formatRoute } from "./route";
 import type { Repo, State, Task } from "./types";
@@ -317,7 +318,7 @@ function WaitingOnYou({
             return (
               <li
                 key={t.key}
-                class={`${styles.need} ${row.need === "ready" && findingsLeft(t) ? styles.warned : ""}`}
+                class={`${styles.need} ${row.need === "ready" && (findingsLeft(t) || reviewOutdated(t)) ? styles.warned : ""}`}
               >
                 <StatusBadge
                   class={styles.badge}
@@ -336,7 +337,7 @@ function WaitingOnYou({
                   {/* Where you decide what to review: its pull request's CI. */}
                   {row.need === "ready" && t.pr && <CiStatus pr={t.pr} link />}
                 </span>
-                {row.need === "ready" && <FindingsLeft task={t} class={styles.left} />}
+                {row.need === "ready" && <ReviewMarks task={t} class={styles.left} />}
                 <span class={styles.needRepo}>{t.repo}</span>
                 <span class={styles.age} title={new Date(row.at).toLocaleString()}>
                   {age(row.at, now)}

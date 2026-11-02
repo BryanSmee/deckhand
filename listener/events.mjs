@@ -533,7 +533,7 @@ export function hasLabel(labels, name) {
 // task of the issue it closes, else its own. `readyAt`: when it turned ready, if it just did.
 // Its size and commit count when GitHub sent them: a single pull request and webhooks have
 // them, listings don't. `head`: its head commit, whose CI the dashboard shows (pulls.mjs), with
-// `updatedAt`.
+// `updatedAt`, and which it compares with the last review's (a commit pushed after it, #535).
 export function pullEntry(repo, pr, readyAt = null) {
   return {
     key: taskKey(repo, linkedIssue(pr, repo) ?? prId(pr.number)),

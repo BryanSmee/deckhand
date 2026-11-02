@@ -24,7 +24,7 @@ import {
 } from "./format";
 import { useShortcuts, useShortcutsOn, withKey } from "./keys";
 import { CiStatus } from "./CiStatus";
-import { FindingsLeft } from "./ReviewLoop";
+import { ReviewMarks } from "./ReviewLoop";
 import type { Task } from "./types";
 import { Field } from "./ui/Field";
 import { FilterChip } from "./ui/FilterChip";
@@ -219,7 +219,7 @@ function Row({
         ))}
       </span>
       <span class={`${styles.state} ${toneClass(tone)}`}>{stateName(t.state)}</span>
-      {isReady(t) && <FindingsLeft task={t} class={styles.left} />}
+      {isReady(t) && <ReviewMarks task={t} class={styles.left} />}
     </button>
   );
 }

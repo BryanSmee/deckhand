@@ -69,8 +69,9 @@ export function useNotifications(state: State | null) {
       const pr = t.pr;
       if (pr && isReady(t) && pr.readyAt && pr.readyAt > since.current!) {
         // Draft and ready again: a new readyAt, so a new notification. A review-and-fix loop's
-        // end is one too, should the listener have let it look ready before the loop began.
-        const end = t.review?.history.at(-1)?.at;
+        // end is one too, should the listener have let it look ready before the loop began. A
+        // maintainer's own review isn't: they asked for it.
+        const end = t.review?.history.findLast((r) => !r.manual)?.at;
         const id = `${t.key}@${pr.readyAt}${end ? `@${end}` : ""}`;
         const left = findingsLeft(t);
         if (once(id) && getPref("notifyReady"))

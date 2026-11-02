@@ -722,6 +722,33 @@ test("prompts: a review reads the pull request, the repo's instructions after th
   assert.doesNotMatch(prompt, /CI hadn't passed/);
 });
 
+test("prompts: a review is pinned to the commit it is posted on, when the listener knows it (#535)", () => {
+  const issue = { repo: "org/app", number: 12, kind: "issue", base: "main" };
+  const reviewed = { sha: "abc1234def", base: "trunk" };
+  const prompt = promptFor(issue, { mode: "review", pull: 31, reviewed });
+  assert.match(
+    prompt,
+    /Review commit `abc1234def`, the pull request's head when\n {3}this run started/,
+  );
+  assert.match(
+    prompt,
+    /`git fetch origin pull\/31\/head && git worktree add --detach\n {3}\/tmp\/pr-31 abc1234def`/,
+  );
+  assert.match(prompt, /`git fetch origin trunk`, then `git diff origin\/trunk\.\.\.abc1234def`/);
+  assert.match(prompt, /\n {3}If that commit is gone \(a force push\), use `FETCH_HEAD` instead/);
+  // Read as of now no more: not the diff of whatever the head is then.
+  assert.doesNotMatch(prompt, /gh pr diff 31/);
+  assert.doesNotMatch(prompt, /\/tmp\/pr-31 FETCH_HEAD/);
+  // The rest of the steps as they were.
+  assert.match(prompt, /Never check it out in \/workspace \(no `gh pr checkout`\)/);
+  // Not known (GitHub couldn't say, or no base): the head whenever it reads it, as before.
+  const plain = promptFor(issue, { mode: "review", pull: 31 });
+  for (const unknown of [null, { sha: "abc1234def", base: null }]) {
+    assert.equal(promptFor(issue, { mode: "review", pull: 31, reviewed: unknown }), plain);
+  }
+  assert.match(plain, /`gh pr diff 31`/);
+});
+
 test("prompts: a review's verdict rule says what its tolerance lets through", () => {
   const issue = { repo: "org/app", number: 12, kind: "issue", base: "main" };
   // low, the default: medium requests changes, the text as it always was.

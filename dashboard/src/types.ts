@@ -117,7 +117,9 @@ export interface PullRequest {
   commits?: number;
   // Its head commit, and what CI says of it (listener/ci.mjs ciSummary()): its GitHub Actions
   // runs, other Apps' check runs and commit statuses, failed ones first. Reset to `none` by a
-  // push; the last one known stays once it is merged or closed. Absent until read.
+  // push; the last one known stays once it is merged or closed. Absent until read. `head` is
+  // also compared with the last review's (ReviewRound.head) for a commit pushed after it
+  // (reviewOutdated()).
   head?: string;
   ci?: Ci;
   // When GitHub last changed it, as the delivery that recorded it said. Sent, not shown.
@@ -251,8 +253,8 @@ export interface Task {
   // With its questions: false when its repo's `wait_for_answers` is off, and Start and Queue
   // go ahead without them (listener/work.mjs act()).
   waitForAnswers?: boolean;
-  // Its pull request's automatic review-and-fix loop (listener/reviews.mjs reviewLoop());
-  // absent when it had no automatic review.
+  // Its pull request's review-and-fix loop (listener/reviews.mjs reviewLoop()), or its
+  // maintainers' reviews alone (`manual`); absent when Deckhand never reviewed it.
   review?: ReviewLoop;
 }
 
@@ -280,8 +282,11 @@ export interface ReviewLoop {
   // allows (0 without it, or not known yet).
   round: number;
   rounds: number;
-  // Each automatic review, oldest first.
+  // Each review, oldest first.
   history: ReviewRound[];
+  // No loop ran: only maintainers' reviews (`/mode review`, the task page's Review), shown as
+  // "Reviews".
+  manual?: boolean;
 }
 
 export interface ReviewRound {
@@ -295,6 +300,8 @@ export interface ReviewRound {
   blocking: number;
   // Posted as a plain comment, GitHub having refused the review.
   comment?: boolean;
+  // A maintainer's review, not the loop's own.
+  manual?: boolean;
 }
 
 export type Severity = "critical" | "high" | "medium" | "low";
