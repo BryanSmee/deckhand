@@ -71,8 +71,12 @@ metadata:
   labels:
     {{- include "deckhand.labels" . | nindent 4 }}
 rules:
+  # Every Service: the addresses its network probe tries from a sandbox's place (#636).
   - apiGroups: [""]
-    resources: [services, pods]
+    resources: [services]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
     verbs: [get]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]
