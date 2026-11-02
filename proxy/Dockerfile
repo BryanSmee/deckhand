@@ -15,5 +15,6 @@ COPY lib/ lib/
 # CA lives in it too (ca/).
 RUN mkdir /cache && chown node:node /cache
 USER node
-EXPOSE 3128
+# 3129: the container engines that share their sandbox's address (Kubernetes, #573).
+EXPOSE 3128 3129
 CMD ["node", "proxy/proxy.mjs"]

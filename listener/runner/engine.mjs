@@ -9,7 +9,14 @@
 //   podman   rootless Podman's Docker-compatible API (../../engine/podman/Dockerfile): no
 //            host setup, but seccomp and AppArmor unconfined, /dev/fuse and /dev/net/tun
 //   auto     sysbox where the host's Docker has its runtime, else podman
+//
+// On Kubernetes (#573), Sysbox alone, through the RuntimeClass its install made
+// (KUBERNETES_ENGINE_RUNTIME_CLASS): the engine is a sidecar in the sandbox's pod
+// (kubernetes.mjs podSpec()), root in the pod's own user namespace (`hostUsers: false`), which
+// Pod Security `restricted` allows from Kubernetes 1.35. Podman, whose seccomp is unconfined,
+// never meets it: refused there (../access.mjs runnerRefusal()).
 
+import { ENGINE_PROXY_PORT } from "../../lib/services.mjs";
 import { limitArgs } from "../docker.mjs";
 
 // SANDBOX_ENGINE's values; empty: no engine for anyone.
@@ -32,6 +39,9 @@ const STORAGE = {
   sysbox: "/var/lib/docker",
   podman: "/home/podman/.local/share/containers",
 };
+
+// Where the engine keeps its storage on Kubernetes: Sysbox's dockerd.
+export const KUBE_ENGINE_STORAGE = STORAGE.sysbox;
 
 // Docker's options for the sidecar of a `backend` (sysbox or podman): its runtime or what it
 // relaxes, its storage `volume` and the repo's `limits`, those of its sandbox.
@@ -63,6 +73,19 @@ export function engineEnv(backend) {
     DOCKER_HOST: `tcp://${ENGINE_HOST}:${ENGINE_PORT}`,
     ...(backend === "podman" ? { DOCKER_BUILDKIT: "0" } : {}),
   };
+}
+
+// Whether the Kubernetes runner starts an engine: with the RuntimeClass, and SANDBOX_ENGINE
+// asking for Sysbox (or auto, which has it then).
+export const kubernetesEngine = (config) =>
+  !!config.kubernetes?.engineRuntimeClass && ["sysbox", "auto"].includes(config.engine);
+
+// The egress proxy for an engine that shares its sandbox's address (a pod): `egressProxy` on the
+// engines' port, which tells the proxy whose connections they are (../egress-http.mjs).
+export function engineProxy(egressProxy) {
+  const url = new URL(egressProxy);
+  url.port = String(ENGINE_PROXY_PORT);
+  return url.href.replace(/\/$/, "");
 }
 
 // SANDBOX_ENGINE as configured → the backend for this host: `runtimes` are the host's Docker's

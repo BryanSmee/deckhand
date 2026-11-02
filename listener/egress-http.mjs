@@ -32,14 +32,20 @@ function sandboxOfTask(task) {
 // sandbox or its container engine; null for any other container there (the proxy's) or
 // none. Nothing per run is kept: a run whose engine starts before its sandbox, or
 // another run's starting meanwhile, changes nothing for the others (#517).
-export async function taskWhere(ctx, ip) {
+// `engine`: the connection came in on the proxy's engines' port (lib/services.mjs
+// ENGINE_PROXY_PORT): an engine that shares its sandbox's address (a Kubernetes pod) is told
+// apart that way, and only for a run that has one (`live.engine`, preparation.mjs).
+export async function taskWhere(ctx, ip, { engine = false } = {}) {
   const at = ip ? await ctx.runner.locate?.(ip) : null;
   if (!at?.sandbox) return null;
   for (const task of ctx.tasks.values()) {
     if (sandboxOfTask(task) !== at.sandbox) continue;
     if (at.name === engineName(task.name)) return { task, engine: true };
     // Kubernetes names no container: the pod at that address is the sandbox.
-    if (at.name == null || at.name === task.name) return { task, engine: false };
+    if (at.name == null || at.name === task.name) {
+      if (engine) return task.live.engine ? { task, engine: true } : null;
+      return { task, engine: false };
+    }
     return null;
   }
   return null;
@@ -66,7 +72,8 @@ export function createEgressHttp(ctx) {
     if (!(await fromProxy(ctx, req))) {
       return sendJson(res, { allowed: false }, 403);
     }
-    const where = await taskWhere(ctx, ip);
+    const viaEngine = url.searchParams.get("engine") === "1";
+    const where = await taskWhere(ctx, ip, { engine: viaEngine });
     const task = where?.task ?? null;
     // A service's name (#511): the proxy forwards its plain HTTP (`forward=1`) for the runs'
     // sandboxes and engines (and a pod's agent install), never a build's, and never tunnels it.
@@ -86,7 +93,8 @@ export function createEgressHttp(ctx) {
       });
     }
     // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
-    const other = task ? null : await ctx.images.egressFor?.(ip, host);
+    // The engines' port is a run's engine's only.
+    const other = task || viaEngine ? null : await ctx.images.egressFor?.(ip, host);
     if (other) {
       if (!other.allowed) log(`Egress: refused ${host} for ${ip} (a build or an install)`);
       return sendJson(res, other);

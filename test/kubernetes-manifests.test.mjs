@@ -631,3 +631,68 @@ test("secrets.mjs: the keys and the App's credentials, each in its own service's
   assert.equal(held.client_secret, undefined);
   assert.equal(file64("deckhand-edge", "session.key").length, 32);
 });
+
+// A component's patches (JSON Patch `add` alone, as they are written) applied to copies of
+// `list`'s documents they target.
+function patched(dir, list) {
+  const out = structuredClone(list);
+  for (const { target, patch } of kustomization(dir).patches ?? []) {
+    const doc = out.find(
+      (r) =>
+        r.kind === target.kind &&
+        r.metadata.name === target.name &&
+        (!target.namespace || r.metadata.namespace === target.namespace),
+    );
+    assert.ok(doc, `${dir}: no ${target.kind} ${target.name}`);
+    for (const op of parseYaml(patch)) {
+      assert.equal(op.op, "add");
+      const keys = op.path.split("/").slice(1);
+      const last = keys.pop();
+      const at = keys.reduce((node, k) => node[k], doc);
+      if (last === "-") at.push(op.value);
+      else at[last] = op.value;
+    }
+  }
+  return out;
+}
+
+test("components/engine: the engines' port published, and the sandboxes' policy with it passes the runner's check with an engine set", () => {
+  const withEngine = patched("components/engine", base);
+  const service = named("Service", "egress", withEngine);
+  assert.deepEqual(
+    service.spec.ports.map((p) => p.port),
+    [3128, 3129],
+  );
+  const ports = named("Deployment", "egress", withEngine).spec.template.spec.containers[0].ports;
+  assert.deepEqual(
+    ports.map((p) => p.containerPort),
+    [3128, 3129],
+  );
+  const policies = of("NetworkPolicy", withEngine).filter(
+    (p) => p.metadata.namespace === SANDBOXES_NS,
+  );
+  const proxy = { namespace: SERVICES_NS, selector: service.spec.selector };
+  const sandbox = { "deckhand.owner": "deckhand", "deckhand.run": "x", "deckhand.role": "sandbox" };
+  // The runner's ports with an engine (kubernetes.mjs sandboxPorts()), and without one: 3129
+  // is then too wide.
+  assert.equal(isolationProblem(policies, sandbox, { proxy, ports: [3128, 3129] }), null);
+  assert.match(isolationProblem(policies, sandbox, { proxy }), /port 3129/);
+  // Install pods still reach 3128 alone.
+  const install = { "deckhand.owner": "deckhand", "deckhand.role": "install" };
+  assert.equal(isolationProblem(policies, install, { proxy }), null);
+  // The proxy lets the sandboxes in on 3129, and nobody else.
+  const engines = named("NetworkPolicy", "deckhand-egress", withEngine).spec.ingress.filter((r) =>
+    r.ports.some((p) => p.port === 3129),
+  );
+  assert.deepEqual(
+    engines.flatMap((r) => r.from.map(peer)),
+    ["sandboxes"],
+  );
+  // The settings that turn it on, beside the base's.
+  const literals = kustomization("components/engine").configMapGenerator[0].literals;
+  assert.deepEqual(literals.map((l) => l.split("=")[0]).sort(), [
+    "ENGINE_IMAGE",
+    "KUBERNETES_ENGINE_RUNTIME_CLASS",
+    "SANDBOX_ENGINE",
+  ]);
+});

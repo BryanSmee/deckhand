@@ -395,7 +395,7 @@ export function createRestart(ctx) {
             .concat(["trusted", "cached", "uncached", "branches", "lines", "result", "later"])
             .concat(["cancelled", "overflow", "answered", "logPhase", "created", "reruns", "fork"])
             .concat(["graceUntil"])
-            .concat(["capabilities"])
+            .concat(["capabilities", "engine"])
             // A review's commit (runs.mjs launch()): its review is posted there.
             .concat(["reviewFrom"])
             .map((k) => [k, live[k]]),

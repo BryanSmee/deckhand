@@ -260,12 +260,13 @@ warning of every pod that isn't `restricted`). The sandboxes' namespace stays `r
 
 - **Host mounts** (`mounts`): a run of a repository with some is refused, with a reply naming
   the runner.
-- **A container engine** (`docker`, #573): a run that would get one is refused. A run without
-  the `docker` capability, a fork's or one without `SANDBOX_ENGINE` goes without, as under
-  Docker.
 - **The Antigravity CLI's plan login** (#572), which the runner refreshes in a container.
 - **A repository's own image** (`dockerfile`) without `KUBERNETES_REGISTRY`
   ([Repo images](#repo-images)).
+
+A container engine (`docker`) runs through Sysbox's RuntimeClass:
+[Container engine on Kubernetes](#container-engine-on-kubernetes), which also says when a run
+that would get one is still refused.
 
 ## What the manifests set up, and why
 
@@ -324,7 +325,8 @@ saying why. What it expects, and the manifests give it:
   In one namespace with the services (`KUBERNETES_SERVICES_NAMESPACE` unset), a peer is a
   `podSelector` alone that never picks a sandbox (no `ipBlock`, no `namespaceSelector`).
 
-- **The egress proxy's Service**, named after the host of `EGRESS_PROXY` (`egress` on 3128),
+- **The egress proxy's Service**, named after the host of `EGRESS_PROXY` (`egress` on 3128, and
+  on 3129 too with the `engine` component: [Container engine on Kubernetes](#container-engine-on-kubernetes)),
   with a cluster IP, and the orchestrator's on 8082 for the proxy's `POLICY_URL`. Sandboxes get
   no DNS server (a lookup fails at once): their pods map the proxy's name to its Service's IP
   (`hostAliases`). The services' names sandboxes call (`http://broker:8081`,
@@ -416,6 +418,12 @@ spec:
             matchExpressions: [{ key: deckhand.role, operator: In, values: [sandbox, install] }]
         - podSelector: { matchLabels: { app: buildkitd } } # BuildKit, in this namespace
       ports: [{ port: 3128 }]
+    # With container engines (Container engine on Kubernetes below): the sandboxes' pods on
+    # the engines' port too.
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: deckhand-sandboxes } }
+          podSelector: { matchLabels: { deckhand.role: sandbox } }
+      ports: [{ port: 3129 }]
 ```
 
 Install pods reach the proxy by its Service's IP there (`hostAliases`, as sandboxes do), not
@@ -507,3 +515,110 @@ claims of their own (`KUBERNETES_CACHE_SIZE`), one per path, made at the first r
 them, kept across its runs and mounted by concurrent ones; the sandbox pod's `fsGroup` makes a
 new one its user's (see above for what the class has to do for that). Without it, runs go
 without caches, said once in the run's log.
+
+## Container engine on Kubernetes
+
+A run granted a [container engine](setup.md#container-engine) gets one on Kubernetes through
+[Sysbox](https://github.com/nestybox/sysbox) alone: `dockerd` is a sidecar in the sandbox's
+pod, under Sysbox's RuntimeClass, and the pod runs in a user namespace of its own
+(`hostUsers: false`). `dockerd` is root there, which Sysbox maps to an unprivileged user on the
+node, and every container's spec keeps the rest of Pod Security `restricted` (no privilege
+gain, every capability dropped, `RuntimeDefault` seccomp), so the sandboxes' namespace stays
+`restricted`. Sysbox applies its own: root in the pod gets its capabilities inside the pod's
+user namespace whatever the spec drops, and every container of the pod, the sandbox's too,
+runs under Sysbox's syscall filter rather than the runtime's default profile (it allows
+`mount`, `unshare`, `setns`, `keyctl`…). What contains them is the user namespace and their
+capabilities: the sandbox keeps its user (uid 1000) and none. Podman's engine, whose seccomp is unconfined, is never started there: with
+`SANDBOX_ENGINE=podman`, such runs are refused, with a reply naming the runner.
+
+What it takes:
+
+- **Kubernetes 1.35 or later**, whose Pod Security lets a pod with `hostUsers: false` run as
+  root under `restricted`. The namespace's `pod-security.kubernetes.io/enforce-version` has to
+  be `latest` (its default) or `v1.35` or later: an older one refuses the pod. The nodes need
+  what Kubernetes' user namespaces need (Linux 6.3 or later; containerd 2.0.5 or later, or
+  CRI-O), and the Kubernetes versions Sysbox supports.
+- **Storage that takes idmapped mounts**: in a pod with `hostUsers: false`, its volumes are
+  mounted idmapped, the session claims (`KUBERNETES_STORAGE_CLASS`), the agents' and caches'
+  claims among them. A filesystem that can't (NFS, among others) may still let the pod start,
+  its owners wrong: on k3s's `nfs-csi`, the sandbox saw its files as `nobody` (65534), and
+  wrote new ones root's on the server, writable only because of how that export maps owners.
+  Git (2.35.2 and later) refuses a repository its user doesn't own, so a clone seen as
+  `nobody`'s is one the sandbox can't use: expect such runs to fail.
+  `local-path` and Longhorn keep uid 1000 across runs with and without an engine. Check your
+  classes with a pod of that kind before granting `docker`: write a file in an engine's pod,
+  then `ls -ln` it there and in a pod without one.
+- **Sysbox on the nodes that run engines**, from its installer
+  ([Sysbox's guide](https://github.com/nestybox/sysbox/blob/master/docs/user-guide/install-k8s.md)):
+
+  ```sh
+  kubectl label nodes <node> sysbox-install=yes
+  kubectl apply -f https://raw.githubusercontent.com/nestybox/sysbox/master/sysbox-k8s-manifests/sysbox-install.yaml
+  ```
+
+  It installs Sysbox (and CRI-O, restarting the kubelet, where containerd is older than
+  2.0.5) and makes the `sysbox-runc` RuntimeClass, whose pods only go to the nodes it runs on.
+
+  Or, on containerd 2 (k3s, say), without that installer: install Sysbox on each such node
+  from its package, register `sysbox-runc` as a containerd runtime, and make the RuntimeClass
+  yourself. On k3s, the runtime goes in
+  `/var/lib/rancher/k3s/agent/etc/containerd/config-v3.toml.tmpl` (then restart k3s):
+
+  ```toml
+  {{ template "base" . }}
+
+  [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc]
+    runtime_type = "io.containerd.runc.v2"
+  [plugins.'io.containerd.cri.v1.runtime'.containerd.runtimes.sysbox-runc.options]
+    BinaryName = "/usr/bin/sysbox-runc"
+    SystemdCgroup = true
+  ```
+
+  ```yaml
+  apiVersion: node.k8s.io/v1
+  kind: RuntimeClass
+  metadata: { name: sysbox-runc }
+  handler: sysbox-runc
+  # Only where Sysbox is: label those nodes, or leave this out when every node has it.
+  scheduling: { nodeSelector: { sysbox-runtime: running } }
+  ```
+
+  Checked that way on k3s 1.36 with containerd 2.3 and Sysbox CE 0.7: `docker run`,
+  `docker build` and a published port answering on `engine`, under `restricted:latest`.
+
+- **The `engine` component** (`deploy/kubernetes/components/engine`, in your overlay's
+  `components`): it sets `SANDBOX_ENGINE=sysbox`, `KUBERNETES_ENGINE_RUNTIME_CLASS=sysbox-runc`
+  (that RuntimeClass) and `ENGINE_IMAGE` (pin it to your version, a reference the nodes can
+  pull, as `SANDBOX_IMAGE` is) in `deckhand-env`, which the orchestrator and the runner read,
+  and opens the engines' port below. Without the RuntimeClass, runs that would get an engine
+  are refused, as before.
+- **The engines' port of the egress proxy**, 3129: the engine shares its sandbox's address, so
+  it goes out, and the containers it builds and runs with it, through that port, which tells
+  the proxy their connections apart from the sandbox's (never decrypted, as an engine's on
+  Docker, and only for a run that has an engine). The proxy's Service publishes 3129 beside
+  3128 (the runner refuses to start an engine otherwise, saying so), and both the sandboxes'
+  NetworkPolicy (`deckhand-sandboxes`) and the proxy's own (`deckhand-egress`) let it
+  through, from the sandboxes alone: the `engine` component adds all three.
+
+  The runner accepts 3129 in the sandboxes' policy only with `KUBERNETES_ENGINE_RUNTIME_CLASS`
+  set and `SANDBOX_ENGINE` `sysbox` or `auto`: otherwise a policy that lets 3129 through is
+  too wide, and every run is refused.
+
+The engine has the repository's limits on top of the sandbox's (the pod requests both), and
+its storage is an `emptyDir` gone with the pod, up to `KUBERNETES_ENGINE_SIZE` (20Gi by
+default; past it, the kubelet evicts the pod and the run fails). No engine cache is kept on
+Kubernetes: a repository's `docker: { cache: true }` gets fresh storage, said in the run's log.
+The pod shares no process namespace between its containers, as Sysbox advises: the sandbox's
+entrypoint reaps its orphaned processes itself (`SANDBOX_REAP`), and needs a sandbox image of
+this release.
+
+One difference from Docker: `no-new-privileges` (Pod Security `restricted`'s
+`allowPrivilegeEscalation: false`) is set on `dockerd` too, and every container and build step
+it starts inherits it, so setuid programs (`sudo`, `su`) fail in them. A Dockerfile's `RUN sudo
+…`, or a container that switches user that way, works with the Docker runner's engine and fails
+here: run such steps as root (`USER root`) instead.
+
+To check it: run a repository's `docker run --rm hello-world` in a granted
+issue; the run's log says `Container engine: sysbox, fresh storage`, and
+`kubectl get pod -n <sandboxes' namespace> -l deckhand.role=sandbox -o yaml` shows
+`runtimeClassName: sysbox-runc` and `hostUsers: false`.
