@@ -5247,70 +5247,90 @@ mounts:
     assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
   });
 
-  test("an issue's closed delivery redelivered while the issue can't be looked up records the close, sets nothing aside", async (t) => {
+  test("an issue's closed or unlabeled delivery redelivered while the issue can't be looked up records the close, leaves the questions", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
-    const deliveries = JSON.stringify([
-      {
-        id: 0,
-        guid: "g-ic",
-        delivered_at: new Date().toISOString(),
-        status_code: 503,
-        event: "issues",
-      },
-    ]);
-    // GitHub can't say what #5 is now: its lookup fails.
+    const failed = (guid) => ({
+      id: 0,
+      guid,
+      delivered_at: new Date().toISOString(),
+      status_code: 503,
+      event: "issues",
+    });
+    const deliveries = JSON.stringify([failed("g-ic"), failed("g-iu")]);
+    // GitHub can't say what #5 and #6 are now: their lookups fail.
     const { dir, listener, send } = await listen(
       t,
-      { deliveries, "issue:5": 502 },
+      { deliveries, "issue:5": 502, "issue:6": 502 },
       (dir, github) => {
         mkdirSync(join(dir, "logs"));
+        for (const n of [5, 6]) {
+          writeFileSync(
+            join(dir, "logs", `org-repo-${n}-1000.log`),
+            [
+              {
+                type: "listener",
+                key: `org/repo#${n}`,
+                repo: "org/repo",
+                taskMode: "work",
+                startedAt: 1000,
+              },
+              { type: "result", result: asked, duration_ms: 6000 },
+            ]
+              .map((l) => JSON.stringify(l))
+              .join("\n") + "\n",
+          );
+        }
+        // Both labelled, waiting for input.
         writeFileSync(
-          join(dir, "logs", "org-repo-5-1000.log"),
-          [
-            {
-              type: "listener",
-              key: "org/repo#5",
-              repo: "org/repo",
-              taskMode: "work",
-              startedAt: 1000,
-            },
-            { type: "result", result: asked, duration_ms: 6000 },
-          ]
-            .map((l) => JSON.stringify(l))
-            .join("\n") + "\n",
+          join(dir, "inputs.json"),
+          JSON.stringify({
+            "org/repo#5": { since: 1000, questions: null },
+            "org/repo#6": { since: 1000, questions: null },
+          }),
         );
         return { GITHUB_URL: github.url };
       },
     );
-    await listener.until("Redelivered g-ic (issues");
+    await listener.until("Redelivered g-iu (issues");
+    const later = new Date(Date.now() + 60_000).toISOString();
+    const delivery = (action, issue, extra = {}) => ({
+      action,
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue,
+      sender: { login: "bob", type: "User" },
+      ...extra,
+    });
     const closed = {
       number: 5,
       title: "Five",
       state: "closed",
       state_reason: "completed",
-      closed_at: new Date(Date.now() + 60_000).toISOString(),
+      closed_at: later,
       labels: [],
     };
-    await send(
-      {
-        action: "closed",
-        installation: { id: 7 },
-        repository: { full_name: "org/repo", default_branch: "main" },
-        issue: closed,
-        sender: { login: "bob", type: "User" },
-      },
-      "issues",
-      "g-ic",
-    );
+    await send(delivery("closed", closed), "issues", "g-ic");
     // Handled as sent: the close recorded, for titles, waits and the backlog.
     const handled = await listener.until(/Delivery: issues \w+ from bob/);
     assert.match(handled, /Delivery issues closed: redelivered, org\/repo#5 not looked up/);
     assert.match(handled, /Delivery: issues closed from bob/);
     await until(() => /"org\/repo#5"/.test(exists(join(dir, "closed.json")) ?? ""), "the close");
-    // But its questions left as they are: the delivery may be older than the run that asked.
+    // #6's label taken off, by its time after the run asked: as sent, it would set them aside.
+    const unlabelled = { number: 6, title: "Six", state: "open", labels: [], updated_at: later };
+    const label = { name: "needs-input" };
+    await send(delivery("unlabeled", unlabelled, { label }), "issues", "g-iu");
+    await listener.until("Delivery: issues unlabeled from bob");
+    assert.match(
+      listener.output(),
+      /Delivery issues unlabeled: redelivered, org\/repo#6 not looked up/,
+    );
+    // But the questions left as they are: either delivery may be older than what GitHub has now
+    // (the label put back, a run that asked since).
     assert.doesNotMatch(listener.output(), /questions set aside/);
-    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
+    assert.equal(exists(join(dir, "dismissed.json")), null);
+    const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
+    assert.deepEqual(Object.keys(inputs).sort(), ["org/repo#5", "org/repo#6"]);
   });
 
   test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {

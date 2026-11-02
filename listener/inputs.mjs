@@ -12,9 +12,9 @@ import { respellMap, taskId } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
-// has them. `dropped(repo, number, entry)`: an issue sync() found no longer labelled (or no
-// longer open), as an `unlabeled` delivery would have said (questions.mjs applyInput()), with
-// the entry it deleted: keep() puts it back if the listing only missed the issue.
+// has them. `dropped(repo, number)`: an issue sync() found no longer labelled (or no longer
+// open), as an `unlabeled` delivery would have said (questions.mjs applyInput()); keep() puts
+// its entry back if the listing only missed the issue.
 export function createInputs({
   path,
   listLabelled,
@@ -24,9 +24,10 @@ export function createInputs({
 }) {
   const inputs = persistentMap(path);
   const save = inputs.save;
-  // The keys sync() dropped that no delivery set (listed or dropped) since: keep() puts back
-  // only those, its lookup's answer being older than such a delivery.
-  const dropping = new Set();
+  // The entries sync() dropped that no delivery set (listed or dropped) since, by taskId():
+  // keep() puts back only those, its lookup's answer being older than such a delivery. An edit
+  // meanwhile goes on the entry kept here, `edited`: its questions are newer than the lookup's.
+  const dropping = new Map();
 
   // Whether issue `key` waits for input now, its questions and whether the bot ticked them
   // when known (undefined: as they were).
@@ -47,19 +48,33 @@ export function createInputs({
     save();
   }
 
-  // An edit to the questions of an issue already listed.
+  // An edit to the questions of an issue already listed, or dropped by sync() and being looked
+  // up (keep()).
   function update(key, questions, ignoredTicks) {
-    if (inputs.has(key)) set(key, true, questions, ignoredTicks);
+    if (inputs.has(key)) return set(key, true, questions, ignoredTicks);
+    const held = dropping.get(taskId(key));
+    if (!held) return;
+    const { ignoredTicks: ticked, ...was } = held.entry;
+    held.entry = {
+      ...was,
+      questions: questions === undefined ? (was.questions ?? null) : questions,
+      ...((ignoredTicks ?? ticked) && { ignoredTicks: true }),
+    };
+    held.edited = true;
   }
 
   // An entry sync() dropped whose issue, looked up on its own, is still open and labelled: a
   // listing read page by page can miss an issue that moved between pages. Its `since` and
-  // ticks as they were, its questions as the body has them now. One a delivery listed again or
-  // dropped meanwhile stays as that delivery left it.
-  function keep(key, entry, questions) {
-    if (!dropping.delete(taskId(key)) || inputs.has(key)) return;
-    inputs.set(key, { ...entry, questions });
+  // ticks as they were, its questions as the body had them when looked up, or as an edit
+  // meanwhile left them. One a delivery listed again or dropped meanwhile stays as that
+  // delivery left it. Whether it was put back.
+  function keep(key, questions) {
+    const held = dropping.get(taskId(key));
+    dropping.delete(taskId(key));
+    if (!held || inputs.has(key)) return false;
+    inputs.set(key, held.edited ? held.entry : { ...held.entry, questions });
     save();
+    return true;
   }
 
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
@@ -90,9 +105,9 @@ export function createInputs({
         if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
         const entry = inputs.get(key);
         inputs.delete(key);
-        dropping.add(taskId(key));
+        dropping.set(taskId(key), { entry, edited: false });
         changed = true;
-        dropped(repo, parseKey(key).number, entry);
+        dropped(repo, parseKey(key).number);
       }
       // Bodies edited meanwhile: their questions as they are now.
       for (const [key, entry] of found) {

@@ -64,7 +64,7 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   const inputs = createInputs({
     path,
     listLabelled,
-    dropped: (repo, number, entry) => dropped.push([repo, number, entry]),
+    dropped: (repo, number) => dropped.push([repo, number]),
     now: () => 5,
     log: (l) => logs.push(l),
   });
@@ -84,9 +84,8 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
     "org/repo#2": Date.parse("2026-10-15T12:00:00Z"),
   });
   assert.match(logs[0], /org\/down: 502/);
-  // #1's run, if it asked, has its questions set aside, as the delivery would have. The entry
-  // goes with it, for keep().
-  assert.deepEqual(dropped, [["org/repo", 1, { since: 5, questions: null }]]);
+  // #1's run, if it asked, has its questions set aside, as the delivery would have.
+  assert.deepEqual(dropped, [["org/repo", 1]]);
   // Its questions from the listing's body.
   const questions = Object.fromEntries(inputs.list().map((i) => [i.key, i.questions]));
   assert.deepEqual(questions["org/repo#2"], {
@@ -99,33 +98,33 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
 
 test("keep: an entry the listing missed comes back as it was, unless a delivery set it since", async (t) => {
   const path = join(tempDir(t), "inputs.json");
-  const dropped = new Map();
-  const inputs = createInputs({
-    path,
-    listLabelled: async () => [],
-    dropped: (repo, number, entry) => dropped.set(number, entry),
-    now: () => 9,
-  });
-  for (const n of [1, 2, 3, 4]) inputs.set(`org/repo#${n}`, true);
+  const inputs = createInputs({ path, listLabelled: async () => [], now: () => 9 });
+  for (const n of [1, 2, 3, 4, 5]) inputs.set(`org/repo#${n}`, true);
   inputs.set("org/repo#1", true, undefined, true);
   await inputs.sync(["org/repo"]);
   assert.deepEqual(inputs.keys(), []);
   const asked = { items: null, raw: "Which one?" };
-  inputs.keep("org/repo#1", dropped.get(1), asked);
-  // A delivery during the lookup: #2 labelled again, #3 unlabelled; then their lookups answer.
+  const edit = { items: null, raw: "Which one, now?" };
+  assert.equal(inputs.keep("org/repo#1", asked), true);
+  // Deliveries during the lookups: #2 labelled again, #3 unlabelled, #4's body edited.
   inputs.set("org/repo#2", true, null);
   inputs.set("org/repo#3", false);
-  inputs.keep("org/repo#2", dropped.get(2), asked);
-  inputs.keep("org/repo#3", dropped.get(3), asked);
+  inputs.update("org/repo#4", edit);
+  assert.equal(inputs.has("org/repo#4"), false);
+  // Then their lookups answer, with the bodies as they were before.
+  assert.equal(inputs.keep("org/repo#2", asked), false);
+  assert.equal(inputs.keep("org/repo#3", asked), false);
+  assert.equal(inputs.keep("org/repo#4", asked), true);
   // Never dropped by sync(): nothing to keep.
-  inputs.keep("org/repo#5", { since: 1, questions: null }, asked);
+  assert.equal(inputs.keep("org/repo#6", asked), false);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
     "org/repo#1": { since: 9, questions: asked, ignoredTicks: true },
     "org/repo#2": { since: 9, questions: null },
+    "org/repo#4": { since: 9, questions: edit },
   });
   // Kept once: a second answer for #1 changes nothing.
   inputs.set("org/repo#1", false);
-  inputs.keep("org/repo#1", dropped.get(1), asked);
+  assert.equal(inputs.keep("org/repo#1", asked), false);
   assert.equal(inputs.has("org/repo#1"), false);
 });
 

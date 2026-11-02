@@ -596,13 +596,16 @@ const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
-  dropped: (repo, number, entry) => {
+  dropped: (repo, number) => {
     const key = taskKey(repo, number);
     lookup(repo, `/repos/${repo}/issues/${number}`)
       .then((issue) => {
         if (issue?.state === "open" && hasLabel(issue.labels, config.needsInputLabel)) {
-          inputs.keep(key, entry, parseQuestions(questionsSection(issue.body)));
-          return log(`${key}: still labelled, though the label's listing missed it`);
+          // A delivery during the lookup has the last word: it listed or dropped the issue.
+          if (inputs.keep(key, parseQuestions(questionsSection(issue.body)))) {
+            log(`${key}: still labelled, though the label's listing missed it`);
+          }
+          return;
         }
         if (!askedOn(ctx.runs, key)) return;
         const at = Date.parse(issue?.updated_at) || null;
