@@ -21,6 +21,7 @@ import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { fromKey, fromTag } from "../listener/discussions.mjs";
 import { QUIET_EVENTS } from "../listener/github-app.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 export const ROUTES = {
   "GET /events": ["orchestrator"],
@@ -137,14 +138,18 @@ export function createEdgeInternal({
   }
 
   return drainable(
-    createServer((req, res) =>
-      handle(req, res).catch((error) => {
-        if (res.headersSent) return res.destroy();
-        if (error instanceof Refused)
-          return sendJson(res, { message: error.message }, error.status);
-        log(`Edge's internal port: ${req.method} ${req.url}: ${error.stack ?? error}`);
-        sendJson(res, { message: error.message ?? "failed" }, 500);
-      }),
+    createServer(
+      withRequest((req, res) =>
+        handle(req, res).catch((error) => {
+          if (res.headersSent) return res.destroy();
+          if (error instanceof Refused)
+            return sendJson(res, { message: error.message }, error.status);
+          (log.error ?? log)(
+            `Edge's internal port: ${req.method} ${req.url}: ${error.stack ?? error}`,
+          );
+          sendJson(res, { message: error.message ?? "failed" }, 500);
+        }),
+      ),
     ),
   );
 }

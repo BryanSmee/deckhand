@@ -15,6 +15,7 @@ import { keyFolder } from "../lib/tokens.mjs";
 import { readSettings, readSettingsFile, settingSource } from "../lib/settings.mjs";
 import { isMap, parseYaml } from "../lib/yaml.mjs";
 import { createEngine } from "./engine.mjs";
+import { createLogger, withRequest } from "../lib/log.mjs";
 
 // The services that decide (lib/services.mjs CALLS): the orchestrator (merges, reviews, fixes,
 // linked branches, reviewers, the config check, `/mode policy` and the Policies tab), the github
@@ -77,35 +78,38 @@ export function runnerAsks(body) {
 export function createPolicyService({ engine, guard, log = () => {} }) {
   let draining = false;
   const server = drainable(
-    createServer(async (req, res) => {
-      if (req.url === "/health" || req.url === "/ready") {
-        res.writeHead(draining && req.url === "/ready" ? 503 : 200, {
-          "content-type": "text/plain",
-        });
-        return res.end(draining && req.url === "/ready" ? "draining\n" : "ok\n");
-      }
-      try {
-        const caller = guard(req);
-        const path = req.url.split("?")[0];
-        if (req.method === "GET" && path === "/policies") return send(res, 200, engine.policies());
-        const body = await readJsonBody(req, MAX_BODY);
-        if (!body || typeof body !== "object") throw new Refused(400, "expected an object");
-        if (path === "/evaluate") {
-          if (caller === "runner") runnerAsks(body);
-          return send(res, 200, await engine.evaluate(body));
+    createServer(
+      withRequest(async (req, res) => {
+        if (req.url === "/health" || req.url === "/ready") {
+          res.writeHead(draining && req.url === "/ready" ? 503 : 200, {
+            "content-type": "text/plain",
+          });
+          return res.end(draining && req.url === "/ready" ? "draining\n" : "ok\n");
         }
-        // What a run gets as it starts (#495): every mode of a config page in one call.
-        if (path === "/capabilities") {
-          return send(res, 200, await engine.evaluateCapabilities(body));
+        try {
+          const caller = guard(req);
+          const path = req.url.split("?")[0];
+          if (req.method === "GET" && path === "/policies")
+            return send(res, 200, engine.policies());
+          const body = await readJsonBody(req, MAX_BODY);
+          if (!body || typeof body !== "object") throw new Refused(400, "expected an object");
+          if (path === "/evaluate") {
+            if (caller === "runner") runnerAsks(body);
+            return send(res, 200, await engine.evaluate(body));
+          }
+          // What a run gets as it starts (#495): every mode of a config page in one call.
+          if (path === "/capabilities") {
+            return send(res, 200, await engine.evaluateCapabilities(body));
+          }
+          if (path === "/check") return send(res, 200, await engine.compile(body));
+          throw new Refused(404, "no such endpoint");
+        } catch (error) {
+          if (error instanceof Refused) return send(res, error.status, { error: error.message });
+          (log.error ?? log)(`${req.method} ${req.url}: ${error.message ?? error}`);
+          if (!res.headersSent) send(res, 500, { error: "the policy service failed" });
         }
-        if (path === "/check") return send(res, 200, await engine.compile(body));
-        throw new Refused(404, "no such endpoint");
-      } catch (error) {
-        if (error instanceof Refused) return send(res, error.status, { error: error.message });
-        log(`${req.method} ${req.url}: ${error.message ?? error}`);
-        if (!res.headersSent) send(res, 500, { error: "the policy service failed" });
-      }
-    }),
+      }),
+    ),
   );
   // /ready says 503 from then on: a readiness probe takes the copy out of rotation.
   server.draining = () => {
@@ -115,7 +119,7 @@ export function createPolicyService({ engine, guard, log = () => {} }) {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const log = (...args) => console.log(new Date().toISOString(), ...args);
+  const log = createLogger({ service: "policy" });
   const env = process.env;
   const port = Number(env.PORT || 8181);
   const keysDir = env.SERVICE_KEYS_DIR || "/keys";

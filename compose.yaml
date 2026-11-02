@@ -52,6 +52,10 @@ services:
     # to the github service (/setup's conversion, the redeliveries).
     networks: [edge-out, edge-orchestrator, broker-edge, github-edge]
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # Who may sign in to the dashboard, as for runs (or in config.yaml): required.
       ALLOWED_USERS: ${ALLOWED_USERS:-}
       # The repos CI's deliveries (check suites, statuses) are passed on for, as the
@@ -108,6 +112,10 @@ services:
       edge-orchestrator:
       orchestrator-proxy:
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # Every setting but the secrets and the wiring below can be in config.yaml instead
       # (docs/setup.md#settings). A variable set here, non-empty, wins over the file's key:
       # these pass .env's value, or nothing, so that the file's keys and the orchestrator's
@@ -271,6 +279,10 @@ services:
     # Its calls in flight finish first: the inboxes' long polls (25 s), uploads (DRAIN_SECONDS).
     stop_grace_period: 35s
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # Who calls, by the network a call arrives on: each caller has one of its own to the
       # broker, whose subnet is fixed below (docs/security.md#service-tokens).
       SERVICE_NETWORKS: orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},edge=${BROKER_EDGE_SUBNET:-10.231.250.208/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
@@ -315,6 +327,10 @@ services:
     # tarballs), and to the policy service (what the operator's policies grant a repository).
     networks: [runner, runner-models, broker-runner, github-runner, policy-runner]
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # The settings the runner reads too, as the orchestrator does (config.yaml, below, has the
       # rest): what it names on Docker, where sandboxes run, their engines, networks and agents.
       # GRANTS_DIR: the orchestrator's grants folder, which the runner checks every spec and build
@@ -391,6 +407,10 @@ services:
     stop_grace_period: 5m
     depends_on: [broker, policy]
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # GitHub's addresses, the repositories let through, and the grants folder (workflows,
       # allow_projects), as the orchestrator has them.
       GITHUB_URL: ${GITHUB_URL:-}
@@ -449,6 +469,10 @@ services:
     # tell them apart (SERVICE_NETWORKS).
     networks: [models-out, models-proxy, models-orchestrator, broker-models, runner-models]
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # Claude Code's credential: one of the three (ANTHROPIC_AUTH_TOKEN for a gateway such
       # as OpenRouter). Never in a file, and never in a sandbox, nor in the orchestrator: this
       # service adds it to the sandboxes' API calls.
@@ -523,6 +547,10 @@ services:
     # runner's (what the operator's policies grant a repository).
     networks: [policy, policy-github, policy-runner]
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # The operator's policies: GRANTS_DIR/policy/*.rego, below. Empty: /etc/deckhand/grants.
       GRANTS_DIR: ${GRANTS_DIR:-}
       # The broker's public keys, which the broker service writes: the service tokens are
@@ -552,6 +580,10 @@ services:
     # docs/architecture.md#restarts): new connections are refused until the next proxy starts.
     stop_grace_period: 30s
     environment:
+      # Its log lines: text, as `docker compose logs` reads them, or json for a collector
+      # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
+      LOG_FORMAT: ${LOG_FORMAT:-text}
+      LOG_LEVEL: ${LOG_LEVEL:-}
       # The orchestrator's egress policy, on its own port (docs/architecture.md#restarts).
       POLICY_URL: http://orchestrator:8082/egress
       # Where the sandboxes' calls about their own run go: their token's renewal, their inbox

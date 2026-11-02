@@ -19,6 +19,7 @@ import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { fingerprints } from "../lib/redact.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { STREAM } from "./runs.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 const SANDBOX = ["proxy"];
 const AGENT_PREFIXES = ["anthropic", "openai", "google", "relay"];
@@ -142,7 +143,7 @@ export function createModelsHandler({
         if (!res.headersSent) sendJson(res, { message: error.message }, error.status);
         return;
       }
-      log(`Models: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
+      (log.error ?? log)(`Models: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
       // A half-sent stream must not look complete.
       if (!res.headersSent) sendJson(res, { message: "the models service failed" }, 500);
       else res.destroy();
@@ -151,5 +152,5 @@ export function createModelsHandler({
 }
 
 export function createModelsServer(options) {
-  return drainable(createServer(createModelsHandler(options)));
+  return drainable(createServer(withRequest(createModelsHandler(options))));
 }

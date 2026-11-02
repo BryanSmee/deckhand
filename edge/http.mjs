@@ -17,6 +17,7 @@ import { drainable } from "../lib/drain.mjs";
 import { readBody } from "../lib/http.mjs";
 import { storable } from "../lib/store.mjs";
 import { ciWaitingKey, DELIVERIES } from "./internal.mjs";
+import { logContext, withRequest } from "../lib/log.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
@@ -140,7 +141,7 @@ export function createEdgeHttp({
         (error) => log(`Rejected a delivery: ${error.message}`),
       )
       .catch((error) => {
-        log(`A delivery: ${error.stack ?? error}`);
+        (log.error ?? log)(`A delivery: ${error.stack ?? error}`);
         if (!res.headersSent) refuse(res, 503, "not kept", "try again");
       });
   }
@@ -184,7 +185,9 @@ export function createEdgeHttp({
     try {
       const redelivered = id ? await redeliveries.redelivered(id) : false;
       // What people wrote may hold a token pasted by mistake: kept without it, as the queue is.
-      const entry = storable({ id, event, payload, redelivered, at: now() }, secrets());
+      // With its request's ID: the orchestrator's lines about it carry it too.
+      const { request } = logContext();
+      const entry = storable({ id, event, payload, redelivered, request, at: now() }, secrets());
       await store.append(DELIVERIES, entry, { maxLength: STREAM_MAX });
     } catch (error) {
       // Not taken after all: GitHub's redelivery, or the next scan's, is. A mark the store
@@ -278,14 +281,19 @@ export function createEdgeHttp({
   }
 
   // One request's unexpected throw answers 500 and is logged: it never takes edge down.
-  function handle(req, res) {
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
-    route(req, res).catch((error) => {
-      log(`${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
-      if (!res.headersSent) res.writeHead(error.status === 503 ? 503 : 500);
-      res.end();
-    });
-  }
+  // Each request under an ID of its own (lib/log.mjs), never one the internet sent: what it logs
+  // here, and what the orchestrator does with it, carry it.
+  const handle = withRequest(
+    (req, res) => {
+      for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+      route(req, res).catch((error) => {
+        (log.error ?? log)(`${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
+        if (!res.headersSent) res.writeHead(error.status === 503 ? 503 : 500);
+        res.end();
+      });
+    },
+    { trusted: false },
+  );
 
   function listen(port = config.port) {
     const web = drainable(createServer(handle));

@@ -14,6 +14,7 @@ import { engineName } from "./runner/engine.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 // The hosts of the services' names, as sandboxes call them.
 const SERVICE_HOSTS = Object.values(SANDBOX_URLS).map((url) => new URL(url).hostname);
@@ -147,7 +148,7 @@ export function createEgressHttp(ctx) {
 
   // A handler's failure: logged, a 500 when nothing was answered yet.
   const failed = (res) => (error) => {
-    log(`Egress: ${error.stack ?? error}`);
+    (log.error ?? log)(`Egress: ${error.stack ?? error}`);
     if (!res.headersSent) res.writeHead(500).end();
   };
 
@@ -161,7 +162,7 @@ export function createEgressHttp(ctx) {
       }
       sendJson(res, { error: "not found" }, 404);
     };
-    const server = drainable(createServer(answer));
+    const server = drainable(createServer(withRequest(answer)));
     bind(server, config.policyPort, () => {
       config.policyPort = server.address().port;
       log(`Egress policy on :${config.policyPort}`);

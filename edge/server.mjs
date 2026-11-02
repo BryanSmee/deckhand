@@ -29,6 +29,7 @@ import { activePassive } from "../lib/active.mjs";
 import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
+import { createLogger } from "../lib/log.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createGithubClient } from "../github/client.mjs";
@@ -45,7 +46,8 @@ import { createEdgeInternal } from "./internal.mjs";
 import { createOAuth } from "./oauth.mjs";
 
 const env = process.env;
-const log = (...args) => console.log(new Date().toISOString(), ...args);
+// Its lines redact its own secrets too (below), once it has read them.
+const log = createLogger({ service: "edge", secrets: () => secrets() });
 
 let config;
 let internalPort;
@@ -60,7 +62,7 @@ try {
   }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
-  console.error(`Edge: ${error.message}`);
+  log.error(`Edge: ${error.message}`);
   process.exit(1);
 }
 const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : 25_000;

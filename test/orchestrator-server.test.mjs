@@ -448,7 +448,8 @@ function tarOf(files) {
 function start(env, { script = "orchestrator/server.mjs", also = () => "" } = {}) {
   const child = spawn(process.execPath, [script], {
     cwd: join(import.meta.dirname, ".."),
-    env,
+    // Text, which its assertions read: lib/log.mjs's own tests cover JSON.
+    env: { LOG_FORMAT: "text", ...env },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let out = "";
@@ -3785,7 +3786,7 @@ allow_capabilities contains "read:pulls"
       writeFileSync(join(dir, "result"), "Fine.\n\nRating: 9/10\nVerdict: approve\n");
       return {};
     });
-    await listener.until(/WARNING: policy\/grants\.rego in the grants folder grants auto-merge/);
+    await listener.until(/WARN policy\/grants\.rego in the grants folder grants auto-merge/);
     await send(
       {
         action: "ready_for_review",

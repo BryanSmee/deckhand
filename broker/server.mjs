@@ -19,6 +19,7 @@
 import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { drainOnSigterm } from "../lib/drain.mjs";
+import { createLogger } from "../lib/log.mjs";
 import { openStore } from "../lib/store.mjs";
 import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createCallers, inClusterReview } from "./callers.mjs";
@@ -79,7 +80,9 @@ export function createBroker({
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  const log = (...args) => console.log(new Date().toISOString(), ...args);
+  // Its lines redact its signing key too, once read.
+  let secrets = [];
+  const log = createLogger({ service: "broker", secrets: () => secrets });
   const env = process.env;
   let started;
   try {
@@ -93,7 +96,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     });
     const key = signingKey(env.KEY_DIR || "/keys");
     // Its key never goes in the store: a value holding it is refused there, a blob redacted.
-    const secrets = storeSecrets(key);
+    secrets = storeSecrets(key);
     const store = openStore(env.STORE_URL || "file:///data/store", {
       password: env.REDIS_PASSWORD,
       secrets: () => secrets,
@@ -102,7 +105,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const keysDir = env.SERVICE_KEYS_DIR || null;
     started = { ...createBroker({ store, key, callers, keysDir, log }), graceMs, key };
   } catch (error) {
-    console.error(`Broker: ${error.message}`);
+    log.error(`Broker: ${error.message}`);
     process.exit(1);
   }
   const { server, graceMs, key } = started;
