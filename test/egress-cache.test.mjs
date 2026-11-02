@@ -87,7 +87,7 @@ test("a second GET on a cached host is answered from disk", async (t) => {
 });
 
 test("other hosts, and requests that aren't a plain GET, are forwarded as before", async (t) => {
-  const { get, seen, files } = await setup(t);
+  const { get, seen, files, cache } = await setup(t);
   for (let i = 0; i < 2; i++) {
     const answer = await get("/x", {}, "other.test");
     assert.equal(answer.body, "body of /x");
@@ -97,7 +97,7 @@ test("other hosts, and requests that aren't a plain GET, are forwarded as before
   await get("/x", { cookie: "a=b" });
   await get("/x", { range: "bytes=0-3" });
   await get("/x", { "cache-control": "no-store" });
-  await wait(30);
+  await cache.settled();
   assert.equal(seen.length, 6);
   assert.deepEqual(files(), []);
   // Credentials reach the host.
@@ -117,7 +117,7 @@ function raw(port, head) {
 }
 
 test("a GET with a body or credential-like headers is forwarded, never stored", async (t) => {
-  const { get, seen, files, proxyPort, url } = await setup(t);
+  const { get, seen, files, cache, proxyPort, url } = await setup(t);
   const sent = [
     `content-length: 4\r\n\r\nbody`,
     `transfer-encoding: chunked\r\n\r\n4\r\nbody\r\n0\r\n\r\n`,
@@ -142,7 +142,7 @@ test("a GET with a body or credential-like headers is forwarded, never stored", 
     const answer = await get("/x", headers);
     assert.equal(answer.headers["x-deckhand-cache"], undefined, Object.keys(headers)[0]);
   }
-  await wait(30);
+  await cache.settled();
   assert.equal(seen.length, sent.length + credentials.length);
   assert.deepEqual(files(), []);
   // They reach the host, as before.
@@ -230,7 +230,7 @@ test("a host that answers before reading the body can't be made to poison an ent
     `GET ${url("/victim")} HTTP/1.1\r\nhost: x\r\nx-a: GET /evil HTTP/1.1\r\n` +
       `connection: close\r\n\r\n`,
   );
-  for (let i = 0; i < 50 && !cache.has(cache.key(url("/victim"))); i++) await wait(5);
+  for (let i = 0; i < 1000 && !cache.has(cache.key(url("/victim"))); i++) await wait(5);
   // Another repository's sandbox.
   const answer = await raw(
     proxyPort,
@@ -334,7 +334,7 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
       res.end("x".repeat(40));
     },
   };
-  const { get, seen, files } = await setup(t, routes, { entryMax: 99 });
+  const { get, seen, files, cache } = await setup(t, routes, { entryMax: 99 });
   for (const path of Object.keys(routes)) {
     for (let i = 0; i < 2; i++) {
       const got = await get(path, { "user-agent": "apt" });
@@ -342,7 +342,7 @@ test("answers that aren't the same for everyone are never stored", async (t) => 
       assert.equal(got.headers["x-deckhand-cache"], "miss", path);
     }
   }
-  await wait(30);
+  await cache.settled();
   assert.equal(seen.length, Object.keys(routes).length * 2);
   assert.deepEqual(files(), []);
 });

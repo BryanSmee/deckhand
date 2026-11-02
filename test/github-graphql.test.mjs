@@ -1257,10 +1257,9 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
   // How busy this thread's event loop was meanwhile: on the thread, the check holds it the
   // whole time (half a second here); in the worker, it waits. Not a bound on its longest pause:
   // a runner at its CPU quota pauses the whole process, which such a bound took for a stall.
+  // Null: validated within VALIDATE_MS, however slow the runner (over 5 s seen on one).
   const before = performance.eventLoopUtilization();
-  const start = performance.now();
   assert.equal(await check(worst), null);
-  assert.ok(performance.now() - start < 5000);
   const { utilization } = performance.eventLoopUtilization(before);
   assert.ok(utilization < 0.5, `the thread was busy ${Math.round(utilization * 100)}% of it`);
 });
