@@ -1283,24 +1283,21 @@ point at the models service, and its calls go to Google directly, so it is kept 
   stops if it can't (#224). Even if `agy` sent its token there, that token is the run's agent token,
   which works nowhere but the models service.
 - **The refresh is `agy`'s own**: the models service doesn't reimplement Google's OAuth with a
-  client secret taken from the binary. When the access token is within 5 minutes of its expiry
-  (or Google refused it), it has the runner run `agy models` (the runner's
+  client secret taken from the binary. When the access token is within 5 minutes of its expiry (or
+  Google refused it), it has the runner run `agy models` (the runner's
   `POST /logins/antigravity/refresh`, which only the models service may call: it never holds the
-  Docker socket) in a short container of the sandbox image (no capabilities, as `node`), on a
-  volume of its own (`<AGY_VOLUME>-login`), outside the runs' networks, with the login's expiry
-  set in the past; it reads back the file `agy` wrote and keeps it sealed in its store. On
-  Kubernetes it is a pod of its own (Pod Security `restricted`, no ServiceAccount token, no
-  Secret, `~/.gemini` an `emptyDir`): the file goes in on its stdin and comes back on its
-  stdout through the API server's `pods/attach`, never in its spec. That stdout is sealed with
-  a one-time key the runner sends first on stdin (`listener/runner/kube-seal.mjs`): the
-  container's log on the node, which log agents may ship off the cluster, holds only
-  ciphertext, never the login. The egress proxy lets
-  it reach Google's OAuth and the CLI's own hosts only, tunnelled (and GitHub's releases while
-  an init container installs the CLI, when it has no claim, never once `agy` runs with the
-  login). It is removed once it ends,
-  whatever its outcome. One
-  refresh at a time, for all runs and every copy of the service. The login's tokens are redacted
-  from runs' output like the other credentials.
+  Docker socket) in a short container of the sandbox image (no capabilities, as `node`), on a volume
+  of its own (`<AGY_VOLUME>-login`), outside the runs' networks, with the login's expiry set in the
+  past; it reads back the file `agy` wrote and keeps it sealed in its store. On Kubernetes it is a
+  pod of its own (Pod Security `restricted`, no ServiceAccount token, no Secret, `~/.gemini` an
+  `emptyDir`): the file goes in on its stdin and comes back on its stdout through the API server's
+  `pods/attach`, never in its spec. That stdout is sealed with a one-time key the runner sends first
+  on stdin (`listener/runner/kube-seal.mjs`): the container's log on the node, which log agents may
+  ship off the cluster, holds only ciphertext, never the login. The egress proxy lets it reach
+  Google's OAuth and the CLI's own hosts only, tunnelled (and GitHub's releases while an init
+  container installs the CLI, when it has no claim, never once `agy` runs with the login). It is
+  removed once it ends, whatever its outcome. One refresh at a time, for all runs and every copy of
+  the service. The login's tokens are redacted from runs' output like the other credentials.
 
 What this changes: the proxy reads those two hosts' requests and answers for these runs, as it
 does a cached host's, and the run's agent token, which it sees, is worth what it is elsewhere: this

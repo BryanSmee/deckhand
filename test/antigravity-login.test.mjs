@@ -693,3 +693,34 @@ test("a refresh that waits on a runner handover still ends within the models ser
     `ends at ${job.at + job.timeoutMs} ms`,
   );
 });
+
+test("the refresh moves on to the runner's next copy when the first doesn't answer", async () => {
+  let at = 0;
+  const tries = [];
+  const runner = createRunnerClient({
+    // Two copies: the first passive (or gone after a handover), the second acting.
+    urls: "http://a.test:8080,http://b.test:8080",
+    token: async () => "Bearer t",
+    epoch: () => null,
+    now: () => at,
+    sleep: async (ms) => (at += ms),
+    fetch: async (url, init) => {
+      tries.push({ host: new URL(url).host, body: JSON.parse(init.body) });
+      if (url.startsWith("http://a.test")) return new Response("passive", { status: 503 });
+      return Response.json({ code: 0, out: "{}", err: "" });
+    },
+  });
+  assert.deepEqual(await runner.refreshLogin("{}", { timeoutMs: REFRESH_MS }), {
+    code: 0,
+    out: "{}",
+    err: "",
+  });
+  assert.deepEqual(
+    tries.map((t) => t.host),
+    ["a.test:8080", "b.test:8080"],
+  );
+  // The second try says what is left then, less than at the first.
+  assert.equal(tries[0].body.timeoutMs, REFRESH_MS);
+  assert.equal(tries[1].body.timeoutMs, REFRESH_MS - at);
+  assert.ok(tries[1].body.timeoutMs < REFRESH_MS);
+});

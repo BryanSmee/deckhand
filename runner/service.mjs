@@ -109,7 +109,8 @@ export const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
 // that no other copy of it refreshes the same login meanwhile. Past it, the pod goes and the
 // refresh fails; the next one starts afresh. Less when the models service says less of its
 // lease is left (the call waited on a runner handover): counted from there, and none started
-// with under MIN_REFRESH_MS to go.
+// with under MIN_REFRESH_MS to go, on either backend. Docker's jobs.run() takes no time limit
+// (../listener/runner/jobs.mjs, unchanged): there, only that start is bounded.
 export const REFRESH_BUDGET_MS = LOGIN_REFRESH_MS - LOGIN_REFRESH_MARGIN_MS;
 
 // The Antigravity login's refresh (../models/antigravity-login.mjs, the models service's, #504):

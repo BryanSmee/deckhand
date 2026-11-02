@@ -499,10 +499,10 @@ export function createKubernetesImages({
   });
 
   // A short pod of the base image's in the sandboxes' namespace, as `user`: Pod Security
-  // `restricted` (kubernetes.mjs restrictedPod(), restrictedContainer() for its containers in `spec`), no
-  // ServiceAccount token, the registry's pull Secret; a leftover of the same name goes first.
-  // One that goes out through the egress proxy (`proxied`), apart from the services, gets the
-  // proxy's Service's IP (hostAliases), as sandboxes do: the cluster's DNS doesn't know its
+  // `restricted` (kubernetes.mjs restrictedPod(), restrictedContainer() for its containers in
+  // `spec`), no ServiceAccount token, the registry's pull Secret; a leftover of the same name goes
+  // first. One that goes out through the egress proxy (`proxied`), apart from the services, gets
+  // the proxy's Service's IP (hostAliases), as sandboxes do: the cluster's DNS doesn't know its
   // short name in the sandboxes' namespace. `spec`: its containers and volumes.
   async function startPod(pod, { role, labels = {}, user, proxied, spec }) {
     await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});

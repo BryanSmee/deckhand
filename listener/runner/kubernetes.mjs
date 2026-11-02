@@ -251,9 +251,10 @@ export const aliasesOf = (proxy) => (proxy ? [{ ip: proxy.ip, hostnames: proxy.h
 
 // Pod Security `restricted`, the pod's side (the container's: kube-names.mjs
 // restrictedContainer()), for the sandboxes and kube-images.mjs's installs, checks and jobs, so
-// that none drifts from the others: as `user`, whose group its claims (and emptyDirs) become, where their storage
-// applies it. Only when the claim's root isn't the group's already: by default the kubelet
-// walks the whole volume at every mount, while the pod is Pending (KUBERNETES_PENDING_MINUTES).
+// that none drifts from the others: as `user`, whose group its claims (and emptyDirs) become, where
+// their storage applies it. Only when the claim's root isn't the group's already: by default the
+// kubelet walks the whole volume at every mount, while the pod is Pending
+// (KUBERNETES_PENDING_MINUTES).
 export function restrictedPod(user) {
   return {
     runAsNonRoot: true,
