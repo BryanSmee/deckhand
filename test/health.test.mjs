@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { healthAnswer, healthInfo } from "../lib/health.mjs";
-import { CACHE_MS, createHealth, reasonOf, STARTING_MS } from "../listener/health.mjs";
+import {
+  CACHE_MS,
+  createHealth,
+  MAX_WARNINGS,
+  reasonOf,
+  STARTING_MS,
+  WARNING_LENGTH,
+} from "../listener/health.mjs";
 import { closedPort } from "./helpers.mjs";
 
 const NOW = 1_800_000_000_000;
@@ -19,6 +26,13 @@ test("healthInfo: its start and the image's version, dev from source", () => {
     version: "v",
     app: true,
   });
+  // Its warnings, when it has any.
+  assert.deepEqual(healthAnswer({ startedAt: 1, version: "v", warnings: [] }), {
+    ok: true,
+    startedAt: 1,
+    version: "v",
+  });
+  assert.deepEqual(healthAnswer({ startedAt: 1, version: "v", warnings: ["w"] }).warnings, ["w"]);
 });
 
 // A fake clock, and a fetch answering each service's URL from `answers` (name → a Response, an
@@ -163,6 +177,20 @@ test("an answer without a start (a copy from before #560) is up", async () => {
   const runner = (await health.check()).services.find((s) => s.name === "runner");
   assert.equal(runner.state, "up");
   assert.equal(runner.startedAt, null);
+});
+
+test("a service's warnings: strings only, a few, each cut short; none, none said", async () => {
+  const { health } = harness({
+    runner: ok(NOW - 86_400_000, { warnings: ["The runs' logs take Redis's memory", 3, ""] }),
+    broker: ok(NOW - 86_400_000, { warnings: Array(9).fill("x".repeat(1000)) }),
+    github: ok(NOW - 86_400_000, { warnings: "not a list" }),
+  });
+  const s = byName((await health.check()).services);
+  assert.deepEqual(s.runner.warnings, ["The runs' logs take Redis's memory"]);
+  assert.equal(s.broker.warnings.length, MAX_WARNINGS);
+  assert.ok(s.broker.warnings.every((w) => w.length === WARNING_LENGTH));
+  assert.ok(!("warnings" in s.github));
+  assert.ok(!("warnings" in s.orchestrator));
 });
 
 test("the cache: two calls within 10 s probe once, the next one after", async () => {

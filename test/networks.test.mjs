@@ -220,6 +220,24 @@ test("compose.yaml: edge holds its three secrets alone, the orchestrator none", 
   );
 });
 
+// Blob storage's settings and key pair (#606) are the runner's and the broker's alone, the
+// services that keep blobs: never the orchestrator's or edge's (the orchestrator holds no
+// secret), nor the github or models service's.
+test("compose.yaml: only the runner and the broker get blob storage's settings", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const names = ["BLOB_URL", "BLOB_ACCESS_KEY_ID", "BLOB_SECRET_ACCESS_KEY"];
+  for (const service of ["runner", "broker"]) {
+    for (const name of names) {
+      assert.equal(compose.services[service].environment[name], `\${${name}:-}`, `${service}`);
+    }
+  }
+  for (const [service, { environment = {} }] of Object.entries(compose.services)) {
+    if (service === "runner" || service === "broker") continue;
+    const named = Object.keys(environment).filter((name) => name.startsWith("BLOB_"));
+    assert.deepEqual(named, [], `${service}'s settings`);
+  }
+});
+
 // The Docker socket is root on the host: only the runner holds it (#503), and the runner holds
 // none of the listener's secrets (the App's key is in the listener's data volume). The agents'
 // credentials are the models service's alone (#504): its environment and the credentials

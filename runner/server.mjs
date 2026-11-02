@@ -6,7 +6,9 @@ import { mkdirSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { activePassive } from "../lib/active.mjs";
+import { BlobError, blobCredentials, blobSecrets, startBlobs } from "../lib/blobs.mjs";
 import { DRAIN_MS } from "../lib/drain.mjs";
+import { healthInfo } from "../lib/health.mjs";
 import { createLogger } from "../lib/log.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
@@ -25,7 +27,10 @@ import { createLogs } from "./logs.mjs";
 import { createRunnerService, loginRefresh } from "./service.mjs";
 
 const env = process.env;
-const log = createLogger({ service: "runner" });
+// Blob storage's credentials (BLOB_URL's, S3's): its secret key is redacted from its lines.
+let credentials = null;
+const secrets = () => blobSecrets(credentials);
+const log = createLogger({ service: "runner", secrets });
 
 let config;
 let backend;
@@ -33,6 +38,7 @@ let bound;
 let brokerCaller;
 try {
   config = loadConfig(env, readConfigFile(env), { service: "runner" });
+  credentials = blobCredentials(env);
   // Kubernetes' NetworkPolicies and the pods' own service accounts tell callers apart there
   // (#396): SERVICE_NETWORKS=none says so. Anywhere else, a runner without it takes no call.
   bound = env.SERVICE_NETWORKS === "none" ? null : networkCallers(env.SERVICE_NETWORKS);
@@ -52,14 +58,38 @@ try {
   const { mirror } = createBrokerService({ caller: brokerCaller, log });
   backend = createBackend({ config, inboxDir: join(config.dataDir, "runs"), mirror, log });
 } catch (error) {
-  if (!(error instanceof ConfigError) && !/SERVICE_NETWORKS/.test(error.message)) throw error;
+  if (
+    !(error instanceof ConfigError) &&
+    !(error instanceof BlobError) &&
+    !/SERVICE_NETWORKS/.test(error.message)
+  )
+    throw error;
   log.error(error.message);
   process.exit(1);
 }
 
-const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
-  password: env.REDIS_PASSWORD,
-});
+// Blob storage's secret key never goes in it: refused in a value, redacted from a blob.
+const storeUrl = env.STORE_URL || `file://${join(config.dataDir, "store")}`;
+const store = openStore(storeUrl, { password: env.REDIS_PASSWORD, secrets });
+
+// Blob storage (BLOB_URL), checked before the runner takes a call: a setting that fails stops it.
+// Nothing is kept there yet: the runs' logs move there in a later part (#604).
+let blobs;
+let warnings;
+try {
+  ({ blobs, warnings } = await startBlobs(env, {
+    store,
+    storeUrl,
+    credentials,
+    secrets,
+    what: "The runs' logs",
+    log,
+  }));
+} catch (error) {
+  if (!(error instanceof BlobError)) throw error;
+  log.error(error.message);
+  process.exit(1);
+}
 
 // The orchestrator's services port: a run's first tokens (which the orchestrator has the broker service sign, with the claims it decided). The
 // github service (#502): the repos' tarballs and blobs.
@@ -147,6 +177,7 @@ service = createRunnerService({
   refresh: loginRefresh({ config, images, jobs: backend.jobs }),
   blobOf,
   keys: () => keys,
+  health: { ...healthInfo(), warnings },
   bound,
   lease,
   log,
@@ -175,5 +206,6 @@ process.once("SIGTERM", async () => {
   if (!all) log("Stopping: calls still going at the end of the grace period, cut");
   brokerCaller.stop();
   await store.close();
+  await blobs.close();
   process.exit(0);
 });

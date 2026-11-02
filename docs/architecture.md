@@ -1495,7 +1495,8 @@ reader and the settings parser, redaction, HTTP helpers, the JSON state files, d
 tokens (run and service tokens, what each caller may do) and the store (`lib/store.mjs`, its
 file backend `lib/store-file.mjs`, its Redis backend `lib/store-redis.mjs` and the Redis client
 `lib/resp.mjs`), and an S3 client (`lib/s3.mjs`: SigV4 signing, PUT, ranged GET, HEAD and
-DELETE, retries on 5xx) for blob storage (#604). Nothing in it imports from `listener/`.
+DELETE, retries on 5xx) for blob storage (`lib/blobs.mjs`, #604: `BLOB_URL`'s S3, folder or
+store backends behind one interface, checked at start). Nothing in it imports from `listener/`.
 
 `orchestrator/server.mjs` only wires the orchestrator together: its settings, the GitHub App's
 public parts, the shared `ctx` and the modules, then, once it holds its lease, it starts the

@@ -332,6 +332,12 @@ services:
       SERVICE_NETWORKS: orchestrator=${BROKER_ORCHESTRATOR_SUBNET:-10.231.250.0/28},edge=${BROKER_EDGE_SUBNET:-10.231.250.208/28},proxy=${BROKER_PROXY_SUBNET:-10.231.250.16/28},runner=${BROKER_RUNNER_SUBNET:-10.231.250.32/28},models=${BROKER_MODELS_SUBNET:-10.231.250.64/28},github=${BROKER_GITHUB_SUBNET:-10.231.250.176/28}
       # Where it publishes its public key, which the policy service and the runner mount read-only.
       SERVICE_KEYS_DIR: /service-keys
+      # Blob storage (docs/setup.md, Blob storage): none by default, the blobs in its store.
+      # s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, with its key pair, which only the
+      # runner and the broker get.
+      BLOB_URL: ${BLOB_URL:-}
+      BLOB_ACCESS_KEY_ID: ${BLOB_ACCESS_KEY_ID:-}
+      BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-}
     volumes:
       # Its signing key (run-token.key, made on first start): this volume alone, never the
       # store nor another service's.
@@ -438,6 +444,12 @@ services:
       SERVICE_NETWORKS: orchestrator=${RUNNER_SUBNET:-10.231.250.48/28},models=${RUNNER_MODELS_SUBNET:-10.231.250.112/28}
       # The broker's public keys, which its callers' service tokens are checked with.
       SERVICE_KEYS_DIR: /service-keys
+      # Blob storage (docs/setup.md, Blob storage): none by default, the blobs in its store.
+      # s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, with its key pair, which only the
+      # runner and the broker get.
+      BLOB_URL: ${BLOB_URL:-}
+      BLOB_ACCESS_KEY_ID: ${BLOB_ACCESS_KEY_ID:-}
+      BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-}
     volumes:
       - ${DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
       # Its store: the runs' logs, their events, its lease; and each run's inbox (comments for a

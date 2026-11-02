@@ -304,6 +304,27 @@ function List({ health }: { health: Health | null }) {
   );
 }
 
+// What the services said of their setup at start (their blobs taking Redis's memory): one row
+// each, under its service's name. Nothing when none said anything.
+function Warnings({ health }: { health: Health | null }) {
+  const said = (health?.services ?? []).flatMap((s) =>
+    (s.warnings ?? []).map((text) => ({ name: s.name, text })),
+  );
+  if (!said.length) return null;
+  return (
+    <ul class={`${styles.warnings} ${toneClass("input")}`} aria-label="Warnings">
+      {said.map(({ name, text }) => (
+        <li key={`${name}-${text}`} data-service={name}>
+          <StatusDot tone="input" />
+          <span>
+            <span class={styles.warningName}>{SERVICES[name].label}</span> {text}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function Legend() {
   return (
     <ul class={styles.legend} aria-label="Legend">
@@ -329,7 +350,8 @@ interface Props {
   narrow?: boolean;
 }
 
-// The card: its title, when the orchestrator last checked, the diagram (or list) and legend.
+// The card: its title, when the orchestrator last checked, the diagram (or list), the services'
+// warnings and the legend.
 export function Services({ health, error = null, narrow = false }: Props) {
   const checked = health
     ? new Date(health.checkedAt).toLocaleTimeString([], {
@@ -352,6 +374,7 @@ export function Services({ health, error = null, narrow = false }: Props) {
       </div>
       <div class={styles.body}>
         {narrow ? <List health={health} /> : <Diagram health={health} />}
+        <Warnings health={health} />
         <Legend />
       </div>
     </Card>

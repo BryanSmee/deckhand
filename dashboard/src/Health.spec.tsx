@@ -114,6 +114,26 @@ test("a phone's list: a row per service, in the same colours, no diagram", () =>
   expect(document.querySelectorAll("li[data-service]")).toHaveLength(7);
 });
 
+test("the services' warnings: one row each, under its name; none, no list", () => {
+  const warned: Health = {
+    ...HEALTH,
+    services: HEALTH.services.map((s) =>
+      s.name === "runner"
+        ? { ...s, warnings: ["The runs' logs take Redis's memory: set BLOB_URL"] }
+        : s,
+    ),
+  };
+  const { rerender } = render(<Services health={warned} />);
+  const list = screen.getByRole("list", { name: "Warnings" });
+  const row = list.querySelector<HTMLElement>('li[data-service="runner"]')!;
+  expect(row.textContent).toBe("runner The runs' logs take Redis's memory: set BLOB_URL");
+  expect(list.querySelectorAll("li")).toHaveLength(1);
+  rerender(<Services health={warned} narrow />);
+  expect(screen.getByRole("list", { name: "Warnings" })).toBeTruthy();
+  rerender(<Services health={HEALTH} />);
+  expect(screen.queryByRole("list", { name: "Warnings" })).toBeNull();
+});
+
 test("before the first answer, or when it can't be read", () => {
   const { rerender } = render(<Services health={null} />);
   expect(screen.getByText("Checking…")).toBeTruthy();
