@@ -15,8 +15,9 @@
 //     (proxyService()). The services' names it calls (lib/services.mjs SANDBOX_URLS) are the
 //     proxy's to read.
 //   - No network per run: the sandboxes' namespace's NetworkPolicies isolate every sandbox, and
-//     start() refuses to run without them (isolationProblem()). The egress proxy knows a
-//     sandbox by its pod IP (locate()).
+//     start() refuses to run without them (isolationProblem()), nor on a cluster that doesn't
+//     enforce them, as a probe pod labelled as a sandbox finds (kube-probe.mjs). The egress
+//     proxy knows a sandbox by its pod IP (locate()).
 //   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs.
 //   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
 //     fails its run, saying why (follow()), and a leftover one is removed rather than waited
@@ -39,7 +40,8 @@ import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
 import { proxyEnv } from "../egress.mjs";
 import { createInbox } from "./inbox.mjs";
-import { kubeName, labelValue } from "./kube-names.mjs";
+import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
+import { createNetworkProbe, PROBE } from "./kube-probe.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import { splitLines } from "./lines.mjs";
 import { aliasOf } from "./networks.mjs";
@@ -247,18 +249,9 @@ export async function proxyService(services, config) {
 // proxyService()'s answer as a pod's hostAliases.
 export const aliasesOf = (proxy) => (proxy ? [{ ip: proxy.ip, hostnames: proxy.hostnames }] : []);
 
-// Pod Security `restricted`, as every pod Deckhand starts in the sandboxes' namespace meets it
-// (sandboxes, their init containers, kube-images.mjs's installs, checks and jobs): in one place,
-// so that none drifts from the others. A container's side: no privilege gain, no capability,
-// not root, the runtime's seccomp profile.
-export const hardened = () => ({
-  allowPrivilegeEscalation: false,
-  capabilities: { drop: ["ALL"] },
-  runAsNonRoot: true,
-  seccompProfile: { type: "RuntimeDefault" },
-});
-
-// The pod's side, as `user`, whose group its claims (and emptyDirs) become, where their storage
+// Pod Security `restricted`, the pod's side (the container's: kube-names.mjs
+// restrictedContainer()), for the sandboxes and kube-images.mjs's installs, checks and jobs, so
+// that none drifts from the others: as `user`, whose group its claims (and emptyDirs) become, where their storage
 // applies it. Only when the claim's root isn't the group's already: by default the kubelet
 // walks the whole volume at every mount, while the pod is Pending (KUBERNETES_PENDING_MINUTES).
 export function restrictedPod(user) {
@@ -282,7 +275,11 @@ export function agentInitContainer({ image, command, env, resources, volumeMount
     command: [command],
     env: envList(env),
     resources: { limits: resources, requests: resources },
-    securityContext: { ...hardened(), runAsUser: INSTALL_USER.uid, runAsGroup: INSTALL_USER.gid },
+    securityContext: {
+      ...restrictedContainer(),
+      runAsUser: INSTALL_USER.uid,
+      runAsGroup: INSTALL_USER.gid,
+    },
     volumeMounts,
   };
 }
@@ -381,7 +378,7 @@ export function podSpec(
           // As much as it may use is held for it: a node without the room leaves it Pending
           // rather than starving it later.
           resources: { limits: resources, requests: resources },
-          securityContext: hardened(),
+          securityContext: restrictedContainer(),
           volumeMounts: volumes.map(mountOf),
         },
       ],
@@ -413,7 +410,7 @@ const envList = (env) => Object.entries(env).map(([k, v]) => ({ name: k, value: 
 // it is up before the sandbox starts and stopped once the sandbox exits, the pod's phase the
 // sandbox's alone. Root, which dockerd needs, only inside the pod's user namespace
 // (`hostUsers: false`): Pod Security `restricted` allows that from Kubernetes 1.35, and the rest
-// of hardened() holds. Sysbox gives root its capabilities and the syscalls it needs in that
+// of restrictedContainer() holds. Sysbox gives root its capabilities and the syscalls it needs in that
 // namespace alone, whatever the spec drops. As much as the sandbox may use, as on Docker.
 function engineContainer({ image, env }, resources) {
   return {
@@ -427,7 +424,7 @@ function engineContainer({ image, env }, resources) {
     env: envList(env),
     resources: { limits: resources, requests: resources },
     securityContext: {
-      ...hardened(),
+      ...restrictedContainer(),
       runAsNonRoot: false,
       runAsUser: 0,
       runAsGroup: 0,
@@ -505,6 +502,10 @@ export function createKubernetesRunner({
   sleep = delay,
   mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
   watchMs = WATCH_MS,
+  // kube-probe.mjs's, made below unless the tests bring theirs; `probeOptions`: more of its
+  // options (the tests' env, DNS lookup, resolv.conf and sleep).
+  probe = null,
+  probeOptions = {},
 }) {
   const { pendingMs, storageClass, sessionSize, cacheStorageClass } = config.kubernetes;
   const apart = services.namespace !== api.namespace;
@@ -519,6 +520,8 @@ export function createKubernetesRunner({
       .map(([k, v]) => `${k}=${v}`)
       .join(",");
   const podPath = (name) => `pods/${kubeName(name)}`;
+  // Not a sandbox, though labelled as one: the network probe's pod.
+  const probing = (pod) => Boolean(pod.metadata?.annotations?.[PROBE]);
   const secretName = (run) => kubeName(`${run}-env`);
   const claimPath = (volume) => `persistentvolumeclaims/${kubeName(volume)}`;
 
@@ -556,6 +559,7 @@ export function createKubernetesRunner({
           `the Service ${proxySvc.hostnames[0]} in the namespace ${services.namespace} has no port ${ENGINE_PROXY_PORT}, the egress proxy's engines' port, through which a container engine goes out (see docs/kubernetes.md, Container engine on Kubernetes)`,
         );
       }
+      await checkEnforced(policies);
       const pullName = await pullSecret.forPods();
       for (const v of volumes.filter((v) => v.kind === "session")) {
         if (await ensureClaim(v.name)) made.push(claimPath(v.name));
@@ -685,6 +689,44 @@ export function createKubernetesRunner({
     }
   }
 
+  // Fail closed too when the cluster doesn't apply the policies isolationProblem() read: the
+  // probe's verdict (kube-probe.mjs), kept until they change or the lease is taken again.
+  probe ??= createNetworkProbe({
+    config,
+    api,
+    services,
+    pullSecret,
+    // Its ports sandboxes may use: EGRESS_PROXY's, and the engines' when the Service has it.
+    proxy: async () => {
+      const svc = await proxyService(services, config);
+      const [main, ...more] = sandboxPorts();
+      return {
+        ip: svc?.ip ?? new URL(config.egressProxy).hostname,
+        ports: [main, ...more.filter((port) => svc?.ports.includes(port))],
+      };
+    },
+    labels: { ...owner, "deckhand.run": "network-probe", [ROLE]: SANDBOX },
+    log,
+    now,
+    sleep,
+    ...probeOptions,
+  });
+  async function checkEnforced(policies) {
+    let problem;
+    try {
+      problem = await probe.check(policies);
+    } catch (error) {
+      throw new Error(
+        `the runner couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${error.message} (see docs/kubernetes.md)`,
+      );
+    }
+    if (problem) {
+      throw new Error(
+        `the cluster doesn't enforce the sandboxes' NetworkPolicies: ${problem}. The runner probes again when they change, or when it restarts (see docs/kubernetes.md)`,
+      );
+    }
+  }
+
   // The session volume's claim, made when missing. → true when it was made now.
   async function ensureClaim(volume) {
     if (await api.find(claimPath(volume))) return false;
@@ -707,7 +749,7 @@ export function createKubernetesRunner({
 
   async function pods() {
     const { items = [] } = await api.get("pods", { labelSelector: selector(SANDBOX) });
-    return items;
+    return items.filter((pod) => !probing(pod));
   }
 
   // Throws when the API can't tell, rather than "none".
@@ -1075,7 +1117,9 @@ export function createKubernetesRunner({
       });
       // Checked here too: the API's answer for that address, and no other.
       const at = (p) => p.status?.podIP === ip || (p.status?.podIPs ?? []).some((a) => a.ip === ip);
-      const live = items.filter((p) => at(p) && !p.metadata?.deletionTimestamp && running(p));
+      const live = items.filter(
+        (p) => at(p) && !p.metadata?.deletionTimestamp && running(p) && !probing(p),
+      );
       uid = live.length === 1 ? (live[0].metadata?.uid ?? null) : null;
     } catch (error) {
       // What was known, if the API said so within PROXY_TTL_MS, until PROXY_RETRY_MS on.
@@ -1148,6 +1192,8 @@ export function createKubernetesRunner({
     installing,
     relink,
     proxyAddresses,
+    // The runner service took its lease: the network probe runs again (kube-probe.mjs).
+    leased: () => probe.reset(),
     // The pod at that address is the sandbox: no other container of a run has one of its own.
     locate: async (ip) => {
       const sandbox = await sandboxOf(ip);

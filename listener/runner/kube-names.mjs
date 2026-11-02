@@ -5,6 +5,16 @@ import { createHash } from "node:crypto";
 
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 
+// A container's securityContext under Pod Security `restricted`: no privilege gain, no
+// capability, not root, the runtime's seccomp profile. Every pod the runner makes has it
+// (kubernetes.mjs podSpec(), kube-images.mjs runPod(), kube-probe.mjs probePod()).
+export const restrictedContainer = () => ({
+  allowPrivilegeEscalation: false,
+  capabilities: { drop: ["ALL"] },
+  runAsNonRoot: true,
+  seccompProfile: { type: "RuntimeDefault" },
+});
+
 // An RFC 1123 subdomain: dot-separated labels of letters, digits and inner dashes.
 const SUBDOMAIN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
 

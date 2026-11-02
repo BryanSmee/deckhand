@@ -1369,8 +1369,11 @@ terms:
 **NetworkPolicies need a network plugin that enforces them** (Calico, Cilium, k3s's own). One
 that doesn't (Flannel alone) takes them and enforces nothing: a sandbox could then call the
 services directly, the orchestrator's services port among them, and get what only the runner
-may. `deploy/kubernetes/check-isolation.sh` checks it from a pod labelled as a sandbox; the runner
-checks only that the policies are there. Each service's own ingress policy is a second line: with
+may. The runner checks that the policies are there before every run, and that the cluster
+applies them with a probe pod labelled as a sandbox each time it takes its lease, refusing every
+run when the probe reaches anything but the egress proxy
+([kubernetes.md](kubernetes.md#the-network-probe)); `deploy/kubernetes/check-isolation.sh`
+checks it by hand. Each service's own ingress policy is a second line: with
 the sandboxes' policies gone, a sandbox reaches edge's public port alone.
 
 **The API server** is no pod: the runner's and the broker's way to it is an `ipBlock` of its

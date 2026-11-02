@@ -21,13 +21,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
 import { sealing, unseal, WRAPPER } from "./kube-seal.mjs";
-import { kubeName, labelValue } from "./kube-names.mjs";
+import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import {
   agentInitContainer,
   aliasesOf,
   excludesSandboxes,
-  hardened,
   INIT_CONTAINER,
   INSTALL_USER,
   pendingReason,
@@ -500,7 +499,7 @@ export function createKubernetesImages({
   });
 
   // A short pod of the base image's in the sandboxes' namespace, as `user`: Pod Security
-  // `restricted` (kubernetes.mjs restrictedPod(), hardened() for its containers in `spec`), no
+  // `restricted` (kubernetes.mjs restrictedPod(), restrictedContainer() for its containers in `spec`), no
   // ServiceAccount token, the registry's pull Secret; a leftover of the same name goes first.
   // One that goes out through the egress proxy (`proxied`), apart from the services, gets the
   // proxy's Service's IP (hostAliases), as sandboxes do: the cluster's DNS doesn't know its
@@ -563,7 +562,7 @@ export function createKubernetesImages({
             command,
             env: Object.entries(env).map(([key, value]) => ({ name: key, value: String(value) })),
             resources: { limits, requests: limits },
-            securityContext: hardened(),
+            securityContext: restrictedContainer(),
             volumeMounts: [{ name: "claim", mountPath: mount }],
           },
         ],
@@ -681,7 +680,7 @@ export function createKubernetesImages({
               value: String(value),
             })),
             resources: { limits, requests: limits },
-            securityContext: hardened(),
+            securityContext: restrictedContainer(),
             volumeMounts: mounts,
           },
         ],

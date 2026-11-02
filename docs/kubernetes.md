@@ -2,7 +2,9 @@
 
 `deploy/kubernetes/` runs Deckhand on a cluster: a kustomize base with every service, the
 sandboxes in a namespace of their own, and two optional components, `redis` (the stores, for
-copies on several nodes) and `buildkit` (repositories' own images). Each run's sandbox is a pod
+copies on several nodes) and `buildkit` (repositories' own images). `deploy/helm/deckhand/` is
+the same as a Helm chart, with values instead of patches ([Install with Helm](#install-with-helm)).
+Each run's sandbox is a pod
 (`RUNNER=kubernetes`): runs spread over the cluster's nodes, and `MAX_PARALLEL` still caps how
 many run at once. [setup.md](setup.md) has the rest (the GitHub App's permissions, the settings,
 the agents): this page is what differs on a cluster.
@@ -20,12 +22,14 @@ the agents): this page is what differs on a cluster.
 
 ## Requirements
 
-- **Kubernetes 1.30 or later**, and `kubectl` (its `-k` is kustomize).
+- **Kubernetes 1.30 or later**, and `kubectl` (its `-k` is kustomize), or Helm 3 or 4 for the
+  chart.
 - **A network plugin that enforces NetworkPolicies**: Calico, Cilium, or k3s's own (kube-router).
   One that ignores them (Flannel alone, say) takes them and isolates nothing: a sandbox could
-  then call the services directly, the orchestrator's run tokens among them. Check it once
-  installed ([Install](#install), step 5), and after any change of plugin (#568 will have the
-  runner check it too).
+  then call the services directly, the orchestrator's run tokens among them. The runner checks
+  it itself and refuses every run on a cluster that doesn't
+  ([The network probe](#the-network-probe)); `check-isolation.sh` checks it by hand
+  ([Install](#install), step 5).
 - **A default storage class** for the services' claims (`ReadWriteOnce`), and for the issues'
   session claims (`KUBERNETES_STORAGE_CLASS`). On several nodes, one with `ReadWriteMany` too
   ([Several nodes](#several-nodes)). Optional: a `ReadWriteMany` class for the agents' and
@@ -179,8 +183,94 @@ sh deploy/kubernetes/check-isolation.sh
 It starts a pod labelled as a sandbox in `deckhand-sandboxes`, tries every port of every service's
 pod from there and the egress proxy's, and expects the proxy's alone to answer: 3128, and 3129
 too when its Service publishes it (the `engine` component). A plugin that
-doesn't enforce NetworkPolicies fails it. Then mention Deckhand on an issue
+doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
+([The network probe](#the-network-probe)): its log says what it found. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
+
+## Install with Helm
+
+The chart, `deploy/helm/deckhand/`, renders the base's objects: with its default values, the same
+as `kustomize build deploy/kubernetes` (CI checks it, alone and with each component:
+`test/helm-chart.test.mjs`), so everything on this page holds for it. Its values do what an
+overlay's patches do. No chart repository is published yet: install it from a checkout of this
+repository at a release. Keep your values in a file of your own:
+
+```yaml
+# values.yaml
+image:
+  tag: v1.2.3 # every service's image, and SANDBOX_IMAGE's
+apiServer:
+  cidrs: [172.18.0.2/32] # the API server's addresses (Install, step 2)
+server:
+  config: |
+    allowed_users: [your-login]
+  grants: # by their path in the grants folder
+    default.yaml: |
+      hosts: [pypi.org]
+    acme/api.yaml: |
+      hosts: [api.acme.example]
+    policy/grants.rego: |
+      package deckhand
+      allow_grant if {
+        input.repo.name == "acme/api"
+        input.grant == "dockerfile"
+      }
+env: # any other setting of the orchestrator, the runner and the models service
+  MAX_PARALLEL: "4"
+ingress:
+  enabled: true
+  className: nginx
+  host: deckhand.example.com
+  tlsSecretName: deckhand-tls
+```
+
+```sh
+helm install deckhand deploy/helm/deckhand -f values.yaml
+```
+
+The chart makes both namespaces itself, with their Pod Security labels, so its release goes in
+another one (your context's, `default`): not `--namespace deckhand --create-namespace`, which
+would make `deckhand` without them, and then refuse to make it again. With
+`namespaces.create: false`, make them yourself, labelled as `namespaces.yaml` labels them. Then
+carry on with [Install](#install)'s steps 3 to 5: the Secrets, the GitHub App and the isolation's
+check, as the chart holds no Secret either. The pods wait for them: don't pass `--wait` to the
+first install.
+
+| Value                                       | Default                      | What it sets                                                                                                                                                                                                      |
+| ------------------------------------------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `image.repository`, `image.tag`             | `ghcr.io/bryansmee/deckhand` | every service's image, `<repository>-<service>:<tag>`; the tag is the chart's `appVersion` (`latest`) when empty                                                                                                  |
+| `image.sandbox`                             | `<repository>-sandbox:<tag>` | `SANDBOX_IMAGE` ([below](#what-the-manifests-set-up-and-why)), for a mirror of yours                                                                                                                              |
+| `namespaces`                                | `deckhand`, `-sandboxes`     | the services' namespace and the sandboxes' ([Namespaces](#namespaces)), two different ones, and whether the chart makes them                                                                                      |
+| `server.config`, `server.grants`            | the examples                 | `config.yaml` and the grants folder's files, by their path in it; `--set-file server.config=config.yaml` reads yours                                                                                              |
+| `env`                                       | none                         | any other setting in `deckhand-env` ([setup.md](setup.md#settings)); one the other values set (`KUBERNETES_NAMESPACE`, `SANDBOX_IMAGE`…) is refused, naming the value to use                                      |
+| `apiServer.cidrs`                           | a placeholder                | the API server's addresses ([Install](#install), step 2)                                                                                                                                                          |
+| `store`                                     | `file`                       | `redis` for the `redis` component ([Several nodes](#several-nodes)), with `redis.image`, `redis.size` and `redis.storageClass`                                                                                    |
+| `persistence.storageClass`, `.sizes`        | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                                                                 |
+| `sandboxes.storageClass`, …                 | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes))                                              |
+| `buildkit.enabled`, `registry`              | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY` (refused without BuildKit), `registry.secretName` its pull Secret                                                 |
+| `engine.enabled`, `.image`, `.runtimeClass` | off                          | the `engine` component ([Container engine](#container-engine-on-kubernetes)): `SANDBOX_ENGINE=sysbox`, `ENGINE_IMAGE` (`<repository>-engine:<tag>` when empty), `KUBERNETES_ENGINE_RUNTIME_CLASS` (`sysbox-runc`) |
+| `ingress`                                   | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                                                                      |
+
+`values.yaml` in the chart says more of each. `store`, `persistence.storageClass`,
+`persistence.sharedStorageClass` and `redis.storageClass` are fixed at install: a claim's access
+mode and class can't change, so an upgrade that changes them fails on the claims it would
+change, and going to `redis` leaves the stores' claims (kept, with what they hold) unused. To
+move, scale the services to 0, copy what the claims hold (or let the stores start empty,
+losing what they hold: [setup.md](setup.md#the-store)), delete the claims that change, then
+upgrade. To update, change `image.tag` and
+`helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from a checkout at the new release:
+the services update as [below](#updating). A change of `server` or `env` renames its ConfigMap,
+as kustomize's hash does, and the pods that read it restart. The old one stays, as
+`kubectl apply -k` leaves kustomize's: an old pod rescheduled while a bad config stalls the
+rollout still starts. They pile up, as kustomize's do; delete those no pod names. The base's objects, made by
+`kubectl apply -k`, aren't the chart's: Helm refuses to install over them, so pick one, or let
+Helm adopt them (the `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace`
+annotations and the `app.kubernetes.io/managed-by: Helm` label on each) before the first install.
+`helm uninstall` keeps both namespaces and the services' claims (`helm.sh/resource-policy: keep`),
+with your Secrets and the stores in them, and the sandboxes' NetworkPolicies: the runner makes the
+sandbox pods itself, so a run going on at that moment keeps running, isolated as before, with no
+proxy left to reach. Remove those pods (`kubectl -n deckhand-sandboxes delete pods --all`), or
+delete both namespaces to remove everything.
 
 ## Updating
 
@@ -279,8 +369,9 @@ saying why. What it expects, and the manifests give it:
   and `get` on `pods/attach` (the Antigravity CLI's login refresh, [Agents](#agents-on-kubernetes):
   Kubernetes checks `create` from 1.35, `get` before), and `list`
   on `events` (why a pod is stuck) and `networkpolicies`; and in the services' namespace, `get`
-  on `services` and `pods` (the proxy's Service, BuildKit's pods), `list` on `networkpolicies`
-  and `endpointslices`. The `buildkit` component adds `get` on the registry's pull Secret alone
+  on `pods` (BuildKit's), `get` and `list` on `services` (the proxy's Service, and every one
+  for [the network probe](#the-network-probe)), `list` on `networkpolicies` and
+  `endpointslices`. The `buildkit` component adds `get` on the registry's pull Secret alone
   (`resourceNames: [deckhand-registry]`) and `update` on that Secret's copy in the sandboxes'
   namespace alone (`resourceNames: [deckhand-registry]` too). Nothing cluster-wide but the broker's binding to `system:auth-delegator`,
   which lets it review the tokens its callers present (TokenReview is cluster-scoped). Only the
@@ -371,6 +462,44 @@ with the run. An issue's clone and agent session are claims of their own
 (`KUBERNETES_STORAGE_CLASS`, `KUBERNETES_SESSION_SIZE`), kept between its runs. A pod that
 stays Pending longer than `KUBERNETES_PENDING_MINUTES` (no node with the room, an image it
 can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
+
+### The network probe
+
+The checks above read what the NetworkPolicies say; a network plugin that ignores them takes
+them all the same. So the runner also checks that the cluster applies them: each time it takes
+its lease (as it starts, or as its other copy hands over), it starts a probe pod in the
+sandboxes' namespace, `<prefix>-network-probe-<random>`, from `SANDBOX_IMAGE`. It has a sandbox's labels
+(`deckhand.role: sandbox`), so the sandboxes' policies pick it, meets Pod Security
+`restricted` as they do, and holds no Secret, claim or ServiceAccount token. From there it
+tries a TCP connection, 3 s at most each, to:
+
+- every port of every Service of the services' namespace, at its cluster IP and at one of its
+  pods' addresses (some plugins treat the two differently): edge, the orchestrator, the runner,
+  the broker, the github, models and policy services, BuildKit, Redis, whatever else is there;
+- with `KUBERNETES_REGISTRY` set, the registry's host and BuildKit's (`KUBERNETES_BUILDKIT`),
+  and with `STORE_URL=redis://…`, Redis's, as the runner resolves them, wherever they are;
+- the cluster's DNS (the runner's own nameservers, the `kube-dns` Service), TCP and UDP 53:
+  sandboxes get no DNS server, but one reached by its address could carry data out in its
+  lookups;
+- the API server, at the `kubernetes` Service's address (`KUBERNETES_SERVICE_HOST`);
+- a public address, `1.1.1.1:443`.
+
+Every one has to be out of reach, and the egress proxy's Service has to answer, so that a pod
+with no network at all doesn't pass as isolated: on `EGRESS_PROXY`'s port, and on the engines'
+(3129) too when runs get a [container engine](#container-engine-on-kubernetes) and the Service
+publishes it. Any one reached, and the runner refuses every
+run, the reply on the issue (and the dashboard) naming what the probe reached: use a plugin that
+enforces NetworkPolicies (Calico, Cilium, k3s's kube-router; Flannel alone doesn't). The probe
+pod is removed whatever it found, and its verdict kept until the NetworkPolicies of either
+namespace change (the runner reads them before every run) or the runner takes its lease again:
+after a change of plugin, restart it (`kubectl -n deckhand rollout restart deploy/runner`). A
+probe that couldn't tell refuses that run alone, and the next one probes again: its pod didn't
+end within `KUBERNETES_PENDING_MINUTES` and a minute, say, or it reached nothing, the egress
+proxy included (not ready yet on a fresh install, its pod evicted). Each probe's pod has a name
+of its own, so a runner copy taking over doesn't remove the other's mid-probe; one older than a
+probe lasts (a runner stopped mid-probe) is removed at the next probe. Its log lines start with
+`Network probe:`. The API server's own addresses, behind the `kubernetes` Service, and the
+DNS pods' aren't tried: the runner has no right to read them.
 
 ## Namespaces
 
@@ -617,8 +746,8 @@ What it takes:
   `docker build` and a published port answering on `engine`, under `restricted:latest`.
 
 - **The `engine` component** (`deploy/kubernetes/components/engine`, in your overlay's
-  `components`): it sets `SANDBOX_ENGINE=sysbox`, `KUBERNETES_ENGINE_RUNTIME_CLASS=sysbox-runc`
-  (that RuntimeClass) and `ENGINE_IMAGE` (pin it to your version, a reference the nodes can
+  `components`; `engine.enabled` with the chart): it sets `SANDBOX_ENGINE=sysbox`,
+  `KUBERNETES_ENGINE_RUNTIME_CLASS=sysbox-runc` (that RuntimeClass) and `ENGINE_IMAGE` (pin it to your version, a reference the nodes can
   pull, as `SANDBOX_IMAGE` is) in `deckhand-env`, which the orchestrator and the runner read,
   and opens the engines' port below. Without the RuntimeClass, runs that would get an engine
   are refused, as before.

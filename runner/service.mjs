@@ -594,8 +594,10 @@ export function createRunnerService({
   return {
     server,
     events,
-    // Once this copy acts: what sandboxes did meanwhile goes to the events.
+    // Once this copy acts: what sandboxes did meanwhile goes to the events, and the Kubernetes
+    // runner probes the cluster's isolation again (kube-probe.mjs).
     activate() {
+      runner.leased?.();
       clearInterval(watching);
       watching = setInterval(
         () => events.watch().catch((error) => log(`Run events: ${error.message}`)),

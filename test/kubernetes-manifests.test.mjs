@@ -336,7 +336,7 @@ test("deploy/kubernetes: nothing cluster-wide but the broker's TokenReviews; the
       .filter((r) => r.metadata.namespace === ns)
       .flatMap((r) => r.rules)
       .map((r) => `${r.resources.join(",")}: ${r.verbs.join(",")}`);
-  // listener/runner/kubernetes.mjs, kube-images.mjs, kube-pull.mjs.
+  // listener/runner/kubernetes.mjs, kube-images.mjs, kube-pull.mjs, kube-probe.mjs.
   assert.deepEqual(rules(SANDBOXES_NS), [
     "pods: create,get,list,delete",
     "pods/log: get",
@@ -348,7 +348,8 @@ test("deploy/kubernetes: nothing cluster-wide but the broker's TokenReviews; the
     "networkpolicies: list",
   ]);
   assert.deepEqual(rules(SERVICES_NS), [
-    "services,pods: get",
+    "services: get,list",
+    "pods: get",
     "endpointslices: list",
     "networkpolicies: list",
   ]);

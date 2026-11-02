@@ -1,0 +1,129 @@
+# deploy/kubernetes/rbac.yaml: a ServiceAccount per service (the broker tells its callers apart
+# by them), the runner's Roles in both namespaces, and the broker's TokenReviews, the only
+# binding beyond a namespace. Only the runner's and the broker's pods mount their API token.
+{{- range list "edge" "orchestrator" "runner" "broker" "github" "models" "policy" "egress" }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-{{ . }}
+  namespace: {{ include "deckhand.ns" $ }}
+  labels:
+    {{- include "deckhand.labels" $ | nindent 4 }}
+automountServiceAccountToken: false
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deckhand-runner
+  namespace: {{ include "deckhand.sandboxesNs" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  # The Antigravity login refresh's pod's stdin and stdout: `get` until Kubernetes 1.34,
+  # `create` from 1.35.
+  - apiGroups: [""]
+    resources: [pods/attach]
+    verbs: [create, get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create, get, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [list]
+  {{- if .Values.buildkit.enabled }}
+  # The registry's pull Secret's copy, which the runner brings up to date.
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ .Values.registry.secretName }}]
+    verbs: [update]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deckhand-runner
+  namespace: {{ include "deckhand.sandboxesNs" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deckhand-runner
+subjects:
+  - kind: ServiceAccount
+    name: deckhand-runner
+    namespace: {{ include "deckhand.ns" . }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deckhand-runner
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [list]
+  {{- if .Values.buildkit.enabled }}
+  # The registry's pull Secret, by name alone.
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [{{ .Values.registry.secretName }}]
+    verbs: [get]
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deckhand-runner
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deckhand-runner
+subjects:
+  - kind: ServiceAccount
+    name: deckhand-runner
+    namespace: {{ include "deckhand.ns" . }}
+---
+# Named after the services' namespace: the only object beyond one.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "deckhand.ns" . }}-broker-auth-delegator
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: deckhand-broker
+    namespace: {{ include "deckhand.ns" . }}

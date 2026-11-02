@@ -1,0 +1,525 @@
+# deploy/kubernetes/network-policies.yaml: the services' NetworkPolicies, Compose's internal
+# networks as Kubernetes writes them. Each service is reached by its callers alone, on its port;
+# the runner and the broker reach the API server's addresses alone (apiServer.cidrs).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-default-deny
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# The cluster's DNS, for every service but the policy service and Redis (components/redis), which
+# call none.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-dns
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: NotIn
+        values: [deckhand-policy, deckhand-redis]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Edge: the internet (your ingress) on 8080, the orchestrator alone on its internal port; out to
+# the orchestrator, the broker, the github service, and GitHub (sign-in).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-edge
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-edge
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports:
+        - port: 8080
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+      ports:
+        - port: 8083
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+      ports:
+        - port: 8083
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8081
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-github
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: "::/0"
+      ports:
+        - port: 443
+          protocol: TCP
+---
+# The orchestrator: the runner and edge on its services port, the proxy on its egress policy's;
+# out to the services it calls, never beyond them.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-orchestrator
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-orchestrator
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+        - podSelector:
+            matchLabels:
+              app: deckhand-edge
+      ports:
+        - port: 8083
+          protocol: TCP
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 8082
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8081
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+        - podSelector:
+            matchLabels:
+              app: deckhand-github
+        - podSelector:
+            matchLabels:
+              app: deckhand-models
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-policy
+      ports:
+        - port: 8181
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-edge
+      ports:
+        - port: 8083
+          protocol: TCP
+    # The proxy's CA, which runs that reach GitHub get.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 3128
+          protocol: TCP
+---
+# The runner: the orchestrator and the models service (the Antigravity login's refresh) alone;
+# out to the services it calls, and the API server (deckhand-api-server, below); the registries
+# with components/buildkit.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-runner
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-runner
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+        - podSelector:
+            matchLabels:
+              app: deckhand-models
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8081
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+      ports:
+        - port: 8083
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-github
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-policy
+      ports:
+        - port: 8181
+          protocol: TCP
+---
+# The broker: every service that asks it for its tokens, and the proxy (the sandboxes' calls
+# about their own run); out to the policy service and the API server (its callers'
+# TokenReviews: deckhand-api-server, below).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-broker
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-broker
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-edge
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+        - podSelector:
+            matchLabels:
+              app: deckhand-github
+        - podSelector:
+            matchLabels:
+              app: deckhand-models
+        - podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 8081
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-policy
+      ports:
+        - port: 8181
+          protocol: TCP
+---
+# The github service: edge, the orchestrator, the proxy (the sandboxes' GitHub calls and
+# pushes) and the runner (tarballs); out to the broker, the policy service and GitHub.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-github
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-github
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-edge
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+        - podSelector:
+            matchLabels:
+              app: deckhand-egress
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8081
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-policy
+      ports:
+        - port: 8181
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: "::/0"
+      ports:
+        - port: 443
+          protocol: TCP
+---
+# The models service: the proxy (the agents' calls) and the orchestrator; out to the broker, the
+# runner and the agents' APIs.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-models
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-models
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-egress
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+      ports:
+        - port: 8080
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8081
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+        - ipBlock:
+            cidr: "::/0"
+      ports:
+        - port: 443
+          protocol: TCP
+---
+# The policy service: the orchestrator, the github service, the runner and the broker; no way
+# out at all.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-policy
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-policy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+        - podSelector:
+            matchLabels:
+              app: deckhand-github
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8181
+          protocol: TCP
+---
+# The egress proxy: the sandboxes' and install pods of deckhand-sandboxes, BuildKit's
+# (components/buildkit: its builds go out through it) and the orchestrator (its CA); out to
+# the services it relays the sandboxes' calls to, and to the hosts the egress policy grants.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-egress
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-egress
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "deckhand.sandboxesNs" . }}
+          podSelector:
+            matchExpressions:
+              - key: deckhand.role
+                operator: In
+                values: [sandbox, install]
+        - podSelector:
+            matchLabels:
+              app: buildkitd
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+      ports:
+        - port: 3128
+          protocol: TCP
+    {{- if .Values.engine.enabled }}
+    # The sandboxes' engines, on their port (components/engine).
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ include "deckhand.sandboxesNs" . }}
+          podSelector:
+            matchLabels:
+              deckhand.role: sandbox
+      ports:
+        - port: 3129
+          protocol: TCP
+    {{- end }}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-orchestrator
+      ports:
+        - port: 8082
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-broker
+      ports:
+        - port: 8081
+          protocol: TCP
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-github
+        - podSelector:
+            matchLabels:
+              app: deckhand-models
+      ports:
+        - port: 8080
+          protocol: TCP
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, 100.64.0.0/10]
+        - ipBlock:
+            cidr: "::/0"
+            except: ["fc00::/7", "fe80::/10"]
+---
+# The API server, for the runner (the sandboxes' pods) and the broker (TokenReview), and nothing
+# else of the cluster or beyond: its addresses, apiServer.cidrs (docs/kubernetes.md,
+# Install). The placeholder (192.0.2.1, a documentation address) reaches nothing, so neither
+# service works until it is set: fail closed. 6443 is where a cluster's API server usually
+# listens behind its `kubernetes` Service, whose address NetworkPolicies see translated.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-api-server
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [deckhand-runner, deckhand-broker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- range .Values.apiServer.cidrs }}
+        - ipBlock:
+            cidr: {{ . }}
+        {{- end }}
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP

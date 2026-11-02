@@ -256,10 +256,18 @@ function fakeApi({
   return { api, servicesApi, calls, bodies, objects, servicesObjects };
 }
 
+// A network probe that finds the cluster enforces the policies (kube-probe.mjs).
+const ENFORCED = { check: async () => null, reset() {} };
+
 // `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
 // retries and polls take time); `sleep(ms)` is called too.
-// `kubernetes`: more of config.kubernetes.
-function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {}, engine } = {}) {
+// `kubernetes`: more of config.kubernetes. `probeOptions`: the network probe's (kube-probe.mjs),
+// which runs only when given: the cluster enforces the policies otherwise.
+function setup(
+  t,
+  options = {},
+  { now, sleep = async () => {}, kubernetes = {}, engine, probeOptions = null } = {},
+) {
   const fake = fakeApi(options);
   const logged = [];
   const inboxDir = tempDir(t);
@@ -287,6 +295,8 @@ function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {}, 
       clock.at += ms;
       await sleep(ms);
     },
+    probe: probeOptions ? null : ENFORCED,
+    probeOptions: probeOptions ?? {},
   });
   return { ...fake, runner, logged, inboxDir, clock };
 }
@@ -1795,6 +1805,7 @@ test("follow: a log stream that outlives its pod is let go, the rest of the log 
     log: (line) => logged.push(line),
     sleep: async () => {},
     watchMs: 5,
+    probe: ENFORCED,
   });
   await runner.start(spec());
   fake.pod = fakes.objects.pods.get("dh-org-repo-12-abc");
@@ -1817,4 +1828,310 @@ test("remove: never a pod or a Secret of the namespace that isn't this deploymen
   await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
   assert.equal(objects.pods.has("dh-org-repo-12-abc"), false);
   assert.equal(objects.secrets.has("dh-org-repo-12-abc-1730000000-env"), false);
+});
+
+// The network probe (kube-probe.mjs): its pods (one name each), and what the cluster around it
+// has.
+const isProbe = (pod) => Boolean(pod?.metadata?.annotations?.["deckhand.probe"]);
+const probeIn = (objects) => [...objects.pods.values()].find(isProbe);
+const CLUSTER_SERVICES = {
+  broker: {
+    metadata: { name: "broker" },
+    spec: { clusterIP: "10.96.0.20", ports: [{ port: 8081, protocol: "TCP" }] },
+  },
+  egress: {
+    metadata: { name: "egress" },
+    spec: {
+      clusterIP: "10.96.0.11",
+      selector: { app: "deckhand-egress" },
+      ports: [{ port: 3128 }],
+    },
+  },
+};
+const CLUSTER_SLICES = [
+  {
+    metadata: { labels: { "kubernetes.io/service-name": "broker" } },
+    endpoints: [{ addresses: [] }, { addresses: ["10.244.2.5"] }],
+    ports: [{ port: 8081, protocol: "TCP" }],
+  },
+  {
+    metadata: { labels: { "kubernetes.io/service-name": "egress" } },
+    endpoints: [{ addresses: ["10.244.3.9"] }],
+    ports: [{ port: 3128, protocol: "TCP" }],
+  },
+];
+const PROXY = "10.96.0.11:3128";
+
+// A runner whose network probe answers `reach(target)` for each of its targets ("host:port",
+// "/udp" after a UDP one), its pod ending `phase` (null: never). `targets()`: what the last
+// probe pod was asked to try; `probes()`: how many were made; `answers.reach` may change.
+// `services`, `slices`: the services' namespace's, by default CLUSTER_SERVICES' and CLUSTER_SLICES.
+function probed(
+  t,
+  {
+    reach = (target) => target === PROXY,
+    phase = "Succeeded",
+    kubernetes,
+    services = CLUSTER_SERVICES,
+    slices = CLUSTER_SLICES,
+  } = {},
+) {
+  const answers = { reach };
+  // Whatever the probe pod's name, its log is what it would print.
+  const logs = new Proxy(
+    {},
+    {
+      get: (_, name) =>
+        String(name).startsWith("dh-network-probe-")
+          ? () =>
+              new Response(
+                `${JSON.stringify(asked(s.objects.pods.get(name)).map((t) => answers.reach(t)))}\n`,
+              )
+          : undefined,
+    },
+  );
+  const policies = [structuredClone(POLICY)];
+  const env = {
+    KUBERNETES_SERVICE_HOST: "10.96.0.1",
+    KUBERNETES_SERVICE_PORT: "443",
+    STORE_URL: "redis://redis.data:6379",
+  };
+  const looked = [];
+  const lookup = async (host) => (looked.push(host), [{ address: `10.0.9.${looked.length}` }]);
+  const asked = (pod) =>
+    JSON.parse(pod.spec.containers[0].command[3]).map(
+      ({ host, port, proto }) => `${host}:${port}${proto === "udp" ? "/udp" : ""}`,
+    );
+  const s = setup(
+    t,
+    { policies, slices, logs },
+    {
+      kubernetes,
+      probeOptions: {
+        env,
+        lookup,
+        resolvConf: () => "search svc.cluster.local\nnameserver 10.96.0.10\n",
+        sleep: async (ms) => {
+          s.clock.at += ms;
+          for (const pod of s.objects.pods.values()) {
+            if (isProbe(pod) && phase) pod.status = { phase };
+          }
+        },
+      },
+    },
+  );
+  for (const [name, svc] of Object.entries(services)) s.objects.services.set(name, svc);
+  const made = () => s.bodies.filter(isProbe);
+  return {
+    ...s,
+    answers,
+    policies,
+    looked,
+    probes: () => made().length,
+    targets: () => asked(made().at(-1)),
+    probePod: () => made().at(-1),
+  };
+}
+
+test("network probe: reaching the egress proxy alone, runs start; the verdict kept until the policies change or the lease", async (t) => {
+  const p = probed(t, {
+    kubernetes: {
+      registry: "registry.example.com:5000/deckhand",
+      buildkit: "tcp://buildkitd:1234",
+    },
+  });
+  await p.runner.start(spec());
+  assert.ok(p.objects.pods.has("dh-org-repo-12-abc"));
+  assert.ok(!probeIn(p.objects), "the probe pod is removed");
+  assert.match(p.probePod().metadata.name, /^dh-network-probe-[0-9a-f]{8}$/);
+  assert.deepEqual(p.targets(), [
+    PROXY,
+    "10.96.0.20:8081",
+    "10.244.2.5:8081",
+    "10.0.9.1:5000",
+    "10.0.9.2:1234",
+    "10.0.9.3:6379",
+    "10.96.0.10:53",
+    "10.96.0.10:53/udp",
+    "10.96.0.1:443",
+    "1.1.1.1:443",
+  ]);
+  // The registry's host, BuildKit's (with a registry) and Redis's, as the runner resolves them.
+  assert.deepEqual(p.looked, ["registry.example.com", "buildkitd", "redis.data"]);
+  assert.match(p.logged.join("\n"), /Network probe: a sandbox reaches the egress proxy alone/);
+  await p.runner.start(spec({ run: "dh-org-repo-12-abc-2", name: "dh-org-repo-13-abc" }));
+  assert.equal(p.probes(), 1);
+  p.policies[0].metadata.resourceVersion = "2";
+  await p.runner.start(spec({ run: "dh-org-repo-12-abc-3", name: "dh-org-repo-14-abc" }));
+  assert.equal(p.probes(), 2);
+  // A new lease probes at once, before any run.
+  p.runner.leased();
+  await p.runner.start(spec({ run: "dh-org-repo-12-abc-4", name: "dh-org-repo-15-abc" }));
+  assert.equal(p.probes(), 3);
+  // Labelled as a sandbox, it is none: never listed nor located.
+  const { name } = p.probePod().metadata;
+  p.objects.pods.set(name, { ...p.probePod(), status: { phase: "Running", podIP: "10.244.1.99" } });
+  assert.ok(!(await p.runner.list()).some((s) => s.name === name));
+  assert.equal(await p.runner.locate("10.244.1.99"), null);
+});
+
+test("network probe: a service, Redis, the registry, the cluster's DNS, the API server or the internet reached refuses runs, saying which", async (t) => {
+  const cases = {
+    "10.96.0.20:8081": /reached the Service broker \(10\.96\.0\.20:8081\)/,
+    "10.244.2.5:8081": /reached a pod of the Service broker \(10\.244\.2\.5:8081\)/,
+    "10.0.9.1:5000": /reached the registry \(registry\.example\.com\) \(10\.0\.9\.1:5000\)/,
+    "10.0.9.3:6379": /reached Redis \(redis\.data\) \(10\.0\.9\.3:6379\)/,
+    "10.96.0.10:53/udp": /reached the cluster's DNS \(10\.96\.0\.10:53\/udp\)/,
+    "10.96.0.1:443": /reached the Kubernetes API server \(10\.96\.0\.1:443\)/,
+    "1.1.1.1:443": /reached a public address \(1\.1\.1\.1:443\)/,
+  };
+  for (const [leak, said] of Object.entries(cases)) {
+    const p = probed(t, {
+      reach: (target) => target === PROXY || target === leak,
+      kubernetes: {
+        registry: "registry.example.com:5000/deckhand",
+        buildkit: "tcp://buildkitd:1234",
+      },
+    });
+    await assert.rejects(p.runner.start(spec()), (error) => {
+      assert.match(error.message, /the cluster doesn't enforce the sandboxes' NetworkPolicies/);
+      assert.match(error.message, said);
+      assert.match(error.message, /Calico and Cilium do/);
+      return true;
+    });
+    assert.equal(p.objects.pods.size + p.objects.secrets.size, 0, leak);
+    // Kept: the next run is refused without another probe.
+    await assert.rejects(p.runner.start(spec()), said);
+    assert.equal(p.probes(), 1);
+    assert.match(p.logged.join("\n"), /Network probe: runs refused/);
+  }
+});
+
+test("network probe: a pod that can't reach the egress proxy proves nothing: that run is refused, the next probes again", async (t) => {
+  // No network at all, or a proxy not ready yet (a fresh install, an evicted pod).
+  const p = probed(t, { reach: () => false });
+  await assert.rejects(
+    p.runner.start(spec()),
+    /couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its probe pod couldn't reach the egress proxy \(10\.96\.0\.11:3128\), which sandboxes go out through/,
+  );
+  assert.equal(p.objects.pods.size, 0);
+  // The proxy back: the next run probes again, and starts.
+  p.answers.reach = (target) => target === PROXY;
+  await p.runner.start(spec());
+  assert.equal(p.probes(), 2);
+  assert.ok(p.objects.pods.has("dh-org-repo-12-abc"));
+  // A leak with the proxy missed is a leak all the same: kept.
+  const leaky = probed(t, { reach: (target) => target === "1.1.1.1:443" });
+  await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
+  await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
+  assert.equal(leaky.probes(), 1);
+});
+
+test("network probe: a leftover older than any probe is removed, a younger one (the other copy's, mid-handover) left alone", async (t) => {
+  const p = probed(t);
+  const left = (name, at) =>
+    p.objects.pods.set(name, {
+      metadata: {
+        name,
+        creationTimestamp: new Date(at).toISOString(),
+        labels: {
+          "deckhand.owner": "dh",
+          "deckhand.run": "network-probe",
+          "deckhand.role": "sandbox",
+        },
+        annotations: { "deckhand.probe": "network" },
+      },
+      status: { phase: "Running" },
+    });
+  left("dh-network-probe-old", p.clock.at - 60 * 60_000);
+  left("dh-network-probe-other", p.clock.at - 1000);
+  await p.runner.start(spec());
+  assert.ok(!p.objects.pods.has("dh-network-probe-old"));
+  assert.ok(p.objects.pods.has("dh-network-probe-other"));
+});
+
+test("network probe: a probe pod that fails or never ends refuses the run, is removed, and is tried again", async (t) => {
+  const failed = probed(t, { phase: "Failed" });
+  await assert.rejects(
+    failed.runner.start(spec()),
+    /couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its probe pod ended Failed/,
+  );
+  assert.ok(!probeIn(failed.objects));
+  await assert.rejects(failed.runner.start(spec()), /its probe pod ended Failed/);
+  assert.equal(failed.probes(), 2, "not kept: probed again");
+
+  const stuck = probed(t, { phase: null, kubernetes: { pendingMs: 60_000 } });
+  await assert.rejects(
+    stuck.runner.start(spec()),
+    /its probe pod didn't end within 2 min \(Running\)/,
+  );
+  assert.equal(stuck.objects.pods.size, 0);
+  await assert.rejects(stuck.runner.start(spec()), /its probe pod didn't end/);
+  assert.equal(stuck.probes(), 2, "not kept: probed again");
+});
+
+test("network probe: its pod is labelled as a sandbox, meets Pod Security restricted, and holds nothing", async (t) => {
+  const p = probed(t);
+  await p.runner.start(spec());
+  const pod = p.probePod();
+  assert.deepEqual(pod.metadata.labels, {
+    "deckhand.owner": "dh",
+    "deckhand.run": "network-probe",
+    "deckhand.role": "sandbox",
+  });
+  assert.equal(isolationProblem([POLICY], pod.metadata.labels), null);
+  assert.deepEqual(restrictedProblems(pod), []);
+  const { spec: podSpec_ } = pod;
+  assert.equal(podSpec_.automountServiceAccountToken, false);
+  assert.equal(podSpec_.enableServiceLinks, false);
+  assert.equal(podSpec_.restartPolicy, "Never");
+  assert.equal(podSpec_.dnsPolicy, "None");
+  assert.equal(podSpec_.volumes, undefined);
+  assert.deepEqual(podSpec_.securityContext, {
+    runAsNonRoot: true,
+    runAsUser: SANDBOX_USER.uid,
+    runAsGroup: SANDBOX_USER.gid,
+    seccompProfile: { type: "RuntimeDefault" },
+  });
+  const [container] = podSpec_.containers;
+  assert.equal(container.image, "dh-sandbox");
+  assert.equal(container.envFrom, undefined);
+  assert.equal(container.env, undefined);
+  assert.deepEqual(container.securityContext, {
+    allowPrivilegeEscalation: false,
+    capabilities: { drop: ["ALL"] },
+    runAsNonRoot: true,
+    seccompProfile: { type: "RuntimeDefault" },
+  });
+  assert.deepEqual(container.command.slice(0, 2), ["node", "-e"]);
+});
+
+test("network probe, with an engine: the proxy's engines' port is the proxy's, to be reached when its Service publishes it", async (t) => {
+  const egress = structuredClone(CLUSTER_SERVICES.egress);
+  egress.spec.ports = [{ port: 3128 }, { port: 3129 }];
+  const slices = structuredClone(CLUSTER_SLICES);
+  slices[1].ports = [{ port: 3128 }, { port: 3129 }];
+  const both = (target) => ["10.96.0.11:3128", "10.96.0.11:3129"].includes(target);
+  const p = probed(t, {
+    reach: both,
+    kubernetes: ENGINE,
+    services: { ...CLUSTER_SERVICES, egress },
+    slices,
+  });
+  await p.runner.start(spec());
+  const tried = p.targets();
+  assert.deepEqual(tried.slice(0, 2), ["10.96.0.11:3128", "10.96.0.11:3129"]);
+  // Neither port of the proxy's pods is a leak; the broker's still are.
+  assert.ok(!tried.some((target) => target.startsWith("10.244.3.9:")));
+  assert.ok(tried.includes("10.244.2.5:8081"));
+  // Its Service without 3129: the port isn't tried (engine runs are refused before, saying so).
+  const without = probed(t, { kubernetes: ENGINE });
+  await without.runner.start(spec());
+  assert.ok(!without.targets().some((target) => target.endsWith(":3129")));
+  // Without the engine's settings, 3129 on the proxy's Service must be out of reach.
+  const off = probed(t, { reach: both, services: { ...CLUSTER_SERVICES, egress }, slices });
+  await assert.rejects(
+    off.runner.start(spec()),
+    /reached the Service egress \(10\.96\.0\.11:3129\)/,
+  );
 });

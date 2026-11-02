@@ -1,0 +1,112 @@
+# deploy/kubernetes/models.yaml: the only pods with your agents' credentials (the
+# deckhand-models Secret). The plans' refreshed logins are sealed in its store with models.key.
+{{- $redis := eq .Values.store "redis" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: models
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    app: deckhand-models
+spec:
+  replicas: 2
+  {{- include "deckhand.strategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      app: deckhand-models
+  template:
+    metadata:
+      labels:
+        app: deckhand-models
+    spec:
+      serviceAccountName: deckhand-models
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 630
+      {{- include "deckhand.podSecurityContext" false | nindent 6 }}
+      {{- if not $redis }}
+      {{- include "deckhand.sameNode" "deckhand-models" | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: models
+          image: {{ include "deckhand.image" (list . "models") }}
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: {{ include "deckhand.envName" . }}
+            - secretRef:
+                name: deckhand-models
+          env:
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            - name: SERVICE_KEYS_DIR
+              value: /service-keys
+            {{- if $redis }}
+            {{- include "deckhand.redisStore" "models" | nindent 12 }}
+            {{- end }}
+          {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
+          {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: key
+              mountPath: /keys
+              readOnly: true
+            - name: store
+              mountPath: /data/store
+            - name: credentials
+              mountPath: /data/credentials
+              readOnly: true
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: service-keys
+              mountPath: /service-keys
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        - name: key
+          secret:
+            secretName: deckhand-models-key
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        - name: store
+          {{- if $redis }}
+          emptyDir: {}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: models-store
+          {{- end }}
+        - name: credentials
+          secret:
+            secretName: deckhand-credentials
+            defaultMode: 288
+            optional: true
+        {{- include "deckhand.serverVolume" (list . false) | nindent 8 }}
+        - name: service-keys
+          configMap:
+            name: deckhand-service-keys
+        {{- include "deckhand.brokerTokenVolume" . | nindent 8 }}
+{{- if not $redis }}
+---
+{{ include "deckhand.claim" (list . "models-store" "ReadWriteOnce") }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: models
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: deckhand-models
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
