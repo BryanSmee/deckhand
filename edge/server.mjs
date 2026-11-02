@@ -1,11 +1,11 @@
-// Edge's entry point (#506): the only service the internet reaches. GitHub's webhooks (their
-// HMAC checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and
-// sessions (MCP clients' too, oauth.mjs), the dashboard's files, and its API, /status and the screenshots, which the
-// orchestrator answers (forward.mjs). It holds the webhook secret, the session key and the
-// OAuth client's, nothing else: no App key (the github service's), no agent credential (the
-// models service's), no Docker socket (the runner's). Two copies may run side by side on one
-// store, both active: either takes any request, the deliveries are taken once, a sign-out ends
-// the login's sessions on both, and the redeliveries' poller runs on the one holding its lease.
+// Edge's entry point (#506): the only service the internet reaches. GitHub's webhooks (their HMAC
+// checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and sessions
+// (MCP clients' too, oauth.mjs), the dashboard's files, and its API, /status and the screenshots,
+// which the orchestrator answers (forward.mjs). It holds the webhook secret, the session key and
+// the OAuth client's, nothing else: no App key (the github service's), no agent credential (the
+// models service's), no Docker socket (the runner's). Two copies may run side by side on one store,
+// both active: either takes any request, the deliveries are taken once, a sign-out ends the login's
+// sessions on both, and the redeliveries' poller runs on the one holding its lease.
 //
 // Settings, from the environment (and config.yaml, as the orchestrator reads them):
 //   PORT                8080: webhooks, /setup, sign-in, the dashboard (published)

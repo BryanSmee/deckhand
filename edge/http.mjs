@@ -1,6 +1,7 @@
 // Edge's public HTTP server (#506), the only one the internet reaches: GitHub's webhooks, /setup,
-// sign-in (the dashboard's, and MCP clients', oauth.mjs), the dashboard's files, and its API, /status and the runs' screenshots, which it passes
-// on to the orchestrator with the signed-in user (forward.mjs).
+// sign-in (the dashboard's, and MCP clients', oauth.mjs), the dashboard's files, and its API,
+// /status and the runs' screenshots, which it passes on to the orchestrator with the signed-in user
+// (forward.mjs).
 //
 // A delivery is verified (its HMAC), taken once (its GUID set-if-absent in edge's store, which
 // both copies share: one GitHub sends twice, or that reaches both, goes on once), then put on

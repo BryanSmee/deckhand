@@ -49,10 +49,31 @@ async function serveOAuth(t, { storeUrl = "memory:", clock: start = 1_000_000_00
     log,
   });
   let n = 0;
+  // Edge's store as oauth.mjs sees it: a compareAndSet matching a pause waits there until let
+  // go, for the tests that run two calls at once.
+  const pauses = [];
+  const compareAndSet = async (...args) => {
+    const at = pauses.findIndex((p) => p.match(...args));
+    if (at >= 0) {
+      const [pause] = pauses.splice(at, 1);
+      pause.reached();
+      await pause.held;
+    }
+    return store.compareAndSet(...args);
+  };
+  // The next compareAndSet(key, expected, value) that `match` takes: { reached, go }.
+  function pauseAt(match) {
+    const pause = { match };
+    const reached = new Promise((resolve) => (pause.reached = resolve));
+    let go;
+    pause.held = new Promise((resolve) => (go = resolve));
+    pauses.push(pause);
+    return { reached, go };
+  }
   const oauth = createOAuth({
     config,
     auth,
-    store,
+    store: { ...store, compareAndSet },
     publicUrl: () => PUBLIC,
     now,
     // Distinct, long enough to pass for tokens, and predictable.
@@ -179,6 +200,7 @@ async function serveOAuth(t, { storeUrl = "memory:", clock: start = 1_000_000_00
     refresh,
     mcp,
     connect,
+    pauseAt,
     later: (ms) => (clock += ms),
   };
 }
@@ -567,6 +589,78 @@ test("a refresh asking only for scopes Deckhand doesn't know keeps those it has"
   });
   assert.equal(res.status, 200);
   assert.equal((await res.json()).scope, "deckhand:read");
+});
+
+// The write that issues a family's tokens: its creation (expected null), or its refresh's (the
+// rotated value).
+const issuing = (key, expected) =>
+  key.startsWith("mcp/families/") &&
+  (expected === null || expected.refresh?.startsWith("rotating-"));
+
+test("two refreshes at once with one token: neither keeps tokens, the family ends", async (t) => {
+  const s = await serveOAuth(t);
+  const { client, tokens } = await s.connect();
+  const pause = s.pauseAt(issuing);
+  const first = s.refresh(client, tokens.refresh_token);
+  await pause.reached;
+  const second = await s.refresh(client, tokens.refresh_token);
+  assert.equal(second.status, 400);
+  pause.go();
+  const res = await first;
+  assert.equal(res.status, 400);
+  assert.equal((await res.json()).error, "invalid_grant");
+  assert.equal((await s.mcp(tokens.access_token)).status, 401);
+  assert.deepEqual(await s.store.get("mcp/logins/alice"), []);
+});
+
+test("Revoke while a refresh is on its way: the refresh gets nothing", async (t) => {
+  const s = await serveOAuth(t);
+  const { client, cookie, tokens } = await s.connect();
+  const [{ id }] = (await (await s.call("/api/mcp/clients", { cookie })).json()).clients;
+  const pause = s.pauseAt(issuing);
+  const refreshing = s.refresh(client, tokens.refresh_token);
+  await pause.reached;
+  const revoked = await s.call(`/api/mcp/clients/${id}/revoke`, {
+    method: "POST",
+    cookie,
+    headers: { origin: PUBLIC },
+  });
+  assert.equal(revoked.status, 200);
+  pause.go();
+  assert.equal((await refreshing).status, 400);
+  assert.equal(await s.store.get(`mcp/families/${id}`), null);
+  assert.deepEqual((await (await s.call("/api/mcp/clients", { cookie })).json()).clients, []);
+});
+
+test("a code used again before its first exchange made the family: no tokens from it", async (t) => {
+  const s = await serveOAuth(t);
+  const cookie = await s.signIn();
+  const client = (await s.register()).body.client_id;
+  const code = (await s.consent(cookie, client)).searchParams.get("code");
+  const pause = s.pauseAt(issuing);
+  const first = s.exchange(client, code);
+  await pause.reached;
+  assert.equal((await s.exchange(client, code)).status, 400);
+  pause.go();
+  assert.equal((await first).status, 400);
+  assert.equal((await s.store.get("mcp/logins/alice"))?.length ?? 0, 0);
+});
+
+test("a refresh asking for fewer scopes narrows its access token only", async (t) => {
+  const s = await serveOAuth(t);
+  const { client, tokens } = await s.connect();
+  const narrow = await s.form("/oauth/token", {
+    grant_type: "refresh_token",
+    refresh_token: tokens.refresh_token,
+    client_id: client,
+    scope: "deckhand:read",
+  });
+  const narrowed = await narrow.json();
+  assert.equal(narrowed.scope, "deckhand:read");
+  assert.deepEqual((await (await s.mcp(narrowed.access_token)).json()).scopes, ["deckhand:read"]);
+  // The refresh token kept the whole grant (RFC 6749 §6).
+  const again = await (await s.refresh(client, narrowed.refresh_token)).json();
+  assert.equal(again.scope, "deckhand:read deckhand:work");
 });
 
 test("tokens survive a restart: edge's store keeps them", async (t) => {

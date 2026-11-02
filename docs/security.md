@@ -2003,7 +2003,11 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
   hour) and a refresh token (30 days), bound to the login, the client and the resource
   (`<PUBLIC_URL>/mcp`, RFC 8707: a client naming another is refused). A refresh rotates the
   refresh token; one used twice (or two refreshes at once) ends its whole family, the client
-  signing in again. Scopes: `deckhand:read` and `deckhand:work` (what a client gets when it
+  signing in again. Each write of a family's tokens is a compare-and-set on its current value,
+  and a revoked family leaves a mark (`mcp/revoked/<id>`, 30 days) its creation checks: a
+  refresh, an exchange or a code used twice racing a revocation never brings the family back. A
+  refresh may ask for fewer scopes: its access token gets those, its refresh token keeps the
+  grant (RFC 6749 §6). Scopes: `deckhand:read` and `deckhand:work` (what a client gets when it
   asks for neither), and `deckhand:machine`, granted only when asked for (machines, #595);
   others (`offline_access`) are ignored.
 - **Kept hashed.** Codes, access and refresh tokens are random (256 bits) and kept as their

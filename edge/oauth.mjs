@@ -63,6 +63,7 @@ const key = {
   code: (hash) => `mcp/codes/${hash}`,
   family: (id) => `mcp/families/${id}`,
   used: (id) => `mcp/used/${id}`,
+  revoked: (id) => `mcp/revoked/${id}`,
   access: (hash) => `mcp/access/${hash}`,
   refresh: (hash) => `mcp/refresh/${hash}`,
   login: (login) => `mcp/logins/${login}`,
@@ -401,7 +402,11 @@ on this Deckhand, with your rights on its dashboard:</p>
     }
   }
 
+  // Its mark first: a family whose creation or refresh is on its way when it is revoked (a code
+  // used twice before its first exchange created it) sees the mark, rather than come back.
   async function revokeFamily(id, why) {
+    if (!id) return false;
+    await store.set(key.revoked(id), true, { ttlMs: REFRESH_MS });
     const family = await store.get(key.family(id));
     await store.delete(key.family(id));
     await store.delete(key.used(id));
@@ -412,31 +417,44 @@ on this Deckhand, with your rights on its dashboard:</p>
   }
 
   // A new access token and refresh token for `family`, written with it: the refresh token it
-  // holds is the only one that counts.
-  async function issue(res, family) {
+  // holds is the only one that counts. `expected`: the family's value now (null: a new one),
+  // which it replaces only if still there: one revoked meanwhile stays revoked. `scopes`: the
+  // access token's, fewer than the family's when a refresh asked for fewer (RFC 6749 §6: the
+  // refresh token keeps them all). The answer's body, or null when it was revoked.
+  async function issue(family, expected, scopes = family.scopes) {
     const access = random(32);
     const refresh = random(32);
     const at = now();
     const next = { ...family, refresh: digest(refresh), expires: at + REFRESH_MS };
+    const accessKey = key.access(digest(access));
+    const refreshKey = key.refresh(digest(refresh));
     await store.set(
-      key.access(digest(access)),
-      { family: family.id, exp: at + ACCESS_MS },
+      accessKey,
+      { family: family.id, exp: at + ACCESS_MS, scopes },
       {
         ttlMs: ACCESS_MS,
       },
     );
-    await store.set(key.refresh(digest(refresh)), { family: family.id }, { ttlMs: REFRESH_MS });
-    await store.set(key.family(family.id), next, { ttlMs: REFRESH_MS });
+    await store.set(refreshKey, { family: family.id }, { ttlMs: REFRESH_MS });
+    const kept =
+      (await store.compareAndSet(key.family(family.id), expected, next, { ttlMs: REFRESH_MS })) &&
+      !(await store.get(key.revoked(family.id)));
+    if (!kept) {
+      await store.delete(key.family(family.id)).catch(() => false);
+      await store.delete(accessKey).catch(() => false);
+      await store.delete(refreshKey).catch(() => false);
+      return null;
+    }
     // The client's registration lives as long as its tokens may.
     const client = await store.get(key.client(family.client));
     if (client) await store.set(key.client(client.id), client, { ttlMs: REFRESH_MS });
-    json(res, 200, {
+    return {
       access_token: access,
       token_type: "Bearer",
       expires_in: ACCESS_MS / 1000,
       refresh_token: refresh,
-      scope: family.scopes.join(" "),
-    });
+      scope: scopes.join(" "),
+    };
   }
 
   async function exchangeCode(res, p) {
@@ -484,6 +502,8 @@ on this Deckhand, with your rights on its dashboard:</p>
       epoch: code.epoch,
       created: now(),
     };
+    const tokens = await issue(family, null);
+    if (!tokens) return oauthError(res, "invalid_grant", "This code was used already.");
     // Past the cap, the oldest of the login's clients goes.
     let dropped = [];
     await changeList(code.login, (ids) => {
@@ -493,7 +513,12 @@ on this Deckhand, with your rights on its dashboard:</p>
     });
     for (const old of dropped) await revokeFamily(old, "revoked: too many clients");
     log(`MCP: ${code.login} connected client ${client.id} (${JSON.stringify(client.name)})`);
-    return issue(res, family);
+    // Revoked while it was being listed (Settings read the list before): not left in it.
+    if (!(await store.get(key.family(id)))) {
+      await changeList(code.login, (ids) => ids.filter((x) => x !== id));
+      return oauthError(res, "invalid_grant", "Revoked.");
+    }
+    return json(res, 200, tokens);
   }
 
   async function refresh(res, p) {
@@ -525,7 +550,12 @@ on this Deckhand, with your rights on its dashboard:</p>
       await revokeFamily(family.id, "revoked: a refresh token was used twice");
       return oauthError(res, "invalid_grant", "This refresh token was used already.");
     }
-    return issue(res, { ...family, scopes });
+    const tokens = await issue(family, rotated, scopes);
+    if (!tokens) {
+      // Revoked since its rotation: another refresh with the same token, or Revoke.
+      return oauthError(res, "invalid_grant", "Unknown, expired or revoked refresh token.");
+    }
+    return json(res, 200, tokens);
   }
 
   async function token(req, res) {
@@ -563,7 +593,7 @@ on this Deckhand, with your rights on its dashboard:</p>
     if (now() - (used ?? 0) > USED_EVERY_MS) {
       await store.set(key.used(family.id), now(), { ttlMs: REFRESH_MS }).catch(() => false);
     }
-    return { login: family.login, scopes: family.scopes, client: family.client };
+    return { login: family.login, scopes: access.scopes ?? family.scopes, client: family.client };
   }
 
   async function mcp(req, res) {

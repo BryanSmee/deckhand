@@ -1,7 +1,7 @@
-// Settings: its tabs (Repositories, Preferences, MCP clients, Server) and the one open. The tabs are links,
-// so each has its address (route.ts); on a wide screen they sit in the page header, on a
-// phone atop the page; a repository's config hides them for its own header. Preferences says
-// it's coming until its page lands.
+// Settings: its tabs (Repositories, Preferences, MCP clients, Server) and the one open. The tabs
+// are links, so each has its address (route.ts); on a wide screen they sit in the page header, on a
+// phone atop the page; a repository's config hides them for its own header. Preferences says it's
+// coming until its page lands.
 import type { RepoList } from "./api";
 import { Clients } from "./Clients";
 import type { Notify } from "./notify";
