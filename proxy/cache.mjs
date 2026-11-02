@@ -16,7 +16,7 @@ import {
   statSync,
   unlinkSync,
 } from "node:fs";
-import { open, readFile, rename, unlink } from "node:fs/promises";
+import { open, readFile, rename, unlink as unlinkFile } from "node:fs/promises";
 import { join } from "node:path";
 import { atomicWrite, tempPath } from "./atomic.mjs";
 
@@ -172,13 +172,15 @@ export function notModified(req, headers) {
   return !Number.isNaN(since) && !Number.isNaN(modified) && modified <= since;
 }
 
-// The store. `max`: bytes in all (0: no cache), `entryMax`: per entry; `now`: the clock.
+// The store. `max`: bytes in all (0: no cache), `entryMax`: per entry; `now`: the clock;
+// `unlink`: how a file is removed (a test slows it).
 export function createCache({
   dir,
   max = DEFAULT_MAX,
   entryMax = DEFAULT_ENTRY_MAX,
   now = Date.now,
   log = () => {},
+  unlink = unlinkFile,
 }) {
   const index = new Map(); // key → { size, lastUsed }
   let total = 0;
@@ -192,6 +194,13 @@ export function createCache({
   const pendingMax = Math.max(limit, max / 2);
   const bodyPath = (key) => join(dir, `${key}.body`);
   const metaPath = (key) => join(dir, `${key}.json`);
+  // Removals and released downloads still under way, for settled().
+  const background = new Set();
+  const inBackground = (promise) => {
+    background.add(promise);
+    promise.finally(() => background.delete(promise));
+    return promise;
+  };
 
   const drop = (key) => {
     const entry = index.get(key);
@@ -225,7 +234,7 @@ export function createCache({
     while (total + pending + bytes > max && index.size) {
       const key = oldest();
       log(`cache: removed ${key}, least recently used`);
-      remove(key);
+      inBackground(remove(key));
     }
     return total + pending + bytes <= max;
   }
@@ -286,6 +295,10 @@ export function createCache({
       return total + pending;
     },
     has: (key) => index.has(key),
+    // Once the files removed and the downloads dropped so far are gone from the disk.
+    async settled() {
+      while (background.size) await Promise.all(background);
+    },
 
     // Accept too, when the client sends one: npm's registry answers its packuments by it.
     key(url, acceptEncoding, accept) {
@@ -354,12 +367,17 @@ export function createCache({
       const closed = new Promise((resolve) => stream.on("close", resolve));
       stream.on("error", () => abort());
       // Its bytes stay counted until its file is gone, or kept.
-      const release = () => (pending -= reserved ?? size);
+      const release = () => {
+        pending -= reserved ?? size;
+      };
+      let released = null;
+      // Resolves once its bytes no longer count: its file is gone.
       function abort() {
-        if (done) return;
+        if (done) return released ?? Promise.resolve();
         done = true;
         stream.destroy();
-        closed.then(() => unlink(path).catch(() => {})).then(release);
+        released = inBackground(closed.then(() => unlink(path).catch(() => {})).then(release));
+        return released;
       }
       return {
         write(chunk) {
