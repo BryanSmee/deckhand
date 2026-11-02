@@ -11,6 +11,7 @@ import {
 import { ConfigError, loadConfig } from "../listener/config.mjs";
 import { parseRepoConfig, startable } from "../listener/repo-config.mjs";
 import { runTrigger } from "../listener/run-policy.mjs";
+import { createTasks, newTask, pickedTask } from "../listener/tasks.mjs";
 import { testConfig } from "./helpers.mjs";
 
 const BOT = "deckhand[bot]";
@@ -752,4 +753,128 @@ test("soon(): one sweep a moment later for a burst, none without slots", async (
   });
   none.pickup.soon();
   assert.deepEqual(off, []);
+});
+
+// createTasks() over org/app's tasks, with MAX_PARALLEL 2 and one reserved slot: `runs`, the
+// run records newest first (what a restart keeps); `closed` and `pulls`, task key → how its
+// issue closed and its pull request (titles.mjs, pulls.mjs). Nothing starts by itself: the
+// test calls schedule().
+function pickTasks({ runs = [], closed = {}, pulls = {} } = {}) {
+  const started = [];
+  const { settings } = parseRepoConfig("auto_pickup: true\n", testConfig());
+  const ctx = {
+    config: testConfig({ MAX_PARALLEL: "2", AUTO_PICKUP_SLOTS: "1", DEBOUNCE_MS: "60000" }),
+    log: () => {},
+    skip: () => null,
+    tasks: new Map(),
+    issueModes: new Map(),
+    brainstorms: { get: () => null, end: () => {} },
+    runs,
+    running: 0,
+    run: (task) => {
+      task.running = true;
+      ctx.running++;
+      started.push(task.id);
+    },
+    titles: { set: () => {}, closed: (key) => closed[key] ?? null },
+    pulls: { get: (key) => pulls[key] ?? null },
+    received: () => {},
+    answer: async () => {},
+    runner: { hasSession: async () => true },
+    policies: { decide: async () => ({ applied: false, messages: [] }) },
+    github: async () => Response.json({ labels: [], user: { login: "alice" } }),
+  };
+  const tasks = createTasks(ctx);
+  // Queued on org/app#`n` as the review loop (`reason`) or a person's comment queues it.
+  const queue = async (n, fields = {}) => {
+    const item = {
+      repo: "org/app",
+      id: String(n),
+      kind: "issue",
+      number: n,
+      replyTo: n,
+      base: "main",
+      settings,
+      text: "",
+      ...fields,
+    };
+    await tasks.accept(item);
+    const task = ctx.tasks.get(`org/app#${n}`);
+    clearTimeout(task.timer);
+    task.ready = true;
+    return item;
+  };
+  const review = (n) => queue(n, { trigger: "review", reason: "review", modeLine: null });
+  const comment = (n) => queue(n, { trigger: "work", author: "alice", text: "And the dates." });
+  return { ctx, started, ...tasks, queue, review, comment };
+}
+
+const pickedRun = (n, fields = {}) => ({
+  id: `run-${n}`,
+  key: `org/app#${n}`,
+  repo: "org/app",
+  status: "ok",
+  autoPickup: true,
+  ...fields,
+});
+
+test("the review loop of an auto-picked issue holds its reserved slot: counted, scheduled there, still the listener's", async () => {
+  // The picked run is over (its record is all there is, as after a restart); its review is
+  // queued after a person's comment on another issue, which waits for a standard slot.
+  const p = pickTasks({ runs: [pickedRun(1)] });
+  const busy = newTask({ repo: "org/app", id: "9", kind: "issue", number: 9 });
+  busy.running = true;
+  p.ctx.tasks.set("org/app#9", busy);
+  p.ctx.running = 1;
+  const other = await p.comment(2);
+  const loop = await p.review(1);
+  assert.equal(other.autoPickup, undefined);
+  assert.deepEqual([loop.autoPickup, loop.followsPick], [true, true]);
+  assert.ok(pickedTask(p.ctx.tasks.get("org/app#1")));
+  // The slot is taken: the sweep picks nothing for it.
+  assert.equal(p.pickedCount(), 1);
+  p.schedule();
+  // The reserved slot is the review's, though #2 was queued first; #2 waits for a standard one.
+  assert.deepEqual(p.started, ["1"]);
+  assert.equal(p.pickedCount(), 1);
+});
+
+test("a person's comment on an auto-picked task holds the slot too, started by the comment for the policies", async () => {
+  const p = pickTasks();
+  const picked = await p.queue(1, { trigger: "work", author: "alice", autoPickup: true });
+  // Queued behind the picked item, before it ran.
+  const follow = await p.comment(1);
+  assert.equal(runTrigger(picked), "auto-pickup");
+  assert.deepEqual([follow.autoPickup, follow.followsPick], [true, true]);
+  assert.equal(runTrigger(follow), "comment");
+  // Its run going: what comes then follows it too.
+  const task = p.ctx.tasks.get("org/app#1");
+  task.pending = [];
+  task.live = { record: { autoPickup: true } };
+  task.running = true;
+  assert.equal((await p.review(1)).autoPickup, true);
+});
+
+test("once the picked work is done, or another run came last, what is queued isn't auto-picked", async () => {
+  const cases = [
+    // The issue closed, its pull request merged or closed.
+    { runs: [pickedRun(1)], closed: { "org/app#1": "completed" } },
+    { runs: [pickedRun(1)], pulls: { "org/app#1": { number: 5, state: "merged" } } },
+    { runs: [pickedRun(1)], pulls: { "org/app#1": { number: 5, state: "closed" } } },
+    // Its last run wasn't picked (an earlier one was), or another task's was.
+    { runs: [pickedRun(1, { id: "run-2", autoPickup: undefined }), pickedRun(1)] },
+    { runs: [pickedRun(3)] },
+  ];
+  for (const state of cases) {
+    const p = pickTasks(state);
+    const loop = await p.review(1);
+    assert.equal(loop.autoPickup, undefined, JSON.stringify(state));
+    assert.equal(p.pickedCount(), 0);
+  }
+  // Its pull request still open, under another spelling of the key: still picked.
+  const p = pickTasks({
+    runs: [pickedRun(1, { key: "Org/App#1" })],
+    pulls: { "org/app#1": { number: 5, state: "ready" } },
+  });
+  assert.equal((await p.review(1)).autoPickup, true);
 });

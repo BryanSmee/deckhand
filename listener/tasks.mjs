@@ -285,6 +285,19 @@ export function createTasks(ctx) {
     return inOrder(accepting, taskKey(item.repo, item.id), () => queue(item));
   }
 
+  // Whether what is queued now on `task` follows an auto-picked run (#591), until the picked work
+  // is done: its run or first queued item is picked, or its last run was (the records keep it
+  // through a restart) while its issue is open and its pull request neither merged nor closed.
+  // Then it holds one of AUTO_PICKUP_SLOTS too, the review loop's runs and people's comments
+  // alike: the sweep doesn't see the slot free while the loop goes on.
+  function followsPick(task, key) {
+    if (pickedTask(task)) return true;
+    const last = ctx.runs?.find((r) => taskId(r.key) === taskId(key));
+    if (!last?.autoPickup || ctx.titles?.closed?.(key)) return false;
+    const pr = ctx.pulls?.get?.(key)?.state;
+    return pr !== "merged" && pr !== "closed";
+  }
+
   async function queue(item) {
     // Its default branch, as GitHub said: "main" when it didn't.
     item.base ||= "main";
@@ -300,6 +313,11 @@ export function createTasks(ctx) {
     }
     // The latest settings decide the repo's parallel cap.
     if (item.settings) task.settings = item.settings;
+    // Its pick's follow-up (the review loop, a comment): in the reserved slot too, and still
+    // started by what started it for the policies (run-policy.mjs runTrigger()).
+    if (!item.autoPickup && followsPick(task, key)) {
+      Object.assign(item, { autoPickup: true, followsPick: true });
+    }
     // A comment that waited (resume()) has its 👀 already.
     if (!item.eyes) ctx.received(item);
     // When it was queued: the run order's, for a task nobody placed (queueOrder()).
