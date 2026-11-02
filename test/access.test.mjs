@@ -16,7 +16,7 @@ import {
 import { agentFor } from "../listener/agents/index.mjs";
 import { egressPolicy } from "../listener/egress.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
-import { grantedOf, tempDir, testConfig } from "./helpers.mjs";
+import { grantedOf, needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
 
 const claude = agentFor("claude");
 const codex = agentFor("codex");
@@ -122,78 +122,93 @@ test("a Dockerfile or engine without its grant: one reply listing them", async (
   assert.deepEqual(access.grant.grantFiles, ["grants.rego"]);
 });
 
-test("mounts outside the granted root, through a symlink or .., are refused, each named", async (t) => {
-  const dir = realpathSync(tempDir(t));
-  mkdirSync(join(dir, "nfs"));
-  symlinkSync("/etc", join(dir, "nfs", "escape"));
-  const yaml = `mounts:\n  - ${dir}/nfs/escape\n  - ${dir}/nfs/../etc\n`;
-  const { error } = await refusal(t, `mounts: [${join(dir, "nfs")}]\n`, yaml, codex);
-  assert.match(
-    error,
-    /^Codex can't run here: host mounts requested by `\.deckhand\.yaml` are refused/,
-  );
-  assert.match(error, /escape`: resolves to \/etc, outside the roots/);
-  assert.match(error, /\.\.\/etc`: (resolves to \S+, outside|doesn't exist)/);
-  assert.match(error, /Only paths under a root the operator grants this repository can be mounted/);
-});
+test(
+  "mounts outside the granted root, through a symlink or .., are refused, each named",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const dir = realpathSync(tempDir(t));
+    mkdirSync(join(dir, "nfs"));
+    symlinkSync("/etc", join(dir, "nfs", "escape"));
+    const yaml = `mounts:\n  - ${dir}/nfs/escape\n  - ${dir}/nfs/../etc\n`;
+    const { error } = await refusal(t, `mounts: [${join(dir, "nfs")}]\n`, yaml, codex);
+    assert.match(
+      error,
+      /^Codex can't run here: host mounts requested by `\.deckhand\.yaml` are refused/,
+    );
+    assert.match(error, /escape`: resolves to \/etc, outside the roots/);
+    assert.match(error, /\.\.\/etc`: (resolves to \S+, outside|doesn't exist)/);
+    assert.match(
+      error,
+      /Only paths under a root the operator grants this repository can be mounted/,
+    );
+  },
+);
 
-test("a mount that resolves elsewhere once the run is prepared stops it", async (t) => {
-  const dir = realpathSync(tempDir(t));
-  mkdirSync(join(dir, "nfs", "a"), { recursive: true });
-  mkdirSync(join(dir, "nfs", "b"));
-  symlinkSync("a", join(dir, "nfs", "api"));
-  const config = testConfig({ GRANTS_DIR: granted(t, `mounts: [${join(dir, "nfs")}]\n`).dir });
-  const { settings } = parseRepoConfig(`mounts:\n  - ${dir}/nfs/api\n`, config);
-  const noted = [];
-  const io = { agent: claude, note: (m) => noted.push(m), log: () => {} };
-  const checked = await grantedAccess(config, task(), settings, io);
-  assert.deepEqual(noted, [`Host mount ${dir}/nfs/api (read-only)`]);
-  // Unchanged: it goes on.
-  recheckMounts(claude, settings, checked);
-  // The link now points elsewhere.
-  symlinkSync("b", join(dir, "nfs", "api-b"));
-  renameSync(join(dir, "nfs", "api-b"), join(dir, "nfs", "api"));
-  assert.throws(
-    () => recheckMounts(claude, settings, checked),
-    (e) =>
-      e instanceof RunError &&
-      /^Claude can't run here: host mounts changed while the run was being prepared\./.test(
-        e.message,
-      ) &&
-      e.message.includes(`\`${dir}/nfs/api\` no longer resolves to \`${dir}/nfs/a\``),
-  );
-});
+test(
+  "a mount that resolves elsewhere once the run is prepared stops it",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const dir = realpathSync(tempDir(t));
+    mkdirSync(join(dir, "nfs", "a"), { recursive: true });
+    mkdirSync(join(dir, "nfs", "b"));
+    symlinkSync("a", join(dir, "nfs", "api"));
+    const config = testConfig({ GRANTS_DIR: granted(t, `mounts: [${join(dir, "nfs")}]\n`).dir });
+    const { settings } = parseRepoConfig(`mounts:\n  - ${dir}/nfs/api\n`, config);
+    const noted = [];
+    const io = { agent: claude, note: (m) => noted.push(m), log: () => {} };
+    const checked = await grantedAccess(config, task(), settings, io);
+    assert.deepEqual(noted, [`Host mount ${dir}/nfs/api (read-only)`]);
+    // Unchanged: it goes on.
+    recheckMounts(claude, settings, checked);
+    // The link now points elsewhere.
+    symlinkSync("b", join(dir, "nfs", "api-b"));
+    renameSync(join(dir, "nfs", "api-b"), join(dir, "nfs", "api"));
+    assert.throws(
+      () => recheckMounts(claude, settings, checked),
+      (e) =>
+        e instanceof RunError &&
+        /^Claude can't run here: host mounts changed while the run was being prepared\./.test(
+          e.message,
+        ) &&
+        e.message.includes(`\`${dir}/nfs/api\` no longer resolves to \`${dir}/nfs/a\``),
+    );
+  },
+);
 
 // A fork's code would leave something there for the repo's later runs (sandbox-spec.mjs).
-test("a run with a comment from a fork's pull request notes its read-write mounts read-only", async (t) => {
-  const dir = realpathSync(tempDir(t));
-  mkdirSync(join(dir, "nfs", "api"), { recursive: true });
-  const grant = `mounts:\n  - root: ${join(dir, "nfs")}\n    read_only: false\n`;
-  const config = testConfig({ GRANTS_DIR: granted(t, grant).dir });
-  const { settings } = parseRepoConfig(
-    `mounts:\n  - path: ${dir}/nfs/api\n    read_only: false\n`,
-    config,
-  );
-  // Owned by root, as a granted root should be: these temp dirs are uid 1000's, the sandbox's.
-  const fs = { stat: () => ({ mode: 0o40755, uid: 0, gid: 0 }) };
-  const notes = async (live) => {
-    const noted = [];
-    await grantedAccess(config, task(live), settings, {
-      agent: claude,
-      note: (m) => noted.push(m),
-      log: () => {},
-      fs,
-    });
-    return noted;
-  };
-  assert.deepEqual(await notes({}), [`Host mount ${dir}/nfs/api`]);
-  assert.deepEqual(await notes({ fork: true }), [
-    `Host mount ${dir}/nfs/api (read-only: a pull request from a fork)`,
-  ]);
-  assert.deepEqual(await notes({ capabilities: ["pull"], fork: true }), [
-    `Host mount ${dir}/nfs/api (read-only)`,
-  ]);
-});
+test(
+  "a run with a comment from a fork's pull request notes its read-write mounts read-only",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const dir = realpathSync(tempDir(t));
+    mkdirSync(join(dir, "nfs", "api"), { recursive: true });
+    const grant = `mounts:\n  - root: ${join(dir, "nfs")}\n    read_only: false\n`;
+    const config = testConfig({ GRANTS_DIR: granted(t, grant).dir });
+    const { settings } = parseRepoConfig(
+      `mounts:\n  - path: ${dir}/nfs/api\n    read_only: false\n`,
+      config,
+    );
+    // Owned by root, as a granted root should be: these temp dirs are uid 1000's, the sandbox's.
+    const fs = { stat: () => ({ mode: 0o40755, uid: 0, gid: 0 }) };
+    const notes = async (live) => {
+      const noted = [];
+      await grantedAccess(config, task(live), settings, {
+        agent: claude,
+        note: (m) => noted.push(m),
+        log: () => {},
+        fs,
+      });
+      return noted;
+    };
+    assert.deepEqual(await notes({}), [`Host mount ${dir}/nfs/api`]);
+    assert.deepEqual(await notes({ fork: true }), [
+      `Host mount ${dir}/nfs/api (read-only: a pull request from a fork)`,
+    ]);
+    assert.deepEqual(await notes({ capabilities: ["pull"], fork: true }), [
+      `Host mount ${dir}/nfs/api (read-only)`,
+    ]);
+  },
+);
 
 test("validateRun: an /agent the operator doesn't have, config errors, a mode gone, another agent's model", () => {
   const ok = { badPick: null, errors: [], warnings: [], own: null };

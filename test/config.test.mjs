@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   ConfigError,
   loadConfig,
@@ -645,12 +646,15 @@ test("Codex: an API key, else a ChatGPT plan's login (CODEX_AUTH_FILE), environm
 });
 
 test("the plans' logins: found in the credentials folder unless their variable is set", () => {
-  const present = new Set(["/d/credentials/codex-auth.json", "/d/credentials/agy-auth.json"]);
+  // Joined as the code joins them: `\` on Windows.
+  const codex = join("/d", "credentials", "codex-auth.json");
+  const agy = join("/d", "credentials", "agy-auth.json");
+  const present = new Set([codex, agy]);
   const exists = (path) => present.has(path);
   const env = { DATA_DIR: "/d", ALLOWED_USERS: "a" };
   const found = withCredentialFiles(env, exists);
-  assert.equal(found.CODEX_AUTH_FILE, "/d/credentials/codex-auth.json");
-  assert.equal(found.AGY_AUTH_FILE, "/d/credentials/agy-auth.json");
+  assert.equal(found.CODEX_AUTH_FILE, codex);
+  assert.equal(found.AGY_AUTH_FILE, agy);
   assert.equal(loadConfig(found).openaiCredential, "CODEX_AUTH_FILE");
   assert.equal(loadConfig(found).agyCredential, "AGY_AUTH_FILE");
   assert.equal(env.CODEX_AUTH_FILE, undefined);
@@ -664,8 +668,8 @@ test("the plans' logins: found in the credentials folder unless their variable i
     none,
   );
   assert.deepEqual(looked, [
-    "/data/credentials/codex-auth.json",
-    "/data/credentials/agy-auth.json",
+    join("/data", "credentials", "codex-auth.json"),
+    join("/data", "credentials", "agy-auth.json"),
   ]);
 });
 

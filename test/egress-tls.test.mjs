@@ -609,6 +609,29 @@ test("the CA: made once, kept across restarts; host certificates reused, then re
   await assert.rejects(again.certFor("../x"), /no certificate/);
 });
 
+// Windows' openssl ends its PEM lines with \r\n: a host certificate read back from disk is still
+// the one made, not made again at every restart.
+test("a host certificate written with CRLF is reused after a restart", async (t) => {
+  const dir = temp(t, "ca");
+  const calls = [];
+  const openssl = async (args) => {
+    calls.push(args.includes("-CA") ? "host" : "ca");
+    execFileSync("openssl", args, { stdio: "ignore" });
+    for (const flag of ["-keyout", "-out"]) {
+      const file = args[args.indexOf(flag) + 1];
+      writeFileSync(file, readFileSync(file, "utf8").replaceAll("\n", "\r\n"));
+    }
+  };
+  const first = createAuthority({ dir, openssl });
+  await first.ready();
+  const cert = await first.certFor("registry.npmjs.org");
+  assert.match(cert.cert, /\r\n$/);
+  const again = createAuthority({ dir, openssl });
+  await again.ready();
+  assert.equal((await again.certFor("registry.npmjs.org")).cert, cert.cert);
+  assert.deepEqual(calls, ["ca", "host"]);
+});
+
 test("relayTarget: only origin-form paths that stay under /relay/<host>/", () => {
   const base = "http://github:8080/relay";
   assert.equal(

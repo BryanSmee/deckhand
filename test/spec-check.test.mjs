@@ -10,7 +10,7 @@ import { SANDBOX_USER, sessionNames, sessionOf } from "../listener/sandbox-spec.
 import { AGENTS } from "../listener/agents/index.mjs";
 import { cliEnv, cliName } from "../listener/runner/docker.mjs";
 import { specProblems } from "../runner/spec-check.mjs";
-import { grantedOf, tempDir } from "./helpers.mjs";
+import { grantedOf, needsPosixPaths, tempDir } from "./helpers.mjs";
 
 function setup(t, grant = "") {
   const dir = tempDir(t, "deckhand-grants-");
@@ -203,45 +203,49 @@ test("root, capabilities, another image, another's volumes: refused, each said",
   ]);
 });
 
-test("host paths: inside a root granted to the repository, resolved again, read-only unless granted", async (t) => {
-  const { dir, config } = setup(t);
-  const root = join(dir, "srv");
-  mkdirSync(join(root, "data"), { recursive: true });
-  // A link inside the root that leads out of it.
-  symlinkSync("/etc", join(root, "out"));
-  writeFileSync(
-    join(config.grantsDir, "org", "repo.yaml"),
-    `mounts:\n  - root: ${root}\n    read_only: true\n`,
-  );
-  const mount = (name, readOnly = true) =>
-    spec(config, { volumes: [{ kind: "mount", name, path: name, readOnly }] });
-  assert.deepEqual(await specProblems(config, mount(join(root, "data"))), []);
-  const [writable] = await specProblems(config, mount(join(root, "data"), false));
-  assert.match(writable, /data: not as the operator grants it$/);
-  const [out] = await specProblems(config, mount(join(root, "out")));
-  assert.match(
-    out,
-    /out: .*resolves to \/etc, outside the roots the operator grants this repository/,
-  );
-  const [etc] = await specProblems(config, mount("/etc"));
-  assert.match(etc, /^the host path \/etc: .*outside the roots/);
-  // An engine it isn't granted.
-  const engine = spec(config, { engine: { limits: config.limits } });
-  assert.deepEqual(await specProblems(config, engine), [
-    "a container engine, which the operator doesn't grant org/repo",
-  ]);
-  // Granted by the operator's policies, as the policy service tells the runner (#498): not when
-  // they can't decide.
-  assert.deepEqual(await specProblems(config, engine, { granted: grantedOf(["docker"]) }), []);
-  assert.deepEqual(
-    await specProblems(config, engine, { granted: grantedOf(["docker"], "org/other") }),
-    ["a container engine, which the operator doesn't grant org/repo"],
-  );
-  assert.deepEqual(
-    await specProblems(config, engine, { granted: async () => ({ error: "policy error: x" }) }),
-    ["a container engine, which the operator doesn't grant org/repo"],
-  );
-});
+test(
+  "host paths: inside a root granted to the repository, resolved again, read-only unless granted",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const { dir, config } = setup(t);
+    const root = join(dir, "srv");
+    mkdirSync(join(root, "data"), { recursive: true });
+    // A link inside the root that leads out of it.
+    symlinkSync("/etc", join(root, "out"));
+    writeFileSync(
+      join(config.grantsDir, "org", "repo.yaml"),
+      `mounts:\n  - root: ${root}\n    read_only: true\n`,
+    );
+    const mount = (name, readOnly = true) =>
+      spec(config, { volumes: [{ kind: "mount", name, path: name, readOnly }] });
+    assert.deepEqual(await specProblems(config, mount(join(root, "data"))), []);
+    const [writable] = await specProblems(config, mount(join(root, "data"), false));
+    assert.match(writable, /data: not as the operator grants it$/);
+    const [out] = await specProblems(config, mount(join(root, "out")));
+    assert.match(
+      out,
+      /out: .*resolves to \/etc, outside the roots the operator grants this repository/,
+    );
+    const [etc] = await specProblems(config, mount("/etc"));
+    assert.match(etc, /^the host path \/etc: .*outside the roots/);
+    // An engine it isn't granted.
+    const engine = spec(config, { engine: { limits: config.limits } });
+    assert.deepEqual(await specProblems(config, engine), [
+      "a container engine, which the operator doesn't grant org/repo",
+    ]);
+    // Granted by the operator's policies, as the policy service tells the runner (#498): not when
+    // they can't decide.
+    assert.deepEqual(await specProblems(config, engine, { granted: grantedOf(["docker"]) }), []);
+    assert.deepEqual(
+      await specProblems(config, engine, { granted: grantedOf(["docker"], "org/other") }),
+      ["a container engine, which the operator doesn't grant org/repo"],
+    );
+    assert.deepEqual(
+      await specProblems(config, engine, { granted: async () => ({ error: "policy error: x" }) }),
+      ["a container engine, which the operator doesn't grant org/repo"],
+    );
+  },
+);
 
 test("the environment names the runner's docker CLI keeps are the ones a spec may not set", async (t) => {
   const { config } = setup(t);

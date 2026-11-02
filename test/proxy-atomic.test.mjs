@@ -1,14 +1,14 @@
 // Files the egress proxy keeps, written whole or not at all (proxy/atomic.mjs).
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { atomicWrite, tempPath } from "../proxy/atomic.mjs";
-import { tempDir } from "./helpers.mjs";
+import { assertMode, posix, tempDir } from "./helpers.mjs";
 
 test("tempPath: a new tmp- name in the folder, with an optional suffix", () => {
-  assert.match(tempPath("/x"), /^\/x\/tmp-[0-9a-f]{16}$/);
-  assert.match(tempPath("/x", "ca.key"), /^\/x\/tmp-[0-9a-f]{16}-ca\.key$/);
+  assert.match(posix(tempPath("/x")), /^\/x\/tmp-[0-9a-f]{16}$/);
+  assert.match(posix(tempPath("/x", "ca.key")), /^\/x\/tmp-[0-9a-f]{16}-ca\.key$/);
   assert.notEqual(tempPath("/x"), tempPath("/x"));
 });
 
@@ -18,7 +18,7 @@ test("atomicWrite: replaces the file, with its mode, and leaves no temporary one
   await atomicWrite(path, "old");
   await atomicWrite(path, "new", { mode: 0o600 });
   assert.equal(readFileSync(path, "utf8"), "new");
-  assert.equal(statSync(path).mode & 0o777, 0o600);
+  assertMode(path, 0o600);
   assert.deepEqual(readdirSync(dir), ["meta.json"]);
 });
 

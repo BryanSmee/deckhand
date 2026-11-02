@@ -30,7 +30,7 @@
 //         input.grant in {"dockerfile", "docker"}
 //       }
 import { readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { join, posix } from "node:path";
+import { isAbsolute, join, posix, relative, sep } from "node:path";
 import { ConfigError, parseLimits } from "./config.mjs";
 import { hostProblem } from "./egress.mjs";
 import { PLAIN_PATH, projectName, RESERVED } from "./repo-config.mjs";
@@ -394,7 +394,7 @@ function scanEntry(scan, real, file, entry) {
     } catch {
       // Leads nowhere: an error for a grant, nothing for anything else.
     }
-    if (!resolved || !within(resolved, top)) {
+    if (!resolved || !inFolder(resolved, top)) {
       const what = resolved ? "a symlink leading outside the grants folder" : "a broken symlink";
       if (yaml && !folder) files[file] = refuseGrant(file, what);
       else if (folder) problems.push({ file, what });
@@ -582,6 +582,13 @@ export async function grantCheck(
 // Whether grantCheck() found anything that stops every run.
 export const refusedByGrants = (check) =>
   !!check.error || check.missing.length + check.mounts.refused.length > 0;
+
+// Whether `path` is the grants folder `dir` or under it, in the host's own paths: unlike the
+// mounts' (Linux's, within()), `\` on Windows, where the tests run too (#565).
+function inFolder(path, dir) {
+  const rel = relative(dir, path);
+  return !isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`);
+}
 
 function within(path, root) {
   return path === root || path.startsWith(root === "/" ? "/" : `${root}/`);

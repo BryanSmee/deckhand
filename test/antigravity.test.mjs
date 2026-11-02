@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { test } from "node:test";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import {
@@ -20,9 +20,9 @@ import {
 import { resolveEntry } from "../listener/agents/select.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { lastResult, outcome } from "../listener/runlog.mjs";
-import { scriptEnv, tempDir } from "./helpers.mjs";
+import { needsBash, scriptEnv, tempDir } from "./helpers.mjs";
 
-const bin = new URL("../sandbox/", import.meta.url).pathname;
+const bin = join(import.meta.dirname, "..", "sandbox") + sep;
 
 // `agy`'s stream-json, recorded from agy 1.4.0 on a Google AI Pro plan (#213's spike): a work
 // turn (a command, an edit, a failing command, an answer in text deltas), an MCP call, and a
@@ -46,49 +46,53 @@ const LS = [
   "-rw-r--r-- 1 dev dev 677 Oct 17 16:17 mcp_server.py",
 ];
 
-test("text.jq: an answer's deltas become one line, the rest passes as it is", () => {
-  const raw = readFileSync(new URL("fixtures/antigravity-work.jsonl", import.meta.url), "utf8");
-  const lines = recorded("antigravity-work.jsonl");
-  const deltas = raw.split("\n").filter((l) => l.includes('"text_delta"'));
-  assert.equal(deltas.length, 18);
-  // Every other line, unchanged and in order, with one deckhand.text before the result.
-  const kept = raw
-    .trim()
-    .split("\n")
-    .filter((l) => !l.includes('"text_delta"'));
-  assert.deepEqual(
-    lines.filter((l) => !l.includes('"deckhand.text"')),
-    kept,
-  );
-  const text = lines.map((l) => JSON.parse(l)).filter((e) => e.event === "deckhand.text");
-  assert.equal(text.length, 1);
-  assert.equal(text[0].step_index, 7);
-  assert.equal(text[0].text, deltas.map((l) => JSON.parse(l).step_update.text_delta).join(""));
-  assert.equal(JSON.parse(lines.at(-2)).event, "deckhand.text");
+test(
+  "text.jq: an answer's deltas become one line, the rest passes as it is",
+  { skip: needsBash },
+  () => {
+    const raw = readFileSync(new URL("fixtures/antigravity-work.jsonl", import.meta.url), "utf8");
+    const lines = recorded("antigravity-work.jsonl");
+    const deltas = raw.split("\n").filter((l) => l.includes('"text_delta"'));
+    assert.equal(deltas.length, 18);
+    // Every other line, unchanged and in order, with one deckhand.text before the result.
+    const kept = raw
+      .trim()
+      .split("\n")
+      .filter((l) => !l.includes('"text_delta"'));
+    assert.deepEqual(
+      lines.filter((l) => !l.includes('"deckhand.text"')),
+      kept,
+    );
+    const text = lines.map((l) => JSON.parse(l)).filter((e) => e.event === "deckhand.text");
+    assert.equal(text.length, 1);
+    assert.equal(text[0].step_index, 7);
+    assert.equal(text[0].text, deltas.map((l) => JSON.parse(l).step_update.text_delta).join(""));
+    assert.equal(JSON.parse(lines.at(-2)).event, "deckhand.text");
 
-  // Two answers, each its own line, and text that isn't JSON passes through.
-  const delta = (step, text) =>
-    JSON.stringify({
-      event: "step_update",
-      step_update: {
-        step_index: step,
-        state: "ACTIVE",
-        step_type: "agent_response",
-        text_delta: text,
-      },
-    });
-  const out = spawnSync("jq", ["-nRr", "-f", `${bin}agents/antigravity/text.jq`], {
-    input: [delta(1, "One, "), delta(1, "two."), delta(3, "Three."), "plain"].join("\n"),
-    encoding: "utf8",
-  }).stdout;
-  assert.deepEqual(out.trim().split("\n"), [
-    '{"event":"deckhand.text","step_index":1,"text":"One, two."}',
-    '{"event":"deckhand.text","step_index":3,"text":"Three."}',
-    "plain",
-  ]);
-});
+    // Two answers, each its own line, and text that isn't JSON passes through.
+    const delta = (step, text) =>
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          step_index: step,
+          state: "ACTIVE",
+          step_type: "agent_response",
+          text_delta: text,
+        },
+      });
+    const out = spawnSync("jq", ["-nRr", "-f", `${bin}agents/antigravity/text.jq`], {
+      input: [delta(1, "One, "), delta(1, "two."), delta(3, "Three."), "plain"].join("\n"),
+      encoding: "utf8",
+    }).stdout;
+    assert.deepEqual(out.trim().split("\n"), [
+      '{"event":"deckhand.text","step_index":1,"text":"One, two."}',
+      '{"event":"deckhand.text","step_index":3,"text":"Three."}',
+      "plain",
+    ]);
+  },
+);
 
-test("normalize: a work turn, from its recorded stream-json", () => {
+test("normalize: a work turn, from its recorded stream-json", { skip: needsBash }, () => {
   const events = recorded("antigravity-work.jsonl").flatMap((l) => antigravity.normalize(l));
   const answer = [
     "1. Ran `ls -la` in `/home/dev/work`:",
@@ -112,7 +116,7 @@ test("normalize: a work turn, from its recorded stream-json", () => {
   assert.equal(outcome(lastResult(recorded("antigravity-work.jsonl"), antigravity)), "ok");
 });
 
-test("normalize: an MCP call, as Claude Code names it", () => {
+test("normalize: an MCP call, as Claude Code names it", { skip: needsBash }, () => {
   const events = recorded("antigravity-mcp.jsonl").flatMap((l) => antigravity.normalize(l));
   assert.deepEqual(events.slice(1, 5), [
     {
@@ -132,54 +136,62 @@ test("normalize: an MCP call, as Claude Code names it", () => {
   });
 });
 
-test("normalize: a failure is a failed result with its error, a provider's for a fallback", () => {
-  const lines = recorded("antigravity-failed.jsonl");
-  const [result] = lines.flatMap((l) => antigravity.normalize(l));
-  assert.equal(result.ok, false);
-  assert.match(result.text, /^Eligibility check failed: UNAUTHENTICATED \(code 401\)/);
-  assert.equal(outcome(lastResult(lines, antigravity)), "error");
-  assert.equal(providerError(result), "invalid credentials");
-  const failed = (text) => ({ type: "result", ok: false, text, durationMs: 0 });
-  assert.equal(
-    providerError(failed("RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity")),
-    "quota reached",
-  );
-  assert.equal(providerError(failed("PERMISSION_DENIED (code 403)")), "invalid credentials");
-  assert.equal(providerError(failed("The tests still fail.")), null);
+test(
+  "normalize: a failure is a failed result with its error, a provider's for a fallback",
+  { skip: needsBash },
+  () => {
+    const lines = recorded("antigravity-failed.jsonl");
+    const [result] = lines.flatMap((l) => antigravity.normalize(l));
+    assert.equal(result.ok, false);
+    assert.match(result.text, /^Eligibility check failed: UNAUTHENTICATED \(code 401\)/);
+    assert.equal(outcome(lastResult(lines, antigravity)), "error");
+    assert.equal(providerError(result), "invalid credentials");
+    const failed = (text) => ({ type: "result", ok: false, text, durationMs: 0 });
+    assert.equal(
+      providerError(failed("RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity")),
+      "quota reached",
+    );
+    assert.equal(providerError(failed("PERMISSION_DENIED (code 403)")), "invalid credentials");
+    assert.equal(providerError(failed("The tests still fail.")), null);
 
-  // A tool step that didn't end as DONE is an error; init's model, when it says one.
-  const step = (s) => JSON.stringify({ event: "step_update", step_update: s });
-  assert.deepEqual(
-    antigravity.normalize(
-      step({ step_type: "tool", state: "ERROR", tool_info: { name: "run_command", output: "no" } }),
-    ),
-    [{ type: "toolOutput", error: true, text: "no" }],
-  );
-  assert.deepEqual(
-    antigravity.normalize(JSON.stringify({ event: "init", init: { model: "gemini-4-argon" } })),
-    [{ type: "started", model: "gemini-4-argon" }],
-  );
-  // Other tools: their first text parameter. Deltas, user input and what isn't JSON: nothing.
-  assert.deepEqual(
-    antigravity.normalize(
-      step({
-        step_type: "tool",
-        state: "ACTIVE",
-        tool_info: { name: "grep_search", parameters: { Query: "TODO", SearchPath: "/w" } },
-      }),
-    ),
-    [{ type: "tool", name: "grep_search", detail: "TODO" }],
-  );
-  for (const raw of [
-    step({ step_type: "agent_response", state: "ACTIVE", text_delta: "Hi" }),
-    step({ step_type: "user_input", state: "DONE" }),
-    "Cloning into 'x'...",
-    "null",
-    '{"type":"result"}',
-  ]) {
-    assert.deepEqual(antigravity.normalize(raw), [], raw);
-  }
-});
+    // A tool step that didn't end as DONE is an error; init's model, when it says one.
+    const step = (s) => JSON.stringify({ event: "step_update", step_update: s });
+    assert.deepEqual(
+      antigravity.normalize(
+        step({
+          step_type: "tool",
+          state: "ERROR",
+          tool_info: { name: "run_command", output: "no" },
+        }),
+      ),
+      [{ type: "toolOutput", error: true, text: "no" }],
+    );
+    assert.deepEqual(
+      antigravity.normalize(JSON.stringify({ event: "init", init: { model: "gemini-4-argon" } })),
+      [{ type: "started", model: "gemini-4-argon" }],
+    );
+    // Other tools: their first text parameter. Deltas, user input and what isn't JSON: nothing.
+    assert.deepEqual(
+      antigravity.normalize(
+        step({
+          step_type: "tool",
+          state: "ACTIVE",
+          tool_info: { name: "grep_search", parameters: { Query: "TODO", SearchPath: "/w" } },
+        }),
+      ),
+      [{ type: "tool", name: "grep_search", detail: "TODO" }],
+    );
+    for (const raw of [
+      step({ step_type: "agent_response", state: "ACTIVE", text_delta: "Hi" }),
+      step({ step_type: "user_input", state: "DONE" }),
+      "Cloning into 'x'...",
+      "null",
+      '{"type":"result"}',
+    ]) {
+      assert.deepEqual(antigravity.normalize(raw), [], raw);
+    }
+  },
+);
 
 test("the agent: installed like Codex, its login out of the sandbox, no mid-run messages", () => {
   const config = { agyVolume: "deckhand-antigravity", agyVersion: "1.4.0", agySha256: "x64:ab" };
@@ -312,134 +324,147 @@ fi
   return { ...result, dir, home, args };
 }
 
-test("its run: print mode with the model and its effort, then the conversation to resume", (t) => {
-  const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "gemini-4-argon", SANDBOX_EFFORT: "high" };
-  const flags = (model) => [
-    ...["-p", "Do it", "--output-format", "stream-json", "--dangerously-skip-permissions"],
-    ...["--model", model],
-  ];
-  const first = agyScript(
-    t,
-    `agent_has_session && echo yes >&2 || echo no >&2; agent_run new "Do it"`,
-    env,
-  );
-  assert.equal(first.status, 0, first.stderr);
-  assert.deepEqual(first.args, flags("gemini-4-argon-high"));
-  assert.match(first.stderr, /^no$/m);
-  assert.doesNotMatch(first.stderr, /stdin not empty/);
-  // Its stream-json, the answer's deltas joined.
-  const lines = first.stdout
-    .trim()
-    .split("\n")
-    .map((l) => JSON.parse(l));
-  assert.deepEqual(
-    lines.map((l) => l.event),
-    ["init", "deckhand.text", "result"],
-  );
-  assert.equal(lines[1].text, "Done it.");
-  // The draft pull request once it exits, and the conversation kept for the next run.
-  assert.equal(readFileSync(join(first.home, "draft-pr.log"), "utf8"), "hook Stop\n");
-  assert.equal(readFileSync(join(first.home, ".gemini/deckhand-conversation"), "utf8"), "conv-1\n");
-
-  // A tier's model keeps its effort; the next run resumes that conversation, a fresh one
-  // (an inbox entry) doesn't replace it.
-  const again = (session, extra = {}) =>
-    agyScript(
+test(
+  "its run: print mode with the model and its effort, then the conversation to resume",
+  { skip: needsBash },
+  (t) => {
+    const env = { TASK_OUTPUT: "json", SANDBOX_MODEL: "gemini-4-argon", SANDBOX_EFFORT: "high" };
+    const flags = (model) => [
+      ...["-p", "Do it", "--output-format", "stream-json", "--dangerously-skip-permissions"],
+      ...["--model", model],
+    ];
+    const first = agyScript(
       t,
-      `mkdir -p "$HOME/.gemini"; echo conv-0 > "$HOME/.gemini/deckhand-conversation"
-       agent_has_session && echo yes >&2; agent_run ${session} "Do it"`,
-      { ...env, SANDBOX_MODEL: "gemini-3.8-flash-low", ...extra },
+      `agent_has_session && echo yes >&2 || echo no >&2; agent_run new "Do it"`,
+      env,
     );
-  const resumed = again("continue");
-  assert.match(resumed.stderr, /^yes$/m);
-  assert.deepEqual(resumed.args, [...flags("gemini-3.8-flash-low"), "--conversation", "conv-0"]);
-  assert.equal(
-    readFileSync(join(resumed.home, ".gemini/deckhand-conversation"), "utf8"),
-    "conv-1\n",
-  );
-  const fresh = again("fresh");
-  assert.deepEqual(fresh.args, flags("gemini-3.8-flash-low"));
-  assert.equal(readFileSync(join(fresh.home, ".gemini/deckhand-conversation"), "utf8"), "conv-0\n");
+    assert.equal(first.status, 0, first.stderr);
+    assert.deepEqual(first.args, flags("gemini-4-argon-high"));
+    assert.match(first.stderr, /^no$/m);
+    assert.doesNotMatch(first.stderr, /stdin not empty/);
+    // Its stream-json, the answer's deltas joined.
+    const lines = first.stdout
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.deepEqual(
+      lines.map((l) => l.event),
+      ["init", "deckhand.text", "result"],
+    );
+    assert.equal(lines[1].text, "Done it.");
+    // The draft pull request once it exits, and the conversation kept for the next run.
+    assert.equal(readFileSync(join(first.home, "draft-pr.log"), "utf8"), "hook Stop\n");
+    assert.equal(
+      readFileSync(join(first.home, ".gemini/deckhand-conversation"), "utf8"),
+      "conv-1\n",
+    );
 
-  // A failed turn: its exit status, after the draft pull request's check.
-  const failed = again("continue", { TURN: "failed" });
-  assert.equal(failed.status, 1);
-  assert.match(readFileSync(join(failed.home, "draft-pr.log"), "utf8"), /^hook /);
-  assert.equal(JSON.parse(failed.stdout.trim().split("\n").at(-1)).result.status, "ERROR");
+    // A tier's model keeps its effort; the next run resumes that conversation, a fresh one
+    // (an inbox entry) doesn't replace it.
+    const again = (session, extra = {}) =>
+      agyScript(
+        t,
+        `mkdir -p "$HOME/.gemini"; echo conv-0 > "$HOME/.gemini/deckhand-conversation"
+       agent_has_session && echo yes >&2; agent_run ${session} "Do it"`,
+        { ...env, SANDBOX_MODEL: "gemini-3.8-flash-low", ...extra },
+      );
+    const resumed = again("continue");
+    assert.match(resumed.stderr, /^yes$/m);
+    assert.deepEqual(resumed.args, [...flags("gemini-3.8-flash-low"), "--conversation", "conv-0"]);
+    assert.equal(
+      readFileSync(join(resumed.home, ".gemini/deckhand-conversation"), "utf8"),
+      "conv-1\n",
+    );
+    const fresh = again("fresh");
+    assert.deepEqual(fresh.args, flags("gemini-3.8-flash-low"));
+    assert.equal(
+      readFileSync(join(fresh.home, ".gemini/deckhand-conversation"), "utf8"),
+      "conv-0\n",
+    );
 
-  // On a Gemini API key, Argon is agy_home's custom model: its suffix becomes --effort. The
-  // catalog's models keep theirs.
-  const key = { GEMINI_API_KEY: "run-secret" };
-  assert.deepEqual(again("fresh", key).args, flags("gemini-3.8-flash-low"));
-  assert.deepEqual(again("fresh", { ...key, SANDBOX_MODEL: "gemini-4-argon-high" }).args, [
-    ...flags("gemini-4-argon"),
-    ...["--effort", "high"],
-  ]);
-  assert.deepEqual(
-    agyScript(t, `agent_run new "Do it"`, { ...env, ...key, SANDBOX_EFFORT: "low" }).args,
-    [...flags("gemini-4-argon"), "--effort", "low"],
-  );
+    // A failed turn: its exit status, after the draft pull request's check.
+    const failed = again("continue", { TURN: "failed" });
+    assert.equal(failed.status, 1);
+    assert.match(readFileSync(join(failed.home, "draft-pr.log"), "utf8"), /^hook /);
+    assert.equal(JSON.parse(failed.stdout.trim().split("\n").at(-1)).result.status, "ERROR");
 
-  // By hand, progress lines rather than the raw events.
-  const human = agyScript(t, `agent_run new "Do it"`);
-  assert.equal(human.stdout, "\nDone it.\n\nDone in 0.5 min\n");
-});
+    // On a Gemini API key, Argon is agy_home's custom model: its suffix becomes --effort. The
+    // catalog's models keep theirs.
+    const key = { GEMINI_API_KEY: "run-secret" };
+    assert.deepEqual(again("fresh", key).args, flags("gemini-3.8-flash-low"));
+    assert.deepEqual(again("fresh", { ...key, SANDBOX_MODEL: "gemini-4-argon-high" }).args, [
+      ...flags("gemini-4-argon"),
+      ...["--effort", "high"],
+    ]);
+    assert.deepEqual(
+      agyScript(t, `agent_run new "Do it"`, { ...env, ...key, SANDBOX_EFFORT: "low" }).args,
+      [...flags("gemini-4-argon"), "--effort", "low"],
+    );
 
-test("its home: the run's agent token as its token, the clone trusted, MCP, hooks and rules", (t) => {
-  const { stdout, home } = agyScript(
-    t,
-    `mkdir -p "$HOME/.gemini/antigravity-cli"
+    // By hand, progress lines rather than the raw events.
+    const human = agyScript(t, `agent_run new "Do it"`);
+    assert.equal(human.stdout, "\nDone it.\n\nDone in 0.5 min\n");
+  },
+);
+
+test(
+  "its home: the run's agent token as its token, the clone trusted, MCP, hooks and rules",
+  { skip: needsBash },
+  (t) => {
+    const { stdout, home } = agyScript(
+      t,
+      `mkdir -p "$HOME/.gemini/antigravity-cli"
      echo '{"theme":"dark","trustedWorkspaces":["/workspace","/x"]}' > "$HOME/.gemini/antigravity-cli/settings.json"
      agy_home; agy_home
      agent_mcp playwright playwright-mcp --headless --proxy-server "http://egress:3128"
      echo "# Rules" > "$HOME/rules.md"; agent_instructions "$HOME/rules.md"
      stat -c %a "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"`,
-    { DECKHAND_AGENT_TOKEN: "agent-token" },
-  );
-  const read = (path) => JSON.parse(readFileSync(join(home, ".gemini", path), "utf8"));
-  assert.deepEqual(read("antigravity-cli/antigravity-oauth-token"), {
-    auth_method: "consumer",
-    token: {
-      access_token: "agent-token",
-      token_type: "Bearer",
-      refresh_token: "deckhand-placeholder",
-      expiry: "2099-01-01T00:00:00Z",
-    },
-  });
-  assert.equal(stdout, "600\n");
-  // Its other settings stay; the clone is trusted once.
-  assert.deepEqual(read("antigravity-cli/settings.json"), {
-    theme: "dark",
-    trustedWorkspaces: ["/x", "/workspace"],
-  });
-  assert.deepEqual(read("config/mcp_config.json"), {
-    mcpServers: {
-      playwright: {
-        command: "playwright-mcp",
-        args: ["--headless", "--proxy-server", "http://egress:3128"],
-        env: {},
+      { DECKHAND_AGENT_TOKEN: "agent-token" },
+    );
+    const read = (path) => JSON.parse(readFileSync(join(home, ".gemini", path), "utf8"));
+    assert.deepEqual(read("antigravity-cli/antigravity-oauth-token"), {
+      auth_method: "consumer",
+      token: {
+        access_token: "agent-token",
+        token_type: "Bearer",
+        refresh_token: "deckhand-placeholder",
+        expiry: "2099-01-01T00:00:00Z",
       },
-    },
-  });
-  // Its user-level hooks (not the workspace's, which would land in the repo) open the draft.
-  assert.deepEqual(read("config/hooks.json"), {
-    deckhand: {
-      Stop: [
-        {
-          type: "command",
-          command: "sandbox-draft-pr hook Stop",
+    });
+    assert.equal(stdout, "600\n");
+    // Its other settings stay; the clone is trusted once.
+    assert.deepEqual(read("antigravity-cli/settings.json"), {
+      theme: "dark",
+      trustedWorkspaces: ["/x", "/workspace"],
+    });
+    assert.deepEqual(read("config/mcp_config.json"), {
+      mcpServers: {
+        playwright: {
+          command: "playwright-mcp",
+          args: ["--headless", "--proxy-server", "http://egress:3128"],
+          env: {},
         },
-      ],
-    },
-  });
-  assert.equal(readFileSync(join(home, ".gemini/AGENTS.md"), "utf8"), "# Rules\n");
+      },
+    });
+    // Its user-level hooks (not the workspace's, which would land in the repo) open the draft.
+    assert.deepEqual(read("config/hooks.json"), {
+      deckhand: {
+        Stop: [
+          {
+            type: "command",
+            command: "sandbox-draft-pr hook Stop",
+          },
+        ],
+      },
+    });
+    assert.equal(readFileSync(join(home, ".gemini/AGENTS.md"), "utf8"), "# Rules\n");
 
-  // With GEMINI_API_KEY: modelProvider is "gemini", Argon a custom model (#1228 upstream) and
-  // any plan token file is removed; switching back to a plan login clears both, the operator's
-  // own custom models kept, and writes the token file again.
-  const withKey = agyScript(
-    t,
-    `mkdir -p "$HOME/.gemini/antigravity-cli"
+    // With GEMINI_API_KEY: modelProvider is "gemini", Argon a custom model (#1228 upstream) and
+    // any plan token file is removed; switching back to a plan login clears both, the operator's
+    // own custom models kept, and writes the token file again.
+    const withKey = agyScript(
+      t,
+      `mkdir -p "$HOME/.gemini/antigravity-cli"
      echo '{"token":"old"}' > "$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
      GEMINI_API_KEY=run-secret agy_home
      jq -c . "$HOME/.gemini/antigravity-cli/settings.json"
@@ -451,45 +476,46 @@ test("its home: the run's agent token as its token, the clone trusted, MCP, hook
      rm "$HOME/.gemini/antigravity-cli/settings.json"; GEMINI_API_KEY=run-secret agy_home
      DECKHAND_AGENT_TOKEN=agent-token agy_home
      jq -c . "$HOME/.gemini/antigravity-cli/settings.json"`,
-  );
-  const [geminiSettings, tokenGone, mineKept, planSettings] = withKey.stdout.trim().split("\n");
-  assert.deepEqual(JSON.parse(geminiSettings), {
-    trustedWorkspaces: ["/workspace"],
-    modelProvider: "gemini",
-    customModelsConfig: {
-      customModels: {
-        "gemini-4-argon": {
-          modelId: "gemini-4-argon",
-          modelName: "gemini-api://gemini-4-argon",
-          label: "Gemini 4 Argon",
-          apiProvider: "API_PROVIDER_GOOGLE_GEMINI",
-          maxTokens: 1048576,
-          modelFeatures: {
-            supportsImages: true,
-            supportsPdf: true,
-            supportsToolCalls: true,
-            supportsThinking: true,
-            zeroShotCapable: true,
+    );
+    const [geminiSettings, tokenGone, mineKept, planSettings] = withKey.stdout.trim().split("\n");
+    assert.deepEqual(JSON.parse(geminiSettings), {
+      trustedWorkspaces: ["/workspace"],
+      modelProvider: "gemini",
+      customModelsConfig: {
+        customModels: {
+          "gemini-4-argon": {
+            modelId: "gemini-4-argon",
+            modelName: "gemini-api://gemini-4-argon",
+            label: "Gemini 4 Argon",
+            apiProvider: "API_PROVIDER_GOOGLE_GEMINI",
+            maxTokens: 1048576,
+            modelFeatures: {
+              supportsImages: true,
+              supportsPdf: true,
+              supportsToolCalls: true,
+              supportsThinking: true,
+              zeroShotCapable: true,
+            },
           },
         },
       },
-    },
-  });
-  assert.deepEqual(JSON.parse(mineKept), {
-    trustedWorkspaces: ["/workspace"],
-    customModelsConfig: { customModels: { mine: {} } },
-  });
-  assert.equal(tokenGone, "no-token");
-  assert.deepEqual(JSON.parse(planSettings), {
-    trustedWorkspaces: ["/workspace"],
-  });
+    });
+    assert.deepEqual(JSON.parse(mineKept), {
+      trustedWorkspaces: ["/workspace"],
+      customModelsConfig: { customModels: { mine: {} } },
+    });
+    assert.equal(tokenGone, "no-token");
+    assert.deepEqual(JSON.parse(planSettings), {
+      trustedWorkspaces: ["/workspace"],
+    });
 
-  // Without the listener (by hand), the token file is the user's own.
-  const plain = agyScript(t, 'agy_home; ls -A "$HOME/.gemini/antigravity-cli"');
-  assert.doesNotMatch(plain.stdout, /antigravity-oauth-token/);
-});
+    // Without the listener (by hand), the token file is the user's own.
+    const plain = agyScript(t, 'agy_home; ls -A "$HOME/.gemini/antigravity-cli"');
+    assert.doesNotMatch(plain.stdout, /antigravity-oauth-token/);
+  },
+);
 
-test("a sandbox without its Antigravity CLI says how to install it", (t) => {
+test("a sandbox without its Antigravity CLI says how to install it", { skip: needsBash }, (t) => {
   const result = agyScript(t, 'agent_missing() { echo "missing $*" >&2; exit 1; }; agent_check');
   assert.equal(result.status, 1);
   assert.match(
@@ -545,37 +571,45 @@ esac
   return { root, run };
 }
 
-test("installing a release: checked against its pinned sha256, linked as agy, once", (t) => {
-  const { root, run } = install(t);
-  const first = run();
-  assert.equal(first.status, 0, first.stderr);
-  assert.match(first.stderr, /Antigravity CLI 1\.4\.0 installed/);
-  const agy = spawnSync(join(root, "1.4.0/bin/agy"), { encoding: "utf8" });
-  assert.equal(agy.stdout, "agy 1.4.0\n");
-  // Already there: no download.
-  const second = run();
-  assert.equal(second.status, 0);
-  assert.doesNotMatch(second.stderr, /curl/);
-});
+test(
+  "installing a release: checked against its pinned sha256, linked as agy, once",
+  { skip: needsBash },
+  (t) => {
+    const { root, run } = install(t);
+    const first = run();
+    assert.equal(first.status, 0, first.stderr);
+    assert.match(first.stderr, /Antigravity CLI 1\.4\.0 installed/);
+    const agy = spawnSync(join(root, "1.4.0/bin/agy"), { encoding: "utf8" });
+    assert.equal(agy.stdout, "agy 1.4.0\n");
+    // Already there: no download.
+    const second = run();
+    assert.equal(second.status, 0);
+    assert.doesNotMatch(second.stderr, /curl/);
+  },
+);
 
-test("installing a release: a tarball that isn't the pinned one, or no pin, is refused", (t) => {
-  const tampered = install(t, { tarball: "not the release" });
-  const refused = tampered.run();
-  assert.equal(refused.status, 1);
-  assert.match(
-    refused.stderr,
-    /agy_cli_linux_x64\.tar\.gz is sha256:[0-9a-f]{64}, but sha256:[0-9a-f]{64} is pinned: not installed/,
-  );
-  assert.deepEqual(spawnSync("ls", ["-A", tampered.root], { encoding: "utf8" }).stdout, "");
+test(
+  "installing a release: a tarball that isn't the pinned one, or no pin, is refused",
+  { skip: needsBash },
+  (t) => {
+    const tampered = install(t, { tarball: "not the release" });
+    const refused = tampered.run();
+    assert.equal(refused.status, 1);
+    assert.match(
+      refused.stderr,
+      /agy_cli_linux_x64\.tar\.gz is sha256:[0-9a-f]{64}, but sha256:[0-9a-f]{64} is pinned: not installed/,
+    );
+    assert.deepEqual(spawnSync("ls", ["-A", tampered.root], { encoding: "utf8" }).stdout, "");
 
-  for (const pinned of [null, "", "sha256:abc"]) {
-    const none = install(t, { pinned });
-    const missing = none.run();
-    assert.equal(missing.status, 1);
-    assert.match(missing.stderr, /no sha256 pinned for agy_cli_linux_x64\.tar\.gz/);
-    assert.doesNotMatch(missing.stderr, /curl/);
-  }
-});
+    for (const pinned of [null, "", "sha256:abc"]) {
+      const none = install(t, { pinned });
+      const missing = none.run();
+      assert.equal(missing.status, 1);
+      assert.match(missing.stderr, /no sha256 pinned for agy_cli_linux_x64\.tar\.gz/);
+      assert.doesNotMatch(missing.stderr, /curl/);
+    }
+  },
+);
 
 test("the pinned sha256: the default version's by default, the operator's otherwise", () => {
   const pinned = loadConfig({ ALLOWED_USERS: "a" });
@@ -594,14 +628,18 @@ test("the pinned sha256: the default version's by default, the operator's otherw
   );
 });
 
-test("installing the Antigravity CLI refuses to run as the sandbox's user", (t) => {
-  // An `id -u` that says 1000, whoever runs the tests.
-  const dir = tempDir(t);
-  writeFileSync(join(dir, "id"), "#!/bin/sh\necho 1000\n", { mode: 0o755 });
-  const result = spawnSync(`${bin}agents/antigravity/install`, [], {
-    env: scriptEnv(t, { PATH: `${dir}:${process.env.PATH}`, AGY_VERSION: "9.9.9" }),
-    encoding: "utf8",
-  });
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /not as the sandbox's user/);
-});
+test(
+  "installing the Antigravity CLI refuses to run as the sandbox's user",
+  { skip: needsBash },
+  (t) => {
+    // An `id -u` that says 1000, whoever runs the tests.
+    const dir = tempDir(t);
+    writeFileSync(join(dir, "id"), "#!/bin/sh\necho 1000\n", { mode: 0o755 });
+    const result = spawnSync(`${bin}agents/antigravity/install`, [], {
+      env: scriptEnv(t, { PATH: `${dir}:${process.env.PATH}`, AGY_VERSION: "9.9.9" }),
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /not as the sandbox's user/);
+  },
+);

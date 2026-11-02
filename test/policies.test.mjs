@@ -38,6 +38,7 @@ import {
   grantsPolicy,
   hasOpa,
   localService,
+  needsBash,
   policyEngineOf,
   servePolicies,
   tempDir,
@@ -1116,37 +1117,44 @@ test("describe: each file with its source and rules, the check of them all", asy
   ]);
 });
 
-test("describe: each error of opa check at its file and row (a recorded output)", async (t) => {
-  const recorded = readFileSync(new URL("fixtures/opa-check-errors.json", import.meta.url), "utf8");
-  const { policies } = setup(t, {
-    opa: { run: opaRunner(FAKE) },
-    builtIn: {},
-    repoFiles: { "net.rego": NET, "size.rego": SIZE },
-  });
-  const described = await policies.describe("org/repo", "main");
-  assert.deepEqual(described.errors, [
-    {
-      layer: "repo",
-      file: "net.rego",
-      row: 3,
-      message: "undefined function http.send",
-      text: "policy error: net.rego:3: undefined function http.send",
-    },
-    {
-      layer: "repo",
-      file: "size.rego",
-      row: 4,
-      message: "count: arity mismatch",
-      text: "policy error: size.rego:4: count: arity mismatch",
-    },
-  ]);
-  assert.equal(JSON.parse(recorded).errors.length, 2);
-  // check() says the same, one line each.
-  assert.deepEqual(await policies.check(described.policies.repo, "repo"), {
-    errors: described.errors.map((e) => e.text),
-    warnings: [],
-  });
-});
+test(
+  "describe: each error of opa check at its file and row (a recorded output)",
+  { skip: needsBash },
+  async (t) => {
+    const recorded = readFileSync(
+      new URL("fixtures/opa-check-errors.json", import.meta.url),
+      "utf8",
+    );
+    const { policies } = setup(t, {
+      opa: { run: opaRunner(FAKE) },
+      builtIn: {},
+      repoFiles: { "net.rego": NET, "size.rego": SIZE },
+    });
+    const described = await policies.describe("org/repo", "main");
+    assert.deepEqual(described.errors, [
+      {
+        layer: "repo",
+        file: "net.rego",
+        row: 3,
+        message: "undefined function http.send",
+        text: "policy error: net.rego:3: undefined function http.send",
+      },
+      {
+        layer: "repo",
+        file: "size.rego",
+        row: 4,
+        message: "count: arity mismatch",
+        text: "policy error: size.rego:4: count: arity mismatch",
+      },
+    ]);
+    assert.equal(JSON.parse(recorded).errors.length, 2);
+    // check() says the same, one line each.
+    assert.deepEqual(await policies.check(described.policies.repo, "repo"), {
+      errors: described.errors.map((e) => e.text),
+      warnings: [],
+    });
+  },
+);
 
 test("describe: errors without a place, file and row null", async (t) => {
   const slow = setup(t, {
@@ -1313,32 +1321,36 @@ test("pullInput: the author's type, and whether the pull request is Deckhand's o
   assert.deepEqual(author({ number: 5 }), [null, false]);
 });
 
-const FAKE = new URL("fixtures/fake-opa.sh", import.meta.url).pathname;
+const FAKE = join(import.meta.dirname, "fixtures", "fake-opa.sh");
 
-test("opaRunner: an empty environment, the input on stdin, killed at its timeout", async (t) => {
-  process.env.DECKHAND_POLICY_TEST = "leaked";
-  t.after(() => delete process.env.DECKHAND_POLICY_TEST);
-  const run = opaRunner(FAKE);
-  const env = await run(["env"]);
-  assert.equal(env.code, 0);
-  assert.doesNotMatch(env.stdout, /DECKHAND_POLICY_TEST|HOME=/);
-  const cwd = tempDir(t);
-  const echo = await run(["echo", "a"], { input: '{"x":1}', cwd });
-  assert.equal(echo.stdout, `echo a\n${cwd}\n{"x":1}`);
-  const start = Date.now();
-  const slow = await run(["sleep"], { timeoutMs: 200 });
-  assert.equal(slow.timedOut, true);
-  assert.ok(Date.now() - start < 5000);
-  assert.deepEqual(await run(["fail"]), {
-    code: 2,
-    stdout: "",
-    stderr: "broken\n",
-    timedOut: false,
-  });
-  const missing = await opaRunner(join(cwd, "nothing"))(["eval"]);
-  assert.equal(missing.code, -1);
-  assert.match(missing.stderr, /ENOENT/);
-});
+test(
+  "opaRunner: an empty environment, the input on stdin, killed at its timeout",
+  { skip: needsBash },
+  async (t) => {
+    process.env.DECKHAND_POLICY_TEST = "leaked";
+    t.after(() => delete process.env.DECKHAND_POLICY_TEST);
+    const run = opaRunner(FAKE);
+    const env = await run(["env"]);
+    assert.equal(env.code, 0);
+    assert.doesNotMatch(env.stdout, /DECKHAND_POLICY_TEST|HOME=/);
+    const cwd = tempDir(t);
+    const echo = await run(["echo", "a"], { input: '{"x":1}', cwd });
+    assert.equal(echo.stdout, `echo a\n${cwd}\n{"x":1}`);
+    const start = Date.now();
+    const slow = await run(["sleep"], { timeoutMs: 200 });
+    assert.equal(slow.timedOut, true);
+    assert.ok(Date.now() - start < 5000);
+    assert.deepEqual(await run(["fail"]), {
+      code: 2,
+      stdout: "",
+      stderr: "broken\n",
+      timedOut: false,
+    });
+    const missing = await opaRunner(join(cwd, "nothing"))(["eval"]);
+    assert.equal(missing.code, -1);
+    assert.match(missing.stderr, /ENOENT/);
+  },
+);
 
 // With the real binary on the PATH (hasOpa): the policy as written.
 

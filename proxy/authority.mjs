@@ -178,8 +178,13 @@ export function createAuthority({ dir, openssl = runOpenssl, now = Date.now, log
     const path = join(hostsDir, `${createHash("sha256").update(host).digest("hex")}.pem`);
     try {
       const pem = await readFile(path, "utf8");
-      const cert = /-----BEGIN CERTIFICATE-----[^]*?-----END CERTIFICATE-----\n?/.exec(pem)?.[0];
-      const key = /-----BEGIN PRIVATE KEY-----[^]*?-----END PRIVATE KEY-----\n?/.exec(pem)?.[0];
+      // Its line end too, as openssl wrote it: \r\n on Windows.
+      const cert = /-----BEGIN CERTIFICATE-----[^]*?-----END CERTIFICATE-----(\r?\n)?/.exec(
+        pem,
+      )?.[0];
+      const key = /-----BEGIN PRIVATE KEY-----[^]*?-----END PRIVATE KEY-----(\r?\n)?/.exec(
+        pem,
+      )?.[0];
       const until = cert && key && issued(cert);
       if (lasting(until)) return { key, cert, until };
     } catch {}

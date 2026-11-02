@@ -33,7 +33,14 @@ import {
   ungranted,
   withGrants,
 } from "../listener/grants.mjs";
-import { defaultPolicies, grantedOf, hasOpa, tempDir, testConfig } from "./helpers.mjs";
+import {
+  defaultPolicies,
+  grantedOf,
+  hasOpa,
+  needsPosixPaths,
+  tempDir,
+  testConfig,
+} from "./helpers.mjs";
 import { operatorPolicies, rulesOf } from "../lib/policy-files.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
 
@@ -433,114 +440,138 @@ function tree(t) {
   return dir;
 }
 
-test("mounts: subpaths of a granted root pass, after resolving .. and symlinks", (t) => {
-  const dir = tree(t);
-  const grant = { mounts: [{ root: join(dir, "work"), readOnly: false }] };
-  const { mounts, refused } = resolveMounts(
-    [
-      { path: join(dir, "work", "api"), readOnly: false },
-      { path: join(dir, "work"), readOnly: true },
-      { path: join(dir, "work", "inside"), readOnly: true },
-      { path: `${dir}/work/api/../api`, readOnly: true },
-    ],
-    grant,
-    { stat: statUnder(dir) },
-  );
-  assert.deepEqual(refused, []);
-  assert.deepEqual(mounts, [
-    { source: join(dir, "work", "api"), target: join(dir, "work", "api"), readOnly: false },
-    { source: join(dir, "work"), target: join(dir, "work"), readOnly: true },
-    // Mounted from where the link points, at the path asked for.
-    { source: join(dir, "work", "api"), target: join(dir, "work", "inside"), readOnly: true },
-    { source: join(dir, "work", "api"), target: join(dir, "work", "api"), readOnly: true },
-  ]);
-});
+test(
+  "mounts: subpaths of a granted root pass, after resolving .. and symlinks",
+  { skip: needsPosixPaths },
+  (t) => {
+    const dir = tree(t);
+    const grant = { mounts: [{ root: join(dir, "work"), readOnly: false }] };
+    const { mounts, refused } = resolveMounts(
+      [
+        { path: join(dir, "work", "api"), readOnly: false },
+        { path: join(dir, "work"), readOnly: true },
+        { path: join(dir, "work", "inside"), readOnly: true },
+        { path: `${dir}/work/api/../api`, readOnly: true },
+      ],
+      grant,
+      { stat: statUnder(dir) },
+    );
+    assert.deepEqual(refused, []);
+    assert.deepEqual(mounts, [
+      { source: join(dir, "work", "api"), target: join(dir, "work", "api"), readOnly: false },
+      { source: join(dir, "work"), target: join(dir, "work"), readOnly: true },
+      // Mounted from where the link points, at the path asked for.
+      { source: join(dir, "work", "api"), target: join(dir, "work", "inside"), readOnly: true },
+      { source: join(dir, "work", "api"), target: join(dir, "work", "api"), readOnly: true },
+    ]);
+  },
+);
 
-test("mounts: .., symlinks out, other paths and no grant are refused", (t) => {
-  const dir = tree(t);
-  const grant = { mounts: [{ root: join(dir, "work"), readOnly: true }] };
-  const refusedFor = (path, g = grant) =>
-    resolveMounts([{ path, readOnly: true }], g).refused.join("");
-  assert.match(refusedFor(`${dir}/work/../secret`), /resolves to \S+\/secret, outside the roots/);
-  assert.match(refusedFor(`${dir}/work/escape`), /resolves to \S+\/secret, outside the roots/);
-  assert.match(refusedFor(`${dir}/work/../nothing`), /resolves to \S+\/nothing, outside/);
-  assert.match(refusedFor(`${dir}/work/missing`), /doesn't exist, or the listener can't see it/);
-  assert.match(refusedFor(`${dir}/work-other`), /outside the roots/);
-  assert.match(refusedFor("/etc", { mounts: [] }), /grants this repository no host paths/);
-  assert.match(refusedFor("/workspace/x"), /the sandbox uses \/workspace itself/);
-  assert.match(refusedFor("/home/node"), /the sandbox uses \/home\/node\/\.claude itself/);
-  assert.match(refusedFor("/tmp/deckhand/x"), /the sandbox uses \/tmp\/deckhand itself/);
-  assert.match(refusedFor(`${dir}/work/a,b`), /only letters, digits/);
-  // A root the listener can't see grants nothing.
-  const unseen = { mounts: [{ root: "/nfs/nowhere", readOnly: false }] };
-  assert.match(refusedFor("/nfs/nowhere/api", unseen), /doesn't exist, or the listener can't/);
-  // Caches the repo mounts are taken too.
-  const clash = resolveMounts([{ path: "/home/node/.npm", readOnly: true }], grant, {
-    caches: ["/home/node/.npm"],
-  });
-  assert.match(clash.refused[0], /uses \/home\/node\/\.npm itself/);
-});
+test(
+  "mounts: .., symlinks out, other paths and no grant are refused",
+  { skip: needsPosixPaths },
+  (t) => {
+    const dir = tree(t);
+    const grant = { mounts: [{ root: join(dir, "work"), readOnly: true }] };
+    const refusedFor = (path, g = grant) =>
+      resolveMounts([{ path, readOnly: true }], g).refused.join("");
+    assert.match(
+      refusedFor(`${dir}/work/../secret`),
+      new RegExp(`resolves to ${RegExp.escape(join(dir, "secret"))}, outside the roots`),
+    );
+    assert.match(
+      refusedFor(`${dir}/work/escape`),
+      new RegExp(`resolves to ${RegExp.escape(join(dir, "secret"))}, outside the roots`),
+    );
+    assert.match(
+      refusedFor(`${dir}/work/../nothing`),
+      new RegExp(`resolves to ${RegExp.escape(join(dir, "nothing"))}, outside`),
+    );
+    assert.match(refusedFor(`${dir}/work/missing`), /doesn't exist, or the listener can't see it/);
+    assert.match(refusedFor(`${dir}/work-other`), /outside the roots/);
+    assert.match(refusedFor("/etc", { mounts: [] }), /grants this repository no host paths/);
+    assert.match(refusedFor("/workspace/x"), /the sandbox uses \/workspace itself/);
+    assert.match(refusedFor("/home/node"), /the sandbox uses \/home\/node\/\.claude itself/);
+    assert.match(refusedFor("/tmp/deckhand/x"), /the sandbox uses \/tmp\/deckhand itself/);
+    assert.match(refusedFor(`${dir}/work/a,b`), /only letters, digits/);
+    // A root the listener can't see grants nothing.
+    const unseen = { mounts: [{ root: "/nfs/nowhere", readOnly: false }] };
+    assert.match(refusedFor("/nfs/nowhere/api", unseen), /doesn't exist, or the listener can't/);
+    // Caches the repo mounts are taken too.
+    const clash = resolveMounts([{ path: "/home/node/.npm", readOnly: true }], grant, {
+      caches: ["/home/node/.npm"],
+    });
+    assert.match(clash.refused[0], /uses \/home\/node\/\.npm itself/);
+  },
+);
 
-test("mounts: read-only unless the operator grants read-write; a repo can only narrow", (t) => {
-  const dir = tree(t);
-  const path = join(dir, "work", "api");
-  const ro = resolveMounts([{ path, readOnly: false }], {
-    mounts: [{ root: join(dir, "work"), readOnly: true }],
-  });
-  assert.equal(ro.mounts[0].readOnly, true);
-  assert.match(ro.notes[0], /mounted read-only: the operator grants \S+ read-only/);
-  const rw = { mounts: [{ root: join(dir, "work"), readOnly: false }] };
-  const fs = { stat: statUnder(dir) };
-  assert.equal(resolveMounts([{ path, readOnly: true }], rw, fs).mounts[0].readOnly, true);
-  assert.equal(resolveMounts([{ path, readOnly: false }], rw, fs).mounts[0].readOnly, false);
-});
+test(
+  "mounts: read-only unless the operator grants read-write; a repo can only narrow",
+  { skip: needsPosixPaths },
+  (t) => {
+    const dir = tree(t);
+    const path = join(dir, "work", "api");
+    const ro = resolveMounts([{ path, readOnly: false }], {
+      mounts: [{ root: join(dir, "work"), readOnly: true }],
+    });
+    assert.equal(ro.mounts[0].readOnly, true);
+    assert.match(ro.notes[0], /mounted read-only: the operator grants \S+ read-only/);
+    const rw = { mounts: [{ root: join(dir, "work"), readOnly: false }] };
+    const fs = { stat: statUnder(dir) };
+    assert.equal(resolveMounts([{ path, readOnly: true }], rw, fs).mounts[0].readOnly, true);
+    assert.equal(resolveMounts([{ path, readOnly: false }], rw, fs).mounts[0].readOnly, false);
+  },
+);
 
-test("mounts: read-write refused when the sandbox's user can rewrite a directory on the way", (t) => {
-  const dir = lockedDir(t);
-  const root = join(dir, "work");
-  mkdirSync(join(root, "team", "api", "src"), { recursive: true });
-  chmodSync(dir, 0o555);
-  chmodSync(root, 0o555);
-  chmodSync(join(root, "team"), 0o777); // anyone, so uid 1000 too
-  chmodSync(join(root, "team", "api"), 0o777); // the mount itself may be writable
-  const stat = statUnder(dir);
-  const grant = { mounts: [{ root, readOnly: false }] };
-  const resolve = (path, readOnly = false) => resolveMounts([{ path, readOnly }], grant, { stat });
-  // /work/team can be written: a sandbox could swap /work/team/api for a symlink to /.
-  assert.match(
-    resolve(join(root, "team", "api")).refused[0],
-    /read-write, but the sandbox's user \(uid 1000\) can write `\S+\/work\/team` on its way/,
-  );
-  assert.match(resolve(join(root, "team", "api", "src")).refused[0], /\/work\/team` on its way/);
-  // Its own entry is in /work, which it can't write; read-only requests aren't checked.
-  assert.deepEqual(resolve(join(root, "team")).refused, []);
-  assert.deepEqual(resolve(root).refused, []);
-  assert.deepEqual(resolve(join(root, "team", "api"), true).refused, []);
-  // A narrower root inside a wider one: checked above the narrower one too.
-  chmodSync(join(root, "team"), 0o555);
-  chmodSync(root, 0o777);
-  const nested = {
-    mounts: [
-      { root: join(root, "team"), readOnly: false },
-      { root, readOnly: true },
-    ],
-  };
-  const refusedFor = (g, path) => resolveMounts([{ path, readOnly: false }], g, { stat }).refused;
-  assert.match(
-    refusedFor(nested, join(root, "team", "api"))[0],
-    /can write `\S+\/work` on its way/,
-  );
-  // Above every root this repo has: another repo's root, or none at all, may hold it.
-  const own = { mounts: [{ root: join(root, "team"), readOnly: false }] };
-  assert.match(refusedFor(own, join(root, "team", "api"))[0], /can write `\S+\/work` on its way/);
-  assert.match(refusedFor(own, join(root, "team"))[0], /can write `\S+\/work` on its way/);
-  chmodSync(root, 0o555);
-  assert.deepEqual(refusedFor(own, join(root, "team", "api")), []);
-  // The temp dir's own parents count too, read for real: /tmp is sticky, so only an entry
-  // the sandbox's user owns (the tests' own, when they run as uid 1000) can be swapped.
-  const real = resolveMounts([{ path: join(root, "team"), readOnly: false }], own).refused;
-  assert.equal(real.length, statSync(dir).uid === 1000 ? 1 : 0);
-});
+test(
+  "mounts: read-write refused when the sandbox's user can rewrite a directory on the way",
+  { skip: needsPosixPaths },
+  (t) => {
+    const dir = lockedDir(t);
+    const root = join(dir, "work");
+    mkdirSync(join(root, "team", "api", "src"), { recursive: true });
+    chmodSync(dir, 0o555);
+    chmodSync(root, 0o555);
+    chmodSync(join(root, "team"), 0o777); // anyone, so uid 1000 too
+    chmodSync(join(root, "team", "api"), 0o777); // the mount itself may be writable
+    const stat = statUnder(dir);
+    const grant = { mounts: [{ root, readOnly: false }] };
+    const resolve = (path, readOnly = false) =>
+      resolveMounts([{ path, readOnly }], grant, { stat });
+    // The refusal naming `path` as a directory the sandbox can write.
+    const writes = (path) => new RegExp(`can write \`${RegExp.escape(path)}\` on its way`);
+    // /work/team can be written: a sandbox could swap /work/team/api for a symlink to /.
+    const [team] = resolve(join(root, "team", "api")).refused;
+    assert.match(team, /: read-write, but the sandbox's user \(uid 1000\) can write /);
+    assert.match(team, writes(join(root, "team")));
+    assert.match(resolve(join(root, "team", "api", "src")).refused[0], writes(join(root, "team")));
+    // Its own entry is in /work, which it can't write; read-only requests aren't checked.
+    assert.deepEqual(resolve(join(root, "team")).refused, []);
+    assert.deepEqual(resolve(root).refused, []);
+    assert.deepEqual(resolve(join(root, "team", "api"), true).refused, []);
+    // A narrower root inside a wider one: checked above the narrower one too.
+    chmodSync(join(root, "team"), 0o555);
+    chmodSync(root, 0o777);
+    const nested = {
+      mounts: [
+        { root: join(root, "team"), readOnly: false },
+        { root, readOnly: true },
+      ],
+    };
+    const refusedFor = (g, path) => resolveMounts([{ path, readOnly: false }], g, { stat }).refused;
+    assert.match(refusedFor(nested, join(root, "team", "api"))[0], writes(root));
+    // Above every root this repo has: another repo's root, or none at all, may hold it.
+    const own = { mounts: [{ root: join(root, "team"), readOnly: false }] };
+    assert.match(refusedFor(own, join(root, "team", "api"))[0], writes(root));
+    assert.match(refusedFor(own, join(root, "team"))[0], writes(root));
+    chmodSync(root, 0o555);
+    assert.deepEqual(refusedFor(own, join(root, "team", "api")), []);
+    // The temp dir's own parents count too, read for real: /tmp is sticky, so only an entry
+    // the sandbox's user owns (the tests' own, when they run as uid 1000) can be swapped.
+    const real = resolveMounts([{ path: join(root, "team"), readOnly: false }], own).refused;
+    assert.equal(real.length, statSync(dir).uid === 1000 ? 1 : 0);
+  },
+);
 
 // The issue's layout, with an injected stat: repo A is granted /nfs/work/api read-write, repo
 // B /nfs/work, which uid 1000 can write. B's sandbox could rename /nfs/work/api and put a
@@ -825,7 +856,7 @@ test("`docker` without its grant is refused", () => {
 });
 
 test("server.example/grants is a valid grants folder that grants nothing", () => {
-  const dir = new URL("../server.example/grants", import.meta.url).pathname;
+  const dir = join(import.meta.dirname, "..", "server.example", "grants");
   const config = testConfig({ ALLOWED_USERS: "a", GRANTS_DIR: dir });
   const grants = loadGrants(config);
   assert.deepEqual(grantErrors(grants), []);

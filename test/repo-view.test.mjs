@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { grantFor, grantsFrom, withGrants } from "../listener/grants.mjs";
 import { KEYS, parseRepoConfig } from "../listener/repo-config.mjs";
 import { effectiveView } from "../listener/repo-view.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({
   ALLOWED_USERS: "alice,bob",
@@ -97,34 +97,41 @@ test("hosts: the operator's only, each naming the grants file it comes from", ()
   assert.equal("allowRepoHosts" in grant, false);
 });
 
-test("mounts: as a run resolves them, refused ones with their reason", (t) => {
-  const dir = realpathSync(tempDir(t, "deckhand-view-"));
-  mkdirSync(join(dir, "work", "api"), { recursive: true });
-  mkdirSync(join(dir, "secret"));
-  symlinkSync(join(dir, "secret"), join(dir, "work", "escape"));
-  const yaml = [
-    "mounts:",
-    `  - path: ${dir}/work/api`,
-    `  - path: ${dir}/work/escape`,
-    `  - path: ${dir}/secret`,
-  ].join("\n");
-  const { mounts, grant } = view(yaml, { "org/app.yaml": `mounts:\n  - root: ${dir}/work\n` });
-  assert.deepEqual(mounts[0], {
-    path: `${dir}/work/api`,
-    source: "repo",
-    readOnly: true,
-    note: null,
-  });
-  assert.equal(mounts[1].source, "refused");
-  assert.match(mounts[1].note, /^resolves to \S+\/secret, outside the roots/);
-  assert.equal(mounts[2].source, "refused");
-  assert.deepEqual(grant.mounts, [{ root: `${dir}/work`, readOnly: true }]);
+test(
+  "mounts: as a run resolves them, refused ones with their reason",
+  { skip: needsPosixPaths },
+  (t) => {
+    const dir = realpathSync(tempDir(t, "deckhand-view-"));
+    mkdirSync(join(dir, "work", "api"), { recursive: true });
+    mkdirSync(join(dir, "secret"));
+    symlinkSync(join(dir, "secret"), join(dir, "work", "escape"));
+    const yaml = [
+      "mounts:",
+      `  - path: ${dir}/work/api`,
+      `  - path: ${dir}/work/escape`,
+      `  - path: ${dir}/secret`,
+    ].join("\n");
+    const { mounts, grant } = view(yaml, { "org/app.yaml": `mounts:\n  - root: ${dir}/work\n` });
+    assert.deepEqual(mounts[0], {
+      path: `${dir}/work/api`,
+      source: "repo",
+      readOnly: true,
+      note: null,
+    });
+    assert.equal(mounts[1].source, "refused");
+    assert.match(
+      mounts[1].note,
+      new RegExp(`^resolves to ${RegExp.escape(join(dir, "secret"))}, outside the roots`),
+    );
+    assert.equal(mounts[2].source, "refused");
+    assert.deepEqual(grant.mounts, [{ root: `${dir}/work`, readOnly: true }]);
 
-  // No grant at all.
-  const none = view(yaml).mounts;
-  assert.ok(none.every((m) => m.source === "refused"));
-  assert.equal(none[0].note, "the operator grants this repository no host paths");
-});
+    // No grant at all.
+    const none = view(yaml).mounts;
+    assert.ok(none.every((m) => m.source === "refused"));
+    assert.equal(none[0].note, "the operator grants this repository no host paths");
+  },
+);
 
 test("broken grants: the defaults, and no grant shown", () => {
   const { settings } = parseRepoConfig("", config);
