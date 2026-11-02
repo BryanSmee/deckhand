@@ -105,6 +105,15 @@ for (const [name, open] of Object.entries(BACKENDS)) {
     assert.equal(await blobs.size(other), 5);
   });
 
+  test(`blobs (${name}): a range that isn't one is refused, as on S3`, async (t) => {
+    const blobs = await open(t);
+    await blobs.put("logs/r", "hello");
+    for (const range of [{ length: -2 }, { length: NaN }, { length: 1.5 }, { offset: -1 }]) {
+      await assert.rejects(blobs.read("logs/r", range), TypeError, JSON.stringify(range));
+    }
+    assert.equal((await blobs.read("logs/r", { offset: 1, length: 2 })).toString(), "el");
+  });
+
   test(`blobs (${name}): keys climbing out are refused`, async (t) => {
     const blobs = await open(t);
     for (const key of ["", "../x", "a/../../x", "/etc/passwd", "a//b", "a\\b", "a/./b"]) {
@@ -175,6 +184,8 @@ test("BLOB_URL: what isn't blob storage, or puts credentials in the URL, is refu
   refused(`s3://deckhand?endpoint=ftp://host`, /not an http\(s\) endpoint/);
   refused(`s3://deckhand?endpoint=${s3.endpoint}`, /needs BLOB_ACCESS_KEY_ID/, {});
   refused(`s3://deckhand/%zz?endpoint=${s3.endpoint}`, /^BLOB_URL: not a valid prefix$/);
+  refused("file:///blobs?endpoint=x", /file:\/\/\/<folder> alone/, {});
+  refused("file:///blobs#x", /file:\/\/\/<folder> alone/, {});
   refused("", /no store/, {});
   // The secret key is in no message.
   try {

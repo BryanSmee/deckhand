@@ -73,9 +73,11 @@ const storeUrl = env.STORE_URL || `file://${join(config.dataDir, "store")}`;
 const store = openStore(storeUrl, { password: env.REDIS_PASSWORD, secrets });
 
 // Blob storage (BLOB_URL), checked before the runner takes a call: a setting that fails stops it.
+// Nothing is kept there yet: the runs' logs move there in a later part (#604).
+let blobs;
 let warnings;
 try {
-  ({ warnings } = await startBlobs(env, {
+  ({ blobs, warnings } = await startBlobs(env, {
     store,
     storeUrl,
     credentials,
@@ -204,5 +206,6 @@ process.once("SIGTERM", async () => {
   if (!all) log("Stopping: calls still going at the end of the grace period, cut");
   brokerCaller.stop();
   await store.close();
+  await blobs.close();
   process.exit(0);
 });

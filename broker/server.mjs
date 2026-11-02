@@ -112,6 +112,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       secrets: () => secrets,
     });
     // Blob storage (BLOB_URL), checked before it takes a call.
+    // Nothing is kept there yet: the runs' files move there in a later part (#604).
     const { warnings } = await startBlobs(env, {
       store,
       storeUrl,

@@ -1736,6 +1736,10 @@ Only the runner and the broker get these settings: the orchestrator, edge, the g
 models services never do. The secret key is one of their secrets: their store refuses it in a
 value and redacts it from a blob, and their logs and blob storage itself redact it too.
 
+For now the runner and the broker only check it: the runs' logs and files move there in the
+next releases ([#604](https://github.com/BryanSmee/deckhand/issues/604)), and until then they
+stay in the store, whatever `BLOB_URL` says.
+
 Each service checks its blob storage as it starts: it writes an object under
 `.deckhand-check/`, reads it back and deletes it. When that fails (a wrong key, a bucket that
 doesn't exist, a folder it can't write), the service stops with what failed rather than
