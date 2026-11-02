@@ -17,6 +17,7 @@ import { copyText, downloadText } from "./logExport";
 import {
   cachedLine,
   count,
+  failuresFail,
   type Filter,
   isError,
   type Item,
@@ -477,7 +478,11 @@ interface SectionProps {
 }
 
 function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle }: SectionProps) {
-  const tone = s.failures ? "err" : s.current ? "run" : "done";
+  const tone = s.failed ? "err" : s.current ? "run" : "done";
+  // Its failures flag it only where they fail it: elsewhere, their count is plain text. A
+  // section that failed otherwise (the agent ended in error) says so: its dot isn't alone.
+  const flagged = failuresFail(s.phase) && s.failures > 0;
+  const searchBadge = hits !== null ? styles.searchBadge : "";
   return (
     <Fold
       title={PHASE_TITLES[s.phase]}
@@ -495,11 +500,15 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
           ) : (
             <span class={styles.counts}>{counts(s)}</span>
           )}
-          {s.failures > 0 && (
+          {s.failures > 0 && !flagged && (
+            // On a phone, hidden like the counts when a badge follows: the title keeps its room.
+            <span class={s.failed ? styles.counts : searchBadge}>{failed(s)}</span>
+          )}
+          {(flagged || s.failed) && (
             <StatusBadge
               tone="err"
-              label={failed(s)}
-              class={`${styles.badge} ${hits !== null ? styles.searchBadge : ""}`}
+              label={flagged ? failed(s) : "Ended in error"}
+              class={`${styles.badge} ${searchBadge}`}
             />
           )}
           {s.seconds !== null && <span class={styles.mono}>{shortDuration(s.seconds)}</span>}

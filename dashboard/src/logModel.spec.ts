@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   clock,
+  failuresFail,
   fields,
   type Item,
   logSections,
@@ -10,7 +11,7 @@ import {
   timeLabel,
   toolLabel,
 } from "./logModel";
-import type { Entry } from "./types";
+import type { Entry, Phase } from "./types";
 
 const step = (n: number, status: string, extra: object = {}) =>
   ({
@@ -54,11 +55,12 @@ const run: Entry[] = [
 
 test("one section per phase, in the order first entered, their times added up", () => {
   const list = logSections(run, 240000, false);
-  expect(list.map((s) => [s.phase, s.seconds, s.failures])).toEqual([
-    ["setup", 12, 0],
-    ["image", 134, 1],
-    ["work", 85, 1],
-    ["push", 9, 0],
+  expect(list.map((s) => [s.phase, s.seconds, s.failures, s.failed])).toEqual([
+    ["setup", 12, 0, false],
+    ["image", 134, 1, true],
+    // A command that exited non-zero: counted, but the work didn't fail.
+    ["work", 85, 1, false],
+    ["push", 9, 0, false],
   ]);
   // Setup's both parts, the run's first line first.
   expect(list[0].items.map((i) => ("text" in i ? i.text : i.kind))).toEqual([
@@ -134,7 +136,26 @@ test("a run that ended in error: an error, not a failed command", () => {
     false,
   );
   expect(work.failures).toBe(0);
+  expect(work.failed).toBe(true);
   expect(search([work], "api", "errors").matches).toHaveLength(1);
+});
+
+test("a failed command fails the push section, not the work or the wrap-up", () => {
+  const failing = (phase: Phase): Entry[] => [
+    { kind: "phase", phase, at: 0 },
+    { kind: "tool", name: "Bash", text: "git push" },
+    { kind: "output", text: "rejected", error: true },
+  ];
+  const list = logSections(
+    [...failing("work"), ...failing("push"), ...failing("wrap-up")],
+    0,
+    false,
+  );
+  expect(list.map((s) => [s.phase, s.failures, s.failed, failuresFail(s.phase)])).toEqual([
+    ["work", 1, false, false],
+    ["push", 1, true, true],
+    ["wrap-up", 1, false, false],
+  ]);
 });
 
 test("search takes the query as typed: no character is special", () => {

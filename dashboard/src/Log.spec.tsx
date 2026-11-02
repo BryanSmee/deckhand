@@ -66,6 +66,8 @@ const section = (title: string) =>
   within(screen.getByRole("log")).getByText(title, { selector: "summary *" }).closest("details")!;
 const opened = () =>
   ["Setup", "Image build", "Work", "Push and pull request"].filter((t) => section(t).open);
+// Its dot is red: the section failed.
+const redDot = (title: string) => !!section(title).querySelector("summary > .s-err");
 const box = () => screen.getByRole("searchbox", { name: "Search this log" });
 
 test("work open, the rest folded; cached steps on one line, each other step folded", () => {
@@ -75,15 +77,46 @@ test("work open, the rest folded; cached steps on one line, each other step fold
   expect(image.querySelector("summary")!.textContent).toMatch(/3 steps · 2 cached.*54s/);
   expect(within(image).getByText("#1–#2 FROM node … COPY . . · CACHED")).toBeTruthy();
   expect(within(image).getByText("RUN npm ci").closest("details")!.open).toBe(false);
-  // The failed command open, the one that passed folded.
+  // The failed command open, the one that passed folded; counted, but the work didn't fail: no
+  // red dot, no red badge.
   const work = section("Work");
   expect(work.querySelector("summary")!.textContent).toMatch(
     /1 message · 2 tool calls.*1 failed command/,
   );
+  expect(redDot("Work")).toBe(false);
+  expect(work.querySelector("summary .s-err")).toBeNull();
   const calls = within(work)
     .getAllByText("node --test")
     .map((n) => n.closest("details")!.open);
   expect(calls).toEqual([true, false]);
+});
+
+test("a red dot for a section that failed: a failed build step, a run that ended in error, a push", () => {
+  show({}, [
+    ...entries.slice(0, 7),
+    { ...step, step: 3, name: "RUN npm ci", status: "error", seconds: null, error: "exit code: 1" },
+    ...entries.slice(8, 14),
+    { kind: "result", status: "error", minutes: 4, text: "API error" },
+    { kind: "phase", phase: "push", at: 230000 },
+    { kind: "tool", name: "Bash", text: "git push origin issue-19-retry" },
+    { kind: "output", text: "rejected", error: true },
+  ]);
+  expect(["Setup", "Image build", "Work", "Push and pull request"].map(redDot)).toEqual([
+    false,
+    true,
+    true,
+    true,
+  ]);
+  // The build's failed step and the push's failed command keep their red badge; the work's
+  // failed command is plain text, and its badge says the agent ended in error: the dot isn't
+  // alone.
+  const badge = (title: string) => section(title).querySelector("summary .s-err:not(summary > *)");
+  expect(badge("Image build")!.textContent).toBe("1 failed step");
+  expect(badge("Push and pull request")!.textContent).toBe("1 failed command");
+  expect(badge("Work")!.textContent).toBe("Ended in error");
+  expect(section("Work").querySelector("summary")!.textContent).toMatch(
+    /1 failed command.*Ended in error/,
+  );
 });
 
 test("search finds text in folded sections, opens them, and steps through the matches", () => {
