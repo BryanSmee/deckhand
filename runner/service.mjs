@@ -517,7 +517,13 @@ export function createRunnerService({
         throw new Refused(413, `an append over ${MAX_APPEND} bytes`);
       }
       try {
-        return { size: await logs.append(params.id, at, data) };
+        // `step`: a step of the run starts with it; `close`: the run's end (logs.mjs). An
+        // orchestrator of the release before marks neither: its log closes at the size cap only.
+        const marks = {
+          step: url.searchParams.get("step") === "1",
+          close: url.searchParams.get("close") === "1",
+        };
+        return { size: await logs.append(params.id, at, data, marks) };
       } catch (error) {
         if (error instanceof LogConflict) {
           throw Object.assign(new Refused(409, error.message), { size: error.size });

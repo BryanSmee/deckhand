@@ -407,16 +407,21 @@ async function fakeGitHub(files = {}) {
 }
 
 // The runs' logs, as the runner keeps them (its store's blobs, runner/logs.mjs): their texts, by
-// run id. Asked again until `ready(texts)` holds, for one still on its way to the runner.
+// run id, their segments (`logs/<run>/<n>`) in order. Asked again until `ready(texts)` holds,
+// for one still on its way to the runner.
 function runLogs(dir) {
   const blobs = join(dir, "runner-store", "blobs");
   if (!existsSync(blobs)) return new Map();
-  return new Map(
-    readdirSync(blobs)
-      .map((file) => [decodeURIComponent(file), file])
-      .filter(([key]) => key.startsWith("logs/"))
-      .map(([key, file]) => [key.slice("logs/".length), readFileSync(join(blobs, file), "utf8")]),
-  );
+  const segments = readdirSync(blobs)
+    .map((file) => [decodeURIComponent(file).match(/^logs\/([^/]+)(?:\/(\d+))?$/), file])
+    .filter(([key]) => key)
+    .map(([[, id, n], file]) => ({ id, n: Number(n ?? 0), file }))
+    .sort((a, b) => a.n - b.n);
+  const texts = new Map();
+  for (const { id, file } of segments) {
+    texts.set(id, (texts.get(id) ?? "") + readFileSync(join(blobs, file), "utf8"));
+  }
+  return texts;
 }
 
 // The one run's log of a test with a single run, once it is all at the runner: its live state

@@ -319,9 +319,11 @@ export function createRunnerClient({
 
   // `data` at `at`, once: → the log's size after it, or { conflict: size } when the runner's
   // log is another size (an append lost, a log removed meanwhile), which the writer goes on
-  // from. Any other refusal (a stale epoch: another listener writes now) is an error.
-  async function append(id, at, data) {
-    const res = await orchestrator.request("POST", `/logs/${path(id)}?at=${at}`, {
+  // from. Any other refusal (a stale epoch: another listener writes now) is an error. `step`:
+  // it starts a step of the run, `close`: the run's end (../runner/logs.mjs, its segments).
+  async function append(id, at, data, { step = false, close = false } = {}) {
+    const marks = `${step ? "&step=1" : ""}${close ? "&close=1" : ""}`;
+    const res = await orchestrator.request("POST", `/logs/${path(id)}?at=${at}${marks}`, {
       body: data,
       headers: { "content-type": "application/octet-stream" },
     });
@@ -347,6 +349,9 @@ export function createRunnerClient({
   // not sent yet counted. `size: null`: a log written before (a run picked up after a
   // restart), its size asked first (ready), once `after` is done (its move to the runner,
   // runlog.mjs moveLogs()). flushed(): once what was written is sent, or its try failed.
+  // write(text, { step: true }): a step of the run starts with it (a phase's line), sent at the
+  // start of an append of its own, so that the runner's segment closes before it. close(): the
+  // run is over, its last segment closed once what was written is sent.
   function openRemote(id, { size = 0, after = null } = {}) {
     let sent = size ?? 0; // what the runner holds
     let queued = [];
@@ -364,25 +369,31 @@ export function createRunnerClient({
             .catch((error) => log(`The log of ${id}: ${error.message}`))
         : Promise.resolve();
 
+    // The next append: { data, step, close }. A step starts one, a close ends one.
     function next() {
       if (retrying) return retrying;
-      const chunks = [];
-      let bytes = 0;
-      while (queued.length && bytes + queued[0].length <= APPEND_MAX) {
-        bytes += queued[0].length;
-        chunks.push(queued.shift());
+      const first = queued.shift();
+      const chunks = [first.data];
+      let bytes = first.data.length;
+      let close = first.close;
+      while (!close && queued.length && !queued[0].step) {
+        if (bytes + queued[0].data.length > APPEND_MAX) break; // one write over the most: alone
+        const write = queued.shift();
+        bytes += write.data.length;
+        chunks.push(write.data);
+        close = write.close;
       }
-      if (!chunks.length) chunks.push(queued.shift()); // one write over the most: alone
-      return Buffer.concat(chunks);
+      return { data: Buffer.concat(chunks), step: first.step, close };
     }
 
     async function flush() {
       await ready;
       while (retrying || queued.length) {
-        const data = next();
+        const chunk = next();
+        const { data } = chunk;
         retrying = null;
         try {
-          const after = await append(id, sent, data);
+          const after = await append(id, sent, data, chunk);
           if (typeof after !== "number") {
             // Taken already (its answer lost), or the runner's log is another size.
             if (after.conflict !== sent + data.length) {
@@ -390,7 +401,7 @@ export function createRunnerClient({
                 `The log of ${id}: ${after.conflict} bytes at the runner, ${sent} here: going on from its end`,
               );
               sent = after.conflict;
-              retrying = data;
+              retrying = chunk;
               continue;
             }
           }
@@ -398,7 +409,7 @@ export function createRunnerClient({
           pending -= data.length;
         } catch (error) {
           // Kept, and tried again: the run's log loses nothing for a runner away a while.
-          retrying = data;
+          retrying = chunk;
           log(`The log of ${id}: ${error.message}, trying again`);
           await (sleep ?? delay)(APPEND_RETRY_MS);
           return false;
@@ -416,10 +427,14 @@ export function createRunnerClient({
     }
 
     return {
-      write(text) {
+      write(text, { step = false } = {}) {
         const data = Buffer.isBuffer(text) ? text : Buffer.from(String(text));
-        queued.push(data);
+        queued.push({ data, step, close: false });
         pending += data.length;
+        kick();
+      },
+      close() {
+        queued.push({ data: Buffer.alloc(0), step: false, close: true });
         kick();
       },
       get size() {
