@@ -17,7 +17,7 @@ import {
 } from "../listener/runner/docker.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { parseCidr } from "../lib/subnets.mjs";
-import { fakeDocker, tempDir } from "./helpers.mjs";
+import { fakeDocker, scriptEnv, tempDir } from "./helpers.mjs";
 
 const SPEC = { user: SANDBOX_USER, limits: { cpus: "1", memory: "1g", pids: 256 } };
 
@@ -351,7 +351,7 @@ test("the inbox: messages, then a close line once", async () => {
   assert.equal(existsSync(join(inboxDir, "x-1")), false);
 });
 
-test("the image's deckhand-inbox prints the messages until the close line", async () => {
+test("the image's deckhand-inbox prints the messages until the close line", async (t) => {
   const { r, inboxDir } = runner();
   await r.start({ run: "x-1", name: "x", image: "i" });
   const script = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
@@ -361,7 +361,7 @@ test("the image's deckhand-inbox prints the messages until the close line", asyn
     const child = execFile(
       script,
       [join(inboxDir, "x-1", "inbox.jsonl")],
-      { timeout: 10000 },
+      { env: scriptEnv(t), timeout: 10000 },
       (e, out) => (e ? reject(e) : resolve(out)),
     );
     child.stdout.once("data", printed);

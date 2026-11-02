@@ -26,8 +26,8 @@ Node 26. The GitHub gateway has one dependency, graphql-js, bundled into a file 
 
 Run the first four before pushing (the dashboard's when it changed). CI runs them too, a job
 each, on every pull request and push to `main` (`.github/workflows/checks.yml`, GitHub-hosted
-runners): the tests as a user that isn't root and with the real `opa` that
-`policy-service/Dockerfile` pins, so none of its tests skips there. A pull request's checks can
+runners): the tests twice, as a user that isn't root and as root in `node:26`, both with the
+real `opa` that `policy-service/Dockerfile` pins, so none of its tests skips there. A pull request's checks can
 point at that run. Work runs on this
 repository start with the dashboard's packages installed and graphql-js bundled (`setup` in
 `.deckhand.yaml`) and the npm cache kept between runs.
@@ -57,6 +57,11 @@ git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
   'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
    chown -R node . && su node -c "cd listener/vendor && npm ci && npm run build && cd ../.. &&
    node --test --test-force-exit --import ./test/blocking-stdout.mjs"'
+# The same as root, as CI's tests-root job runs it (--init reaps the fake docker's orphans).
+git ls-files -z | tar --null -T - -c | docker run --rm -i --init node:<v> sh -c \
+  'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
+   cd listener/vendor && npm ci && npm run build && cd ../.. &&
+   node --test --test-force-exit --import ./test/blocking-stdout.mjs'
 ```
 
 The engine is slower than the sandbox: a timing test failing there alone (`deliveries`)
@@ -210,6 +215,13 @@ docs/         setup, per-repo config reference, security model, architecture
 - Shared fakes live in `test/helpers.mjs` (`listening`, `serve`, `tempDir`, `testConfig`,
   `recordingFetch`) and `test/fixtures/` (the fake `docker` of `orchestrator-server.test.mjs`):
   reuse them rather than write another copy. A temp dir goes with its test (`tempDir(t)`).
+- The suite passes as root and as any other user, and inside a Deckhand sandbox (Deckhand
+  testing itself): CI runs it both ways. A test whose subject is "a user can't write here"
+  skips as root with its reason (`{ skip: isRoot && "root writes anywhere" }`, `isRoot` from
+  `test/helpers.mjs`), its logic covered through a `stat` seam where the code has one
+  (`resolveMounts`). A sandbox script a test spawns gets `scriptEnv(t, extra)`, never the
+  tests' own environment: in a sandbox that one holds the run's settings, and
+  `DECKHAND_TOKEN_FILE` unset would read the run's real token.
 - Flaky is a bug, fixed at its cause, never retried away (#563). Ports: the OS's (port 0),
   never one probed free then handed on; a service that restarts is reached through a port the
   test holds (`forwarder`), or one the OS never hands out (`listenToRestart`). Time: an injected

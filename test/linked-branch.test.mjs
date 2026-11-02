@@ -9,7 +9,14 @@ import { branchName, createLinkedBranches } from "../listener/linked-branch.mjs"
 import { createPolicies } from "../listener/policies.mjs";
 import { builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
-import { localService, policyEngine, policyEngineOf, tempDir, hasOpa } from "./helpers.mjs";
+import {
+  localService,
+  policyEngine,
+  policyEngineOf,
+  scriptEnv,
+  tempDir,
+  hasOpa,
+} from "./helpers.mjs";
 
 // A work run on org/repo#12, from main: `live` over it.
 const taskOf = (live = {}, task = {}) => ({
@@ -89,7 +96,7 @@ function linker({
   return { link, calls, mutations, notes, logs, decided };
 }
 
-test("branchName: draft-pr.sh's slug, from the title", () => {
+test("branchName: draft-pr.sh's slug, from the title", (t) => {
   assert.equal(branchName(12, "Café : bientôt"), "issue-12-cafe-bientot");
   assert.equal(branchName(3, "修复登录"), "issue-3-task");
   assert.equal(branchName(3, "🔥 !"), "issue-3-task");
@@ -104,7 +111,7 @@ test("branchName: draft-pr.sh's slug, from the title", () => {
     "x".repeat(80),
   ]) {
     const shell = spawnSync("bash", ["-c", `${slug}\nslug <<< "$T"`], {
-      env: { ...process.env, T: title },
+      env: scriptEnv(t, { T: title }),
       encoding: "utf8",
     }).stdout;
     assert.equal(branchName(1, title), `issue-1-${shell}`);
