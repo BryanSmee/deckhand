@@ -284,16 +284,17 @@ export function readConfigFile(env, read) {
   });
 }
 
-// The folders of the data volume whose files the orchestrator only adds to the folder, appends
-// to or deletes through it: their first level is checked, not deeper. 90 days of run logs and
-// screenshots, walked at every start, would delay each one, and each handover (#536).
-const SHALLOW_DATA = new Set(["logs", "shots"]);
+// The screenshots' folder of the data volume: one folder per run, which the orchestrator makes
+// and deletes whole, the screenshots in them only read. Its first level is checked, not the
+// screenshots: 90 days of them, read at every start, would delay each one, and each handover
+// (#536). The rest is cheap to walk (logs/ is flat, its summaries read at start anyway).
+const SHOTS = "shots";
 
 // What the orchestrator can't write of its data volume, said at start, before it refuses to
 // start: it runs as uid 1000 (#536), where the listener before it wrote that volume as root.
 // The volume in depth (store/ above all: a root orchestrator still running during the chown
-// makes its files root's again, which would otherwise fail one write at a time), but
-// SHALLOW_DATA's, without following links. `shown` paths, then how many more. The hint is for a
+// makes its files root's again, which would otherwise fail one write at a time), but the
+// screenshots (SHOTS), without following links. `shown` paths, then how many more. The hint is for a
 // permission only: stop the orchestrator, then hand the volume over, with compose (whose `run`
 // keeps the service's cap_drop: CHOWN given back) or on Kubernetes (fsGroup). → lines for the
 // log, [] when all is writable.
@@ -327,7 +328,7 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
       if (!entry.isDirectory()) {
         if (!entry.isSymbolicLink()) writable(child, false);
       } else if (!deep) writable(child, true);
-      else walk(child, !(path === dir && SHALLOW_DATA.has(entry.name)));
+      else walk(child, !(path === dir && entry.name === SHOTS));
     }
   };
   walk(dir);

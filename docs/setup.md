@@ -1267,8 +1267,9 @@ as edge does. What changes for you:
     volumes mounted (the screenshots' at `/data/shots`), and nothing else. It keeps the
     service's settings, so `--cap-add CHOWN` gives back the one capability `chown` needs:
     without it, root gets `Operation not permitted`. Keep `-R`: the files in the volume are
-    root's too. The orchestrator checks the whole volume at start, so a file left behind is
-    named rather than failing later.
+    root's too. The orchestrator checks the volume at start, so a file left behind is named
+    rather than failing later, but for the screenshots themselves (`shots/<run>/`, not read
+    at every start): one left root's fails only when it is served.
 
   New volumes are the `node` user's from the start.
 

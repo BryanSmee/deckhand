@@ -729,8 +729,9 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
   );
   assert.ok(!asked.some(([path]) => path === at("x")));
 
-  // logs/ and shots/: their first level only. A run's screenshot folder is checked (made and
-  // deleted through it), not the screenshots in it: 90 days of them aren't read at every start.
+  // shots/: its first level only. A run's screenshot folder is checked (made and deleted
+  // through it), not the screenshots in it: 90 days of them aren't read at every start. logs/'s
+  // files are (r1.json, in the count below).
   const run = at("shots", "run1");
   const png = join(run, "a.png");
   asked.length = 0;
