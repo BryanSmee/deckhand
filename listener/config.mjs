@@ -284,13 +284,19 @@ export function readConfigFile(env, read) {
   });
 }
 
+// The folders of the data volume whose files the orchestrator only adds to the folder, appends
+// to or deletes through it: their first level is checked, not deeper. 90 days of run logs and
+// screenshots, walked at every start, would delay each one, and each handover (#536).
+const SHALLOW_DATA = new Set(["logs", "shots"]);
+
 // What the orchestrator can't write of its data volume, said at start, before it refuses to
 // start: it runs as uid 1000 (#536), where the listener before it wrote that volume as root.
-// The whole volume, without following links: a root orchestrator still running during the
-// chown makes store/'s files root's again, which would otherwise fail one write at a time.
-// `shown` paths, then how many more. The chown needs CHOWN back (`compose run` keeps the
-// service's cap_drop), and is the fix for a permission only. → lines for the log, [] when all
-// is writable.
+// The volume in depth (store/ above all: a root orchestrator still running during the chown
+// makes its files root's again, which would otherwise fail one write at a time), but
+// SHALLOW_DATA's, without following links. `shown` paths, then how many more. The hint is for a
+// permission only: stop the orchestrator, then hand the volume over, with compose (whose `run`
+// keeps the service's cap_drop: CHOWN given back) or on Kubernetes (fsGroup). → lines for the
+// log, [] when all is writable.
 export function unwritableData(dir, { access = accessSync, list = readdirSync, shown = 5 } = {}) {
   const found = [];
   const writable = (path, folder) => {
@@ -302,7 +308,8 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
       return false;
     }
   };
-  const walk = (path) => {
+  // `deep`: whether the folders in it are walked too, or only checked.
+  const walk = (path, deep = true) => {
     // A folder it can't write may still be listed: what is in it is said too.
     writable(path, true);
     let entries;
@@ -317,8 +324,10 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
     }
     for (const entry of entries) {
       const child = join(path, entry.name);
-      if (entry.isDirectory()) walk(child);
-      else if (!entry.isSymbolicLink()) writable(child, false);
+      if (!entry.isDirectory()) {
+        if (!entry.isSymbolicLink()) writable(child, false);
+      } else if (!deep) writable(child, true);
+      else walk(child, !(path === dir && SHALLOW_DATA.has(entry.name)));
     }
   };
   walk(dir);
@@ -328,7 +337,7 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync, s
   if (found.length > shown) lines.push(`… and ${found.length - shown} more in ${dir}`);
   if (found.some(({ code }) => code === "EACCES" || code === "EPERM")) {
     lines.push(
-      `It runs as uid 1000, and a data volume from an earlier release is root's. With the orchestrator stopped (\`docker compose stop orchestrator\`: one still running as root writes its store again), hand the volume over once with \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\`, then \`docker compose up -d\` (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`,
+      `It runs as uid 1000, and a data volume from an earlier release is root's. Stop the orchestrator first (one still running as root writes its store again), then hand the volume over once. Compose: \`docker compose stop orchestrator\`, \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\`, then \`docker compose up -d\`. Kubernetes: scale it to 0, then \`fsGroup: 1000\` on its pod, or a one-time chown init container (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`,
     );
   }
   return lines;

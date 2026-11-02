@@ -683,10 +683,18 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
     isSymbolicLink: () => kind === "link",
   });
   const tree = {
-    "/data": [entry("logs"), entry("store"), entry("queue.json", "file"), entry("x", "link")],
+    "/data": [
+      entry("logs"),
+      entry("store"),
+      entry("queue.json", "file"),
+      entry("x", "link"),
+      entry("shots"),
+    ],
     [at("logs")]: [entry("r1.json", "file")],
     [at("store")]: [entry("state.json", "file"), entry("streams")],
     [at("store", "streams")]: [entry("deliveries", "file")],
+    [at("shots")]: [entry("run1")],
+    [at("shots", "run1")]: [entry("a.png", "file")],
   };
   const list = (path) => tree[path];
   const asked = [];
@@ -697,7 +705,7 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
       if (paths.includes(path)) throw Object.assign(new Error("denied"), { code });
     };
   const chown =
-    /docker compose stop orchestrator.*--user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 \/data/;
+    /Compose: `docker compose stop orchestrator`, `docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 \/data`, then `docker compose up -d`\. Kubernetes: scale it to 0, then `fsGroup: 1000`/;
   assert.deepEqual(unwritableData("/data", { access: () => {}, list }), []);
 
   // What a root orchestrator still running during the chown leaves: store/'s files root's
@@ -721,15 +729,27 @@ test("the data volume: the orchestrator says what it can't write, anywhere in it
   );
   assert.ok(!asked.some(([path]) => path === at("x")));
 
-  // A volume from before, root's throughout (8 paths, the link not one): a few, how many more,
-  // the chown once.
+  // logs/ and shots/: their first level only. A run's screenshot folder is checked (made and
+  // deleted through it), not the screenshots in it: 90 days of them aren't read at every start.
+  const run = at("shots", "run1");
+  const png = join(run, "a.png");
+  asked.length = 0;
+  assert.match(
+    unwritableData("/data", { access: denied([run, png]), list })[0],
+    /run1 \(EACCES\)$/,
+  );
+  assert.equal(unwritableData("/data", { access: denied([png]), list }).length, 0);
+  assert.ok(!asked.some(([path]) => path === png));
+
+  // A volume from before, root's throughout (10 paths, the link and the screenshot not among
+  // them): a few, how many more, the hint once.
   const everything = () => {
     throw Object.assign(new Error("denied"), { code: "EACCES" });
   };
   const root = unwritableData("/data", { access: everything, list, shown: 2 });
   assert.equal(root.length, 4);
   assert.match(root[0], /^The orchestrator can't write \/data \(EACCES\)$/);
-  assert.match(root[2], /^… and 6 more in \/data$/);
+  assert.match(root[2], /^… and 8 more in \/data$/);
   assert.match(root[3], chown);
 
   // Another cause (a volume mounted read-only): said as it is, without the chown.

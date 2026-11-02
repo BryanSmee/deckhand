@@ -1272,6 +1272,13 @@ as edge does. What changes for you:
 
   New volumes are the `node` user's from the start.
 
+- **On Kubernetes**, the orchestrator's pod refuses to start the same way on a claim the
+  earlier release wrote. A rolling update would start the new pod beside the old one, still
+  root, so: scale the orchestrator to 0, give its pod the security context in
+  [Kubernetes runner](#kubernetes-runner) (`fsGroup: 1000` hands its claims over as they are
+  mounted, or a one-time `chown` init container where the storage ignores `fsGroup`), then
+  update its image and scale it back.
+
 - **Your server folder** (`config.yaml`, the grants folder and its `policy/`) is read as uid
   1000, as the policy service already reads it: the usual `0644` files and `0755` folders are.
   A `config.yaml` it can't read stops it at start, with `EACCES`.
@@ -1572,6 +1579,27 @@ ignores them leaves the sandboxes unisolated, whatever the policy says.
   `/tmp`; a NetworkPolicy letting in the orchestrator, the github service and the runner alone (which asks it the grants) and letting nothing out keeps it as
   closed as Compose's internal network. Its pods may be two, behind a readiness probe on
   `/ready`, with `maxUnavailable: 0`: an update fails no decision.
+- **The orchestrator's pod** runs as the image's `node` user (#536), on a read-only filesystem:
+
+  ```yaml
+  securityContext: # the pod's
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000 # its data and screenshots' claims, writable by it
+  containers:
+    - name: orchestrator
+      securityContext:
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities: { drop: [ALL] }
+  ```
+
+  A storage class that ignores `fsGroup` (`hostPath`, some NFS) leaves a claim an earlier
+  release wrote root's, and the orchestrator refuses to start, saying so. Hand it over once,
+  with the orchestrator scaled to 0, by an init container from its image with the same mounts,
+  removed once it has run: `runAsUser: 0`, `capabilities: { drop: [ALL], add: [CHOWN] }`,
+  `command: [chown, -R, "1000:1000", /data]`.
+
 - **The agents**: see [Agents on Kubernetes](#agents-on-kubernetes).
 - **Grace periods**: `terminationGracePeriodSeconds: 300` on the orchestrator's pods and the
   runner's, and about 30 on edge's and the egress proxy's. On SIGTERM the orchestrator lets the
