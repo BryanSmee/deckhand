@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { networkCallers, signServiceToken } from "../lib/service-token.mjs";
 import { keyId } from "../lib/tokens.mjs";
 import { createServicesHttp } from "../listener/services-http.mjs";
-import { listening } from "./helpers.mjs";
+import { assertHealth, listening } from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const signing = { privateKey, kid: keyId(publicKey) };
@@ -139,7 +139,9 @@ test("a copy waiting for the lease answers its probes, and 503 to every call", a
   const url = `http://127.0.0.1:${await listening(server)}`;
   server.unref();
   t.after(() => server.close());
-  assert.equal((await fetch(`${url}/health`)).status, 200);
+  const health = await fetch(`${url}/health`);
+  assert.equal(health.status, 200);
+  assertHealth(await health.json());
   assert.equal((await fetch(`${url}/ready`)).status, 503);
   const tokens = () =>
     fetch(`${url}/runs/dh-a-1/tokens`, {

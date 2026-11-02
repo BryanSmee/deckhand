@@ -33,7 +33,7 @@ import {
 } from "../models/server.mjs";
 import { RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
-import { assertMode, listening, serve, tempDir, testKey } from "./helpers.mjs";
+import { assertHealth, assertMode, listening, serve, tempDir, testKey } from "./helpers.mjs";
 
 // Each service reaches the others at an address of its own, as over a network of its own with
 // Docker.
@@ -257,6 +257,13 @@ test("another agent's token, another sandbox's call, an ended run: refused, the 
   assert.equal(ended.status, 401);
   assert.match(ended.json.error.message, /unknown or finished run/);
   assert.equal(upstream.requests.length, 0);
+});
+
+test("GET /health: without a token, its start and version, nothing else", async (t) => {
+  const ctx = await setup(t, { env: { ANTHROPIC_API_KEY: KEY } });
+  const health = await call(ctx.copies[0].port, "orchestrator", "GET", "/health");
+  assert.equal(health.status, 200);
+  assertHealth(health.json);
 });
 
 test("only the proxy and the orchestrator call it, each its own endpoints", async (t) => {

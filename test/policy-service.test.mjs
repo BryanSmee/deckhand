@@ -15,6 +15,7 @@ import { createEngine, opaErrors } from "../policy-service/engine.mjs";
 import { opaBinary, opaServer } from "../policy-service/opa.mjs";
 import { createPolicyService, grantsDirOf, ROUTES } from "../policy-service/service.mjs";
 import {
+  assertHealth,
   evalResult,
   fakeOpa,
   hasOpa,
@@ -66,7 +67,10 @@ test("the service: probes without a token, the rest by its table, an engine's an
   const { url, server } = await copy(t, engine, dir);
   const get = (path, auth, init = {}) =>
     fetch(`${url}${path}`, { ...init, headers: { ...(auth && { authorization: auth }) } });
-  assert.equal((await get("/health")).status, 200);
+  const health = await get("/health");
+  assert.equal(health.status, 200);
+  // JSON now, as every service's (#560); its status, which the health checks read, unchanged.
+  assertHealth(await health.json());
   assert.equal((await get("/ready")).status, 200);
   // No token, another service's audience, a caller the table doesn't name, a path not in it.
   assert.equal((await get("/policies")).status, 401);

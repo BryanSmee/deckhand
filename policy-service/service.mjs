@@ -9,6 +9,7 @@
 import { createServer } from "node:http";
 import { pathToFileURL } from "node:url";
 import { drainable, drainOnSigterm } from "../lib/drain.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, send } from "../lib/http.mjs";
 import { networkCallers, serviceGuard } from "../lib/service-token.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
@@ -75,16 +76,16 @@ export function runnerAsks(body) {
 }
 
 // `engine`: createEngine()'s; `guard(req)` → the caller, or a Refused (serviceGuard()).
-export function createPolicyService({ engine, guard, log = () => {} }) {
+// `health`: what GET /health says (../lib/health.mjs).
+export function createPolicyService({ engine, guard, log = () => {}, health = healthInfo() }) {
   let draining = false;
   const server = drainable(
     createServer(
       withRequest(async (req, res) => {
-        if (req.url === "/health" || req.url === "/ready") {
-          res.writeHead(draining && req.url === "/ready" ? 503 : 200, {
-            "content-type": "text/plain",
-          });
-          return res.end(draining && req.url === "/ready" ? "draining\n" : "ok\n");
+        if (req.url === "/health") return send(res, 200, healthAnswer(health));
+        if (req.url === "/ready") {
+          res.writeHead(draining ? 503 : 200, { "content-type": "text/plain" });
+          return res.end(draining ? "draining\n" : "ok\n");
         }
         try {
           const caller = guard(req);
