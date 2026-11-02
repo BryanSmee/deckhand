@@ -397,6 +397,16 @@ test("deploy/kubernetes: each secret is its own service's, the orchestrator hold
   }
 });
 
+// A disk emptyDir over its sizeLimit evicts the pod, cutting every call it serves; a tmpfs refuses
+// the one write that would go over it.
+test("deploy/kubernetes: the github service's and the runner's /tmp are tmpfs of a fixed size", () => {
+  for (const service of ["github", "runner"]) {
+    const tmp = pod(service).volumes.find((v) => v.name === "tmp");
+    assert.equal(tmp.emptyDir.medium, "Memory", service);
+    assert.ok(tmp.emptyDir.sizeLimit, service);
+  }
+});
+
 test("deploy/kubernetes: no two services share a writable volume", () => {
   const users = new Map(); // claim → services
   for (const service of SERVICES) {
@@ -504,6 +514,15 @@ test("components/redis: each service's store under its own user and keys, its pa
     "orchestrator",
     "runner",
   ]);
+  // Redis reaches nothing: no policy picking its pods lets them out, DNS included.
+  const policies = of("NetworkPolicy", [...base, ...redis]);
+  const labels = named("StatefulSet", "redis", redis).spec.template.metadata.labels;
+  const picking = policies.filter((p) => selects(p.spec.podSelector, labels));
+  assert.ok(picking.some((p) => p.spec.policyTypes.includes("Egress")));
+  assert.deepEqual(
+    picking.flatMap((p) => p.spec.egress ?? []),
+    [],
+  );
   // Redis lets in those alone.
   const policy = named("NetworkPolicy", "deckhand-redis", redis);
   const from = policy.spec.ingress[0].from[0].podSelector.matchExpressions[0].values;

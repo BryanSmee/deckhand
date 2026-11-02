@@ -266,7 +266,7 @@ saying why. What it expects, and the manifests give it:
   the broker publishes none on a cluster (no volume is shared between services).
 - **NetworkPolicies** (`network-policies.yaml`, `sandboxes.yaml`): default deny in both
   namespaces; each service lets in its callers alone, on its port, and reaches its callees and
-  DNS alone (`lib/services.mjs` `CALLS`, as Compose's networks; `test/kubernetes.test.mjs`
+  DNS alone (`lib/services.mjs` `CALLS`, as Compose's networks; `test/kubernetes-manifests.test.mjs`
   holds them to it). Edge alone is reached from outside; edge, the github and models services
   reach the internet on 443, the runner and the broker the API server, and the proxy any host
   but the private ranges (add yours to its policy to grant a host of your network). The policy
@@ -305,6 +305,12 @@ saying why. What it expects, and the manifests give it:
   `GITHUB_SERVICE_URL` and `MODELS_SERVICE_URL`. The orchestrator tells the proxy's calls by
   its pods' addresses (the Service's EndpointSlices, which it asks the runner): nothing may
   stand between them that changes the source address (a service mesh's sidecar, say).
+- **Temporary files in memory**: the github service's `/tmp` (the pushes of repositories
+  granted `workflows`, up to 2 GiB each, while checked) and the runner's (checkouts for build
+  contexts) are 4 GiB tmpfs (`emptyDir` with `medium: Memory`): one that would go over it fails
+  with `ENOSPC`, that push or that build alone. A disk `emptyDir` over its `sizeLimit` gets its
+  pod evicted instead, cutting every call it serves. They count toward the pods' memory: raise
+  `sizeLimit` with the room your nodes have.
 - **No `<SERVICE>_PORT` variables** (`enableServiceLinks: false`): Kubernetes would set
   `POLICY_PORT=tcp://…` from the `policy` Service, which the services read as a setting of
   theirs, and stop at start.

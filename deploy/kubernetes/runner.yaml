@@ -98,9 +98,12 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: runner-data
-        # Repositories' checkouts, for build contexts.
+        # Repositories' checkouts, for build contexts. In memory: a tmpfs of that size, which
+        # fails the build that would go over it (ENOSPC) rather than evict the runner, as a disk
+        # emptyDir over its sizeLimit would.
         - name: tmp
           emptyDir:
+            medium: Memory
             sizeLimit: 4Gi
         - name: server
           projected:

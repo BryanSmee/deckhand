@@ -93,9 +93,13 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: github-data
-        # Pushes of repositories granted `workflows`, while checked (up to 2 GiB each).
+        # Pushes of repositories granted `workflows`, while checked (up to 2 GiB each). In memory:
+        # a tmpfs of that size, which refuses the push that would go over it (ENOSPC) rather
+        # than the pod's eviction a disk emptyDir over its sizeLimit gets, which would cut every
+        # push and clone this copy serves.
         - name: tmp
           emptyDir:
+            medium: Memory
             sizeLimit: 4Gi
         - name: server
           projected:

@@ -117,7 +117,7 @@ engine/       container engine sidecar images (dockerd for Sysbox, podman/ for P
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
 deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base and its components
               (redis, buildkit), secrets.mjs (the Secrets the base doesn't hold) and
-              check-isolation.sh; test/kubernetes.test.mjs holds them to CALLS (docs/kubernetes.md)
+              check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes.md)
 docs/         setup, per-repo config reference, security model, architecture
 ```
 

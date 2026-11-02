@@ -574,7 +574,7 @@ function sandboxConfig(env, s) {
 function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(
-      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/setup.md, Repo images on Kubernetes)",
+      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/kubernetes.md, Repo images on Kubernetes)",
     );
   }
 }
@@ -696,7 +696,7 @@ function buildkitAddress(text, { label }) {
     return value;
   }
   throw new ConfigError(
-    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the services' namespace by its short name, got ${text} (docs/setup.md, Repo images on Kubernetes)`,
+    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the services' namespace by its short name, got ${text} (docs/kubernetes.md, Repo images on Kubernetes)`,
   );
 }
 
