@@ -415,10 +415,15 @@ function runLogs(dir) {
   const segments = readdirSync(blobs)
     .map((file) => [decodeURIComponent(file).match(/^logs\/([^/]+)(?:\/(\d+))?$/), file])
     .filter(([key]) => key)
-    .map(([[, id, n], file]) => ({ id, n: Number(n ?? 0), file }))
+    .map(([[, id, n], file]) => ({ id, n: n === undefined ? -1 : Number(n), file }))
     .sort((a, b) => a.n - b.n);
   const texts = new Map();
-  for (const { id, file } of segments) {
+  const shapes = new Map();
+  for (const { id, n, file } of segments) {
+    // A log is one blob (before segments, n -1) or segments, never both.
+    const shape = n < 0 ? "blob" : "segments";
+    if (shapes.get(id) && shapes.get(id) !== shape) throw new Error(`${id}: a blob and segments`);
+    shapes.set(id, shape);
     texts.set(id, (texts.get(id) ?? "") + readFileSync(join(blobs, file), "utf8"));
   }
   return texts;
@@ -1145,6 +1150,18 @@ describe("listener", options, () => {
       [header.provider, header.credential, header.auth],
       ["anthropic", null, "plan"],
     );
+    // At the runner, in segments: one per step of the run (its phases), the last closed at its
+    // end (runner/logs.mjs).
+    const [[id, text]] = runLogs(dir);
+    const store = openStore(`file://${join(dir, "runner-store")}`);
+    t.after(() => store.close());
+    const index = () => store.get(`logs/${id}/index`);
+    await waitUntil(async () => (await index())?.open === Buffer.byteLength(text), {
+      what: "its last segment closed",
+    });
+    const { segments } = await index();
+    assert.ok(segments.length >= 2, `${segments.length} segments`);
+    assert.ok(segments.every((s) => s.size > 0));
   });
 
   test("through a gateway: its token stays out too, and opus means the gateway's model", async (t) => {

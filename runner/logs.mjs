@@ -149,6 +149,12 @@ export function createLogs({ store, segmentMax = 8 * 1024 * 1024, timers = globa
         await finishClosing(id, after);
         after = await store.get(indexKey(id));
       }
+      // Removed meanwhile (retention): this write made a segment of no index's, which reads
+      // and remove() would never find. Taken back, and the writer goes on from an empty log.
+      if (!after && n > 0) {
+        await store.deleteBlob(segmentKey(id, n));
+        throw new LogConflict((await locate(id)).size);
+      }
       const closed = after?.segments?.[n];
       if (closed && closed.at === index.open && closed.size < from + data.length) {
         throw new LogConflict((await locate(id)).size);

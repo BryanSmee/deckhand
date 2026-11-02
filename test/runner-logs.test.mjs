@@ -235,3 +235,27 @@ test("a read answers MAX_READ at most, within its segment", async () => {
   assert.equal((await logs.read(ID)).data.length, MAX_READ);
   assert.equal((await logs.read(ID, { offset: MAX_READ })).data.length, 10);
 });
+
+// A stalled copy that read the log before its removal (retention) writes on: no segment is
+// left that no index names.
+test("an append landing after its log's removal leaves no segment behind", async () => {
+  const shared = fileStore();
+  let stall = null;
+  const a = createLogs({
+    store: {
+      ...shared,
+      appendBlobAt: async (...args) => {
+        if (stall) await stall().finally(() => (stall = null));
+        return shared.appendBlobAt(...args);
+      },
+    },
+    segmentMax: 4,
+  });
+  const b = createLogs({ store: shared, segmentMax: 4 });
+  await b.append(ID, 0, Buffer.from("abcd"));
+  await b.append(ID, 4, Buffer.from("ef")); // the second segment, open
+  stall = async () => assert.equal(await b.remove(ID), true);
+  await assert.rejects(a.append(ID, 6, Buffer.from("gh")), (error) => error.size === 0);
+  for (const n of [0, 1, 2]) assert.equal(await shared.blobSize(`logs/${ID}/${n}`), null);
+  assert.equal(await shared.get(`logs/${ID}/index`), null);
+});
