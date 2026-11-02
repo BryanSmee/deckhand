@@ -29,6 +29,14 @@ x-sandbox-image: &sandbox-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand
 # `engine` profile pulls or builds them (COMPOSE_PROFILES=engine in .env), docs/setup.md.
 x-engine-image: &engine-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine:${DECKHAND_VERSION:-latest}
 x-engine-podman-image: &engine-podman-image ${DECKHAND_REGISTRY:-ghcr.io/bryansmee}/deckhand-engine-podman:${DECKHAND_VERSION:-latest}
+# Every service's logs: Docker's json-file, which `docker compose logs` reads, rotated (five
+# files of 10 MB per container) so that a long-running deployment doesn't fill the disk. A
+# compose.override.yaml of yours sends them elsewhere instead (docs/setup.md#logs).
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
 
 services:
   # The only service the internet reaches (#506, docs/services.md): GitHub's webhooks (their HMAC
@@ -46,7 +54,11 @@ services:
     stop_grace_period: 30s
     ports:
       - "${PORT:-8080}:8080"
-    depends_on: [broker, github]
+    depends_on:
+      broker:
+        condition: service_healthy
+      github:
+        condition: service_healthy
     # Its way in and out (webhooks, browsers, GitHub's sign-in) on a network of its own, not the
     # proxy's `default`; its networks to the orchestrator, to the broker (its service tokens) and
     # to the github service (/setup's conversion, the redeliveries).
@@ -79,6 +91,14 @@ services:
       - edge-data:/data
       # Your configuration, read only: config.yaml (allowed_users, public_url).
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
+    # Its public port's, with node: every image has it, not all of them curl or wget.
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -99,8 +119,21 @@ services:
     # The broker service signs the runs' tokens: the orchestrator asks it for them as runs start.
     # Every policy decision goes to the policy service, every GitHub call to the github service,
     # the deliveries come from edge, and the orchestrator asks the models service which agents'
-    # credentials it holds before it reads its settings: started first.
-    depends_on: [broker, policy, github, models, edge]
+    # credentials it holds before it reads its settings; it has the runner start the runs. Each
+    # started first, and ready: its health check passing.
+    depends_on:
+      broker:
+        condition: service_healthy
+      policy:
+        condition: service_healthy
+      github:
+        condition: service_healthy
+      models:
+        condition: service_healthy
+      edge:
+        condition: service_healthy
+      runner:
+        condition: service_healthy
     # No way out: its networks to the broker, the runner, the github service, the policy
     # service, the models service, edge and the egress proxy (docs/security.md#the-services-networks).
     networks:
@@ -261,6 +294,15 @@ services:
       # Each mount root you grant, at the same path and read-only: the orchestrator resolves the
       # paths repos ask for (.., symlinks) in it before mounting them into a sandbox, as uid 1000.
       # - /nfs/work:/nfs/work:ro
+    # Its services port's /health: /ready is 503 on a copy waiting for the lease
+    # (docs/setup.md#two-copies), which is still up.
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8083/health').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     # As the node user (orchestrator/Dockerfile): it writes its volumes alone.
     read_only: true
     cap_drop: [ALL]
@@ -297,6 +339,14 @@ services:
       # Its public key (<kid>.pem), for the policy service and the runner to check service tokens with: nothing
       # secret, and a volume apart from its signing key's.
       - service-keys:/service-keys
+    # Ready once its keys are made and published: the others wait for it.
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8081/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     networks:
       - broker-orchestrator
       - broker-edge
@@ -326,6 +376,10 @@ services:
     # broker service (its tokens, the runs' inboxes and files), to the github service (the repos'
     # tarballs), and to the policy service (what the operator's policies grant a repository).
     networks: [runner, runner-models, broker-runner, github-runner, policy-runner]
+    # The broker's public keys, which it checks its callers' service tokens with.
+    depends_on:
+      broker:
+        condition: service_healthy
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
       # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
@@ -391,6 +445,14 @@ services:
       # Each mount root you grant, as on the orchestrator: the runner resolves a sandbox's host
       # paths again (.., symlinks) before Docker mounts them, and refuses those it can't see.
       # - /nfs/work:/nfs/work:ro
+    # /health, as the orchestrator's: /ready is 503 on a copy waiting for the lease.
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
 
   # The only service with the GitHub App's key (#502, docs/services.md): the runs' GitHub and git
   # gateways (the egress proxy sends their calls here), the orchestrator's and edge's own GitHub
@@ -405,7 +467,11 @@ services:
     # Stopping lets the calls in flight finish (pushes, clones, an Actions log): the proxy and the
     # orchestrator wait for the next copy meanwhile (docs/architecture.md#restarts).
     stop_grace_period: 5m
-    depends_on: [broker, policy]
+    depends_on:
+      broker:
+        condition: service_healthy
+      policy:
+        condition: service_healthy
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
       # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
@@ -445,6 +511,14 @@ services:
       - github-runner
       - broker-github
       - policy-github
+    # 503 once it drains, as the broker's, the models service's and the policy service's.
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
@@ -463,7 +537,9 @@ services:
     # (DRAIN_SECONDS, 600). New ones wait for the next copy meanwhile, 5 minutes at most at the
     # proxy (docs/services.md, Upgrades without downtime).
     stop_grace_period: 630s
-    depends_on: [broker]
+    depends_on:
+      broker:
+        condition: service_healthy
     # Its way out to the agents' APIs is a network of its own, not `default`: its callers are on
     # `default` too, and Docker's DNS would answer `models` with its address there, where it can't
     # tell them apart (SERVICE_NETWORKS).
@@ -526,6 +602,13 @@ services:
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       # The broker's public keys (nothing secret).
       - service-keys:/service-keys:ro
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -546,6 +629,10 @@ services:
     # The orchestrator's network to it, the github service's (the runs' writes and pushes) and the
     # runner's (what the operator's policies grant a repository).
     networks: [policy, policy-github, policy-runner]
+    # The broker's public keys, which its callers' service tokens are checked with.
+    depends_on:
+      broker:
+        condition: service_healthy
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
       # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
@@ -561,6 +648,13 @@ services:
       # what it reads (docs/security.md#policies).
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       - service-keys:/keys:ro
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:8181/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     # Each policy set is staged in /tmp while its opa runs.
     read_only: true
     tmpfs:
@@ -596,12 +690,26 @@ services:
     # Its way out (the hosts granted to runs), and its networks to the orchestrator, the broker,
     # the github service and the models service.
     networks: [default, orchestrator-proxy, broker-proxy, github-proxy, models-proxy]
-    depends_on: [broker, github, models]
+    depends_on:
+      broker:
+        condition: service_healthy
+      github:
+        condition: service_healthy
+      models:
+        condition: service_healthy
     volumes:
       # Answers from the hosts the grants list in cached_hosts, kept for every run, and the
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
       # (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
       - egress-cache:/cache
+    # Its /ready, a plain HTTP request to itself: 503 once it drains.
+    healthcheck:
+      test: node -e "fetch('http://127.0.0.1:3128/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
     # How the runner finds it, to join it to each run's network.
     labels:
       deckhand.role: egress
