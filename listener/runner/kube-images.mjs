@@ -20,6 +20,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
+import { sealing, unseal, WRAPPER } from "./kube-seal.mjs";
 import { kubeName, labelValue } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import {
@@ -669,7 +670,9 @@ export function createKubernetesImages({
           {
             name: JOB_CONTAINER,
             image,
-            command: [entrypoint, ...args],
+            // Its stdout sealed with a key that comes first on its stdin: what it prints
+            // reaches the node's log, and whatever ships it (kube-seal.mjs).
+            command: ["node", "-e", WRAPPER, entrypoint, ...args],
             // Its input, once attached; its end, the input's (stdinOnce).
             stdin: true,
             stdinOnce: true,
@@ -694,13 +697,23 @@ export function createKubernetesImages({
       if (started.problem) return { code: -1, out: "", err: started.problem };
       // Ended before it could take its input: whatever it printed is in its log, unread.
       let result = { out: "", err: `the pod ${pod} ended before its input went in` };
+      const seal = sealing(input ?? "");
       if (!started.ended) {
         try {
           result = await api.attach(
             `pods/${pod}/attach`,
             { container: JOB_CONTAINER, stdin: "true", stdout: "true", stderr: "true" },
-            { input, signal: AbortSignal.timeout(Math.max(until - now(), 1000)) },
+            { input: seal.input, signal: AbortSignal.timeout(Math.max(until - now(), 1000)) },
           );
+          const out = unseal(result.out, seal.key);
+          if (out === null) {
+            return {
+              code: -1,
+              out: "",
+              err: `${result.err}the output of the pod ${pod} isn't sealed with its key: not read`,
+            };
+          }
+          result = { ...result, out };
         } catch (error) {
           return { code: -1, out: "", err: `attaching to the pod ${pod}: ${error.message}` };
         }

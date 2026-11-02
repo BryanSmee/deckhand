@@ -6,7 +6,7 @@
 // buildctl.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createCipheriv, createHash, randomBytes } from "node:crypto";
 import { chmodSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -21,6 +21,7 @@ import {
   writable,
 } from "../listener/runner/kube-images.mjs";
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
+import { WRAPPER } from "../listener/runner/kube-seal.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
 import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
@@ -1178,7 +1179,8 @@ test("builderIsolationProblem: a DNS rule without `to` is DNS, nothing more", ()
 // The Antigravity login's refresh on Kubernetes (runner/service.mjs loginRefresh(), with
 // runJob() as its jobs): the job's pod goes through `starting` (statuses, one per look at it,
 // each seen by `looked(status)`), then runs until it is attached to, then ends with
-// `exitCode`; `attach(input)` answers what the container printed. `attached`: the inputs
+// `exitCode`; `attach(input)` answers what the container printed, which the fake seals with
+// the key the input starts with, as kube-seal.mjs's WRAPPER does. `attached`: the inputs
 // sent; `logs`: the log reads' queries.
 function refreshOn(t, { exitCode = 0, attach, starting = [], looked = () => {}, ...options } = {}) {
   const s = setup(t, options);
@@ -1213,10 +1215,14 @@ function refreshOn(t, { exitCode = 0, attach, starting = [], looked = () => {}, 
     };
   };
   const attached = [];
-  s.api.attach = async (path, query, { input }) => {
-    attached.push({ path, query, input });
+  s.api.attach = async (path, query, { input: sent }) => {
+    const nl = sent.indexOf("\n");
+    const key = Buffer.from(sent.slice(0, nl), "hex");
+    const input = sent.slice(nl + 1);
+    attached.push({ path, query, input, key });
     try {
-      return await attach(input);
+      const { out, err } = await attach(input);
+      return { out: sealWith(key, out), err };
     } finally {
       ended.add(path.replace(/\/attach$/, ""));
     }
@@ -1233,6 +1239,14 @@ function refreshOn(t, { exitCode = 0, attach, starting = [], looked = () => {}, 
     jobs: { run: s.backend.runJob },
   });
   return { ...s, refresh, attached, logs };
+}
+
+// What kube-seal.mjs's WRAPPER prints of `text`, with `key`.
+function sealWith(key, text) {
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const sealed = Buffer.concat([cipher.update(text), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), sealed]).toString("base64");
 }
 
 // A pod Pending while its init container installs the agent.
@@ -1265,13 +1279,18 @@ test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, n
     out: '{"token":"old"} refreshed',
     err: "",
   });
-  assert.deepEqual(attached, [
-    {
-      path: "pods/dh-job-antigravity-refresh/attach",
-      query: { container: "job", stdin: "true", stdout: "true", stderr: "true" },
-      input: '{"token":"old"}',
-    },
-  ]);
+  assert.deepEqual(
+    attached.map(({ key, ...rest }) => rest),
+    [
+      {
+        path: "pods/dh-job-antigravity-refresh/attach",
+        query: { container: "job", stdin: "true", stdout: "true", stderr: "true" },
+        input: '{"token":"old"}',
+      },
+    ],
+  );
+  // A key of its own for each job, first on its stdin.
+  assert.equal(attached[0].key.length, 32);
   assert.deepEqual(reached["oauth2.googleapis.com"], {
     allowed: true,
     private: false,
@@ -1304,7 +1323,9 @@ test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, n
     seccompProfile: { type: "RuntimeDefault" },
   });
   const [c] = spec.containers;
-  assert.deepEqual(c.command, ["deckhand-antigravity-refresh"]);
+  // Its stdout sealed with a one-time key (kube-seal.mjs): the node's log of it, shipped or not,
+  // holds no token.
+  assert.deepEqual(c.command, ["node", "-e", WRAPPER, "deckhand-antigravity-refresh"]);
   assert.equal(c.stdin, true);
   assert.equal(c.stdinOnce, true);
   assert.deepEqual(c.securityContext, {
@@ -1472,6 +1493,30 @@ test("Kubernetes: a refresh that fails or can't be attached to says so, and its 
   assert.match(result.err, /attaching to the pod dh-job-antigravity-refresh: .*forbidden/);
   assert.ok(cut.removed.includes("pods/dh-job-antigravity-refresh"));
   assert.equal(cut.objects.pods.size, 0);
+});
+
+test("Kubernetes: a refresh whose output isn't sealed with its key is not read", async (t) => {
+  const { backend, api, removed } = refreshOn(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    attach: async () => ({ out: "", err: "" }),
+  });
+  // A container that printed the file itself, as it is, rather than through the wrapper.
+  api.attach = async () => ({ out: '{"token":{"refresh_token":"1//x"}}', err: "" });
+  await backend.installAgent({ ...antigravity.install(config), name: "antigravity" });
+  const result = await backend.runJob({
+    name: "antigravity-refresh",
+    image: BASE,
+    network: "install",
+    user: SANDBOX_USER,
+    entrypoint: "deckhand-antigravity-refresh",
+    volumes: [{ name: "dh-antigravity", path: "/opt/antigravity", readOnly: true }],
+    input: "{}",
+  });
+  assert.equal(result.code, -1);
+  assert.equal(result.out, "");
+  assert.match(result.err, /isn't sealed with its key: not read/);
+  assert.ok(!result.err.includes("1//x"));
+  assert.ok(removed.includes("pods/dh-job-antigravity-refresh"));
 });
 
 test("Kubernetes: a job that asks for root or a capability is refused, no pod made", async (t) => {

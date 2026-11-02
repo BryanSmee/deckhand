@@ -23,7 +23,7 @@ function serverFrame(opcode, payload) {
 // An API server whose attach upgrades: `container(stdin)` → { out, err } once stdin ended.
 // `protocol`: what it answers in Sec-WebSocket-Protocol. `ending`: "close" (channel 3's
 // Success, then a close frame, as the API server ends it), "cut" (the connection dropped
-// without a close frame) or a Status channel 3 says instead. Every request is in `requests`.
+// without a close frame), "hang" (no end at all) or a Status channel 3 says instead. Every request is in `requests`.
 async function fakeAttach(
   t,
   { container, protocol = PROTOCOL, status = 101, ending = "close" } = {},
@@ -35,6 +35,10 @@ async function fakeAttach(
   });
   server.on("upgrade", (req, socket) => {
     requests.push({ url: req.url, headers: req.headers });
+    // A client that goes at once resets the connection: the end the test waits for.
+    socket.on("error", () => {});
+    const closed = new Promise((resolve) => socket.on("close", resolve));
+    requests.at(-1).closed = closed;
     if (status !== 101) {
       const body = JSON.stringify({ message: "forbidden" });
       socket.end(
@@ -75,6 +79,8 @@ async function fakeAttach(
           socket.write(serverFrame(2, Buffer.concat([Buffer.from([2]), Buffer.from(err)])));
           requests.at(-1).seen = seen;
           if (ending === "cut") return socket.destroy();
+          // A container that never ends: nothing more, until the client goes.
+          if (ending === "hang") return;
           const said = ending === "close" ? { metadata: {}, status: "Success" } : ending;
           socket.write(serverFrame(2, Buffer.from([3, ...Buffer.from(JSON.stringify(said))])));
           socket.write(serverFrame(8, Buffer.from([0x03, 0xe8])));
@@ -147,6 +153,24 @@ test("attach: a stream cut before its close frame, or a Status that isn't Succes
     failed.api.attach("pods/p/attach", {}, { input: "x" }),
     /the API server said: error attaching to container: container not found/,
   );
+});
+
+test("attach: a signal that aborts (the job's time is up) rejects, and the connection goes", async (t) => {
+  const controller = new AbortController();
+  const { api, requests } = await fakeAttach(t, {
+    ending: "hang",
+    container: () => {
+      // Its input is in, and it runs on: the job's budget runs out.
+      setImmediate(() => controller.abort(new Error("the job's time is up")));
+      return { out: "partial", err: "" };
+    },
+  });
+  await assert.rejects(
+    api.attach("pods/p/attach", {}, { input: "x", signal: controller.signal }),
+    /the job's time is up/,
+  );
+  // The client's socket destroyed: the server sees its connection close.
+  await requests[0].closed;
 });
 
 test("frames: a client's masked, of any length, read back whole or not yet", () => {

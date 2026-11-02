@@ -514,8 +514,16 @@ egress proxy lets it reach Google's OAuth (`oauth2.googleapis.com`) and the CLI'
 only, tunnelled (and GitHub's releases while its init container installs the CLI, never once
 `agy` runs). It has 4 minutes in all, the CLI's install included, within the models service's
 5-minute hold on the login, so that no other copy of the service refreshes it meanwhile. It is
-removed once it ends, whatever its outcome; the kubelet's copy of its log (which holds the
-refreshed file) goes with it.
+removed once it ends, whatever its outcome.
+
+What the pod prints to stdout reaches its log on the node (`/var/log/pods`), which a log agent
+(Fluent Bit, Promtail, a cloud's own logging) may ship elsewhere before the pod goes. So the
+refreshed file never goes there as it is: the runner sends a one-time key first on the pod's
+stdin (which no log keeps), and a wrapper of its own in the pod (`node -e`, from
+`listener/runner/kube-seal.mjs`) encrypts the refresh's stdout with it (AES-256-GCM). The log
+holds only that ciphertext, which nothing but the runner's memory, during that call, can open;
+an output that isn't sealed with the key isn't read. Its stderr, which holds no token, stays as
+it is.
 
 The shared claims (agents', caches') are written by their pods' users, uid 1001 for the
 installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim theirs. That

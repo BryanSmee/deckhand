@@ -1,11 +1,13 @@
 #!/bin/bash
 # Refreshes a Google AI plan's login with the Antigravity CLI itself, for the models service
 # (../../../models/antigravity-login.mjs), in a short container on the login's own volume
-# (~/.gemini; on Kubernetes, a pod's emptyDir): the token file on stdin, its expiry already past, so that `agy models` refreshes
-# it; then the file as `agy` left it on stdout, and `agy`'s exit status. When it fails, why the
-# refresh did, from its log, on stderr: `agy` itself only says to sign in, whether Google
-# refused the refresh token or couldn't be reached. And nothing on stdout: the listener's error
-# message must not quote the token file (#242). No repo or agent input runs here.
+# (~/.gemini; on Kubernetes, a pod's emptyDir, its stdout sealed by the runner's wrapper,
+# listener/runner/kube-seal.mjs): the token file on stdin, its expiry already past, so that
+# `agy models` refreshes it; then the file as `agy` left it on stdout, and `agy`'s exit status.
+# When it fails, why the refresh did, from its log, on stderr: `agy` itself only says to sign
+# in, whether Google refused the refresh token or couldn't be reached. And nothing on stdout:
+# the models service's error message must not quote the token file (#242). No repo or agent
+# input runs here.
 set -uo pipefail
 
 : "${AGY_VERSION:?AGY_VERSION: the Antigravity CLI version to run}"

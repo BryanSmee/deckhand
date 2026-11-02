@@ -1291,7 +1291,10 @@ point at the models service, and its calls go to Google directly, so it is kept 
   set in the past; it reads back the file `agy` wrote and keeps it sealed in its store. On
   Kubernetes it is a pod of its own (Pod Security `restricted`, no ServiceAccount token, no
   Secret, `~/.gemini` an `emptyDir`): the file goes in on its stdin and comes back on its
-  stdout through the API server's `pods/attach`, never in its spec, and the egress proxy lets
+  stdout through the API server's `pods/attach`, never in its spec. That stdout is sealed with
+  a one-time key the runner sends first on stdin (`listener/runner/kube-seal.mjs`): the
+  container's log on the node, which log agents may ship off the cluster, holds only
+  ciphertext, never the login. The egress proxy lets
   it reach Google's OAuth and the CLI's own hosts only, tunnelled (and GitHub's releases while
   an init container installs the CLI, when it has no claim, never once `agy` runs with the
   login). It is removed once it ends,
