@@ -22,7 +22,7 @@ import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
 import { grantsFrom } from "../listener/grants.mjs";
-import { fakeDocker, grantedOf, tempDir } from "./helpers.mjs";
+import { fakeDocker, grantedOf, listenToRestart, tempDir } from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const signing = { privateKey, kid: keyId(publicKey) };
@@ -140,7 +140,8 @@ async function copy(
     blobOf:
       blobOf ?? (async (repo, path, ref) => `blob of ${path} at ${ref ?? "the default branch"}`),
   });
-  await new Promise((resolve) => service.server.listen(0, "127.0.0.1", resolve));
+  // Where a test may start it again (a runner away, then back).
+  await listenToRestart(service.server);
   await lease.start();
   t.after(async () => {
     await lease.stop();

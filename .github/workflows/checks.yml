@@ -45,7 +45,7 @@ jobs:
       # Fails, too, when a real-opa test skipped: opa is on the PATH here.
       - name: Tests
         run: |
-          node --test --test-force-exit --test-timeout=120000 \
+          node --test --test-force-exit --import ./test/blocking-stdout.mjs --test-timeout=120000 \
             --test-reporter=spec --test-reporter-destination=stdout \
             --test-reporter=tap --test-reporter-destination="$RUNNER_TEMP/tests.tap"
           if grep "# SKIP no opa on the PATH" "$RUNNER_TEMP/tests.tap"; then

@@ -78,6 +78,16 @@ export function pickedTask(t) {
   return t.live ? !!t.live.record?.autoPickup : !!t.pending?.[0]?.autoPickup;
 }
 
+// `fn()` once the calls `chains` holds for `key` before it have settled, failed or not: → its
+// promise. The key is dropped once its last call is done.
+function inOrder(chains, key, fn) {
+  const done = (chains.get(key) ?? Promise.resolve()).then(fn);
+  const settled = done.catch(() => {});
+  chains.set(key, settled);
+  settled.then(() => chains.get(key) === settled && chains.delete(key));
+  return done;
+}
+
 // `ctx` (server.mjs): the listener's state and services, read at call time. Tasks are
 // `ctx.tasks`: key → { repo, id, kind, number, base, name, settings, pending: [], running,
 // ready, timer, dueAt, live, next }; live: the running sandbox's (runs.mjs), next: "/model" and
@@ -93,9 +103,19 @@ export function createTasks(ctx) {
     return taskSandboxName(config, repo, id, ctx.runs, (name) => ctx.runner.hasSession(name));
   }
 
+  // Task key, as the delivery names it → its latest admit(), settled: the next waits for it.
+  const admitting = new Map();
+
   // A comment that passed the operator's checks, checked again with its repo's settings
-  // (users, trigger lines), then queued.
-  async function admit(first, event, payload) {
+  // (users, trigger lines), then queued. After the comments on its task that came before: its
+  // checks await (the repo's settings, a pull request's lookup), and a follow-up whose answers
+  // came first mustn't pass the comment that creates the task (accept() keeps that order only
+  // from there on).
+  function admit(first, event, payload) {
+    return inOrder(admitting, taskKey(first.repo, first.id), () => admitNow(first, event, payload));
+  }
+
+  async function admitNow(first, event, payload) {
     const { settings, errors } = await ctx.repoSettings(first.repo, first.base);
     if (errors.length) {
       log(`${first.repo}: ${CONFIG_FILE} has errors: ${errors.join("; ")}`);
@@ -262,12 +282,7 @@ export function createTasks(ctx) {
   // a session look-up), and a follow-up mustn't pass the comment that creates the task. → its
   // mode, or null when it runs nothing (refused by the policies, nothing to go on in…).
   function accept(item) {
-    const key = taskKey(item.repo, item.id);
-    const queued = (accepting.get(key) ?? Promise.resolve()).then(() => queue(item));
-    const settled = queued.catch(() => {});
-    accepting.set(key, settled);
-    settled.then(() => accepting.get(key) === settled && accepting.delete(key));
-    return queued;
+    return inOrder(accepting, taskKey(item.repo, item.id), () => queue(item));
   }
 
   async function queue(item) {

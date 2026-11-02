@@ -537,6 +537,46 @@ function refusingTasks(messages) {
   return { ctx, cancelled, asked, ...createTasks(ctx) };
 }
 
+test("tasks.mjs admit(): a follow-up whose checks answer first still waits for the comment before it", async () => {
+  const payload = (id, body) => ({
+    action: "created",
+    installation: { id: 7 },
+    repository: { full_name: "Org/Repo", default_branch: "main" },
+    issue: { number: 12, title: "Twelve" },
+    comment: { id, body, user: { login: "alice", type: "User" } },
+    sender: { login: "alice" },
+  });
+  const { ctx, admit } = refusingTasks([]);
+  // The first comment's repo settings come back last: a burst of comments, each reading them.
+  let release;
+  const slow = new Promise((resolve) => (release = resolve));
+  const read = ctx.repoSettings;
+  let reads = 0;
+  ctx.repoSettings = async (...args) => (reads++ === 0 && (await slow), read(...args));
+  const first = { repo: "Org/Repo", id: 12, base: "main", trigger: "work", replyTo: 12 };
+  const trigger = admit(
+    { ...first, kind: "issue" },
+    "issue_comment",
+    payload(99, "Deckhand\nFix it."),
+  );
+  // No trigger line: it only goes on in a task that exists, which the first creates.
+  const followUp = admit(
+    { ...first, trigger: null, kind: "issue" },
+    "issue_comment",
+    payload(100, "And the dates."),
+  );
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(reads, 1);
+  release();
+  await Promise.all([trigger, followUp]);
+  const task = ctx.tasks.get("Org/Repo#12");
+  clearTimeout(task.timer);
+  assert.deepEqual(
+    task.pending.map((i) => i.text),
+    ["Fix it.", "And the dates."],
+  );
+});
+
 test("tasks.mjs: a refused trigger comment keeps the issue's wait; a refused waiting comment isn't started", async () => {
   const payload = (body) => ({
     action: "created",
