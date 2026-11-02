@@ -516,7 +516,8 @@ token only reads, and Deckhand posts the review.
   listed by title in the comment). The issue's body says the text is a review model's
   output, to check against the code, and quotes it. The review is told not to list again a
   follow-up an earlier review of Deckhand's listed. **`follow_ups: false`** turns the filing
-  off: the repository's config is read again from the default branch at the merge, and a
+  off (the review's prompt, its Follow-ups section and the fix run's message say they are left
+  to the maintainer): the repository's config is read again from the default branch at the merge, and a
   `review` block that is gone, or a config with errors, files nothing either.
 - **Comments**: remarks that aren't defects (a naming choice, a question, a suggestion, a
   nit), each marked **blocking** or **note**. A note never blocks nor caps the rating; the fix

@@ -3271,3 +3271,59 @@ test("follow-ups: the label made with its colour, a refusal logged", async (t) =
   assert.deepEqual([made.body.name, made.body.color], [FOLLOW_UP_LABEL, "c5def5"]);
   assert.ok(s.logged.includes("org/repo: the follow-up label: 403"), s.logged.join("\n"));
 });
+
+test("review.follow_ups: false: the review, the fix run and the prompt say Deckhand files none", () => {
+  const review = parseReview(SECTIONS);
+  const off = reviewBody(review, SECTIONS, "f", null, { followUps: false });
+  assert.match(
+    off,
+    /## Follow-ups \(2\)\n\nFor other issues: listed for the maintainer: Deckhand files none here \(`review\.follow_ups: false`\)\./,
+  );
+  assert.doesNotMatch(off, /once this pull request is merged/);
+  // Read back the same.
+  assert.deepEqual(parsePostedReview(off).followUps, review.followUps);
+  const fix = fixMessage(review, 5, { followUps: false });
+  assert.match(
+    fix,
+    /2 follow-ups for other issues, not below: they are left to the maintainer, in the review \(this repository's `review\.follow_ups: false`\)\. Don't work on them here, nor file them yourself\./,
+  );
+  assert.doesNotMatch(fix, /Deckhand files them/);
+  assert.match(
+    fixMessage(review, 5),
+    /Deckhand files them as issues once the pull request is merged/,
+  );
+});
+
+test("review.follow_ups: false: the fix run queued says so", async (t) => {
+  const { fix } = fixSetup(t, "review:\n  on: ready\n  fix: true\n  follow_ups: false\n");
+  const item = await fix(posted(SECTIONS));
+  assert.match(item.text, /left to the maintainer, in the review/);
+});
+
+test("follow-ups: a separator inside the bold is no part of the title; both spellings filed once", async (t) => {
+  const review = parseReview(
+    "## Follow-ups\n\n- **Share the helper:** `a.mjs:3`: dup.\n- **Docs —**: missing.\n\nRating: 10/10\nVerdict: comment",
+  );
+  assert.deepEqual(
+    review.followUps.map((f) => [f.title, f.path, f.text]),
+    [
+      ["Share the helper", "a.mjs", "dup."],
+      ["Docs", null, "missing."],
+    ],
+  );
+  const colon = SECTIONS.replace(
+    "**Share the retry helper with the uploader**",
+    "**Share the retry helper with the uploader:**",
+  );
+  // An issue filed with the colon before: linked, not filed again.
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS), postedBody(colon)],
+    existing: [{ number: 7, title: "Docs: the cache's limits:" }],
+  });
+  await s.record(SECTIONS);
+  assert.deepEqual(await s.merged(), [40]);
+  assert.deepEqual(
+    s.filed().map((c) => c.body.title),
+    ["Share the retry helper with the uploader"],
+  );
+});

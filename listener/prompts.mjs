@@ -122,6 +122,24 @@ function verdictRule(text, allowed) {
   return text.replaceAll("<blocking>", severityList(blocking)).replace("<tolerated>", note);
 }
 
+// prompts/review.md's follow-ups rule: who files them, Deckhand after the merge unless the
+// repo's `review.follow_ups` is false (reviews.mjs fileFollowUps()).
+function followUpRule(text, filed) {
+  return text
+    .replace(
+      "<filed>",
+      filed
+        ? "Deckhand files each one as an issue once the pull request is merged"
+        : "the maintainer files those worth it (this repository's `review.follow_ups: false`: Deckhand files none)",
+    )
+    .replace(
+      "<filed-again>",
+      filed
+        ? "it will be filed with the others once the pull request is merged"
+        : "it is listed there for the maintainer already",
+    );
+}
+
 // A review (reviews.mjs) of pull request `pull`: its task may be the issue the pull request
 // closes. Its thread is the run's file TASK_DIGEST names (reviews.mjs reviewThread()).
 // `instructions`: the repo's `review.instructions` file, if any; `text`: what the
@@ -130,14 +148,23 @@ function verdictRule(text, allowed) {
 // `reviewed`: { sha, base } of the pull request at the run's start (reviews.mjs reviewStart()),
 // the commit it reads and its review is posted on; null when GitHub couldn't say: its head
 // whenever it reads it.
-function reviewPrompt(task, pull, instructions, text, allowed = "low", ciNote = null, reviewed) {
+function reviewPrompt(
+  task,
+  pull,
+  instructions,
+  text,
+  allowed = "low",
+  ciNote = null,
+  reviewed,
+  followUps = true,
+) {
   const own = instructions?.trim()
     ? `\n\nThe repository's review instructions:\n\n${instructions.trim()}`
     : "";
   const asked = text ? `\n\nThe maintainer asks:\n\n${text}` : "";
   const ci = ciNote ? `\n\n${ciNote}` : "";
   const read = pinned(modeInstructions.review, reviewed);
-  const rules = verdictRule(read.replaceAll("<n>", String(pull)), allowed);
+  const rules = followUpRule(verdictRule(read.replaceAll("<n>", String(pull)), allowed), followUps);
   return `Review pull request #${pull} of ${task.repo}.
 
 ${rules}${ci}${own}${asked}`;
@@ -438,7 +465,16 @@ export function promptFor(
   if (mode === "analyze") return analyzePrompt(task, text);
   if (mode === "research") return researchPrompt(task);
   if (mode === "review")
-    return reviewPrompt(task, pull ?? task.number, instructions, text, allowed, ciNote, reviewed);
+    return reviewPrompt(
+      task,
+      pull ?? task.number,
+      instructions,
+      text,
+      allowed,
+      ciNote,
+      reviewed,
+      settings?.review?.followUps !== false,
+    );
   if (mode === "onboarding") return onboardingPrompt(task, settings, config, grant);
   // Work expects a branch: without `push`, told so. The repo's own modes say it in theirs.
   if (own) return modePrompt(task, own, instructions, branches, grant, caps);

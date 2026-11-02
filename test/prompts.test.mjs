@@ -872,3 +872,18 @@ test("prompts: any mode but an analysis or research, without `pull`: the thread,
   );
   assert.equal(bare(issue, "research"), promptFor(issue, { mode: "research" }));
 });
+
+test("prompts: a review is told who files its follow-ups, Deckhand unless review.follow_ups is false", () => {
+  const issue = { repo: "org/app", number: 12, kind: "issue", base: "main" };
+  const on = promptFor(issue, { mode: "review", pull: 31 });
+  assert.match(on, /Deckhand files each one as an issue once the pull request is merged\./);
+  assert.match(on, /it will be filed with the others once the pull request is merged\./);
+  const settings = { review: { followUps: false } };
+  const off = promptFor(issue, { mode: "review", pull: 31, settings });
+  assert.match(
+    off,
+    /the maintainer files those worth it \(this repository's `review\.follow_ups: false`: Deckhand files none\)\./,
+  );
+  assert.match(off, /it is listed there for the maintainer already\./);
+  assert.doesNotMatch(off, /<filed|Deckhand files each one/);
+});

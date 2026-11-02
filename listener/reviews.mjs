@@ -283,7 +283,13 @@ const NOTHING =
   /^(?:n\/a|(?:no|none|nothing)(?:\s+(?:follow[- ]?ups?|issues?|found|here|left|needed|so far|to (?:file|report|add|list)))*)\W*$/i;
 
 // A follow-up's title, on one line, as long as GitHub takes an issue's (256).
-const titleOf = (text) => String(text).replace(/\s+/g, " ").trim().slice(0, 256);
+// A separator the model put inside the bold ("**Share the helper:**") is no part of it.
+const titleOf = (text) =>
+  String(text)
+    .replace(/\s+/g, " ")
+    .replace(/\s*[:–—-]\s*$/, "")
+    .trim()
+    .slice(0, 256);
 
 // The comments of `review` that block (all of its blocking ones, whatever its tolerance).
 const blockingComments = (review) => (review.comments ?? []).filter((c) => c.blocking);
@@ -371,15 +377,16 @@ export function reviewEvent(review) {
 // The review's body: verdict and rating, the summary, then its sections: the findings by
 // severity (Must fix), the follow-ups and the comments, each item linked to its line at `blob`
 // (the head commit's tree URL), when known. A review with findings only is posted as before the
-// sections. Unparsed: the raw text.
-export function reviewBody(review, raw, footer, blob = null) {
+// sections. Unparsed: the raw text. `followUps`: whether Deckhand files the follow-ups after the
+// merge (the repo's `review.follow_ups`), which their section says.
+export function reviewBody(review, raw, footer, blob = null, { followUps = true } = {}) {
   if (!review) {
     return `${String(raw ?? "").trim()}\n\n_The review's format couldn't be read: posted as it is, as a comment._\n\n${footer}`;
   }
   const head = `**Verdict: ${VERDICTS[review.verdict]}** · Rating: ${review.rating}/10`;
   const parts = [head];
   if (review.summary) parts.push(review.summary);
-  const others = [...followUpSection(review, blob), ...commentSection(review, blob)];
+  const others = [...followUpSection(review, blob, followUps), ...commentSection(review, blob)];
   if (others.length) parts.push("## Must fix");
   parts.push(...findingSections(review, blob));
   if (!review.findings.length) parts.push(others.length ? "None." : "No findings.");
@@ -400,14 +407,15 @@ function findingSections(review, blob = null) {
   return parts;
 }
 
-// The follow-ups, if any, as one section.
-function followUpSection(review, blob = null) {
+// The follow-ups, if any, as one section, saying who files them (`filed`: Deckhand).
+function followUpSection(review, blob = null, filed = true) {
   const list = review.followUps ?? [];
   if (!list.length) return [];
   const items = list.map((f) => itemLine(f, blob, `**${f.title}** `));
-  return [
-    `## Follow-ups (${list.length})\n\nFor other issues: Deckhand files each one as an issue labelled \`${FOLLOW_UP_LABEL}\` once this pull request is merged.\n\n${items.join("\n")}`,
-  ];
+  const who = filed
+    ? `Deckhand files each one as an issue labelled \`${FOLLOW_UP_LABEL}\` once this pull request is merged`
+    : "listed for the maintainer: Deckhand files none here (`review.follow_ups: false`)";
+  return [`## Follow-ups (${list.length})\n\nFor other issues: ${who}.\n\n${items.join("\n")}`];
 }
 
 // The comments, if any, as one section, the blocking ones first.
@@ -426,12 +434,17 @@ const itemLine = (item, blob, lead = "") =>
 // medium and low ones too) and every comment, so the run doesn't have to look the review up:
 // the findings and blocking comments to fix, the notes to apply only when cheap and in scope.
 // The follow-ups are only counted: Deckhand files them once the pull request is merged
-// (fileFollowUps()), and the fix run leaves them alone. The items are model-written, after
+// (fileFollowUps()), unless `followUps` is false (the repo's `review.follow_ups`), and the fix
+// run leaves them alone either way. The items are model-written, after
 // reading the diff and the thread (reviewThread()): fenced off from the instruction, as claims
 // to check, never as instructions of their own.
 // `round` of `rounds` (`review.fix`): from the second on, the run is told that the fix before
 // it didn't clear them.
-export function fixMessage(review, number, { round = 1, rounds = 1 } = {}) {
+export function fixMessage(
+  review,
+  number,
+  { round = 1, rounds = 1, followUps: filed = true } = {},
+) {
   const comments = commentSection(review);
   const items = [
     ...(comments.length ? ["## Must fix"] : []),
@@ -450,7 +463,7 @@ export function fixMessage(review, number, { round = 1, rounds = 1 } = {}) {
     : "";
   const n = review.followUps?.length ?? 0;
   const followUps = n
-    ? `\n- The review also listed ${n > 1 ? `${n} follow-ups` : "a follow-up"} for other issues, not below: Deckhand files ${n > 1 ? "them" : "it"} as issues once the pull request is merged. Don't work on ${n > 1 ? "them" : "it"} here, nor file ${n > 1 ? "them" : "it"} yourself.`
+    ? `\n- The review also listed ${n > 1 ? `${n} follow-ups` : "a follow-up"} for other issues, not below: ${filed ? `Deckhand files ${n > 1 ? "them" : "it"} as issues once the pull request is merged` : `${n > 1 ? "they are" : "it is"} left to the maintainer, in the review (this repository's \`review.follow_ups: false\`)`}. Don't work on ${n > 1 ? "them" : "it"} here, nor file ${n > 1 ? "them" : "it"} yourself.`
     : "";
   return `The automated review of pull request #${number} requested changes. Its findings are below, between the fences: address them, then rerun the checks and push.${which}
 
@@ -501,15 +514,16 @@ export async function reviewStart({ github, log = () => {} }, repo, number) {
 // request after a force push, say): the same at its current head, `head` still `from`. A review
 // GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost. `github`: the
 // App's calls (server.mjs); `allowed`: the review's tolerance (reviews' tolerance()); `full`:
-// where the whole text is, should GitHub take only its start. The comment fallback throws when
-// GitHub refuses it too (comments.mjs reply()).
+// where the whole text is, should GitHub take only its start; `followUps`: the repo's
+// `review.follow_ups` (reviewBody()). The comment fallback throws when GitHub refuses it too
+// (comments.mjs reply()).
 export async function postReview(
   { github, reply, log = () => {} },
   repo,
   number,
   text,
   footer,
-  { allowed = "low", full, from = null } = {},
+  { allowed = "low", full, from = null, followUps = true } = {},
 ) {
   const review = parseReview(text, { allowed });
   let pr = null;
@@ -522,7 +536,7 @@ export async function postReview(
   const sha = from ?? now;
   const site = pr?.base?.repo?.html_url;
   const blob = sha && site ? `${site}/blob/${sha}` : null;
-  const body = `${cut(reviewBody(review, text, footer, blob))}\n\n${MARKER}`;
+  const body = `${cut(reviewBody(review, text, footer, blob, { followUps }))}\n\n${MARKER}`;
   const post = (event, at) =>
     github(
       repo,
@@ -1124,7 +1138,8 @@ const ROUNDS_KEPT = 20;
 // never ran (cancelled, refused). `entry.deciding`: the listener is deciding about the loop's
 // step right now (createReviews() entry()): it is there too.
 // `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
-// `history`: each review's { round, at, head, counts, blocking, manual? }, oldest first;
+// `history`: each review's { round, at, head, counts, blocking, followUps, comments: { blocking,
+// notes }, comment?, commentId?, manual? } (recordRound()), oldest first;
 // `manual`: true when no loop ran, only maintainers' reviews (the dashboard's "Reviews").
 export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const history = entry?.rounds ?? [];
@@ -1420,12 +1435,9 @@ export function notMergedText(why) {
   return `**Not merged automatically** (\`review.merge\`): ${why}. It waits for a maintainer's review and merge.`;
 }
 
-// A follow-up's title as compared with another's: case and spacing aside.
-const titleKey = (title) =>
-  String(title ?? "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
+// A follow-up's title as compared with another's (an issue's too, filed before titles lost
+// their trailing separator): case, spacing and a trailing separator aside.
+const titleKey = (title) => titleOf(title ?? "").toLowerCase();
 
 // The body of the issue a follow-up `f` (parsePostedReview()'s, with the App's `review` it came
 // from) is filed as: its text, its place at the reviewed commit, and the pull request `number`
@@ -1975,7 +1987,11 @@ export function createReviews({
       title: null,
       trigger: "work",
       modeLine: null,
-      text: fixMessage(review, number, { round, rounds }),
+      text: fixMessage(review, number, {
+        round,
+        rounds,
+        followUps: settings.review?.followUps !== false,
+      }),
       replyTo: number,
       comment,
       base,

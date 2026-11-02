@@ -897,7 +897,12 @@ export function createRuns(ctx) {
         live.replyTo,
         hidden(live, result.text),
         footer,
-        { allowed, full: runLink(task), from: live.reviewFrom ?? null },
+        {
+          allowed,
+          full: runLink(task),
+          from: live.reviewFrom ?? null,
+          followUps: task.settings?.review?.followUps !== false,
+        },
       );
       log(`${live.key}: review posted on #${live.replyTo} (${posted.event ?? "as a comment"})`);
       live.reviewed = { number: live.replyTo, posted, auto };

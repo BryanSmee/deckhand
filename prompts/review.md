@@ -66,10 +66,8 @@ Sort what you found into three sections, each with its own rules:
   didn't change that the diff reveals, duplication with code it didn't touch, a refactor or an
   improvement beyond its issue's acceptance criteria. The scope and duplication checks above
   that point outside the diff go here, not in Must fix. Each one is an issue as it is: a short
-  title, then what and why. They never block nor cap the rating: Deckhand files each one as an
-  issue once the pull request is merged. Don't list a follow-up an earlier review of
-  Deckhand's in the thread already listed: it will be filed with the others once the pull
-  request is merged.
+  title, then what and why. They never block nor cap the rating: <filed>. Don't list a
+  follow-up an earlier review of Deckhand's in the thread already listed: <filed-again>.
 - **Comments**: remarks that aren't defects: a naming choice, a question, a suggestion, a nit.
   Mark each one `blocking` or `note`. A **note** never blocks nor caps the rating: the fix run
   applies it only when it is cheap and in scope. A nit is a note, never a low finding. Mark one
