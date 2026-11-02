@@ -97,6 +97,18 @@ test("ciSummary: each run, check run and status that counts, failed ones first",
     ],
   });
   assert.deepEqual(ciSummary({}), { state: "none", runs: [] });
+  // Only a web page's link: a poster's `javascript:` or junk link is dropped.
+  const links = ciSummary({
+    statuses: [
+      status("failure", { context: "a", target_url: "javascript:alert(1)" }),
+      status("failure", { context: "b", target_url: "not a url" }),
+      status("failure", { context: "c", target_url: "http://ci.example/1" }),
+    ],
+  });
+  assert.deepEqual(
+    links.runs.map((r) => r.url),
+    [null, null, "http://ci.example/1"],
+  );
   // Without the Actions runs (refused), its check runs stand for them.
   const alone = ciSummary({
     checks: [check("completed", "success", { app: { slug: "github-actions" } })],
@@ -112,18 +124,23 @@ test("commitCi: Actions runs, check runs and statuses read; a refused one left o
     assert.deepEqual([repo, method, expected], ["org/repo", "GET", [403, 404, 422]]);
     if (path.includes("/actions/runs")) {
       return reply(200, {
-        workflow_runs: [{ name: "CI", status: "completed", conclusion: "success", html_url: "r" }],
+        workflow_runs: [
+          { name: "CI", status: "completed", conclusion: "success", html_url: "https://r" },
+        ],
       });
     }
     if (path.includes("/check-runs")) return reply(403, { message: "Resource not accessible" });
-    return reply(200, { state: "failure", statuses: [status("failure", { target_url: "s" })] });
+    return reply(200, {
+      state: "failure",
+      statuses: [status("failure", { target_url: "https://s" })],
+    });
   };
   assert.deepEqual(await commitCi(github, "org/repo", "abc"), {
     sha: "abc",
     state: "failed",
     runs: [
-      { name: "ci/jenkins", state: "failed", url: "s" },
-      { name: "CI", state: "passed", url: "r" },
+      { name: "ci/jenkins", state: "failed", url: "https://s" },
+      { name: "CI", state: "passed", url: "https://r" },
     ],
   });
   assert.deepEqual(paths.sort(), [

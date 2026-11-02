@@ -37,12 +37,15 @@ const signed = (body) => `sha256=${createHmac("sha256", SECRET).update(body).dig
 
 // One copy of edge's public server on `store`, its App held in `dir`; `orchestrator`: what the
 // dashboard's API is passed on to.
-async function edgeCopy(t, { store, dir = tempDir(t), orchestrator, logs = [] } = {}) {
+async function edgeCopy(
+  t,
+  { store, dir = tempDir(t), orchestrator, logs = [], config = testConfig({ PORT: "0" }) } = {},
+) {
   writeFileSync(join(dir, "app.json"), JSON.stringify(CREDENTIALS));
   const app = createEdgeApp({ dir });
   const redeliveries = createRedeliveries({ store, app: () => null });
   const http = createEdgeHttp({
-    config: testConfig({ PORT: "0" }),
+    config,
     app,
     auth: { handle: () => false, user: async () => null },
     setup: { handle: () => false },
@@ -89,20 +92,6 @@ test("two copies: a delivery GitHub sends to both, or twice, goes on the stream 
     ],
   );
   assert.ok(two.logs.includes("Delivery guid-1 again: already handled"));
-  // A commit's CI changed (QUIET_EVENTS): on the stream each time, without its GUID, which
-  // takes no place among the GUIDs, nor a log line.
-  for (const copy of [one, two])
-    await deliver(copy.url, { sha: "abc" }, { id: "guid-3", event: "status" });
-  const quiet = (await store.read(DELIVERIES, "orchestrator")).slice(2);
-  assert.deepEqual(
-    quiet.map(({ event }) => [event.id, event.event, event.payload.sha]),
-    [
-      [null, "status", "abc"],
-      [null, "status", "abc"],
-    ],
-  );
-  assert.equal(await store.get("deliveries/guid-3"), null);
-  assert.ok(!two.logs.some((line) => /status/.test(line)), two.logs.join("\n"));
 });
 
 test("a delivery: unsigned, badly signed or without an App refused; a secret in it kept out of the store", async (t) => {
@@ -204,6 +193,72 @@ async function internal(
   t.after(() => client.stop());
   return { url, app, store, client, as, handedOver };
 }
+
+test("CI deliveries: only what the orchestrator reads, allowed repos only, one waiting per commit until it is read", async (t) => {
+  const store = openStore("memory:");
+  const logs = [];
+  const config = testConfig({ PORT: "0", ALLOWED_REPOS: "org/repo" });
+  const copy = await edgeCopy(t, { store, logs, config });
+  const { url, as } = await internal(t, { store });
+  const repository = { full_name: "org/repo", private: true, owner: { login: "org" } };
+  const status = (sha, more = {}) => ({
+    installation: { id: 7 },
+    repository,
+    sha,
+    state: "pending",
+    context: "ci/jenkins",
+    commit: { sha, commit: { message: "a long message" } },
+    branches: [{ name: "issue-30-fix" }],
+    ...more,
+  });
+  const quiet = async () =>
+    (await store.read(DELIVERIES, "orchestrator")).filter((e) => e.event.event !== "push");
+  // The same commit twice, and its check suite: one entry, with only what ciDelivery() reads,
+  // without its GUID.
+  await deliver(copy.url, status("abc"), { id: "s-1", event: "status" });
+  await deliver(copy.url, status("abc", { state: "success" }), { id: "s-2", event: "status" });
+  const suite = {
+    action: "completed",
+    installation: { id: 7 },
+    repository,
+    check_suite: { head_sha: "abc", app: {} },
+  };
+  await deliver(copy.url, suite, { id: "c-1", event: "check_suite" });
+  // Another repository's, or one without a commit: none.
+  await deliver(copy.url, status("abc", { repository: { full_name: "else/where" } }), {
+    event: "status",
+  });
+  await deliver(copy.url, status(null), { event: "status" });
+  assert.deepEqual(
+    (await quiet()).map(({ event }) => [event.id, event.event, event.payload]),
+    [
+      [
+        null,
+        "status",
+        { installation: { id: 7 }, repository: { full_name: "org/repo" }, sha: "abc" },
+      ],
+    ],
+  );
+  assert.equal(await store.get("deliveries/s-1"), null);
+  assert.ok(!logs.some((line) => /status|check_suite/.test(line)), logs.join("\n"));
+  // Once the orchestrator read it, the next one for that commit goes on the stream: its read of
+  // CI may have been before it.
+  const auth = { authorization: await as("orchestrator")() };
+  const { events } = await (await fetch(`${url}/events?wait=0`, { headers: auth })).json();
+  assert.equal(events.length, 1);
+  await deliver(copy.url, suite, { id: "c-2", event: "check_suite" });
+  const after = await quiet();
+  assert.deepEqual(
+    after.map(({ event }) => [
+      event.event,
+      event.payload.check_suite?.head_sha ?? event.payload.sha,
+    ]),
+    [
+      ["status", "abc"],
+      ["check_suite", "abc"],
+    ],
+  );
+});
 
 test("the orchestrator reads the deliveries, acknowledges each once handled; one that fails is read again", async (t) => {
   const { store, client } = await internal(t);

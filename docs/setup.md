@@ -115,7 +115,7 @@ run's project writes are refused with a message naming the permission; nothing e
 changes. A GitHub App can't reach a project owned by a user account.
 
 Checks and Commit statuses let runs read what CI says of a commit beyond GitHub Actions
-(other services' check runs, commit statuses: `gh pr checks`), and the dashboard show them in
+(other services' check runs, commit statuses: `gh pr checks`), and the dashboard shows them in
 each pull request's CI status; the `check_suite` and `status` events keep that status current. An App created before then lacks
 them: add **Checks: read** and **Commit statuses: read** in its settings, turn on **Check
 suite** and **Status** under _Subscribe to events_, then accept the new permissions on each

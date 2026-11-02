@@ -20,6 +20,7 @@ import { drainable } from "../lib/drain.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { fromKey, fromTag } from "../listener/discussions.mjs";
+import { QUIET_EVENTS } from "../listener/github-app.mjs";
 
 export const ROUTES = {
   "GET /events": ["orchestrator"],
@@ -34,6 +35,12 @@ export const ROUTES = {
 // turns reading it (lib/store.mjs, active/passive).
 export const DELIVERIES = "deliveries";
 const CONSUMER = "orchestrator";
+// A commit whose CI changed (QUIET_EVENTS) with an entry on the stream the orchestrator hasn't
+// read yet: { at }, cleared when it reads it (events()). The next ones for that
+// commit go on no stream until then: that entry's handling reads the commit's CI after them
+// anyway. So statuses, one per state of each context, never crowd out the deliveries that
+// matter under STREAM_MAX, while the orchestrator is away too.
+export const ciWaitingKey = (repo, sha) => `ci-waiting/${repo.toLowerCase()}@${sha}`;
 // The orchestrator's long poll: under its own timeout.
 export const EVENTS_WAIT_MS = 20_000;
 const MAX_BODY = 1024 * 1024;
@@ -63,8 +70,24 @@ export function createEdgeInternal({
     res.on("close", () => (gone = true));
     for (;;) {
       const found = await store.read(DELIVERIES, CONSUMER, { count: 50 });
-      if (found.length || gone || now() >= until) return sendJson(res, { events: found });
+      if (found.length || gone || now() >= until) {
+        await readCi(found);
+        return sendJson(res, { events: found });
+      }
       await sleep(Math.min(250, until - now()));
+    }
+  }
+
+  // The commits whose CI entry the orchestrator reads now: the next status for one goes on the
+  // stream again (ciWaitingKey()), its handling coming after this one's.
+  async function readCi(found) {
+    for (const { event } of found) {
+      if (!QUIET_EVENTS.has(event?.event)) continue;
+      const repo = event.payload?.repository?.full_name;
+      const sha = event.payload?.sha ?? event.payload?.check_suite?.head_sha;
+      if (typeof repo === "string" && typeof sha === "string") {
+        await store.delete(ciWaitingKey(repo, sha));
+      }
     }
   }
 

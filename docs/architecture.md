@@ -1293,12 +1293,18 @@ decided by the rule auto-merge uses (`ci.mjs` `ciState()`) over the commit's Act
 runs and commit statuses (`commitCi()`; one GitHub refuses, an installation that hasn't accepted
 `checks` or `statuses`, is left out). A `workflow_run`, `check_suite` or `status` delivery for
 the head of an open pull request reads it again (`ciChanged()`, one read at a time per task, one
-more after those that came meanwhile); one for any other commit (an older head) changes
-nothing. A delivery with a new head resets it to `none`. `check_suite` and `status` are
-`QUIET_EVENTS` (`github-app.mjs`): edge passes them on without their GUID or a log line, the
-orchestrator handles them without one, and the redeliveries skip them: `resync()` reads, at
-start and from Sync, the CI of each open pull request not settled for its head (never read,
-`none` or still running). A merged or closed one keeps the last CI known.
+more after those that came meanwhile, a failed one included), without holding the delivery's
+place among those the orchestrator handles at once; one for any other commit (an older head)
+changes nothing. A new head resets it to `none` and reads it at once: the delivery that said
+it changed may have been handled before the pull request's own. `check_suite` and `status` are
+`QUIET_EVENTS` (`github-app.mjs`): edge passes on only what `ciDelivery()` reads of them
+(`quietPayload()`), for allowed repositories, without their GUID or a log line, and at most one
+per commit the orchestrator hasn't read yet (`ciWaitingKey()`, cleared when it reads it: its
+handling reads the commit's CI after the ones left out), so they never crowd the stream. The
+orchestrator handles them without a log line, and the redeliveries skip them: `resync()`
+starts, once it resolved and four at a time, a read of the CI of each open pull request not
+settled for its head (never read, `none` or still running). A merged or closed one keeps the
+last CI known.
 
 ## Agents
 

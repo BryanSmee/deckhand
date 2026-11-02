@@ -101,9 +101,20 @@ export function ciSummary(input = {}) {
     ...others.map((c) => ({ name: c.name ?? "?", state: of(c), url: c.html_url ?? c.details_url })),
     ...contexts.map((s) => ({ name: s.context ?? "?", state: of(s), url: s.target_url })),
   ]
-    .map(({ url, ...item }) => ({ ...item, url: typeof url === "string" && url ? url : null }))
+    .map(({ url, ...item }) => ({ ...item, url: webUrl(url) }))
     .sort((a, b) => RANK[a.state] - RANK[b.state]);
   return { state, runs: items };
+}
+
+// `url` when it is a web page's (http or https), else null: a status's `target_url` and a check
+// run's `details_url` are whatever their poster set, and the dashboard links to them.
+function webUrl(url) {
+  if (typeof url !== "string") return null;
+  try {
+    return ["http:", "https:"].includes(new URL(url).protocol) ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 // Commit `sha`'s CI as GitHub has it now (`github(repo, method, path, body, expected)`, the

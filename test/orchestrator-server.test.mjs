@@ -2955,7 +2955,7 @@ mounts:
     assert.match(JSON.parse(replies(github)[0].body).body, / · 1\.1 min/);
   });
 
-  test("CI deliveries: the CI of the pull request at that commit read, kept for the dashboard; nothing logged for check_suite and status", async (t) => {
+  test("CI deliveries: the CI of the pull request at that commit read, not holding the deliveries after them, kept for the dashboard; nothing logged for check_suite and status", async (t) => {
     const statuses = JSON.stringify({
       statuses: [{ context: "ci/jenkins", state: "failure", target_url: "https://ci/1" }],
     });
@@ -2974,11 +2974,17 @@ mounts:
       draft: false,
       head,
     };
+    // Its CI read held back: the deliveries after it are handled meanwhile.
+    const statusRead = (r) => r.path.startsWith("/repos/org/repo/commits/abc/status?");
+    const release = github.hold(statusRead);
+    t.after(release);
+    const calls = github.requests.length;
     await send({ ...ci, action: "synchronize", pull_request }, "pull_request");
     await listener.until("org/repo#30: pull request #31 ready");
-    const calls = github.requests.length;
+    await github.waitFor(statusRead);
     // Another commit's: nothing read. The same status twice: kept out of the memory of handled
-    // deliveries, so not "already handled" either.
+    // deliveries, so not "already handled" either; while the first waits, edge passes on no
+    // other for that commit.
     for (const [payload, event, id] of [
       [{ ...ci, state: "pending", context: "ci/jenkins", sha: "old" }, "status", "s-0"],
       [{ ...ci, state: "failure", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
@@ -2987,6 +2993,9 @@ mounts:
     ]) {
       assert.equal((await send(payload, event, id)).status, 202, event);
     }
+    await send({ ...ci, action: "opened", issue: { number: 3, labels: [] } }, "issues");
+    await listener.until("Delivery: issues opened");
+    release();
     await listener.until("org/repo#30: CI of #31 failed");
     const kept = JSON.parse(readFileSync(join(dir, "pulls.json"), "utf8"))["org/repo#30"];
     assert.deepEqual(kept.ci, {
@@ -3000,9 +3009,7 @@ mounts:
       read.join("\n"),
     );
     assert.ok(!read.some((p) => p.includes("old")), read.join("\n"));
-    // The next delivery's line: they came before it, and logged nothing.
-    await send({ ...ci, action: "opened", issue: { number: 3, labels: [] } }, "issues");
-    await listener.until("Delivery: issues opened");
+    // They came before the issue's delivery, and logged nothing.
     assert.doesNotMatch(
       listener.output(),
       /Delivery: (?:status|check_suite)|Passed on: (?:status|check_suite)|Delivery (?:s|c)-1 again/,

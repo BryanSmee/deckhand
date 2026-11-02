@@ -22,6 +22,8 @@ import { respellMap, sameTask } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
+// How many open pull requests' CI resync() reads at once (three GitHub calls each).
+const CI_AT_ONCE = 4;
 
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them;
 // `getPull(repo, number)`: one of them, or null.
@@ -87,6 +89,11 @@ export function createPulls({
       ...(ci && { ci }),
     });
     pulls.save();
+    // Moved to a new head: its CI read now, as the delivery that said it changed may have been
+    // handled before this one, and found no pull request at that commit.
+    if (head && before?.ci?.sha !== head && open(pr)) {
+      readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`));
+    }
     return true;
   }
 
@@ -221,12 +228,29 @@ export function createPulls({
       }
       if (dirty) pulls.save();
       // What CI deliveries lost meanwhile (the listener down, a delivery that failed): read
-      // again for the open pull requests whose CI isn't settled for their head.
-      const stale = openPulls().filter(([, pr]) => ciStale(pr));
-      await Promise.all(stale.map(([key]) => readCiOf(key)));
+      // again for the open pull requests whose CI isn't settled for their head, after, so the
+      // dashboard's Sync doesn't wait for them.
+      catchUp(
+        openPulls()
+          .filter(([, pr]) => ciStale(pr))
+          .map(([key]) => key),
+      );
       return changed;
     })().finally(() => (resyncing = null));
     return resyncing;
+  }
+
+  // The CI of the tasks in `keys` read again, CI_AT_ONCE at a time; resolves once all are read.
+  // A catch-up still going takes the new keys after its own.
+  let catching = Promise.resolve();
+  function catchUp(keys) {
+    const queue = [...keys];
+    const worker = async () => {
+      while (queue.length) await readCiOf(queue.shift());
+    };
+    const run = () => Promise.all(Array.from({ length: CI_AT_ONCE }, worker));
+    catching = catching.then(run, run);
+    return catching;
   }
 
   // Whether an open pull request's CI is worth reading again from GitHub: never read for its
@@ -263,8 +287,9 @@ export function createPulls({
         try {
           ci = await readCi(repo, pr.head);
         } catch (error) {
+          // A delivery since asks again: the error may have passed.
           log(`${key}: CI of #${pr.number}: ${error.message ?? error}`);
-          break;
+          continue;
         }
         const now = pulls.get(key);
         // Moved to another head meanwhile: that one's CI is the one shown.
@@ -290,6 +315,8 @@ export function createPulls({
     fill,
     resync,
     ciChanged,
+    // The CI reads resync() started, for tests.
+    caughtUp: () => catching,
     open: openPulls,
     keys: () => [...pulls.keys()],
     respell,

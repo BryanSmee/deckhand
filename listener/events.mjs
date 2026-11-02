@@ -563,6 +563,20 @@ export function ciDelivery(config, event, p) {
   return repoAllowed(config, repo) ? { repo, sha } : null;
 }
 
+// A `check_suite` or `status` delivery (github-app.mjs QUIET_EVENTS) as edge passes it on: only
+// what ciDelivery() reads of it, or null when it reads nothing (another repo's, no commit). A
+// status's payload holds the whole commit, its branches and repository.
+export function quietPayload(config, event, p) {
+  const ci = ciDelivery(config, event, p);
+  if (!ci) return null;
+  return {
+    ...(p.action && { action: p.action }),
+    installation: { id: p.installation.id },
+    repository: { full_name: ci.repo },
+    ...(event === "check_suite" ? { check_suite: { head_sha: ci.sha } } : { sha: ci.sha }),
+  };
+}
+
 // A pull request's size fields, the dashboard's name → GitHub's.
 export const PULL_SIZE = {
   additions: "additions",
