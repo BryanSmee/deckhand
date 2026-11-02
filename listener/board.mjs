@@ -29,7 +29,7 @@
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
 import { APART } from "./modes.mjs";
-import { LOOP_STEPS, reviewLoop } from "./reviews.mjs";
+import { LOOP_STEPS, LOOPING, reviewLoop } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -226,8 +226,8 @@ function settle(t, q, b, w, input, aside = null) {
   t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
   t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
   t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
-  // Picked by the listener from its auto-pickup label (auto-pickup.mjs): queued so, or its last
-  // run was.
+  // Picked by the listener from its auto-pickup label (auto-pickup.mjs), or what follows such a
+  // run until its work is done (tasks.mjs followsPick()): queued so, or its last run was.
   if (q?.autoPickup || last?.autoPickup) t.autoPickup = true;
   t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0, w?.since ?? 0);
   // What its next run waits for, whatever it is doing now.
@@ -272,8 +272,6 @@ function settle(t, q, b, w, input, aside = null) {
   t.rerunnable = rerunnable(t);
 }
 
-// The loop's states, between two of its runs: the task is in review, not queued or done.
-const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
 // The reasons of the loop's own runs (reviews.mjs).
 const STEPS = LOOP_STEPS;
 

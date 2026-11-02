@@ -918,6 +918,10 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   return { loop: out ? "rounds-out" : "stopped", ...at };
 }
 
+// reviewLoop()'s states between two of the loop's runs: the task is in review (board.mjs), and
+// an auto-picked one keeps its reserved slot (tasks.mjs loopGoing()).
+export const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
+
 // The reasons of the loop's own runs.
 export const LOOP_STEPS = ["review", "review-fix", "ci-fix"];
 

@@ -757,9 +757,9 @@ test("soon(): one sweep a moment later for a burst, none without slots", async (
 
 // createTasks() over org/app's tasks, with MAX_PARALLEL 2 and one reserved slot: `runs`, the
 // run records newest first (what a restart keeps); `closed` and `pulls`, task key → how its
-// issue closed and its pull request (titles.mjs, pulls.mjs). Nothing starts by itself: the
-// test calls schedule().
-function pickTasks({ runs = [], closed = {}, pulls = {} } = {}) {
+// issue closed and its pull request (titles.mjs, pulls.mjs); `reviews`, pull request number →
+// its review loop's entry (reviews.mjs). Nothing starts by itself: the test calls schedule().
+function pickTasks({ runs = [], closed = {}, pulls = {}, reviews = {} } = {}) {
   const started = [];
   const { settings } = parseRepoConfig("auto_pickup: true\n", testConfig());
   const ctx = {
@@ -776,8 +776,13 @@ function pickTasks({ runs = [], closed = {}, pulls = {} } = {}) {
       ctx.running++;
       started.push(task.id);
     },
-    titles: { set: () => {}, closed: (key) => closed[key] ?? null },
-    pulls: { get: (key) => pulls[key] ?? null },
+    titles: {
+      set: () => {},
+      closed: (key) => closed[key] ?? null,
+      keys: () => Object.keys(closed),
+    },
+    pulls: { get: (key) => pulls[key] ?? null, keys: () => Object.keys(pulls) },
+    reviews: { entry: (repo, number) => reviews[number] ?? null },
     received: () => {},
     answer: async () => {},
     runner: { hasSession: async () => true },
@@ -861,6 +866,13 @@ test("once the picked work is done, or another run came last, what is queued isn
     { runs: [pickedRun(1)], closed: { "org/app#1": "completed" } },
     { runs: [pickedRun(1)], pulls: { "org/app#1": { number: 5, state: "merged" } } },
     { runs: [pickedRun(1)], pulls: { "org/app#1": { number: 5, state: "closed" } } },
+    // The picked run failed or was stopped before any pull request.
+    { runs: [pickedRun(1, { status: "error" })] },
+    { runs: [pickedRun(1, { status: "cancelled" })] },
+    { runs: [pickedRun(1, { status: "stopped" })] },
+    // Merged, or the issue closed, under another spelling of the key.
+    { runs: [pickedRun(1)], pulls: { "Org/App#1": { number: 5, state: "merged" } } },
+    { runs: [pickedRun(1)], closed: { "Org/App#1": "completed" } },
     // Its last run wasn't picked (an earlier one was), or another task's was.
     { runs: [pickedRun(1, { id: "run-2", autoPickup: undefined }), pickedRun(1)] },
     { runs: [pickedRun(3)] },
@@ -877,4 +889,49 @@ test("once the picked work is done, or another run came last, what is queued isn
     pulls: { "org/app#1": { number: 5, state: "ready" } },
   });
   assert.equal((await p.review(1)).autoPickup, true);
+  // A fix run that failed with its pull request open: the loop's, still picked.
+  const fix = pickTasks({
+    runs: [pickedRun(1, { status: "error", reason: "review-fix" })],
+    pulls: { "org/app#1": { number: 5, state: "ready" } },
+  });
+  assert.equal((await fix.review(1)).autoPickup, true);
+});
+
+test("between two loop steps of an auto-picked issue, nothing queued, its slot stays taken: the sweep picks nothing", async () => {
+  const ready = { "org/app#1": { number: 5, state: "ready" } };
+  const waits = { 5: { ciWaiting: { sha: "abc", since: 1 } } };
+  // The picked run is over, its pull request ready, the review waiting for CI.
+  const p = pickTasks({ runs: [pickedRun(1)], pulls: ready, reviews: waits });
+  p.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
+  assert.equal(p.pickedCount(), 1);
+  const { pickup } = setup({
+    repos: { "org/a": { issues: [issue(2, 1)] } },
+    taken: p.pickedCount(),
+  });
+  assert.deepEqual(await pickup.sweep(), []);
+  // A fix run's end, what follows it being decided (`next`): still taken.
+  const fixed = pickTasks({
+    runs: [pickedRun(1, { reason: "review-fix", startedAt: 10 })],
+    pulls: ready,
+    reviews: { 5: { rounds: [{ round: 1, blocking: true }], next: "review-fix", nextAt: 5 } },
+  });
+  fixed.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
+  assert.equal(fixed.pickedCount(), 1);
+  // The loop over (a clean review), the pull request merged, or the task never picked: free.
+  for (const state of [
+    { runs: [pickedRun(1)], pulls: ready, reviews: { 5: { rounds: [{ round: 0 }] } } },
+    {
+      runs: [pickedRun(1)],
+      pulls: { "org/app#1": { number: 5, state: "merged" } },
+      reviews: waits,
+    },
+    { runs: [pickedRun(1, { autoPickup: undefined })], pulls: ready, reviews: waits },
+  ]) {
+    const free = pickTasks(state);
+    free.ctx.tasks.set(
+      "org/app#1",
+      newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }),
+    );
+    assert.equal(free.pickedCount(), 0, JSON.stringify(state));
+  }
 });

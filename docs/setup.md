@@ -654,9 +654,11 @@ auto-picked issue is cancelled.
   `max_parallel` counts auto-picked runs too: an issue of a repository at its own cap isn't
   picked, and one picked before its repo filled up holds no slot while it waits for it.
   What follows a picked run on its task holds the reserved slot too, until the issue closes or
-  its pull request is merged or closed: the review loop's runs (review, fixes, CI, conflicts)
-  and people's comments. The next issue isn't picked meanwhile, and the policies still see
-  those runs as started by the listener or by the comment.
+  its pull request is merged or closed (or the picked run failed or was stopped before opening
+  one): the review loop's runs (review, fixes, CI, conflicts) and people's comments. So does
+  the loop between its steps (waiting for CI, its next step on its way): the next issue isn't
+  picked meanwhile. The policies still see those runs as started by the listener or by the
+  comment.
 - **What is skipped.** An issue with something live on the dashboard (running, queued,
   waiting, asking), the needs-input label (`NEEDS_INPUT_LABEL`), an open issue it is "blocked
   by", or an open pull request of Deckhand's for it; the next one is picked instead.
