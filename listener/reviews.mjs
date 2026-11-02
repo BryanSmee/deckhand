@@ -225,28 +225,41 @@ function bullet(section, line) {
     return m && { severity: m[1].toLowerCase(), ...located(m[2]) };
   }
   if (section === "follow-ups") {
-    // Only with its title in bold: each one becomes a public issue after the merge, so a bullet
-    // in another form ("- No follow-ups.") is no follow-up, rather than an issue of that title.
+    // A comment's kind or a severity as its lead, in any form the Comments section reads: a
+    // blocking comment or a finding under the wrong heading. Neither filed nor dropped quietly:
+    // `misplaced`, so the model's verdict stands.
+    if (commentKind(rest) || MISPLACED_SEVERITY.test(rest)) return { misplaced: true };
+    // Only with its title in bold: each one becomes a public issue after the merge.
     const m = /^(?:\*\*(.+?)\*\*|__(.+?)__)\s*[:–—-]?\s*(.*)$/.exec(rest);
-    if (!m) return null;
+    // Another form is no follow-up; unless it says there is none ("- No follow-ups."), it is
+    // something the parser can't read, and the verdict stands too.
+    if (!m) return NOTHING.test(titleOf(located(rest).text)) ? null : { misplaced: true };
     const title = titleOf(m[1] ?? m[2]);
     // "**No follow-ups.**", "**None found**": nothing to file.
     if (NOTHING.test(title)) return null;
-    // A comment's kind or a severity as its title: a blocking comment or a finding under the
-    // wrong heading. Neither filed nor dropped quietly: `misplaced`, so the verdict stands.
-    if (/^(?:blocking|non[- ]blocking|note|nit|critical|high|medium|low)\W*$/i.test(title)) {
-      return { misplaced: true };
-    }
     return { title, ...located(m[3]) };
   }
-  const kind = String.raw`(blocking|non[- ]blocking|note|nit)(?:\s+(?:comment|remark|question))?`;
-  const m =
-    new RegExp(String.raw`^[*_\`\[]+\s*${kind}\s*[:–—]?\s*[*_\`\]]+\s*[:–—-]?\s*(.*)$`, "i").exec(
-      rest,
-    ) ?? new RegExp(String.raw`^${kind}(?:\s*[:–—]|\s+-)\s*(.*)$`, "i").exec(rest);
+  const m = commentKind(rest);
   if (!m) return { blocking: false, ...located(rest), unmarked: true };
   return { blocking: m[1].toLowerCase() === "blocking", ...located(m[2]) };
 }
+
+// A comment's kind leading `rest` (a bullet's text) → [, kind, text], or null: `blocking` or
+// `note` (`non-blocking`, `nit` too, "blocking comment"), in bold, italics, backticks or
+// brackets, or bare before a separator.
+function commentKind(rest) {
+  const kind = String.raw`(blocking|non[- ]blocking|note|nit)(?:\s+(?:comment|remark|question))?`;
+  return (
+    new RegExp(String.raw`^[*_\`\[]+\s*${kind}\s*[:–—]?\s*[*_\`\]]+\s*[:–—-]?\s*(.*)$`, "i").exec(
+      rest,
+    ) ?? new RegExp(String.raw`^${kind}(?:\s*[:–—]|\s+-)\s*(.*)$`, "i").exec(rest)
+  );
+}
+
+// A severity leading a bullet, as a finding's ("**high**", "[high]", "high:", "🟠 High:"),
+// emphasis or a separator after it: not a title that starts with the word ("**High memory**").
+const MISPLACED_SEVERITY =
+  /^[*_`[]*(?:\p{Extended_Pictographic}️?\s*)?[*_`[]*(critical|high|medium|low)(?:[\]*_`]+|\s*[:–—]|\s+-\s)/iu;
 
 // A follow-up's title saying there is none: "No follow-ups.", "None found", "Nothing to file".
 const NOTHING =

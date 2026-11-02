@@ -3133,3 +3133,32 @@ test("follow-ups: a title closes on the marker it opened with", () => {
   const back = parsePostedReview(reviewBody(review, "", "f"));
   assert.equal(back.followUps[0].title, "Rename __init__ hook");
 });
+
+test("follow-ups: a misplaced blocking comment or finding in any form keeps the verdict, an unbolded bullet too", () => {
+  const reply = (line) =>
+    `## Must fix\n\nNone.\n\n## Follow-ups\n\n${line}\n\nRating: 10/10\nVerdict: request-changes`;
+  for (const line of [
+    "- **[blocking]** why?",
+    "- **Blocking comment** why?",
+    "- blocking: why?",
+    "- `blocking` why?",
+    "- *blocking*: why?",
+    "- **note**: rename it.",
+    "- high: broken.",
+    "- [high] broken.",
+    "- 🟠 High: broken.",
+    "- **🟠 High** broken.",
+    "- Share the helper `a.mjs:1`: twice.",
+  ]) {
+    const review = parseReview(reply(line));
+    assert.deepEqual([review.followUps, review.verdict], [[], "request-changes"], line);
+  }
+  // Saying there is none, or a title that only starts like a kind or a severity: as before.
+  assert.equal(parseReview(reply("- No follow-ups.")).verdict, "comment");
+  assert.deepEqual(
+    ["- **High memory use**: x.", "- **Note taking app**: y."].map(
+      (line) => parseReview(reply(line)).followUps[0].title,
+    ),
+    ["High memory use", "Note taking app"],
+  );
+});
