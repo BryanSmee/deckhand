@@ -20,6 +20,7 @@ import {
   createKubernetesImages,
   writable,
 } from "../listener/runner/kube-images.mjs";
+import { createNetworkGate } from "../listener/runner/kube-gate.mjs";
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { WRAPPER } from "../listener/runner/kube-seal.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
@@ -50,6 +51,7 @@ const config = {
     cacheSize: "10Gi",
     agentStorageClass: null,
     agentSize: "5Gi",
+    pendingMs: 600_000,
   },
 };
 
@@ -162,8 +164,9 @@ const BUILDER_POLICY = {
 
 // A namespace's API, as kube-api.mjs answers it: objects by resource then name. The pods the
 // images create (installs, checks) end as `install` says ("Succeeded", "Failed", with
-// `exitCode`), their log `installLog`; with `hold`, they run until finish() is called. The
-// BuildKit daemon is a pod behind its Service, under `policies`. `namespace`: the API's;
+// `exitCode`), their log `installLog`; with `hold`, they run until finish() is called; with
+// `gateExit`, their network gate ended so, saying `gateLog`. The BuildKit daemon is a pod
+// behind its Service, under `policies`. `namespace`: the API's;
 // `pull`: whether the registry's Secret is there.
 function fakeApi({
   namespace = "runs",
@@ -172,6 +175,8 @@ function fakeApi({
   exitCode = install === "Succeeded" ? 0 : 1,
   installLog = "Claude Code 9.9.9 installed\n",
   hold = false,
+  gateExit = 0,
+  gateLog = "",
   podsFail = false,
   policies = [BUILDER_POLICY],
   builder = true,
@@ -249,11 +254,20 @@ function fakeApi({
       created.push(body);
       const status =
         kind === "pods"
-          ? {
-              phase: install,
-              podIP: "10.244.2.9",
-              containerStatuses: [{ state: { terminated: { exitCode } } }],
-            }
+          ? gateExit
+            ? {
+                phase: "Failed",
+                podIP: "10.244.2.9",
+                initContainerStatuses: [
+                  { name: "network-gate", state: { terminated: { exitCode: gateExit } } },
+                ],
+                containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+              }
+            : {
+                phase: install,
+                podIP: "10.244.2.9",
+                containerStatuses: [{ state: { terminated: { exitCode } } }],
+              }
           : {};
       store.set(body.metadata.name, { ...body, status });
       return body;
@@ -268,8 +282,8 @@ function fakeApi({
       const { store, name } = split(path);
       return store.delete(name);
     },
-    async stream() {
-      return new Response(installLog);
+    async stream(path, query = {}) {
+      return new Response(query.container === "network-gate" ? gateLog : installLog);
     },
   };
   return { api, objects, created, removed, finish: () => (finished = true) };
@@ -302,6 +316,16 @@ function fakeBuildctl(registry, clock, { fail = false, hold } = {}) {
   return { buildctl, calls };
 }
 
+// The addresses every pod's network gate waits on (kube-gate.mjs), as a runner in the cluster
+// has them: the API server's Service and the cluster's DNS.
+// What a network gate's container (`gate`) tries.
+const gateTargets = (gate) => JSON.parse(gate.command[3]);
+
+const GATE_OPTIONS = {
+  env: { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" },
+  resolvConf: () => "nameserver 10.96.0.10\n",
+};
+
 function setup(
   t,
   {
@@ -333,6 +357,7 @@ function setup(
     buildctl: build.buildctl,
     buildMs,
     log: (line) => logged.push(line),
+    networkGate: createNetworkGate({ config: cfg, ...GATE_OPTIONS }),
     now: () => clock.at,
     // Time passes, and other tasks get their turn.
     sleep: async (ms) => {
@@ -589,6 +614,16 @@ test("an agent with a class: its claim made, filled by an install pod as neither
     seccompProfile: { type: "RuntimeDefault" },
   });
   assert.notEqual(INSTALL_USER.uid, SANDBOX_USER.uid);
+  // Its network gate first (kube-gate.mjs): the API server and the DNS out of reach, the proxy
+  // reached, before the installer runs.
+  const [gate] = spec.initContainers;
+  assert.equal(gate.name, "network-gate");
+  assert.equal(gate.image, BASE);
+  assert.deepEqual(gateTargets(gate), [
+    { what: "the Kubernetes API server", host: "10.96.0.1", port: 443, reach: false },
+    { what: "the cluster's DNS", host: "10.96.0.10", port: 53, reach: false },
+    { what: "the egress proxy", host: "10.96.0.11", port: 3128, reach: true },
+  ]);
   const [c] = spec.containers;
   assert.equal(c.image, BASE);
   // The installer, once the claim proved writable (writable()).
@@ -653,6 +688,33 @@ test("a failed install says so, removes its pod, and the next run tries again", 
   assert.equal(created.filter((o) => o.kind === "Pod").length, 2);
 });
 
+test("a pod whose NetworkPolicies don't apply: its network gate fails it before anything of it runs, said", async (t) => {
+  const { images, objects } = setup(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    api: {
+      gateExit: 3,
+      gateLog: "still reached the Kubernetes API server (10.96.0.1:443) after 600 s\n",
+    },
+  });
+  const output = [];
+  await assert.rejects(
+    images.installAgent(claude, (chunk) => output.push(chunk.toString())),
+    /installing Claude 9\.9\.9 failed: its NetworkPolicies didn't apply within 10 min: still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 600 s/,
+  );
+  // The installer never ran: no log of its.
+  assert.deepEqual(output, []);
+  assert.equal(objects.pods.size, 0);
+  // A cache's check likewise.
+  const checks = setup(t, {
+    kubernetes: { cacheStorageClass: "nfs" },
+    api: { gateExit: 3, gateLog: "still reached the cluster's DNS (10.96.0.10:53) after 600 s\n" },
+  });
+  await assert.rejects(
+    checks.images.caches("org/a", ["/home/node/.npm"], BASE),
+    /its NetworkPolicies didn't apply within 10 min: still reached the cluster's DNS/,
+  );
+});
+
 test("an agent's claim made beforehand is installed into without a class", async (t) => {
   const { images, objects, created } = setup(t);
   objects.persistentvolumeclaims.set("dh-claude-code", { metadata: {} });
@@ -683,6 +745,8 @@ test("caches: claims of the cache class, the sandbox's by its fsGroup, no chown 
   assert.deepEqual(check.spec.containers[0].command, writable("/cache"));
   assert.equal(check.spec.volumes[0].persistentVolumeClaim.claimName, claim.metadata.name);
   assert.equal(check.spec.containers[0].env.length, 0);
+  // Its network gate waits for no proxy: it may reach nothing at all.
+  assert.ok(gateTargets(check.spec.initContainers[0]).every((target) => !target.reach));
   assert.equal(claim.metadata.labels["deckhand.role"], "cache");
   assert.equal(claim.metadata.annotations["deckhand.cache"], "/home/node/.npm");
   assert.deepEqual(claim.spec, {
@@ -1313,7 +1377,17 @@ test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, n
   assert.equal(spec.restartPolicy, "Never");
   assert.equal(spec.automountServiceAccountToken, false);
   assert.equal(spec.enableServiceLinks, false);
-  assert.equal(spec.initContainers, undefined);
+  // Its network gate alone (kube-gate.mjs), waiting for the proxy too: it goes out through it.
+  assert.deepEqual(
+    spec.initContainers.map((c) => c.name),
+    ["network-gate"],
+  );
+  assert.deepEqual(gateTargets(spec.initContainers[0]).at(-1), {
+    what: "the egress proxy",
+    host: "10.96.0.11",
+    port: 3128,
+    reach: true,
+  });
   assert.deepEqual(spec.securityContext, {
     runAsNonRoot: true,
     runAsUser: SANDBOX_USER.uid,
@@ -1372,7 +1446,9 @@ test("Kubernetes: without an agent claim, the refresh pod installs the CLI in an
   });
   await refresh("{}");
   const { spec } = created.find((o) => o.metadata.name === "dh-job-antigravity-refresh");
-  const [init] = spec.initContainers;
+  // After its network gate.
+  const [gate, init] = spec.initContainers;
+  assert.equal(gate.name, "network-gate");
   assert.deepEqual(init.command, ["deckhand-install-antigravity"]);
   assert.equal(init.securityContext.runAsUser, INSTALL_USER.uid);
   assert.deepEqual(init.volumeMounts, [{ name: "v0", mountPath: "/opt/antigravity" }]);
@@ -1409,6 +1485,32 @@ test("Kubernetes: a refresh whose agent's install fails says why, with the insta
   assert.deepEqual(attached, []);
   assert.deepEqual(logs, [
     { path: "pods/dh-job-antigravity-refresh/log", query: { container: "agent-install" } },
+  ]);
+  assert.ok(removed.includes("pods/dh-job-antigravity-refresh"));
+  assert.equal(objects.pods.size, 0);
+});
+
+test("Kubernetes: a refresh pod whose NetworkPolicies don't apply fails before anything of it runs, and goes", async (t) => {
+  const { refresh, attached, logs, removed, objects } = refreshOn(t, {
+    api: { gateLog: "still reached the cluster's DNS (10.96.0.10:53) after 600 s\n" },
+    starting: [
+      {
+        phase: "Failed",
+        initContainerStatuses: [{ name: "network-gate", state: { terminated: { exitCode: 3 } } }],
+        containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+      },
+    ],
+    attach: async () => assert.fail("never attached"),
+  });
+  const result = await refresh("{}");
+  assert.equal(result.code, -1);
+  assert.match(
+    result.err,
+    /^the pod dh-job-antigravity-refresh: its NetworkPolicies didn't apply within 10 min: still reached the cluster's DNS \(10\.96\.0\.10:53\) after 600 s$/,
+  );
+  assert.deepEqual(attached, []);
+  assert.deepEqual(logs, [
+    { path: "pods/dh-job-antigravity-refresh/log", query: { container: "network-gate" } },
   ]);
   assert.ok(removed.includes("pods/dh-job-antigravity-refresh"));
   assert.equal(objects.pods.size, 0);

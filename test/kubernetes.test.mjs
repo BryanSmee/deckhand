@@ -137,7 +137,8 @@ const APART_POLICY = {
 // `fail(call)` answers a call instead (a Response), when it does. Every call is in `calls`
 // as "METHOD path?query", the bodies sent in `bodies`.
 // `fail` gets the request's `signal`, and may answer a promise that only it ends (an API that
-// never answers); a pod's log may be a function of { follow, signal } giving a Response.
+// never answers); a pod's log may be a function of { follow, signal, container } giving a
+// Response.
 // `timeoutMs`: createKubeApi()'s.
 // `apart`: the services in a namespace of their own (SVC), with the proxy's Service, its
 // EndpointSlices (`slices`) and `servicePolicies`; `servicesApi` and `servicesObjects` are
@@ -198,7 +199,11 @@ function fakeApi({
     if (sub === "log") {
       if (!store.has(name)) return missing();
       if (typeof logs[name] === "function") {
-        return logs[name]({ follow: searchParams.get("follow") === "true", signal: init.signal });
+        return logs[name]({
+          follow: searchParams.get("follow") === "true",
+          signal: init.signal,
+          container: searchParams.get("container"),
+        });
       }
       const chunks = logs[name] ?? [];
       return new Response(
@@ -259,6 +264,13 @@ function fakeApi({
 // A network probe that finds the cluster enforces the policies (kube-probe.mjs).
 const ENFORCED = { check: async () => null, reset() {} };
 
+// The addresses every pod's network gate waits on (kube-gate.mjs), as a runner in the cluster
+// has them: the API server's Service and the cluster's DNS.
+const GATE_OPTIONS = {
+  env: { KUBERNETES_SERVICE_HOST: "10.96.0.1", KUBERNETES_SERVICE_PORT: "443" },
+  resolvConf: () => "search svc.cluster.local\nnameserver 10.96.0.10\n",
+};
+
 // `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
 // retries and polls take time); `sleep(ms)` is called too.
 // `kubernetes`: more of config.kubernetes. `probeOptions`: the network probe's (kube-probe.mjs),
@@ -296,7 +308,8 @@ function setup(
       await sleep(ms);
     },
     probe: probeOptions ? null : ENFORCED,
-    probeOptions: probeOptions ?? {},
+    // The gate's addresses too.
+    probeOptions: probeOptions ?? GATE_OPTIONS,
   });
   return { ...fake, runner, logged, inboxDir, clock };
 }
@@ -1063,13 +1076,13 @@ test("start: an engine with Sysbox's RuntimeClass is a sidecar in the pod, root 
   // Every container under Sysbox, in the pod's own user namespace.
   assert.equal(s.runtimeClassName, "sysbox-runc");
   assert.equal(s.hostUsers, false);
-  // The agent's install first, then the engine: a sidecar (restartPolicy Always), up before
-  // the sandbox starts and stopped once it exits.
+  // The network gate, the agent's install, then the engine: a sidecar (restartPolicy Always),
+  // up before the sandbox starts and stopped once it exits.
   assert.deepEqual(
     s.initContainers.map((c) => c.name),
-    ["agent-install", "engine"],
+    ["network-gate", "agent-install", "engine"],
   );
-  const sidecar = s.initContainers[1];
+  const sidecar = s.initContainers[2];
   assert.equal(sidecar.restartPolicy, "Always");
   assert.equal(sidecar.image, "dh-engine");
   // Its API on the pod's loopback only: the node reaches the pod's address whatever the policy.
@@ -1127,7 +1140,7 @@ test("start: an engine with Sysbox's RuntimeClass is a sidecar in the pod, root 
   assert.equal(plain.hostUsers, undefined);
   assert.deepEqual(
     plain.initContainers.map((c) => c.name),
-    ["agent-install"],
+    ["network-gate", "agent-install"],
   );
 });
 
@@ -1196,7 +1209,9 @@ test("start: an agent without a claim is installed by an init container, mounted
   // The nodes pull through the registry's Secret.
   assert.deepEqual(pod.spec.imagePullSecrets, [{ name: "pull" }]);
   assert.deepEqual(pod.spec.volumes[0], { name: "v0", emptyDir: {} });
-  const [init] = pod.spec.initContainers;
+  // After the network gate: nothing reaches the proxy before the pod's policies apply.
+  const [gate, init] = pod.spec.initContainers;
+  assert.equal(gate.name, "network-gate");
   // From the base image, as neither root nor the sandbox's user, hardened as the sandbox is.
   assert.equal(init.image, "dh-sandbox");
   assert.deepEqual(init.command, ["deckhand-install-claude-code"]);
@@ -1227,18 +1242,75 @@ test("start: an agent without a claim is installed by an init container, mounted
   });
 });
 
-test("start: an agent whose claim is there mounts it, no init container", async (t) => {
+test("start: an agent whose claim is there mounts it, no install's init container", async (t) => {
   const { runner, objects } = setup(t);
   objects.persistentvolumeclaims.set("dh-claude-code", { metadata: { name: "dh-claude-code" } });
   await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
   const pod = objects.pods.get("dh-org-repo-12-abc");
-  assert.equal(pod.spec.initContainers, undefined);
+  assert.deepEqual(
+    pod.spec.initContainers.map((c) => c.name),
+    ["network-gate"],
+  );
   assert.equal(pod.spec.imagePullSecrets, undefined);
   assert.equal(pod.metadata.annotations["deckhand.agent-init"], undefined);
   assert.deepEqual(pod.spec.volumes[0].persistentVolumeClaim, {
     claimName: "dh-claude-code",
     readOnly: true,
   });
+});
+
+test("start: the network gate first, from the base image: the API server and the DNS out of reach, the proxy reached", async (t) => {
+  const { runner, objects } = setup(t);
+  // A repo's image: the gate is the base image's all the same, which has node.
+  await runner.start(spec({ image: "registry.example.com/dh/org-repo:abc" }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  const [gate] = pod.spec.initContainers;
+  assert.equal(gate.name, "network-gate");
+  assert.equal(gate.image, "dh-sandbox");
+  assert.equal(pod.spec.containers[0].image, "registry.example.com/dh/org-repo:abc");
+  assert.deepEqual(JSON.parse(gate.command[3]), [
+    { what: "the Kubernetes API server", host: "10.96.0.1", port: 443, reach: false },
+    { what: "the cluster's DNS", host: "10.96.0.10", port: 53, reach: false },
+    { what: "the egress proxy", host: "10.96.0.11", port: 3128, reach: true },
+  ]);
+  // As long as the pod may stay Pending (KUBERNETES_PENDING_MINUTES).
+  assert.equal(gate.command[4], "600000");
+  // No secret of the run's, and Pod Security `restricted` still.
+  assert.equal(gate.envFrom, undefined);
+  assert.ok(!JSON.stringify(gate).includes("s3cret"));
+  assert.deepEqual(restrictedProblems(pod), []);
+});
+
+test("start: a runner that knows no address to gate on starts nothing", async (t) => {
+  const { runner, objects } = setup(t, {}, { probeOptions: { env: {}, resolvConf: () => "" } });
+  await assert.rejects(runner.start(spec()), /knows no address the sandboxes mustn't reach/);
+  assert.equal(objects.pods.size + objects.secrets.size, 0);
+});
+
+test("follow: a network gate that never saw its NetworkPolicies apply fails the run, nothing of it run", async (t) => {
+  const { runner, objects, calls, logged } = setup(t, {
+    logs: {
+      "dh-org-repo-12-abc": [
+        "still reached the Kubernetes API server (10.96.0.1:443) after 600 s\n",
+      ],
+    },
+  });
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.status = {
+    phase: "Failed",
+    initContainerStatuses: [{ name: "network-gate", state: { terminated: { exitCode: 3 } } }],
+  };
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+    (error) =>
+      error instanceof RunError &&
+      /its NetworkPolicies didn't apply within 10 min: still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 600 s\. Nothing of the run's ran/.test(
+        error.message,
+      ),
+  );
+  assert.ok(calls.some((c) => c.includes("/log?container=network-gate")));
+  assert.ok(logged.some((line) => /its NetworkPolicies didn't apply/.test(line)));
 });
 
 test("installing: while its init container hasn't ended, whatever the pod's phase says yet", async (t) => {
@@ -1531,6 +1603,18 @@ test("pendingReason: an init container's image it can't pull, or its install run
       status: { initContainerStatuses: [{ name: "agent-install", state: { running: {} } }] },
     }),
     INSTALLING,
+  );
+  // Its network gate waiting for its NetworkPolicies, before the install.
+  assert.equal(
+    pendingReason({
+      status: {
+        initContainerStatuses: [
+          { name: "network-gate", state: { running: {} } },
+          { name: "agent-install", state: { waiting: { reason: "PodInitializing" } } },
+        ],
+      },
+    }),
+    "its init container waits for its NetworkPolicies to apply",
   );
   // The engine's sidecar running says nothing about the agent's install.
   assert.equal(
@@ -1951,6 +2035,7 @@ const PROXY = "10.96.0.11:3128";
 // A runner whose network probe answers `reach(target)` for each of its targets ("host:port",
 // "/udp" after a UDP one), its pod ending `phase` (null: never). `targets()`: what the last
 // probe pod was asked to try; `probes()`: how many were made; `answers.reach` may change.
+// `gate`: { exitCode, said } when its network gate (kube-gate.mjs) ended so, past its deadline.
 // `services`, `slices`: the services' namespace's, by default CLUSTER_SERVICES' and CLUSTER_SLICES.
 function probed(
   t,
@@ -1960,6 +2045,7 @@ function probed(
     kubernetes,
     services = CLUSTER_SERVICES,
     slices = CLUSTER_SLICES,
+    gate = null,
   } = {},
 ) {
   const answers = { reach };
@@ -1969,9 +2055,11 @@ function probed(
     {
       get: (_, name) =>
         String(name).startsWith("dh-network-probe-")
-          ? () =>
+          ? ({ container }) =>
               new Response(
-                `${JSON.stringify(asked(s.objects.pods.get(name)).map((t) => answers.reach(t)))}\n`,
+                container === "network-gate"
+                  ? `${gate.said}\n`
+                  : `${JSON.stringify(asked(s.objects.pods.get(name)).map((t) => answers.reach(t)))}\n`,
               )
           : undefined,
     },
@@ -2000,7 +2088,15 @@ function probed(
         sleep: async (ms) => {
           s.clock.at += ms;
           for (const pod of s.objects.pods.values()) {
-            if (isProbe(pod) && phase) pod.status = { phase };
+            if (!isProbe(pod)) continue;
+            if (gate) {
+              pod.status = {
+                phase: "Failed",
+                initContainerStatuses: [
+                  { name: "network-gate", state: { terminated: { exitCode: gate.exitCode } } },
+                ],
+              };
+            } else if (phase) pod.status = { phase };
           }
         },
       },
@@ -2111,6 +2207,43 @@ test("network probe: a pod that can't reach the egress proxy proves nothing: tha
   await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
   await assert.rejects(leaky.runner.start(spec()), /reached a public address/);
   assert.equal(leaky.probes(), 1);
+});
+
+test("network probe: its pod's network gate first, the probe's targets tried once its policies apply", async (t) => {
+  const p = probed(t);
+  await p.runner.start(spec());
+  const [gate] = p.probePod().spec.initContainers;
+  assert.equal(gate.name, "network-gate");
+  assert.deepEqual(JSON.parse(gate.command[3]), [
+    { what: "the Kubernetes API server", host: "10.96.0.1", port: 443, reach: false },
+    { what: "the cluster's DNS", host: "10.96.0.10", port: 53, reach: false },
+    { what: "the egress proxy", host: "10.96.0.11", port: 3128, reach: true },
+  ]);
+});
+
+test("network probe: a gate that still reached the API server or the DNS past its deadline is a verdict: runs refused", async (t) => {
+  const p = probed(t, {
+    gate: { exitCode: 3, said: "still reached the cluster's DNS (10.96.0.10:53) after 600 s" },
+  });
+  const said =
+    /the cluster doesn't enforce the sandboxes' NetworkPolicies: a pod labelled as a sandbox still reached the cluster's DNS \(10\.96\.0\.10:53\) after 600 s: does the network plugin enforce NetworkPolicies\?/;
+  await assert.rejects(p.runner.start(spec()), said);
+  assert.ok(!probeIn(p.objects), "the probe pod is removed");
+  // Kept, as any verdict.
+  await assert.rejects(p.runner.start(spec()), said);
+  assert.equal(p.probes(), 1);
+});
+
+test("network probe: a gate that never reached the egress proxy proves nothing: that run is refused, the next probes again", async (t) => {
+  const p = probed(t, {
+    gate: { exitCode: 4, said: "never reached the egress proxy (10.96.0.11:3128) in 600 s" },
+  });
+  await assert.rejects(
+    p.runner.start(spec()),
+    /couldn't check that the cluster enforces the sandboxes' NetworkPolicies: its probe pod never reached the egress proxy \(10\.96\.0\.11:3128\) in 600 s, which sandboxes go out through/,
+  );
+  await assert.rejects(p.runner.start(spec()), /its probe pod never reached the egress proxy/);
+  assert.equal(p.probes(), 2, "not kept: probed again");
 });
 
 test("network probe: a leftover older than any probe is removed, a younger one (the other copy's, mid-handover) left alone", async (t) => {

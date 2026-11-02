@@ -469,6 +469,37 @@ with the run. An issue's clone and agent session are claims of their own
 stays Pending longer than `KUBERNETES_PENDING_MINUTES` (no node with the room, an image it
 can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
 
+### The network gate
+
+Some network plugins apply a new pod's NetworkPolicies a moment after it has its address: k3s's
+kube-router from the pod's events, and Calico once its agent has programmed the pod, unless its
+CNI plugin is set to wait for that (`linuxPolicySetupTimeoutSeconds`). Cilium's CNI plugin waits
+for the pod's first policy before its containers start. In between, the pod's traffic isn't
+filtered. So every pod the runner makes in the sandboxes' namespace (the sandboxes, the agents'
+install pods and jobs, the caches' checks, the network probe) starts with an init container,
+`network-gate`, from `SANDBOX_IMAGE`, before anything else of the pod runs. Every half second, it
+tries a TCP connection (3 s at most each) to:
+
+- the API server, at the `kubernetes` Service's address (`KUBERNETES_SERVICE_HOST`), and the
+  cluster's DNS (the runner's own nameservers, TCP 53): no pod of that namespace may reach them,
+  and the runner does, so they answer whatever doesn't filter them;
+- the egress proxy, for a pod that goes out through it (not a cache's check, which reaches
+  nothing).
+
+It ends once the first are out of reach (refused, or no answer) and the proxy answers: the pod's
+rules are in place, not its network merely down. On a plugin that applies them by then, that is
+one round, about 3 s (its connections giving up). Past `KUBERNETES_PENDING_MINUTES`, it fails, and
+its pod with it, before anything of the run: the reply on the issue says what it still reached
+(`its NetworkPolicies didn't apply within 10 min: still reached the Kubernetes API server (…)`),
+or that the proxy never answered.
+
+What it waits for is one of the pod's rules applied, seen through two addresses its policies
+forbid and one they allow; it takes the rest to be applied with them. kube-router applies a pod's
+rules together, in one sync of its iptables chains, and Calico and Cilium compute a pod's policy
+whole before they program it. A plugin that applied them one rule at a time could leave the
+others unapplied a moment more: [the probe](#the-network-probe), which runs after its own gate and
+tries every address it knows, would then see them reached more often than not.
+
 ### The network probe
 
 The checks above read what the NetworkPolicies say; a network plugin that ignores them takes
@@ -476,8 +507,9 @@ them all the same. So the runner also checks that the cluster applies them: each
 its lease (as it starts, or as its other copy hands over), it starts a probe pod in the
 sandboxes' namespace, `<prefix>-network-probe-<random>`, from `SANDBOX_IMAGE`. It has a sandbox's labels
 (`deckhand.role: sandbox`), so the sandboxes' policies pick it, meets Pod Security
-`restricted` as they do, and holds no Secret, claim or ServiceAccount token. From there it
-tries a TCP connection, 3 s at most each, to:
+`restricted` as they do, and holds no Secret, claim or ServiceAccount token. Once its
+[network gate](#the-network-gate) has seen its policies apply (a verdict on what the cluster
+enforces, not on how fast it applies it), it tries a TCP connection, 3 s at most each, to:
 
 - every port of every Service of the services' namespace, at its cluster IP and at one of its
   pods' addresses (some plugins treat the two differently): edge, the orchestrator, the runner,
@@ -495,13 +527,16 @@ with no network at all doesn't pass as isolated: on `EGRESS_PROXY`'s port, and o
 (3129) too when runs get a [container engine](#container-engine-on-kubernetes) and the Service
 publishes it. Any one reached, and the runner refuses every
 run, the reply on the issue (and the dashboard) naming what the probe reached: use a plugin that
-enforces NetworkPolicies (Calico, Cilium, k3s's kube-router; Flannel alone doesn't). The probe
+enforces NetworkPolicies (Calico, Cilium, k3s's kube-router; Flannel alone doesn't). On a plugin
+that doesn't, the probe pod's gate never sees the API server or the DNS out of reach: that
+verdict comes once it gives up, after `KUBERNETES_PENDING_MINUTES`, the runs meanwhile waiting
+for it. The probe
 pod is removed whatever it found, and its verdict kept until the NetworkPolicies of either
 namespace change (the runner reads them before every run) or the runner takes its lease again:
 after a change of plugin, restart it (`kubectl -n deckhand rollout restart deploy/runner`). A
 probe that couldn't tell refuses that run alone, and the next one probes again: its pod didn't
-end within `KUBERNETES_PENDING_MINUTES` and a minute, say, or it reached nothing, the egress
-proxy included (not ready yet on a fresh install, its pod evicted). Each probe's pod has a name
+end within `KUBERNETES_PENDING_MINUTES` and a minute, say, or its gate never reached the egress
+proxy (not ready yet on a fresh install, its pod evicted), or the probe itself didn't. Each probe's pod has a name
 of its own, so a runner copy taking over doesn't remove the other's mid-probe; one older than a
 probe lasts (a runner stopped mid-probe) is removed at the next probe. Its log lines start with
 `Network probe:`. The API server's own addresses, behind the `kubernetes` Service, and the

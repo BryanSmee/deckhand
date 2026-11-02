@@ -20,6 +20,8 @@
 //     proxy knows a sandbox by its pod IP (locate()).
 //   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs, a folder of
 //     it mounted (SESSION_FOLDER) unless it is from before.
+//   - Every pod's first init container waits until its NetworkPolicies apply (kube-gate.mjs):
+//     some plugins apply them a moment after the pod has its address.
 //   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
 //     fails its run, saying why (follow()), and a leftover one is removed rather than waited
 //     for (wait()).
@@ -42,6 +44,15 @@ import { agentFor } from "../agents/index.mjs";
 import { proxyEnv } from "../egress.mjs";
 import { createInbox } from "./inbox.mjs";
 import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
+import {
+  createNetworkGate,
+  failedGate,
+  GATE_CONTAINER,
+  gateProblem,
+  GATING,
+  gating,
+  proxyTarget,
+} from "./kube-gate.mjs";
 import { createNetworkProbe, PROBE } from "./kube-probe.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import { splitLines } from "./lines.mjs";
@@ -303,7 +314,8 @@ export function agentInitContainer({ image, command, env, resources, volumeMount
 // has no claim: an emptyDir, which an init container fills as INSTALL_USER before the
 // sandbox mounts it read-only. `engine`: { image, runtimeClass, env, size } for a run granted
 // a container engine (engine.mjs): its sidecar, below. `rooted`: the session volumes whose
-// claim is from before SESSION_FOLDER, mounted at its root.
+// claim is from before SESSION_FOLDER, mounted at its root. `gate`: kube-gate.mjs's init
+// container, first, before anything of the run's.
 export function podSpec(
   { name, image, user, limits, caps = [], volumes = [] },
   {
@@ -318,6 +330,7 @@ export function podSpec(
     agentInit = null,
     engine = null,
     rooted = [],
+    gate = null,
   },
 ) {
   if (!user) throw new Error("the sandbox spec has no user");
@@ -362,9 +375,10 @@ export function podSpec(
       // The engine's: every container of the pod under Sysbox's runtime, in a user namespace
       // of the pod's own, root there an unprivileged user on the node.
       ...(engine ? { runtimeClassName: engine.runtimeClass, hostUsers: false } : {}),
-      ...(init || engine
+      ...(gate || init || engine
         ? {
             initContainers: [
+              ...(gate ? [gate] : []),
               ...(init
                 ? [
                     agentInitContainer({
@@ -468,6 +482,7 @@ export function pendingReason(pod) {
   const init = pod.status?.initContainerStatuses ?? [];
   const said =
     waiting(init) ??
+    (gating(pod) ? GATING : null) ??
     (init.some((s) => s.name === INIT_CONTAINER && s.state?.running) ? INSTALLING : null) ??
     waiting(pod.status?.containerStatuses);
   if (said) return said;
@@ -494,6 +509,9 @@ export function latestWarning(events) {
 }
 
 const UNSAID = "Kubernetes gave no reason: its volumes may not have mounted";
+
+// The last line of a log read line by line, or "".
+const lastLine = (lines) => (lines.findLast((l) => l.trim()) ?? "").trim();
 
 // A pod's log has stdout and stderr in one stream, and the runtime splits a long line into
 // parts the other stream's lines can land between. So the sandbox, when SANDBOX_TAG_STDERR
@@ -522,6 +540,12 @@ export function createKubernetesRunner({
   // options (the tests' env, DNS lookup, resolv.conf and sleep).
   probe = null,
   probeOptions = {},
+  // kube-gate.mjs's, shared with kube-images.mjs (index.mjs), else made here.
+  networkGate = createNetworkGate({
+    config,
+    env: probeOptions.env,
+    resolvConf: probeOptions.resolvConf,
+  }),
 }) {
   const { pendingMs, storageClass, sessionSize, cacheStorageClass } = config.kubernetes;
   const apart = services.namespace !== api.namespace;
@@ -584,6 +608,7 @@ export function createKubernetesRunner({
         if (claim === "rooted") rooted.push(v.name);
       }
       const agentInit = await agentInstall(volumes.find((v) => v.kind === "agent"));
+      const gateInit = networkGate.container({ proxy: proxyTarget(config, proxySvc) });
       const sidecar = engine ? engineSpec() : null;
       const secret = secretName(run);
       // The pod first: the run's tokens are bound to its UID (../sandbox-spec.mjs tokenEnv()).
@@ -617,6 +642,7 @@ export function createKubernetesRunner({
           agentInit,
           engine: sidecar,
           rooted,
+          gate: gateInit,
         }),
       );
       made.push(podPath(name));
@@ -726,6 +752,7 @@ export function createKubernetesRunner({
       };
     },
     labels: { ...owner, "deckhand.run": "network-probe", [ROLE]: SANDBOX },
+    gate: networkGate,
     log,
     now,
     sleep,
@@ -958,6 +985,18 @@ export function createKubernetesRunner({
     for (;;) {
       const pod = await look(name);
       if (!pod) return false;
+      const gated = failedGate(pod);
+      if (gated !== null) {
+        const said = [];
+        await readLog(name, { container: GATE_CONTAINER }, AbortSignal.timeout(WATCH_MS), (line) =>
+          said.push(line),
+        ).catch((error) => log(`The gate's log of ${name}: ${error.message}`));
+        const problem = gateProblem(gated, lastLine(said), pendingMs);
+        log(`${name}: ${problem}`);
+        throw new RunError(
+          `The sandbox couldn't start on the Kubernetes runner: ${problem}. Nothing of the run's ran. The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes.md, The network gate). Comment again to retry.`,
+        );
+      }
       const code = failedInit(pod);
       if (code !== null) {
         const agent = pod.metadata?.annotations?.[AGENT_INIT] ?? "its agent";
