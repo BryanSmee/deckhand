@@ -1,0 +1,19 @@
+# Two namespaces (docs/setup.md#namespaces): the services' and the sandboxes'. Nothing but
+# sandbox, install and check pods runs in the sandboxes' one, so it enforces Pod Security
+# `restricted`, a last line should a pod's own spec ever be wrong. The services meet it too
+# (components/repo-images lowers it for rootless BuildKit, which can't).
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deckhand
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deckhand-sandboxes
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted

@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: deckhand
+spec:
+  template:
+    spec:
+      containers:
+        - name: orchestrator
+          env:
+            - name: STORE_URL
+              value: "redis://orchestrator@redis:6379?prefix=deckhand:orchestrator:"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deckhand-redis
+                  key: orchestrator
+      # Its claims are ReadWriteMany (kustomization.yaml): its copies on any node.
+      affinity: null

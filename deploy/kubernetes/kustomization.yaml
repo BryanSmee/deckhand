@@ -1,0 +1,64 @@
+# Deckhand on Kubernetes (docs/kubernetes.md): every service in the deckhand namespace, two
+# copies each (one for the egress proxy, and a second during an update), the sandboxes' pods in
+# deckhand-sandboxes. The stores are the file backend on each service's volume, its copies on one
+# node; components/redis puts them in Redis, for copies on several nodes.
+#
+#   kubectl apply -k deploy/kubernetes   # or your overlay of it, with your settings
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - namespaces.yaml
+  - rbac.yaml
+  - network-policies.yaml
+  - sandboxes.yaml
+  - edge.yaml
+  - orchestrator.yaml
+  - runner.yaml
+  - broker.yaml
+  - github.yaml
+  - models.yaml
+  - policy.yaml
+  - egress.yaml
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: deckhand
+    # The selectors stay as written: the sandboxes' NetworkPolicy pins the egress Service's.
+    includeSelectors: false
+
+configMapGenerator:
+  # config.yaml and the grants folder's files, mounted at /etc/deckhand by the services that
+  # read them (each one's `server` volume says where each key goes).
+  - name: deckhand-server
+    namespace: deckhand
+    files:
+      - server/config.yaml
+      - server/default.yaml
+  # The settings the orchestrator, the runner and the models service share, in their
+  # environment: where sandboxes run and from which image.
+  - name: deckhand-env
+    namespace: deckhand
+    literals:
+      - RUNNER=kubernetes
+      - KUBERNETES_NAMESPACE=deckhand-sandboxes
+      - KUBERNETES_SERVICES_NAMESPACE=deckhand
+      - SANDBOX_IMAGE=ghcr.io/bryansmee/deckhand-sandbox:latest
+
+images:
+  - name: ghcr.io/bryansmee/deckhand-edge
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-orchestrator
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-runner
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-broker
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-github
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-models
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-policy
+    newTag: latest
+  - name: ghcr.io/bryansmee/deckhand-egress
+    newTag: latest

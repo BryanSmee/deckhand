@@ -1,0 +1,156 @@
+# The orchestrator (docs/services.md#edge-and-the-orchestrator): the queue and the runs' lives.
+# It holds no secret and has no way out (network-policies.yaml). Two copies, active/passive
+# through its lease: the one waiting answers its probes and 503 to every call, with the
+# connection closed, so a caller's next try reaches the copy that acts, and its egress policy's
+# port (8082) opens once it acts. Its readiness is /health, not /ready (200 on the acting copy
+# alone): a rolling update starts the next copy, which only takes the lease once the old one
+# releases it, so a probe on /ready would never let the update go on.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: deckhand
+  labels:
+    app: deckhand-orchestrator
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-orchestrator
+  template:
+    metadata:
+      labels:
+        app: deckhand-orchestrator
+    spec:
+      serviceAccountName: deckhand-orchestrator
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # On SIGTERM it lets the replies being posted finish, saves the queue and the runs' state
+      # and releases its lease: the other copy takes it at once.
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-orchestrator
+      containers:
+        - name: orchestrator
+          image: ghcr.io/bryansmee/deckhand-orchestrator:latest
+          ports:
+            - name: egress-policy
+              containerPort: 8082
+            - name: services
+              containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: deckhand-env
+          env:
+            # Every call arrives at the pod's one address: the callers' service tokens tell the
+            # runner and edge apart, and network-policies.yaml lets only their pods reach 8083.
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: services
+            periodSeconds: 5
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: screenshots
+              mountPath: /data/shots
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        # Its state (the runs' summaries and logs, its store), and the screenshots, served under
+        # /shots/ through edge.
+        - name: data
+          persistentVolumeClaim:
+            claimName: orchestrator-data
+        - name: screenshots
+          persistentVolumeClaim:
+            claimName: orchestrator-screenshots
+        # config.yaml and the grants folder: deckhand-server's items (docs/kubernetes.md).
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
+                    - key: default.yaml
+                      path: grants/default.yaml
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: deckhand-broker
+                  path: broker-token
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orchestrator-data
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orchestrator-screenshots
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+# 8083: the runner (a run's first tokens) and edge (the dashboard's API); 8082: the egress
+# proxy's questions.
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-orchestrator
+  ports:
+    - name: egress-policy
+      port: 8082
+      targetPort: egress-policy
+    - name: services
+      port: 8083
+      targetPort: services

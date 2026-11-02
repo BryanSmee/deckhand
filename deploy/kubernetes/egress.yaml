@@ -1,0 +1,122 @@
+# The sandboxes' egress proxy (docs/services.md#the-proxys-handover): their only way out, which
+# asks the orchestrator about each connection. One copy, and a second during an update: the new
+# one takes the new connections once ready, the old one drains as long as an agent's call lasts
+# (DRAIN_SECONDS, 600). Not two at all times: each copy makes the CA sandboxes trust in its
+# volume when there is none, or near its end, so two would make two.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: egress
+  namespace: deckhand
+  labels:
+    app: deckhand-egress
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-egress
+  template:
+    metadata:
+      labels:
+        app: deckhand-egress
+    spec:
+      serviceAccountName: deckhand-egress
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # The preStop pause, then the drain: an agent's call streams for up to 10 minutes.
+      terminationGracePeriodSeconds: 630
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # The next copy, during an update, shares the volume (its CA): on the same node.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-egress
+      containers:
+        - name: egress
+          image: ghcr.io/bryansmee/deckhand-egress:latest
+          ports:
+            - name: proxy
+              containerPort: 3128
+          env:
+            - name: DRAIN_SECONDS
+              value: "600"
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+          # Plain HTTP on the proxy's port: 503 once it drains.
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: proxy
+            periodSeconds: 5
+          # Agents, git and gh don't try a refused connection again: the old copy keeps taking
+          # them until the Service no longer sends it any.
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        # The egress cache, and the CA its key never leaves (ca/).
+        - name: cache
+          persistentVolumeClaim:
+            claimName: egress-cache
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: deckhand-broker
+                  path: broker-token
+                  expirationSeconds: 3600
+---
+# EGRESS_CACHE_MAX (10g) and the CA.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: egress-cache
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 12Gi
+---
+# Named after EGRESS_PROXY's host, with a cluster IP: sandboxes have no DNS, and reach it by the
+# hostAliases the runner gives their pods. Its selector is what their NetworkPolicy's peer pins
+# (sandboxes.yaml).
+apiVersion: v1
+kind: Service
+metadata:
+  name: egress
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-egress
+  ports:
+    - name: proxy
+      port: 3128
+      targetPort: proxy

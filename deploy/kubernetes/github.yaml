@@ -1,0 +1,140 @@
+# The github service (docs/setup.md#the-github-service): the only pods with the GitHub App's key,
+# in their own Secret (deckhand-github, at APP_DIR). Its way out is GitHub's
+# (network-policies.yaml). Two copies, both active on one store.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github
+  namespace: deckhand
+  labels:
+    app: deckhand-github
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-github
+  template:
+    metadata:
+      labels:
+        app: deckhand-github
+    spec:
+      serviceAccountName: deckhand-github
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # Its drain (DRAIN_SECONDS, 280 s: pushes, clones).
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-github
+      containers:
+        - name: github
+          image: ghcr.io/bryansmee/deckhand-github:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            # Its callers' service tokens tell them apart, and network-policies.yaml lets only
+            # edge's, the orchestrator's, the proxy's and the runner's pods in.
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            - name: HOME
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: app-key
+              mountPath: /app-key
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        # app.json, the App's key with its credentials: deckhand-github, which secrets.mjs makes
+        # (docs/kubernetes.md), mounted here alone. Read only: /setup stays closed.
+        - name: app-key
+          secret:
+            secretName: deckhand-github
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        # Its store and the granted repositories' git mirrors.
+        - name: data
+          persistentVolumeClaim:
+            claimName: github-data
+        # Pushes of repositories granted `workflows`, while checked (up to 2 GiB each).
+        - name: tmp
+          emptyDir:
+            sizeLimit: 4Gi
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
+                    - key: default.yaml
+                      path: grants/default.yaml
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: deckhand-broker
+                  path: broker-token
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: github-data
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: github
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-github
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

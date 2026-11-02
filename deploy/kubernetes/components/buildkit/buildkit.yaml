@@ -1,0 +1,133 @@
+# Rootless BuildKit, which builds the repositories' own images (docs/setup.md#repo-images-on-kubernetes)
+# for the runner, which pushes them to KUBERNETES_REGISTRY. Only the runner reaches it, and it
+# goes out through the egress proxy alone: the runner checks both before every build
+# (listener/runner/kube-images.mjs builderIsolationProblem()) and refuses to build otherwise.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: buildkitd
+  namespace: deckhand
+  labels:
+    app: buildkitd
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: buildkitd
+  template:
+    metadata:
+      labels:
+        app: buildkitd
+    spec:
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # A build in flight: the runner waits for the next daemon, then builds again.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: buildkitd
+          image: moby/buildkit:v0.25.1-rootless
+          args:
+            - --addr
+            - tcp://0.0.0.0:1234
+            - --oci-worker-no-process-sandbox
+          env:
+            # Its pulls go through the proxy, which lets them reach the registries of the
+            # image being built and of its base, while a build runs. Add your registry to
+            # NO_PROXY if it runs in the cluster.
+            - name: HTTPS_PROXY
+              value: http://egress:3128
+            - name: HTTP_PROXY
+              value: http://egress:3128
+            - name: NO_PROXY
+              value: ""
+          ports:
+            - name: buildkit
+              containerPort: 1234
+          readinessProbe:
+            exec:
+              command: [buildctl, --addr, tcp://127.0.0.1:1234, debug, workers]
+            periodSeconds: 10
+          # Rootless BuildKit makes user namespaces: neither seccomp nor AppArmor may stop it
+          # (moby/buildkit's own manifests), which Pod Security `restricted` or `baseline`
+          # refuse. The namespace allows it (kustomization.yaml).
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+            seccompProfile:
+              type: Unconfined
+            appArmorProfile:
+              type: Unconfined
+          volumeMounts:
+            - name: cache
+              mountPath: /home/user/.local/share/buildkit
+      volumes:
+        - name: cache
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: buildkitd
+  namespace: deckhand
+spec:
+  selector:
+    app: buildkitd
+  ports:
+    - name: buildkit
+      port: 1234
+      targetPort: buildkit
+---
+# In from the runner alone; out to the egress proxy, and DNS (deckhand-dns,
+# network-policies.yaml). A registry in the cluster goes here too, as a podSelector of the
+# namespace: the runner refuses any peer beyond its pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-buildkitd
+  namespace: deckhand
+spec:
+  podSelector:
+    matchLabels:
+      app: buildkitd
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: deckhand-runner
+      ports:
+        - port: 1234
+          protocol: TCP
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: deckhand-egress
+      ports:
+        - port: 3128
+          protocol: TCP
+---
+# The runner drives it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-runner-buildkitd
+  namespace: deckhand
+spec:
+  podSelector:
+    matchLabels:
+      app: deckhand-runner
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              app: buildkitd
+      ports:
+        - port: 1234
+          protocol: TCP

@@ -1,0 +1,152 @@
+# The models service (docs/setup.md#the-models-service): the only pods with your agents'
+# credentials (the deckhand-models Secret, docs/kubernetes.md), which add them to the sandboxes'
+# API calls the egress proxy sends here. The plans' refreshed logins are sealed in its store
+# with models.key, a Secret both copies mount: a copy with another key refuses them.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: models
+  namespace: deckhand
+  labels:
+    app: deckhand-models
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-models
+  template:
+    metadata:
+      labels:
+        app: deckhand-models
+    spec:
+      serviceAccountName: deckhand-models
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # An agent's call streams for up to 10 minutes (DRAIN_SECONDS, 600).
+      terminationGracePeriodSeconds: 630
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-models
+      containers:
+        - name: models
+          image: ghcr.io/bryansmee/deckhand-models:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: deckhand-env
+            # CLAUDE_CODE_OAUTH_TOKEN, ANTHROPIC_API_KEY, OPENAI_API_KEY… (docs/kubernetes.md).
+            - secretRef:
+                name: deckhand-models
+          env:
+            # Its callers' service tokens tell the proxy and the orchestrator apart, and
+            # network-policies.yaml lets only their pods in.
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            - name: SERVICE_KEYS_DIR
+              value: /service-keys
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: http
+            periodSeconds: 5
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: key
+              mountPath: /keys
+              readOnly: true
+            - name: store
+              mountPath: /data/store
+            - name: credentials
+              mountPath: /data/credentials
+              readOnly: true
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: service-keys
+              mountPath: /service-keys
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        - name: key
+          secret:
+            secretName: deckhand-models-key
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        # The plans' refreshed logins (sealed), the runs' API state, its stream.
+        - name: store
+          persistentVolumeClaim:
+            claimName: models-store
+        # The plans' logins you signed in with (codex-auth.json, agy-auth.json), if any.
+        - name: credentials
+          secret:
+            secretName: deckhand-credentials
+            defaultMode: 288
+            optional: true
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
+        - name: service-keys
+          configMap:
+            name: deckhand-service-keys
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: deckhand-broker
+                  path: broker-token
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: models-store
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: models
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-models
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
