@@ -512,8 +512,11 @@ install's last line is in the refresh's error, which the runs on the login fail 
 labelled `deckhand.role: install`, so `deckhand-installs` (`sandboxes.yaml`) covers it: the
 egress proxy lets it reach Google's OAuth (`oauth2.googleapis.com`) and the CLI's own hosts
 only, tunnelled (and GitHub's releases while its init container installs the CLI, never once
-`agy` runs). It has 4 minutes in all, the CLI's install included, within the models service's
-5-minute hold on the login, so that no other copy of the service refreshes it meanwhile. It is
+`agy` runs). It has 4 minutes in all, the CLI's install included, and never more than what is left of the
+models service's 5-minute hold on the login, a minute to spare: the service sends what is left
+with its call (and stops asking a runner that doesn't answer, during a handover, once too little
+is), and a refresh with under 30 seconds to go isn't started. So no other copy of the service
+refreshes the login meanwhile. It is
 removed once it ends, whatever its outcome.
 
 What the pod prints to stdout reaches its log on the node (`/var/log/pods`), which a log agent

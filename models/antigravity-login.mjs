@@ -48,7 +48,8 @@ function parseLogin(text, file) {
 export function createAntigravityLogin({
   file, // AGY_AUTH_FILE
   config, // runner
-  // (input) → { code, out, err }: the refresh's container, `input` on its stdin (the runner's
+  // (input, { timeoutMs }) → { code, out, err }: the refresh's container, `input` on its stdin,
+  // within `timeoutMs`, what is left of the lease on the login (the runner's
   // POST /logins/antigravity/refresh, ../runner/client.mjs refreshLogin()); null: none
   refresh: runRefresh = null,
   // Where the refreshed login is kept, sealed (logins.mjs): the service's store and key; none, a
@@ -66,10 +67,14 @@ export function createAntigravityLogin({
   }
 
   // `agy models` in a container of the runner's: the login in, the one `agy` left out.
-  async function refresh(json) {
+  // `until`: when the lease on the login runs out (logins.mjs): the runner is told what is left
+  // of it, and ends its job before.
+  async function refresh(json, { until } = {}) {
     if (!runRefresh) throw new Error(`the ${config.runner} runner runs no login refresh`);
     const forced = { ...json, token: { ...json.token, expiry: EXPIRED } };
-    const result = await runRefresh(JSON.stringify(forced));
+    const result = await runRefresh(JSON.stringify(forced), {
+      ...(until !== undefined && { timeoutMs: Math.max(0, until - now()) }),
+    });
     let next = null;
     try {
       next = parseLogin(result.out, file);

@@ -160,10 +160,14 @@ export function sharedLogin({
   const same = (a, b) =>
     JSON.stringify(a.login) === JSON.stringify(b.login) && !a.broken === !b.broken;
 
-  // `saved`, refreshed by `run(login)` → the new login, once for every copy: the lease's holder
-  // runs it, and saves its result; the others wait for it. A refusal (an error with
+  // `saved`, refreshed by `run(login, { until })` → the new login, once for every copy: the
+  // lease's holder runs it, and saves its result; the others wait for it. `until`: when the
+  // lease runs out (this copy's clock), which the refresh must end before: another copy takes
+  // the login over then. A refusal (an error with
   // `refused`, a LoginError) is saved too, so that no copy spends the login again. → load()'s.
   async function refresh(saved, run, rounds = 2) {
+    // Taken before asking, so that the lease's true end is never later than this.
+    const until = now() + refreshMs;
     const held = await store.acquire(lease, holder, { ttlMs: refreshMs });
     if (!held) return waitFor(saved, run, rounds);
     try {
@@ -172,7 +176,7 @@ export function sharedLogin({
       if (!same(latest, saved)) return latest;
       let next;
       try {
-        next = await run(latest.login);
+        next = await run(latest.login, { until });
       } catch (error) {
         if (error.status === 401) {
           await save(latest, {
@@ -212,8 +216,8 @@ export function sharedLogin({
 }
 
 // A plan's login as its endpoint uses it (chatgpt.mjs, antigravity-login.mjs): sharedLogin()'s,
-// with what differs between plans. `due(login)`: whether it needs a refresh now; `refresh(login)`
-// → the new login; `headersOf(login)`: the headers that make a call the plan's; `accessOf(login)`:
+// with what differs between plans. `due(login)`: whether it needs a refresh now;
+// `refresh(login, { until })` → the new login, before `until` (the lease's end, sharedLogin()); `headersOf(login)`: the headers that make a call the plan's; `accessOf(login)`:
 // its access token; `secretsOf(login)`: its tokens. → { headers, current, refused, secrets }.
 export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...options }) {
   const shared = sharedLogin(options);

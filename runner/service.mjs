@@ -25,7 +25,7 @@ import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readBody, readJsonBody, Refused, send, sendJson } from "../lib/http.mjs";
 import { createFence } from "../lib/fence.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
-import { LOGIN_REFRESH_MS } from "../lib/services.mjs";
+import { LOGIN_REFRESH_MARGIN_MS, LOGIN_REFRESH_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 import { antigravity } from "../listener/agents/antigravity.mjs";
 import { agentFor } from "../listener/agents/index.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
@@ -107,8 +107,10 @@ export const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
 // How long the refresh may take on Kubernetes, its agent's install included: within the models
 // service's lease on the login (../lib/services.mjs LOGIN_REFRESH_MS), a minute to spare, so
 // that no other copy of it refreshes the same login meanwhile. Past it, the pod goes and the
-// refresh fails; the next one starts afresh.
-export const REFRESH_BUDGET_MS = LOGIN_REFRESH_MS - 60_000;
+// refresh fails; the next one starts afresh. Less when the models service says less of its
+// lease is left (the call waited on a runner handover): counted from there, and none started
+// with under MIN_REFRESH_MS to go.
+export const REFRESH_BUDGET_MS = LOGIN_REFRESH_MS - LOGIN_REFRESH_MARGIN_MS;
 
 // The Antigravity login's refresh (../models/antigravity-login.mjs, the models service's, #504):
 // `agy models` in a short container of its own on the login's volume, the token file in on
@@ -121,9 +123,22 @@ export const REFRESH_BUDGET_MS = LOGIN_REFRESH_MS - 60_000;
 // → { code, out, err }, or null for a backend without short containers.
 export function loginRefresh({ config, images, jobs, now = Date.now }) {
   if (!jobs?.run) return null;
-  return async (input) => {
-    const since = now();
+  return async (input, { timeoutMs } = {}) => {
+    const until =
+      now() +
+      Math.min(
+        REFRESH_BUDGET_MS,
+        timeoutMs === undefined ? Infinity : timeoutMs - LOGIN_REFRESH_MARGIN_MS,
+      );
+    const tooLate = () =>
+      until - now() < MIN_REFRESH_MS && {
+        code: -1,
+        out: "",
+        err: `too little of the models service's hold on the login is left to refresh it (${Math.max(0, Math.round((until - now()) / 1000))} s): not started`,
+      };
+    if (tooLate()) return tooLate();
     await images.installAgent(antigravity, () => {});
+    if (tooLate()) return tooLate();
     const { code, out, err } = await jobs.run({
       name: "antigravity-refresh",
       image: config.image,
@@ -138,7 +153,7 @@ export function loginRefresh({ config, images, jobs, now = Date.now }) {
       input,
       hosts: REFRESH_HOSTS,
       agent: antigravity.install(config),
-      timeoutMs: REFRESH_BUDGET_MS - (now() - since),
+      timeoutMs: until - now(),
     });
     return { code, out: String(out ?? ""), err: String(err ?? "") };
   };
@@ -520,9 +535,14 @@ export function createRunnerService({
     },
     "POST /logins/antigravity/refresh": async ({ req }) => {
       if (!refresh) throw new Refused(501, `the ${config.runner} runner runs no login refresh`);
-      const { input } = await readJsonBody(req, MAX_JSON);
+      const { input, timeoutMs } = await readJsonBody(req, MAX_JSON);
       if (typeof input !== "string") throw new Refused(400, "input?");
-      return refresh(input);
+      // What is left of the models service's lease on the login; none from a models service
+      // older than this runner: its own budget alone.
+      if (timeoutMs !== undefined && !(Number.isFinite(timeoutMs) && timeoutMs >= 0)) {
+        throw new Refused(400, "timeoutMs?");
+      }
+      return refresh(input, { ...(timeoutMs !== undefined && { timeoutMs }) });
     },
   };
 

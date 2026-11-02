@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { partEnd } from "../lib/redact.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
+import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 
 // What the orchestrator waits for the runner, for the calls a run's life needs: an update of
 // the runner, a slow pull of its image. A run doesn't fail for it.
@@ -467,9 +468,17 @@ export function createRunnerClient({
   };
 
   // `agy models` on the login's volume (../models/antigravity-login.mjs): { code, out, err }.
-  // Once: its refresh token is spent by the first.
-  const refreshLogin = (input) =>
-    models.json("POST", "/logins/antigravity/refresh", { body: { input }, once: true });
+  // Once: its refresh token is spent by the first. `timeoutMs`: what is left of the models
+  // service's lease on the login, which the runner ends its job within; a runner that
+  // doesn't answer (a handover's 503s) is asked again only while there is time left for it.
+  const refreshLogin = (input, { timeoutMs } = {}) =>
+    models.json("POST", "/logins/antigravity/refresh", {
+      body: { input, ...(timeoutMs !== undefined && { timeoutMs }) },
+      once: true,
+      ...(timeoutMs !== undefined && {
+        waitMs: Math.max(0, timeoutMs - LOGIN_REFRESH_MARGIN_MS - MIN_REFRESH_MS),
+      }),
+    });
 
   return {
     runner: {
