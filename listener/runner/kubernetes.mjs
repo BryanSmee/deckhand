@@ -92,9 +92,10 @@ export const INIT_CONTAINER = "agent-install";
 // The folder of a session claim its sandbox mounts (podSpec()), never the claim's root: a block
 // volume's filesystem (ext4 on Longhorn, EBS, Ceph RBD…) holds lost+found there, and
 // entrypoint.sh's clone wants an empty /workspace (#643). Made by the kubelet at the first
-// mount. A claim from before kept its files at its root: its next run starts afresh, as after
-// a lost claim.
-export const SESSION_FOLDER = "session";
+// mount. A claim from before kept its files at its root (a clone, an agent's home): its next
+// run starts afresh, as after a lost claim, so the name is one neither of them holds, where
+// a repository's `session/` would be mounted as a clone without .git (#644).
+export const SESSION_FOLDER = ".deckhand-session";
 
 // The engine's sidecar (podSpec()), and its storage's volume.
 const ENGINE_CONTAINER = "engine";

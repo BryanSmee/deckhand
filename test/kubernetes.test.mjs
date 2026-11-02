@@ -20,6 +20,7 @@ import {
   latestWarning,
   pendingReason,
   podSpec,
+  SESSION_FOLDER,
   quantity,
   selects,
 } from "../listener/runner/kubernetes.mjs";
@@ -367,8 +368,8 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
   assert.deepEqual(c.volumeMounts, [
     { name: "v0", mountPath: "/opt/claude-code", readOnly: true },
     // A folder of each session claim, not its root, which may hold lost+found (#643).
-    { name: "v1", mountPath: "/workspace", subPath: "session" },
-    { name: "v2", mountPath: "/home/node/.claude", subPath: "session" },
+    { name: "v1", mountPath: "/workspace", subPath: ".deckhand-session" },
+    { name: "v2", mountPath: "/home/node/.claude", subPath: ".deckhand-session" },
   ]);
   // The session claims, of the operator's class and size; the agent's is not the runner's.
   const claim = objects.persistentvolumeclaims.get("dh-org-repo-12-abc-workspace");
@@ -455,6 +456,24 @@ test("start: a failure removes the Pod, Secret and claims it made, keeps the old
   await assert.rejects(runner.start(spec()), /POST pods: pods is forbidden/);
   assert.equal(objects.secrets.size, 0);
   assert.deepEqual([...objects.persistentvolumeclaims.keys()], ["dh-org-repo-12-abc-claude"]);
+});
+
+// A claim from before #643 holds a clone or an agent's home at its root: the folder mounted is
+// one neither holds (a repository's `session/` would be a clone without .git), so its run
+// starts afresh beside them, its claim kept.
+test("start: a claim made before mounts a folder its old files don't hold", async (t) => {
+  const { runner, objects } = setup(t);
+  for (const name of ["dh-org-repo-12-abc-workspace", "dh-org-repo-12-abc-claude"]) {
+    objects.persistentvolumeclaims.set(name, { metadata: { name } });
+  }
+  await runner.start(spec());
+  const [, ...sessions] = objects.pods.get("dh-org-repo-12-abc").spec.containers[0].volumeMounts;
+  assert.deepEqual(
+    sessions.map((m) => m.subPath),
+    [SESSION_FOLDER, SESSION_FOLDER],
+  );
+  assert.match(SESSION_FOLDER, /^\.deckhand-/);
+  assert.equal(objects.persistentvolumeclaims.size, 2);
 });
 
 test("start: a Secret refused removes the Pod made before it", async (t) => {
