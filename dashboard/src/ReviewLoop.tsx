@@ -99,8 +99,10 @@ export function ReviewRounds({ task, actions }: { task: Task; actions?: Componen
             key={`${h.round}-${h.at}`}
             title={`${h.manual ? "A maintainer's review" : h.round ? `Review after fix round ${h.round}${of}` : "First review"}: ${h.blocking} blocking${h.head ? ` · ${shortSha(h.head)}` : ""}`}
           >
-            <span class={styles.round}>R{h.round}</span> {roundCounts(h)}
-            {noProgress(r.history, i) && <span class={styles.stuck}>no progress</span>}
+            {/* Without a loop, no fix round between them: numbered in turn, never stuck. */}
+            <span class={styles.round}>{r.manual ? `#${i + 1}` : `R${h.round}`}</span>{" "}
+            {roundCounts(h)}
+            {!r.manual && noProgress(r.history, i) && <span class={styles.stuck}>no progress</span>}
             {i === last && h.head && <span class={styles.head}>{shortSha(h.head)}</span>}
           </li>
         ))}

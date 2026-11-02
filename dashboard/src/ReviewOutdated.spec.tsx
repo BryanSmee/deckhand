@@ -157,6 +157,22 @@ test("a maintainer's reviews alone, no loop: Reviews, its state without fix roun
   expect(within(section).getByRole("listitem").getAttribute("title")).toMatch(
     /^A maintainer's review: 1 blocking/,
   );
+  // Two of them, the second as blocking: numbered in turn, no fix round between to call stuck.
+  const two = [
+    { ...round(0, REVIEWED, 1), manual: true },
+    { ...round(0, HEAD, 1), at: 2, manual: true },
+  ];
+  rerender(
+    <Dashboard
+      state={withTask({ review: manual({ loop: "rounds-out", history: two }) })}
+      error={null}
+    />,
+  );
+  expect(
+    within(screen.getByRole("region", { name: "Reviews" }))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent),
+  ).toEqual(["#1 1 high", "#2 1 highbbbbbbb"]);
   // Without `review.fix` (no rounds): Review, never Fix.
   expect(reviewOffers(task({ review: manual({ loop: "rounds-out" }) }))).toEqual({
     review: true,

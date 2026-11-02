@@ -237,6 +237,18 @@ test("postReview: one review at the head commit, its event from the findings", a
   assert.deepEqual(gh.replies, []);
 });
 
+test("postReview: on the commit the run started from, when a push came meanwhile (#535)", async () => {
+  const gh = fakeGitHub();
+  const posted = await postReview(gh, "org/repo", 5, MESSAGE, "f", { from: "start1" });
+  const post = gh.calls.find((c) => c.method === "POST");
+  assert.equal(post.body.commit_id, "start1");
+  // Its places linked at that commit too; the pull request as it is now kept for the rest.
+  assert.match(post.body.body, /blob\/start1\//);
+  assert.deepEqual([posted.head, posted.pr.head.sha], ["start1", "abc123"]);
+  // Not known: the head now, as before.
+  assert.equal((await postReview(fakeGitHub(), "org/repo", 5, MESSAGE, "f")).head, "abc123");
+});
+
 test("postReview: the App's own pull request, unparsed messages, refusals", async () => {
   // GitHub refuses changes requested by a pull request's author (the App's own): a comment.
   const own = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": [422, 200] });
@@ -976,6 +988,12 @@ test("review loop: clean, or stopped when no fix run follows a blocking review",
     [replaced.loop, replaced.manual, replaced.history.map((r) => [r.blocking, r.manual])],
     ["clean", undefined, [[0, undefined]]],
   );
+  // Its round is at the commit the run started from (postReview() `head`), not a later one.
+  await manual.reviews.settle(
+    { repo: "org/repo", number: 5, base: "trunk", settings: manual.read.settings, auto: false },
+    { ...posted(HIGH_ONE), head: "sha-0" },
+  );
+  assert.equal(manual.loop().history.at(-1).head, "sha-0");
   // A repo without any `review` settings: recorded all the same, no fix round.
   const bare = await loopSetup(t, "");
   await bare.reviews.settle(

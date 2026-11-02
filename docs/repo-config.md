@@ -581,7 +581,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   section is called Reviews, and offers the same buttons. Once a commit is pushed after the
   last review, the section says "Outdated: reviewed `abc1234`, head is now `def5678`" and the
   task's rows "Review outdated" (until the loop is over, a new head is expected: nothing is
-  said): press Review for the new head. It still isn't a loop round: it counts no fix run,
+  said): press Review for the new head. A review is posted on the commit its run started
+  from, so a commit pushed while it runs is outdated too. It still isn't a loop round: it counts no fix run,
   tolerates nothing itself, and may start a fix run while rounds are left. Both requests are
   refused, the dashboard saying why, for someone outside the repo's `users`, a closed pull
   request, or one with a run going or queued.

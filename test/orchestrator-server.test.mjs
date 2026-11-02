@@ -3536,20 +3536,6 @@ allow_capabilities contains "read:pulls"
 `;
 
   test("review.on: a ready pull request gets one review run, posted as a GitHub review", async (t) => {
-    const { dir, github, listener, send } = await listen(
-      t,
-      {
-        ".deckhand.yaml":
-          "brainstorm_model: sonnet\nwait_for_answers: false\nreview:\n  on: ready\n  effort: high\n",
-      },
-      (dir) => {
-        writeFileSync(
-          join(dir, "result"),
-          "Fine overall.\n\n## Findings\n\n- **high** `a.mjs:3`: no test. Fix: add one.\n\nRating: 6/10\nVerdict: request-changes\n",
-        );
-        return {};
-      },
-    );
     // Deckhand's own pull request, which closes #12, turns ready.
     const ready = {
       action: "ready_for_review",
@@ -3565,12 +3551,36 @@ allow_capabilities contains "read:pulls"
       },
       sender: { login: "deckhand-x[bot]", type: "Bot" },
     };
+    const { dir, github, listener, send } = await listen(
+      t,
+      (dir) => ({
+        ".deckhand.yaml":
+          "brainstorm_model: sonnet\nwait_for_answers: false\nreview:\n  on: ready\n  effort: high\n",
+        // A commit pushed while the review runs (its sandbox started: run-args): head-2.
+        get "pull:13"() {
+          const sha = existsSync(join(dir, "run-args")) ? "head-2" : "head-1";
+          return JSON.stringify({
+            ...ready.pull_request,
+            head: { ...ready.pull_request.head, sha },
+          });
+        },
+      }),
+      (dir) => {
+        writeFileSync(
+          join(dir, "result"),
+          "Fine overall.\n\n## Findings\n\n- **high** `a.mjs:3`: no test. Fix: add one.\n\nRating: 6/10\nVerdict: request-changes\n",
+        );
+        return {};
+      },
+    );
     await send(ready, "pull_request");
     const review = await github.waitFor(
       (r) => r.method === "POST" && r.path === "/repos/org/repo/pulls/13/reviews",
     );
     const posted = JSON.parse(review.body);
     assert.equal(posted.event, "REQUEST_CHANGES");
+    // Posted on the commit the run started from, not the one pushed meanwhile (#535).
+    assert.equal(posted.commit_id, "head-1");
     // The model's 6/10, capped by its high finding.
     assert.match(
       posted.body,

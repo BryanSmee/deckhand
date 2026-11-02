@@ -284,8 +284,23 @@ function where({ path, line }, blob) {
 // Replies longer than GitHub takes are cut (as comments.mjs's).
 const cut = (text) => (text.length > 60000 ? `${text.slice(0, 60000)}\n\n…` : text);
 
+// The head commit of pull request `number` now, or null when GitHub can't say: where a review
+// run starts from (runs.mjs launch()), the commit its review is posted on (postReview() `from`).
+export async function reviewStart({ github, log = () => {} }, repo, number) {
+  try {
+    const pr = await getJson(github, repo, `/repos/${repo}/pulls/${number}`, [404]);
+    return pr?.head?.sha ?? null;
+  } catch (error) {
+    log(`${repo}#${number}: looking the pull request's head up for its review: ${error.message}`);
+    return null;
+  }
+}
+
 // Posts the run's final message `text` on pull request `number` as one review (POST
-// /repos/{repo}/pulls/{n}/reviews), at its current head commit. The App can't request changes
+// /repos/{repo}/pulls/{n}/reviews), at the commit the run started from (`from`, reviewStart()),
+// else its current head: a commit pushed while it ran stays unreviewed, and the dashboard says
+// so (issue #535). `pr`: the pull request as it is now, `head`: the commit it was posted on.
+// The App can't request changes
 // on its own pull request (GitHub answers 422): then a comment review, the verdict in its
 // text. A review GitHub refuses otherwise goes as a plain comment (`reply`): nothing is lost.
 // `github`: the App's calls (server.mjs); `allowed`: the review's tolerance (reviews'
@@ -297,7 +312,7 @@ export async function postReview(
   number,
   text,
   footer,
-  { allowed = "low", full } = {},
+  { allowed = "low", full, from = null } = {},
 ) {
   const review = parseReview(text, { allowed });
   let pr = null;
@@ -306,7 +321,7 @@ export async function postReview(
   } catch (error) {
     log(`${repo}#${number}: looking the pull request up for its review: ${error.message}`);
   }
-  const sha = pr?.head?.sha ?? null;
+  const sha = from ?? pr?.head?.sha ?? null;
   const site = pr?.base?.repo?.html_url;
   const blob = sha && site ? `${site}/blob/${sha}` : null;
   const body = `${cut(reviewBody(review, text, footer, blob))}\n\n${MARKER}`;
@@ -321,10 +336,10 @@ export async function postReview(
   let event = reviewEvent(review);
   let res = await post(event);
   if (res.status === 422 && event !== "COMMENT") res = await post((event = "COMMENT"));
-  if (res.ok) return { event, review, pr };
+  if (res.ok) return { event, review, pr, head: sha };
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
   await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
-  return { event: null, review, pr };
+  return { event: null, review, pr, head: sha };
 }
 
 // The latest review the App posted on pull request `number` (postReview(), with its marker),
@@ -854,16 +869,16 @@ const severities = (findings) =>
 const fixesOf = (entry) => entry?.fixes ?? (entry?.fixedAt ? 1 : 0);
 const reviewedFixesOf = (entry) => entry?.reviewedFixes ?? (entry?.rereviewAt ? 1 : 0);
 
-// The automatic reviews kept per pull request (`rounds`): more than the operator's
-// MAX_FIX_ROUNDS allows in one loop, as the history goes on across the pull request turning
-// ready again: its fix count carries over, so that review is numbered after the fix runs so
-// far (R<fixes>), not a new first review.
+// The reviews kept per pull request (`rounds`, the loop's or a maintainer's, `manual`): more
+// than the operator's MAX_FIX_ROUNDS allows in one loop, as the history goes on across the
+// pull request turning ready again: its fix count carries over, so that review is numbered
+// after the fix runs so far (R<fixes>), not a new first review.
 const ROUNDS_KEPT = 20;
 
 // Where the fix loop of a pull request is, for the dashboard (board.mjs), from its entry in
 // reviews.json and `step`, the reason of its task's run going or queued ("review",
 // "review-fix", "ci-fix"; null for none, or a maintainer's comment) → { loop, round, rounds,
-// history } or null when it had no automatic review. `loop`:
+// history, manual? } or null when Deckhand never reviewed it. `loop`:
 //   reviewing, fixing  a review or fix run of the loop is queued or running
 //   ci-fix             a CI fix run (`review.ci`) is queued or running
 //   ci                 the review waits for the head commit's Actions runs (`review.ci`)
@@ -1251,9 +1266,10 @@ export function createReviews({
   // ciSettled, grantedTo, asked, askedFrom } of its last automatic review,
   // how many fix runs it had and when the last one was queued, how many of them had their
   // review queued, the comment saying the rounds ran out, and its auto-merge (merged or
-  // refused), or the auto-merge waiting for its checks (decide()); each automatic review's
-  // counts and the fix runs allowed, the loop's step on its way and when it was queued, and
-  // the fix run nothing reviews, for the dashboard (recordRound(), nextStep(), reviewLoop());
+  // refused), or the auto-merge waiting for its checks (decide()); each review's counts (the
+  // loop's or a maintainer's, `manual`) and the fix runs allowed, the loop's step on its way
+  // and when it was queued, and the fix run nothing reviews, for the dashboard (recordRound(),
+  // nextStep(), reviewLoop());
   // the CI step's wait ({ sha, since, base, author }), its CI fix runs, when the last one was
   // queued and how many of them were settled (reviewAfterCi(), ciFailed(), ciFixed()); the
   // last fix round maintainers granted from the dashboard beyond `review.fix`, and the last round
@@ -1750,7 +1766,8 @@ export function createReviews({
     const key = taskKey(repo, prId(number));
     const entry = reviewed.get(key) ?? {};
     const round = fixesOf(entry);
-    const head = posted.pr?.head?.sha ?? entry.head ?? null;
+    // The commit the review run started from (postReview()), not a later one pushed meanwhile.
+    const head = posted.head ?? posted.pr?.head?.sha ?? entry.head ?? null;
     const counts = Object.fromEntries(
       SEVERITIES.map((s) => [s, review.findings.filter((f) => f.severity === s).length]),
     );

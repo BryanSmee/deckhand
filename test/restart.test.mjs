@@ -81,7 +81,8 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
     broker,
     running: 0,
   };
-  const secret = saveRun(dir, "r1", 1, { agent: "claude" });
+  // A review's commit (runs.mjs launch()) goes along too: its review is posted there.
+  const secret = saveRun(dir, "r1", 1, { agent: "claude" }, { reviewFrom: "start1" });
   await createRestart(ctx).restoreRuns();
   // What the git gateway calls once GitHub took a push.
   broker.runOf(secret).pushed({ branch: "issue-1-x", at: 1234 });
@@ -91,6 +92,7 @@ test("a restored run's pushes go on its record, saved with it", async (t) => {
   await task.live.saving;
   const saved = JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8"));
   assert.deepEqual([saved.record.branch, saved.record.lastPushAt], ["issue-1-x", 1234]);
+  assert.deepEqual([task.live.reviewFrom, saved.reviewFrom], ["start1", "start1"]);
 });
 
 test("a restored run keeps the issues it created, the comments it posted and the workflow runs it reran, and saves those it adds next", async (t) => {
