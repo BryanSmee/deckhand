@@ -446,6 +446,22 @@ the build), `work` at the agent's first event, `push` at a shell command that ru
 `work` again at the next other tool call, `wrap-up` after its final answer. A phase whose line
 wouldn't fit under `RUN_LOG_MAX_MB` isn't written. Logs from before phases have none, and read as one Work section.
 
+The runner keeps a log in segments (`runner/logs.mjs`, #607), so that the closed ones can leave
+its store while the run goes on: `logs/<run>/<n>`, and an index (`logs/<run>/index`: each closed
+segment's first byte, size and where it is, and where the open one, the last, starts). Only the
+open one is appended to. It closes at a step of the run (a `phase` line, which the orchestrator
+sends at the start of an append of its own, marked `step=1`), at `LOG_SEGMENT_MB` (8 MB by
+default), whichever comes first, and at the run's end (an empty append marked `close=1`, from
+`teardown()`). Closing takes two compare-and-sets of the index: one marks the open segment
+`closing`, then whichever copy of the runner gets there first records its size as it is then.
+An append reads the index again after its write: a segment marked or closed meanwhile tells it
+whether its bytes are inside, and one past a closed segment's end is answered with the log's
+size, as a conflict, so two copies handing over never lose or repeat bytes. Callers only ever
+see offsets in the whole log: appends name the offset they go at, and a read answers from the
+one segment holding its offset (`MAX_READ` at most). A log written before segments
+(`logs/<run>`, one blob) reads as one closed segment and is appended to as it was, and an
+orchestrator of the release before marks no step: its runs' logs close at the size cap only.
+
 The run's record keeps its phase too, for the dashboard's task state (`board.mjs`
 `runState()`): `scheduled` from the moment the run leaves the queue (`setup`: its settings,
 sandbox, clone and the repo's `setup`), `building-image` while the image builds (a step of

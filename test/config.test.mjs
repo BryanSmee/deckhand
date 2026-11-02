@@ -131,6 +131,16 @@ test("log retention: 90 days by default, 0 keeps everything, junk refused", () =
   }
 });
 
+test("LOG_SEGMENT_MB: megabytes, 8 by default, never 0, the runner's too", () => {
+  const base = { ALLOWED_USERS: "alice" };
+  assert.equal(loadConfig(base).logSegmentMax, 8 * 1024 * 1024);
+  const runner = loadConfig({ LOG_SEGMENT_MB: "2" }, undefined, { service: "runner" });
+  assert.equal(runner.logSegmentMax, 2 * 1024 * 1024);
+  for (const bad of ["0", "-1", "2.5", "big"]) {
+    assert.throws(() => loadConfig({ ...base, LOG_SEGMENT_MB: bad }), ConfigError);
+  }
+});
+
 test("RUN_LOG_MAX_MB: megabytes, 200 by default, never 0", () => {
   const base = { ALLOWED_USERS: "alice" };
   assert.equal(loadConfig(base).runLogMax, 200 * 1024 * 1024);

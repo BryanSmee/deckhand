@@ -224,6 +224,9 @@ export const SETTINGS = {
   WAITS_CHECK_MINUTES: { default: 5, parse: aboveZero("a whole number of minutes above 0") },
   // The most a run's log may hold: a run whose output passes it is stopped, as failed (runs.mjs).
   RUN_LOG_MAX_MB: { default: 200, parse: aboveZero("a whole number of megabytes above 0") },
+  // Where the runner closes a run's log's segment at the latest, when no step of the run did
+  // first (../runner/logs.mjs): what of a live log stays in its store.
+  LOG_SEGMENT_MB: { default: 8, parse: aboveZero("a whole number of megabytes above 0") },
   // How long a run's log, summary and screenshots are kept (history.mjs). 0: forever.
   LOG_RETENTION_DAYS: { default: 90, parse: whole("a whole number of days (0: forever)") },
   // The names of what the listener creates on Docker.
@@ -516,6 +519,7 @@ export function loadConfig(env, file = NO_FILE, { service = "orchestrator" } = {
     waitsCheckMinutes: s.WAITS_CHECK_MINUTES,
     logRetentionDays: s.LOG_RETENTION_DAYS,
     runLogMax: s.RUN_LOG_MAX_MB * 1024 * 1024,
+    logSegmentMax: s.LOG_SEGMENT_MB * 1024 * 1024,
     onboarding: s.ONBOARDING,
   };
 }

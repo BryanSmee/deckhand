@@ -23,9 +23,10 @@ test("a sandbox's end: its exit code kept and saved, a failed one said in its lo
   };
   const written = { r1: [], r2: [] };
   const saved = [];
+  const closed = [];
   const run = (id, finishedAt) => ({
     record: { key: `org/repo#${id}`, finishedAt },
-    logFile: { write: (text) => written[id].push(JSON.parse(text)) },
+    logFile: { write: (text) => written[id].push(JSON.parse(text)), close: () => closed.push(id) },
     save: () => saved.push(id),
   });
   // r1 over already (its summary written), r2 still live.
@@ -40,6 +41,8 @@ test("a sandbox's end: its exit code kept and saved, a failed one said in its lo
     [["note", "Its sandbox exited with code 137"]],
   );
   assert.deepEqual(written.r2, []);
+  // The note on a run over already: its log's last segment closed again after it.
+  assert.deepEqual(closed, ["r1"]);
   assert.deepEqual(saved, ["r1", "r2"]);
   // Nothing new: nothing written, nothing acknowledged twice.
   await reader.poll();

@@ -946,8 +946,10 @@ export function createRuns(ctx) {
     await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
     live.record.finishedAt = Date.now();
     saveSummary(ctx.logDir, live.record, log);
-    // What it wrote last, at the runner before its state goes.
+    // What it wrote last, at the runner before its state goes, and its last segment closed
+    // there after it (../runner/logs.mjs).
     await logSent(live);
+    live.logFile?.close?.();
     await ctx.runner.remove(task.name, live.id).catch((e) => log(`${live.key}: ${e}`));
     live.over = true;
     clearTimeout(live.soon);

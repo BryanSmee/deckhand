@@ -806,7 +806,9 @@ const phase = (name, at) => line({ type: "listener", event: "phase", phase: name
 
 test("enterPhase: a phase line in the log at each change only", () => {
   const written = [];
-  const live = { logPhase: null, logFile: { write: (text) => written.push(JSON.parse(text)) } };
+  const marks = [];
+  const write = (text, options) => (written.push(JSON.parse(text)), marks.push(options));
+  const live = { logPhase: null, logFile: { write } };
   assert.equal(enterPhase(live, "setup"), true);
   assert.equal(enterPhase(live, "setup"), false);
   assert.equal(enterPhase(live, "image"), true);
@@ -819,6 +821,8 @@ test("enterPhase: a phase line in the log at each change only", () => {
     ],
   );
   assert.equal(typeof written[0].at, "number");
+  // Each a step of the run: the runner starts its log's next segment with it (runner/logs.mjs).
+  assert.deepEqual(marks, [{ step: true }, { step: true }]);
   assert.equal(live.logPhase, "image");
 });
 

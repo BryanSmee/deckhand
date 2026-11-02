@@ -134,7 +134,7 @@ service = createRunnerService({
   granted: grantsBy(policies),
   runner: backend.runner,
   images,
-  logs: createLogs({ store }),
+  logs: createLogs({ store, segmentMax: config.logSegmentMax }),
   store,
   broker: {
     runTokens: async (run, sandbox) =>

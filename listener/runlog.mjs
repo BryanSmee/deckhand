@@ -67,10 +67,11 @@ export function openLog(path) {
 }
 
 // One of the listener's own lines in a run's log (`file`: openLog()'s): `event` ("note",
-// "delivered", "cancelled"…) with what `fields` add, at `fields.at` or now.
-export function writeEvent(file, event, fields = {}) {
+// "delivered", "cancelled"…) with what `fields` add, at `fields.at` or now. `options`: the
+// write's (../runner/client.mjs openRemote(), `step`).
+export function writeEvent(file, event, fields = {}, options = undefined) {
   const at = "at" in fields ? {} : { at: Date.now() };
-  file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n");
+  file.write(JSON.stringify({ type: "listener", event, ...at, ...fields }) + "\n", options);
 }
 
 // The agent's events whose time a run's log keeps (runs.mjs output()): its tool calls and
@@ -99,7 +100,8 @@ export function enterPhase(live, phase) {
   if (live.record) live.record.phase = phase;
   if (live.logPhase === phase) return false;
   live.logPhase = phase;
-  writeEvent(live.logFile, "phase", { phase });
+  // A step of the run: the runner starts its log's next segment with it (../runner/logs.mjs).
+  writeEvent(live.logFile, "phase", { phase }, { step: true });
   return true;
 }
 
