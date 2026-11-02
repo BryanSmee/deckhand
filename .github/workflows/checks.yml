@@ -166,7 +166,7 @@ jobs:
       - name: Render and validate
         run: |
           set -o pipefail
-          for combination in "" redis buildkit "redis buildkit"; do
+          for combination in "" redis buildkit engine "redis buildkit" "redis buildkit engine"; do
             overlay=$(mktemp -d -p "$RUNNER_TEMP")
             base=$(realpath --relative-to="$overlay" "$GITHUB_WORKSPACE/deploy/kubernetes")
             printf 'resources: [%s]\n' "$base" > "$overlay/kustomization.yaml"

@@ -104,6 +104,8 @@ export function createPreparation(ctx) {
     live.record.shots = live.shots;
     live.hosts = access.hosts;
     live.trusted = access.trusted;
+    // Whether the proxy's engines' port is this run's (egress-http.mjs taskWhere()).
+    live.engine = !!engine;
     live.uncached = mandatoryHosts(config, agent);
     // Its GitHub calls are relayed through the proxy: it trusts the CA.
     const { ca, cached } = await egressCache(access.grant, ctx.egressCa, note, agent, config, true);
@@ -258,6 +260,7 @@ export function createPreparation(ctx) {
     live.record.shots = null;
     live.hosts = access.hosts;
     live.trusted = access.trusted;
+    live.engine = false;
     live.uncached = mandatoryHosts(config, agent);
     live.cached = [];
     // No cached hosts, but the CA an agent whose calls are relayed needs.

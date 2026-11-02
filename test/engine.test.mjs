@@ -7,7 +7,9 @@ import {
   engineBackend,
   engineEnv,
   engineName,
+  engineProxy,
   engineVolume,
+  kubernetesEngine,
 } from "../listener/runner/engine.mjs";
 
 const limits = { cpus: "1.5", memory: "2g", pids: 512 };
@@ -39,4 +41,20 @@ test("engineEnv, names", () => {
   assert.deepEqual(engineEnv("podman"), { DOCKER_HOST: "tcp://engine:2375", DOCKER_BUILDKIT: "0" });
   assert.equal(engineName("dh-org-repo-1-abc"), "dh-org-repo-1-abc-engine");
   assert.equal(engineVolume("dh-org-repo-1-abc-123"), "dh-org-repo-1-abc-123-engine");
+});
+
+test("kubernetesEngine: Sysbox's RuntimeClass, and SANDBOX_ENGINE sysbox or auto; never Podman", () => {
+  const kube = (engine, engineRuntimeClass) => ({ engine, kubernetes: { engineRuntimeClass } });
+  assert.equal(kubernetesEngine(kube("sysbox", "sysbox-runc")), true);
+  assert.equal(kubernetesEngine(kube("auto", "sysbox-runc")), true);
+  assert.equal(kubernetesEngine(kube("podman", "sysbox-runc")), false);
+  assert.equal(kubernetesEngine(kube(null, "sysbox-runc")), false);
+  assert.equal(kubernetesEngine(kube("sysbox", null)), false);
+  assert.equal(kubernetesEngine({ engine: "sysbox" }), false);
+});
+
+test("engineProxy: the egress proxy on its engines' port", () => {
+  assert.equal(engineProxy("http://egress:3128"), "http://egress:3129");
+  assert.equal(engineProxy("http://egress"), "http://egress:3129");
+  assert.equal(engineProxy("http://10.96.0.11:8080/"), "http://10.96.0.11:3129");
 });

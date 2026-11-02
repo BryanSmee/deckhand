@@ -2344,6 +2344,34 @@ in the engine only:
   `deckhand.run`: an engine is never taken for a sandbox). They go with the run, and the
   orchestrator's check every minute removes those whose run is gone, after a restart too.
 
+On Kubernetes ([kubernetes.md](kubernetes.md#container-engine-on-kubernetes)), Sysbox alone, and the
+sandboxes' namespace stays Pod Security `restricted`:
+
+- **A sidecar in the sandbox's pod**, under Sysbox's RuntimeClass, the pod in a user namespace
+  of its own (`hostUsers: false`): `dockerd` runs as root there, an unprivileged user on the
+  node, which `restricted` allows from Kubernetes 1.35. Every container's spec keeps the rest of
+  it (no privilege gain, every capability dropped, `RuntimeDefault` seccomp), but Sysbox
+  applies its own: root in the pod gets its capabilities inside the pod's user namespace, and
+  every container of the pod, **the sandbox's included**, runs under Sysbox's syscall filter
+  instead of the runtime's default profile (it allows `mount`, `unshare`, `setns`, `keyctl`…,
+  which Sysbox traps or confines to the pod). What contains the sandbox there is the pod's user
+  namespace, its user (uid 1000) and its having no capability, more than its syscall filter;
+  `no-new-privileges` holds on `dockerd` and on all it starts (setuid programs fail in its
+  containers). Podman, whose seccomp is unconfined, is refused.
+- **No process namespace shared** between the pod's containers, as Sysbox advises: the sandbox
+  sees none of the engine's processes, and its entrypoint reaps its own orphans.
+- **Its storage** is an `emptyDir`, gone with the pod, at most `KUBERNETES_ENGINE_SIZE`: no
+  cache kept between runs.
+- **Its address is the sandbox's**: its API listens on the pod's loopback alone
+  (`engine` is `127.0.0.1` in the pod), so nothing outside the pod reaches it: not even its
+  node, which a NetworkPolicy always lets in. It goes out on the egress
+  proxy's engines' port (3129), and so do the containers it runs (the sandbox's docker CLI
+  config): the proxy asks the orchestrator with that port's flag, and the orchestrator answers
+  as for an engine on Docker (the run's hosts, never decrypted, GitHub tunnelled without the
+  run's identity), only for a run that has an engine; a run without one, a build or an install
+  is refused there. What the sandbox could reach through that port is what it could already
+  reach through its engine.
+
 ## Reviews
 
 A repository turns reviews on with a `review` block in its `.deckhand.yaml` (default branch

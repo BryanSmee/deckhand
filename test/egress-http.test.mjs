@@ -350,3 +350,56 @@ test("egress: an agent's relayed host is the models service's, GitHub's the gith
   assert.equal(github.service, "github");
   assert.equal(github.sandbox, "net-a");
 });
+
+test("egress: on the engines' port, a pod's connections are its engine's, and only for a run that has one (#573)", async (t) => {
+  const config = testConfig();
+  const broker = createBroker({});
+  // Kubernetes: the pod at an address is the sandbox, its engine at the same address.
+  const pods = { "10.244.1.7": "uid-a", "10.244.1.8": "uid-b" };
+  const live = (repo, sandbox, engine) => ({
+    id: broker.register(repo),
+    sandbox,
+    engine,
+    hosts: ["github.com", "api.github.com", "registry-1.docker.io"],
+    trusted: [],
+    cached: ["registry-1.docker.io"],
+    record: { agent: "claude" },
+  });
+  const ctx = {
+    config,
+    broker,
+    log: () => {},
+    runner: {
+      proxyAddresses: async () => ["127.0.0.1"],
+      locate: async (ip) => (pods[ip] ? { sandbox: pods[ip], name: null } : null),
+      installing: async () => false,
+    },
+    // A build's address: the engines' port is never its.
+    images: { egressFor: async (ip) => (ip === "10.244.2.2" ? { allowed: true } : null) },
+    tasks: new Map([
+      ["org/a#1", { name: "a", repo: "org/a", id: "1", live: live("org/a", "uid-a", true) }],
+      ["org/b#2", { name: "b", repo: "org/b", id: "2", live: live("org/b", "uid-b", false) }],
+    ]),
+  };
+  const ask = await policyServer(t, ctx);
+  // The sandbox: GitHub relayed with its pod, the cached host decrypted.
+  const sandbox = await ask("10.244.1.7", "api.github.com");
+  assert.equal(sandbox.relay, true);
+  assert.equal(sandbox.sandbox, "uid-a");
+  assert.equal((await ask("10.244.1.7", "registry-1.docker.io")).decrypt, true);
+  // Its engine: the same hosts, never decrypted, GitHub tunnelled without the pod's identity.
+  const engine = await ask("10.244.1.7", "api.github.com", "&engine=1");
+  assert.equal(engine.allowed, true);
+  assert.equal(engine.relay, false);
+  assert.equal(engine.decrypt, false);
+  assert.equal(engine.sandbox, undefined);
+  const pull = await ask("10.244.1.7", "registry-1.docker.io", "&engine=1");
+  // Its plain HTTP cached, as on Docker; its HTTPS tunnelled.
+  assert.deepEqual([pull.allowed, pull.cache, pull.decrypt], [true, true, false]);
+  assert.equal((await ask("10.244.1.7", "evil.example", "&engine=1")).allowed, false);
+  // A run without an engine: nothing on that port, nor for a build.
+  assert.equal((await ask("10.244.1.8", "github.com", "&engine=1")).allowed, false);
+  assert.equal((await ask("10.244.1.8", "github.com")).allowed, true);
+  assert.equal((await ask("10.244.2.2", "github.com", "&engine=1")).allowed, false);
+  assert.equal((await ask("10.244.2.2", "github.com")).allowed, true);
+});

@@ -26,8 +26,14 @@
 //     claim mounted read-only, or, when there is none, installed by an init container into an
 //     emptyDir (podSpec()); caches are claims too, when the operator sets their class.
 //
-// Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine
-// and host mounts.
+//   - A run granted a container engine (engine.mjs) gets Sysbox's dockerd as a sidecar in its
+//     pod, under the operator's RuntimeClass (KUBERNETES_ENGINE_RUNTIME_CLASS) and the pod's
+//     own user namespace, its storage an emptyDir (podSpec()). It shares the sandbox's address,
+//     so it reaches the egress proxy on the engines' port (lib/services.mjs ENGINE_PROXY_PORT),
+//     which tells the proxy its connections apart.
+//
+// Not here yet, refused before a run starts (access.mjs runnerRefusal()): host mounts. An
+// engine without that RuntimeClass, or Podman's, is refused there too.
 import { setTimeout as delay } from "node:timers/promises";
 import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
@@ -37,6 +43,14 @@ import { kubeName, labelValue } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import { splitLines } from "./lines.mjs";
 import { aliasOf } from "./networks.mjs";
+import {
+  ENGINE_HOST,
+  engineEnv,
+  engineProxy,
+  KUBE_ENGINE_STORAGE,
+  kubernetesEngine,
+} from "./engine.mjs";
+import { ENGINE_PROXY_PORT } from "../../lib/services.mjs";
 
 // How long a cancelled run's sandbox has between SIGTERM and SIGKILL, as under Docker.
 const KILL_GRACE_S = 10;
@@ -71,6 +85,10 @@ export const INSTALL_USER = { uid: 1001, gid: 1001 };
 // container's name.
 const AGENT_INIT = "deckhand.agent-init";
 const INIT_CONTAINER = "agent-install";
+
+// The engine's sidecar (podSpec()), and its storage's volume.
+const ENGINE_CONTAINER = "engine";
+const ENGINE_VOLUME = "engine";
 
 // What pendingReason() says while the init container installs the agent.
 export const INSTALLING = "its init container is installing the agent";
@@ -210,8 +228,8 @@ export function isolationProblem(policies, labels, { ports = [3128], proxy = nul
 
 // The egress proxy's Service, in the services' namespace (`services`, kube-api.mjs): the
 // cluster IP sandboxes and install pods reach it at by its name (hostAliases: they have no DNS,
-// or none that knows it) and its selector, the proxy's pods (isolationProblem()). Null when
-// EGRESS_PROXY is an address.
+// or none that knows it), its selector, the proxy's pods (isolationProblem()), and its ports
+// (an engine needs the engines'). Null when EGRESS_PROXY is an address.
 export async function proxyService(services, config) {
   const host = aliasOf(config.egressProxy);
   if (!host) return null;
@@ -222,7 +240,8 @@ export async function proxyService(services, config) {
       `no Service ${host} with a cluster IP in the namespace ${services.namespace}: sandboxes reach ${config.egressProxy} through it`,
     );
   }
-  return { ip, hostnames: [host], selector: service.spec.selector ?? {} };
+  const ports = (service.spec.ports ?? []).map((p) => p.port);
+  return { ip, hostnames: [host], selector: service.spec.selector ?? {}, ports };
 }
 
 // proxyService()'s answer as a pod's hostAliases.
@@ -234,7 +253,8 @@ export const aliasesOf = (proxy) => (proxy ? [{ ip: proxy.ip, hostnames: proxy.h
 // `aliases`: hostAliases; `claims`: volume name → its claim's; `pullSecret`: the registry's
 // (KUBERNETES_REGISTRY_SECRET); `agentInit`: { volume, image, command, env } when the agent
 // has no claim: an emptyDir, which an init container fills as INSTALL_USER before the
-// sandbox mounts it read-only.
+// sandbox mounts it read-only. `engine`: { image, runtimeClass, env, size } for a run granted
+// a container engine (engine.mjs): its sidecar, below.
 export function podSpec(
   { name, image, user, limits, caps = [], volumes = [] },
   {
@@ -247,6 +267,7 @@ export function podSpec(
     claims = {},
     pullSecret = null,
     agentInit = null,
+    engine = null,
   },
 ) {
   if (!user) throw new Error("the sandbox spec has no user");
@@ -277,8 +298,10 @@ export function podSpec(
       // It never calls the API.
       automountServiceAccountToken: false,
       enableServiceLinks: false,
-      // Under Docker, `--init` reaps orphaned processes; here the pod's pause process does.
-      shareProcessNamespace: true,
+      // Under Docker, `--init` reaps orphaned processes; here the pod's pause process does. Not
+      // in an engine's pod, as Sysbox advises: the sandbox's entrypoint reaps them there
+      // (SANDBOX_REAP), and the engine's image has its own init.
+      shareProcessNamespace: !engine,
       terminationGracePeriodSeconds: KILL_GRACE_S,
       hostAliases: aliases,
       ...(pullSecret ? { imagePullSecrets: [{ name: pullSecret }] } : {}),
@@ -298,24 +321,32 @@ export function podSpec(
         fsGroupChangePolicy: "OnRootMismatch",
         seccompProfile: { type: "RuntimeDefault" },
       },
-      ...(init
+      // The engine's: every container of the pod under Sysbox's runtime, in a user namespace
+      // of the pod's own, root there an unprivileged user on the node.
+      ...(engine ? { runtimeClassName: engine.runtimeClass, hostUsers: false } : {}),
+      ...(init || engine
         ? {
             initContainers: [
-              {
-                name: INIT_CONTAINER,
-                image: init.image,
-                command: [init.command],
-                env: Object.entries(init.env).map(([k, v]) => ({ name: k, value: String(v) })),
-                resources: { limits: resources, requests: resources },
-                securityContext: {
-                  ...hardened,
-                  runAsUser: INSTALL_USER.uid,
-                  runAsGroup: INSTALL_USER.gid,
-                },
-                volumeMounts: volumes
-                  .filter((v) => v.name === init.volume)
-                  .map((v) => ({ ...mountOf(v), readOnly: false })),
-              },
+              ...(init
+                ? [
+                    {
+                      name: INIT_CONTAINER,
+                      image: init.image,
+                      command: [init.command],
+                      env: envList(init.env),
+                      resources: { limits: resources, requests: resources },
+                      securityContext: {
+                        ...hardened,
+                        runAsUser: INSTALL_USER.uid,
+                        runAsGroup: INSTALL_USER.gid,
+                      },
+                      volumeMounts: volumes
+                        .filter((v) => v.name === init.volume)
+                        .map((v) => ({ ...mountOf(v), readOnly: false })),
+                    },
+                  ]
+                : []),
+              ...(engine ? [engineContainer(engine, resources, hardened)] : []),
             ],
           }
         : {}),
@@ -327,7 +358,7 @@ export function podSpec(
           // at every start, so nodes don't keep an old base image (and its entrypoint) after
           // an update, and keeps a pinned tag or digest.
           envFrom: [{ secretRef: { name: secret } }],
-          env: Object.entries(env).map(([k, v]) => ({ name: k, value: String(v) })),
+          env: envList(env),
           // As much as it may use is held for it: a node without the room leaves it Pending
           // rather than starving it later.
           resources: { limits: resources, requests: resources },
@@ -335,21 +366,54 @@ export function podSpec(
           volumeMounts: volumes.map(mountOf),
         },
       ],
-      volumes: claimed.map((volume, i) =>
-        volume === init?.volume
-          ? { name: `v${i}`, emptyDir: {} }
-          : {
-              name: `v${i}`,
-              persistentVolumeClaim: {
-                claimName: claims[volume] ?? kubeName(volume),
-                // Read-only for each of its mounts: the claim too, then.
-                ...(volumes.filter((v) => v.name === volume).every((v) => v.readOnly)
-                  ? { readOnly: true }
-                  : {}),
+      volumes: [
+        ...claimed.map((volume, i) =>
+          volume === init?.volume
+            ? { name: `v${i}`, emptyDir: {} }
+            : {
+                name: `v${i}`,
+                persistentVolumeClaim: {
+                  claimName: claims[volume] ?? kubeName(volume),
+                  // Read-only for each of its mounts: the claim too, then.
+                  ...(volumes.filter((v) => v.name === volume).every((v) => v.readOnly)
+                    ? { readOnly: true }
+                    : {}),
+                },
               },
-            },
-      ),
+        ),
+        // Gone with the pod; past its size, the kubelet evicts the pod.
+        ...(engine ? [{ name: ENGINE_VOLUME, emptyDir: { sizeLimit: engine.size } }] : []),
+      ],
     },
+  };
+}
+
+const envList = (env) => Object.entries(env).map(([k, v]) => ({ name: k, value: String(v) }));
+
+// The engine's sidecar: an init container that keeps running (`restartPolicy: Always`), so
+// it is up before the sandbox starts and stopped once the sandbox exits, the pod's phase the
+// sandbox's alone. Root, which dockerd needs, only inside the pod's user namespace
+// (`hostUsers: false`): Pod Security `restricted` allows that from Kubernetes 1.35, and the rest
+// of `hardened` holds. Sysbox gives root its capabilities and the syscalls it needs in that
+// namespace alone, whatever the spec drops. As much as the sandbox may use, as on Docker.
+function engineContainer({ image, env }, resources, hardened) {
+  return {
+    name: ENGINE_CONTAINER,
+    image,
+    restartPolicy: "Always",
+    // Its API on the pod's loopback alone, where the sandbox reaches it (`engine` is 127.0.0.1
+    // there): a NetworkPolicy always lets the pod's own node in, its hostNetwork pods too. With
+    // `dockerd` first, the image's entrypoint adds no host of its own (0.0.0.0:2375).
+    args: ["dockerd", "--host=unix:///var/run/docker.sock", "--host=tcp://127.0.0.1:2375"],
+    env: envList(env),
+    resources: { limits: resources, requests: resources },
+    securityContext: {
+      ...hardened,
+      runAsNonRoot: false,
+      runAsUser: 0,
+      runAsGroup: 0,
+    },
+    volumeMounts: [{ name: ENGINE_VOLUME, mountPath: KUBE_ENGINE_STORAGE }],
   };
 }
 
@@ -372,7 +436,7 @@ export function pendingReason(pod) {
   const init = pod.status?.initContainerStatuses ?? [];
   const said =
     waiting(init) ??
-    (init.some((s) => s.state?.running) ? INSTALLING : null) ??
+    (init.some((s) => s.name === INIT_CONTAINER && s.state?.running) ? INSTALLING : null) ??
     waiting(pod.status?.containerStatuses);
   if (said) return said;
   const unscheduled = (pod.status?.conditions ?? []).find(
@@ -439,11 +503,16 @@ export function createKubernetesRunner({
   const secretName = (run) => kubeName(`${run}-env`);
   const claimPath = (volume) => `persistentvolumeclaims/${kubeName(volume)}`;
 
-  // `spec`: sandboxSpec()'s. → { engine: null }: no engine here.
+  // `spec`: sandboxSpec()'s. → { engine: { backend, cached } } when it has one, else
+  // { engine: null }.
   async function start(spec) {
     const { run, name, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
     const { volumes = [] } = spec;
-    if (engine) throw new Error("the kubernetes runner runs no container engine");
+    if (engine && !kubernetesEngine(config)) {
+      throw new Error(
+        "the kubernetes runner runs a container engine only with Sysbox's RuntimeClass (KUBERNETES_ENGINE_RUNTIME_CLASS, SANDBOX_ENGINE sysbox or auto)",
+      );
+    }
     for (const v of volumes) {
       // A cache's claim is images.mjs caches()'s, made only with a class to make it of.
       if (v.kind === "mount" || (v.kind === "cache" && !cacheStorageClass)) {
@@ -462,11 +531,18 @@ export function createKubernetesRunner({
       );
       const proxySvc = await proxyService(services, config);
       checkIsolation(policies, podLabels, proxySvc);
+      // Its engine goes out on the proxy's engines' port, through the Service's cluster IP.
+      if (engine && proxySvc && !proxySvc.ports.includes(ENGINE_PROXY_PORT)) {
+        throw new Error(
+          `the Service ${proxySvc.hostnames[0]} in the namespace ${services.namespace} has no port ${ENGINE_PROXY_PORT}, the egress proxy's engines' port, through which a container engine goes out (see docs/kubernetes.md, Container engine on Kubernetes)`,
+        );
+      }
       const pullName = await pullSecret.forPods();
       for (const v of volumes.filter((v) => v.kind === "session")) {
         if (await ensureClaim(v.name)) made.push(claimPath(v.name));
       }
       const agentInit = await agentInstall(volumes.find((v) => v.kind === "agent"));
+      const sidecar = engine ? engineSpec() : null;
       const secret = secretName(run);
       // The pod first: the run's tokens are bound to its UID (../sandbox-spec.mjs tokenEnv()).
       // Its container waits for the Secret it reads (CreateContainerConfigError, which the
@@ -482,11 +558,22 @@ export function createKubernetesRunner({
             ...(agentInit ? { [AGENT_INIT]: agentInit.volume } : {}),
           },
           secret,
-          // Not secrets: where the run's files are.
-          env: { ...inbox.env(ca, digest), SANDBOX_TAG_STDERR: "1" },
-          aliases: aliasesOf(proxySvc),
+          // Not secrets: where the run's files and its engine are.
+          env: {
+            ...inbox.env(ca, digest),
+            SANDBOX_TAG_STDERR: "1",
+            // Its pod shares no process namespace: the entrypoint stays PID 1, reaping.
+            ...(sidecar ? { SANDBOX_REAP: "1" } : {}),
+            ...(sidecar ? sidecar.sandboxEnv : {}),
+          },
+          // Its engine at `engine`, as on Docker: in the pod, its published ports too.
+          aliases: [
+            ...aliasesOf(proxySvc),
+            ...(sidecar ? [{ ip: "127.0.0.1", hostnames: [ENGINE_HOST] }] : []),
+          ],
           pullSecret: pullName,
           agentInit,
+          engine: sidecar,
         }),
       );
       made.push(podPath(name));
@@ -519,7 +606,22 @@ export function createKubernetesRunner({
     } finally {
       starting.delete(run);
     }
-    return { engine: null };
+    return { engine: engine ? { backend: "sysbox", cached: false } : null };
+  }
+
+  // The engine's sidecar (podSpec()), and what the sandbox gets to use it: the engine's address,
+  // and the proxy's engines' port for the containers it builds and runs (their connections
+  // are the engine's, ../../sandbox/entrypoint.sh), which the engine itself goes out through.
+  function engineSpec() {
+    const proxy = engineProxy(config.egressProxy);
+    const { engineRuntimeClass: runtimeClass, engineSize: size } = config.kubernetes;
+    return {
+      image: config.engineImage,
+      runtimeClass,
+      size,
+      env: { EGRESS_PROXY: proxy },
+      sandboxEnv: { ...engineEnv("sysbox"), DECKHAND_ENGINE_PROXY: proxy },
+    };
   }
 
   // The init container that installs the agent when it has no claim (kube-images.mjs
@@ -537,8 +639,12 @@ export function createKubernetesRunner({
     };
   }
 
-  // The port sandboxes reach the proxy on: none other (isolationProblem()).
-  const sandboxPorts = () => [Number(new URL(config.egressProxy).port || 3128)];
+  // The ports sandboxes reach the proxy on: none other (isolationProblem()). The engines' too
+  // when runs may have one: their pod's policy lets it through.
+  const sandboxPorts = () => [
+    Number(new URL(config.egressProxy).port || 3128),
+    ...(kubernetesEngine(config) ? [ENGINE_PROXY_PORT] : []),
+  ];
 
   // Fail closed: without the sandboxes' namespace's NetworkPolicies (`policies`), a sandbox
   // would reach anything. `proxySvc`: proxyService()'s, whose pods alone they may reach in the

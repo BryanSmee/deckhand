@@ -6,6 +6,7 @@ import { mandatoryHosts, operatorHosts } from "./egress.mjs";
 import { grantCheck, notGranted, resolveMounts } from "./grants.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { CONFIG_FILE, engineCacheVolume } from "./repo-config.mjs";
+import { kubernetesEngine } from "./runner/engine.mjs";
 
 // A run that can't start for a reason the maintainer can fix: the reply says it.
 export class RunError extends Error {}
@@ -177,21 +178,26 @@ export function engineFor(config, task, settings, { grant, limits }, fork, note,
     note("No engine cache: this run reaches the open internet");
     return { limits, cache: null };
   }
+  // Its storage is an emptyDir, gone with the pod (runner/kubernetes.mjs).
+  if (settings.docker.cache && config.runner === "kubernetes") {
+    note("No engine cache: the Kubernetes runner keeps none");
+    return { limits, cache: null };
+  }
   const cache = settings.docker.cache ? engineCacheVolume(config, task.repo) : null;
   return { limits, cache };
 }
 
 // What the operator granted and the repo asks for that the runner can't do yet (RUNNER), as
-// the reply's reason, or null. Docker does all of it; the Kubernetes runner runs no container
-// engine, builds no repo image without a registry to push it to and mounts no host path
-// (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
+// the reply's reason, or null. Docker does all of it; the Kubernetes runner runs a container
+// engine only through Sysbox's RuntimeClass (runner/engine.mjs kubernetesEngine()), builds no
+// repo image without a registry to push it to and mounts no host path (runner/kubernetes.mjs). Only what is granted: an ungranted ask is refused before this, by
 // grantedAccess(). The engine only when the run would get one (`engine`, engineFor()'s): a
 // run without `docker`, a fork's, or one without SANDBOX_ENGINE goes without, as under Docker.
 // `caps`: the run's capabilities (capabilities.mjs).
 export function runnerRefusal(config, settings, { grant, mounts }, engine, caps = new Set()) {
   if ((config.runner ?? "docker") === "docker") return null;
   const asked = [
-    engine && "a container engine (`docker`)",
+    engine && !kubernetesEngine(config) && "a container engine (`docker`)",
     // Its image needs a registry the nodes pull from (runner/kube-images.mjs): a run that
     // builds none (without `image:repo`) needs none.
     settings.dockerfile &&
