@@ -138,11 +138,13 @@ export function createWaits({
   }
 
   // Makes the task of `item` wait for `blockers` (open issues of its repo), replacing its wait,
-  // without a reply: request()'s, or the dashboard's own comment (work.mjs).
-  async function hold(item, blockers) {
+  // without a reply: request()'s, or the dashboard's own comment (work.mjs). `eyes`: the
+  // comment has its 👀 already (a queued one, work.mjs requeue()): nothing to wait for before
+  // the wait is saved.
+  async function hold(item, blockers, { eyes = false } = {}) {
     const key = keyOf(item);
     if (drop(key)) log(`${key}: its wait is replaced`);
-    received(item);
+    if (!eyes) received(item);
     const { settings, after: _, ...rest } = item;
     waits.set(key, { repo: item.repo, blockers, item: await plain(rest), since: now() });
     save();

@@ -114,7 +114,7 @@ test("a task waiting for a slot has its place in the run order; a brainstorm sta
   const tasks = board({
     runs: [run("acme/api#3", 10, { status: "running" })],
     queued: [
-      q(1, { position: 2 }),
+      q(1, { position: 2, canWait: true }),
       q(2, { position: 1, startsFirst: true }),
       // Its follow-up waits for the run going: no place yet.
       q(3, { position: null }),
@@ -127,6 +127,9 @@ test("a task waiting for a slot has its place in the run order; a brainstorm sta
   assert.equal(byKey["acme/api#2"].position, 1);
   assert.equal(byKey["acme/api#2"].startsFirst, true);
   assert.equal(byKey["acme/api#3"].position, undefined);
+  // Whether it can wait for another issue instead (runs.mjs queuedTask()).
+  assert.equal(byKey["acme/api#1"].canWait, true);
+  assert.equal(byKey["acme/api#2"].canWait, undefined);
 });
 
 test("auto-picked tasks are marked: queued so, or their last run was", () => {

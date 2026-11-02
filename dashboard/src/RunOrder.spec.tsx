@@ -1,18 +1,33 @@
 // The run order (listener/order.mjs): the Queued tab of the board's work queue, its buttons
-// and drags, the graph's place badges and a queued node dragged onto another one's edge.
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
+// and drags, the graph's place badges and a queued node dragged onto another one's edge; and
+// what takes a queued issue out of the line: Queue after… (a wait instead) and Back to backlog.
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import { inLine, moveOnto } from "./graphModel";
-import { BACKLOG, makeState, makeTask, mockApi, transfer } from "./testUtils";
+import { inLine, moveOnto, stillInLine } from "./graphModel";
+import { BACKLOG, makeRuns, makeState, makeTask, mockApi, queueAfter, transfer } from "./testUtils";
 
+// `canWait`: a comment of its starts a run, which can wait for another issue instead.
 const queued = (number: number, position: number, extra = {}) =>
-  makeTask({ number, title: `Queued ${number}`, state: "queued", position, ...extra });
+  makeTask({
+    number,
+    title: `Queued ${number}`,
+    state: "queued",
+    position,
+    canWait: true,
+    ...extra,
+  });
 
-// #44 a brainstorm, which starts first; #41 next, then another repo's task (acme/api#9), then
+// #44 a brainstorm's reply (it ran before), which starts first; #41 next, then another repo's task (acme/api#9), then
 // #42 and #43.
 const LINE = [
-  queued(44, 1, { startsFirst: true, kind: "brainstorm", mode: "brainstorm" }),
+  queued(44, 1, {
+    startsFirst: true,
+    kind: "brainstorm",
+    mode: "brainstorm",
+    canWait: false,
+    runs: makeRuns("acme/app#44", 1),
+  }),
   queued(41, 2),
   queued(9, 3, { repo: "acme/api", key: "acme/api#9", title: "Elsewhere" }),
   queued(42, 4),
@@ -127,12 +142,163 @@ test("a card dragged onto the bottom half of another goes after it, the top half
   expect(api.bodies()).toHaveLength(1);
 });
 
+test("Back to backlog and Queue after… send cancel and queue; the card leaves the line at once", async () => {
+  const list = open();
+  const release = api.hold();
+  fireEvent.click(within(list).getByRole("button", { name: /^Take #42 out of the queue/ }));
+  expect(api.bodies()).toEqual([{ action: "cancel", number: 42 }]);
+  // On its way: out of the line already.
+  await waitFor(() => expect(cards(list)).toEqual(["#44", "#41", "#43"]));
+  release();
+  await waitFor(() => expect(cards(list)).toEqual(["#44", "#41", "#42", "#43"]));
+  fireEvent.click(within(list).getByRole("button", { name: "Queue #41 after…" }));
+  queueAfter(41, 42);
+  await waitFor(() =>
+    expect(api.bodies().at(-1)).toEqual({ action: "queue", number: 41, after: 42 }),
+  );
+  // Neither for a reply to a brainstorm going on, nor a pull request's task.
+  for (const ref of ["#44", "#43"]) {
+    expect(within(list).queryByRole("button", { name: `Queue ${ref} after…` })).toBeNull();
+    expect(within(list).queryByRole("button", { name: new RegExp(`^Take ${ref} out`) })).toBeNull();
+  }
+});
+
+test("a brainstorm queued to start (no run yet) can go back to the backlog, or wait", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  // `/mode brainstorm` on a backlog issue while every slot is busy.
+  const start = queued(46, 1, { startsFirst: true, kind: "brainstorm", mode: "brainstorm" });
+  render(<Dashboard state={makeState({}, [start, queued(41, 2)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  const list = screen.getByRole("list", { name: "Tasks waiting for a slot, in run order" });
+  const card = within(list).getByText("Queued 46").closest("li")!;
+  expect(within(card).queryByRole("button", { name: "Run #46 next" })).toBeNull();
+  expect(within(card).getByRole("button", { name: "Queue #46 after…" })).toBeTruthy();
+  const data = transfer();
+  fireEvent.dragStart(card, { dataTransfer: data });
+  const tab = screen.getByRole("tab", { name: /^Backlog/ });
+  fireEvent.dragOver(tab, { dataTransfer: data });
+  fireEvent.drop(tab, { dataTransfer: data });
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "cancel", number: 46 }]));
+  fireEvent.dragEnd(card);
+});
+
+test("a queued task with replies to its last run only: Back to backlog, but no Queue after", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  render(
+    <Dashboard
+      state={makeState({}, [queued(41, 1, { canWait: false }), queued(42, 2)])}
+      error={null}
+    />,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  expect(screen.queryByRole("button", { name: "Queue #41 after…" })).toBeNull();
+  expect(screen.getByRole("button", { name: /^Take #41 out of the queue/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Queue #42 after…" })).toBeTruthy();
+  // On the graph, let go on another node's middle: no label, nothing sent.
+  const from = screen.getByRole("listitem", { name: /^#41 Queued 41:/ });
+  const start = boxOf(from);
+  const target = boxOf(screen.getByRole("listitem", { name: /^#42 Queued 42:/ }));
+  const middle = { clientX: target.x + target.w / 2, clientY: target.y + target.h / 2 };
+  fireEvent.pointerDown(from, {
+    button: 0,
+    pointerId: 1,
+    clientX: start.x + 5,
+    clientY: start.y + 5,
+  });
+  fireEvent.pointerMove(from, { pointerId: 1, ...middle });
+  expect(screen.queryByText(/^Queue #41 after/)).toBeNull();
+  fireEvent.pointerUp(from, { pointerId: 1, ...middle });
+  expect(api.bodies()).toEqual([]);
+});
+
+test("a queued issue that starts first (a mode apart from work's) can leave the line, not move in it", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  // An analyze run on #45: kind "issue", before the work runs.
+  const first = queued(45, 1, { startsFirst: true, mode: "analyze" });
+  render(<Dashboard state={makeState({}, [first, queued(41, 2), queued(42, 3)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  const list = screen.getByRole("list", { name: "Tasks waiting for a slot, in run order" });
+  const card = () => within(list).getByText("Queued 45").closest("li")!;
+  expect(within(card()).queryByRole("button", { name: "Run #45 next" })).toBeNull();
+  expect(within(card()).queryByRole("button", { name: "Move #45 down" })).toBeNull();
+  expect(within(card()).getByRole("button", { name: "Queue #45 after…" })).toBeTruthy();
+  // Dropped on another card: it doesn't move in line.
+  const data = transfer();
+  fireEvent.dragStart(card(), { dataTransfer: data });
+  const other = within(list).getByText("Queued 42").closest("li")!;
+  fireEvent.dragOver(other, { dataTransfer: data, clientY: 10 });
+  fireEvent.drop(other, { dataTransfer: data, clientY: 10 });
+  fireEvent.dragEnd(card());
+  expect(api.bodies()).toEqual([]);
+  // On the graph, onto another queued node's edge: queued after it, not moved in line.
+  const from = screen.getByRole("listitem", { name: /^#45 Queued 45:/ });
+  const start = boxOf(from);
+  const target = boxOf(screen.getByRole("listitem", { name: /^#42 Queued 42:/ }));
+  const edge = { clientX: target.x + target.w * 0.9, clientY: target.y + target.h / 2 };
+  fireEvent.pointerDown(from, {
+    button: 0,
+    pointerId: 1,
+    clientX: start.x + 5,
+    clientY: start.y + 5,
+  });
+  fireEvent.pointerMove(from, { pointerId: 1, ...edge });
+  expect(screen.getByText("Queue #45 after #42: it leaves the line")).toBeTruthy();
+  fireEvent.pointerUp(from, { pointerId: 1, ...edge });
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 45, after: 42 }]));
+  // Answered (the fake listener's state doesn't change): back in line. On the Backlog tab, it
+  // goes back to the backlog.
+  const take = /^Take #45 out of the queue/;
+  await waitFor(() =>
+    expect(within(list).getByRole<HTMLButtonElement>("button", { name: take }).disabled).toBe(
+      false,
+    ),
+  );
+  const again = transfer();
+  fireEvent.dragStart(card(), { dataTransfer: again });
+  const tab = screen.getByRole("tab", { name: /^Backlog/ });
+  fireEvent.dragOver(tab, { dataTransfer: again });
+  fireEvent.drop(tab, { dataTransfer: again });
+  await waitFor(() => expect(api.bodies().at(-1)).toEqual({ action: "cancel", number: 45 }));
+});
+
+test("a Queued card dropped on the Backlog tab goes back to the backlog", async () => {
+  const list = open();
+  const card = within(list).getByText("Queued 41").closest("li")!;
+  const data = transfer();
+  fireEvent.dragStart(card, { dataTransfer: data });
+  const tab = screen.getByRole("tab", { name: /^Backlog/ });
+  fireEvent.dragOver(tab, { dataTransfer: data });
+  fireEvent.drop(tab, { dataTransfer: data });
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "cancel", number: 41 }]));
+  // A pull request's task doesn't drag there: nothing.
+  fireEvent.drop(tab, {
+    dataTransfer: transfer({ "application/x-deckhand-queued": "acme/app#pr-43" }),
+  });
+  expect(api.bodies()).toHaveLength(1);
+});
+
+test("stillInLine: an action on its way that takes a task out of the queue", () => {
+  const { line } = inLine(LINE, null);
+  const keys = (pending: Parameters<typeof stillInLine>[1]) =>
+    stillInLine(line, pending).map((t) => t.key);
+  const p = { repo: "acme/app", title: null };
+  expect(keys([{ ...p, action: "cancel", number: 41 }])).not.toContain("acme/app#41");
+  expect(keys([{ ...p, action: "queue", number: 42, after: 7 }])).not.toContain("acme/app#42");
+  expect(keys([{ ...p, action: "start", number: 41 }])).toContain("acme/app#41");
+});
+
 test("on a phone: Run next, Move up and Move down on each card, 44 px", () => {
   const list = open(true);
   const item = within(list).getByText("Queued 42").closest("li")!;
   for (const name of ["Run #42 next", "Move #42 up", "Move #42 down"]) {
     expect(within(item).getByRole("button", { name }).className).toMatch(/touch/);
   }
+  // Queue after… and Back to backlog in its menu.
+  fireEvent.click(within(item).getByRole("button", { name: /^More for #42/ }));
+  const menu = screen.getByRole("dialog");
+  expect(within(menu).getByRole("button", { name: "Queue #42 after…" })).toBeTruthy();
+  fireEvent.click(within(menu).getByRole("button", { name: /^Take #42 out of the queue/ }));
+  expect(api.bodies()).toEqual([{ action: "cancel", number: 42 }]);
 });
 
 test("Run next is off for the first work run of every repo shown, another's brainstorm before it", () => {
@@ -244,7 +410,7 @@ const boxOf = (node: HTMLElement) => {
   };
 };
 
-test("on the graph: a queued node onto another's right edge goes after it; its middle or the open, nothing", async () => {
+test("on the graph: a queued node onto another's right edge goes after it; the open, nothing", async () => {
   open();
   const node = (n: number) =>
     screen.getByRole("listitem", { name: new RegExp(`^#${n} Queued ${n}:`) });
@@ -262,11 +428,7 @@ test("on the graph: a queued node onto another's right edge goes after it; its m
   const target = boxOf(node(42));
   const at = (side: number) => ({ x: target.x + target.w * side, y: target.y + target.h / 2 });
 
-  // Its middle: no label, nothing sent.
-  drag(at(0.5));
-  expect(screen.queryByText(/^Move #/)).toBeNull();
-  fireEvent.pointerUp(from, { pointerId: 1, ...{ clientX: at(0.5).x, clientY: at(0.5).y } });
-  // In the open: nothing either.
+  // In the open: nothing.
   drag({ x: 5000, y: 5000 });
   fireEvent.pointerUp(from, { pointerId: 1, clientX: 5000, clientY: 5000 });
   // #42 onto PR #43's left edge: right before it, where #42 is already.
@@ -279,6 +441,15 @@ test("on the graph: a queued node onto another's right edge goes after it; its m
   expect(screen.queryByText(/^Move #/)).toBeNull();
   fireEvent.pointerUp(second, { pointerId: 3, ...edge });
   expect(api.bodies()).toEqual([]);
+
+  // Its middle: queued after it, out of the line, as the label says.
+  drag(at(0.5));
+  expect(screen.getByText("Queue #41 after #42: it leaves the line")).toBeTruthy();
+  fireEvent.pointerUp(from, { pointerId: 1, clientX: at(0.5).x, clientY: at(0.5).y });
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 41, after: 42 }]));
+  // Answered: the fake listener's state doesn't change, #41 is back in line.
+  await screen.findByRole("listitem", { name: /^#41 Queued 41: Queued/ });
+  api.posted.length = 0;
 
   // Its right edge: after it.
   drag(at(0.9));
@@ -297,4 +468,27 @@ test("on the graph: a queued node onto another's right edge goes after it; its m
   fireEvent.pointerUp(other, { pointerId: 2, clientX: right.x, clientY: right.y });
   release();
   await waitFor(() => expect(api.bodies()).toHaveLength(1));
+});
+
+test("a Queued card dragged onto a graph node's middle queues after it; onto its edge, it moves in line", async () => {
+  const list = open();
+  const card = within(list).getByText("Queued 41").closest("li")!;
+  const target = boxOf(screen.getByRole("listitem", { name: /^#42 Queued 42:/ }));
+  const area = screen.getByRole("list", { name: "Issues of acme/app" }).parentElement!;
+  const data = transfer();
+  // jsdom's drag events have no pointer position: given here.
+  const at = (kind: "dragOver" | "drop", side: number) => {
+    const e = createEvent[kind](area, { dataTransfer: data });
+    Object.defineProperty(e, "clientX", { value: target.x + target.w * side });
+    Object.defineProperty(e, "clientY", { value: target.y + target.h / 2 });
+    fireEvent(area, e);
+  };
+  fireEvent.dragStart(card, { dataTransfer: data });
+  at("dragOver", 0.5);
+  expect(screen.getByText("Queue #41 after #42: it leaves the line")).toBeTruthy();
+  at("dragOver", 0.9);
+  expect(screen.getByText("Move #41 after #42 in line")).toBeTruthy();
+  at("drop", 0.5);
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "queue", number: 41, after: 42 }]));
+  fireEvent.dragEnd(card);
 });

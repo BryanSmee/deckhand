@@ -222,6 +222,105 @@ test("a queued auto-picked task cancelled frees its reserved slot: the next pick
   await following;
 });
 
+test("unqueue: a queued task's latest comment leaves the queue for a wait, the others settled", async (t) => {
+  const { ctx, runs, runner, settled, following } = setup(t, { mode: "work" });
+  let asked = 0;
+  ctx.autoPickup = { soon: () => asked++ };
+  const dropped = [];
+  ctx.order = { drop: (key) => dropped.push(key) };
+  const queued = (id, pending, extra = {}) => {
+    const task = { repo: "org/repo", id, kind: "issue", number: Number(id), pending };
+    Object.assign(task, { running: false, ready: true, timer: null, live: null, next: {} });
+    ctx.tasks.set(`org/repo#${id}`, Object.assign(task, extra));
+    return task;
+  };
+  const item = (text, extra = {}) => ({
+    kind: "issue",
+    author: "alice",
+    trigger: "work",
+    mode: "work",
+    text,
+    queuedAt: 1,
+    queueId: "q",
+    ...extra,
+  });
+  const task = queued("13", [
+    item("first", { autoPickup: true }),
+    item("second", { modeLine: "review" }),
+  ]);
+  assert.equal(runs.queuedTask("org/repo#13").item.text, "second");
+  const latest = runs.unqueue("org/repo#13", "alice");
+  // Every queued comment's text, as the run would have read them.
+  assert.deepEqual(latest, {
+    item: {
+      kind: "issue",
+      author: "alice",
+      trigger: "work",
+      text: "first\n\n---\n\nsecond",
+      modeLine: "review",
+    },
+    dropped: 0,
+  });
+  assert.deepEqual(task.pending, []);
+  assert.deepEqual(settled, ["cancelled"]);
+  assert.deepEqual(dropped, ["org/repo#13"]);
+  // An auto-picked one's slot is free again.
+  assert.equal(asked, 1);
+  assert.equal(runs.unqueue("org/repo#13", "alice"), null);
+  // A follow-up behind a run going (or ending), a reply that starts nothing, a pull request's:
+  // they stay.
+  queued("14", [item("more")], { running: true });
+  queued("15", [item("reply", { trigger: null })]);
+  queued("16", [item("pr", { kind: "pr" })]);
+  for (const id of ["14", "15", "16"]) {
+    // Waiting for a slot with replies only: queued, but nothing to wait.
+    const replies = {
+      14: null,
+      15: { item: null, replies: true },
+      16: { item: null, replies: false },
+    };
+    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), replies[id]);
+    assert.equal(runs.unqueue(`org/repo#${id}`, "alice"), null);
+    assert.equal(ctx.tasks.get(`org/repo#${id}`).pending.length, 1);
+  }
+  // An inbox entry or a wrap-up: nothing to wait, and not replies either.
+  queued("19", [item("an idea", { trigger: "idea" })]);
+  queued("20", [item("", { trigger: "stop", mode: "stop" })]);
+  for (const id of ["19", "20"]) {
+    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), { item: null, replies: false });
+  }
+  // A trigger, then a plain comment while it waited: the trigger waits, with both texts; the
+  // follow-up's 👀 goes.
+  const trigger = item("do it", { modeLine: "review", comment: { id: 1 } });
+  const reply = item("and this too", { trigger: null, comment: { id: 2 } });
+  const both = queued("17", [trigger, reply]);
+  assert.equal(runs.queuedTask("org/repo#17").item, trigger);
+  const { item: held, dropped: none } = runs.unqueue("org/repo#17", "alice");
+  assert.equal(none, 0);
+  assert.equal(held.comment.id, 1);
+  assert.equal(held.modeLine, "review");
+  assert.equal(held.text, "do it\n\n---\n\nand this too");
+  assert.deepEqual(both.pending, []);
+  assert.deepEqual(settled, ["cancelled", "cancelled"]);
+  // Another author's comments don't go with it (the wait has one author, whom the run's checks
+  // see): dropped and counted. The held one's author in another case is the same login.
+  queued("18", [
+    item("from alice", { comment: { id: 3 } }),
+    item("from bob", { trigger: null, author: "bob", comment: { id: 4 } }),
+    item("alice again", { trigger: null, author: "Alice", comment: { id: 5 } }),
+  ]);
+  const mixed = runs.unqueue("org/repo#18", "alice");
+  assert.equal(mixed.dropped, 1);
+  assert.equal(mixed.item.author, "alice");
+  assert.equal(mixed.item.text, "from alice\n\n---\n\nalice again");
+  assert.deepEqual(settled.slice(2), ["cancelled", "cancelled"]);
+  // Cancelled, the one behind a run says so: it isn't back in the backlog.
+  assert.equal(runs.cancel("org/repo#14", "alice"), "following");
+  assert.equal(runs.cancel("org/repo#15", "alice"), "queued");
+  await runner.kill();
+  await following;
+});
+
 test("output after the answer postpones its stop", async (t) => {
   const { runner, answers, following } = setup(t, { graceMs: 80 });
   // The test's clock: a pause between a line and the next 40 ms wait (a busy runner's) would

@@ -605,7 +605,8 @@ export function createRuns(ctx) {
   // knows, then its sandbox is stopped. The follow loop sees it exit and finish() ends the
   // run as cancelled. Comments waiting for a follow-up run stay queued. A task with no run
   // going loses its queued comments instead. `by`: who stopped it. Returns "running",
-  // "queued" or null when there was nothing to stop.
+  // "queued" (no run: the task is back in the backlog), "following" (comments behind a run
+  // that is ending) or null when there was nothing to stop.
   function cancel(key, by) {
     const task = ctx.tasks.get(key);
     if (!task) return null;
@@ -626,19 +627,69 @@ export function createRuns(ctx) {
     }
     if (live?.cancelled) return "running";
     if (!task.pending.length) return null;
-    // Waiting for a slot or their pause, or for a run that is ending: dropped, their 👀 off.
-    // An auto-picked one frees its reserved slot: the next labelled issue, without waiting for
-    // the next sweep.
+    const following = task.running;
+    dropPending(task, key);
+    log(`${key}: queued comments dropped by ${by}`);
+    return following ? "following" : "queued";
+  }
+
+  // The task's queued comments go, their 👀 off (but `keep`'s), and it leaves the run order.
+  // Waiting for a slot or their pause, or for a run that is ending. An auto-picked one frees
+  // its reserved slot: the next labelled issue, without waiting for the next sweep.
+  function dropPending(task, key, keep = null) {
     const picked = !task.running && pickedTask(task);
     clearTimeout(task.timer);
     task.ready = false;
-    for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
+    for (const item of task.pending.splice(0)) {
+      if (item !== keep) ctx.track(ctx.settle(item, "cancelled"));
+    }
     ctx.saveQueue?.();
     ctx.order?.drop(key);
-    log(`${key}: queued comments dropped by ${by}`);
     if (picked) ctx.autoPickup?.soon();
-    return "queued";
   }
+
+  // A task waiting for a slot, no run going or ending (a follow-up waits for that one):
+  // { item, replies }. `item`: its newest comment that starts a run (an issue's trigger or
+  // `/mode` comment), which can wait for another issue instead (the dashboard's Queue after…,
+  // work.mjs); null when none does. `replies`: none does, and every comment queued is a plain
+  // reply to its last run (not an inbox entry, a wrap-up, a pull request's…). Null otherwise.
+  function queuedTask(key) {
+    const task = ctx.tasks.get(key);
+    if (!task || task.running || task.live || !task.pending.length) return null;
+    const item = task.pending.findLast(
+      (i) => i.kind === "issue" && (i.trigger === "work" || !!i.modeLine),
+    );
+    const replies =
+      !item && task.pending.every((i) => i.kind === "issue" && !i.trigger && !i.modeLine);
+    return { item: item ?? null, replies };
+  }
+
+  // queuedTask()'s task out of the queue: { item, dropped }. `item` is returned for its wait
+  // (waits.mjs hold()), which keeps that comment's 👀, author and mode line, with the text of
+  // every comment its author queued, as the run would have read them (events.mjs
+  // commentsText()). The wait has one author, whom the run's checks see (tasks.mjs
+  // noLongerAllowed()): another author's comments aren't folded in, but dropped (`dropped`, how
+  // many). The others lose their 👀. `by`: who moved it. Null when queuedTask() has no item.
+  function unqueue(key, by) {
+    const task = ctx.tasks.get(key);
+    const held = queuedTask(key)?.item;
+    if (!held) return null;
+    const own = task.pending.filter((i) => i === held || sameAuthor(i, held));
+    const texts = own.map((i) => i.text).filter(Boolean);
+    const dropped = task.pending.length - own.length;
+    dropPending(task, key, held);
+    log(
+      `${key}: taken out of the queue by ${by}, to wait (${dropped} comment(s) by others dropped)`,
+    );
+    // Queued again once its wait ends (tasks.mjs queue()): its mode, its place in line and no
+    // auto-pickup slot then.
+    const item = { ...held, text: texts.join("\n\n---\n\n") };
+    for (const k of ["mode", "queuedAt", "queueId", "autoPickup"]) delete item[k];
+    return { item, dropped };
+  }
+
+  // GitHub's logins regardless of case; none known (the listener's own items) isn't anyone's.
+  const sameAuthor = (a, b) => !!a.author && a.author.toLowerCase() === b.author?.toLowerCase();
 
   // A cancelled run's end: a short reply, no fallback, and nothing put back in the queue
   // (what was delivered went with the run). Its session and pushed commits stay. One stopped
@@ -984,7 +1035,7 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending, dropRefused, cancel, teardown };
+  return { run, follow, ending, dropRefused, cancel, queuedTask, unqueue, teardown };
 }
 
 // A run's record mode once its capabilities are decided (runs.mjs begin()'s reopen()): null when

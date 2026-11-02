@@ -211,7 +211,9 @@ comment from the App's bot.
 without code; `/stop` wraps it up. `/cancel` (the whole first line) stops the issue's running
 run now, and the task's page on the dashboard has a **Stop** button that does the same: the
 run's reply says who stopped it, its session and pushed commits stay, and the next comment
-resumes it. With nothing running, `/cancel` gets a reply saying so.
+resumes it. On a queued task (waiting for a slot), `/cancel` and the page's **Remove from queue**
+drop its queued comments: it is back in the backlog. With nothing running or queued, `/cancel`
+gets a reply saying so.
 `/mode`, `/after`, `/agent`, `/model`, `/effort` and `/speed` may share the trigger's line, alone or
 together (`Deckhand /agent codex /mode brainstorm`), as well as follow it on lines of their
 own; anything else on that line and it isn't the trigger. In an inbox entry (an idea, a bug, a
@@ -378,7 +380,15 @@ waiting for your answers: starting or queueing one asks its open questions first
 lists the tasks waiting for a free slot, in the order they start (the **run order**): drag a card
 above or below another to move it, or use its **Run next**, **Move up** and **Move down**
 buttons. On the graph, a queued node shows its place ("2nd"), and dragging it onto another queued
-node's left or right edge moves it before or after that one (dropped anywhere else, it stays).
+node's left or right edge moves it before or after that one (dropped in the open, it stays).
+An issue's queued task can also leave the line: **Queue after…** (or a drop of its card or node
+on the middle of another node, or anywhere on a node that isn't queued) makes it wait for that
+issue instead, as `/after` does: its last trigger (or `/mode`) comment waits, in its mode,
+with the text of every comment its author queued (another's are dropped, the App's comment
+says so). **Back to backlog** (or a drop of its card on the
+Backlog tab) drops its queued comments. Neither while a run is going on it: a comment queued
+behind that run waits for it. A task queued with replies to its last run only can't wait: take
+it out of the queue, then queue it after the issue.
 Brainstorms always start before work runs and don't move. A task whose repository is at its
 `max_parallel` is skipped, and the next one starts: the order is a priority, not a strict line.
 Tasks you never moved go after the ones you did, in the order they were queued. Each card has

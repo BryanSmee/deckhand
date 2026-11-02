@@ -264,10 +264,12 @@ function settle(t, q, b, w, input, aside = null) {
   }
   // Its place in the run order (tasks.mjs queueOrder()), 1 next to start, while it waits for
   // a slot; `startsFirst`: a brainstorm or another mode apart from work (modes.mjs `volumes`),
-  // which goes before any work run.
+  // which goes before any work run. `canWait`: it can wait for another issue instead
+  // (runs.mjs queuedTask()).
   if (t.state === "queued" && q?.position) {
     t.position = q.position;
     if (q.startsFirst) t.startsFirst = true;
+    if (q.canWait) t.canWait = true;
   }
   t.rerunnable = rerunnable(t);
 }

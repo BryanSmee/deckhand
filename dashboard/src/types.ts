@@ -230,6 +230,9 @@ export interface Task {
   // order, and doesn't move.
   position?: number;
   startsFirst?: boolean;
+  // Queued: it can wait for another issue instead (Queue after…), its queued comments having
+  // one that starts a run, not only replies to its last run (listener/runs.mjs queuedTask()).
+  canWait?: boolean;
   // Picked by the listener from its auto-pickup label (listener/auto-pickup.mjs): queued so, or
   // its last run was.
   autoPickup?: boolean;
@@ -796,13 +799,16 @@ export interface Backlog {
 
 // POST api/repos/<owner>/<repo>/work: start an issue, queue it after another ("/after"), lay
 // out a parent issue and its sub-issues from their "blocked by" links (after another, too),
-// cancel its wait ("/after none"), or stop its brainstorm ("/stop": the wrap-up).
+// cancel its wait ("/after none"), stop its brainstorm ("/stop": the wrap-up), or take a
+// queued issue out of the queue, back to the backlog ("/cancel"). A queued issue queued after
+// another leaves the queue and waits for it instead.
 export type WorkAction =
   | { action: "start"; number: number; mode?: string }
   | { action: "queue"; number: number; after: number; mode?: string }
   | { action: "plan"; number: number; after?: number; mode?: string }
   | { action: "dequeue"; number: number }
-  | { action: "stop"; number: number };
+  | { action: "stop"; number: number }
+  | { action: "cancel"; number: number };
 // A work area action sent and not confirmed yet (api.ts useWorkArea()): the graph shows what
 // it will do at once.
 export type Pending = WorkAction & { repo: string; title: string | null };
