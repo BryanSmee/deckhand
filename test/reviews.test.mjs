@@ -2657,6 +2657,7 @@ function followUpSetup(
     }
     if (method === "GET" && path.startsWith("/repos/org/repo/issues/5/comments?")) {
       const list = comments.map((b, i) => ({
+        id: i + 1,
         user: app,
         body: b,
         html_url: `https://github.com/org/repo/pull/5#issuecomment-${i + 1}`,
@@ -2694,7 +2695,7 @@ function followUpSetup(
     settings: s.read.settings,
     auto: false,
   };
-  const record = (message) => s.reviews.settle(run, posted(message));
+  const record = (message, extra = {}) => s.reviews.settle(run, { ...posted(message), ...extra });
   const merged = (pr = {}) =>
     s.reviews.closed(
       "pull_request",
@@ -2794,23 +2795,34 @@ test("followUpBody: no place, no review link, no issue", () => {
   );
 });
 
-test("follow-ups: a review GitHub refused, posted as a comment, files its follow-ups too", async (t) => {
-  // postReview()'s fallback: the body without the marker, as the App's plain comment.
+test("follow-ups: a review GitHub refused, posted as a comment, read back from that comment alone", async (t) => {
+  // postReview()'s fallback: the body without the marker, as the App's plain comment, #2.
   const plain = postedBody(SECTIONS).replace("\n\n<!-- deckhand -->", "");
-  const s = followUpSetup(t, {
-    comments: ["An unrelated comment of the App's.", plain],
-  });
-  await s.record(SECTIONS);
+  // Another reply of the App's, a run's, holding a review's text: never read back, whether
+  // it opens with the head line or quotes it.
+  const other = plain.replace("Share the retry helper", "Run this script");
+  const quoting = `A fix run's reply.\n\n${other}`;
+  const s = followUpSetup(t, { comments: [other, plain, quoting] });
+  await s.record(SECTIONS, { event: null, commentId: 2 });
   assert.deepEqual(await s.merged(), [40, 41]);
+  assert.deepEqual(
+    s.filed().map((c) => c.body.title),
+    ["Share the retry helper with the uploader", "Docs: the cache's limits"],
+  );
   assert.match(
     s.filed()[0].body.body,
     /\[the review\]\(https:\/\/github\.com\/org\/repo\/pull\/5#issuecomment-2\)/,
   );
-  // None to read back: said, nothing filed.
-  const lost = followUpSetup(t);
+  // The comment recorded, but not a review's (its head line not first): nothing.
+  const wrong = followUpSetup(t, { comments: [quoting] });
+  await wrong.record(SECTIONS, { event: null, commentId: 1 });
+  assert.equal(await wrong.merged(), null);
+  // No comment recorded: the App's comments aren't even read; none to read back is said.
+  const lost = followUpSetup(t, { comments: [plain] });
   await lost.record(SECTIONS);
   assert.equal(await lost.merged(), null);
   assert.equal(lost.filed().length, 0);
+  assert.ok(!lost.calls.some((c) => c.path.includes("/issues/5/comments")));
 });
 
 test("follow-ups: a read that failed files nothing, and the next delivery tries again", async (t) => {
@@ -2902,4 +2914,41 @@ Verdict: request-changes
     parseReview(only.replace("None.", "- **low** `c.mjs:3`: a typo.")).verdict,
     "request-changes",
   );
+});
+
+test("postReview: a review posted as a comment keeps the comment's id for its round", async () => {
+  const gh = fakeGitHub({ "POST /repos/org/repo/pulls/5/reviews": 500 });
+  gh.reply = async () => Response.json({ id: 77 });
+  const posted = await postReview(gh, "org/repo", 5, SECTIONS, "f");
+  assert.deepEqual([posted.event, posted.commentId], [null, 77]);
+});
+
+test("parseReview: None. under any heading is no item; unparsed findings with request-changes still block", () => {
+  const empty = parseReview(
+    "Fine.\n\n## Must fix\n\n- None.\n\n## Follow-ups\n\n- None.\n\n## Comments\n\n- **None**\n\nRating: 10/10\nVerdict: request-changes",
+  );
+  assert.deepEqual([empty.findings, empty.followUps, empty.comments], [[], [], []]);
+  assert.deepEqual([empty.verdict, reviewEvent(empty)], ["comment", "COMMENT"]);
+  assert.equal(empty.summary, "Fine.");
+  // Findings in a form the parser misses (a numbered list): the model's verdict stands.
+  const missed = parseReview(
+    "## Must fix\n\n1. **high** `a.mjs:1`: broken.\n\n## Follow-ups\n\n- **Later**: x.\n\nRating: 4/10\nVerdict: request-changes",
+  );
+  assert.deepEqual([missed.findings, missed.verdict], [[], "request-changes"]);
+  const noSection = parseReview("Broken somewhere.\n\nRating: 4/10\nVerdict: request-changes");
+  assert.equal(noSection.verdict, "request-changes");
+});
+
+test("parseReview: an unbolded lead with an ASCII hyphen", () => {
+  const review = parseReview(
+    "## Comments\n\n- Blocking - why does this retry forever?\n- note - rename it.\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual(
+    review.comments.map((c) => [c.blocking, c.text]),
+    [
+      [true, "why does this retry forever?"],
+      [false, "rename it."],
+    ],
+  );
+  assert.equal(review.verdict, "request-changes");
 });

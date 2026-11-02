@@ -305,8 +305,9 @@ export interface ReviewRound {
   // absent from rounds kept before the review's sections (#622).
   followUps?: number;
   comments?: { blocking: number; notes: number };
-  // Posted as a plain comment, GitHub having refused the review.
+  // Posted as a plain comment, GitHub having refused the review, and that comment's id.
   comment?: boolean;
+  commentId?: number;
   // A maintainer's review, not the loop's own.
   manual?: boolean;
 }

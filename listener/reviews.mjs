@@ -117,9 +117,9 @@ const KEEP_MS = 90 * 24 * 3600_000;
 // finding that doesn't block (`review.max_allowed_severity`, for an automatic review in a fix
 // loop or deciding an auto-merge). The prompt is told the same tolerance (reviewPrompt()), but a model may still
 // write `request-changes` on tolerated findings only: that verdict says nothing more than the
-// findings, so it reads `comment`, and so does one with no finding at all (follow-ups and notes
-// only, which never block). Otherwise the model's `request-changes` stays, and blocks the
-// merge.
+// findings, so it reads `comment`, and so does one whose Must fix section says `None.` (follow-ups
+// and notes only, which never block). Otherwise the model's `request-changes` stays, and blocks
+// the merge: a finding the parser missed (a numbered list, say) still does.
 export function parseReview(text, { allowed = "low" } = {}) {
   const lines = String(text ?? "").split(/\r?\n/);
   const rating = /^\W*rating\W*\s*(\d{1,2}(?:\.\d)?)\s*\/\s*10\b/im.exec(text ?? "");
@@ -133,6 +133,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
   let section = "findings";
   let current = null;
   let started = false;
+  let none = false;
   for (const line of lines) {
     const heading = /^#+\s*(must[- ]fix|findings|follow[- ]?ups?|comments)\b/i.exec(line.trim());
     if (heading) {
@@ -144,6 +145,13 @@ export function parseReview(text, { allowed = "low" } = {}) {
         : name === "comments"
           ? "comments"
           : "findings";
+      continue;
+    }
+    // "None." under a heading, as a bullet or not: no item. Under Must fix, the review says it
+    // has no finding (`none`), which lets its verdict read `comment` below.
+    if (started && /^\s*(?:[-*]\s+)?\**(?:none|nothing|n\/a)\b[^\w]*$/i.test(line)) {
+      if (section === "findings") none = true;
+      current = null;
       continue;
     }
     const item = bullet(section, line);
@@ -175,7 +183,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
     rating: Math.min(Number(rating[1]), ...caps),
     verdict: blocks(review, allowed)
       ? "request-changes"
-      : (tolerated || !findings.length) && said === "request-changes"
+      : (tolerated || (none && !findings.length)) && said === "request-changes"
         ? "comment"
         : said,
   };
@@ -210,7 +218,7 @@ function bullet(section, line) {
   const m =
     /^(?:\*\*|\[)\s*(blocking|non[- ]blocking|note|nit)\s*[:–—]?\s*(?:\*\*|\])\s*[:–—-]?\s*(.*)$/i.exec(
       rest,
-    ) ?? /^(blocking|non[- ]blocking|note|nit)\s*[:–—]\s*(.*)$/i.exec(rest);
+    ) ?? /^(blocking|non[- ]blocking|note|nit)(?:\s*[:–—]|\s+-)\s*(.*)$/i.exec(rest);
   if (!m) return { blocking: false, ...located(rest) };
   return { blocking: m[1].toLowerCase() === "blocking", ...located(m[2]) };
 }
@@ -225,18 +233,20 @@ const blockingComments = (review) => (review.comments ?? []).filter((c) => c.blo
 const blocks = (review, allowed = "low") =>
   above(review, allowed).length + blockingComments(review).length > 0;
 
+// The head line of a review the listener posted (reviewBody()).
+const REVIEW_HEAD =
+  /^\*\*Verdict: (approve|comment|request changes)\*\* · Rating: (\d{1,2}(?:\.\d)?)\/10$/;
+
 // A review the listener posted (reviewBody()'s, as GitHub keeps it) → parseReview()'s
 // { summary, findings, followUps, comments, rating, verdict, allowed }, or null when it isn't
 // one (the raw text of an unparsed review). The items are read back from their sections, their
 // links taken off; a review posted before the sections has findings only. The summary isn't
 // kept: a fix run's message has the items only (fixMessage()). `allowed`: the tolerance it is
 // read with now.
+
 export function parsePostedReview(body, { allowed = "low" } = {}) {
   const text = String(body ?? "");
-  const head =
-    /^\*\*Verdict: (approve|comment|request changes)\*\* · Rating: (\d{1,2}(?:\.\d)?)\/10$/m.exec(
-      text,
-    );
+  const head = new RegExp(REVIEW_HEAD.source, "m").exec(text);
   if (!head) return null;
   const findings = [];
   const followUps = [];
@@ -477,8 +487,11 @@ export async function postReview(
   }
   if (res.ok) return { event, review, pr, head: sha };
   log(`${repo}#${number}: the review was refused (${res.status}), posted as a comment`);
-  await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
-  return { event: null, review, pr, head: sha };
+  const sent = await reply(repo, number, body.replace(`\n\n${MARKER}`, ""), { full });
+  // The comment's id, kept with its round (recordRound()): the follow-ups are read back from
+  // it, and from no other comment of the App's (fileFollowUps()).
+  const comment = await sent?.json?.().catch(() => null);
+  return { event: null, review, pr, head: sha, commentId: comment?.id ?? null };
 }
 
 // The latest review the App posted on pull request `number` (postReview(), with its marker),
@@ -1981,7 +1994,10 @@ export function createReviews({
     const rounds = (entry.rounds ?? []).filter((r) => !same(r));
     // Posted as a plain comment (GitHub refused the review): not on GitHub's list of reviews,
     // which the dashboard's Fix reads (latestReview()).
-    const comment = posted.event === null ? { comment: true } : {};
+    const comment =
+      posted.event === null
+        ? { comment: true, ...(posted.commentId && { commentId: posted.commentId }) }
+        : {};
     rounds.push({
       round,
       at: now(),
@@ -2286,15 +2302,22 @@ export function createReviews({
     const bot = config.bot?.toLowerCase();
     if (!bot) return null;
     const get = (path) => github(repo, "GET", path);
-    const own = (c) => c.user?.login?.toLowerCase() === bot;
+    // The App's, opening with a review's head line: another body of the App's (a run's reply
+    // quoting one) never counts.
+    const own = (c) =>
+      c.user?.login?.toLowerCase() === bot && REVIEW_HEAD.test(String(c.body ?? "").split("\n")[0]);
     // Its reviews with the marker, then the reviews GitHub refused, posted as plain comments
-    // (postReview()), which only the App's login and the review's head line tell apart.
+    // (postReview()): only those whose ids their rounds kept, as the App's other comments may
+    // be any run's text.
     const reviews = (await paginate(get, `/repos/${repo}/pulls/${pr.number}/reviews`)).filter(
       (r) => own(r) && (r.body ?? "").includes(MARKER),
     );
-    const comments = (await paginate(get, `/repos/${repo}/issues/${pr.number}/comments`)).filter(
-      own,
-    );
+    const ids = new Set(entry.rounds.map((r) => r.commentId).filter(Boolean));
+    const comments = ids.size
+      ? (await paginate(get, `/repos/${repo}/issues/${pr.number}/comments`)).filter(
+          (c) => ids.has(c.id) && own(c),
+        )
+      : [];
     const site = pr.base?.repo?.html_url ?? null;
     const found = new Map();
     for (const r of [...reviews, ...comments]) {

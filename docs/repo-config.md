@@ -504,7 +504,8 @@ token only reads, and Deckhand posts the review.
   reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
   (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
-  comments. A pull request closed without a merge files none. The issue's body says the text
+  comments (only the comments Deckhand posted them as, recorded in `reviews.json`). A section
+  with nothing in it says `None.`, which is no item. A pull request closed without a merge files none. The issue's body says the text
   is a review model's output, to check against the code, and quotes it. The review is told not
   to list again a follow-up an earlier review of Deckhand's listed.
 - **Comments**: remarks that aren't defects (a naming choice, a question, a suggestion, a
