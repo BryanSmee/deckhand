@@ -380,6 +380,26 @@ test("authorize refuses a client without PKCE, or with plain", async (t) => {
   assert.equal(elsewhere.headers.get("location"), null);
 });
 
+test("not signed in, a request the client would get an error for goes to GitHub, never to it", async (t) => {
+  const s = await serveOAuth(t);
+  // Anyone may register a client, with any https:// redirect URI.
+  const client = (await s.register(["https://evil.example.com/x"])).body.client_id;
+  for (const extra of [
+    { response_type: "x" },
+    { code_challenge_method: "plain" },
+    { resource: "https://elsewhere.example.com/mcp" },
+  ]) {
+    const query = s.authorizeQuery(client, {
+      redirect_uri: "https://evil.example.com/x",
+      ...extra,
+    });
+    const res = await s.call(`/oauth/authorize?${query}`);
+    assert.equal(res.status, 302, JSON.stringify(extra));
+    const to = new URL(res.headers.get("location"), PUBLIC);
+    assert.equal(to.origin + to.pathname, `${PUBLIC}/auth/login`, JSON.stringify(extra));
+  }
+});
+
 test("the consent: denied, a forged post, and a page used twice", async (t) => {
   const s = await serveOAuth(t);
   const cookie = await s.signIn();

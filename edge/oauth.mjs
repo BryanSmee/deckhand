@@ -292,6 +292,17 @@ export function createOAuth({
 Connect it again from the client.</p>`,
       );
     }
+    // Signed in first, before any redirect to the client: anyone may register one, so an error
+    // sent there to someone not signed in would make this an open redirect (RFC 9700 §4.11.2).
+    const login = await auth.user(req);
+    if (!login) {
+      const next = `/oauth/authorize${url.search}`;
+      res.writeHead(302, {
+        location: `/auth/login?next=${encodeURIComponent(next)}`,
+        "cache-control": "no-store",
+      });
+      return res.end();
+    }
     const state = p.get("state") ?? "";
     if (p.get("response_type") !== "code") {
       return redirectError(res, to, "unsupported_response_type", "code only.", state);
@@ -302,15 +313,6 @@ Connect it again from the client.</p>`,
     }
     if (!ours(p.get("resource"))) {
       return redirectError(res, to, "invalid_target", `The resource is ${resource()}.`, state);
-    }
-    const login = await auth.user(req);
-    if (!login) {
-      const next = `/oauth/authorize${url.search}`;
-      res.writeHead(302, {
-        location: `/auth/login?next=${encodeURIComponent(next)}`,
-        "cache-control": "no-store",
-      });
-      return res.end();
     }
     const scopes = scopesOf(p.get("scope"));
     const id = random(24);
