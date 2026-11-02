@@ -1,8 +1,9 @@
-// Settings: its tabs (Repositories, Preferences, Server) and the one open. The tabs are links,
-// so each has its address (route.ts); on a wide screen they sit in the page header, on a
-// phone atop the page; a repository's config hides them for its own header. Preferences says
-// it's coming until its page lands.
+// Settings: its tabs (Repositories, Preferences, MCP clients, Server) and the one open. The tabs
+// are links, so each has its address (route.ts); on a wide screen they sit in the page header, on a
+// phone atop the page; a repository's config hides them for its own header. Preferences says it's
+// coming until its page lands.
 import type { RepoList } from "./api";
+import { Clients } from "./Clients";
 import type { Notify } from "./notify";
 import { Preferences } from "./Preferences";
 import { needingYou, Repos } from "./Repos";
@@ -16,6 +17,7 @@ import styles from "./Settings.module.css";
 const TABS: { id: Section | null; label: string }[] = [
   { id: null, label: "Repositories" },
   { id: "preferences", label: "Preferences" },
+  { id: "clients", label: "MCP clients" },
   { id: "server", label: "Server" },
 ];
 
@@ -76,6 +78,8 @@ export function Settings({ route, state, error, repos, narrow, notify, onOpen, r
       )}
       {route.section === "server" ? (
         <Server state={state} error={error} app={repos.app} refresh={refresh} />
+      ) : route.section === "clients" ? (
+        <Clients />
       ) : route.section === "preferences" ? (
         <Preferences notify={notify} user={state?.user} />
       ) : (

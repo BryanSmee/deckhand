@@ -936,3 +936,24 @@ export interface AnalysisResult extends WorkResult {
   number?: number;
   task?: string;
 }
+
+// GET api/mcp/clients: `resource`, the URL clients connect to (the public URL's /mcp, which
+// may not be the page's own origin), and the clients.
+export interface McpClients {
+  resource: string;
+  clients: McpClient[];
+}
+
+// An MCP client signed in as the user, for Settings › MCP clients: GET api/mcp/clients (edge's
+// own, edge/oauth.mjs clients()), the newest first. `id`: its sign-in's, what Revoke posts
+// (api/mcp/clients/<id>/revoke); `client`: its registration's; `name`: its own claim;
+// `created`, `used`: ms, `used` null until its token was first used.
+export interface McpClient {
+  id: string;
+  name: string;
+  client: string;
+  redirect: string;
+  scopes: string[];
+  created: number;
+  used: number | null;
+}
