@@ -1682,7 +1682,7 @@ maxmemory-policy noeviction
 # only (those its scripts call included: Redis checks them too). REDIS_PASSWORD, with
 # redis://deckhand@redis:6379 as STORE_URL.
 user default off
-user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +getrange +strlen +set +append +select +ping +quit
+user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
 ```
 
 The user's key pattern follows the prefix: with `?prefix=team-a:`, it is `~team-a:*`, else

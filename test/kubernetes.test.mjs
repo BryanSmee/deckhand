@@ -1,499 +1,1614 @@
-// deploy/kubernetes/ held to the rules test/networks.test.mjs holds compose.yaml to: each
-// service's NetworkPolicies let in its callers alone and let it out to its callees alone
-// (lib/services.mjs CALLS), the secrets are each their own service's, nothing but the broker's
-// TokenReviews is cluster-wide, and no two services share a writable volume. The sandboxes'
-// and BuildKit's policies pass the runner's own checks, which it makes before every run and
-// build. kubeconform checks the schemas (docs/kubernetes.md): kustomize isn't needed here, as
-// the files are read as written, with the components' patches.
+// The Kubernetes runner, against a fake of the API that keeps what it is sent: the Pod, Secret
+// and claims a run gets (and loses when its start fails), the NetworkPolicy check, the
+// Pending timeout, its log followed with `skip`, and what the listener asks of it otherwise.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { appSecrets, keys } from "../deploy/kubernetes/secrets.mjs";
-import { CALLS, SERVICES } from "../lib/services.mjs";
-import { keyId } from "../lib/tokens.mjs";
-import { parseYaml } from "../lib/yaml.mjs";
-import { builderIsolationProblem } from "../listener/runner/kube-images.mjs";
-import { isolationProblem, selects } from "../listener/runner/kubernetes.mjs";
+import { RunError, runnerRefusal } from "../listener/access.mjs";
+import { claude } from "../listener/agents/claude.mjs";
+import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { apiBase, createKubeApi, KubeError } from "../listener/runner/kube-api.mjs";
+import { createPullSecret } from "../listener/runner/kube-pull.mjs";
+import {
+  createKubernetesRunner,
+  INSTALL_USER,
+  INSTALLING,
+  isolationProblem,
+  kubeName,
+  labelValue,
+  latestWarning,
+  pendingReason,
+  podSpec,
+  quantity,
+  selects,
+} from "../listener/runner/kubernetes.mjs";
+import { LINE_CUT, MAX_LINE } from "../listener/runner/lines.mjs";
+import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
+import { tempDir } from "./helpers.mjs";
 
-const root = join(import.meta.dirname, "..", "deploy", "kubernetes");
-const SERVICES_NS = "deckhand";
-const SANDBOXES_NS = "deckhand-sandboxes";
-
-// Each file's documents, as lib/yaml.mjs reads them.
-const docs = (file) =>
-  readFileSync(join(root, file), "utf8")
-    .split(/^---$/m)
-    .map((text) => parseYaml(text))
-    .filter(Boolean);
-const kustomization = (dir = "") => docs(join(dir, "kustomization.yaml"))[0];
-const resources = (dir = "") => kustomization(dir).resources.flatMap((f) => docs(join(dir, f)));
-
-const base = resources();
-const buildkit = resources("components/buildkit");
-const redis = resources("components/redis");
-const all = [...base, ...buildkit, ...redis];
-const of = (kind, list = all) => list.filter((r) => r.kind === kind);
-const named = (kind, name, list = all) => of(kind, list).find((r) => r.metadata.name === name);
-
-// lib/services.mjs's services → the app label of their pods (and their Deployment's name).
-const APP = Object.fromEntries(SERVICES.map((s) => [s, s === "proxy" ? "egress" : s]));
-const SERVICE_OF = Object.fromEntries(SERVICES.map((s) => [`deckhand-${APP[s]}`, s]));
-const deployment = (service) => named("Deployment", APP[service], base);
-const pod = (service) => deployment(service).spec.template.spec;
-const container = (service) => pod(service).containers[0];
-const env = (service) =>
-  Object.fromEntries((container(service).env ?? []).map((e) => [e.name, e.value ?? e.valueFrom]));
-
-// Calls without a service token, as in test/networks.test.mjs: the proxy asks the orchestrator's
-// egress policy about each connection; the orchestrator reads the proxy's CA from it.
-const UNTOKENED = { proxy: ["orchestrator"], orchestrator: ["proxy"] };
-const callees = (service) => [...CALLS[service], ...(UNTOKENED[service] ?? [])].sort();
-const callers = (service) => SERVICES.filter((caller) => callees(caller).includes(service)).sort();
-// Who else may reach a service: the internet edge's public port, the sandboxes' namespace and
-// BuildKit the proxy.
-const OUTSIDE_CALLERS = { edge: ["internet"], proxy: ["sandboxes", "buildkitd"] };
-// Ways out beyond the cluster's pods, as INTERNET in test/networks.test.mjs; the runner's and
-// the broker's include the API server's port.
-const WAYS_OUT = {
-  edge: [443],
-  github: [443],
-  models: [443],
-  runner: [443, 6443],
-  broker: [443, 6443],
-  proxy: "any",
+const NS = "runs";
+const config = {
+  prefix: "dh",
+  image: "dh-sandbox",
+  runner: "kubernetes",
+  egressProxy: "http://egress:3128",
+  kubernetes: { pendingMs: 600000, storageClass: "fast", sessionSize: "10Gi" },
 };
 
-// A policy peer → who it is: a service, "sandboxes", "buildkitd", "dns", "internet".
-function peer(p) {
-  if (p.ipBlock) return "internet";
-  const ns = p.namespaceSelector?.matchLabels?.["kubernetes.io/metadata.name"];
-  if (ns === "kube-system") return "dns";
-  if (ns === SANDBOXES_NS) return "sandboxes";
-  const app = p.podSelector?.matchLabels?.app;
-  if (app === "buildkitd") return "buildkitd";
-  return SERVICE_OF[app] ?? `unknown ${JSON.stringify(p)}`;
-}
-
-// The policies of the services' namespace picking a service's pods: who they let in, who out.
-function reach(service, policies = of("NetworkPolicy", base)) {
-  const labels = deployment(service).spec.template.metadata.labels;
-  const picking = policies.filter(
-    (p) => p.metadata.namespace === SERVICES_NS && selects(p.spec.podSelector, labels),
-  );
-  const ins = new Set();
-  const outs = new Set();
-  const out = [];
-  for (const p of picking) {
-    for (const rule of p.spec.ingress ?? []) {
-      for (const from of rule.from ?? [{ ipBlock: {} }]) ins.add(peer(from));
-    }
-    for (const rule of p.spec.egress ?? []) {
-      for (const to of rule.to ?? []) {
-        outs.add(peer(to));
-        if (to.ipBlock) out.push(...(rule.ports?.map((x) => x.port) ?? ["any"]));
-      }
-    }
-  }
-  return { ins, outs, out, picking };
-}
-
-test("kustomization.yaml: every manifest of the folder is a resource of the base or a component's", () => {
-  const listed = new Set([
-    ...kustomization().resources,
-    ...kustomization("components/redis").resources.map((f) => `components/redis/${f}`),
-    ...kustomization("components/redis").patches.flatMap((p) =>
-      p.path ? [`components/redis/${p.path}`] : [],
-    ),
-    ...kustomization("components/buildkit").resources.map((f) => `components/buildkit/${f}`),
-  ]);
-  const files = readdirSync(root, { recursive: true })
-    .map((f) => f.replaceAll("\\", "/"))
-    .filter((f) => f.endsWith(".yaml") && !f.endsWith("kustomization.yaml"))
-    .filter((f) => !f.startsWith("server/"));
-  assert.deepEqual(files.filter((f) => !listed.has(f)).sort(), []);
-});
-
-test("deploy/kubernetes: a Deployment, a Service and a ServiceAccount per service, its API token on the runner and the broker alone", () => {
-  for (const service of SERVICES) {
-    const d = deployment(service);
-    assert.ok(d, `${service}: no Deployment ${APP[service]}`);
-    assert.equal(d.metadata.namespace, SERVICES_NS);
-    assert.ok(named("Service", APP[service], base), `${service}: no Service`);
-    const account = pod(service).serviceAccountName;
-    assert.equal(account, `deckhand-${APP[service]}`, `${service}'s ServiceAccount`);
-    assert.ok(named("ServiceAccount", account, base), `${service}: no ServiceAccount ${account}`);
-    const api = ["runner", "broker"].includes(service);
-    assert.equal(pod(service).automountServiceAccountToken, api, `${service}'s API token`);
-    // No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT.
-    assert.equal(pod(service).enableServiceLinks, false, `${service}: enableServiceLinks`);
-  }
-  // Every Service's selector is its Deployment's pods'.
-  for (const service of of("Service", base)) {
-    const d = named("Deployment", service.metadata.name, base);
-    assert.deepEqual(service.spec.selector, d.spec.selector.matchLabels, service.metadata.name);
-  }
-});
-
-test("deploy/kubernetes: a token projected for the broker wherever CALLS says the service calls it, and SERVICE_ACCOUNTS to match", () => {
-  const accounts = Object.fromEntries(
-    env("broker")
-      .SERVICE_ACCOUNTS.split(",")
-      .map((part) => part.split("=")),
-  );
-  for (const service of SERVICES) {
-    const projected = (pod(service).volumes ?? []).find((v) =>
-      v.projected?.sources?.some((s) => s.serviceAccountToken),
-    );
-    const calls = CALLS[service].includes("broker");
-    assert.equal(Boolean(projected), calls, `${service}'s token for the broker`);
-    if (!calls) {
-      assert.ok(!(service in accounts), `${service} in SERVICE_ACCOUNTS`);
-      continue;
-    }
-    const source = projected.projected.sources[0].serviceAccountToken;
-    assert.equal(source.audience, "deckhand-broker");
-    const mount = container(service).volumeMounts.find((m) => m.name === projected.name);
-    assert.equal(env(service).SERVICE_ACCOUNT_TOKEN_FILE, `${mount.mountPath}/${source.path}`);
-    assert.equal(accounts[service], `${SERVICES_NS}:${pod(service).serviceAccountName}`, service);
-  }
-});
-
-test("deploy/kubernetes: SERVICE_NETWORKS=none wherever it is read; the broker tells its callers by their accounts", () => {
-  for (const service of ["edge", "orchestrator", "runner", "github", "models"]) {
-    assert.equal(env(service).SERVICE_NETWORKS, "none", service);
-  }
-  // The broker takes the network's word over the accounts' when both are set; the policy
-  // service checks no network unset.
-  for (const service of ["broker", "policy", "proxy"]) {
-    assert.ok(!("SERVICE_NETWORKS" in env(service)), service);
-  }
-});
-
-test("deploy/kubernetes: each service's NetworkPolicies let in its callers alone, and out to its callees alone (CALLS)", () => {
-  // Default deny in both namespaces: what isn't let through below isn't.
-  for (const ns of [SERVICES_NS, SANDBOXES_NS]) {
-    const deny = of("NetworkPolicy", base).find(
-      (p) => p.metadata.namespace === ns && Object.keys(p.spec.podSelector).length === 0,
-    );
-    assert.deepEqual(deny?.spec.policyTypes, ["Ingress", "Egress"], `${ns}: default deny`);
-    assert.ok(!deny.spec.ingress && !deny.spec.egress, `${ns}: default deny lets nothing`);
-  }
-  for (const service of SERVICES) {
-    const { ins, outs, out } = reach(service);
-    const expectedIns = [...callers(service), ...(OUTSIDE_CALLERS[service] ?? [])].sort();
-    assert.deepEqual([...ins].sort(), expectedIns, `who reaches ${service}`);
-    const ways = WAYS_OUT[service];
-    const expectedOuts = [
-      ...callees(service),
-      ...(service === "policy" ? [] : ["dns"]),
-      ...(ways ? ["internet"] : []),
-    ].sort();
-    assert.deepEqual([...outs].sort(), expectedOuts, `what ${service} reaches`);
-    if (ways === "any") assert.deepEqual(out, ["any", "any"], service);
-    else assert.deepEqual([...new Set(out)].sort(), ways ?? [], `${service}'s ways out`);
-  }
-  // The proxy's way out leaves out the private ranges: no granted host is a pod or a node.
-  const { picking } = reach("proxy");
-  const blocks = picking.flatMap((p) =>
-    (p.spec.egress ?? []).flatMap((r) => (r.to ?? []).filter((t) => t.ipBlock)),
-  );
-  for (const range of ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]) {
-    assert.ok(blocks[0].ipBlock.except.includes(range), range);
-  }
-});
-
-test("deploy/kubernetes: the sandboxes' and install pods' NetworkPolicies pass the runner's check, with the services apart", () => {
-  const policies = of("NetworkPolicy", base).filter((p) => p.metadata.namespace === SANDBOXES_NS);
-  const proxy = {
-    namespace: SERVICES_NS,
-    selector: named("Service", "egress", base).spec.selector,
-  };
-  const sandbox = { "deckhand.owner": "deckhand", "deckhand.run": "x", "deckhand.role": "sandbox" };
-  assert.equal(isolationProblem(policies, sandbox, { proxy }), null);
-  const install = { "deckhand.owner": "deckhand", "deckhand.role": "install" };
-  assert.equal(isolationProblem(policies, install, { proxy }), null);
-  // A check pod: picked by the default deny alone, nothing in or out.
-  const check = { "deckhand.owner": "deckhand", "deckhand.role": "check" };
-  const picking = policies.filter((p) => selects(p.spec.podSelector, check));
-  assert.deepEqual(
-    picking.map((p) => p.metadata.name),
-    ["deckhand-default-deny"],
-  );
-  // And the check fails closed on what would let them out: one wide rule is enough.
-  const wide = structuredClone(policies);
-  wide[1].spec.egress.push({ to: [{ ipBlock: { cidr: "0.0.0.0/0" } }] });
-  assert.match(isolationProblem(wide, sandbox, { proxy }), /reach/);
-});
-
-test("components/buildkit: BuildKit's NetworkPolicies pass the runner's check", () => {
-  const policies = of("NetworkPolicy", [...base, ...buildkit]).filter(
-    (p) => p.metadata.namespace === SERVICES_NS,
-  );
-  const labels = named("Deployment", "buildkitd", buildkit).spec.template.metadata.labels;
-  assert.equal(builderIsolationProblem(policies, labels, { sandboxesApart: true }), null);
-  // The runner reaches it: its Service's port, from the runner's pods.
-  const runner = reach("runner", policies);
-  assert.ok(runner.outs.has("buildkitd"));
-});
-
-test("deploy/kubernetes: nothing cluster-wide but the broker's TokenReviews; the runner's Roles name what it calls", () => {
-  const wide = all.filter((r) => /^Cluster/.test(r.kind));
-  assert.deepEqual(
-    wide.map((r) => `${r.kind} ${r.roleRef?.name} → ${r.subjects?.map((s) => s.name)}`),
-    ["ClusterRoleBinding system:auth-delegator → deckhand-broker"],
-  );
-  // Every Role: namespaced, no wildcard, bound to the runner alone.
-  for (const role of of("Role")) {
-    for (const rule of role.rules) {
-      for (const field of ["apiGroups", "resources", "verbs"]) {
-        assert.ok(!rule[field].includes("*"), `${role.metadata.namespace}: ${field} *`);
-      }
-    }
-  }
-  for (const binding of of("RoleBinding")) {
-    assert.deepEqual(
-      binding.subjects.map((s) => `${s.namespace}:${s.name}`),
-      [`${SERVICES_NS}:deckhand-runner`],
-    );
-  }
-  const rules = (ns, list = base) =>
-    of("Role", list)
-      .filter((r) => r.metadata.namespace === ns)
-      .flatMap((r) => r.rules)
-      .map((r) => `${r.resources.join(",")}: ${r.verbs.join(",")}`);
-  // listener/runner/kubernetes.mjs, kube-images.mjs, kube-pull.mjs.
-  assert.deepEqual(rules(SANDBOXES_NS), [
-    "pods: create,get,list,delete",
-    "pods/log: get",
-    "secrets: create,get,list,delete",
-    "persistentvolumeclaims: create,get,delete",
-    "events: list",
-    "networkpolicies: list",
-  ]);
-  assert.deepEqual(rules(SERVICES_NS), [
-    "services,pods: get",
-    "endpointslices: list",
-    "networkpolicies: list",
-  ]);
-});
-
-test("deploy/kubernetes: each secret is its own service's, the orchestrator holds none, the broker's public key reaches its readers read only", () => {
-  const SECRETS = {
-    "deckhand-edge": "edge",
-    "deckhand-github": "github",
-    "deckhand-broker-key": "broker",
-    "deckhand-models": "models",
-    "deckhand-models-key": "models",
-    "deckhand-credentials": "models",
-  };
-  const secretsOf = (service) => [
-    ...(pod(service).volumes ?? []).filter((v) => v.secret).map((v) => v.secret.secretName),
-    ...(container(service).envFrom ?? []).filter((e) => e.secretRef).map((e) => e.secretRef.name),
-    ...(container(service).env ?? []).flatMap((e) =>
-      e.valueFrom?.secretKeyRef ? [e.valueFrom.secretKeyRef.name] : [],
-    ),
-  ];
-  for (const service of SERVICES) {
-    const held = secretsOf(service).sort();
-    const own = Object.entries(SECRETS)
-      .filter(([, holder]) => holder === service)
-      .map(([name]) => name)
-      .sort();
-    assert.deepEqual(held, own, `${service}'s Secrets`);
-  }
-  // Nothing secret in the orchestrator's settings either.
-  const secretLike = (name) =>
-    /TOKEN|KEY|SECRET|AUTH_FILE|PASSWORD|PEM/.test(name) &&
-    !["SERVICE_ACCOUNT_TOKEN_FILE"].includes(name);
-  assert.deepEqual(Object.keys(env("orchestrator")).filter(secretLike), []);
-  // Read only wherever mounted.
-  for (const service of SERVICES) {
-    const secretVolumes = (pod(service).volumes ?? []).filter((v) => v.secret).map((v) => v.name);
-    for (const mount of container(service).volumeMounts ?? []) {
-      if (secretVolumes.includes(mount.name)) assert.equal(mount.readOnly, true, mount.name);
-    }
-  }
-  // The broker publishes none: its readers mount the ConfigMap, read only, at SERVICE_KEYS_DIR
-  // (the policy service's default, /keys).
-  assert.ok(!("SERVICE_KEYS_DIR" in env("broker")));
-  for (const service of SERVICES) {
-    const volume = (pod(service).volumes ?? []).find(
-      (v) => v.configMap?.name === "deckhand-service-keys",
-    );
-    const reads = ["runner", "models", "policy"].includes(service);
-    assert.equal(Boolean(volume), reads, `${service}: the broker's public key`);
-    if (!reads) continue;
-    const mount = container(service).volumeMounts.find((m) => m.name === volume.name);
-    assert.equal(mount.readOnly, true);
-    assert.equal(mount.mountPath, env(service).SERVICE_KEYS_DIR ?? "/keys", service);
-  }
-});
-
-test("deploy/kubernetes: no two services share a writable volume, nor does a service and Redis", () => {
-  const users = new Map(); // claim → services
-  for (const service of SERVICES) {
-    for (const v of pod(service).volumes ?? []) {
-      if (!v.persistentVolumeClaim) continue;
-      const claim = v.persistentVolumeClaim.claimName;
-      users.set(claim, [...(users.get(claim) ?? []), service]);
-      assert.ok(named("PersistentVolumeClaim", claim, base), `${claim}: no claim`);
-    }
-  }
-  for (const [claim, services] of users) assert.equal(services.length, 1, `${claim}: ${services}`);
-  // Every claim of the base is a service's.
-  for (const claim of of("PersistentVolumeClaim", base)) {
-    assert.ok(users.has(claim.metadata.name), `${claim.metadata.name}: no service mounts it`);
-  }
-});
-
-// What a copy's update takes (docs/services.md, Upgrades without downtime): its next copy is
-// ready before the old one stops, which drains within its grace period.
-const GRACE = {
-  edge: 30,
-  orchestrator: 300,
-  runner: 300,
-  broker: 35,
-  github: 300,
-  models: 630,
-  policy: 30,
-  proxy: 630,
+// Deckhand's policy, as docs/kubernetes.md shows it.
+const POLICY = {
+  metadata: { name: "deckhand-sandboxes" },
+  spec: {
+    podSelector: { matchLabels: { "deckhand.role": "sandbox" } },
+    policyTypes: ["Ingress", "Egress"],
+    egress: [
+      { to: [{ podSelector: { matchLabels: { app: "egress" } } }], ports: [{ port: 3128 }] },
+    ],
+  },
 };
-// Readiness on /ready, but: edge has none (it stops taking connections as it drains); the
-// orchestrator's and the runner's answer on the acting copy alone, and the next copy only acts
-// once the old one has stopped, so a rolling update waiting for it would never end.
-const READINESS = { edge: "/health", orchestrator: "/health", runner: "/health" };
 
-test("deploy/kubernetes: two copies of each service, one of the proxy, each update starting the next copy first", () => {
-  for (const service of SERVICES) {
-    const d = deployment(service);
-    assert.equal(d.spec.replicas, service === "proxy" ? 1 : 2, `${service}'s copies`);
-    assert.deepEqual(
-      d.spec.strategy,
-      { type: "RollingUpdate", rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
-      service,
-    );
-    assert.equal(
-      container(service).readinessProbe?.httpGet?.path,
-      READINESS[service] ?? "/ready",
-      `${service}'s readiness`,
-    );
-    assert.equal(pod(service).terminationGracePeriodSeconds, GRACE[service], service);
-  }
-  // The proxy drains as long as an agent's call lasts, after its preStop pause, within its
-  // grace period.
-  const pause = Number(container("proxy").lifecycle.preStop.exec.command[1]);
-  assert.ok(pause + Number(env("proxy").DRAIN_SECONDS) < GRACE.proxy);
-});
+const SERVICES = {
+  egress: {
+    metadata: { name: "egress" },
+    spec: { clusterIP: "10.96.0.11", selector: { app: "deckhand-egress" } },
+  },
+};
 
-test("deploy/kubernetes: every service as compose runs it: not root, no capability, a read-only root", () => {
-  for (const service of SERVICES) {
-    const security = pod(service).securityContext;
-    assert.equal(security.runAsNonRoot, true, service);
-    assert.equal(security.runAsUser, 1000, service);
-    assert.equal(security.seccompProfile.type, "RuntimeDefault", service);
-    const own = container(service).securityContext;
-    assert.deepEqual(own.capabilities, { drop: ["ALL"] }, service);
-    assert.equal(own.allowPrivilegeEscalation, false, service);
-    assert.equal(own.readOnlyRootFilesystem, true, service);
-  }
-  // The sandboxes' namespace enforces Pod Security `restricted`.
-  const sandboxes = named("Namespace", SANDBOXES_NS, base);
-  assert.equal(sandboxes.metadata.labels["pod-security.kubernetes.io/enforce"], "restricted");
-});
+// The services' namespace, when the sandboxes have one of their own.
+const SVC = "deckhand";
 
-test("components/redis: each service's store under its own user and keys", () => {
-  const patches = kustomization("components/redis").patches.filter((p) => p.path);
-  const stored = patches.map((p) => docs(join("components/redis", p.path))[0]);
-  const acl = readFileSync(join(root, "components/redis/redis.yaml"), "utf8");
-  const users = /for service in ([\w ]+); do/.exec(acl)[1].split(" ");
-  for (const patch of stored) {
-    const service = patch.metadata.name;
-    const vars = Object.fromEntries(
-      patch.spec.template.spec.containers[0].env.map((e) => [e.name, e.value ?? e.valueFrom]),
-    );
-    assert.equal(vars.STORE_URL, `redis://${service}@redis:6379?prefix=deckhand:${service}:`);
-    assert.deepEqual(vars.REDIS_PASSWORD, {
-      secretKeyRef: { name: "deckhand-redis", key: service },
+// Deckhand's policy with the sandboxes apart, as docs/kubernetes.md shows it: the proxy's pods in
+// the services' namespace alone.
+const APART_POLICY = {
+  metadata: { name: "deckhand-sandboxes" },
+  spec: {
+    podSelector: { matchLabels: { "deckhand.role": "sandbox" } },
+    policyTypes: ["Ingress", "Egress"],
+    egress: [
+      {
+        to: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": SVC } },
+            podSelector: { matchLabels: { app: "deckhand-egress" } },
+          },
+        ],
+        ports: [{ port: 3128 }],
+      },
+    ],
+  },
+};
+
+// A namespace's API: `objects` by resource then name; `logs` a pod's log, chunks of text;
+// `fail(call)` answers a call instead (a Response), when it does. Every call is in `calls`
+// as "METHOD path?query", the bodies sent in `bodies`.
+// `fail` gets the request's `signal`, and may answer a promise that only it ends (an API that
+// never answers); a pod's log may be a function of { follow, signal } giving a Response.
+// `timeoutMs`: createKubeApi()'s.
+// `apart`: the services in a namespace of their own (SVC), with the proxy's Service, its
+// EndpointSlices (`slices`) and `servicePolicies`; `servicesApi` and `servicesObjects` are
+// theirs.
+function fakeApi({
+  policies = [POLICY],
+  logs = {},
+  slices = [],
+  fail = () => null,
+  timeoutMs,
+  apart = false,
+  servicePolicies = [],
+} = {}) {
+  const store = (services = {}) => ({
+    pods: new Map(),
+    secrets: new Map(),
+    persistentvolumeclaims: new Map(),
+    services: new Map(Object.entries(services)),
+    events: new Map(),
+  });
+  const objects = store(apart ? {} : SERVICES);
+  const servicesObjects = apart ? store(SERVICES) : objects;
+  const namespaces = { [NS]: objects, ...(apart ? { [SVC]: servicesObjects } : {}) };
+  const servicesNs = apart ? SVC : NS;
+  const calls = [];
+  const bodies = [];
+  let uids = 0;
+  const matches = (obj, selector) =>
+    !selector ||
+    selector.split(",").every((term) => {
+      const [k, v] = term.split("=");
+      return obj.metadata.labels?.[k] === v;
     });
-    assert.ok(users.includes(service), `${service}: no Redis user`);
-    // Each user's keys are its own prefix's.
-    assert.match(acl, /~deckhand:\$service:\*/);
+  const fetch = async (url, init = {}) => {
+    const { pathname, search, searchParams } = new URL(url);
+    const method = init.method ?? "GET";
+    calls.push(`${method} ${pathname}${search}`);
+    assert.equal(init.headers.authorization, "Bearer token-1");
+    const body = init.body && JSON.parse(init.body);
+    if (body) bodies.push(body);
+    const failed = await fail({ method, path: pathname, body, signal: init.signal });
+    if (failed) return failed;
+    if (pathname === `/apis/networking.k8s.io/v1/namespaces/${NS}/networkpolicies`) {
+      return Response.json({ items: policies });
+    }
+    if (apart && pathname === `/apis/networking.k8s.io/v1/namespaces/${SVC}/networkpolicies`) {
+      return Response.json({ items: servicePolicies });
+    }
+    if (pathname === `/apis/discovery.k8s.io/v1/namespaces/${servicesNs}/endpointslices`) {
+      return Response.json({ items: slices });
+    }
+    const [, ns, kind, name, sub] =
+      pathname.match(/^\/api\/v1\/namespaces\/([^/]+)\/(\w+)(?:\/([^/]+))?(?:\/(\w+))?$/) ?? [];
+    const store = namespaces[ns]?.[kind];
+    if (!store) return new Response("no such route", { status: 404 });
+    const missing = () =>
+      Response.json({ message: `${kind} "${name}" not found` }, { status: 404 });
+    if (sub === "log") {
+      if (!store.has(name)) return missing();
+      if (typeof logs[name] === "function") {
+        return logs[name]({ follow: searchParams.get("follow") === "true", signal: init.signal });
+      }
+      const chunks = logs[name] ?? [];
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            for (const chunk of chunks) c.enqueue(new TextEncoder().encode(chunk));
+            c.close();
+          },
+        }),
+      );
+    }
+    if (method === "POST") {
+      if (store.has(body.metadata.name)) {
+        return Response.json({ message: "already exists" }, { status: 409 });
+      }
+      const made = {
+        ...body,
+        metadata: {
+          creationTimestamp: new Date(0).toISOString(),
+          uid: `uid-${++uids}`,
+          resourceVersion: "1",
+          ...body.metadata,
+        },
+        status: kind === "pods" ? { phase: "Running", podIPs: [{ ip: "10.244.1.7" }] } : {},
+      };
+      store.set(body.metadata.name, made);
+      return Response.json(made, { status: 201 });
+    }
+    if (method === "PUT") {
+      if (!store.has(name)) return missing();
+      const version = store.get(name).metadata.resourceVersion;
+      if (body.metadata.resourceVersion !== version) {
+        return Response.json({ message: "conflict" }, { status: 409 });
+      }
+      // Each change a new version, as the API gives it.
+      const changed = {
+        ...body,
+        metadata: { ...body.metadata, resourceVersion: String(Number(version ?? 0) + 1) },
+      };
+      store.set(name, changed);
+      return Response.json(changed);
+    }
+    if (method === "DELETE") {
+      if (!store.delete(name)) return missing();
+      return Response.json({ kind: "Status" });
+    }
+    if (name) return store.has(name) ? Response.json(store.get(name)) : missing();
+    const selector = searchParams.get("labelSelector");
+    return Response.json({ items: [...store.values()].filter((o) => matches(o, selector)) });
+  };
+  const kubeApi = (namespace) =>
+    createKubeApi({ fetch, base: "https://kube", token: () => "token-1", namespace, timeoutMs });
+  const api = kubeApi(NS);
+  const servicesApi = apart ? kubeApi(SVC) : api;
+  return { api, servicesApi, calls, bodies, objects, servicesObjects };
+}
+
+// `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
+// retries and polls take time); `sleep(ms)` is called too.
+// `kubernetes`: more of config.kubernetes.
+function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {} } = {}) {
+  const fake = fakeApi(options);
+  const logged = [];
+  const inboxDir = tempDir(t);
+  const clock = { at: Date.parse("2026-10-30T10:00:00Z") };
+  const cfg = { ...config, kubernetes: { ...config.kubernetes, ...kubernetes } };
+  const clockNow = now ?? (() => clock.at);
+  const runner = createKubernetesRunner({
+    config: cfg,
+    api: fake.api,
+    services: fake.servicesApi,
+    pullSecret: createPullSecret({
+      config: cfg,
+      api: fake.api,
+      services: fake.servicesApi,
+      now: clockNow,
+    }),
+    inboxDir,
+    log: (line) => logged.push(line),
+    now: clockNow,
+    sleep: async (ms) => {
+      clock.at += ms;
+      await sleep(ms);
+    },
+  });
+  return { ...fake, runner, logged, inboxDir, clock };
+}
+
+// What sandboxSpec() gives a work run (sandbox-spec.mjs).
+const spec = (over = {}) => ({
+  run: "dh-org-repo-12-abc-1730000000",
+  name: "dh-org-repo-12-abc",
+  image: "dh-sandbox",
+  labels: { "deckhand.task": "org/repo#12" },
+  env: { DECKHAND_RUN_TOKEN: "s3cret", TASK_PROMPT: "do it", SANDBOX_MODEL: undefined },
+  user: SANDBOX_USER,
+  limits: { cpus: "2", memory: "4g", pids: 2048 },
+  caps: [],
+  volumes: [
+    { kind: "agent", name: "dh-claude-code", path: "/opt/claude-code", readOnly: true },
+    { kind: "session", name: "dh-org-repo-12-abc-workspace", path: "/workspace" },
+    { kind: "session", name: "dh-org-repo-12-abc-claude", path: "/home/node/.claude" },
+  ],
+  ca: "PEM",
+  ...over,
+});
+
+test("start: a claim per session volume, the Pod, then a Secret with the run's env and tokens", async (t) => {
+  const { runner, calls, objects } = setup(t);
+  const bound = [];
+  const tokens = (uid) => (bound.push(uid), { DECKHAND_RUN_TOKEN: `token-for-${uid}` });
+  assert.deepEqual(await runner.start(spec({ tokens })), { engine: null });
+  const secret = objects.secrets.get("dh-org-repo-12-abc-1730000000-env");
+  // Unset values stay unset; the secrets are in the Secret, never in the Pod. The run's tokens
+  // are bound to the pod's UID, known once it is made.
+  const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
+  assert.deepEqual(bound, [uid]);
+  assert.deepEqual(secret.stringData, {
+    DECKHAND_RUN_TOKEN: `token-for-${uid}`,
+    DECKHAND_RUN_TOKEN: "s3cret",
+    TASK_PROMPT: "do it",
+  });
+  assert.equal(secret.metadata.annotations["deckhand.run"], "dh-org-repo-12-abc-1730000000");
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.ok(!JSON.stringify(pod).includes("s3cret"));
+  const [c] = pod.spec.containers;
+  assert.deepEqual(c.envFrom, [{ secretRef: { name: "dh-org-repo-12-abc-1730000000-env" } }]);
+  // Where the run's files are: values, from the broker.
+  assert.deepEqual(c.env, [
+    { name: "TASK_INBOX", value: "http://broker:8081/run/inbox" },
+    { name: "DECKHAND_CA", value: "http://broker:8081/run/ca" },
+    // Its stderr lines tagged: the pod log has both streams in one.
+    { name: "SANDBOX_TAG_STDERR", value: "1" },
+  ]);
+  // The proxy's name alone: the services' names sandboxes call are the proxy's to read.
+  assert.deepEqual(pod.spec.hostAliases, [{ ip: "10.96.0.11", hostnames: ["egress"] }]);
+  assert.deepEqual(pod.metadata.labels, {
+    "deckhand.owner": "dh",
+    "deckhand.run": "dh-org-repo-12-abc-1730000000",
+    "deckhand.role": "sandbox",
+  });
+  assert.equal(pod.metadata.annotations["deckhand.task"], "org/repo#12");
+  assert.equal(pod.metadata.annotations["deckhand.name"], "dh-org-repo-12-abc");
+  assert.deepEqual(
+    pod.spec.volumes.map((v) => v.persistentVolumeClaim),
+    [
+      { claimName: "dh-claude-code", readOnly: true },
+      { claimName: "dh-org-repo-12-abc-workspace" },
+      { claimName: "dh-org-repo-12-abc-claude" },
+    ],
+  );
+  assert.deepEqual(c.volumeMounts, [
+    { name: "v0", mountPath: "/opt/claude-code", readOnly: true },
+    { name: "v1", mountPath: "/workspace" },
+    { name: "v2", mountPath: "/home/node/.claude" },
+  ]);
+  // The session claims, of the operator's class and size; the agent's is not the runner's.
+  const claim = objects.persistentvolumeclaims.get("dh-org-repo-12-abc-workspace");
+  assert.deepEqual(claim.spec, {
+    accessModes: ["ReadWriteOnce"],
+    resources: { requests: { storage: "10Gi" } },
+    storageClassName: "fast",
+  });
+  assert.ok(!objects.persistentvolumeclaims.has("dh-claude-code"));
+  // The policy checked first, the Pod, then its Secret, last.
+  assert.match(calls[0], /networkpolicies$/);
+  assert.match(calls.at(-2), /^POST \/api\/v1\/namespaces\/runs\/pods$/);
+  assert.match(calls.at(-1), /^POST \/api\/v1\/namespaces\/runs\/secrets$/);
+  // The inbox is the runner's: the next run's claims are already there.
+  runner.send("dh-org-repo-12-abc-1730000000", "more", claude);
+  assert.equal(runner.closed("dh-org-repo-12-abc-1730000000"), false);
+  objects.pods.clear();
+  calls.length = 0;
+  await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
+  assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2); // Pod, Secret
+});
+
+test("podSpec: Pod Security restricted, no token, no restart, the grant's limits", () => {
+  const pod = podSpec(spec(), {
+    pod: "p",
+    labels: {},
+    annotations: {},
+    secret: "s",
+  });
+  const { spec: s } = pod;
+  assert.equal(s.restartPolicy, "Never");
+  assert.equal(s.automountServiceAccountToken, false);
+  assert.equal(s.enableServiceLinks, false);
+  // No cluster DNS: a lookup fails at once rather than timing out behind the NetworkPolicy.
+  assert.equal(s.dnsPolicy, "None");
+  assert.deepEqual(s.dnsConfig, { nameservers: ["127.0.0.1"] });
+  assert.equal(s.terminationGracePeriodSeconds, 10);
+  assert.equal(s.hostNetwork ?? false, false);
+  assert.equal(s.hostPID ?? false, false);
+  assert.equal(s.hostIPC ?? false, false);
+  assert.deepEqual(s.securityContext, {
+    runAsNonRoot: true,
+    runAsUser: 1000,
+    runAsGroup: 1000,
+    fsGroup: 1000,
+    // Not a walk through the whole workspace at every mount, while the pod is Pending.
+    fsGroupChangePolicy: "OnRootMismatch",
+    seccompProfile: { type: "RuntimeDefault" },
+  });
+  // restricted: no hostPath (volumes are claims only), every container hardened.
+  assert.ok(s.volumes.every((v) => Object.keys(v).sort().join() === "name,persistentVolumeClaim"));
+  for (const c of [...s.containers, ...(s.initContainers ?? [])]) {
+    assert.deepEqual(c.securityContext, {
+      allowPrivilegeEscalation: false,
+      capabilities: { drop: ["ALL"] },
+      runAsNonRoot: true,
+      seccompProfile: { type: "RuntimeDefault" },
+    });
+    assert.equal(c.ports, undefined);
+    // Kubernetes' default: a :latest image is pulled again, a pinned one kept.
+    assert.equal(c.imagePullPolicy, undefined);
+    assert.deepEqual(c.resources, {
+      limits: { cpu: "2", memory: "4Gi" },
+      requests: { cpu: "2", memory: "4Gi" },
+    });
   }
-  // Every service with a store, and nothing else.
-  assert.deepEqual(stored.map((p) => p.metadata.name).sort(), [
-    "broker",
-    "edge",
-    "github",
-    "models",
-    "orchestrator",
-    "runner",
+  // Fail closed, as sandboxArgs(): no user or limits, no sandbox; nor capabilities.
+  assert.throws(() => podSpec(spec({ user: undefined }), {}), /no user/);
+  assert.throws(() => podSpec(spec({ limits: undefined }), {}), /no limits/);
+  assert.throws(() => podSpec(spec({ caps: ["CHOWN"] }), {}), /no capabilities/);
+});
+
+test("start: a failure removes the Pod, Secret and claims it made, keeps the older ones", async (t) => {
+  const { runner, objects } = setup(t, {
+    fail: ({ method, path }) =>
+      method === "POST" && path.endsWith("/pods")
+        ? Response.json({ message: "pods is forbidden" }, { status: 403 })
+        : null,
+  });
+  objects.persistentvolumeclaims.set("dh-org-repo-12-abc-claude", {
+    metadata: { name: "dh-org-repo-12-abc-claude" },
+  });
+  await assert.rejects(runner.start(spec()), /POST pods: pods is forbidden/);
+  assert.equal(objects.secrets.size, 0);
+  assert.deepEqual([...objects.persistentvolumeclaims.keys()], ["dh-org-repo-12-abc-claude"]);
+});
+
+test("start: a Secret refused removes the Pod made before it", async (t) => {
+  const { runner, objects } = setup(t, {
+    fail: ({ method, path }) =>
+      method === "POST" && path.endsWith("/secrets")
+        ? Response.json({ message: "secrets is forbidden" }, { status: 403 })
+        : null,
+  });
+  await assert.rejects(runner.start(spec()), /POST secrets: secrets is forbidden/);
+  assert.equal(objects.pods.size, 0);
+});
+
+test("locate: the UID of the running sandbox pod at an address, else null", async (t) => {
+  let time = 0;
+  let failing = false;
+  let failed = 0;
+  const { runner, objects, calls } = setup(
+    t,
+    {
+      fail: ({ method, path }) =>
+        failing && method === "GET" && path.endsWith("/pods")
+          ? (failed++, Response.json({ message: "etcd leader changed" }, { status: 500 }))
+          : null,
+    },
+    { now: () => time },
+  );
+  await runner.start(spec());
+  const uid = objects.pods.get("dh-org-repo-12-abc").metadata.uid;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(await runner.locate("10.244.9.9"), null);
+  // The connections that ask at once about an address share one lookup.
+  const lists = () => calls.filter((c) => c.startsWith("GET") && c.includes("podIP")).length;
+  time += 60_000;
+  const before = lists();
+  const found = await Promise.all([1, 2, 3].map(() => runner.locate("10.244.8.8")));
+  assert.deepEqual(found, [null, null, null]);
+  assert.equal(lists(), before + 1);
+  // An API error keeps what was known, even right after another sandbox started: one failed
+  // call refuses no sandbox. Nor is it asked again for every connection meanwhile.
+  time += 60_000;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  time += 2_000;
+  failing = true;
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1730000000" }));
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.equal(failed, 1);
+  for (let i = 0; i < 5; i++) {
+    time += 10;
+    assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+    assert.equal(await runner.locate("10.244.5.5"), null);
+  }
+  assert.equal(failed, 2);
+  // Known means answered within 10 s: past that, an outage fails closed (the pod may be gone
+  // without remove(), its address another's).
+  time += 10_000;
+  assert.equal(await runner.locate("10.244.1.7"), null);
+  failing = false;
+  objects.pods.delete("dh-org-repo-13-abc");
+  // Gone with its pod: an address never names a pod that was removed.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.equal(await runner.locate("10.244.1.7"), null);
+});
+
+test("start: without the namespace's NetworkPolicy, no run, and the reply says why", async (t) => {
+  const { runner, objects } = setup(t, { policies: [] });
+  await assert.rejects(
+    runner.start(spec()),
+    /the namespace runs doesn't isolate its sandboxes: no NetworkPolicy picks the sandbox pods for both Ingress and Egress.*docs\/kubernetes\.md/,
+  );
+  assert.equal(objects.pods.size + objects.secrets.size + objects.persistentvolumeclaims.size, 0);
+  // Its Services missing: no way to the broker or the proxy.
+  const other = setup(t);
+  other.objects.services.delete("egress");
+  await assert.rejects(other.runner.start(spec()), /no Service egress with a cluster IP/);
+});
+
+test("isolationProblem: any policy that widens what a sandbox may reach or what reaches it", () => {
+  const labels = { "deckhand.owner": "dh", "deckhand.role": "sandbox", "deckhand.run": "r" };
+  assert.equal(isolationProblem([POLICY], labels), null);
+  const add = (spec) => [POLICY, { metadata: { name: "extra" }, spec }];
+  const all = { podSelector: {} };
+  assert.match(isolationProblem(add({ ...all, ingress: [{}] }), labels), /extra lets traffic in/);
+  assert.match(
+    isolationProblem(add({ ...all, policyTypes: ["Egress"], egress: [{}] }), labels),
+    /extra lets sandbox pods reach anything/,
+  );
+  for (const peer of [
+    { ipBlock: { cidr: "0.0.0.0/0" } },
+    { namespaceSelector: {} },
+    { namespaceSelector: {}, podSelector: { matchLabels: { app: "egress" } } },
+  ]) {
+    assert.match(
+      isolationProblem(add({ ...all, policyTypes: ["Egress"], egress: [{ to: [peer] }] }), labels),
+      /beyond the namespace's pods/,
+    );
+  }
+  assert.match(
+    isolationProblem(
+      add({ ...all, policyTypes: ["Egress"], egress: [{ to: [{ podSelector: {} }] }] }),
+      labels,
+    ),
+    /reach each other/,
+  );
+  // No sandbox at all, not just this one: another deployment's, another run's.
+  for (const matchLabels of [
+    { "deckhand.role": "sandbox", "deckhand.owner": "other" },
+    { "deckhand.run": "another-run" },
+  ]) {
+    assert.match(
+      isolationProblem(
+        add({
+          ...all,
+          policyTypes: ["Egress"],
+          egress: [{ to: [{ podSelector: { matchLabels } }] }],
+        }),
+        labels,
+      ),
+      /reach each other/,
+    );
+  }
+  // A label sandbox pods never carry, or another role: never a sandbox.
+  for (const podSelector of [
+    { matchLabels: { "deckhand.role": "egress" } },
+    { matchLabels: { "deckhand.owner": "dh", app: "listener" } },
+    { matchExpressions: [{ key: "deckhand.role", operator: "NotIn", values: ["sandbox"] }] },
+    { matchExpressions: [{ key: "deckhand.role", operator: "In", values: ["egress"] }] },
+    { matchExpressions: [{ key: "app", operator: "Exists" }] },
+  ]) {
+    const spec = {
+      ...all,
+      policyTypes: ["Egress"],
+      egress: [{ to: [{ podSelector }], ports: [{ port: 3128 }] }],
+    };
+    assert.equal(isolationProblem(add(spec), labels), null, JSON.stringify(podSelector));
+  }
+  // Their other ports (the orchestrator's services port gives the runner's tokens; the broker's
+  // port, which sandboxes once reached directly, #567): each rule names its ports, the proxy's
+  // only.
+  const orchestrator = { podSelector: { matchLabels: { app: "orchestrator" } } };
+  for (const [ports, open] of [
+    [undefined, "every port"],
+    [[{ port: 8083 }], "port 8083"],
+    [[{ port: 8081 }], "port 8081"],
+    [[{ port: 3128, endPort: 3140 }], "port 3128"],
+    [[{ port: "http" }], "port http"],
+    [[{ protocol: "TCP" }], "every port"],
+    [[{ port: 3128 }, { protocol: "TCP" }], "every port"],
+  ]) {
+    const spec = { ...all, policyTypes: ["Egress"], egress: [{ to: [orchestrator], ports }] };
+    assert.match(
+      isolationProblem(add(spec), labels),
+      new RegExp(`extra lets sandbox pods reach ${open} `),
+    );
+  }
+  const notApp = { matchExpressions: [{ key: "app", operator: "DoesNotExist" }] };
+  assert.match(
+    isolationProblem(
+      add({ ...all, policyTypes: ["Egress"], egress: [{ to: [{ podSelector: notApp }] }] }),
+      labels,
+    ),
+    /reach each other/,
+  );
+  // A policy for other pods doesn't count, either way.
+  const others = { podSelector: { matchLabels: { app: "egress" } }, egress: [{}] };
+  assert.equal(isolationProblem(add(others), labels), null);
+  assert.match(isolationProblem([{ metadata: {}, spec: others }], labels), /no NetworkPolicy/);
+  // Egress only: what comes in isn't denied.
+  const egressOnly = { ...POLICY.spec, policyTypes: ["Egress"] };
+  assert.match(isolationProblem([{ metadata: {}, spec: egressOnly }], labels), /no NetworkPolicy/);
+});
+
+test("isolationProblem, apart: the egress proxy's pods in the services' namespace, nothing else", () => {
+  const labels = { "deckhand.owner": "dh", "deckhand.role": "sandbox", "deckhand.run": "r" };
+  const proxy = { namespace: SVC, selector: { app: "deckhand-egress" } };
+  assert.equal(isolationProblem([APART_POLICY], labels, { proxy }), null);
+  const withPeer = (peer, ports = [{ port: 3128 }]) => [
+    {
+      metadata: { name: "deckhand-sandboxes" },
+      spec: { ...APART_POLICY.spec, egress: [{ to: [peer], ports }] },
+    },
+  ];
+  const svc = { matchLabels: { "kubernetes.io/metadata.name": SVC } };
+  const egress = { matchLabels: { app: "deckhand-egress" } };
+  // Narrower still, or the same written as expressions: allowed.
+  for (const peer of [
+    { namespaceSelector: svc, podSelector: { matchLabels: { app: "deckhand-egress", v: "2" } } },
+    {
+      namespaceSelector: {
+        matchExpressions: [{ key: "kubernetes.io/metadata.name", operator: "In", values: [SVC] }],
+      },
+      podSelector: {
+        matchExpressions: [{ key: "app", operator: "In", values: ["deckhand-egress"] }],
+      },
+    },
+  ]) {
+    assert.equal(isolationProblem(withPeer(peer), labels, { proxy }), null, JSON.stringify(peer));
+  }
+  // Another pod of the services' namespace, or all of them.
+  for (const podSelector of [
+    { matchLabels: { app: "orchestrator" } },
+    {},
+    undefined,
+    { matchExpressions: [{ key: "app", operator: "In", values: ["deckhand-egress", "broker"] }] },
+    { matchExpressions: [{ key: "app", operator: "NotIn", values: ["broker"] }] },
+  ]) {
+    assert.match(
+      isolationProblem(withPeer({ namespaceSelector: svc, podSelector }), labels, { proxy }),
+      /lets sandbox pods reach pods of the namespace deckhand other than the egress proxy's/,
+      JSON.stringify(podSelector),
+    );
+  }
+  // A third namespace, every namespace, the sandboxes' own pods, an address.
+  for (const peer of [
+    {
+      namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "other" } },
+      podSelector: egress,
+    },
+    { namespaceSelector: {}, podSelector: egress },
+    {
+      namespaceSelector: {
+        matchExpressions: [
+          { key: "kubernetes.io/metadata.name", operator: "In", values: [SVC, "other"] },
+        ],
+      },
+      podSelector: egress,
+    },
+    { namespaceSelector: { matchLabels: { team: "deckhand" } }, podSelector: egress },
+    { podSelector: egress },
+    { podSelector: { matchLabels: { "deckhand.role": "install" } } },
+    { ipBlock: { cidr: "10.244.0.0/16" } },
+  ]) {
+    assert.match(
+      isolationProblem(withPeer(peer), labels, { proxy }),
+      /lets sandbox pods reach beyond the namespace deckhand/,
+      JSON.stringify(peer),
+    );
+  }
+  // A proxy Service without a selector: nothing tells its pods.
+  assert.match(
+    isolationProblem([APART_POLICY], labels, { proxy: { namespace: SVC, selector: {} } }),
+    /other than the egress proxy's .*which has none/,
+  );
+  // Its other ports, as in one namespace.
+  assert.match(
+    isolationProblem(
+      withPeer({ namespaceSelector: svc, podSelector: egress }, [{ port: 8083 }]),
+      labels,
+      {
+        proxy,
+      },
+    ),
+    /reach port 8083 of the egress proxy's pods \(only 3128\)/,
+  );
+  // The single-namespace policy no longer does: its peer is the sandboxes' own namespace.
+  assert.match(isolationProblem([POLICY], labels, { proxy }), /beyond the namespace deckhand/);
+  // Ingress refused as in one namespace.
+  const ingress = { ...APART_POLICY, spec: { ...APART_POLICY.spec, ingress: [{}] } };
+  assert.match(isolationProblem([ingress], labels, { proxy }), /lets traffic in/);
+});
+
+test("start, apart: the pod, its Secret and claims in the sandboxes' namespace, the proxy read in the services'", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const pull = (auth) => ({
+    metadata: { name: "pull", resourceVersion: "1" },
+    type: "kubernetes.io/dockerconfigjson",
+    data: { ".dockerconfigjson": Buffer.from(JSON.stringify({ auths: auth })).toString("base64") },
+  });
+  let time = 0;
+  const { runner, objects, servicesObjects, calls } = setup(
+    t,
+    { apart: true, policies: [APART_POLICY] },
+    { kubernetes, now: () => time },
+  );
+  servicesObjects.secrets.set("pull", pull({ "registry.example.com": { auth: "a" } }));
+  await runner.start(spec());
+  assert.deepEqual([...objects.pods.keys()], ["dh-org-repo-12-abc"]);
+  assert.deepEqual([...objects.persistentvolumeclaims.keys()].sort(), [
+    "dh-org-repo-12-abc-claude",
+    "dh-org-repo-12-abc-workspace",
   ]);
-  assert.deepEqual([...users].sort(), [
-    "broker",
-    "edge",
-    "github",
-    "models",
-    "orchestrator",
-    "runner",
+  // Nothing made in the services' namespace; only its Service, its Secret read.
+  for (const kind of ["pods", "persistentvolumeclaims", "events"]) {
+    assert.equal(servicesObjects[kind].size, 0, kind);
+  }
+  assert.deepEqual([...servicesObjects.secrets.keys()], ["pull"]);
+  const writes = calls.filter((c) => !c.startsWith("GET"));
+  assert.ok(
+    writes.every((c) => c.includes(`/namespaces/${NS}/`)),
+    writes.join("\n"),
+  );
+  assert.ok(calls.includes(`GET /api/v1/namespaces/${SVC}/services/egress`));
+  assert.ok(calls.includes(`GET /apis/networking.k8s.io/v1/namespaces/${NS}/networkpolicies`));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.deepEqual(pod.spec.hostAliases, [{ ip: "10.96.0.11", hostnames: ["egress"] }]);
+  // Its pull Secret: a copy of the services' one in its own namespace, as pods pull with.
+  assert.deepEqual(pod.spec.imagePullSecrets, [{ name: "pull" }]);
+  const copy = objects.secrets.get("pull");
+  assert.equal(copy.type, "kubernetes.io/dockerconfigjson");
+  assert.deepEqual(copy.data, servicesObjects.secrets.get("pull").data);
+  assert.equal(copy.metadata.labels["deckhand.owner"], "dh");
+  assert.ok(objects.secrets.has("dh-org-repo-12-abc-1730000000-env"));
+  // Rotated in the services' namespace: the copy follows, once the source is read again.
+  servicesObjects.secrets.set("pull", pull({ "registry.example.com": { auth: "b" } }));
+  time += 61_000;
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1" }));
+  assert.deepEqual(objects.secrets.get("pull").data, servicesObjects.secrets.get("pull").data);
+  // One of that name that isn't the runner's copy is never overwritten: the run is refused.
+  objects.secrets.set("pull", { metadata: { name: "pull", labels: {} }, data: {} });
+  time += 61_000;
+  await assert.rejects(
+    runner.start(spec({ name: "dh-org-repo-14-abc", run: "dh-org-repo-14-abc-1" })),
+    /the Secret pull in the namespace runs isn't the runner's copy of KUBERNETES_REGISTRY_SECRET/,
+  );
+  assert.deepEqual(objects.secrets.get("pull").data, {});
+  assert.equal(objects.pods.has("dh-org-repo-14-abc"), false);
+});
+
+test("start, apart: a pull Secret there that isn't the runner's copy is refused, even holding the same data", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const data = { ".dockerconfigjson": Buffer.from("{}").toString("base64") };
+  const source = { metadata: { name: "pull" }, data };
+  // The same data, labelled the runner's owner but not its copy's role; then one made between
+  // the runner's look and its create (a 409), by someone else.
+  const foreign = { metadata: { name: "pull", labels: { "deckhand.owner": "dh" } }, data };
+  {
+    const { runner, objects, servicesObjects } = setup(
+      t,
+      { apart: true, policies: [APART_POLICY] },
+      { kubernetes },
+    );
+    servicesObjects.secrets.set("pull", source);
+    objects.secrets.set("pull", foreign);
+    await assert.rejects(
+      runner.start(spec()),
+      /the Secret pull in the namespace runs isn't the runner's copy of KUBERNETES_REGISTRY_SECRET \(labelled deckhand.owner: dh and deckhand.role: registry\)/,
+    );
+    assert.equal(objects.pods.size, 0);
+  }
+  let raced = false;
+  const fake = setup(
+    t,
+    {
+      apart: true,
+      policies: [APART_POLICY],
+      fail: ({ method, path, body }) => {
+        if (
+          method !== "POST" ||
+          !path.endsWith(`/namespaces/${NS}/secrets`) ||
+          body.metadata.name !== "pull"
+        ) {
+          return null;
+        }
+        raced = true;
+        fake.objects.secrets.set("pull", foreign);
+        return Response.json({ message: "already exists" }, { status: 409 });
+      },
+    },
+    { kubernetes },
+  );
+  fake.servicesObjects.secrets.set("pull", source);
+  await assert.rejects(fake.runner.start(spec()), /isn't the runner's copy/);
+  assert.ok(raced);
+  assert.equal(fake.objects.pods.size, 0);
+  // Its own copy, made by the other runner meanwhile: used.
+  fake.objects.secrets.set("pull", {
+    metadata: { name: "pull", labels: { "deckhand.owner": "dh", "deckhand.role": "registry" } },
+    data,
+  });
+  await fake.runner.start(spec());
+  assert.equal(fake.objects.pods.size, 1);
+});
+
+test("start, apart: the pull Secret's copy changed or gone under it (another start's) is looked at again", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const config = (auth) => ({
+    ".dockerconfigjson": Buffer.from(JSON.stringify({ auths: { r: { auth } } })).toString("base64"),
+  });
+  const labels = { "deckhand.owner": "dh", "deckhand.role": "registry" };
+  let time = 0;
+  let race = null; // what another start does just before this one's write lands
+  const fake = setup(
+    t,
+    {
+      apart: true,
+      policies: [APART_POLICY],
+      fail: ({ method, path }) => {
+        if (
+          !race ||
+          !path.endsWith(`/namespaces/${NS}/secrets${method === "PUT" ? "/pull" : ""}`)
+        ) {
+          return null;
+        }
+        if (!["PUT", "POST"].includes(method)) return null;
+        const then = race;
+        race = null;
+        return then(method);
+      },
+    },
+    { kubernetes, now: () => time },
+  );
+  const { runner, objects, servicesObjects } = fake;
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("a") });
+  await runner.start(spec());
+  assert.deepEqual(objects.secrets.get("pull").data, config("a"));
+  // Rotated; another start brings the copy up to date between this one's look and its PUT,
+  // whose version is then stale: a 409, looked at again, and found up to date.
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("b") });
+  time += 61_000;
+  let puts = 0;
+  race = () => {
+    puts++;
+    const copy = objects.secrets.get("pull");
+    objects.secrets.set("pull", {
+      ...copy,
+      metadata: { ...copy.metadata, resourceVersion: "9" },
+      data: config("b"),
+    });
+    return null; // this PUT goes on, its resourceVersion now stale
+  };
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1" }));
+  assert.equal(puts, 1);
+  assert.deepEqual(objects.secrets.get("pull").data, config("b"));
+  assert.ok(objects.pods.has("dh-org-repo-13-abc"));
+  // Two starts at once across a rotation: both run, the copy up to date.
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("c") });
+  time += 61_000;
+  await Promise.all([
+    runner.start(spec({ name: "dh-org-repo-14-abc", run: "dh-org-repo-14-abc-1" })),
+    runner.start(spec({ name: "dh-org-repo-15-abc", run: "dh-org-repo-15-abc-1" })),
   ]);
-  // Redis lets in those alone.
-  const policy = named("NetworkPolicy", "deckhand-redis", redis);
-  const from = policy.spec.ingress[0].from[0].podSelector.matchExpressions[0].values;
-  assert.deepEqual(from.map((app) => SERVICE_OF[app]).sort(), [
-    "broker",
-    "edge",
-    "github",
-    "models",
-    "orchestrator",
-    "runner",
+  assert.ok(objects.pods.has("dh-org-repo-14-abc") && objects.pods.has("dh-org-repo-15-abc"));
+  assert.deepEqual(objects.secrets.get("pull").data, config("c"));
+  // Made by someone meanwhile (a 409), then gone again: made anew, not "remove it".
+  objects.secrets.delete("pull");
+  time += 61_000;
+  race = () => Response.json({ message: "already exists" }, { status: 409 });
+  await runner.start(spec({ name: "dh-org-repo-16-abc", run: "dh-org-repo-16-abc-1" }));
+  assert.deepEqual(objects.secrets.get("pull").metadata.labels, labels);
+  assert.ok(objects.pods.has("dh-org-repo-16-abc"));
+});
+
+test("start, apart: the single-namespace policy, or a proxy at an address, starts nothing", async (t) => {
+  const { runner, objects } = setup(t, { apart: true });
+  await assert.rejects(
+    runner.start(spec()),
+    /the namespace runs doesn't isolate its sandboxes: the NetworkPolicy deckhand-sandboxes lets sandbox pods reach beyond the namespace deckhand/,
+  );
+  const byAddress = setup(t, { apart: true, policies: [APART_POLICY] });
+  const runner2 = createKubernetesRunner({
+    config: { ...config, egressProxy: "http://10.96.0.11:3128" },
+    api: byAddress.api,
+    services: byAddress.servicesApi,
+    inboxDir: tempDir(t),
+  });
+  await assert.rejects(
+    runner2.start(spec()),
+    /EGRESS_PROXY \(http:\/\/10\.96\.0\.11:3128\) is an address/,
+  );
+  assert.equal(objects.pods.size + byAddress.objects.pods.size, 0);
+  assert.equal(objects.secrets.size + byAddress.objects.secrets.size, 0);
+});
+
+test("proxyAddresses and locate, apart: the proxy's endpoints in the services' namespace, sandboxes in theirs", async (t) => {
+  const slices = [{ endpoints: [{ addresses: ["10.244.2.3"] }] }];
+  const { runner, objects, calls } = setup(t, { apart: true, policies: [APART_POLICY], slices });
+  assert.deepEqual(await runner.proxyAddresses(), ["10.244.2.3"]);
+  assert.match(
+    calls.at(-1),
+    new RegExp(`^GET /apis/discovery.k8s.io/v1/namespaces/${SVC}/endpointslices`),
+  );
+  await runner.start(spec());
+  const { uid } = objects.pods.get("dh-org-repo-12-abc").metadata;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.match(calls.at(-1), new RegExp(`^GET /api/v1/namespaces/${NS}/pods\\?`));
+});
+
+test("selects: matchLabels and matchExpressions", () => {
+  const labels = { a: "1", b: "2" };
+  assert.ok(selects({}, labels));
+  assert.ok(selects({ matchLabels: { a: "1" } }, labels));
+  assert.ok(!selects({ matchLabels: { a: "2" } }, labels));
+  const expr = (operator, values) => ({ matchExpressions: [{ key: "a", operator, values }] });
+  assert.ok(selects(expr("In", ["1", "3"]), labels));
+  assert.ok(!selects(expr("NotIn", ["1"]), labels));
+  assert.ok(selects(expr("Exists"), labels));
+  assert.ok(!selects(expr("DoesNotExist"), labels));
+});
+
+test("start: an engine, a host mount or a cache is refused", async (t) => {
+  const { runner, objects } = setup(t);
+  await assert.rejects(runner.start(spec({ engine: { limits: {} } })), /no container engine/);
+  const mount = { kind: "mount", name: "/srv", path: "/srv" };
+  await assert.rejects(runner.start(spec({ volumes: [mount] })), /no host path/);
+  // A cache only with a class to make its claims of (KUBERNETES_CACHE_STORAGE_CLASS).
+  const cache = { kind: "cache", name: "c", path: "/c" };
+  await assert.rejects(runner.start(spec({ volumes: [cache] })), /no cache/);
+  assert.equal(objects.pods.size + objects.secrets.size, 0);
+});
+
+test("start: with a cache class, a cache is its claim, mounted read-write", async (t) => {
+  const { runner, objects } = setup(t, {}, { kubernetes: { cacheStorageClass: "nfs" } });
+  const cache = { kind: "cache", name: "dh-cache-org-repo-npm", path: "/home/node/.npm" };
+  await runner.start(spec({ volumes: [...spec().volumes, cache] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.deepEqual(pod.spec.volumes.at(-1).persistentVolumeClaim, {
+    claimName: "dh-cache-org-repo-npm",
+  });
+  assert.deepEqual(pod.spec.containers[0].volumeMounts.at(-1), {
+    name: "v3",
+    mountPath: "/home/node/.npm",
+  });
+  // The cache's claim is the images' to make (kube-images.mjs), not the runner's.
+  assert.ok(!objects.persistentvolumeclaims.has("dh-cache-org-repo-npm"));
+});
+
+// The agent's volume as sandboxSpec() gives it, with how to fill it.
+const agentVolume = {
+  kind: "agent",
+  name: "dh-claude-code",
+  path: "/opt/claude-code",
+  readOnly: true,
+  install: { command: "deckhand-install-claude-code", env: { CLAUDE_CODE_VERSION: "9.9.9" } },
+};
+
+test("start: an agent without a claim is installed by an init container, mounted read-only", async (t) => {
+  const { runner, objects } = setup(t, {}, { kubernetes: { registrySecret: "pull" } });
+  const volumes = [agentVolume, ...spec().volumes.slice(1)];
+  await runner.start(spec({ volumes }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.equal(pod.metadata.annotations["deckhand.agent-init"], "dh-claude-code");
+  // The nodes pull through the registry's Secret.
+  assert.deepEqual(pod.spec.imagePullSecrets, [{ name: "pull" }]);
+  assert.deepEqual(pod.spec.volumes[0], { name: "v0", emptyDir: {} });
+  const [init] = pod.spec.initContainers;
+  // From the base image, as neither root nor the sandbox's user, hardened as the sandbox is.
+  assert.equal(init.image, "dh-sandbox");
+  assert.deepEqual(init.command, ["deckhand-install-claude-code"]);
+  assert.deepEqual(init.securityContext, {
+    allowPrivilegeEscalation: false,
+    capabilities: { drop: ["ALL"] },
+    runAsNonRoot: true,
+    seccompProfile: { type: "RuntimeDefault" },
+    runAsUser: INSTALL_USER.uid,
+    runAsGroup: INSTALL_USER.gid,
+  });
+  assert.notEqual(INSTALL_USER.uid, SANDBOX_USER.uid);
+  assert.notEqual(INSTALL_USER.uid, 0);
+  assert.deepEqual(init.volumeMounts, [
+    { name: "v0", mountPath: "/opt/claude-code", readOnly: false },
+  ]);
+  const env = Object.fromEntries(init.env.map((e) => [e.name, e.value]));
+  assert.equal(env.CLAUDE_CODE_VERSION, "9.9.9");
+  // Out through the egress proxy, the only way out of a sandbox's pod.
+  assert.equal(env.HTTPS_PROXY, "http://egress:3128");
+  // Never the run's secrets: those are the sandbox's, in its Secret.
+  assert.ok(!JSON.stringify(init).includes("s3cret"));
+  // The sandbox only reads it.
+  assert.deepEqual(pod.spec.containers[0].volumeMounts[0], {
+    name: "v0",
+    mountPath: "/opt/claude-code",
+    readOnly: true,
+  });
+});
+
+test("start: an agent whose claim is there mounts it, no init container", async (t) => {
+  const { runner, objects } = setup(t);
+  objects.persistentvolumeclaims.set("dh-claude-code", { metadata: { name: "dh-claude-code" } });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.equal(pod.spec.initContainers, undefined);
+  assert.equal(pod.spec.imagePullSecrets, undefined);
+  assert.equal(pod.metadata.annotations["deckhand.agent-init"], undefined);
+  assert.deepEqual(pod.spec.volumes[0].persistentVolumeClaim, {
+    claimName: "dh-claude-code",
+    readOnly: true,
+  });
+});
+
+test("installing: while its init container hasn't ended, whatever the pod's phase says yet", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.status.phase = "Pending";
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), true);
+  // Its init container ended: the sandbox starts, before the kubelet reports Running.
+  pod.status.initContainerStatuses = [
+    { name: "agent-install", state: { terminated: { exitCode: 0 } } },
+  ];
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+  pod.status.initContainerStatuses = [{ name: "agent-install", state: { running: {} } }];
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), true);
+  pod.status.phase = "Running";
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+  // A pod without an init container never installs.
+  objects.pods.clear();
+  await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
+  objects.pods.get("dh-org-repo-12-abc").status.phase = "Pending";
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), false);
+});
+
+test("installing: an API that can't tell is no answer, not a refused connection", async (t) => {
+  let failing = false;
+  const { runner } = setup(t, {
+    fail: ({ method, path }) =>
+      failing && method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc")
+        ? Response.json({ message: "etcd timeout" }, { status: 500 })
+        : null,
+  });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  failing = true;
+  assert.equal(await runner.installing("dh-org-repo-12-abc"), null);
+});
+
+test("follow: a failed install in the init container fails the run, its output in the log", async (t) => {
+  const { runner, objects, calls, logged } = setup(t, {
+    logs: { "dh-org-repo-12-abc": ["npm error 403 registry.npmjs.org\n"] },
+  });
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.status = {
+    phase: "Failed",
+    initContainerStatuses: [{ name: "agent-install", state: { terminated: { exitCode: 1 } } }],
+  };
+  const err = [];
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (line) => err.push(line) }),
+    (error) =>
+      error instanceof RunError &&
+      /installing its agent \(dh-claude-code\) in its init container failed \(exit 1\); the installer's output is in the run's log/.test(
+        error.message,
+      ),
+  );
+  assert.deepEqual(err, ["npm error 403 registry.npmjs.org"]);
+  assert.ok(calls.some((c) => c.includes("/log?container=agent-install")));
+  assert.ok(logged.some((line) => /installing dh-claude-code failed \(exit 1\)/.test(line)));
+});
+
+test("follow: an install still running past KUBERNETES_PENDING_MINUTES says so, not 'make room'", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:00:00Z";
+  pod.status = {
+    phase: "Pending",
+    initContainerStatuses: [{ name: "agent-install", state: { running: {} } }],
+    containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+  };
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+    (error) =>
+      /stayed Pending for 10 min \(its init container is installing the agent\)\. The operator can check that the agent's install reaches its hosts/.test(
+        error.message,
+      ),
+  );
+});
+
+test("list and state: this deployment's sandbox pods, Pending and Running as running", async (t) => {
+  const { runner, objects } = setup(t);
+  await runner.start(spec());
+  await runner.start(spec({ run: "r2", name: "dh-other" }));
+  objects.pods.get("dh-other").status.phase = "Failed";
+  objects.pods.set("someone-else", {
+    metadata: {
+      name: "someone-else",
+      labels: { "deckhand.owner": "xx", "deckhand.role": "sandbox" },
+    },
+    status: { phase: "Running" },
+  });
+  assert.deepEqual(await runner.list(), [
+    { name: "dh-org-repo-12-abc", run: "dh-org-repo-12-abc-1730000000", running: true },
+    { name: "dh-other", run: "r2", running: false },
+  ]);
+  objects.pods.get("dh-org-repo-12-abc").status.phase = "Pending";
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  assert.equal(await runner.state("dh-other"), "exited");
+  assert.equal(await runner.state("dh-gone"), null);
+  // Its sandbox container's exit code, once it ended (the run events'): none while it runs.
+  assert.equal(await runner.exitCode("dh-other"), null);
+  objects.pods.get("dh-other").status.containerStatuses = [
+    { name: "sandbox", state: { terminated: { exitCode: 137 } } },
+  ];
+  assert.equal(await runner.exitCode("dh-other"), 137);
+  assert.equal(await runner.exitCode("dh-gone"), null);
+  // The API failing isn't "none".
+  const broken = setup(t, {
+    fail: () => Response.json({ message: "etcd down" }, { status: 500 }),
+  });
+  await assert.rejects(broken.runner.list(), /etcd down/);
+  await assert.rejects(broken.runner.state("x"), /etcd down/);
+});
+
+test("follow: the agent's lines and the rest apart, from one log, past what was read", async (t) => {
+  const stamp = (s) => `2026-10-30T10:00:0${s}.123456789Z `;
+  // Stderr's lines start with STDERR_TAG, a setup's JSON too: it's never the agent's.
+  const log = [
+    `${stamp(1)}\x1eCloning…\n`,
+    `${stamp(2)}{"type":"system"}\n${stamp(3)}\x1e{"type":"result","result":"from setup"}\n`,
+    `${stamp(4)}{"type":"assi`,
+    `stant"}\n${stamp(5)}{"type":"result"}\n${stamp(6)}\x1ehalf a line`,
+  ];
+  const { runner } = setup(t, { logs: { "dh-org-repo-12-abc": log } });
+  await runner.start(spec());
+  const out = [];
+  const err = [];
+  let caught = null;
+  await runner.follow("dh-org-repo-12-abc", {
+    skip: { out: 1, err: 1 },
+    onOut: (line, at) => out.push([line, at]),
+    onErr: (line) => err.push(line),
+    // Past the skipped lines of both, before the next.
+    onCaughtUp: () => (caught = [out.length, err.length]),
+  });
+  assert.deepEqual(caught, [0, 0]);
+  assert.deepEqual(out, [
+    ['{"type":"assistant"}', Date.parse("2026-10-30T10:00:04.123Z")],
+    ['{"type":"result"}', Date.parse("2026-10-30T10:00:05.123Z")],
+  ]);
+  // The half line is read again, whole, by the next follow().
+  assert.deepEqual(err, ['{"type":"result","result":"from setup"}']);
+});
+
+test("follow: a line over MAX_LINE is cut; a handler that throws loses its line only", async (t) => {
+  const long = "x".repeat(MAX_LINE + 10);
+  const { runner, logged } = setup(t, {
+    logs: { "dh-org-repo-12-abc": [`\x1e${long}\n`, "\x1eboom\n", "\x1eafter\n"] },
+  });
+  await runner.start(spec());
+  const err = [];
+  await runner.follow("dh-org-repo-12-abc", {
+    onOut: () => {},
+    onErr: (line) => {
+      if (line === "boom") throw new Error("disk full");
+      err.push(line);
+    },
+  });
+  // The tag counts toward MAX_LINE.
+  assert.deepEqual(err, ["x".repeat(MAX_LINE - 1) + LINE_CUT, "after"]);
+  assert.ok(logged.some((l) => l.includes("disk full")));
+});
+
+test("follow: a log shorter than what was read (rotated by the kubelet) is logged", async (t) => {
+  const { runner, logged } = setup(t, { logs: { "dh-org-repo-12-abc": ["\x1eone\n"] } });
+  await runner.start(spec());
+  let caught = false;
+  await runner.follow("dh-org-repo-12-abc", {
+    skip: { out: 40, err: 2 },
+    onOut: () => {},
+    onErr: () => {},
+    // Never past them: the run keeps its whole grace (runs.mjs follow()).
+    onCaughtUp: () => (caught = true),
+  });
+  assert.equal(caught, false);
+  assert.ok(
+    logged.some((l) => /has 1 lines, fewer than the 42 already read.*containerLogMaxSize/.test(l)),
+  );
+});
+
+test("follow: a Pending pod is waited for, then followed", async (t) => {
+  let looks = 0;
+  const fake = {};
+  const { runner, objects, calls } = setup(
+    t,
+    { logs: { "dh-org-repo-12-abc": ["\x1estarted\n"] } },
+    {
+      sleep: async () => {
+        if (++looks === 3) fake.pod.status.phase = "Running";
+      },
+    },
+  );
+  await runner.start(spec());
+  fake.pod = objects.pods.get("dh-org-repo-12-abc");
+  fake.pod.metadata.creationTimestamp = "2026-10-30T09:59:00Z";
+  fake.pod.status.phase = "Pending";
+  const err = [];
+  await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  assert.equal(looks, 3);
+  assert.deepEqual(err, ["started"]);
+  assert.ok(calls.at(-1).includes("/log?container=sandbox&follow=true&timestamps=true"));
+});
+
+test("follow: a pod Pending past KUBERNETES_PENDING_MINUTES fails its run, saying why", async (t) => {
+  const { runner, objects, calls } = setup(t);
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:50:00Z"; // 10 min before now()
+  pod.status = {
+    phase: "Pending",
+    conditions: [
+      {
+        type: "PodScheduled",
+        status: "False",
+        reason: "Unschedulable",
+        message: "0/3 nodes are available: 3 Insufficient memory.",
+      },
+    ],
+  };
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+    (error) =>
+      error instanceof RunError &&
+      /stayed Pending for 10 min \(0\/3 nodes are available: 3 Insufficient memory\.\)/.test(
+        error.message,
+      ),
+  );
+  assert.ok(
+    calls.includes("DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=10"),
+  );
+  assert.equal(objects.pods.size, 0);
+});
+
+test("follow: a pod stuck mounting its volumes fails with its latest Warning event", async (t) => {
+  const { runner, objects, calls } = setup(t);
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:50:00Z";
+  pod.status = {
+    phase: "Pending",
+    containerStatuses: [{ state: { waiting: { reason: "ContainerCreating" } } }],
+  };
+  objects.events.set("e1", {
+    metadata: { name: "e1" },
+    type: "Warning",
+    reason: "FailedAttachVolume",
+    message: 'Multi-Attach error for volume "pvc-1": Volume is already used by pod(s) other',
+    lastTimestamp: "2026-10-30T09:55:00Z",
+  });
+  const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+  await assert.rejects(
+    follow(),
+    /stayed Pending for 10 min \(FailedAttachVolume: Multi-Attach error for volume "pvc-1"/,
+  );
+  assert.ok(
+    calls.some((c) =>
+      c.endsWith(
+        `/events?fieldSelector=involvedObject.kind%3DPod%2CinvolvedObject.name%3Ddh-org-repo-12-abc%2CinvolvedObject.uid%3D${pod.metadata.uid}`,
+      ),
+    ),
+  );
+  // No event either: it says what it can.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  objects.events.clear();
+  await runner.start(spec());
+  Object.assign(objects.pods.get("dh-org-repo-12-abc"), {
+    status: pod.status,
+    metadata: {
+      ...objects.pods.get("dh-org-repo-12-abc").metadata,
+      creationTimestamp: "2026-10-30T09:50:00Z",
+    },
+  });
+  await assert.rejects(follow(), /\(Kubernetes gave no reason: its volumes may not have mounted\)/);
+});
+
+test("pendingReason: an init container's image it can't pull, or its install running", () => {
+  assert.equal(
+    pendingReason({
+      status: {
+        initContainerStatuses: [
+          { state: { waiting: { reason: "ErrImagePull", message: "denied" } } },
+        ],
+      },
+    }),
+    "ErrImagePull: denied",
+  );
+  assert.equal(
+    pendingReason({ status: { initContainerStatuses: [{ state: { running: {} } }] } }),
+    INSTALLING,
+  );
+});
+
+test("pendingReason: an image it can't pull before scheduling, else Kubernetes' silence", () => {
+  const waiting = (reason, message) => ({
+    status: { containerStatuses: [{ state: { waiting: { reason, message } } }] },
+  });
+  assert.equal(
+    pendingReason(waiting("ImagePullBackOff", 'Back-off pulling image "x"')),
+    'ImagePullBackOff: Back-off pulling image "x"',
+  );
+  // Nothing more than ContainerCreating: the events tell.
+  assert.equal(pendingReason(waiting("ContainerCreating")), null);
+  assert.equal(pendingReason({}), null);
+  const event = (type, reason, at) => ({ type, reason, message: `${reason}!`, lastTimestamp: at });
+  assert.equal(
+    latestWarning([
+      event("Warning", "FailedMount", "2026-10-30T09:55:00Z"),
+      event("Warning", "FailedAttachVolume", "2026-10-30T09:58:00Z"),
+      event("Normal", "Scheduled", "2026-10-30T09:59:00Z"),
+    ]),
+    "FailedAttachVolume: FailedAttachVolume!",
+  );
+  assert.equal(latestWarning([event("Normal", "Pulling", "2026-10-30T09:59:00Z")]), null);
+});
+
+test("wait: a leftover stuck Pending past the limit is removed, not waited on forever", async (t) => {
+  let onSleep = () => {};
+  const { runner, objects, calls, logged } = setup(t, {}, { sleep: async () => onSleep() });
+  const deletes = () => calls.filter((c) => c.startsWith("DELETE")).length;
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:50:00Z"; // 10 min before now()
+  pod.status = {
+    phase: "Pending",
+    containerStatuses: [{ state: { waiting: { reason: "ImagePullBackOff" } } }],
+  };
+  await runner.wait("dh-org-repo-12-abc");
+  assert.equal(
+    calls.filter((c) => c.startsWith("DELETE")).at(-1),
+    "DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=10",
+  );
+  assert.ok(logged.some((l) => /Pending for 10 min \(ImagePullBackOff\): removing it/.test(l)));
+  // Pending within the limit: waited for until it exits, never removed.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  await runner.start(spec());
+  const young = objects.pods.get("dh-org-repo-12-abc");
+  young.metadata.creationTimestamp = "2026-10-30T09:59:00Z";
+  young.status = { phase: "Pending" };
+  const before = deletes();
+  let looks = 0;
+  onSleep = () => {
+    if (++looks === 3) young.status.phase = "Succeeded";
+  };
+  await runner.wait("dh-org-repo-12-abc");
+  assert.equal(looks, 3);
+  assert.equal(deletes(), before);
+});
+
+test("apiBase: the API server's URL, an IPv6 host in brackets", () => {
+  const env = (host) => ({ KUBERNETES_SERVICE_HOST: host, KUBERNETES_SERVICE_PORT: "443" });
+  assert.equal(apiBase(env("10.96.0.1")), "https://10.96.0.1:443");
+  assert.equal(apiBase(env("fd00:10:96::1")), "https://[fd00:10:96::1]:443");
+  assert.equal(new URL(`${apiBase(env("fd00:10:96::1"))}/api`).hostname, "[fd00:10:96::1]");
+});
+
+test("wait, kill and remove: the pod deleted with its grace, then with its Secret", async (t) => {
+  let looks = 0;
+  const { runner, objects, calls, inboxDir } = setup(
+    t,
+    {},
+    {
+      sleep: async () => {
+        if (++looks === 2) objects.pods.get("dh-org-repo-12-abc").status.phase = "Succeeded";
+      },
+    },
+  );
+  await runner.start(spec());
+  await runner.wait("dh-org-repo-12-abc");
+  assert.equal(looks, 2);
+  await runner.kill("dh-org-repo-12-abc");
+  assert.equal(
+    calls.at(-1),
+    "DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=10",
+  );
+  // Gone already: nothing to stop.
+  await runner.kill("dh-org-repo-12-abc");
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.equal(objects.pods.size + objects.secrets.size, 0);
+  assert.ok(!existsSync(join(inboxDir, "dh-org-repo-12-abc-1730000000")));
+  // The claims stay: the issue's next run goes on from them.
+  assert.equal(objects.persistentvolumeclaims.size, 2);
+  // A leftover: its Secret is the one its annotation names.
+  await runner.start(spec({ run: "r9" }));
+  await runner.remove("dh-org-repo-12-abc");
+  assert.equal(objects.pods.size + objects.secrets.size, 0);
+});
+
+test("hasSession, address and proxyAddresses", async (t) => {
+  const slices = [
+    {
+      endpoints: [
+        { addresses: ["10.244.2.3"] },
+        { addresses: ["10.244.3.4"], conditions: { ready: false } },
+      ],
+    },
+  ];
+  let time = 0;
+  const { runner, objects, calls } = setup(t, { slices }, { now: () => time });
+  assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), false);
+  await runner.start(spec());
+  assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
+  const { uid } = objects.pods.get("dh-org-repo-12-abc").metadata;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.deepEqual(await runner.proxyAddresses(), ["10.244.2.3", "10.244.3.4"]);
+  assert.ok(
+    calls.at(-1).endsWith("endpointslices?labelSelector=kubernetes.io%2Fservice-name%3Degress"),
+  );
+  // Cached, as under Docker; looked up again when asked fresh, a little later.
+  const asked = calls.length;
+  await runner.proxyAddresses();
+  await runner.proxyAddresses({ fresh: true });
+  assert.equal(calls.length, asked);
+  time = 3000;
+  await runner.proxyAddresses({ fresh: true });
+  assert.equal(calls.length, asked + 1);
+});
+
+test("relink: the Secrets of runs whose pod is gone are removed, the others kept", async (t) => {
+  const { runner, objects, logged } = setup(t);
+  await runner.start(spec());
+  await runner.start(spec({ run: "r2", name: "dh-other" }));
+  objects.pods.delete("dh-other");
+  objects.secrets.set("unowned", { metadata: { name: "unowned", labels: {} } });
+  await runner.relink();
+  assert.deepEqual([...objects.secrets.keys()], ["dh-org-repo-12-abc-1730000000-env", "unowned"]);
+  assert.ok(logged.some((l) => l.includes("Removing the Secret r2-env")));
+});
+
+test("kubeName, labelValue, quantity: Deckhand's names and amounts as Kubernetes takes them", () => {
+  assert.equal(kubeName("dh-org-repo-12-abc"), "dh-org-repo-12-abc");
+  assert.equal(kubeName("dh.org.repo-12"), "dh.org.repo-12");
+  // A dot beside a dash, or two in a row, isn't a subdomain: a repo named .github.
+  const subdomain = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
+  for (const name of ["deckhand-acme-.github-12-ab12cd", "a..b", "a.-b", ".git_hooks", "x."]) {
+    const made = kubeName(name);
+    assert.match(made, subdomain, name);
+    assert.match(made, /-[0-9a-f]{10}$/, name);
+  }
+  assert.match(kubeName("deckhand-acme-.github-12-ab12cd"), /^deckhand-acme-github-12-ab12cd-/);
+  const odd = kubeName("dh-my_org-repo-12");
+  assert.match(odd, /^dh-my-org-repo-12-[0-9a-f]{10}$/);
+  assert.notEqual(odd, kubeName("dh-my-org-repo-12"));
+  assert.ok(kubeName("x".repeat(300)).length <= 253);
+  assert.equal(labelValue("dh"), "dh");
+  assert.match(labelValue("org/repo#12"), /^[0-9a-f]{40}$/);
+  assert.match(labelValue("a".repeat(64)), /^[0-9a-f]{40}$/);
+  assert.equal(quantity("4g"), "4Gi");
+  assert.equal(quantity("512m"), "512Mi");
+  assert.equal(quantity("1024k"), "1024Ki");
+  assert.equal(quantity("1000"), "1000");
+});
+
+test("createKubeApi: the token at each call, the API's message in its errors", async () => {
+  let n = 0;
+  const seen = [];
+  const api = createKubeApi({
+    base: "https://kube",
+    namespace: NS,
+    token: () => `t${++n}`,
+    fetch: async (url, init) => {
+      seen.push([url, init.headers.authorization]);
+      return Response.json({ message: 'pods "x" is forbidden' }, { status: 403 });
+    },
+  });
+  const error = await api.get("pods/x").catch((e) => e);
+  assert.ok(error instanceof KubeError);
+  assert.equal(error.status, 403);
+  assert.equal(error.message, 'GET pods/x: pods "x" is forbidden');
+  await api.find("/apis/x", { a: "1", b: undefined }).catch(() => {});
+  assert.deepEqual(seen, [
+    [`https://kube/api/v1/namespaces/${NS}/pods/x`, "Bearer t1"],
+    ["https://kube/apis/x?a=1", "Bearer t2"],
   ]);
 });
 
-test("secrets.mjs: the keys and the App's credentials, each in its own service's Secret", () => {
-  const made = keys("deckhand")
-    .split(/^---$/m)
-    .map((text) => parseYaml(text))
-    .filter(Boolean);
-  assert.deepEqual(
-    made.map((r) => `${r.kind} ${r.metadata.name}`),
-    ["Secret deckhand-broker-key", "ConfigMap deckhand-service-keys", "Secret deckhand-models-key"],
+test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming the runner", () => {
+  const grant = { allowDocker: true, allowDockerfile: true };
+  const settings = { docker: {}, dockerfile: "Dockerfile" };
+  const mounts = [{ source: "/srv", target: "/srv" }];
+  const engine = { limits: {}, cache: null };
+  // Its capabilities (capabilities.mjs): the repo's image is built with `image:repo`.
+  const caps = new Set(["pull", "image:repo"]);
+  assert.equal(
+    runnerRefusal({ runner: "docker" }, settings, { grant, mounts }, engine, caps),
+    null,
   );
-  // The public key named by its kid, as the broker would publish it.
-  const [file, pem] = Object.entries(made[1].data)[0];
-  assert.equal(file, `${keyId(pem)}.pem`);
-  const models = Buffer.from(
-    Buffer.from(made[2].data["models.key"], "base64").toString(),
-    "base64",
+  assert.equal(
+    runnerRefusal(config, settings, { grant, mounts }, engine, caps),
+    "the operator runs sandboxes on the kubernetes runner, which doesn't support a container engine (`docker`), its own image (`dockerfile`) without a registry (`KUBERNETES_REGISTRY`), host mounts (`mounts`) yet. The repository can remove them from `.deckhand.yaml`, or the operator can run its sandboxes on Docker (`RUNNER=docker`).",
   );
-  assert.equal(models.length, 32);
+  // No engine for this run (a light run, a fork's, no SANDBOX_ENGINE): it goes without one,
+  // as under Docker.
+  assert.match(
+    runnerRefusal(config, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null, caps),
+    /support its own image \(`dockerfile`\) without a registry \(`KUBERNETES_REGISTRY`\) yet\. The repository can remove it from/,
+  );
+  // With a registry, its image is built (kube-images.mjs).
+  const registry = { ...config, kubernetes: { ...config.kubernetes, registry: "r.example.com" } };
+  assert.equal(
+    runnerRefusal(registry, { docker: {}, dockerfile: "D" }, { grant, mounts: [] }, null, caps),
+    null,
+  );
+  // Nor without `image:repo`: the run builds none.
+  assert.equal(
+    runnerRefusal(config, { dockerfile: "D" }, { grant, mounts: [] }, null, new Set(["pull"])),
+    null,
+  );
+  assert.equal(runnerRefusal(config, { docker: {} }, { grant, mounts: [] }, null), null);
+  assert.equal(runnerRefusal(config, {}, { grant, mounts: [] }, null), null);
+  // A `preview` left in the config, from before #574: ignored, so not refused for it.
+  const { settings: left } = parseRepoConfig("preview: ./preview.sh\n", config);
+  assert.equal(runnerRefusal(config, left, { grant, mounts: [] }, null), null);
+});
 
-  const app = appSecrets(
-    {
-      id: 1,
-      slug: "deckhand-x",
-      client_id: "Iv1.x",
-      client_secret: "client-secret",
-      webhook_secret: "webhook-secret",
-      pem: "-----BEGIN RSA PRIVATE KEY-----",
-      owner: { login: "acme" },
-      html_url: "https://github.com/apps/deckhand-x",
+test("state and follow: an API that errs for a while is asked again, a run at work goes on", async (t) => {
+  let failures = 0;
+  const { runner, logged, clock } = setup(t, {
+    logs: { "dh-org-repo-12-abc": ["\x1estill here\n"] },
+    fail: ({ method, path }) =>
+      method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc") && failures-- > 0
+        ? Response.json({ message: "etcdserver: leader changed" }, { status: 500 })
+        : null,
+  });
+  await runner.start(spec());
+  failures = 3;
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  assert.equal(logged.filter((l) => /leader changed \(asked again in/.test(l)).length, 3);
+  failures = 2;
+  const err = [];
+  await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  assert.deepEqual(err, ["still here"]);
+  // Past API_RETRY_MS, it says so.
+  failures = Infinity;
+  const before = clock.at;
+  await assert.rejects(runner.state("dh-org-repo-12-abc"), /leader changed/);
+  assert.ok(clock.at - before >= 60_000);
+});
+
+test("state and wait: a pod its node lost is force-deleted and counts as gone", async (t) => {
+  const { runner, objects, calls, clock } = setup(t);
+  const force = "DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=0";
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  // Deleted, its grace not long past: still running, as it may still be stopping.
+  pod.metadata.deletionTimestamp = new Date(clock.at - 60_000).toISOString();
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  pod.metadata.deletionTimestamp = new Date(clock.at - 2 * 60_000).toISOString();
+  assert.equal(await runner.state("dh-org-repo-12-abc"), null);
+  assert.equal(calls.at(-1), force);
+  assert.equal(objects.pods.size, 0);
+  // Unknown: lost once its node said nothing for 5 min; wait() returns then.
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  await runner.start(spec());
+  const unknown = objects.pods.get("dh-org-repo-12-abc");
+  const since = new Date(clock.at).toISOString();
+  unknown.status = { phase: "Unknown", conditions: [{ type: "Ready", lastTransitionTime: since }] };
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  await runner.wait("dh-org-repo-12-abc");
+  assert.ok(clock.at - Date.parse(since) >= 5 * 60_000);
+  assert.equal(calls.at(-1), force);
+});
+
+test("remove: a pod still running gets its grace, an exited one goes at once", async (t) => {
+  const { runner, objects, calls } = setup(t);
+  await runner.start(spec());
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.ok(
+    calls.includes("DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=10"),
+  );
+  await runner.start(spec());
+  objects.pods.get("dh-org-repo-12-abc").status.phase = "Succeeded";
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.ok(
+    calls.includes("DELETE /api/v1/namespaces/runs/pods/dh-org-repo-12-abc?gracePeriodSeconds=0"),
+  );
+});
+
+// What an API that never answers does: nothing, until the request's signal aborts.
+const never = (signal) =>
+  new Promise((resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason)));
+
+test("state: a call the API never answers times out, and is asked again", async (t) => {
+  let hangs = 0;
+  const { runner, logged } = setup(t, {
+    timeoutMs: 20,
+    fail: ({ method, path, signal }) =>
+      method === "GET" && path.endsWith("/pods/dh-org-repo-12-abc") && hangs-- > 0
+        ? never(signal)
+        : null,
+  });
+  await runner.start(spec());
+  hangs = 2;
+  assert.equal(await runner.state("dh-org-repo-12-abc"), "running");
+  assert.equal(
+    logged.filter((l) => l.includes("GET pods/dh-org-repo-12-abc: no answer in 0.02 s")).length,
+    2,
+  );
+});
+
+test("follow: a log stream that outlives its pod is let go, the rest of the log read", async (t) => {
+  const encode = (text) => new TextEncoder().encode(text);
+  const fake = {};
+  const logs = {
+    "dh-org-repo-12-abc": ({ follow, signal }) => {
+      if (!follow) return new Response("\x1eone\n\x1etwo\n");
+      // The first line, then nothing, the connection never closed: the pod exits meanwhile.
+      return new Response(
+        new ReadableStream({
+          start(c) {
+            c.enqueue(encode("\x1eone\n"));
+            fake.pod.status.phase = "Succeeded";
+            signal.addEventListener("abort", () => c.error(signal.reason));
+          },
+        }),
+      );
     },
-    { botId: 2, publicUrl: "https://deckhand.example.com", namespace: "deckhand", now: () => 0 },
-  )
-    .split(/^---$/m)
-    .map((text) => parseYaml(text))
-    .filter(Boolean);
-  const file64 = (secret, key) =>
-    Buffer.from(app.find((r) => r.metadata.name === secret).data[key], "base64");
-  const edge = JSON.parse(file64("deckhand-edge", "app.json"));
-  const github = JSON.parse(file64("deckhand-github", "app.json"));
-  // The key is the github service's alone; the webhook secret and the OAuth client's, edge's.
-  assert.equal(edge.pem, undefined);
-  assert.equal(edge.webhook_secret, "webhook-secret");
-  assert.equal(edge.public_url, "https://deckhand.example.com");
-  assert.equal(github.pem, "-----BEGIN RSA PRIVATE KEY-----");
-  assert.equal(github.webhook_secret, undefined);
-  assert.equal(github.client_secret, undefined);
-  assert.equal(file64("deckhand-edge", "session.key").length, 32);
+  };
+  const fakes = fakeApi({ logs });
+  const logged = [];
+  const runner = createKubernetesRunner({
+    config,
+    api: fakes.api,
+    inboxDir: tempDir(t),
+    log: (line) => logged.push(line),
+    sleep: async () => {},
+    watchMs: 5,
+  });
+  await runner.start(spec());
+  fake.pod = fakes.objects.pods.get("dh-org-repo-12-abc");
+  const err = [];
+  await runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: (l) => err.push(l) });
+  assert.deepEqual(err, ["one", "two"]);
+  assert.ok(logged.some((l) => /its stream outlived the pod, reading the rest/.test(l)));
+});
+
+test("remove: never a pod or a Secret of the namespace that isn't this deployment's run's", async (t) => {
+  const { runner, objects } = setup(t);
+  // The namespace's own: a pod named like a sandbox, a Secret named like a run's.
+  objects.pods.set("myapp", { metadata: { name: "myapp", labels: { app: "myapp" } }, status: {} });
+  objects.secrets.set("myapp-1-env", { metadata: { name: "myapp-1-env", labels: {} } });
+  await runner.remove("myapp", "myapp-1");
+  assert.ok(objects.pods.has("myapp"));
+  assert.ok(objects.secrets.has("myapp-1-env"));
+  // Its own, as before.
+  await runner.start(spec());
+  await runner.remove("dh-org-repo-12-abc", "dh-org-repo-12-abc-1730000000");
+  assert.equal(objects.pods.has("dh-org-repo-12-abc"), false);
+  assert.equal(objects.secrets.has("dh-org-repo-12-abc-1730000000-env"), false);
 });

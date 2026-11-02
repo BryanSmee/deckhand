@@ -33,7 +33,7 @@ configMapGenerator:
   - name: deckhand-server
     namespace: deckhand
     files:
-      - server/config.yaml
+      - config.yaml=server/config.example.yaml
       - server/default.yaml
   # The settings the orchestrator, the runner and the models service share, in their
   # environment: where sandboxes run and from which image.

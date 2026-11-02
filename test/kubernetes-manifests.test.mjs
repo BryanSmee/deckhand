@@ -1,0 +1,576 @@
+// deploy/kubernetes/ held to the rules test/networks.test.mjs holds compose.yaml to: each
+// service's NetworkPolicies let in its callers alone and let it out to its callees alone
+// (lib/services.mjs CALLS), the secrets are each their own service's, nothing but the broker's
+// TokenReviews is cluster-wide, and no two services share a writable volume. The sandboxes'
+// and BuildKit's policies pass the runner's own checks, which it makes before every run and
+// build. kubeconform checks the schemas (docs/kubernetes.md): kustomize isn't needed here, as
+// the files are read as written, with the components' patches.
+import assert from "node:assert/strict";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+import { test } from "node:test";
+import { appSecrets, keys } from "../deploy/kubernetes/secrets.mjs";
+import { convertManifest, KEPT } from "../github/app.mjs";
+import { CALLS, SERVICES } from "../lib/services.mjs";
+import { keyId } from "../lib/tokens.mjs";
+import { parseYaml } from "../lib/yaml.mjs";
+import { builderIsolationProblem } from "../listener/runner/kube-images.mjs";
+import { isolationProblem, selects } from "../listener/runner/kubernetes.mjs";
+
+const root = join(import.meta.dirname, "..", "deploy", "kubernetes");
+const SERVICES_NS = "deckhand";
+const SANDBOXES_NS = "deckhand-sandboxes";
+
+// Each file's documents, as lib/yaml.mjs reads them.
+const docs = (file) =>
+  readFileSync(join(root, file), "utf8")
+    .split(/^---$/m)
+    .map((text) => parseYaml(text))
+    .filter(Boolean);
+const kustomization = (dir = "") => docs(join(dir, "kustomization.yaml"))[0];
+const resources = (dir = "") => kustomization(dir).resources.flatMap((f) => docs(join(dir, f)));
+
+const base = resources();
+const buildkit = resources("components/buildkit");
+const redis = resources("components/redis");
+const all = [...base, ...buildkit, ...redis];
+const of = (kind, list = all) => list.filter((r) => r.kind === kind);
+const named = (kind, name, list = all) => of(kind, list).find((r) => r.metadata.name === name);
+
+// lib/services.mjs's services → the app label of their pods (and their Deployment's name).
+const APP = Object.fromEntries(SERVICES.map((s) => [s, s === "proxy" ? "egress" : s]));
+const SERVICE_OF = Object.fromEntries(SERVICES.map((s) => [`deckhand-${APP[s]}`, s]));
+const deployment = (service) => named("Deployment", APP[service], base);
+const pod = (service) => deployment(service).spec.template.spec;
+const container = (service) => pod(service).containers[0];
+const env = (service) =>
+  Object.fromEntries((container(service).env ?? []).map((e) => [e.name, e.value ?? e.valueFrom]));
+
+// Calls without a service token, as in test/networks.test.mjs: the proxy asks the orchestrator's
+// egress policy about each connection; the orchestrator reads the proxy's CA from it.
+const UNTOKENED = { proxy: ["orchestrator"], orchestrator: ["proxy"] };
+const callees = (service) => [...CALLS[service], ...(UNTOKENED[service] ?? [])].sort();
+const callers = (service) => SERVICES.filter((caller) => callees(caller).includes(service)).sort();
+// Who else may reach a service: the internet edge's public port, the sandboxes' namespace and
+// BuildKit the proxy.
+const OUTSIDE_CALLERS = { edge: ["internet"], proxy: ["sandboxes", "buildkitd"] };
+// Ways out beyond the cluster's pods, as INTERNET in test/networks.test.mjs; the runner's and
+// the broker's include the API server's port.
+const WAYS_OUT = {
+  edge: [443],
+  github: [443],
+  models: [443],
+  runner: [443, 6443],
+  broker: [443, 6443],
+  proxy: "any",
+};
+
+// A policy peer → who it is: a service, "sandboxes", "buildkitd", "dns", "internet".
+function peer(p) {
+  if (p.ipBlock) return "internet";
+  const ns = p.namespaceSelector?.matchLabels?.["kubernetes.io/metadata.name"];
+  if (ns === "kube-system") return "dns";
+  if (ns === SANDBOXES_NS) return "sandboxes";
+  const app = p.podSelector?.matchLabels?.app;
+  if (app === "buildkitd") return "buildkitd";
+  return SERVICE_OF[app] ?? `unknown ${JSON.stringify(p)}`;
+}
+
+// The policies of the services' namespace picking a service's pods: who they let in, who out.
+function reach(service, policies = of("NetworkPolicy", base)) {
+  const labels = deployment(service).spec.template.metadata.labels;
+  const picking = policies.filter(
+    (p) => p.metadata.namespace === SERVICES_NS && selects(p.spec.podSelector, labels),
+  );
+  const ins = new Set();
+  const outs = new Set();
+  const out = [];
+  for (const p of picking) {
+    for (const rule of p.spec.ingress ?? []) {
+      for (const from of rule.from ?? [{ ipBlock: {} }]) ins.add(peer(from));
+    }
+    for (const rule of p.spec.egress ?? []) {
+      for (const to of rule.to ?? []) {
+        outs.add(peer(to));
+        if (to.ipBlock) out.push(...(rule.ports?.map((x) => x.port) ?? ["any"]));
+      }
+    }
+  }
+  return { ins, outs, out, picking };
+}
+
+test("kustomization.yaml: every manifest of the folder is a resource of the base or a component's", () => {
+  const listed = new Set([
+    ...kustomization().resources,
+    ...kustomization("components/redis").resources.map((f) => `components/redis/${f}`),
+    ...kustomization("components/redis").patches.flatMap((p) =>
+      p.path ? [`components/redis/${p.path}`] : [],
+    ),
+    ...kustomization("components/buildkit").resources.map((f) => `components/buildkit/${f}`),
+  ]);
+  const files = readdirSync(root, { recursive: true })
+    .map((f) => f.replaceAll("\\", "/"))
+    .filter((f) => f.endsWith(".yaml") && !f.endsWith("kustomization.yaml"))
+    .filter((f) => !f.startsWith("server/"));
+  assert.deepEqual(files.filter((f) => !listed.has(f)).sort(), []);
+});
+
+// A generator's file missing (or git-ignored, as config.yaml is) fails every build of the base,
+// remote ones included.
+test("kustomization.yaml: every file a generator reads is in the folder", () => {
+  for (const dir of ["", "components/redis", "components/buildkit"]) {
+    for (const generator of kustomization(dir).configMapGenerator ?? []) {
+      for (const entry of generator.files ?? []) {
+        const file = join(root, dir, entry.split("=").at(-1));
+        assert.ok(existsSync(file), `${generator.name}: ${file}`);
+      }
+    }
+  }
+});
+
+// The commands the store sends (lib/store-redis.mjs, its scripts' included: Redis checks those
+// too, and lib/resp.mjs): each user's ACL has to allow them all, or a call fails with NOPERM.
+function storeCommands() {
+  const lib = join(import.meta.dirname, "..", "lib");
+  const text = ["store-redis.mjs", "resp.mjs"]
+    .map((f) => readFileSync(join(lib, f), "utf8"))
+    .join("\n");
+  const found = new Set();
+  // In the scripts: redis.call('XINFO', 'GROUPS', …), redis.pcall(…), pcall(redis.call, …).
+  for (const [, command, sub] of text.matchAll(
+    /(?:redis\.p?call\(|pcall\(redis\.call, )'([A-Z]+)'(?:, '([A-Z]+)')?/g,
+  )) {
+    found.add(["XGROUP", "XINFO"].includes(command) ? `${command}|${sub}` : command);
+  }
+  // From Node: call("EVALSHA", …), ["SELECT", …].
+  for (const [, command] of text.matchAll(/(?:call\(|\[)"([A-Z]+)"/g)) found.add(command);
+  found.delete("AUTH"); // always allowed
+  return [...found].map((c) => c.toLowerCase());
+}
+const allows = (acl, command) =>
+  acl.includes(` +${command} `) || acl.includes(` +${command.split("|")[0]} `);
+
+test("components/redis and setup.md: each user's ACL allows every command the store sends", () => {
+  const commands = storeCommands();
+  assert.ok(commands.includes("xdel") && commands.includes("xinfo|groups"), commands.join(" "));
+  const lines = [
+    /echo "(user \$service on .*)" >>/.exec(
+      readFileSync(join(root, "components/redis/redis.yaml"), "utf8"),
+    )[1],
+    /^(user deckhand on .*)$/m.exec(
+      readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8"),
+    )[1],
+  ];
+  for (const line of lines) {
+    const acl = `${line} `;
+    assert.deepEqual(
+      commands.filter((c) => !allows(acl, c)),
+      [],
+      line.slice(0, 40),
+    );
+  }
+});
+
+test("deploy/kubernetes: a Deployment, a Service and a ServiceAccount per service, its API token on the runner and the broker alone", () => {
+  for (const service of SERVICES) {
+    const d = deployment(service);
+    assert.ok(d, `${service}: no Deployment ${APP[service]}`);
+    assert.equal(d.metadata.namespace, SERVICES_NS);
+    assert.ok(named("Service", APP[service], base), `${service}: no Service`);
+    const account = pod(service).serviceAccountName;
+    assert.equal(account, `deckhand-${APP[service]}`, `${service}'s ServiceAccount`);
+    assert.ok(named("ServiceAccount", account, base), `${service}: no ServiceAccount ${account}`);
+    const api = ["runner", "broker"].includes(service);
+    assert.equal(pod(service).automountServiceAccountToken, api, `${service}'s API token`);
+    // No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT.
+    assert.equal(pod(service).enableServiceLinks, false, `${service}: enableServiceLinks`);
+  }
+  // Every Service's selector is its Deployment's pods'.
+  for (const service of of("Service", base)) {
+    const d = named("Deployment", service.metadata.name, base);
+    assert.deepEqual(service.spec.selector, d.spec.selector.matchLabels, service.metadata.name);
+  }
+});
+
+test("deploy/kubernetes: a token projected for the broker wherever CALLS says the service calls it, and SERVICE_ACCOUNTS to match", () => {
+  const accounts = Object.fromEntries(
+    env("broker")
+      .SERVICE_ACCOUNTS.split(",")
+      .map((part) => part.split("=")),
+  );
+  for (const service of SERVICES) {
+    const projected = (pod(service).volumes ?? []).find((v) =>
+      v.projected?.sources?.some((s) => s.serviceAccountToken),
+    );
+    const calls = CALLS[service].includes("broker");
+    assert.equal(Boolean(projected), calls, `${service}'s token for the broker`);
+    if (!calls) {
+      assert.ok(!(service in accounts), `${service} in SERVICE_ACCOUNTS`);
+      continue;
+    }
+    const source = projected.projected.sources[0].serviceAccountToken;
+    assert.equal(source.audience, "deckhand-broker");
+    const mount = container(service).volumeMounts.find((m) => m.name === projected.name);
+    assert.equal(env(service).SERVICE_ACCOUNT_TOKEN_FILE, `${mount.mountPath}/${source.path}`);
+    assert.equal(accounts[service], `${SERVICES_NS}:${pod(service).serviceAccountName}`, service);
+  }
+});
+
+test("deploy/kubernetes: SERVICE_NETWORKS=none wherever it is read; the broker tells its callers by their accounts", () => {
+  for (const service of ["edge", "orchestrator", "runner", "github", "models"]) {
+    assert.equal(env(service).SERVICE_NETWORKS, "none", service);
+  }
+  // The broker takes the network's word over the accounts' when both are set; the policy
+  // service checks no network unset.
+  for (const service of ["broker", "policy", "proxy"]) {
+    assert.ok(!("SERVICE_NETWORKS" in env(service)), service);
+  }
+});
+
+test("deploy/kubernetes: each service's NetworkPolicies let in its callers alone, and out to its callees alone (CALLS)", () => {
+  // Default deny in both namespaces: what isn't let through below isn't.
+  for (const ns of [SERVICES_NS, SANDBOXES_NS]) {
+    const deny = of("NetworkPolicy", base).find(
+      (p) => p.metadata.namespace === ns && Object.keys(p.spec.podSelector).length === 0,
+    );
+    assert.deepEqual(deny?.spec.policyTypes, ["Ingress", "Egress"], `${ns}: default deny`);
+    assert.ok(!deny.spec.ingress && !deny.spec.egress, `${ns}: default deny lets nothing`);
+  }
+  for (const service of SERVICES) {
+    const { ins, outs, out } = reach(service);
+    const expectedIns = [...callers(service), ...(OUTSIDE_CALLERS[service] ?? [])].sort();
+    assert.deepEqual([...ins].sort(), expectedIns, `who reaches ${service}`);
+    const ways = WAYS_OUT[service];
+    const expectedOuts = [
+      ...callees(service),
+      ...(service === "policy" ? [] : ["dns"]),
+      ...(ways ? ["internet"] : []),
+    ].sort();
+    assert.deepEqual([...outs].sort(), expectedOuts, `what ${service} reaches`);
+    if (ways === "any") assert.deepEqual(out, ["any", "any"], service);
+    else assert.deepEqual([...new Set(out)].sort(), ways ?? [], `${service}'s ways out`);
+  }
+  // The proxy's way out leaves out the private ranges: no granted host is a pod or a node.
+  const { picking } = reach("proxy");
+  const blocks = picking.flatMap((p) =>
+    (p.spec.egress ?? []).flatMap((r) => (r.to ?? []).filter((t) => t.ipBlock)),
+  );
+  for (const range of ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]) {
+    assert.ok(blocks[0].ipBlock.except.includes(range), range);
+  }
+});
+
+test("deploy/kubernetes: the sandboxes' and install pods' NetworkPolicies pass the runner's check, with the services apart", () => {
+  const policies = of("NetworkPolicy", base).filter((p) => p.metadata.namespace === SANDBOXES_NS);
+  const proxy = {
+    namespace: SERVICES_NS,
+    selector: named("Service", "egress", base).spec.selector,
+  };
+  const sandbox = { "deckhand.owner": "deckhand", "deckhand.run": "x", "deckhand.role": "sandbox" };
+  assert.equal(isolationProblem(policies, sandbox, { proxy }), null);
+  const install = { "deckhand.owner": "deckhand", "deckhand.role": "install" };
+  assert.equal(isolationProblem(policies, install, { proxy }), null);
+  // A check pod: picked by the default deny alone, nothing in or out.
+  const check = { "deckhand.owner": "deckhand", "deckhand.role": "check" };
+  const picking = policies.filter((p) => selects(p.spec.podSelector, check));
+  assert.deepEqual(
+    picking.map((p) => p.metadata.name),
+    ["deckhand-default-deny"],
+  );
+  // And the check fails closed on what would let them out: one wide rule is enough.
+  const wide = structuredClone(policies);
+  wide[1].spec.egress.push({ to: [{ ipBlock: { cidr: "0.0.0.0/0" } }] });
+  assert.match(isolationProblem(wide, sandbox, { proxy }), /reach/);
+});
+
+test("components/buildkit: BuildKit's NetworkPolicies pass the runner's check", () => {
+  const policies = of("NetworkPolicy", [...base, ...buildkit]).filter(
+    (p) => p.metadata.namespace === SERVICES_NS,
+  );
+  const labels = named("Deployment", "buildkitd", buildkit).spec.template.metadata.labels;
+  assert.equal(builderIsolationProblem(policies, labels, { sandboxesApart: true }), null);
+  // Its Roles' additions: the registry's pull Secret by name, in both namespaces.
+  const added = kustomization("components/buildkit")
+    .patches.filter((p) => p.target?.kind === "Role")
+    .flatMap((p) => parseYaml(p.patch))
+    .map((op) => op.value);
+  assert.equal(added.length, 2);
+  for (const rule of added) {
+    assert.deepEqual(rule.resources, ["secrets"]);
+    assert.deepEqual(rule.resourceNames, ["deckhand-registry"], rule.verbs.join(","));
+  }
+  // The runner reaches it: its Service's port, from the runner's pods.
+  const runner = reach("runner", policies);
+  assert.ok(runner.outs.has("buildkitd"));
+});
+
+test("deploy/kubernetes: nothing cluster-wide but the broker's TokenReviews; the runner's Roles name what it calls", () => {
+  const wide = all.filter((r) => /^Cluster/.test(r.kind));
+  assert.deepEqual(
+    wide.map((r) => `${r.kind} ${r.roleRef?.name} → ${r.subjects?.map((s) => s.name)}`),
+    ["ClusterRoleBinding system:auth-delegator → deckhand-broker"],
+  );
+  // Every Role: namespaced, no wildcard, bound to the runner alone.
+  for (const role of of("Role")) {
+    for (const rule of role.rules) {
+      for (const field of ["apiGroups", "resources", "verbs"]) {
+        assert.ok(!rule[field].includes("*"), `${role.metadata.namespace}: ${field} *`);
+      }
+    }
+  }
+  for (const binding of of("RoleBinding")) {
+    assert.deepEqual(
+      binding.subjects.map((s) => `${s.namespace}:${s.name}`),
+      [`${SERVICES_NS}:deckhand-runner`],
+    );
+  }
+  const rules = (ns, list = base) =>
+    of("Role", list)
+      .filter((r) => r.metadata.namespace === ns)
+      .flatMap((r) => r.rules)
+      .map((r) => `${r.resources.join(",")}: ${r.verbs.join(",")}`);
+  // listener/runner/kubernetes.mjs, kube-images.mjs, kube-pull.mjs.
+  assert.deepEqual(rules(SANDBOXES_NS), [
+    "pods: create,get,list,delete",
+    "pods/log: get",
+    "secrets: create,get,list,delete",
+    "persistentvolumeclaims: create,get,delete",
+    "events: list",
+    "networkpolicies: list",
+  ]);
+  assert.deepEqual(rules(SERVICES_NS), [
+    "services,pods: get",
+    "endpointslices: list",
+    "networkpolicies: list",
+  ]);
+});
+
+test("deploy/kubernetes: each secret is its own service's, the orchestrator holds none, the broker's public key reaches its readers read only", () => {
+  const SECRETS = {
+    "deckhand-edge": "edge",
+    "deckhand-github": "github",
+    "deckhand-broker-key": "broker",
+    "deckhand-models": "models",
+    "deckhand-models-key": "models",
+    "deckhand-credentials": "models",
+  };
+  const secretsOf = (service) => [
+    ...(pod(service).volumes ?? []).filter((v) => v.secret).map((v) => v.secret.secretName),
+    ...(container(service).envFrom ?? []).filter((e) => e.secretRef).map((e) => e.secretRef.name),
+    ...(container(service).env ?? []).flatMap((e) =>
+      e.valueFrom?.secretKeyRef ? [e.valueFrom.secretKeyRef.name] : [],
+    ),
+  ];
+  for (const service of SERVICES) {
+    const held = secretsOf(service).sort();
+    const own = Object.entries(SECRETS)
+      .filter(([, holder]) => holder === service)
+      .map(([name]) => name)
+      .sort();
+    assert.deepEqual(held, own, `${service}'s Secrets`);
+  }
+  // Nothing secret in the orchestrator's settings either.
+  const secretLike = (name) =>
+    /TOKEN|KEY|SECRET|AUTH_FILE|PASSWORD|PEM/.test(name) &&
+    !["SERVICE_ACCOUNT_TOKEN_FILE"].includes(name);
+  assert.deepEqual(Object.keys(env("orchestrator")).filter(secretLike), []);
+  // Read only wherever mounted.
+  for (const service of SERVICES) {
+    const secretVolumes = (pod(service).volumes ?? []).filter((v) => v.secret).map((v) => v.name);
+    for (const mount of container(service).volumeMounts ?? []) {
+      if (secretVolumes.includes(mount.name)) assert.equal(mount.readOnly, true, mount.name);
+    }
+  }
+  // The broker publishes none: its readers mount the ConfigMap, read only, at SERVICE_KEYS_DIR
+  // (the policy service's default, /keys).
+  assert.ok(!("SERVICE_KEYS_DIR" in env("broker")));
+  for (const service of SERVICES) {
+    const volume = (pod(service).volumes ?? []).find(
+      (v) => v.configMap?.name === "deckhand-service-keys",
+    );
+    const reads = ["runner", "models", "policy"].includes(service);
+    assert.equal(Boolean(volume), reads, `${service}: the broker's public key`);
+    if (!reads) continue;
+    const mount = container(service).volumeMounts.find((m) => m.name === volume.name);
+    assert.equal(mount.readOnly, true);
+    assert.equal(mount.mountPath, env(service).SERVICE_KEYS_DIR ?? "/keys", service);
+  }
+});
+
+test("deploy/kubernetes: no two services share a writable volume", () => {
+  const users = new Map(); // claim → services
+  for (const service of SERVICES) {
+    for (const v of pod(service).volumes ?? []) {
+      if (!v.persistentVolumeClaim) continue;
+      const claim = v.persistentVolumeClaim.claimName;
+      users.set(claim, [...(users.get(claim) ?? []), service]);
+      assert.ok(named("PersistentVolumeClaim", claim, base), `${claim}: no claim`);
+    }
+  }
+  for (const [claim, services] of users) assert.equal(services.length, 1, `${claim}: ${services}`);
+  // Every claim of the base is a service's.
+  for (const claim of of("PersistentVolumeClaim", base)) {
+    assert.ok(users.has(claim.metadata.name), `${claim.metadata.name}: no service mounts it`);
+  }
+});
+
+// What a copy's update takes (docs/services.md, Upgrades without downtime): its next copy is
+// ready before the old one stops, which drains within its grace period.
+const GRACE = {
+  edge: 30,
+  orchestrator: 300,
+  runner: 300,
+  broker: 35,
+  github: 300,
+  models: 630,
+  policy: 30,
+  proxy: 630,
+};
+// Readiness on /ready, but: edge has none (it stops taking connections as it drains); the
+// orchestrator's and the runner's answer on the acting copy alone, and the next copy only acts
+// once the old one has stopped, so a rolling update waiting for it would never end.
+const READINESS = { edge: "/health", orchestrator: "/health", runner: "/health" };
+
+test("deploy/kubernetes: two copies of each service, one of the proxy, each update starting the next copy first", () => {
+  for (const service of SERVICES) {
+    const d = deployment(service);
+    assert.equal(d.spec.replicas, service === "proxy" ? 1 : 2, `${service}'s copies`);
+    assert.deepEqual(
+      d.spec.strategy,
+      { type: "RollingUpdate", rollingUpdate: { maxUnavailable: 0, maxSurge: 1 } },
+      service,
+    );
+    assert.equal(
+      container(service).readinessProbe?.httpGet?.path,
+      READINESS[service] ?? "/ready",
+      `${service}'s readiness`,
+    );
+    assert.equal(pod(service).terminationGracePeriodSeconds, GRACE[service], service);
+  }
+  // The proxy drains as long as an agent's call lasts, after its preStop pause, within its
+  // grace period.
+  const pause = Number(container("proxy").lifecycle.preStop.exec.command[1]);
+  assert.ok(pause + Number(env("proxy").DRAIN_SECONDS) < GRACE.proxy);
+});
+
+test("deploy/kubernetes: every service as compose runs it: not root, no capability, a read-only root", () => {
+  for (const service of SERVICES) {
+    const security = pod(service).securityContext;
+    assert.equal(security.runAsNonRoot, true, service);
+    assert.equal(security.runAsUser, 1000, service);
+    assert.equal(security.seccompProfile.type, "RuntimeDefault", service);
+    const own = container(service).securityContext;
+    assert.deepEqual(own.capabilities, { drop: ["ALL"] }, service);
+    assert.equal(own.allowPrivilegeEscalation, false, service);
+    assert.equal(own.readOnlyRootFilesystem, true, service);
+  }
+  // The sandboxes' namespace enforces Pod Security `restricted`.
+  const sandboxes = named("Namespace", SANDBOXES_NS, base);
+  assert.equal(sandboxes.metadata.labels["pod-security.kubernetes.io/enforce"], "restricted");
+});
+
+test("components/redis: each service's store under its own user and keys, its password one key of deckhand-redis", () => {
+  const patches = kustomization("components/redis").patches.filter((p) => p.path);
+  const stored = patches.map((p) => docs(join("components/redis", p.path))[0]);
+  const acl = readFileSync(join(root, "components/redis/redis.yaml"), "utf8");
+  const users = /for service in ([\w ]+); do/.exec(acl)[1].split(" ");
+  for (const patch of stored) {
+    const service = patch.metadata.name;
+    const vars = Object.fromEntries(
+      patch.spec.template.spec.containers[0].env.map((e) => [e.name, e.value ?? e.valueFrom]),
+    );
+    assert.equal(vars.STORE_URL, `redis://${service}@redis:6379?prefix=deckhand:${service}:`);
+    assert.deepEqual(vars.REDIS_PASSWORD, {
+      secretKeyRef: { name: "deckhand-redis", key: service },
+    });
+    assert.ok(users.includes(service), `${service}: no Redis user`);
+    // Each user's keys are its own prefix's.
+    assert.match(acl, /~deckhand:\$service:\*/);
+  }
+  // Every service with a store, and nothing else.
+  assert.deepEqual(stored.map((p) => p.metadata.name).sort(), [
+    "broker",
+    "edge",
+    "github",
+    "models",
+    "orchestrator",
+    "runner",
+  ]);
+  assert.deepEqual([...users].sort(), [
+    "broker",
+    "edge",
+    "github",
+    "models",
+    "orchestrator",
+    "runner",
+  ]);
+  // Redis lets in those alone.
+  const policy = named("NetworkPolicy", "deckhand-redis", redis);
+  const from = policy.spec.ingress[0].from[0].podSelector.matchExpressions[0].values;
+  assert.deepEqual(from.map((app) => SERVICE_OF[app]).sort(), [
+    "broker",
+    "edge",
+    "github",
+    "models",
+    "orchestrator",
+    "runner",
+  ]);
+});
+
+test("secrets.mjs: the keys and the App's credentials, each in its own service's Secret", async () => {
+  const made = keys("deckhand")
+    .split(/^---$/m)
+    .map((text) => parseYaml(text))
+    .filter(Boolean);
+  assert.deepEqual(
+    made.map((r) => `${r.kind} ${r.metadata.name}`),
+    ["Secret deckhand-broker-key", "ConfigMap deckhand-service-keys", "Secret deckhand-models-key"],
+  );
+  // The public key named by its kid, as the broker would publish it.
+  const [file, pem] = Object.entries(made[1].data)[0];
+  assert.equal(file, `${keyId(pem)}.pem`);
+  const models = Buffer.from(
+    Buffer.from(made[2].data["models.key"], "base64").toString(),
+    "base64",
+  );
+  assert.equal(models.length, 32);
+
+  // GitHub's answer to the manifest's code, as the github service converts it (/setup).
+  const github = {
+    "/app-manifests/c0de/conversions": {
+      id: 1,
+      slug: "deckhand-x",
+      client_id: "Iv1.x",
+      client_secret: "client-secret",
+      webhook_secret: "webhook-secret",
+      pem: "-----BEGIN RSA PRIVATE KEY-----",
+      owner: { login: "acme" },
+      html_url: "https://github.com/apps/deckhand-x",
+    },
+    "/users/deckhand-x%5Bbot%5D": { id: 2 },
+  };
+  const fetch = async (url) => Response.json(github[new URL(url).pathname]);
+  const credentials = await convertManifest({ code: "c0de", api: "https://api.test", fetch });
+  const app = appSecrets(credentials, {
+    publicUrl: "https://deckhand.example.com",
+    namespace: "deckhand",
+  })
+    .split(/^---$/m)
+    .map((text) => parseYaml(text))
+    .filter(Boolean);
+  const file64 = (secret, key) =>
+    Buffer.from(app.find((r) => r.metadata.name === secret).data[key], "base64");
+  const edge = JSON.parse(file64("deckhand-edge", "app.json"));
+  const held = JSON.parse(file64("deckhand-github", "app.json"));
+  // What the github service keeps, as /setup would have written it; edge's, with the bot.
+  assert.deepEqual(Object.keys(held).sort(), [...KEPT].sort());
+  assert.equal(edge.bot_id, 2);
+  // The key is the github service's alone; the webhook secret and the OAuth client's, edge's.
+  assert.equal(edge.pem, undefined);
+  assert.equal(edge.webhook_secret, "webhook-secret");
+  assert.equal(edge.public_url, "https://deckhand.example.com");
+  assert.equal(held.pem, "-----BEGIN RSA PRIVATE KEY-----");
+  assert.equal(held.webhook_secret, undefined);
+  assert.equal(held.client_secret, undefined);
+  assert.equal(file64("deckhand-edge", "session.key").length, 32);
+});

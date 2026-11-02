@@ -191,7 +191,8 @@ components:
 It runs Valkey (Redis's protocol, `deploy/kubernetes/components/redis/redis.yaml`), kept on disk
 (append-only, fsync every second) and never evicting, with one user per service, each allowed the
 store's commands on its own keys (`deckhand:<service>:`) alone, and moves every store there. Make
-its Secret first, one password per service (letters and digits):
+its Secret first, one password per service (letters and digits): each service's pods read their own
+key of it alone, and Redis reads them all, to make its users:
 
 ```sh
 kubectl -n deckhand create secret generic deckhand-redis $(for s in edge orchestrator runner \

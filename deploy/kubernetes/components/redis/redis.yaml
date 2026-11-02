@@ -52,7 +52,7 @@ spec:
               for service in edge orchestrator runner broker github models; do
                 password=$(cat "/passwords/$service")
                 [ -n "$password" ] || { echo "deckhand-redis: no password for $service" >&2; exit 1; }
-                echo "user $service on >$password ~deckhand:$service:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +getrange +strlen +set +append +select +ping +quit" >> "$conf"
+                echo "user $service on >$password ~deckhand:$service:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit" >> "$conf"
               done
           securityContext:
             readOnlyRootFilesystem: true

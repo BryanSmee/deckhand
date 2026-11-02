@@ -19,6 +19,8 @@
 import { createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { parseArgs } from "node:util";
+import { withoutKey } from "../../edge/app.mjs";
+import { convertManifest, kept } from "../../github/app.mjs";
 import { keyId } from "../../lib/tokens.mjs";
 import { escape } from "../../listener/html.mjs";
 import { manifest } from "../../listener/setup.mjs";
@@ -68,33 +70,19 @@ export function keys(namespace) {
   ].join("");
 }
 
-// GitHub's answer to the manifest's conversion → edge's and the github service's Secrets, the
-// files /setup would have written: edge's app.json without the key (with the public URL), the
-// github service's with the key and without edge's secrets (github/app.mjs KEPT).
-export function appSecrets(made, { botId, publicUrl, namespace, now = Date.now }) {
-  const common = {
-    id: made.id,
-    slug: made.slug,
-    client_id: made.client_id,
-    owner: made.owner?.login ?? null,
-    html_url: made.html_url,
-    bot_id: botId,
-    created_at: new Date(now()).toISOString(),
-  };
-  const edge = {
-    ...common,
-    client_secret: made.client_secret,
-    webhook_secret: made.webhook_secret,
-    public_url: publicUrl,
-  };
-  const github = { ...common, pem: made.pem };
+// The App's credentials, as the github service's convertManifest() gives them → edge's and the
+// github service's Secrets, the files /setup would have written: edge's app.json without the key
+// (with the public URL, edge/app.mjs), the github service's with the key and without edge's
+// secrets (github/app.mjs kept()).
+export function appSecrets(credentials, { publicUrl, namespace }) {
+  const edge = { ...withoutKey(credentials), public_url: publicUrl };
   return [
     resource("Secret", "deckhand-edge", namespace, {
       "app.json": `${JSON.stringify(edge, null, 2)}\n`,
       "session.key": randomBytes(32),
     }),
     resource("Secret", "deckhand-github", namespace, {
-      "app.json": `${JSON.stringify(github, null, 2)}\n`,
+      "app.json": `${JSON.stringify(kept(credentials), null, 2)}\n`,
     }),
   ].join("");
 }
@@ -112,7 +100,6 @@ async function app({ url, name, org, github, namespace }) {
   const githubUrl = String(github ?? "https://github.com").replace(/\/$/, "");
   const api = githubUrl === "https://github.com" ? "https://api.github.com" : `${githubUrl}/api/v3`;
   const state = randomBytes(16).toString("hex");
-  const headers = { accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" };
 
   return new Promise((resolve, reject) => {
     const server = createServer(async (req, res) => {
@@ -144,24 +131,15 @@ async function app({ url, name, org, github, namespace }) {
         return page(400, "<p>Not this run's answer: start again from its address.</p>");
       }
       try {
-        const answer = await fetch(`${api}/app-manifests/${code}/conversions`, {
-          method: "POST",
-          headers,
-        });
-        if (!answer.ok) throw new Error(`GitHub refused the code: ${answer.status}`);
-        const made = await answer.json();
-        // The bot's user id makes its commits link to it; GitHub shows them without it anyway.
-        const bot = await fetch(`${api}/users/${encodeURIComponent(`${made.slug}[bot]`)}`, {
-          headers,
-        }).catch(() => null);
-        const botId = bot?.ok ? (await bot.json()).id : null;
+        const made = await convertManifest({ code, api });
+        if (made.status) throw new Error(made.message);
         page(
           200,
           `<p>GitHub App ${escape(made.slug)} created. Install it on your repositories:
 <a href="${escape(made.html_url)}/installations/new">${escape(made.html_url)}/installations/new</a></p>`,
         );
         server.close();
-        resolve({ manifests: appSecrets(made, { botId, publicUrl, namespace }), made });
+        resolve({ manifests: appSecrets(made, { publicUrl, namespace }), made });
       } catch (error) {
         page(502, `<p>${escape(error.message)}</p>`);
         server.close();

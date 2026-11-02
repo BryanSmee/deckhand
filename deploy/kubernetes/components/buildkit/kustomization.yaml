@@ -50,4 +50,5 @@ patches:
         value:
           apiGroups: [""]
           resources: [secrets]
+          resourceNames: [deckhand-registry]
           verbs: [update]
