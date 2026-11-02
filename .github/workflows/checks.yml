@@ -60,9 +60,11 @@ jobs:
   tests-root:
     runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
     timeout-minutes: 20
+    # --init: a PID 1 that reaps orphans. The runner's own (`tail -f /dev/null`) leaves them
+    # zombies, which the fake docker's `tail --pid` waits on forever.
     container:
       image: node:26
-      options: --user 0
+      options: --user 0 --init
     steps:
       - uses: actions/checkout@v4
       - name: Install jq and opa
