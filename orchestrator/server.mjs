@@ -888,6 +888,8 @@ ctx.workApi = createWorkApi({
   inputs,
   runOf: (id) => ctx.runsById.get(id) ?? null,
   cancel: (key, user) => ctx.cancel(key, user),
+  queuedItem: (key) => ctx.queuedItem(key),
+  unqueue: (key, user) => ctx.unqueue(key, user),
   analysis: ctx.analysis,
   lanes,
   dismissals,

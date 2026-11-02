@@ -222,6 +222,53 @@ test("a queued auto-picked task cancelled frees its reserved slot: the next pick
   await following;
 });
 
+test("unqueue: a queued task's latest comment leaves the queue for a wait, the others settled", async (t) => {
+  const { ctx, runs, runner, settled, following } = setup(t, { mode: "work" });
+  let asked = 0;
+  ctx.autoPickup = { soon: () => asked++ };
+  const dropped = [];
+  ctx.order = { drop: (key) => dropped.push(key) };
+  const queued = (id, pending, extra = {}) => {
+    const task = { repo: "org/repo", id, kind: "issue", number: Number(id), pending };
+    Object.assign(task, { running: false, ready: true, timer: null, live: null, next: {} });
+    ctx.tasks.set(`org/repo#${id}`, Object.assign(task, extra));
+    return task;
+  };
+  const item = (text, extra = {}) => ({
+    kind: "issue",
+    trigger: "work",
+    mode: "work",
+    text,
+    queuedAt: 1,
+    queueId: "q",
+    ...extra,
+  });
+  const task = queued("13", [
+    item("first", { autoPickup: true }),
+    item("second", { modeLine: "review" }),
+  ]);
+  assert.equal(runs.queuedItem("org/repo#13").text, "second");
+  const latest = runs.unqueue("org/repo#13", "alice");
+  assert.deepEqual(latest, { kind: "issue", trigger: "work", text: "second", modeLine: "review" });
+  assert.deepEqual(task.pending, []);
+  assert.deepEqual(settled, ["cancelled"]);
+  assert.deepEqual(dropped, ["org/repo#13"]);
+  // An auto-picked one's slot is free again.
+  assert.equal(asked, 1);
+  assert.equal(runs.unqueue("org/repo#13", "alice"), null);
+  // A follow-up behind a run going, a reply that starts nothing, a pull request's: they stay.
+  queued("14", [item("more")], { running: true });
+  queued("15", [item("reply", { trigger: null })]);
+  queued("16", [item("pr", { kind: "pr" })]);
+  for (const id of ["14", "15", "16"]) {
+    assert.equal(runs.queuedItem(`org/repo#${id}`), null);
+    assert.equal(runs.unqueue(`org/repo#${id}`, "alice"), null);
+    assert.equal(ctx.tasks.get(`org/repo#${id}`).pending.length, 1);
+  }
+  await runner.kill();
+  await following;
+});
+
 test("output after the answer postpones its stop", async (t) => {
   const { runner, answers, following } = setup(t, { graceMs: 80 });
   // The test's clock: a pause between a line and the next 40 ms wait (a busy runner's) would

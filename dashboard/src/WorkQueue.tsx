@@ -4,17 +4,28 @@
 // Waiting: those waiting for others, to start now, queue after another or take out of their
 // wait. Answers: those waiting for answers, which a start or a queue asks first. Queued: the
 // tasks waiting for a slot, in the order they start (the run order, listener/order.mjs): drag
-// one above or below another, or Run next, Move up and Move down. Each card has
-// a button for each drag (on a phone, its first one and a menu for the rest), so phones and
-// keyboards can do the same. The drags onto the graph are the board's (Board.tsx); the tabs
-// take drops too: a card on Brainstorm brainstorms it, a brainstorm on Backlog stops it.
+// one above or below another, or Run next, Move up and Move down; an issue's can also wait for
+// another issue instead (Queue after…) or go back to the backlog. Each card has a button for
+// each drag (on a phone, its first one and a menu for the rest), so phones and keyboards can
+// do the same. The drags onto the graph are the board's (Board.tsx); the tabs take drops too:
+// a card on Brainstorm brainstorms it, a brainstorm on Backlog stops it, a Queued card there
+// goes back to the backlog.
 import type { ComponentChildren } from "preact";
 import { useEffect, useState } from "preact/hooks";
 import type { WorkAreaState } from "./api";
 import { Chooser, type Target } from "./Chooser";
-import { BRAINSTORM_TYPE, dragEnded, dragOf, droppedIssue, ISSUE_TYPE, LINK_TYPES } from "./dnd";
+import {
+  BRAINSTORM_TYPE,
+  dragEnded,
+  dragOf,
+  droppedIssue,
+  ISSUE_TYPE,
+  LINK_TYPES,
+  QUEUED_TYPE,
+  queuedDrag,
+} from "./dnd";
 import { issueList, plural, sameRepo, STATE_NAMES, when } from "./format";
-import { alreadyThere, type BrainstormCard, ordinal, reorderable } from "./graphModel";
+import { alreadyThere, type BrainstormCard, ordinal, reorderable, unqueueable } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import type { OrderMove, Task, WorkAction } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -26,9 +37,6 @@ import { Tabs } from "./ui/Tabs";
 import styles from "./WorkQueue.module.css";
 
 export type QueueTab = "backlog" | "brainstorm" | "waiting" | "answers" | "queued";
-
-// A Queued card's drag: its task's key.
-const QUEUED_TYPE = "application/x-deckhand-queued";
 
 // What can be done to a brainstorm now: start work on it, or stop it. Not while a reply or its
 // wrap-up is on its way (the listener refuses a busy issue).
@@ -76,7 +84,7 @@ const HINTS: Record<QueueTab, string> = {
     "On the board, drag a waiting card away to end its wait, or onto another card to wait for that one.",
   answers: "Drag onto the board to answer and start · onto a card to answer and queue after it.",
   queued:
-    "The order they start in when a slot frees · drag above or below another card to move it. Brainstorms start first.",
+    "The order they start in when a slot frees · drag above or below another card to move it · onto a card on the board to queue after it · onto the Backlog tab to take it out. Brainstorms start first.",
 };
 
 interface Props {
@@ -175,10 +183,16 @@ export function WorkQueue({
     (i) => !words || `#${i.number} ${i.title ?? ""}`.toLowerCase().includes(words),
   );
 
-  // A brainstorm's card let go on Backlog: it stops.
+  // A brainstorm's card let go on Backlog: it stops. A Queued card: it leaves the queue.
   const stopZone = useDropZone(
-    (e) => !blocked && typesOf(e).includes(BRAINSTORM_TYPE),
+    (e) => !blocked && typesOf(e).some((t) => t === BRAINSTORM_TYPE || t === QUEUED_TYPE),
     (e) => {
+      const key = e.dataTransfer?.getData(QUEUED_TYPE);
+      if (key) {
+        const t = line.find((t) => t.key === key);
+        if (t && unqueueable(t) && !busy) act({ action: "cancel", number: t.number! });
+        return;
+      }
       const number = Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
       if (number) act({ action: "stop", number });
     },
@@ -252,6 +266,23 @@ export function WorkQueue({
         run: () => move({ key: t.key, after: movers[i + 1].key }),
         disabled: still || i === movers.length - 1,
       },
+      // An issue's: it leaves the queue, to wait for another issue or for nothing.
+      ...(unqueueable(t)
+        ? [
+            {
+              label: "After…",
+              aria: `Queue ${ref} after…`,
+              after: (after: number) => act({ action: "queue", number: t.number!, after }),
+              disabled: still || busy,
+            },
+            {
+              label: "Back to backlog",
+              aria: `Take ${ref} out of the queue, back to the backlog`,
+              run: () => act({ action: "cancel", number: t.number! }),
+              disabled: still || busy,
+            },
+          ]
+        : []),
     ];
   };
 
@@ -273,12 +304,7 @@ export function WorkQueue({
       href: taskUrl(t),
       meta: [`${ordinal(t.position!)} in line`, mode, first, auto].filter(Boolean).join(" · "),
       queued: true,
-      drag: can
-        ? (e: DragEvent) => {
-            e.dataTransfer?.setData(QUEUED_TYPE, t.key);
-            if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
-          }
-        : undefined,
+      drag: can ? queuedDrag(t.key, t.number!) : undefined,
       actions: queuedActions(t),
     };
   });

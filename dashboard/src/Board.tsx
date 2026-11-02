@@ -24,6 +24,7 @@ import {
   ISSUE_TYPE,
   LINK_TYPES,
   type Look,
+  QUEUED_TYPE,
 } from "./dnd";
 import { sameRepo } from "./format";
 import { type DropLabel, GHOST_GRIP, GraphDrawing, nodeRef, PAD, targetsOf } from "./GraphDrawing";
@@ -39,6 +40,9 @@ import {
   nextInLine,
   movable,
   moveOnto,
+  onEdge,
+  stillInLine,
+  unqueueable,
   workLists,
 } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
@@ -171,7 +175,11 @@ export function Board({
   const shown = inLine(state?.tasks ?? [], order.moving);
   const everyLine = shown.line;
   const tasks = shown.tasks.filter((t) => sameRepo(t.repo, repo));
-  const line = everyLine.filter((t) => sameRepo(t.repo, repo));
+  // Less those an action on its way takes out of the queue.
+  const line = stillInLine(
+    everyLine.filter((t) => sameRepo(t.repo, repo)),
+    work.pending,
+  );
   // What Run next can't pass is maybe another repo's.
   const nextKey = nextInLine(everyLine);
   const brainstorms = brainstormsOf(tasks, work.pending);
@@ -235,15 +243,50 @@ export function Board({
     request({ action: parent ? "plan" : "start", number, ...mode });
   };
 
+  // Whether queued task `key` let go on `node`'s middle (or on a node that isn't queued) queues
+  // after it: it leaves the queue to wait for that issue.
+  const queuesAfter = (key: string, node: GraphNode | null | undefined) => {
+    const task = everyLine.find((t) => t.key === key);
+    return (
+      !!task &&
+      unqueueable(task) &&
+      node?.number != null &&
+      node.key !== key &&
+      sameRepo(node.repo, repo)
+    );
+  };
+
+  // Queued task `key` let go on node `target` (`side`: where on it, as at()): on a queued
+  // node's edges, it moves in the run order; elsewhere on a node, it queues after it. In the
+  // open, or while another move is on its way, it stays where it is.
+  const droppedQueued = (key: string, target: string | null, side: number) => {
+    setNotice(null);
+    if (order.moving || !target) return;
+    if (onEdge(everyLine, target, side)) {
+      const move = moveOnto(everyLine, key, target, side);
+      if (move) reorder(move);
+      return;
+    }
+    const node = byKey.get(target);
+    const number = everyLine.find((t) => t.key === key)?.number;
+    if (number == null || !queuesAfter(key, node)) return;
+    request({ action: "queue", number, after: node!.number! });
+  };
+
   // What letting go does, said where it would happen.
   const labelOf = (h: Hover): DropLabel | null => {
     const node = h.target ? byKey.get(h.target) : null;
     if (h.what === "queued") {
-      const move =
-        node && h.key && !order.moving ? moveOnto(everyLine, h.key, node.key, h.side) : null;
       const box = node && shape.boxes.find((b) => b.key === node.key);
-      if (!move || !box) return null;
-      const text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;
+      if (!node || !box || !h.key || order.moving) return null;
+      let text: string;
+      if (onEdge(everyLine, node.key, h.side)) {
+        const move = moveOnto(everyLine, h.key, node.key, h.side);
+        if (!move) return null;
+        text = `Move #${h.number} ${move.after ? "after" : "before"} ${nodeRef(node, false, 0)} in line`;
+      } else if (queuesAfter(h.key, node)) {
+        text = `Queue #${h.number} after ${nodeRef(node, false, 0)}: it leaves the line`;
+      } else return null;
       return { text, x: box.x, y: box.y >= 30 ? box.y - 30 : box.y + shape.h + 6 };
     }
     if (node && node.number === h.number) return null;
@@ -280,9 +323,16 @@ export function Board({
 
   const zone = useDropZone(
     (e) =>
-      !blocked && typesOf(e).some((t) => [ISSUE_TYPE, BRAINSTORM_TYPE, ...LINK_TYPES].includes(t)),
+      !blocked &&
+      typesOf(e).some((t) => [ISSUE_TYPE, BRAINSTORM_TYPE, QUEUED_TYPE, ...LINK_TYPES].includes(t)),
     (e) => {
       dragEnded();
+      // A Queued card from the work queue: as a queued node's drag.
+      const queued = e.dataTransfer?.getData(QUEUED_TYPE);
+      if (queued) {
+        const where = at(e.clientX, e.clientY);
+        return droppedQueued(queued, where?.target ?? null, where?.side ?? 0.5);
+      }
       const brainstorm = !!Number(e.dataTransfer?.getData(BRAINSTORM_TYPE));
       const number = droppedIssue(e.dataTransfer, [BRAINSTORM_TYPE, ISSUE_TYPE], github, repo);
       if (!number) {
@@ -298,6 +348,15 @@ export function Board({
         const where = e && at(e.clientX, e.clientY);
         if (!where) return setHover(null);
         const card = carriedCard();
+        if (card?.type === QUEUED_TYPE) {
+          return setHover({
+            ...where,
+            what: "queued",
+            number: card.number,
+            key: card.key,
+            look: null,
+          });
+        }
         const what = card?.type === BRAINSTORM_TYPE ? "brainstorm" : "new";
         const look = card && { status: card.status, title: card.title };
         setHover({ ...where, what, number: card?.number ?? null, look });
@@ -315,12 +374,8 @@ export function Board({
     },
     onDrop: (d, point) => {
       if (!d.queued) return dropped(d.number, targetAt(point.x, point.y), dragged(d));
-      // Let go anywhere but a queued node's edge, or while another move is on its way: it stays
-      // where it is. Its middle doesn't queue it after: the listener refuses a queued task.
-      if (order.moving) return;
       const where = at(point.x, point.y);
-      const move = where?.target ? moveOnto(everyLine, d.key, where.target, where.side) : null;
-      if (move) reorder(move);
+      droppedQueued(d.key, where?.target ?? null, where?.side ?? 0.5);
     },
   });
 

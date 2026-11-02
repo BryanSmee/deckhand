@@ -110,6 +110,19 @@ test("no Stop when nothing runs: queued, waiting, done, failed, a discussion", (
   expect(show("acme/notes#discussion-8", working)).toBeNull();
 });
 
+test("a queued task: Remove from queue sends cancel at once, no question", async () => {
+  api.answer = () => ({ message: "#23 is back in the backlog." });
+  show("acme/app#23");
+  const remove = screen.getByRole("button", { name: "Remove from queue" });
+  fireEvent.click(remove);
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toBe("#23 is back in the backlog."),
+  );
+  expect(api.bodies()).toEqual([{ action: "cancel", number: 23, pr: false }]);
+  expect(refresh).toHaveBeenCalledOnce();
+});
+
 test("a stopped run: its own badge, and Rerun", () => {
   const cancelled = (t: Task): Task => ({
     ...t,

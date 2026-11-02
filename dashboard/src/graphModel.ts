@@ -40,6 +40,7 @@ export function pendingName(p: Pick<Pending, "action">): string {
   if (p.action === "queue") return "Queueing…";
   if (p.action === "plan") return "Laying out…";
   if (p.action === "dequeue") return "Removing its wait…";
+  if (p.action === "cancel") return "Back to the backlog…";
   return "Stopping…";
 }
 
@@ -176,8 +177,9 @@ export function brainstormsOf(tasks: Task[], pending: Pending[] = []): Brainstor
 
 // The tasks and arrows as they will be once `pending` is done: a queued issue gets an arrow
 // from what it waits for, a started one none, a parent laid out with its sub-issues ("plan")
-// waits, its arrows the listener's to tell, a dequeued one leaves (unless it ran before:
-// then it stays, without its arrows). A stopped brainstorm doesn't move. The keys it touches
+// waits, its arrows the listener's to tell, a dequeued one or a queued one taken out of the
+// queue leaves (unless it ran before: then it stays, without its arrows). A stopped brainstorm
+// doesn't move. The keys it touches
 // come back too, with the last action on each.
 function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
   const touched = new Map<string, Pending>();
@@ -187,7 +189,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
     if (p.action === "stop") continue;
     edges = edges.filter((e) => e.to !== key);
     const task = tasks.find((t) => t.key === key);
-    if (p.action === "dequeue") {
+    if (p.action === "dequeue" || p.action === "cancel") {
       if (task && !task.runs.length) tasks = tasks.filter((t) => t !== task);
       continue;
     }
@@ -316,6 +318,21 @@ export function ordinal(n: number): string {
 // Whether a queued task moves in the run order: not a brainstorm, which starts first anyway.
 export const reorderable = (t: Task) => t.state === "queued" && !!t.position && !t.startsFirst;
 
+// Whether a queued task can leave the queue for a wait (Queue after…) or the backlog: an
+// issue's, in the run order.
+export const unqueueable = (t: Task) => reorderable(t) && t.kind === "issue" && t.number !== null;
+
+// `line` (inLine()'s) less the tasks an action on its way takes out of the queue: back to the
+// backlog, or queued after another issue.
+export const stillInLine = (line: Task[], pending: Pending[]) => {
+  const leaving = new Set(
+    pending
+      .filter((p) => p.action === "cancel" || p.action === "queue")
+      .map((p) => `${p.repo}#${p.number}`),
+  );
+  return leaving.size ? line.filter((t) => !leaving.has(t.key)) : line;
+};
+
 // `tasks` (every repo's the user sees) with the queued ones' places as they will be once
 // `moving` is done (the Queued tab and the graph's badges show a move at once), and those
 // queued in run order. As listener/order.mjs move() does: the whole line with the task taken
@@ -350,6 +367,14 @@ export function alreadyThere(line: Task[], key: string, onto: Task, before: bool
   return at >= 0 && movers[at + (before ? 1 : -1)]?.key === onto.key;
 }
 
+// Whether `side` (0 its left edge, 1 its right) is on the edges of `target`, a queued node that
+// moves in the run order (`line`: inLine()'s): a queued task let go there moves in line, not
+// after it.
+export function onEdge(line: Task[], target: string, side: number): boolean {
+  const onto = line.find((t) => t.key === target);
+  return !!onto && reorderable(onto) && !(side > 0.3 && side < 0.7);
+}
+
 // Where a queued node dropped on another queued one moves it: on its left edge before it, on
 // its right edge after it (`line`: inLine()'s, every repo's). `side`: where on the target it was
 // let go, 0 its left edge, 1 its right. Null: its middle, or where it is already.
@@ -359,8 +384,8 @@ export function moveOnto(
   target: string,
   side: number,
 ): OrderMove | null {
-  const onto = line.find((t) => t.key === target);
-  if (key === target || !onto || !reorderable(onto) || (side > 0.3 && side < 0.7)) return null;
+  if (key === target || !onEdge(line, target, side)) return null;
+  const onto = line.find((t) => t.key === target)!;
   const before = side <= 0.3;
   if (alreadyThere(line, key, onto, before)) return null;
   return before ? { key, before: target } : { key, after: target };

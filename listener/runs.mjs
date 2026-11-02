@@ -620,18 +620,50 @@ export function createRuns(ctx) {
     }
     if (live?.cancelled) return "running";
     if (!task.pending.length) return null;
-    // Waiting for a slot or their pause, or for a run that is ending: dropped, their 👀 off.
-    // An auto-picked one frees its reserved slot: the next labelled issue, without waiting for
-    // the next sweep.
+    dropPending(task, key, task.pending.length);
+    log(`${key}: queued comments dropped by ${by}`);
+    return "queued";
+  }
+
+  // The first `n` of the task's queued comments go, their 👀 off, and it leaves the run order.
+  // Waiting for a slot or their pause, or for a run that is ending. An auto-picked one frees
+  // its reserved slot: the next labelled issue, without waiting for the next sweep.
+  function dropPending(task, key, n) {
     const picked = !task.running && pickedTask(task);
     clearTimeout(task.timer);
     task.ready = false;
+    const kept = task.pending.splice(n);
     for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
     ctx.saveQueue?.();
     ctx.order?.drop(key);
-    log(`${key}: queued comments dropped by ${by}`);
     if (picked) ctx.autoPickup?.soon();
-    return "queued";
+    return kept;
+  }
+
+  // The latest comment of a task waiting for a slot that can wait for another issue instead
+  // (the dashboard's Queue after…, work.mjs): an issue's trigger or `/mode` comment, no run
+  // going or ending (a follow-up waits for that one). Null otherwise.
+  function queuedItem(key) {
+    const task = ctx.tasks.get(key);
+    if (!task || task.running || task.live || !task.pending.length) return null;
+    const item = task.pending.at(-1);
+    const starts = item.trigger === "work" || !!item.modeLine;
+    return item.kind === "issue" && starts ? item : null;
+  }
+
+  // queuedItem()'s task out of the queue, the other comments' 👀 off: its latest comment is
+  // returned for its wait (waits.mjs hold()), which keeps that comment's 👀, text, author and
+  // mode line. `by`: who moved it. Null when queuedItem() is.
+  function unqueue(key, by) {
+    const task = ctx.tasks.get(key);
+    if (!queuedItem(key)) return null;
+    const [latest] = dropPending(task, key, task.pending.length - 1);
+    log(`${key}: taken out of the queue by ${by}, to wait`);
+    // Queued again once its wait ends (tasks.mjs queue()): its mode, its place in line and no
+    // auto-pickup slot then.
+    const item = { ...latest };
+    for (const k of ["mode", "queuedAt", "queueId", "autoPickup"]) delete item[k];
+    return item;
   }
 
   // A cancelled run's end: a short reply, no fallback, and nothing put back in the queue
@@ -978,7 +1010,7 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending, dropRefused, cancel, teardown };
+  return { run, follow, ending, dropRefused, cancel, queuedItem, unqueue, teardown };
 }
 
 // A run's record mode once its capabilities are decided (runs.mjs begin()'s reopen()): null when
