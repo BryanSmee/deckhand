@@ -100,6 +100,10 @@ test("two copies: a delivery GitHub sends to both, or twice, goes on the stream 
     ],
   );
   assert.ok(two.logs.includes("Delivery guid-1 again: already handled"));
+  // Each with the ID of the request that brought it, for the orchestrator's lines (#547).
+  const requests = events.map(({ event }) => event.request);
+  for (const id of requests) assert.match(id, /^[0-9a-f]{16}$/);
+  assert.notEqual(requests[0], requests[1]);
 });
 
 test("a delivery: unsigned, badly signed or without an App refused; a secret in it kept out of the store", async (t) => {

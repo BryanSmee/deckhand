@@ -30,6 +30,7 @@ import { runFields, STREAM } from "./runs.mjs";
 // The headers the proxy sets on a sandbox's call: whatever the sandbox sent in them was
 // replaced.
 import { RUN_TOKEN_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
+import { withRequest } from "../lib/log.mjs";
 export { RUN_TOKEN_HEADER, SANDBOX_HEADER };
 
 const RUNNER = ["runner"];
@@ -266,5 +267,5 @@ export function createBrokerHandler({
 }
 
 export function createBrokerServer(options) {
-  return drainable(createServer(createBrokerHandler(options)));
+  return drainable(createServer(withRequest(createBrokerHandler(options))));
 }

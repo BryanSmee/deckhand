@@ -32,6 +32,7 @@ import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
 import { buildPlan, buildProblem, validRepo } from "./builds.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId } from "./logs.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 // Who may call what. A route that isn't here is refused to everyone.
 export const ROUTES = {
@@ -537,7 +538,7 @@ export function createRunnerService({
     }
   }
 
-  const server = drainable(createServer((req, res) => void handle(req, res)));
+  const server = drainable(createServer(withRequest((req, res) => void handle(req, res))));
   let stopping = false;
   let watching = null;
 

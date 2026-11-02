@@ -17,6 +17,7 @@
 import { createServer } from "node:http";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
+import { withRequest } from "../lib/log.mjs";
 
 export const ROUTES = {
   "POST /runs/:run/tokens": ["runner"],
@@ -107,16 +108,19 @@ export function createServicesHttp({
     throw new Refused(404, "no such endpoint");
   }
 
-  const server = createServer((req, res) =>
-    handle(req, res).catch((error) => {
-      if (res.headersSent) return res.destroy();
-      // Not this copy's to answer (it waits, or stops): the connection isn't kept for the next
-      // call, which then reaches the copy that acts.
-      if (error instanceof Refused && error.status === 503) res.setHeader("connection", "close");
-      if (error instanceof Refused) return sendJson(res, { message: error.message }, error.status);
-      log(`Services port: ${req.method} ${req.url}: ${error.stack ?? error}`);
-      sendJson(res, { message: "failed" }, 500);
-    }),
+  const server = createServer(
+    withRequest((req, res) =>
+      handle(req, res).catch((error) => {
+        if (res.headersSent) return res.destroy();
+        // Not this copy's to answer (it waits, or stops): the connection isn't kept for the next
+        // call, which then reaches the copy that acts.
+        if (error instanceof Refused && error.status === 503) res.setHeader("connection", "close");
+        if (error instanceof Refused)
+          return sendJson(res, { message: error.message }, error.status);
+        log(`Services port: ${req.method} ${req.url}: ${error.stack ?? error}`);
+        sendJson(res, { message: "failed" }, 500);
+      }),
+    ),
   );
   server.posting = () => [...posting];
   return server;

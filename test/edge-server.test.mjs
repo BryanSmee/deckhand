@@ -73,6 +73,7 @@ async function startEdge(t) {
     cwd: join(import.meta.dirname, ".."),
     env: {
       PATH: process.env.PATH,
+      LOG_FORMAT: "text",
       PORT: "0",
       // A port the OS picks, as for PORT: one probed free first may be another test's by then.
       INTERNAL_PORT: "0",

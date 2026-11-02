@@ -1200,6 +1200,60 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `DECKHAND_VERSION` (in the image)                                                                                                  | none                             | set when the image is built                                                                             | the version the dashboard shows                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `DECKHAND_SOURCE` (in the image)                                                                                                   | none                             | set when the image is built; empty from source                                                          | the repository the image was built from: the dashboard links the version to its commit or release there                                                                                                                                                                                                                                                                                                                            |
 
+## Logs
+
+Each service writes its own lines to stdout, one per event: its runs' output never goes there
+(the runner keeps it, the dashboard shows it). Every line goes through the same redaction as the
+runs' output first, GitHub's and Deckhand's own token shapes and the service's own secrets (the
+App's key, the session key, the agents' credentials): once logs leave the host, a leaked token is
+hard to get back.
+
+Two settings, in `.env` (`compose.yaml` passes them to every service):
+
+| Setting      | Default                                    | What                                                      |
+| ------------ | ------------------------------------------ | --------------------------------------------------------- |
+| `LOG_FORMAT` | `text` with `compose.yaml`, `json` without | `text` for `docker compose logs`, `json` for a collector  |
+| `LOG_LEVEL`  | `info`                                     | `debug`, `info`, `warn` or `error`: the lines below it go |
+
+`text` reads as before: the time and the message, the level when it isn't `info`, then the
+fields that apply (`request=… repo=… issue=… run=…`). `json` is one object a line (spread out
+here):
+
+```json
+{
+  "ts": "2026-11-02T10:00:00.000Z",
+  "level": "info",
+  "service": "orchestrator",
+  "msg": "acme/api#42: cancelled by alice",
+  "request": "4f1c2a9e0b7d6e35",
+  "repo": "acme/api",
+  "issue": 42,
+  "run": "dh-acme-api-42-1762077600000"
+}
+```
+
+- `ts`, `level`, `service` and `msg` are on every line; `repo`, `issue` (an issue, pull request
+  or discussion number) and `run` when the line is about one.
+- `request`: edge gives each webhook and dashboard request an ID, and every service it reaches
+  (the orchestrator, then the runner, the github service, the broker, the models and policy
+  services) logs it, as the call carries it (the `x-deckhand-request` header). One search
+  follows a webhook across them. A call that comes with none (a timer, a sandbox's own call) gets
+  one of its own there.
+
+On Kubernetes, the services log JSON (their default, `LOG_FORMAT` unset), which the
+node's agent (Promtail, Alloy, Fluent Bit) sends to Loki or VictoriaLogs as it is. With Docker,
+`LOG_FORMAT=json` in `.env` and one of Docker's logging drivers do the same. Deckhand ships no
+collector. With Loki:
+
+- Keep labels to what the cluster or the driver adds (namespace, pod or container, service).
+  Leave `repo`, `issue`, `run` and `request` as JSON fields to filter on, never labels: each run
+  would make a new label value, and Loki slows down with too many.
+- Filter on them in the query: `{container="runner"} | json | run="dh-acme-api-42-…"`, or
+  `{namespace="deckhand"} | json | request="4f1c2a9e0b7d6e35"` for one webhook everywhere.
+- Error rates for alerts come from the lines: `sum by (container)
+(count_over_time({namespace="deckhand"} | json | level="error" [5m]))`. Deckhand has no
+  `/metrics` endpoint.
+
 ## Updating
 
 Each release is a git tag (`v1.2.3`) that publishes the images, tagged `1.2.3`, `1.2`

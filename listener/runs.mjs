@@ -34,6 +34,7 @@ import { logSent } from "./restart.mjs";
 import { sandboxSpec, sessionName, sessionOf } from "./sandbox-spec.mjs";
 import { noLongerAllowed, pickedTask } from "./tasks.mjs";
 import { operatorSecrets, redact } from "./secrets.mjs";
+import { withLogContext } from "../lib/log.mjs";
 
 // A run cancelled before its sandbox started (cancel()): finish() ends it as cancelled.
 class Cancelled extends Error {}
@@ -81,6 +82,13 @@ export function createRuns(ctx) {
     // Started: out of the run order (order.mjs), what comes after it goes by its queue time.
     ctx.order?.drop(taskKey(task.repo, task.id));
     task.live = newLive(task, items);
+    // What it logs from here on, and the calls it makes to the other services, name it.
+    const fields = { repo: task.repo, issue: task.number, run: task.live.id };
+    return withLogContext(fields, () => started(task, items));
+  }
+
+  // A run whose record is made: started, then followed to its end.
+  async function started(task, items) {
     addRun(ctx, task.live.record);
     // In its saved state before they leave the saved queue (restart.mjs take()).
     if (ctx.take) ctx.take(task, items);

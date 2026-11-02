@@ -9,6 +9,7 @@
 // until WAIT_MS: an update of the service, or a copy that stops, is a wait rather than a
 // refusal. After it, or for any other failure, the call throws, and the decision refuses with a
 // `policy error` (fail closed).
+import { requestHeaders } from "../lib/log.mjs";
 
 // How long a call waits for a service that doesn't take it: a restart's drain and start.
 export const WAIT_MS = 30_000;
@@ -49,6 +50,7 @@ export function policyClient({
           method,
           headers: {
             authorization: await header(),
+            ...requestHeaders(),
             ...(body !== undefined && { "content-type": "application/json" }),
           },
           body: body === undefined ? undefined : JSON.stringify(body),

@@ -446,3 +446,14 @@ test("the subnet check fails on one written apart, two that overlap, one in Dock
     "github-edge and edge-orchestrator overlap: 10.231.250.192/28, 10.231.250.192/28",
   ]);
 });
+
+// Text for `docker compose logs`, JSON with one line in .env for a collector (#547): the
+// services' own default, unset, is JSON (lib/log.mjs).
+test("compose.yaml: every Deckhand service logs as LOG_FORMAT says, text by default", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  for (const name of Object.keys(RUNS)) {
+    const { environment = {} } = compose.services[name];
+    assert.equal(environment.LOG_FORMAT, "${LOG_FORMAT:-text}", `${name}'s LOG_FORMAT`);
+    assert.equal(environment.LOG_LEVEL, "${LOG_LEVEL:-}", `${name}'s LOG_LEVEL`);
+  }
+});
