@@ -31,7 +31,7 @@
 // fix run (`ci-fix`), counted apart (`ciFixes`, at most `review.ci_fix`), whose push goes back
 // to waiting. Out of CI fix runs, or `review.ci_wait` minutes gone: the review anyway.
 import { ciState, countedRuns, PASSED } from "./ci.mjs";
-import { waitsForInput } from "./comments.mjs";
+import { ensureLabel, waitsForInput } from "./comments.mjs";
 import { repoAllowed } from "./config.mjs";
 import {
   headInRepo,
@@ -238,9 +238,14 @@ function bullet(section, line) {
   }
   if (section === "follow-ups") {
     // A comment's kind or a severity as its lead, in any form the Comments section reads: a
-    // blocking comment or a finding under the wrong heading. Neither filed nor dropped quietly:
-    // `misplaced`, so the model's verdict stands.
-    if (commentKind(rest) || MISPLACED_SEVERITY.test(rest)) return { misplaced: true };
+    // comment or a finding under the wrong heading, never filed. A blocking comment blocks
+    // there as anywhere (a comment, moved to its section, as under Must fix); a note or a
+    // finding is `misplaced`, and the model's verdict stands.
+    const kind = commentKind(rest);
+    if (kind?.[1].toLowerCase() === "blocking") {
+      return { comment: true, blocking: true, ...located(kind[2]) };
+    }
+    if (kind || MISPLACED_SEVERITY.test(rest)) return { misplaced: true };
     // Only with its title in bold: each one becomes a public issue after the merge.
     const m = /^(?:\*\*(.+?)\*\*|__(.+?)__)\s*[:–—-]?\s*(.*)$/.exec(rest);
     // Another form is no follow-up; unless it says there is none ("- No follow-ups."), it is
@@ -2437,17 +2442,16 @@ export function createReviews({
     // came during the reads above may have marked it since.
     if (reviewed.get(key)?.followUpsAt) return null;
     keep(key, { followUpsAt: now() });
-    // Its colour and description, should the repo not have it yet (422: it has).
-    await github(
+    // Its colour and description, should the repo not have it yet.
+    await ensureLabel(
+      github,
       repo,
-      "POST",
-      `/repos/${repo}/labels`,
       {
         name: FOLLOW_UP_LABEL,
         color: "c5def5",
         description: "Found by Deckhand's review of a pull request, for another issue",
       },
-      [422],
+      log,
     );
     const issue = linkedIssue(pr, repo, config.bot);
     const filed = [];

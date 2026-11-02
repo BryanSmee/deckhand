@@ -508,10 +508,10 @@ token only reads, and Deckhand posts the review.
   (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
   comments (only the comments Deckhand posted them as, recorded in `reviews.json`). Only a
   bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
-  `- No follow-ups.` or `- **None found**` files nothing. A bullet led by a comment's kind
-  or a severity, in any form Comments or Must fix reads (`- **blocking** …`, `- high: …`
-  under Follow-ups: an item under the wrong heading), and any other bullet without a bold
-  title, is filed neither, and keeps the review's own verdict, as an unreadable comment does.
+  `- No follow-ups.` or `- **None found**` files nothing. An item under the wrong heading is
+  never filed: a blocking comment there (`- **blocking** …`, in any form Comments reads)
+  blocks as one under Comments does; a note or a finding (`- high: …`) there, and any other
+  bullet without a bold title, keeps the review's own verdict, as an unreadable comment does.
   A pull request closed without a merge files none, and a merge files at most 10 (the rest
   listed by title in the comment). The issue's body says the text is a review model's
   output, to check against the code, and quotes it. The review is told not to list again a

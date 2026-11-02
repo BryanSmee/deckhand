@@ -379,6 +379,7 @@ function setup(
     reply = async () => {},
     // The repo's settings as read later on (its config changed since), when the test sets it.
     later = null,
+    log = () => {},
   } = {},
 ) {
   let time = 1_800_000_000_000;
@@ -388,6 +389,7 @@ function setup(
     path,
     config: settings,
     repoSettings: async () => later?.() ?? read,
+    log,
     accept: async (item) => accepted.push(item),
     github,
     busy,
@@ -2652,9 +2654,11 @@ function followUpSetup(
     refuse = [],
     failReads = 0,
     later = null,
+    label = 422,
   } = {},
 ) {
   let fails = failReads;
+  const logged = [];
   const calls = [];
   const replies = [];
   let next = 40;
@@ -2687,7 +2691,7 @@ function followUpSetup(
       return Response.json(path.includes("page=1") ? existing : []);
     }
     if (method === "POST" && path === "/repos/org/repo/labels")
-      return new Response("{}", { status: 422 });
+      return new Response("{}", { status: label });
     if (method === "POST" && path === "/repos/org/repo/issues") {
       if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
       return Response.json({ number: next++ }, { status: 201 });
@@ -2696,6 +2700,7 @@ function followUpSetup(
   };
   const s = setup(t, "review:\n  on: manual\n", {
     later,
+    log: (line) => logged.push(line),
     github,
     reply: async (repo, number, text) => replies.push([number, text]),
   });
@@ -2721,7 +2726,7 @@ function followUpSetup(
     );
   const filed = () =>
     calls.filter((c) => c.method === "POST" && c.path === "/repos/org/repo/issues");
-  return { ...s, calls, replies, record, merged, filed };
+  return { ...s, calls, replies, record, merged, filed, logged };
 }
 
 const postedBody = (message) =>
@@ -3235,4 +3240,34 @@ test("follow-ups: two deliveries of one merge at once file once", async (t) => {
     [2],
   );
   assert.equal(s.filed().length, 2);
+});
+
+test("follow-ups: a blocking comment under Follow-ups blocks, whatever the model's verdict", () => {
+  const review = parseReview(
+    "## Must fix\n\nNone.\n\n## Follow-ups\n\n- **blocking** `a.mjs:1`: must not merge\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual(
+    [review.followUps, review.comments, review.verdict, review.rating, reviewEvent(review)],
+    [
+      [],
+      [{ blocking: true, path: "a.mjs", line: 1, text: "must not merge" }],
+      "request-changes",
+      8,
+      "REQUEST_CHANGES",
+    ],
+  );
+  // A note there files nothing and keeps the model's verdict, as before.
+  const note = parseReview(
+    "## Must fix\n\nNone.\n\n## Follow-ups\n\n- **note** rename it.\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual([note.followUps, note.comments, note.verdict], [[], [], "comment"]);
+});
+
+test("follow-ups: the label made with its colour, a refusal logged", async (t) => {
+  const s = followUpSetup(t, { posted: [postedBody(SECTIONS)], label: 403 });
+  await s.record(SECTIONS);
+  await s.merged();
+  const made = s.calls.find((c) => c.method === "POST" && c.path === "/repos/org/repo/labels");
+  assert.deepEqual([made.body.name, made.body.color], [FOLLOW_UP_LABEL, "c5def5"]);
+  assert.ok(s.logged.includes("org/repo: the follow-up label: 403"), s.logged.join("\n"));
 });
