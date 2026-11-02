@@ -108,12 +108,15 @@ test("a red dot for a section that failed: a failed build step, a run that ended
     true,
   ]);
   // The build's failed step and the push's failed command keep their red badge; the work's
-  // failed command is plain text.
+  // failed command is plain text, and its badge says the agent ended in error: the dot isn't
+  // alone.
   const badge = (title: string) => section(title).querySelector("summary .s-err:not(summary > *)");
   expect(badge("Image build")!.textContent).toBe("1 failed step");
   expect(badge("Push and pull request")!.textContent).toBe("1 failed command");
-  expect(badge("Work")).toBeNull();
-  expect(section("Work").querySelector("summary")!.textContent).toContain("1 failed command");
+  expect(badge("Work")!.textContent).toBe("Ended in error");
+  expect(section("Work").querySelector("summary")!.textContent).toMatch(
+    /1 failed command.*Ended in error/,
+  );
 });
 
 test("search finds text in folded sections, opens them, and steps through the matches", () => {

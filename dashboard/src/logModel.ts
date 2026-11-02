@@ -93,13 +93,14 @@ export const isFailure = (item: Item): boolean =>
 export const isError = (item: Item): boolean =>
   isFailure(item) || (item.kind === "result" && item.status === "error");
 
-// What makes a section fail, not just a command in it: a build step (the build stopped), the
-// agent ending in error, or, in the push section, a command (the pull request may not have been
-// updated: a refused push, a failed `gh pr` call).
+// Where a failed command or build step fails its section, not just itself: the image's build
+// (a failed step stops it) and the push section (a refused push or a failed `gh pr` call may
+// leave the pull request as it was). Elsewhere a command that exits non-zero is often expected.
+export const failuresFail = (phase: Phase): boolean => phase === "image" || phase === "push";
+
+// What makes a section fail: a failure where failuresFail(), or the agent ending in error.
 export const fails = (phase: Phase, item: Item): boolean =>
-  (item.kind === "step" && item.step.status === "error") ||
-  (item.kind === "result" && item.status === "error") ||
-  (phase === "push" && isFailure(item));
+  (failuresFail(phase) && isFailure(item)) || (item.kind === "result" && item.status === "error");
 
 export function shown(item: Item, filter: Filter): boolean {
   if (filter === "messages") return item.kind === "say" || item.kind === "result";

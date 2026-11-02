@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import {
   clock,
+  failuresFail,
   fields,
   type Item,
   logSections,
@@ -150,10 +151,10 @@ test("a failed command fails the push section, not the work or the wrap-up", () 
     0,
     false,
   );
-  expect(list.map((s) => [s.phase, s.failures, s.failed])).toEqual([
-    ["work", 1, false],
-    ["push", 1, true],
-    ["wrap-up", 1, false],
+  expect(list.map((s) => [s.phase, s.failures, s.failed, failuresFail(s.phase)])).toEqual([
+    ["work", 1, false, false],
+    ["push", 1, true, true],
+    ["wrap-up", 1, false, false],
   ]);
 });
 
