@@ -992,8 +992,7 @@ Then restart the models service and the orchestrator. The models service logs `A
 Google AI plan's login, from /data/credentials/agy-auth.json` at start, or why it can't use it.
 When the access token is within 5 minutes of its expiry, it has `agy` refresh it: the runner runs
 `agy models` in a short container of the sandbox image, on a volume of its own
-(`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs; on
-Kubernetes, a pod of its own: [Agents on Kubernetes](#agents-on-kubernetes)), once for
+(`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs), once for
 all runs, and the models service keeps the new token in its store, sealed. When Google refuses
 the refresh (the login was revoked), runs fail with "sign in with `agy` again": repeat the steps
 above; the models service reads the new file without a restart. `GEMINI_API_KEY`, when set too, wins.
@@ -1178,7 +1177,7 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `BROKER_SERVICE_URL` (egress proxy)                                                                                                | none                             | `http://broker:8081`                                                                                    | the broker service, one URL, where the proxy sends what a sandbox calls about its own run (`/run/…` on `http://broker:8081`, the name sandboxes call it by: its token's renewal, its inbox and files) with its own service token, and asks for that token; compose sets it                                                                                                                                                         |
 | `MODELS_SERVICE_URL`                                                                                                               | none                             | `http://models:8080`                                                                                    | the [models service](#the-models-service), comma-separated for its copies: where the orchestrator asks which agents' credentials it holds and their fingerprints (waiting for both at start) and a run's API state; compose sets it                                                                                                                                                                                                |
 | `MODELS_SERVICE_URL` (egress proxy)                                                                                                | none                             | `http://models:8080`                                                                                    | the models service, one URL (not comma-separated: the proxy stops at start otherwise; several copies go behind one address), where the proxy sends the sandboxes' agent calls (`/anthropic/`, `/openai/`, `/google/` on `http://models:8080`, the name sandboxes call it by, and the hosts relayed for an agent) with its own service token; compose sets it                                                                       |
-| `SERVICE_ACCOUNT_TOKEN_FILE` (edge, orchestrator, egress proxy, runner, models service)                                            | none                             | none                                                                                                    | on Kubernetes, the pod's service account token projected for the broker (audience `deckhand-broker`), which proves to it who calls (see [Kubernetes runner](#kubernetes-runner))                                                                                                                                                                                                                                                   |
+| `SERVICE_ACCOUNT_TOKEN_FILE` (edge, orchestrator, egress proxy, runner)                                                            | none                             | none                                                                                                    | on Kubernetes, the pod's service account token projected for the broker (audience `deckhand-broker`), which proves to it who calls (see [Kubernetes runner](#kubernetes-runner))                                                                                                                                                                                                                                                   |
 | `SERVICE_NETWORKS` (broker)                                                                                                        | none                             | none; compose sets it                                                                                   | with Docker, who calls the broker, by the network a call arrives on: `orchestrator=<subnet>,edge=<subnet>,proxy=<subnet>,runner=<subnet>,models=<subnet>,github=<subnet>`, each caller's own network to the broker; this or `SERVICE_ACCOUNTS` is required                                                                                                                                                                         |
 | `SERVICE_ACCOUNTS` (broker)                                                                                                        | none                             | none                                                                                                    | on Kubernetes, who calls the broker, by its pod's service account: `orchestrator=<namespace>:<name>,edge=<namespace>:<name>,proxy=<namespace>:<name>,runner=<namespace>:<name>,models=<namespace>:<name>`                                                                                                                                                                                                                          |
 | `STORE_URL` (broker)                                                                                                               | none                             | `file:///data/store`                                                                                    | the broker's store: the live runs, their files and events (the `broker-store` volume); `redis://…` for two copies on several nodes, with `REDIS_PASSWORD` (see [The store](#the-store))                                                                                                                                                                                                                                            |
@@ -1533,9 +1532,7 @@ runner expects ([Namespaces](#namespaces) says which goes where).
 
 - **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none), in
   the sandboxes' namespace: `create`, `get`, `list` and `delete` on `pods`, `secrets` and
-  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, `create`
-  and `get` on `pods/attach` (the Antigravity CLI's login refresh,
-  [Agents on Kubernetes](#agents-on-kubernetes): `create` from Kubernetes 1.35, `get` before), and
+  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and
   `list` on `events` (why a pod is stuck) and `networkpolicies` (`networking.k8s.io`). With
   the services in a namespace of their own, `update` on `secrets` there too (the registry's
   copy), and another Role in the services' namespace: `get` on `services` and `pods`, `list`
@@ -1554,9 +1551,7 @@ runner expects ([Namespaces](#namespaces) says which goes where).
   - on the orchestrator, `SERVICE_NETWORKS=runner+edge=0.0.0.0/0` (either caller, on any
     address: their tokens tell them apart), and a NetworkPolicy that lets only the runner's and
     edge's pods reach its 8083; on the runner, `SERVICE_NETWORKS=none`, and a NetworkPolicy
-    that lets only the orchestrator's and the models service's pods reach its 8080 (the models
-    service calls it for the Antigravity login's refresh alone, its `RUNNER_URL`; the runner
-    refuses it every other endpoint, by its service token). 8083 serves a run's first tokens while it
+    that lets only the orchestrator's pods reach its 8080. 8083 serves a run's first tokens while it
     starts (the repositories' tarballs and blobs are the github service's, `GITHUB_SERVICE_URL`,
     whose NetworkPolicy lets the runner's pods in), only to a caller holding the runner's
     service token from the broker: the first policy is defence in depth, in case such a token
@@ -1579,7 +1574,7 @@ runner expects ([Namespaces](#namespaces) says which goes where).
   proxy's Deployments.
   Sandboxes never reach it but through the proxy. It tells its callers apart by their pods'
   service accounts: `SERVICE_ACCOUNTS` names them (`orchestrator=<namespace>:<orchestrator's>,edge=<namespace>:<edge's>,proxy=<namespace>:<proxy's>,runner=<namespace>:<runner's>,models=<namespace>:<models service's>`),
-  each its own service account; edge's, the orchestrator's, the runner's, the proxy's and the models service's pods each mount a token projected for it (a
+  each its own service account; edge's, the orchestrator's, the runner's and the proxy's pods each mount a token projected for it (a
   `serviceAccountToken` volume with `audience: deckhand-broker`) and name its path in
   `SERVICE_ACCOUNT_TOKEN_FILE`, and the broker's own ServiceAccount reviews them (a
   ClusterRoleBinding to `system:auth-delegator`). One replica on the file backend
@@ -1690,7 +1685,8 @@ can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
 
 Not on Kubernetes yet: a run whose repository has host mounts (`mounts`) is refused, with a reply naming the runner, and so is one that would get a
 container engine (`docker`; a run without the `docker` capability, a fork's or one without `SANDBOX_ENGINE` goes without,
-as under Docker), or its own image (`dockerfile`) without `KUBERNETES_REGISTRY`.
+as under Docker), or its own image (`dockerfile`) without `KUBERNETES_REGISTRY`. So is the
+Antigravity CLI's plan login, which the runner refreshes in a container.
 
 ### Namespaces
 
@@ -1812,18 +1808,6 @@ every sandbox mounts read-only, as on Docker:
   Pending (the init container running), the egress proxy lets it reach the agent's install
   hosts only, nothing of the run's own; once the sandbox starts, those hosts are gone again.
   A failed install fails the run, with the installer's output in the run's log.
-
-The Antigravity CLI's plan login ([Antigravity CLI](#antigravity-cli)) is refreshed by a pod of
-its own, `<NAME_PREFIX>-job-antigravity-refresh`, in the sandboxes' namespace, which meets Pod
-Security `restricted` as the sandbox's user, with no ServiceAccount token and no Secret. The
-runner sends it the token file on its stdin and reads back the refreshed one from its stdout,
-through the API server (`pods/attach`, over WebSocket, `v5.channel.k8s.io`: Kubernetes 1.30 or
-later), never through its spec; `~/.gemini` is an `emptyDir` there, no claim. It mounts the
-agent's claim read-only (or, without one, installs the CLI in an init container, as sandboxes
-do), and is labelled `deckhand.role: install`, so the install pods' NetworkPolicies cover it:
-the egress proxy lets it reach Google's OAuth (`oauth2.googleapis.com`) and the CLI's own hosts
-only, tunnelled. It is removed once it ends, whatever its outcome; the kubelet's copy of its
-log (which holds the refreshed file) goes with it.
 
 The shared claims (agents', caches') are written by their pods' users, uid 1001 for the
 installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim theirs. That
