@@ -20,7 +20,7 @@ and shares a network only with the services it calls or is called by
 | -------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [edge](#edge)                                | the webhook secret, the session key, the OAuth client's | forged deliveries and sessions (any allowed user's dashboard); through the github service, reads, the redeliveries and /setup's conversion (refused once an App is held) only: no token minted, no write                                                                                                                                                                                                                                                     |
 | [orchestrator](#the-orchestrator)            | nothing secret                                          | what it decides: runs started (each spec checked again by the runner against the grants), the App's writes through the github service, a run's first tokens with the claims it picks; no way out but the services it calls; no sandbox calls it (the egress proxy asks its egress policy)                                                                                                                                                                    |
-| [runner](#the-runner-service)                | the Docker socket or the Kubernetes API                 | with Docker, the host (the socket is root on it), and with it every service's secrets on that host (the App's key, the signing key, the agents' credentials, in their volumes); on Kubernetes, the sandboxes' namespace (with the services in another, only the registry's pull Secret of theirs, [Namespaces](setup.md#namespaces)). It holds no credential itself                                                                                          |
+| [runner](#the-runner-service)                | the Docker socket or the Kubernetes API                 | with Docker, the host (the socket is root on it), and with it every service's secrets on that host (the App's key, the signing key, the agents' credentials, in their volumes); on Kubernetes, the sandboxes' namespace (with the services in another, only the registry's pull Secret of theirs, [Namespaces](kubernetes.md#namespaces)). It holds no credential itself                                                                                     |
 | [broker](#the-broker-service)                | the tokens' signing key                                 | every live run's inbox and digest, so it can direct their agents; tokens with any claims for a live run, handed to its sandbox at renewal, and so pushes through it to any repository the App is installed on (any branch but the default, as the push policies allow) and any of the operator's agent credentials; the `runs` stream the orchestrator reads (run ends, screenshots). Outside a live run's own network (or pod), none of its tokens is taken |
 | [github](#the-github-service)                | the App's key, its installation tokens                  | the App, on every repository it is installed on                                                                                                                                                                                                                                                                                                                                                                                                              |
 | [models](#the-models-service)                | the operator's agent credentials                        | those credentials                                                                                                                                                                                                                                                                                                                                                                                                                                            |
@@ -578,7 +578,7 @@ The host's Docker socket is root on the host, and the Kubernetes API's credentia
 any pod in the sandboxes' namespace (`KUBERNETES_NAMESPACE`; with the services in a namespace
 of their own, `KUBERNETES_SERVICES_NAMESPACE`, its Role there reads no Secret but the
 registry's pull Secret, so none of the services' keys, and that namespace may enforce Pod
-Security `restricted`, [Namespaces](setup.md#namespaces)): only the runner service holds either (`runner/`, #503,
+Security `restricted`, [Namespaces](kubernetes.md#namespaces)): only the runner service holds either (`runner/`, #503,
 [architecture.md](architecture.md#the-runner-service)). Edge, which the internet reaches
 (webhooks, the dashboard), has neither, nor does the orchestrator: a hole in either doesn't give
 the host. What the runner
@@ -741,8 +741,8 @@ own network to the service it calls. The broker is on none of those: with Docker
 network per caller (`broker-orchestrator`, `broker-edge`, `broker-proxy`, `broker-runner`,
 `broker-models`, `broker-github`), internal, with no way out, where the service on the other
 side takes no call that arrives from the broker's address as another caller's; on Kubernetes,
-NetworkPolicies would have to keep it there (#396, the Kubernetes deployment, which also has
-to give every copy the same key). With Compose, one copy runs
+NetworkPolicies keep it there, and both copies mount the same key's Secret
+([On Kubernetes](#on-kubernetes)). With Compose, one copy runs
 ([architecture.md](architecture.md#the-broker-service)).
 
 ### Service tokens
@@ -771,7 +771,7 @@ mechanism: Ed25519, checked offline with its public key, the same strict checks 
   which network a call arrived on (its own address on it, `SERVICE_NETWORKS`:
   `edge=172.30.1.0/24,…`) against `sub`. A token stolen from one service and replayed from
   another arrives on the wrong network: `403`. On Kubernetes, NetworkPolicies do it (with a
-  network plugin that enforces them, #396).
+  network plugin that enforces them: [On Kubernetes](#on-kubernetes)).
 
 **What each caller may do.** `aud` isn't enough: each service declares, for each of its
 endpoints, which callers may call it, in **one table per service**, checked in code
@@ -1340,6 +1340,34 @@ endpoint forwards a fixed list of methods and paths, what its agent calls, and n
 - So a provider's `401` on one of these paths, the only ones a run reaches, is what marks a
   plan's token for a refresh: a sandbox can't force refreshes through some other path.
 
+## On Kubernetes
+
+`deploy/kubernetes/` ([kubernetes.md](kubernetes.md)) keeps each rule above, in Kubernetes'
+terms:
+
+| Rule                                                        | With Docker Compose                                                              | On Kubernetes                                                                                                                                                                                              |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The Docker socket, or the API's credentials, in one service | the runner alone mounts the socket                                               | the runner's pods alone mount their ServiceAccount's token (`automountServiceAccountToken: false` on the others but the broker's, which reviews tokens), for Roles in two namespaces, nothing cluster-wide |
+| Each secret in its service alone                            | its own volume or environment                                                    | its own Secret, mounted read only by its pods alone: edge's, the github service's, the broker's key, the models service's credentials and key; the orchestrator mounts none                                |
+| Who calls a service                                         | one internal network per caller and callee (`SERVICE_NETWORKS`)                  | one NetworkPolicy per service letting in its callers' pods alone (`CALLS`), default deny in both namespaces; `SERVICE_NETWORKS=none`                                                                       |
+| A service token bound to its caller                         | the network it arrives on                                                        | the pod's service account: a token projected for the broker (audience `deckhand-broker`), reviewed by the API server (`SERVICE_ACCOUNTS`)                                                                  |
+| Sandboxes reach the egress proxy alone                      | each run's internal network, the proxy alone on it                               | their namespace's NetworkPolicies, which the runner checks before every run (`isolationProblem()`); no DNS server, the proxy's address in `hostAliases`                                                    |
+| No way out but the services' own                            | internal networks, a way out for edge, the github and models services, the proxy | egress rules: 443 for edge, the github and models services, the API server for the runner and the broker, any public host for the proxy (not the private ranges), nothing for the policy service           |
+| Hardened containers                                         | `cap_drop: ALL`, `no-new-privileges`, uid 1000, read-only roots                  | the same in each pod's security context; the sandboxes' namespace enforces Pod Security `restricted`, and every sandbox pod meets it                                                                       |
+| The broker's public key, read only                          | the `service-keys` volume, which the broker writes                               | a ConfigMap the operator makes beside the signing key's Secret: no volume shared between services                                                                                                          |
+
+**NetworkPolicies need a network plugin that enforces them** (Calico, Cilium, k3s's own). One
+that doesn't (Flannel alone) takes them and enforces nothing: a sandbox could then call the
+services directly, the orchestrator's services port among them, and get what only the runner
+may. `deploy/kubernetes/check-isolation.sh` checks it from a pod labelled as a sandbox; the runner
+checks only that the policies are there. Each service's own ingress policy is a second line: with
+the sandboxes' policies gone, a sandbox reaches edge's public port alone.
+
+**What isn't covered**: an `ipBlock` can't name the API server on every cluster (it is no pod),
+so the runner and the broker may reach any address on 443 and 6443. A service
+mesh that rewrites source addresses breaks the orchestrator's check of the proxy's calls (by its
+pods' addresses), and refuses them: run Deckhand's namespaces outside it.
+
 ## Mounts
 
 A sandbox only gets Docker named volumes:
@@ -1614,7 +1642,7 @@ shared claim, or each sandbox's init container into an `emptyDir`): still not th
 user, and the sandbox mounts it read-only all the same. Through the egress proxy, it reaches
 its agent's install hosts only, tunnelled; an init container gets them only while its pod is
 Pending, never the run's own hosts, and the sandbox never gets them
-([Agents on Kubernetes](setup.md#agents-on-kubernetes)).
+([Agents on Kubernetes](kubernetes.md#agents-on-kubernetes)).
 
 What is installed is pinned: Claude Code and Codex by their npm version, the Antigravity CLI
 by the sha256 of its release's tarball (`AGY_SHA256`, the operator's setting, not the
@@ -1800,7 +1828,7 @@ egress proxy with the repo's hosts only, and pushed to the operator's registry; 
 refuses to build unless NetworkPolicies make the proxy the daemon's only way out, but that
 the daemon's own pulls use the proxy rests on its Deployment's `HTTPS_PROXY`, which the
 runner can't see. The registry has to require credentials to pull, push and delete (Deckhand doesn't start with `KUBERNETES_REGISTRY` and no `KUBERNETES_REGISTRY_SECRET`): a repo image runs in its repository's sandboxes, so whoever could push over its tag would run code with that repository's grant, and it holds what its Dockerfile copied of the checkout, which any sandbox that could pull it would read:
-[Repo images on Kubernetes](setup.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
+[Repo images on Kubernetes](kubernetes.md#repo-images-on-kubernetes)). A repository whose config has `dockerfile`
 without the `dockerfile` grant doesn't get it: its runs stop and the reply on the issue says
 which grant is missing, like refused mounts. Grant it to repositories whose default branch you
 trust as much as the host itself. `branch_docker_images`

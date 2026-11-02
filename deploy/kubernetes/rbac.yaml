@@ -104,7 +104,7 @@ subjects:
 # In the services' namespace, reads only: the egress proxy's Service (its cluster IP, the
 # sandboxes' hostAliases, and its selector) and its EndpointSlices (the proxy's pod addresses,
 # for the egress policy), and the NetworkPolicies and pods it checks BuildKit's isolation with.
-# Never the services' Secrets: components/repo-images adds the registry's pull Secret, by name.
+# Never the services' Secrets: components/buildkit adds the registry's pull Secret, by name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

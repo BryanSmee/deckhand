@@ -1,4 +1,4 @@
-# Rootless BuildKit, which builds the repositories' own images (docs/setup.md#repo-images-on-kubernetes)
+# Rootless BuildKit, which builds the repositories' own images (docs/kubernetes.md#repo-images-on-kubernetes)
 # for the runner, which pushes them to KUBERNETES_REGISTRY. Only the runner reaches it, and it
 # goes out through the egress proxy alone: the runner checks both before every build
 # (listener/runner/kube-images.mjs builderIsolationProblem()) and refuses to build otherwise.

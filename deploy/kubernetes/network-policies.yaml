@@ -421,7 +421,7 @@ spec:
           protocol: TCP
 ---
 # The egress proxy: the sandboxes' and install pods of deckhand-sandboxes, BuildKit's
-# (components/repo-images: its builds go out through it) and the orchestrator (its CA); out to
+# (components/buildkit: its builds go out through it) and the orchestrator (its CA); out to
 # the services it relays the sandboxes' calls to, and to the hosts the egress policy grants.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
