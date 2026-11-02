@@ -51,13 +51,17 @@ curl engine:8080/health
 # The whole stack, as an operator runs it (one copy each; --scale orchestrator=2 for a
 # handover): every service, then `docker compose -p <name> down -v` once seen.
 docker compose -p dh --env-file <your .env> up -d --build
-# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root (as
-# root too: drop the chown and su), and graphql-js bundled first (listener/vendor/graphql.mjs
-# isn't committed).
+# The tests on another Node: a Debian image (bash and git for the fakes), jq, not root, and
+# graphql-js bundled first (listener/vendor/graphql.mjs isn't committed).
 git ls-files -z | tar --null -T - -c | docker run --rm -i node:<v> sh -c \
   'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
    chown -R node . && su node -c "cd listener/vendor && npm ci && npm run build && cd ../.. &&
    node --test --test-force-exit --import ./test/blocking-stdout.mjs"'
+# The same as root, as CI's tests-root job runs it (--init reaps the fake docker's orphans).
+git ls-files -z | tar --null -T - -c | docker run --rm -i --init node:<v> sh -c \
+  'apt-get update -qq && apt-get install -y -qq jq && mkdir /w && cd /w && tar x &&
+   cd listener/vendor && npm ci && npm run build && cd ../.. &&
+   node --test --test-force-exit --import ./test/blocking-stdout.mjs'
 ```
 
 The engine is slower than the sandbox: a timing test failing there alone (`deliveries`)

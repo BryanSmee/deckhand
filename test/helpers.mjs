@@ -267,8 +267,10 @@ export const isRoot = process.getuid?.() === 0;
 export function scriptEnv(t, extra = {}) {
   return {
     PATH: process.env.PATH,
-    DECKHAND_TOKEN_FILE: join(tempDir(t, "deckhand-env-"), "run-token"),
     ...extra,
+    // A temp dir only when the test doesn't name its own file.
+    DECKHAND_TOKEN_FILE:
+      extra.DECKHAND_TOKEN_FILE ?? join(tempDir(t, "deckhand-env-"), "run-token"),
   };
 }
 
