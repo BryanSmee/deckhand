@@ -1189,6 +1189,8 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `SERVICE_NETWORKS` (broker)                                                                                                        | none                              | none; compose sets it                                                                                   | with Docker, who calls the broker, by the network a call arrives on: `orchestrator=<subnet>,edge=<subnet>,proxy=<subnet>,runner=<subnet>,models=<subnet>,github=<subnet>`, each caller's own network to the broker; this or `SERVICE_ACCOUNTS` is required                                                                                                                                                                                                                      |
 | `SERVICE_ACCOUNTS` (broker)                                                                                                        | none                              | none                                                                                                    | on Kubernetes, who calls the broker, by its pod's service account: `orchestrator=<namespace>:<name>,edge=<namespace>:<name>,proxy=<namespace>:<name>,runner=<namespace>:<name>,models=<namespace>:<name>,github=<namespace>:<name>`                                                                                                                                                                                                                                             |
 | `STORE_URL` (broker)                                                                                                               | none                              | `file:///data/store`                                                                                    | the broker's store: the live runs, their files and events (the `broker-store` volume); `redis://…` for two copies on several nodes, with `REDIS_PASSWORD` (see [The store](#the-store))                                                                                                                                                                                                                                                                                         |
+| `BLOB_URL` (runner, broker)                                                                                                        | none                              | none: the blobs stay in the store                                                                       | the service's [blob storage](#blob-storage), for the blobs that will never change again: `s3://<bucket>[/<prefix>]?endpoint=https://…&region=…` or `file:///<folder>`; checked at start, a setting that fails stops the service                                                                                                                                                                                                                                                 |
+| `BLOB_ACCESS_KEY_ID`, `BLOB_SECRET_ACCESS_KEY` (runner, broker)                                                                    | none                              | none                                                                                                    | the S3 key pair of `BLOB_URL`, never in the URL; `BLOB_ACCESS_KEY_ID_FILE` and `BLOB_SECRET_ACCESS_KEY_FILE` name files holding them instead (a Kubernetes Secret's)                                                                                                                                                                                                                                                                                                            |
 | `KEY_DIR` (broker)                                                                                                                 | none                              | `/keys`                                                                                                 | the folder of the broker's signing key, `run-token.key`, made on first start (the `broker-keys` volume): back it up, or every running sandbox's token is refused once it is gone                                                                                                                                                                                                                                                                                                |
 | `DRAIN_SECONDS` (broker)                                                                                                           | none                              | `30`                                                                                                    | how long a stopping broker lets its calls finish (an inbox's long poll lasts 25 s), under its `stop_grace_period`                                                                                                                                                                                                                                                                                                                                                               |
 | `PORT` (broker)                                                                                                                    | none                              | `8081`                                                                                                  | the port the broker listens on                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
@@ -1708,6 +1710,37 @@ stay in their service's own secret or volume. A write holding one the service kn
 private key or a GitHub token is refused in a value or an event (`lib/store.mjs`,
 `withoutSecrets()`): with Redis, every service using it could read it otherwise. In a blob (a
 run's log, its files), the secrets and GitHub tokens are redacted instead.
+
+## Blob storage
+
+The runner and the broker keep blobs: the runs' logs, a run's files and screenshots. Without
+more, they keep them in their store, which with `file://` is disk. With `redis://` it is
+Redis's memory, which a run history doesn't fit in for long: each of them then says so at start,
+in its log and on the dashboard's status page (Settings › Server). **Blob storage** is a
+second place for what will never change again, which each one's `BLOB_URL` names:
+
+- **`s3://<bucket>[/<prefix>]?endpoint=https://s3.example.com&region=<region>`**: any
+  S3-compatible server (Garage, MinIO, a hosted one), through path-style URLs. Deckhand calls
+  PUT, ranged GET, HEAD and DELETE on single objects, under `<prefix>/` when there is one.
+  `region` is `us-east-1` when left out (Garage's is `garage`). The key pair is
+  `BLOB_ACCESS_KEY_ID` and `BLOB_SECRET_ACCESS_KEY`, or `BLOB_ACCESS_KEY_ID_FILE` and
+  `BLOB_SECRET_ACCESS_KEY_FILE`, the paths of files holding them (a Kubernetes Secret's): never
+  in the URL, which is refused with them. Give the key access to that bucket alone.
+- **`file:///<folder>`**: a folder, for one node (Redis as the store, the blobs on a volume).
+- **unset**: none, the blobs stay in the store, as before.
+
+Only the runner and the broker get these settings: the orchestrator, edge, the github and the
+models services never do. The secret key is one of their secrets: their store refuses it in a
+value and redacts it from a blob, and their logs and blob storage itself redact it too.
+
+Each service checks its blob storage as it starts: it writes an object under
+`.deckhand-check/`, reads it back and deletes it. When that fails (a wrong key, a bucket that
+doesn't exist, a folder it can't write), the service stops with what failed rather than
+finding out at a run's end, for instance:
+
+```text
+Broker: BLOB_URL (bucket deckhand at https://s3.example.com): can't write an object: S3 put .deckhand-check/1f0c…: 403 InvalidAccessKeyId (the access key isn't known there)
+```
 
 ## Container engine
 

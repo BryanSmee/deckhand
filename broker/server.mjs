@@ -8,6 +8,8 @@
 //   PORT              8081
 //   STORE_URL         its store (lib/store.mjs): file:///data/store, or Redis for two copies on
 //                     several nodes (REDIS_PASSWORD)
+//   BLOB_URL          its blob storage (lib/blobs.mjs): s3://…, file:///…, or none (the store);
+//                     BLOB_ACCESS_KEY_ID and BLOB_SECRET_ACCESS_KEY (or _FILE) for S3
 //   KEY_DIR           its signing key's folder (run-token.key, made on first start): /keys,
 //                     its own volume or Secret, never the store
 //   SERVICE_NETWORKS  with Docker: each caller's network, service=subnet (callers.mjs)
@@ -18,7 +20,9 @@
 //                     service tokens offline (the policy service's, #501): none by default
 import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { blobCredentials, blobSecrets, startBlobs } from "../lib/blobs.mjs";
 import { drainOnSigterm } from "../lib/drain.mjs";
+import { healthInfo } from "../lib/health.mjs";
 import { createLogger } from "../lib/log.mjs";
 import { openStore } from "../lib/store.mjs";
 import { publishKey, signingKey } from "../lib/tokens.mjs";
@@ -56,6 +60,8 @@ export function createBroker({
   now = Date.now,
   sleep,
   log = () => {},
+  // What GET /health says (../lib/health.mjs): its start, version and warnings.
+  health,
 }) {
   if (keysDir) {
     mkdirSync(keysDir, { recursive: true });
@@ -74,13 +80,14 @@ export function createBroker({
     now,
     sleep,
     log,
+    ...(health && { health }),
   });
   server.startDraining = () => (draining = true);
   return { server, runs, files };
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  // Its lines redact its signing key too, once read.
+  // Its lines redact its signing key and blob storage's secret key too, once read.
   let secrets = [];
   const log = createLogger({ service: "broker", secrets: () => secrets });
   const env = process.env;
@@ -95,15 +102,28 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       }),
     });
     const key = signingKey(env.KEY_DIR || "/keys");
+    const credentials = blobCredentials(env);
     // Its key never goes in the store: a value holding it is refused there, a blob redacted.
-    secrets = storeSecrets(key);
-    const store = openStore(env.STORE_URL || "file:///data/store", {
+    // Nor does blob storage's secret key.
+    secrets = [...storeSecrets(key), ...blobSecrets(credentials)];
+    const storeUrl = env.STORE_URL || "file:///data/store";
+    const store = openStore(storeUrl, {
       password: env.REDIS_PASSWORD,
       secrets: () => secrets,
     });
+    // Blob storage (BLOB_URL), checked before it takes a call.
+    const { warnings } = await startBlobs(env, {
+      store,
+      storeUrl,
+      credentials,
+      secrets: () => secrets,
+      what: "The runs' files",
+      log,
+    });
     const graceMs = drainMs(env.DRAIN_SECONDS);
     const keysDir = env.SERVICE_KEYS_DIR || null;
-    started = { ...createBroker({ store, key, callers, keysDir, log }), graceMs, key };
+    const health = { ...healthInfo(), warnings };
+    started = { ...createBroker({ store, key, callers, keysDir, log, health }), graceMs, key };
   } catch (error) {
     log.error(`Broker: ${error.message}`);
     process.exit(1);

@@ -2,7 +2,10 @@
 // orchestrator calls each service's GET /health (../lib/health.mjs), all at once, and says
 // which is up, starting (a restart or an update within STARTING_MS) or down, and why. Answers
 // are kept CACHE_MS, so that many dashboards open don't each probe every service. What it
-// says never holds a service's URL or what it answered beyond its start and version.
+// says never holds a service's URL or what it answered beyond its start, version and warnings
+// (what it said of its setup at start: its blobs taking Redis's memory, ../lib/blobs.mjs).
+export const MAX_WARNINGS = 5;
+export const WARNING_LENGTH = 300;
 import { SERVICES } from "../lib/services.mjs";
 
 export const TIMEOUT_MS = 2000;
@@ -52,9 +55,16 @@ export function createHealth({
       throw new Error("not JSON");
     }
     if (body?.ok !== true) throw new Error("not ok");
+    const warnings = Array.isArray(body.warnings)
+      ? body.warnings
+          .filter((w) => typeof w === "string" && w)
+          .slice(0, MAX_WARNINGS)
+          .map((w) => w.slice(0, WARNING_LENGTH))
+      : [];
     return {
       startedAt: Number.isFinite(body.startedAt) ? body.startedAt : null,
       version: typeof body.version === "string" ? body.version.slice(0, 64) : null,
+      warnings,
     };
   }
 
@@ -66,9 +76,16 @@ export function createHealth({
       .map((u) => u.trim())
       .filter(Boolean)) {
       try {
-        const { startedAt, version } = await ask(url);
+        const { startedAt, version, warnings } = await ask(url);
         const checkedAt = now();
-        return { name, state: stateOf(startedAt, checkedAt), startedAt, version, checkedAt };
+        return {
+          name,
+          state: stateOf(startedAt, checkedAt),
+          startedAt,
+          version,
+          checkedAt,
+          ...(warnings.length && { warnings }),
+        };
       } catch (error) {
         reason = error.message;
       }
@@ -90,8 +107,8 @@ export function createHealth({
     return { checkedAt, services: SERVICES.filter((n) => found.has(n)).map((n) => found.get(n)) };
   }
 
-  // { checkedAt, services: [{ name, state, startedAt, version, checkedAt, reason? }] }: the last
-  // answer while it is fresh, the one in flight if any.
+  // { checkedAt, services: [{ name, state, startedAt, version, checkedAt, reason?, warnings? }] }:
+  // the last answer while it is fresh, the one in flight if any.
   function check() {
     const at = now();
     if (last && at - last.at < cacheMs) return last.result;
