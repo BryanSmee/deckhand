@@ -545,7 +545,10 @@ export function createProxy({
       res.writeHead(403, { "content-type": "text/plain" });
       return res.end(`Deckhand's egress proxy relays ${host} over HTTPS only\n`);
     }
-    const cacheOk = decision.cache && (!https || decision.decrypt);
+    // As tunnel() has it: HTTPS cached only where its CONNECT would be decrypted, never an
+    // agent provider's (certifiable(), authority.mjs EXCLUDED) nor with no CA.
+    const cacheOk =
+      decision.cache && (!https || (decision.decrypt && !!authority && certifiable(host)));
     relay(req, res, { address: decision.address, url, host }, cacheOk);
   }
 

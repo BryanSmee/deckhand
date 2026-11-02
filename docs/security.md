@@ -2370,8 +2370,9 @@ sandboxes' namespace stays Pod Security `restricted`:
   node, which a NetworkPolicy always lets in. It goes out on the egress
   proxy's engines' port (3129), and so do the containers it runs (the sandbox's docker CLI
   config): the proxy asks the orchestrator with that port's flag, and the orchestrator answers
-  as for an engine on Docker (the run's hosts, never decrypted, GitHub tunnelled without the
-  run's identity), only for a run that has an engine; a run without one, a build or an install
+  as for an engine on Docker (the run's hosts, never decrypted, GitHub tunnelled, or sent on by
+  the proxy for an absolute-form `https://` request (see
+  [HTTPS and Deckhand's CA](#https-and-deckhands-ca)), without the run's identity), only for a run that has an engine; a run without one, a build or an install
   is refused there. What the sandbox could reach through that port is what it could already
   reach through its engine.
 
@@ -2963,12 +2964,13 @@ real server's certificate.
 
 Some clients don't open a tunnel for HTTPS: busybox `wget` (Alpine's) sends the whole URL to the
 proxy instead (`GET https://host/path`), unencrypted on the run's network. The proxy takes it as
-a `CONNECT` to that host: the same policy answer, and the request goes on to the host over TLS it
-checks against Node's trust store, or to the service that relays it. It is cached only where the
-host's `CONNECT` would be decrypted, so a container engine's (never decrypted) is sent on, never
-kept. The proxy reads nothing the client had encrypted: such a client never encrypted it. (busybox
-`wget` also shuts its side of the connection down once the request is sent: the proxy keeps the
-connection open until it has answered.)
+a `CONNECT` to that host: the same policy answer, and the request goes on to the host over TLS
+it checks against Node's trust store, or to the service that relays it. It is cached only where
+the host's `CONNECT` would be decrypted, so a container engine's (never decrypted), an agent
+provider's (which Deckhand's CA can't vouch for, below) or any with no CA is sent on, never
+kept. The proxy reads nothing the client had encrypted: such a client never encrypted it.
+(busybox `wget` also shuts its side of the connection down once the request is sent: the proxy
+keeps the connection open until it has answered.)
 
 - **The CA** is made by the proxy on its first start (the `openssl` CLI, in its image),
   in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new

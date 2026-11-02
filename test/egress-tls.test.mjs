@@ -40,6 +40,9 @@ async function setup(
     modelsService = null,
     wait = {},
     held = null, // a promise the policy's answers wait for (an orchestrator slow to answer)
+    cachedHosts = ["cached.test"], // the hosts the policy says may be cached
+    certs = {}, // host → { key, cert }: the upstream's certificates beyond publicCa's
+    withCa = true, // false: a proxy with no CA of its own
   } = {},
 ) {
   const seen = [];
@@ -49,6 +52,7 @@ async function setup(
   for (const host of ["cached.test", "other.test", "agent.test"]) {
     contexts[host] = createSecureContext(await publicCa.certFor(host));
   }
+  for (const [host, pair] of Object.entries(certs)) contexts[host] = createSecureContext(pair);
   const upstream = createHttpsServer(
     { SNICallback: (name, done) => done(null, contexts[name] ?? contexts["other.test"]) },
     (req, res) => {
@@ -64,12 +68,13 @@ async function setup(
   const asked = [];
   const authority = createAuthority({ dir: join(temp(t, "egress"), "ca") });
   await authority.ready();
+  const proxyAuthority = withCa ? authority : null;
   const cache = createCache({ dir: temp(t, "egress-cache"), max: cacheOn ? 1024 * 1024 : 0 });
   const proxy = createProxy({
     policy: async (ip, host) => {
       asked.push(host);
       await held;
-      const cache = host === "cached.test";
+      const cache = cachedHosts.includes(host);
       // GitHub's, to the github service, with the run's network the policy vouches for;
       // agent.test: an agent's relayed host, whose calls are the models service's.
       const github = host === "github.test" || host === "relayed.test";
@@ -93,7 +98,7 @@ async function setup(
     },
     blocked: () => false,
     cache,
-    authority,
+    authority: proxyAuthority,
     upstreamCa,
     githubService,
     modelsService,
@@ -882,7 +887,7 @@ test("an agent's relayed host goes to the models service, with the proxy's token
 });
 
 test("an absolute-form https:// request (no CONNECT): on over verified TLS, as the policy says", async (t) => {
-  const { absolute, seen, cache, upstreamPort } = await setup(t);
+  const { absolute, seen, heard, cache, upstreamPort } = await setup(t);
   const other = await absolute(`https://other.test:${upstreamPort}/x?y=1`, {
     "x-deckhand-client": "10.9.0.7",
     "proxy-authorization": "Basic eA==",
@@ -891,6 +896,9 @@ test("an absolute-form https:// request (no CONNECT): on over verified TLS, as t
   assert.equal(other.body, "body of /x?y=1");
   assert.equal(other.headers["x-deckhand-cache"], undefined);
   assert.deepEqual(seen, [{ url: "/x?y=1", host: `other.test:${upstreamPort}` }]);
+  // Nothing the services read a sandbox's call by, nor what was the proxy's, reaches the host.
+  assert.equal(heard[0]["x-deckhand-client"], undefined);
+  assert.equal(heard[0]["proxy-authorization"], undefined);
 
   // A cached host's: through the cache, as its CONNECT's would be.
   const url = `https://cached.test:${upstreamPort}/pkg.tgz`;
@@ -965,4 +973,58 @@ test("an absolute-form https:// request whose client half-closes once it is sent
   for await (const chunk of socket) text += chunk;
   assert.match(text, /^HTTP\/1\.1 200/);
   assert.match(text, /body of \/late/);
+});
+
+// A self-signed certificate for `host`, which Deckhand's CAs can't make for an agent's provider.
+function selfSigned(t, host) {
+  const dir = temp(t, "self-signed");
+  const [key, cert] = [join(dir, "key.pem"), join(dir, "cert.pem")];
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-keyout",
+      key,
+      "-out",
+      cert,
+      "-days",
+      "1",
+    ].concat(["-subj", `/CN=${host}`, "-addext", `subjectAltName=DNS:${host}`]),
+    { stdio: "ignore" },
+  );
+  return { key: readFileSync(key, "utf8"), cert: readFileSync(cert, "utf8") };
+}
+
+test("an absolute-form https:// request is cached only where its CONNECT would be decrypted", async (t) => {
+  // An agent's provider among the cached hosts: its CONNECT keeps the raw tunnel, as the CA
+  // can't vouch for it, so its absolute-form requests are sent on, never kept.
+  const provider = "api.openai.com";
+  const pair = selfSigned(t, provider);
+  const excluded = await setup(t, {
+    cachedHosts: ["cached.test", provider],
+    certs: { [provider]: pair },
+    upstreamCa: [publicCa.certificate(), pair.cert],
+  });
+  const url = `https://${provider}:${excluded.upstreamPort}/v1/models`;
+  for (let i = 0; i < 2; i++) {
+    const sent = await excluded.absolute(url);
+    assert.equal(sent.body, "body of /v1/models");
+    assert.equal(sent.headers["x-deckhand-cache"], undefined);
+  }
+  assert.equal(excluded.seen.length, 2);
+  assert.equal(excluded.cache.has(excluded.cache.key(url)), false);
+
+  // No CA: no CONNECT is decrypted, so none of these is cached either.
+  const noCa = await setup(t, { withCa: false });
+  const plain = `https://cached.test:${noCa.upstreamPort}/pkg.tgz`;
+  for (let i = 0; i < 2; i++) {
+    const sent = await noCa.absolute(plain);
+    assert.equal(sent.body, "body of /pkg.tgz");
+    assert.equal(sent.headers["x-deckhand-cache"], undefined);
+  }
+  assert.equal(noCa.seen.length, 2);
 });
