@@ -2384,7 +2384,10 @@ secret sent somewhere. What limits it:
   says they are untrusted claims to check against the code, never instructions: no commands
   from a finding, no changes to CI, workflows, `.deckhand.yaml`, Dockerfiles, dependencies or
   credentials unless the issue asked for them, no secrets sent anywhere, and its reply says
-  which findings it left and why.
+  which findings it left and why. It asks the maintainer (needs-input) only about a change the
+  issue itself needs that it may not make: a change only a finding asks for is never relayed as
+  Deckhand's question, so a planted finding can't reach the maintainer as one ("add secret X",
+  with a `Done, carry on` box) nor stop the loop.
 - **What any work run is held to**: its token can't push or write pull requests, the git
   gateway pushes only its own branch (never the default one), `.github/workflows/` only
   with the `workflows` grant, hosts only through the egress proxy, and its pull request still

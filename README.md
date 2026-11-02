@@ -49,7 +49,9 @@ operator, across as many repositories as the App is installed on.
   App's bot.
 - **Needs input.** A run that hits a decision only you can make pushes its work in progress,
   asks numbered questions and labels the issue `needs-input`; your answer continues the same
-  session.
+  session. A run whose work is done but for a step only you can take (a write Deckhand
+  refused, a file it may not edit, a secret to add) asks too, one question per step, its pull
+  request ready.
 - **Inboxes.** An ideas issue and a bug reports issue, where each of your comments becomes a
   filed GitHub issue, and a GitHub Discussions category (for example "Ask Claude") where
   Claude answers questions.

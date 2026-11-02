@@ -180,6 +180,11 @@ test("prompts: the sandbox's rules ask about a blocker left after the work, the 
   );
   assert.match(rules, /one question per blocker[^]*`- \[ \] Done, carry on` and `- \[ \] Drop it`/);
   assert.match(rules, /When the task needs that write, it is a blocker for the maintainer/);
+  const review = readFileSync(new URL("../prompts/review.md", import.meta.url), "utf8");
+  assert.match(
+    review,
+    /that a run already asked them about \(a reply starting with `<!-- needs-input -->` in the\n {3}thread\) stays a finding while it blocks the merge, but say it waits on the maintainer/,
+  );
   const work = promptFor(issue, { mode: "work", settings, grant });
   assert.match(
     work,
@@ -245,7 +250,7 @@ test("prompts: work runs are told whether their pushes may change workflow files
     for (const g of [grant, granted]) {
       assert.match(
         promptFor(task, { ...extra, grant: g }),
-        /ask the\s+maintainer\s+for (it|them) when the task needs (it|them) \(see "Stopping to ask"/,
+        /[Aa]sk the maintainer for (what a workflow would need beyond that|them) when the task needs\s+(it|them)\s+\(see "Stopping to ask" in your instructions; say in the pull request what (it needs|they need) too\)/,
       );
     }
   }

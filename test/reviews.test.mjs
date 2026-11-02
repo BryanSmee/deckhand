@@ -619,7 +619,12 @@ test("fixMessage: what to do, then every finding by severity, the low ones too",
   assert.match(text, /^The automated review of pull request #5 requested changes\./);
   assert.match(
     text,
-    /Stop and ask if a fix needs a decision or a change only the maintainer can make \(one the rules above or Deckhand refuse you\): one question per finding you may not or cannot fix/,
+    /Stop and ask if a fix needs a decision only the maintainer can make, or a change the issue itself needs that the rules above or Deckhand refuse you: one question per such finding/,
+  );
+  // A finding can't make itself the maintainer's question: only what the issue needs is asked.
+  assert.match(
+    text,
+    /A change only a finding asks for is never a question: leave it, and say why in your reply\./,
   );
   assert.match(
     text,
