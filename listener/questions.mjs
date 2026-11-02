@@ -66,7 +66,9 @@ const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
 const BULLET = /^\s+[-*+]\s+(\S.*)$/;
 const BOX = /^\[[^\]]{0,3}\](?!\()/;
 const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
-const RECOMMENDED = /\s*\(recommended\)\s*$/i;
+// `(recommended)` ending an option, or with its reason: `(recommended: …)`, `(recommended, …)`,
+// `(recommended - …)`. The reason stays in the label, in parentheses.
+const RECOMMENDED = /\s*\(\s*recommended\s*(?:(?:[:,;]|\s[-–—])\s*(.*?))?\s*\)\s*$/i;
 
 // An "Open questions" section (or a run's questions) → { items, raw }, null when it asks
 // nothing ("None"). `items`: [{ title, text, options: [{ label, recommended, checked }] }]
@@ -101,12 +103,13 @@ export function parseQuestions(markdown) {
       const option = OPTION.exec(line);
       const bullet = !item.options.length && BULLET.exec(line);
       if (option) {
+        const pick = RECOMMENDED.exec(option[2]);
         const label = option[2].replace(RECOMMENDED, "").trim();
         if (!label) return other;
         loose = false;
         item.options.push({
-          label,
-          recommended: RECOMMENDED.test(option[2]),
+          label: pick?.[1] ? `${label} (${pick[1]})` : label,
+          recommended: !!pick,
           checked: option[1] !== " ",
         });
       } else if (bullet && !BOX.test(bullet[1])) {
@@ -143,11 +146,14 @@ export function stillAsks(body) {
   return hasOpenQuestions(body) && !allTicked(parseQuestions(questionsSection(body)));
 }
 
+// A question that is all title (`**Which one?**:`, nothing after it), as agents write it too:
+// the title is its text. Only markup and nothing else (`**:**`) is no question.
 function question(line) {
   const titled = TITLE.exec(line.trim());
-  const text = (titled ? titled[2] : line).trim();
-  if (!text) return null;
-  return { title: titled ? titled[1].trim() : null, text, options: [] };
+  const title = titled?.[1].trim() || null;
+  const text = (titled ? titled[2].trim() || title : line.trim()) ?? "";
+  if (!text.replace(/[*_:\s]/g, "")) return null;
+  return { title: titled?.[2].trim() ? title : null, text, options: [] };
 }
 
 // The questions of a run's reply that starts with NEEDS_INPUT: its "Open questions" section

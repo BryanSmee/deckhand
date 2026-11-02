@@ -2098,10 +2098,11 @@ mounts:
     // The agent never got it; its sandbox and saved state went as usual, its volumes stay.
     assert.doesNotMatch(ctx.listener.output(), /for the running session/);
     assert.doesNotMatch(calls, /^volume rm/m);
+    // How long the run took is the machine's: a slow runner says 0.1 min.
     const [stopped] = replies(github);
     assert.match(
       JSON.parse(stopped.body).body,
-      /^Stopped by @alice\.\n\n<sub>🤖 Claude opus · medium effort · 0 min<\/sub>/,
+      /^Stopped by @alice\.\n\n<sub>🤖 Claude opus · medium effort · [\d.]+ min<\/sub>/,
     );
     assert.doesNotMatch(JSON.parse(stopped.body).body, /stopped with an error/);
     // Then the brainstorm runs: what was queued wasn't dropped.

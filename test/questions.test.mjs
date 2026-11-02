@@ -159,7 +159,8 @@ test("parsed questions in another format: only the markdown", () => {
     // A paragraph between two questions, two picks, an empty question or option.
     "1. A?\n\nSome context.\n\n2. B?",
     "1. A?\n   - [ ] X (recommended)\n   - [ ] Y (recommended)",
-    "1. **Title**:\n2. B?",
+    "1. **:**\n2. B?",
+    "1. ** **:\n2. B?",
     "1. A?\n   - [ ] (recommended)",
     // A first option empty or mistyped is not an explanation line.
     "1. A?\n   - [ ]\n   - [ ] B",
@@ -177,6 +178,73 @@ test("parsed questions in another format: only the markdown", () => {
   ]) {
     assert.deepEqual(parseQuestions(raw), { items: null, raw }, raw);
   }
+});
+
+// #609's section: a question that is all title, its pick with a reason.
+const ALL_TITLE = [
+  "1. **Who serves `GET /shots/`**:",
+  "   - [ ] Edge passes it on to the broker (recommended: the orchestrator stays out of it)",
+  "   - [ ] Edge passes it on to the orchestrator, which asks the broker (no new route on edge, one more hop)",
+  "",
+  "Part of #604.",
+].join("\n");
+
+test("parsed questions: a question all title, a pick with its reason", () => {
+  assert.deepEqual(parseQuestions(ALL_TITLE).items, [
+    {
+      title: null,
+      text: "Who serves `GET /shots/`",
+      options: [
+        {
+          label: "Edge passes it on to the broker (the orchestrator stays out of it)",
+          recommended: true,
+          checked: false,
+        },
+        {
+          label:
+            "Edge passes it on to the orchestrator, which asks the broker (no new route on edge, one more hop)",
+          recommended: false,
+          checked: false,
+        },
+      ],
+    },
+  ]);
+  assert.deepEqual(parseQuestions("1. **Colour?:**\n2. **B**: which?").items, [
+    free("Colour?"),
+    { title: "B", text: "which?", options: [] },
+  ]);
+  const label = (option) =>
+    parseQuestions(`1. A?\n   - [ ] ${option}\n   - [ ] Y`).items[0].options[0];
+  assert.deepEqual(label("X (recommended, simpler)"), {
+    label: "X (simpler)",
+    recommended: true,
+    checked: false,
+  });
+  assert.deepEqual(label("X (Recommended - simpler)").label, "X (simpler)");
+  assert.deepEqual(label("X (recommended:)"), { label: "X", recommended: true, checked: false });
+  // Not a pick: the word elsewhere, or not first in the parentheses.
+  assert.deepEqual(label("X (not recommended)"), {
+    label: "X (not recommended)",
+    recommended: false,
+    checked: false,
+  });
+  assert.equal(label("X (recommended) for now").recommended, false);
+  // One pick still, whichever way it is written; an option that is only its pick is none.
+  for (const raw of [
+    "1. A?\n   - [ ] X (recommended: simpler)\n   - [ ] Y (recommended)",
+    "1. A?\n   - [ ] (recommended: simpler)\n   - [ ] Y",
+  ]) {
+    assert.deepEqual(parseQuestions(raw), { items: null, raw }, raw);
+  }
+  // A ticked box answers it.
+  assert.equal(allTicked(parseQuestions(ALL_TITLE)), false);
+  const ticked = ALL_TITLE.replace(
+    "- [ ] Edge passes it on to the orchestrator",
+    "- [x] Edge passes it on to the orchestrator",
+  );
+  assert.equal(allTicked(parseQuestions(ticked)), true);
+  assert.equal(stillAsks(`Body.\n\n## Open questions\n\n${ALL_TITLE}`), true);
+  assert.equal(stillAsks(`Body.\n\n## Open questions\n\n${ticked}`), false);
 });
 
 test("parsed questions of real issues, as filed before the format", () => {

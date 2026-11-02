@@ -258,9 +258,10 @@ without the answers (`409`) only then, and `api/state` carries `waitForAnswers` 
 questions so the graph doesn't open the form when it is off.
 
 The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
-point to it): numbered, an optional `**Title**:`, options as an indented task list with one
-`(recommended)`. `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in
-another shape comes as its markdown only (`items: null`). A task waiting for input carries
+point to it): numbered, an optional `**Title**:` (a question all title is its text), options
+as an indented task list with one `(recommended)` or `(recommended: reason)`.
+`parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in another shape
+comes as its markdown only (`items: null`). A task waiting for input carries
 them in `api/state` (`questions`): from the reply of its last run when that run stopped to ask
 (kept on the run, and read again from its log after a restart), else from its issue's body
 (kept in `inputs.json` with the entry, from the `issues` deliveries and the startup lookup).
