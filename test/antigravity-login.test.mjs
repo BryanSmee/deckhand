@@ -634,9 +634,10 @@ test("the models service tells the runner what is left of its lease, and asks ag
   await login.headers();
   assert.deepEqual(asked, [{ timeoutMs: REFRESH_MS }]);
 
-  // The runner answers 503 (a handover): asked again only while the job could still start.
+  // The runner answers 503 (a handover): asked again only while the job could still start,
+  // each try saying what is left of the lease then.
   let at = 0;
-  const bodies = [];
+  const tries = [];
   const runner = createRunnerClient({
     urls: "http://runner.test",
     token: async () => "Bearer t",
@@ -644,13 +645,51 @@ test("the models service tells the runner what is left of its lease, and asks ag
     now: () => at,
     sleep: async (ms) => (at += ms),
     fetch: async (url, init) => {
-      bodies.push(JSON.parse(init.body));
+      tries.push({ at, body: JSON.parse(init.body) });
       return new Response("draining", { status: 503 });
     },
   });
-  const left = LOGIN_REFRESH_MARGIN_MS + MIN_REFRESH_MS + 10_000;
-  await assert.rejects(runner.refreshLogin("{}", { timeoutMs: left }), /didn't answer/);
-  assert.deepEqual(bodies[0], { input: "{}", timeoutMs: left });
-  // Its retries stop within what the runner could still use, not the client's 5 minutes.
-  assert.ok(at <= 10_000 + 5000, `${at} ms`);
+  await assert.rejects(runner.refreshLogin("{}", { timeoutMs: REFRESH_MS }), /didn't answer/);
+  assert.ok(tries.length > 3, `${tries.length} tries`);
+  for (const { at: sent, body } of tries) {
+    // What is left at that try, never the lease's whole length again.
+    assert.equal(body.timeoutMs, REFRESH_MS - sent);
+    assert.ok(body.timeoutMs >= LOGIN_REFRESH_MARGIN_MS + MIN_REFRESH_MS, `${body.timeoutMs} ms`);
+  }
+  // No try once too little is left for the job.
+  assert.ok(at <= REFRESH_MS - LOGIN_REFRESH_MARGIN_MS - MIN_REFRESH_MS, `${at} ms`);
+});
+
+test("a refresh that waits on a runner handover still ends within the models service's lease", async () => {
+  // The models service takes the lease at 0; the runner answers 503 for 3 minutes, then
+  // takes the call: the job it starts must end before the lease does, its margin kept.
+  let at = 0;
+  const handover = 180_000;
+  const jobs = [];
+  const refresh = loginRefresh({
+    config,
+    images: { installAgent: async () => {} },
+    jobs: { run: async (job) => (jobs.push({ at, ...job }), { code: 0, out: "{}", err: "" }) },
+    now: () => at,
+  });
+  const runner = createRunnerClient({
+    urls: "http://runner.test",
+    token: async () => "Bearer t",
+    epoch: () => null,
+    now: () => at,
+    sleep: async (ms) => (at += ms),
+    fetch: async (url, init) => {
+      if (at < handover) return new Response("draining", { status: 503 });
+      const { input, timeoutMs } = JSON.parse(init.body);
+      return Response.json(await refresh(input, { timeoutMs }));
+    },
+  });
+  const result = await runner.refreshLogin("{}", { timeoutMs: REFRESH_MS });
+  assert.equal(result.code, 0);
+  const [job] = jobs;
+  assert.ok(job.at >= handover);
+  assert.ok(
+    job.at + job.timeoutMs <= REFRESH_MS - LOGIN_REFRESH_MARGIN_MS,
+    `ends at ${job.at + job.timeoutMs} ms`,
+  );
 });

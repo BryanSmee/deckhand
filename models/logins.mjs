@@ -217,8 +217,10 @@ export function sharedLogin({
 
 // A plan's login as its endpoint uses it (chatgpt.mjs, antigravity-login.mjs): sharedLogin()'s,
 // with what differs between plans. `due(login)`: whether it needs a refresh now;
-// `refresh(login, { until })` → the new login, before `until` (the lease's end, sharedLogin()); `headersOf(login)`: the headers that make a call the plan's; `accessOf(login)`:
-// its access token; `secretsOf(login)`: its tokens. → { headers, current, refused, secrets }.
+// `refresh(login, { until })` → the new login, before `until` (the lease's end,
+// sharedLogin()); `headersOf(login)`: the headers that make a call the plan's;
+// `accessOf(login)`: its access token; `secretsOf(login)`: its tokens. → { headers, current,
+// refused, secrets }.
 export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...options }) {
   const shared = sharedLogin(options);
   let last = null; // the login as last used, for refused() and secrets()

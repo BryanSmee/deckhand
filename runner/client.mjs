@@ -12,7 +12,7 @@
 import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { partEnd } from "../lib/redact.mjs";
-import { serviceClient } from "../lib/service-client.mjs";
+import { serviceClient, Unavailable } from "../lib/service-client.mjs";
 import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 
 // What the orchestrator waits for the runner, for the calls a run's life needs: an update of
@@ -24,6 +24,8 @@ const POLICY_WAIT_MS = 10_000;
 const APPEND_MAX = 4 * 1024 * 1024;
 // After a failed append, the next try.
 const APPEND_RETRY_MS = 5000;
+// The first pause before the login's refresh is asked again of a runner that didn't answer.
+const REFRESH_RETRY_MS = 500;
 
 const path = (...parts) => parts.map((p) => encodeURIComponent(p)).join("/");
 
@@ -469,16 +471,31 @@ export function createRunnerClient({
 
   // `agy models` on the login's volume (../models/antigravity-login.mjs): { code, out, err }.
   // Once: its refresh token is spent by the first. `timeoutMs`: what is left of the models
-  // service's lease on the login, which the runner ends its job within; a runner that
-  // doesn't answer (a handover's 503s) is asked again only while there is time left for it.
-  const refreshLogin = (input, { timeoutMs } = {}) =>
-    models.json("POST", "/logins/antigravity/refresh", {
-      body: { input, ...(timeoutMs !== undefined && { timeoutMs }) },
-      once: true,
-      ...(timeoutMs !== undefined && {
-        waitMs: Math.max(0, timeoutMs - LOGIN_REFRESH_MARGIN_MS - MIN_REFRESH_MS),
-      }),
-    });
+  // service's lease on the login, which the runner ends its job within. A runner that doesn't
+  // answer (a handover's 503s, a refused connection: the call never reached it) is asked
+  // again here, each try saying what is left of the lease at that moment, and none once too
+  // little is for the runner to start the job.
+  async function refreshLogin(input, { timeoutMs } = {}) {
+    const route = "/logins/antigravity/refresh";
+    if (timeoutMs === undefined) return models.json("POST", route, { body: { input }, once: true });
+    const until = now() + timeoutMs;
+    let wait = REFRESH_RETRY_MS;
+    for (;;) {
+      const left = until - now();
+      try {
+        return await models.json("POST", route, {
+          body: { input, timeoutMs: left },
+          once: true,
+          retry: false,
+        });
+      } catch (error) {
+        if (!(error instanceof Unavailable)) throw error;
+        if (until - now() - wait < LOGIN_REFRESH_MARGIN_MS + MIN_REFRESH_MS) throw error;
+      }
+      await (sleep ?? delay)(wait);
+      wait = Math.min(wait * 2, 5000);
+    }
+  }
 
   return {
     runner: {
