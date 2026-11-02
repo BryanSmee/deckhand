@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { request } from "node:http";
 import { test } from "node:test";
 import { createSlots, readDelivery, sourceOf } from "../listener/deliveries.mjs";
-import { serve } from "./helpers.mjs";
+import { serve, until } from "./helpers.mjs";
 
 test("sourceOf: IPv4 as is, IPv6 by its /64", () => {
   assert.equal(sourceOf("203.0.113.9"), "203.0.113.9");
@@ -113,25 +113,24 @@ async function serveReads(t, options) {
   return { results, send };
 }
 
-const until = async (check) => {
-  while (!check()) await new Promise((resolve) => setTimeout(resolve, 10));
-};
-
 test("readDelivery: a body, or a stalled one dropped after the idle timeout", async (t) => {
-  const { results, send } = await serveReads(t, { limit: 100, idleMs: 100, totalMs: 5000 });
+  const { results, send } = await serveReads(t, { limit: 100, idleMs: 1000, totalMs: 10_000 });
   const whole = send();
   whole.end("{}");
-  await until(() => results.length === 1);
+  await until(() => results.length === 1, { what: "the body" });
   assert.deepEqual(results, ["{}"]);
-  // Chunks closer than the idle timeout keep it going; then nothing comes.
+  // Chunks closer than the idle timeout keep it going past it; then nothing comes. Far closer:
+  // with 60 ms of 100, a runner pausing the process 40 ms read the second chunk too late.
   const slow = send();
-  slow.write("{");
-  await new Promise((resolve) => setTimeout(resolve, 60));
-  slow.write('"a"');
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  const started = Date.now();
+  for (const chunk of ["{", '"a"', ":", "1", " "]) {
+    slow.write(chunk);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  assert.ok(Date.now() - started > 1000);
   assert.equal(results.length, 1);
-  await until(() => results.length === 2);
-  assert.equal(results[1], "no data for 100 ms");
+  await until(() => results.length === 2, { what: "the idle timeout" });
+  assert.equal(results[1], "no data for 1000 ms");
 });
 
 test("readDelivery: dropped past its total time, however steady, or past its size", async (t) => {
@@ -141,11 +140,11 @@ test("readDelivery: dropped past its total time, however steady, or past its siz
   const trickle = steady.send();
   const timer = setInterval(() => trickle.write(" "), 30);
   t.after(() => clearInterval(timer));
-  await until(() => steady.results.length === 1);
+  await until(() => steady.results.length === 1, { what: "the total time" });
   clearInterval(timer);
   assert.deepEqual(steady.results, ["body not received in 400 ms"]);
   const small = await serveReads(t, { limit: 10, idleMs: 100, totalMs: 5000 });
   small.send().end("x".repeat(11));
-  await until(() => small.results.length === 1);
+  await until(() => small.results.length === 1, { what: "the size's refusal" });
   assert.deepEqual(small.results, ["body over 10 bytes"]);
 });

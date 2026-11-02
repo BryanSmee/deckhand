@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { encode, parseRedisUrl, RedisError, redisClient, replyParser } from "../lib/resp.mjs";
 import { openStore } from "../lib/store.mjs";
 import { redisStore } from "../lib/store-redis.mjs";
-import { asidePort, listening } from "./helpers.mjs";
+import { asidePort, listening, until } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
 test("resp: commands encoded as bulk strings, bytes kept", () => {
@@ -176,7 +176,8 @@ test("resp: a dropped connection fails the calls in flight, the next call reconn
   const client = redisClient(redis.url, { password: "secret" });
   t.after(() => client.close());
   const lost = client.call("ECHO", "x");
-  await sleep(50);
+  // Once the server has read it, after the AUTH: the connection dropped is the one it was on.
+  await until(() => redis.got.some(([name]) => name === "ECHO"), { what: "the ECHO" });
   redis.drop();
   await assert.rejects(lost, /closed|ECONNRESET/);
   hang = false;
@@ -188,11 +189,12 @@ test("resp: a dropped connection fails the calls in flight, the next call reconn
 test("resp: a call nothing answers fails in time, and the next one connects again", async (t) => {
   let answer = false;
   const redis = await fakeRedis(t, () => (answer ? "+PONG\r\n" : undefined));
-  const client = redisClient(redis.url, { timeoutMs: 100 });
+  // Long enough for the second call to connect again and be answered on a paused runner.
+  const client = redisClient(redis.url, { timeoutMs: 500 });
   t.after(() => client.close());
   const started = Date.now();
-  await assert.rejects(client.call("PING"), /didn't answer within 100 ms/);
-  assert.ok(Date.now() - started < 1000);
+  await assert.rejects(client.call("PING"), /didn't answer within 500 ms/);
+  assert.ok(Date.now() - started < 5000);
   answer = true;
   assert.equal(await client.call("PING"), "PONG");
 });
@@ -324,23 +326,24 @@ test(
     assert.equal((await b.lease("orchestrator")).holder, "copy-a");
     // Released on SIGTERM: the other copy takes it at once, with a higher epoch.
     assert.equal(await a.release("orchestrator", "copy-a", first.epoch), true);
-    const second = await b.acquire("orchestrator", "copy-b", { ttlMs: 300 });
+    // A second: long enough to outlive the next call on a paused runner.
+    const second = await b.acquire("orchestrator", "copy-b", { ttlMs: 1000 });
     assert.ok(second.epoch > first.epoch);
     // Copy b stops renewing (killed, its node gone): once it expires, a takes it back.
-    assert.equal(await a.acquire("orchestrator", "copy-a", { ttlMs: 300 }), null);
-    await sleep(400);
+    assert.equal(await a.acquire("orchestrator", "copy-a", { ttlMs: 1000 }), null);
+    await sleep(1100);
     const third = await a.acquire("orchestrator", "copy-a", { ttlMs: 10_000 });
     assert.ok(third.epoch > second.epoch);
-    assert.equal(await b.renew("orchestrator", "copy-b", second.epoch, { ttlMs: 300 }), null);
+    assert.equal(await b.renew("orchestrator", "copy-b", second.epoch, { ttlMs: 1000 }), null);
 
     // What one copy writes, the other reads; a key's TTL is Redis's own.
-    await a.set("session", { user: "alice" }, { ttlMs: 200 });
+    await a.set("session", { user: "alice" }, { ttlMs: 1000 });
     assert.deepEqual(await b.get("session"), { user: "alice" });
     const client = redisClient(redisUrl);
     t.after(() => client.close());
     const pttl = await client.call("PTTL", `${prefix}k:session`);
-    assert.ok(pttl > 0 && pttl <= 200, `PTTL ${pttl}`);
-    await sleep(300);
+    assert.ok(pttl > 0 && pttl <= 1000, `PTTL ${pttl}`);
+    await sleep(1100);
     assert.equal(await b.get("session"), null);
 
     // An event one copy appended, the next one reads until acknowledged.

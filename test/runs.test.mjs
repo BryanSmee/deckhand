@@ -411,7 +411,7 @@ test("a restored run's grace waits for the follow to skip what was read before",
   // Its deadline long gone, and a log long to skip.
   task.live.graceUntil = Date.now() - 60_000;
   runner.holding = true;
-  const next = createRuns({ ...ctx, answerGraceMs: 1000, catchUpMs: 20 });
+  const next = createRuns({ ...ctx, answerGraceMs: 10_000, catchUpMs: 20 });
   const followed = next.follow(task);
   await sleep(150);
   // Still skipping: its whole grace meanwhile.
@@ -422,7 +422,7 @@ test("a restored run's grace waits for the follow to skip what was read before",
   runner.caughtUp();
   await followed;
   assert.equal(runner.kills, 1);
-  assert.ok(Date.now() - at < 500);
+  assert.ok(Date.now() - at < 5000);
 });
 
 test("a run whose grace passed while no listener was there: what its sandbox wrote meanwhile is read before any stop", async (t) => {
@@ -434,7 +434,8 @@ test("a run whose grace passed while no listener was there: what its sandbox wro
   ctx.stopping = false;
   // Its deadline long gone; its sandbox went on (a background task's turn).
   task.live.graceUntil = Date.now() - 60_000;
-  const next = createRuns({ ...ctx, answerGraceMs: 200, catchUpMs: 100 });
+  // A grace well past the waits below: with 200 ms, a runner pausing 50 ms stopped it first.
+  const next = createRuns({ ...ctx, answerGraceMs: 1000, catchUpMs: 100 });
   const followed = next.follow(task);
   // The follow's backlog: a line written while no listener was there.
   await sleep(30);

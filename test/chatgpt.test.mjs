@@ -8,7 +8,7 @@ import { test } from "node:test";
 import { openStore } from "../lib/store.mjs";
 import { createChatgptLogin } from "../models/chatgpt.mjs";
 import { loginSeal } from "../models/logins.mjs";
-import { tempDir } from "./helpers.mjs";
+import { tempDir, until } from "./helpers.mjs";
 
 const NOW = Date.parse("2026-10-16T12:00:00Z");
 const jwt = (claims) => `h.${Buffer.from(JSON.stringify(claims)).toString("base64url")}.s`;
@@ -112,8 +112,11 @@ test("two copies of the service on one store: a single refresh, the other waits 
     createChatgptLogin({ file, store, seal, holder, fetch, sleep, now: () => NOW }),
   );
   const asked = copies.map((copy) => copy.headers());
+  // One holds the lease and refreshes (once it has read the file); the other waits, with no
+  // refresh of its own.
+  await until(() => calls.length, { what: "the first refresh" });
+  // A while for the other to refresh too, which it mustn't.
   await new Promise((resolve) => setTimeout(resolve, 30));
-  // One holds the lease and refreshes; the other waits, with no refresh of its own.
   assert.equal(calls.length, 1);
   release();
   for (const headers of await Promise.all(asked)) {
