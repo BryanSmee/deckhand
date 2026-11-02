@@ -1341,6 +1341,27 @@ held the host's Docker socket, so it was root on the host. What changes for you:
   ([Preview deployments](repo-config.md#preview-deployments)). It gets what the hook got, with
   only the access you give it.
 
+### Upgrading: the runner network's subnet (#543)
+
+The `runner` network, between the orchestrator and the runner, took `172.31.253.0/24` by
+default, inside Docker's default address pools, where it could clash with another network on
+the host. Its default is `10.231.250.48/28` now. Only a deployment that followed `edge` while the
+runner service had the old default (#530 to #543, no release) created the network on it. Compose
+doesn't always move it to the new subnet:
+
+- **Created by Compose 2.31 or later**: `docker compose up -d` sees that it changed, stops the
+  orchestrator and the runner, recreates the network on the new subnet, and starts them again.
+- **Created by an earlier Compose**: the network carries no hash of its settings, so every
+  Compose, 2.31 and 5 included, keeps it as it is. It stays on `172.31.253.0/24` while the
+  orchestrator's and the runner's `SERVICE_NETWORKS` name the new subnet, so they refuse each
+  other's calls and no run starts.
+
+Either keep the old subnet, where it doesn't clash on your host: `RUNNER_SUBNET=172.31.253.0/24`
+in `.env`. Or take the new one once, whatever Compose's version: `docker compose down`, then
+`docker compose up -d` (`down` removes the project's networks, not its volumes; the sandboxes
+keep running, as in any update). `docker network inspect <project>_runner` shows the subnet the
+network has.
+
 ### Upgrading the grants (#498)
 
 The yes-or-no grants left the grants folder's YAML for your policies: each old key in
