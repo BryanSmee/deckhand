@@ -1,7 +1,7 @@
 // A commit pushed after the last review (#535): "Outdated" with both shas in the task page's
 // Review loop section, a "Review outdated" mark on its rows, and Review still offered for the
 // new head. Also a maintainer's reviews alone, without a loop: "Reviews".
-import { render, screen, within } from "@testing-library/preact";
+import { act, fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeEach, expect, test } from "vitest";
 import { Dashboard } from "./App";
 import { reviewOffers, reviewOutdated } from "./format";
@@ -86,8 +86,14 @@ test("the task page says Outdated with both shas, the row a mark; a new round cl
   expect(within(section).getByRole("link", { name: "aaaaaaa" }).getAttribute("href")).toBe(
     `${URL}/commits/${REVIEWED}`,
   );
-  // The last round's chip shows its commit.
+  // The last review's commit, in the list of every review.
+  act(() =>
+    within(section)
+      .getByRole("button", { name: /^Last review:/ })
+      .focus(),
+  );
   expect(within(section).getAllByRole("listitem").at(-1)!.textContent).toContain("aaaaaaa");
+  fireEvent.keyDown(document, { key: "Escape" });
   // Review offered, for the new head.
   const review = within(section).getByRole("button", { name: /Review/ });
   expect(review.getAttribute("title")).toContain("new head, bbbbbbb");
@@ -154,6 +160,11 @@ test("a maintainer's reviews alone, no loop: Reviews, its state without fix roun
   );
   const section = screen.getByRole("region", { name: "Reviews" });
   expect(within(section).getByRole("heading").textContent).toBe("Reviews · Blocking findings");
+  act(() =>
+    within(section)
+      .getByRole("button", { name: /^Last review:/ })
+      .focus(),
+  );
   expect(within(section).getByRole("listitem").getAttribute("title")).toMatch(
     /^A maintainer's review: 1 blocking/,
   );
@@ -168,11 +179,13 @@ test("a maintainer's reviews alone, no loop: Reviews, its state without fix roun
       error={null}
     />,
   );
+  const reviews = screen.getByRole("region", { name: "Reviews" });
+  // Focus already on the line: the list stays open across the new state.
   expect(
-    within(screen.getByRole("region", { name: "Reviews" }))
+    within(reviews)
       .getAllByRole("listitem")
       .map((li) => li.textContent),
-  ).toEqual(["#1 1 high", "#2 1 highbbbbbbb"]);
+  ).toEqual(["#1 1 high aaaaaaa", "#2 1 high bbbbbbb"]);
   // Without `review.fix` (no rounds): Review, never Fix.
   expect(reviewOffers(task({ review: manual({ loop: "rounds-out" }) }))).toEqual({
     review: true,

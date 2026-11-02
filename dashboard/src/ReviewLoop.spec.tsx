@@ -1,10 +1,18 @@
 // A pull request's review-and-fix loop (Task.review): in review between its runs, the round on
 // its row, and what the loop left on its ready row, in Detail, the Overview and the
 // notification.
-import { render, screen, within } from "@testing-library/preact";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/preact";
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
-import { findingsLeft, isReady, loopLine, noProgress, roundCounts } from "./format";
+import {
+  findingsLeft,
+  isReady,
+  loopLine,
+  noProgress,
+  reviewScore,
+  reviewTrend,
+  roundCounts,
+} from "./format";
 import { Overview } from "./Overview";
 import { repoParts, waitingOnYou } from "./overview";
 import { makeState, makeTask } from "./testUtils";
@@ -120,20 +128,101 @@ test("its row says the round while in review, then what the loop left", () => {
   );
   expect(within(row()).getByText("2 high findings left after 2 fix rounds")).toBeTruthy();
   expect(within(row()).queryByText(/Review · round/)).toBeNull();
-  // Detail: each round's counts, the one that didn't lower them marked.
+  // Detail: the last review's counts, worse than the one before it (10 points, then 13).
   const rounds = screen.getByRole("region", { name: "Review loop" });
   expect(within(rounds).getByText(/Fix rounds ran out/)).toBeTruthy();
   expect(within(rounds).getByText("2 high findings left after 2 fix rounds")).toBeTruthy();
   expect(
-    within(rounds)
+    within(rounds).getByRole("button", {
+      name: "Last review: 2 high · 1 medium worse than the review before",
+    }),
+  ).toBeTruthy();
+  // No list until it's asked for, nor any point.
+  expect(within(rounds).queryByRole("list")).toBeNull();
+  expect(rounds.textContent).not.toMatch(/pts|points/);
+});
+
+const detail = (review: ReviewLoop) => {
+  const pr = { ...state.tasks.find((t) => t.key === KEY)!.pr!, state: "ready" as const };
+  render(<Dashboard state={withReview(state, { state: "done", pr, review })} error={null} />);
+  return screen.getByRole("region", { name: /^Review/ });
+};
+
+test("the last review's arrow: down and green when it weighs less, up and red when more", () => {
+  // 24 points, then 10.
+  let rounds = detail(loop({ history: HISTORY.slice(0, 2) }));
+  expect(
+    within(rounds).getByRole("button", {
+      name: "Last review: 2 high better than the review before",
+    }),
+  ).toBeTruthy();
+  const better = within(rounds).getByRole("img", { name: "better than the review before" });
+  expect(better.className).toMatch(/better/);
+  cleanup();
+
+  // 10 points, then 13.
+  rounds = detail(loop({ history: HISTORY.slice(1) }));
+  const worse = within(rounds).getByRole("img", { name: "worse than the review before" });
+  expect(worse.className).toMatch(/worse/);
+  cleanup();
+
+  // The same points (2 high, then 1 high and 1 medium and 2 low), or only one review: none.
+  rounds = detail(loop({ history: [HISTORY[1], round(2, { high: 1, medium: 1, low: 2 }, 1)] }));
+  expect(within(rounds).queryByRole("img")).toBeNull();
+  cleanup();
+  rounds = detail(loop({ loop: "stopped", history: [HISTORY[0]] }));
+  expect(within(rounds).queryByRole("img")).toBeNull();
+  expect(within(rounds).getByRole("button", { name: /^Last review:/ }).textContent).toBe(
+    "Last review: 1 critical · 3 high · 1 low",
+  );
+});
+
+test("hovering, focusing or clicking the line lists every review; Escape, Tab, a click away close it", () => {
+  const rounds = detail(loop());
+  const line = within(rounds).getByRole("button", { name: /^Last review:/ });
+  const rows = () =>
+    within(within(rounds).getByRole("list", { name: "Every review, oldest first" }))
       .getAllByRole("listitem")
-      .map((li) => li.textContent),
-  ).toEqual([
-    "R0 1 critical · 3 high · 1 low",
-    "R1 2 high",
-    // The last one's commit in plain text, not just its tooltip.
-    "R2 2 high · 1 mediumno progresssha-2",
-  ]);
+      .map((li) => li.textContent);
+  // Oldest first, the one that didn't lower the blocking findings marked, each with its commit.
+  const ALL = [
+    "R0 1 critical · 3 high · 1 low sha-0",
+    "R1 2 high sha-1",
+    "R2 2 high · 1 mediumno progress sha-2",
+  ];
+
+  fireEvent.mouseEnter(line.parentElement!);
+  expect(line.getAttribute("aria-expanded")).toBe("true");
+  expect(rows()).toEqual(ALL);
+  fireEvent.mouseLeave(line.parentElement!);
+  expect(within(rounds).queryByRole("list")).toBeNull();
+
+  act(() => line.focus());
+  expect(rows()).toEqual(ALL);
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(within(rounds).queryByRole("list")).toBeNull();
+  expect(document.activeElement).toBe(line);
+
+  // A tap: open, and it stays while focus is on it, whatever the mouse does.
+  fireEvent.click(line);
+  fireEvent.mouseLeave(line.parentElement!);
+  expect(rows()).toEqual(ALL);
+  fireEvent.pointerDown(document.body);
+  expect(within(rounds).queryByRole("list")).toBeNull();
+
+  fireEvent.click(line);
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(within(rounds).queryByRole("list")).toBeNull();
+});
+
+test("a review's points: low 1, medium 3, high 5, critical 8, every finding counted", () => {
+  expect(reviewScore(HISTORY[0])).toBe(24);
+  expect(reviewScore(HISTORY[2])).toBe(13);
+  expect(reviewScore(round(3, {}, 0))).toBe(0);
+  expect(reviewTrend(HISTORY)).toBe("worse");
+  expect(reviewTrend(HISTORY.slice(0, 2))).toBe("better");
+  expect(reviewTrend(HISTORY.slice(0, 1))).toBeNull();
+  expect(reviewTrend([HISTORY[1], round(2, { high: 1, medium: 1, low: 2 }, 1)])).toBeNull();
 });
 
 test("a clean loop: plain Ready for review, its rounds still listed", () => {
