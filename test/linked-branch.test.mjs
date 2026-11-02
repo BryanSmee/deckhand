@@ -13,6 +13,7 @@ import {
   localService,
   policyEngine,
   policyEngineOf,
+  needsBash,
   scriptEnv,
   tempDir,
   hasOpa,
@@ -96,7 +97,7 @@ function linker({
   return { link, calls, mutations, notes, logs, decided };
 }
 
-test("branchName: draft-pr.sh's slug, from the title", (t) => {
+test("branchName: draft-pr.sh's slug, from the title", { skip: needsBash }, (t) => {
   assert.equal(branchName(12, "Café : bientôt"), "issue-12-cafe-bientot");
   assert.equal(branchName(3, "修复登录"), "issue-3-task");
   assert.equal(branchName(3, "🔥 !"), "issue-3-task");

@@ -1,6 +1,6 @@
 // Runs a previous listener left behind (restart.mjs): what the broker knows of them again.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBroker } from "../listener/broker.mjs";
@@ -13,7 +13,7 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
-import { fileLogs, localBroker, tempDir } from "./helpers.mjs";
+import { assertMode, fileLogs, localBroker, tempDir } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it. → its id, the broker's handle once restored.
 function saveRun(dir, id, issue, record, more = {}) {
@@ -1056,7 +1056,7 @@ test("a run's end the queue couldn't be written for: over, its put-back comments
   // Its state goes: the next listener doesn't take it for a run going (its tokens, its follow).
   assert.throws(() => readFileSync(join(dir, "r1.live.json")), { code: "ENOENT" });
   const kept = join(dir, "r1.queued.json");
-  assert.equal(statSync(kept).mode & 0o777, 0o600);
+  assertMode(kept, 0o600);
 
   // A listener killed now: the next one has the comment, once, and no run.
   const next = queueContext(t, dir, store);

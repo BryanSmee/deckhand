@@ -354,13 +354,14 @@ test("the inbox: messages, then a close line once", async () => {
 test("the image's deckhand-inbox prints the messages until the close line", async (t) => {
   const { r, inboxDir } = runner();
   await r.start({ run: "x-1", name: "x", image: "i" });
-  const script = new URL("../sandbox/deckhand-inbox", import.meta.url).pathname;
+  const script = join(import.meta.dirname, "..", "sandbox", "deckhand-inbox");
   let printed;
   const first = new Promise((resolve) => (printed = resolve));
   const done = new Promise((resolve, reject) => {
+    // Through node, as its shebang would: Windows runs no shebang.
     const child = execFile(
-      script,
-      [join(inboxDir, "x-1", "inbox.jsonl")],
+      process.execPath,
+      [script, join(inboxDir, "x-1", "inbox.jsonl")],
       { env: scriptEnv(t), timeout: 10000 },
       (e, out) => (e ? reject(e) : resolve(out)),
     );

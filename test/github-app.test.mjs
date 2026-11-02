@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createVerify, generateKeyPairSync } from "node:crypto";
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -22,7 +21,7 @@ import {
   tunnelsGitHub,
   saveCredentials,
 } from "../listener/github-app.mjs";
-import { recordingFetch, tempDir } from "./helpers.mjs";
+import { assertMode, recordingFetch, tempDir } from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("rsa", {
   modulusLength: 2048,
@@ -220,7 +219,7 @@ test("credentials are stored owner-only and read back", (t) => {
   const dir = tempDir(t);
   assert.equal(loadCredentials(dir), null);
   saveCredentials(dir, credentials);
-  assert.equal(statSync(join(dir, "app.json")).mode & 0o777, 0o600);
+  assertMode(join(dir, "app.json"), 0o600);
   assert.deepEqual(loadCredentials(dir), credentials);
 });
 

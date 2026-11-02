@@ -6,7 +6,7 @@
 import assert from "node:assert/strict";
 import { Agent, request } from "node:http";
 import { randomBytes } from "node:crypto";
-import { readdirSync, statSync } from "node:fs";
+import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
@@ -33,7 +33,7 @@ import {
 } from "../models/server.mjs";
 import { RECORD_MS } from "../models/runs.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
-import { listening, serve, tempDir, testKey } from "./helpers.mjs";
+import { assertMode, escapeRegExp, listening, serve, tempDir, testKey } from "./helpers.mjs";
 
 // Each service reaches the others at an address of its own, as over a network of its own with
 // Docker.
@@ -720,13 +720,16 @@ test("loginKey(): made once, then read; the same key for every caller", () => {
   assert.equal(key.length, 32);
   assert.deepEqual(loginKey(dir), key);
   assert.deepEqual(readdirSync(dir), ["models.key"]);
-  assert.equal(statSync(join(dir, "models.key")).mode & 0o777, 0o600);
+  assertMode(join(dir, "models.key"), 0o600);
 });
 
 test("a credentials folder or login the models service can't read is said at start, by name", () => {
-  const denied = new Set(["/data/credentials/codex-auth.json", "/elsewhere/agy.json"]);
+  // Joined as the code joins them: `\` on Windows.
+  const credentials = join("/data", "credentials");
+  const codex = join(credentials, "codex-auth.json");
+  const denied = new Set([codex, "/elsewhere/agy.json"]);
   const access = (path) => {
-    if (path === "/data/credentials/agy-auth.json")
+    if (path === join(credentials, "agy-auth.json"))
       throw Object.assign(new Error(), { code: "ENOENT" });
     if (denied.has(path)) throw Object.assign(new Error(), { code: "EACCES" });
   };
@@ -739,7 +742,7 @@ test("a credentials folder or login the models service can't read is said at sta
     lines[0],
     /AGY_AUTH_FILE, \/elsewhere\/agy\.json can't be read \(EACCES\): it runs as uid 1000/,
   );
-  assert.match(lines[1], /the login \/data\/credentials\/codex-auth\.json can't be read/);
+  assert.match(lines[1], new RegExp(`the login ${escapeRegExp(codex)} can't be read`));
   // The folder itself: said once, not for each file in it.
   const folder = unreadableCredentials(
     { DATA_DIR: "/data" },
@@ -750,7 +753,7 @@ test("a credentials folder or login the models service can't read is said at sta
     },
   );
   assert.equal(folder.length, 1);
-  assert.match(folder[0], /the credentials folder \/data\/credentials/);
+  assert.match(folder[0], new RegExp(`the credentials folder ${escapeRegExp(credentials)}`));
   assert.deepEqual(unreadableCredentials({ DATA_DIR: "/data" }, { access: () => {} }), []);
 });
 

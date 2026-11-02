@@ -494,9 +494,9 @@ test(
     // Served without the check before: opa refuses its own start, saying why.
     const dir = tempDir(t);
     const { mkdirSync, writeFileSync } = await import("node:fs");
-    mkdirSync(`${dir}/policy`);
-    writeFileSync(`${dir}/policy/bad.rego`, "package deckhand\n\ndeny_merge contains\n");
-    await assert.rejects(opaServer()(dir, `${dir}/policy`), /bad\.rego/);
+    mkdirSync(join(dir, "policy"));
+    writeFileSync(join(dir, "policy", "bad.rego"), "package deckhand\n\ndeny_merge contains\n");
+    await assert.rejects(opaServer()(dir, join(dir, "policy")), /bad\.rego/);
   },
 );
 

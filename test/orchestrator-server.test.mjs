@@ -61,6 +61,7 @@ import {
   forwarder,
   grantsPolicy,
   servePolicies,
+  needsBash,
   tempDir,
   testKey,
 } from "./helpers.mjs";
@@ -91,7 +92,7 @@ const RW_MOUNT = "/usr";
 // A fake `docker` on the listener's PATH, playing Docker on files in `dir`
 // (fixtures/fake-docker.sh says how).
 function fakeDocker(dir) {
-  symlinkSync(new URL("fixtures/fake-docker.sh", import.meta.url).pathname, join(dir, "docker"));
+  symlinkSync(join(import.meta.dirname, "fixtures", "fake-docker.sh"), join(dir, "docker"));
 }
 
 // Stops the fake sandboxes a test leaves running.
@@ -430,7 +431,7 @@ function tarOf(files) {
 // every side).
 function start(env, { script = "orchestrator/server.mjs", also = () => "" } = {}) {
   const child = spawn(process.execPath, [script], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: join(import.meta.dirname, ".."),
     env,
     stdio: ["ignore", "pipe", "pipe"],
   });
@@ -634,7 +635,9 @@ async function sandboxProxy({ policyPort, token, urls }) {
 
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).
-describe("listener", { concurrency: Math.min(8, 2 * availableParallelism()) }, () => {
+// Not on Windows: the fake docker is a shell script, and its sandboxes are process groups.
+const options = { concurrency: Math.min(8, 2 * availableParallelism()), skip: needsBash };
+describe("listener", options, () => {
   // The ports a listener bound, from its log: edge's, its egress policy's.
   async function ports(listener) {
     const bound = async (name) => {

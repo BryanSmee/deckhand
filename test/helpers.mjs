@@ -1,6 +1,7 @@
 // What the test files share: servers on a port the OS picks, temp dirs that don't outlive
 // their test, a config, a fake GitHub's fetch. `node --test` loads it as a file of its own too
 // (everything under test/ matches its patterns), where it finds no test.
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { generateKeyPairSync } from "node:crypto";
 import {
@@ -10,12 +11,13 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { connect, createServer as createTcpServer } from "node:net";
 import { hostname, tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, sep } from "node:path";
 import { gitBlob } from "../listener/images.mjs";
 import { loadConfig } from "../listener/config.mjs";
 import { createPolicies } from "../listener/policies.mjs";
@@ -258,6 +260,45 @@ export function tempDir(t, prefix = "deckhand-") {
 // Whether the tests run as root, who writes anywhere: a test whose subject is "a user can't
 // write here" skips then (`{ skip: isRoot && "root writes anywhere" }`). CI runs them both ways.
 export const isRoot = process.getuid?.() === 0;
+
+// Native Windows (#565): Deckhand runs in Linux containers, but its pure-Node tests pass there
+// too. What only POSIX has skips with one of these reasons (`{ skip: needsBash }`), false
+// elsewhere. Not a check that `bash` runs: from PowerShell that is WSL's launcher, which gets
+// Windows paths it can't open.
+export const isWindows = process.platform === "win32";
+// Deckhand's shell scripts, the fakes written in sh (fake-docker.sh, fake-opa.sh), jq, mkfifo.
+export const needsBash =
+  isWindows && "needs bash and POSIX tools, which Deckhand's Linux images have";
+// File modes (0o600) and unreadable folders: NTFS keeps neither.
+export const needsModes = isWindows && "needs POSIX file modes, which NTFS doesn't keep";
+// Paths the code checks as Linux's (mounts, grants), which a Windows temp dir (C:\…) isn't.
+export const needsPosixPaths =
+  isWindows && "needs POSIX paths: the code checks Linux's, where Deckhand runs";
+// /proc, Linux's.
+export const needsProc = isWindows && "needs /proc, which only Linux has";
+// Windows won't rename over a file another process has open (lib/store-file.mjs's state.json).
+export const needsPosixRename =
+  isWindows && "needs POSIX rename: Windows won't replace a file another process has open";
+// Windows resets a connection closed with a request's body unread, before its answer is read.
+export const resetsUnread =
+  isWindows && "Windows resets a connection closed with a body unread: its answer is lost";
+// SIGTERM caught: Windows has no signals, a kill ends the process there.
+export const needsSignals = isWindows && "needs POSIX signals: on Windows a kill ends the process";
+// Symlinks, which Windows creates only in developer mode.
+export const needsSymlinks =
+  isWindows && "needs symlinks, which Windows creates only in developer mode";
+
+// Asserts `path`'s permission bits (0o600) where the system keeps them: not on Windows, where a
+// test that checks a mode in passing still checks the rest.
+export function assertMode(path, mode) {
+  if (!needsModes) assert.equal(statSync(path).mode & 0o777, mode);
+}
+
+// A path in POSIX form (`a/b`, never `a\b`), for assertions written with `/`.
+export const posix = (path) => path.split(sep).join("/");
+
+// `text` escaped for a RegExp: a path, whatever its separator.
+export const escapeRegExp = (text) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // The environment of a sandbox script a test spawns: never the tests' own, which inside a
 // Deckhand sandbox (Deckhand testing itself) holds the run's real settings, and a run token

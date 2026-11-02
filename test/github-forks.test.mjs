@@ -25,7 +25,7 @@ import { createGithubGateway, FILES, ROUTING_HEADERS } from "../listener/github-
 import { createGraphqlChecks, githubSchema } from "../listener/github-graphql.mjs";
 import { pkt, pktLines } from "../listener/pkt-line.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
-import { serve, tempDir, tokenBroker } from "./helpers.mjs";
+import { needsBash, serve, tempDir, tokenBroker } from "./helpers.mjs";
 
 const OWN = "a".repeat(40); // on the default branch
 const HEAD = "b".repeat(40); // a branch's head, not on the default one
@@ -963,152 +963,160 @@ test("the gateway's file hosts are the ones the egress proxy relays", () => {
 // run's whole clone and own pull request go, a fork's pull request doesn't, by its ref or its
 // commit, and a blobless clone's checkout (its blobs wanted one by one) doesn't either: hence
 // SANDBOX_FULL_CLONE. A fork's run fetches its pull request as before.
-test("real git through the gateway: a whole clone goes, a fork's head and lone blobs don't", async (t) => {
-  const dir = tempDir(t, "forks-git-");
-  const env = {
-    PATH: process.env.PATH,
-    HOME: dir,
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_TERMINAL_PROMPT: "0",
-    // No `git gc --auto` or `git maintenance` left running after a fetch: detached, it would
-    // still write in the clones while the test's dir is removed, which then fails (#521).
-    GIT_CONFIG_COUNT: "2",
-    GIT_CONFIG_KEY_0: "gc.auto",
-    GIT_CONFIG_VALUE_0: "0",
-    GIT_CONFIG_KEY_1: "maintenance.auto",
-    GIT_CONFIG_VALUE_1: "false",
-    ...Object.fromEntries(
-      ["AUTHOR", "COMMITTER"].flatMap((w) => [
-        [`GIT_${w}_NAME`, "a"],
-        [`GIT_${w}_EMAIL`, "a@example"],
-      ]),
-    ),
-  };
-  // Async: the servers answering git run on this thread.
-  const sh = (command) =>
-    new Promise((resolve) => {
-      const child = spawn("bash", ["-c", command], { cwd: dir, env });
-      let out = "";
-      child.stdout.on("data", (d) => (out += d));
-      child.stderr.on("data", (d) => (out += d));
-      child.on("close", (code) => resolve({ code, out: out.trim() }));
-    });
-  const repo = join(dir, "root", "org", "repo.git");
-  const made = await sh(
-    `git init -q -b main src && cd src && for v in 1 2 3; do echo $v > f && git add f &&
+test(
+  "real git through the gateway: a whole clone goes, a fork's head and lone blobs don't",
+  { skip: needsBash },
+  async (t) => {
+    const dir = tempDir(t, "forks-git-");
+    const env = {
+      PATH: process.env.PATH,
+      HOME: dir,
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_TERMINAL_PROMPT: "0",
+      // No `git gc --auto` or `git maintenance` left running after a fetch: detached, it would
+      // still write in the clones while the test's dir is removed, which then fails (#521).
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "gc.auto",
+      GIT_CONFIG_VALUE_0: "0",
+      GIT_CONFIG_KEY_1: "maintenance.auto",
+      GIT_CONFIG_VALUE_1: "false",
+      ...Object.fromEntries(
+        ["AUTHOR", "COMMITTER"].flatMap((w) => [
+          [`GIT_${w}_NAME`, "a"],
+          [`GIT_${w}_EMAIL`, "a@example"],
+        ]),
+      ),
+    };
+    // Async: the servers answering git run on this thread.
+    const sh = (command) =>
+      new Promise((resolve) => {
+        const child = spawn("bash", ["-c", command], { cwd: dir, env });
+        let out = "";
+        child.stdout.on("data", (d) => (out += d));
+        child.stderr.on("data", (d) => (out += d));
+        child.on("close", (code) => resolve({ code, out: out.trim() }));
+      });
+    const repo = join(dir, "root", "org", "repo.git");
+    const made = await sh(
+      `git init -q -b main src && cd src && for v in 1 2 3; do echo $v > f && git add f &&
     git commit -qm $v; done && git checkout -q -b fork && echo evil > evil.sh && git add . &&
     git commit -qm fork && git checkout -q main && git clone -q --bare . ${repo} &&
     cd ${repo} && git update-ref refs/pull/7/head fork && git update-ref refs/pull/8/head main &&
     git branch -q -D fork && git config uploadpack.allowFilter true &&
     git config uploadpack.allowAnySHA1InWant true && git rev-parse refs/pull/7/head`,
-  );
-  assert.equal(made.code, 0, made.out);
-  const forkSha = made.out.split("\n").at(-1);
-  const github = await serve(t, (req, res) => {
-    const url = new URL(req.url, "http://github");
-    const cgi = spawn("git", ["http-backend"], {
-      env: {
-        ...env,
-        GIT_PROJECT_ROOT: join(dir, "root"),
-        GIT_HTTP_EXPORT_ALL: "1",
-        PATH_INFO: url.pathname,
-        QUERY_STRING: url.search.slice(1),
-        REQUEST_METHOD: req.method,
-        CONTENT_TYPE: req.headers["content-type"] ?? "",
-        GIT_PROTOCOL: req.headers["git-protocol"] ?? "",
-        HTTP_CONTENT_ENCODING: req.headers["content-encoding"] ?? "",
-      },
-    });
-    req.pipe(cgi.stdin);
-    let head = Buffer.alloc(0);
-    let started = false;
-    cgi.stdout.on("data", (chunk) => {
-      if (started) return res.write(chunk);
-      head = Buffer.concat([head, chunk]);
-      const end = head.indexOf("\r\n\r\n");
-      if (end < 0) return;
-      const headers = {};
-      let status = 200;
-      for (const line of head.subarray(0, end).toString().split("\r\n")) {
-        const [name, value] = [line.slice(0, line.indexOf(":")), line.slice(line.indexOf(":") + 2)];
-        if (name.toLowerCase() === "status") status = parseInt(value);
-        else headers[name] = value;
-      }
-      started = true;
-      res.writeHead(status, headers);
-      res.write(head.subarray(end + 4));
-    });
-    cgi.stdout.on("end", () => res.end());
-  });
-  // GitHub's API as the checks ask it: #7 a fork's, #8 a branch's; compare from the clone.
-  const get = async (_, path) => {
-    let m;
-    if (path === "/repos/org/repo") return { id: 1, full_name: "org/repo", default_branch: "main" };
-    if ((m = /pulls\/(\d+)$/.exec(path))) return PULLS[m[1]] ?? null;
-    if ((m = /compare\/([0-9a-f]+)\.\.\./.exec(path))) {
-      const on = await sh(`git -C ${repo} merge-base --is-ancestor ${m[1]} main`);
-      return on.code === 0 ? { status: "ahead" } : null;
-    }
-    return /branches-where-head/.test(path) ? [] : null;
-  };
-  const broker = createBroker({});
-  let current = null;
-  const gw = createGithubGateway({
-    broker,
-    app: () => ({ repoToken: async () => ({ token: "repo-token-0123456789abcdef" }) }),
-    api: `${github.url}/api/v3`,
-    web: github.url,
-    forks: createForkChecks({ get }),
-    // git's calls carry no token: the run whose sandbox sent them.
-    runFrom: async () => current,
-  });
-  const { url } = await serve(t, (req, res) => gw.handle(req, res));
-  const via = `${url}/relay/127.0.0.1/org/repo.git`;
-  const as = (fork) => {
-    const secret = broker.register("org/repo", { push: true, caps: ["pull"] });
-    broker.allow(secret, [], fork);
-    current = broker.runOf(secret);
-  };
-
-  as(false);
-  assert.equal(
-    (await sh(`git clone -q ${via} whole && git -C whole log --oneline | wc -l`)).out,
-    "3",
-  );
-  assert.equal((await sh("git -C whole fetch -q origin refs/pull/8/head")).code, 0);
-  for (const what of ["refs/pull/7/head", forkSha]) {
-    const fetched = await sh(`git -C whole fetch -q origin ${what}`);
-    assert.notEqual(fetched.code, 0, what);
-    assert.match(
-      fetched.out,
-      /remote error: Deckhand: pull request #7 is from a fork \(evil\/repo\)/,
     );
-  }
-  const blobless = await sh(`git clone -q --filter=blob:none ${via} blobless`);
-  assert.match(
-    blobless.out,
-    /remote error: Deckhand: \w+ isn't a commit on org\/repo's default branch/,
-  );
-  assert.match(blobless.out, /checkout failed/);
+    assert.equal(made.code, 0, made.out);
+    const forkSha = made.out.split("\n").at(-1);
+    const github = await serve(t, (req, res) => {
+      const url = new URL(req.url, "http://github");
+      const cgi = spawn("git", ["http-backend"], {
+        env: {
+          ...env,
+          GIT_PROJECT_ROOT: join(dir, "root"),
+          GIT_HTTP_EXPORT_ALL: "1",
+          PATH_INFO: url.pathname,
+          QUERY_STRING: url.search.slice(1),
+          REQUEST_METHOD: req.method,
+          CONTENT_TYPE: req.headers["content-type"] ?? "",
+          GIT_PROTOCOL: req.headers["git-protocol"] ?? "",
+          HTTP_CONTENT_ENCODING: req.headers["content-encoding"] ?? "",
+        },
+      });
+      req.pipe(cgi.stdin);
+      let head = Buffer.alloc(0);
+      let started = false;
+      cgi.stdout.on("data", (chunk) => {
+        if (started) return res.write(chunk);
+        head = Buffer.concat([head, chunk]);
+        const end = head.indexOf("\r\n\r\n");
+        if (end < 0) return;
+        const headers = {};
+        let status = 200;
+        for (const line of head.subarray(0, end).toString().split("\r\n")) {
+          const [name, value] = [
+            line.slice(0, line.indexOf(":")),
+            line.slice(line.indexOf(":") + 2),
+          ];
+          if (name.toLowerCase() === "status") status = parseInt(value);
+          else headers[name] = value;
+        }
+        started = true;
+        res.writeHead(status, headers);
+        res.write(head.subarray(end + 4));
+      });
+      cgi.stdout.on("end", () => res.end());
+    });
+    // GitHub's API as the checks ask it: #7 a fork's, #8 a branch's; compare from the clone.
+    const get = async (_, path) => {
+      let m;
+      if (path === "/repos/org/repo")
+        return { id: 1, full_name: "org/repo", default_branch: "main" };
+      if ((m = /pulls\/(\d+)$/.exec(path))) return PULLS[m[1]] ?? null;
+      if ((m = /compare\/([0-9a-f]+)\.\.\./.exec(path))) {
+        const on = await sh(`git -C ${repo} merge-base --is-ancestor ${m[1]} main`);
+        return on.code === 0 ? { status: "ahead" } : null;
+      }
+      return /branches-where-head/.test(path) ? [] : null;
+    };
+    const broker = createBroker({});
+    let current = null;
+    const gw = createGithubGateway({
+      broker,
+      app: () => ({ repoToken: async () => ({ token: "repo-token-0123456789abcdef" }) }),
+      api: `${github.url}/api/v3`,
+      web: github.url,
+      forks: createForkChecks({ get }),
+      // git's calls carry no token: the run whose sandbox sent them.
+      runFrom: async () => current,
+    });
+    const { url } = await serve(t, (req, res) => gw.handle(req, res));
+    const via = `${url}/relay/127.0.0.1/org/repo.git`;
+    const as = (fork) => {
+      const secret = broker.register("org/repo", { push: true, caps: ["pull"] });
+      broker.allow(secret, [], fork);
+      current = broker.runOf(secret);
+    };
 
-  as(true);
-  assert.equal(
-    (
-      await sh(
-        "git -C whole fetch -q origin refs/pull/7/head && git -C whole show FETCH_HEAD:evil.sh",
-      )
-    ).out,
-    "evil",
-  );
-  assert.equal((await sh(`git clone -q --filter=blob:none ${via} kept`)).code, 0);
-  // The entrypoint's whole_clone(), in the next work run: every blob at once, through the gateway.
-  as(false);
-  const whole = await sh(
-    `cd kept && git fetch -q --refetch --no-filter origin && git log -p >/dev/null &&
+    as(false);
+    assert.equal(
+      (await sh(`git clone -q ${via} whole && git -C whole log --oneline | wc -l`)).out,
+      "3",
+    );
+    assert.equal((await sh("git -C whole fetch -q origin refs/pull/8/head")).code, 0);
+    for (const what of ["refs/pull/7/head", forkSha]) {
+      const fetched = await sh(`git -C whole fetch -q origin ${what}`);
+      assert.notEqual(fetched.code, 0, what);
+      assert.match(
+        fetched.out,
+        /remote error: Deckhand: pull request #7 is from a fork \(evil\/repo\)/,
+      );
+    }
+    const blobless = await sh(`git clone -q --filter=blob:none ${via} blobless`);
+    assert.match(
+      blobless.out,
+      /remote error: Deckhand: \w+ isn't a commit on org\/repo's default branch/,
+    );
+    assert.match(blobless.out, /checkout failed/);
+
+    as(true);
+    assert.equal(
+      (
+        await sh(
+          "git -C whole fetch -q origin refs/pull/7/head && git -C whole show FETCH_HEAD:evil.sh",
+        )
+      ).out,
+      "evil",
+    );
+    assert.equal((await sh(`git clone -q --filter=blob:none ${via} kept`)).code, 0);
+    // The entrypoint's whole_clone(), in the next work run: every blob at once, through the gateway.
+    as(false);
+    const whole = await sh(
+      `cd kept && git fetch -q --refetch --no-filter origin && git log -p >/dev/null &&
     git rev-list --objects --missing=print --all | grep -c '^?' || true`,
-  );
-  assert.equal(whole.out, "0");
-});
+    );
+    assert.equal(whole.out, "0");
+  },
+);
 
 test("a file host's calls don't count towards a run's calls in flight: they hold no token", async (t) => {
   // None may be in flight: every counted call is refused, a file host's goes on.

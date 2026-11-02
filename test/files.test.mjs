@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
@@ -8,7 +8,7 @@ import { createOnboardingStore } from "../listener/onboarding.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { persistentMap, readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { createTitles } from "../listener/titles.mjs";
-import { tempDir } from "./helpers.mjs";
+import { assertMode, needsModes, tempDir } from "./helpers.mjs";
 
 const temp = (t) => tempDir(t, "deckhand-store-");
 const leftovers = (dir) => readdirSync(dir).filter((f) => f.endsWith(".tmp"));
@@ -32,11 +32,11 @@ test("writeJsonAtomic: replaces the file whole, leaves no temporary file", (t) =
   assert.deepEqual(leftovers(dir), []);
 });
 
-test("writeJsonAtomic: a mode for secrets, even over a wider umask", (t) => {
+test("writeJsonAtomic: a mode for secrets, even over a wider umask", { skip: needsModes }, (t) => {
   const dir = temp(t);
   const path = join(dir, "secret.json");
   writeJsonAtomic(path, { pem: "…" }, { mode: 0o600 });
-  assert.equal(statSync(path).mode & 0o777, 0o600);
+  assertMode(path, 0o600);
 });
 
 test("writeJsonAtomic: a failed write keeps the previous file and cleans up", (t) => {
@@ -79,7 +79,7 @@ test("persistentMap: the file's object as a Map, saved whole in the same format"
   const secret = persistentMap(join(dir, "waits.json"), { mode: 0o600 });
   secret.set("o/r#5", { blockers: [4] });
   secret.save();
-  assert.equal(statSync(join(dir, "waits.json")).mode & 0o777, 0o600);
+  assertMode(join(dir, "waits.json"), 0o600);
 });
 
 test("every state file is written through lib/files.mjs: no temporary file left behind", async (t) => {
