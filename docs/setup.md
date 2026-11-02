@@ -1240,6 +1240,12 @@ here):
   follows a webhook across them. A call that comes with none (a timer, a sandbox's own call) gets
   one of its own there.
 
+With Compose, Docker keeps each container's lines in its `json-file` driver, rotated: five files
+of 10 MB each per container (`compose.yaml`'s `x-logging`, which every service uses), the
+oldest dropped first, so a long-running deployment never fills the disk with them. Read them
+with `docker compose logs`: `docker compose logs -f --since 1h orchestrator runner` follows
+two services, `docker compose logs --tail 200` shows the last lines of each.
+
 On Kubernetes, the services log JSON (their default, `LOG_FORMAT` unset), which the
 node's agent (Promtail, Alloy, Fluent Bit) sends to Loki or VictoriaLogs as it is. With Docker,
 `LOG_FORMAT=json` in `.env` and one of Docker's logging drivers do the same. Deckhand ships no
@@ -1253,6 +1259,44 @@ collector. With Loki:
 - Error rates for alerts come from the lines: `sum by (container)
 (count_over_time({namespace="deckhand"} | json | level="error" [5m]))`. Deckhand has no
   `/metrics` endpoint.
+
+To send the lines to your own stack with Docker, a `compose.override.yaml` beside
+`compose.yaml` (Compose reads it with `docker compose up -d`, no flag needed) gives each service
+another driver: `fluentd`, `gelf`, `journald`, `loki` (Grafana's plugin, installed on the host
+first) or any other. A driver other than `json-file` takes none of its options, and with most
+`docker compose logs` has nothing to show. With GELF, say:
+
+```yaml
+# compose.override.yaml: an anchor is a file's own, so this one names each service again.
+x-logging: &logging
+  driver: gelf
+  options:
+    gelf-address: udp://graylog.example.com:12201
+    tag: "{{.Name}}"
+
+services:
+  edge: { logging: *logging }
+  orchestrator: { logging: *logging }
+  runner: { logging: *logging }
+  broker: { logging: *logging }
+  github: { logging: *logging }
+  models: { logging: *logging }
+  policy: { logging: *logging }
+  egress: { logging: *logging }
+```
+
+## Health checks
+
+Every service in `compose.yaml` has a health check, which calls its own `/ready` (or `/health`)
+with `node -e "fetch(…)"`, which every image can run: once a second while it starts, then every
+30 s. `docker compose ps` shows each one `healthy`, `starting` or `unhealthy`. A service starts
+only once those it calls are healthy (`depends_on` with `condition: service_healthy`): the broker
+first, whose public keys the others check service tokens with, then the policy service, the
+github and models services, edge and the runner, and the orchestrator last. The orchestrator's
+and the runner's check `/health`, which a copy waiting for the lease answers too (its `/ready`
+is 503 until it acts, [Two copies](#two-copies)); the others' check `/ready`, which turns 503
+once a stopping copy drains. Docker doesn't restart an unhealthy container by itself: its logs
+say why.
 
 ## Updating
 
@@ -1605,6 +1649,12 @@ until they move to the store, #505); `/ready` answers only on the one acting, fo
 probe. Ready-made manifests are on their way (issue #396); until then, this is what the
 runner expects ([Namespaces](#namespaces) says which goes where).
 
+- **Probes**, on every service's pods: a `livenessProbe` on `/health` and a `readinessProbe` on
+  `/ready`, both on the port its Service names (edge's 8080, the orchestrator's 8083, the
+  broker's 8081, the policy service's 8181, the egress proxy's 3128, the others' 8080). `/ready`
+  is 503 on a copy that drains, and on an orchestrator's or a runner's copy waiting for its
+  lease, which keeps it out of its Service ([Health checks](#health-checks) has a command every
+  image can run).
 - **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none), in
   the sandboxes' namespace: `create`, `get`, `list` and `delete` on `pods`, `secrets` and
   `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and

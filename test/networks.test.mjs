@@ -35,11 +35,11 @@ const RUNS = {
 // (the agents' APIs), the runner (registries) and the proxy (the hosts granted to runs).
 const INTERNET = ["edge", "github", "models", "runner", "proxy"];
 
-// compose.yaml as lib/yaml.mjs reads it: without its anchors and aliases (the image names),
-// which it refuses, and nothing here needs.
+// compose.yaml as lib/yaml.mjs reads it, which refuses anchors and aliases: each anchor dropped
+// (the image names', the logging's), each alias read as `alias-<name>`.
 function readCompose(text) {
   return parseYaml(
-    text.replace(/^(x-[\w-]+:\s*)&[\w-]+\s+/gm, "$1").replace(/:\s+\*([\w-]+)\s*$/gm, ": alias-$1"),
+    text.replace(/^(x-[\w-]+:)[ \t]*&[\w-]+/gm, "$1").replace(/:\s+\*([\w-]+)\s*$/gm, ": alias-$1"),
   );
 }
 
@@ -447,13 +447,44 @@ test("the subnet check fails on one written apart, two that overlap, one in Dock
   ]);
 });
 
-// Text for `docker compose logs`, JSON with one line in .env for a collector (#547): the
-// services' own default, unset, is JSON (lib/log.mjs).
-test("compose.yaml: every Deckhand service logs as LOG_FORMAT says, text by default", () => {
+// The ports compose.yaml's services are reached on: those their callers' URLs name
+// (http://broker:8081), and those it publishes.
+function portsOf(compose, name) {
+  const ports = new Set();
+  const text = JSON.stringify(compose.services);
+  for (const [, port] of text.matchAll(new RegExp(`http://${name}:(\\d+)`, "g"))) ports.add(port);
+  for (const port of compose.services[name].ports ?? []) ports.add(String(port).split(":").at(-1));
+  return ports;
+}
+
+test("compose.yaml: every long-running service has a health check on its own port, the others wait for it, and its logs rotate", () => {
   const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
-  for (const name of Object.keys(RUNS)) {
-    const { environment = {} } = compose.services[name];
-    assert.equal(environment.LOG_FORMAT, "${LOG_FORMAT:-text}", `${name}'s LOG_FORMAT`);
-    assert.equal(environment.LOG_LEVEL, "${LOG_LEVEL:-}", `${name}'s LOG_LEVEL`);
+  const { options } = compose["x-logging"];
+  assert.equal(compose["x-logging"].driver, "json-file");
+  assert.ok(options["max-size"] && options["max-file"], "the logs rotate");
+  const running = Object.entries(compose.services).filter(([, s]) => s.restart !== "no");
+  assert.deepEqual(running.map(([name]) => name).sort(), Object.keys(RUNS).sort());
+  for (const [name, service] of running) {
+    assert.equal(service.logging, "alias-logging", `${name}: the logging anchor`);
+    const probe = /fetch\('http:\/\/127\.0\.0\.1:(\d+)(\/health|\/ready)'\)/.exec(
+      service.healthcheck?.test ?? "",
+    );
+    assert.ok(probe, `${name}: a health check calling its /health or /ready`);
+    assert.ok(portsOf(compose, name).has(probe[1]), `${name}: ${probe[1]} isn't its port`);
+    // A copy waiting for its lease answers /ready with 503 and is still up.
+    if (["orchestrator", "runner"].includes(name)) assert.equal(probe[2], "/health", name);
+    assert.ok(service.healthcheck.start_interval, `${name}: checked often while it starts`);
+    for (const [on, wait] of Object.entries(service.depends_on ?? {})) {
+      assert.equal(wait?.condition, "service_healthy", `${name} waits for ${on} to be healthy`);
+    }
   }
+  // The orchestrator starts once every service it calls is ready.
+  assert.deepEqual(Object.keys(compose.services.orchestrator.depends_on).sort(), [
+    "broker",
+    "edge",
+    "github",
+    "models",
+    "policy",
+    "runner",
+  ]);
 });
