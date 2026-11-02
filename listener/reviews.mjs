@@ -885,7 +885,8 @@ const ROUNDS_KEPT = 20;
 // never ran (cancelled, refused). `entry.deciding`: the listener is deciding about the loop's
 // step right now (createReviews() entry()): it is there too.
 // `round`: the fix runs started so far (0 for the first review), of `rounds` the repo allows;
-// `history`: each review's { round, at, head, counts, blocking }, oldest first.
+// `history`: each review's { round, at, head, counts, blocking, manual? }, oldest first;
+// `manual`: true when no loop ran, only maintainers' reviews (the dashboard's "Reviews").
 export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const history = entry?.rounds ?? [];
   if (!step && entry?.deciding) step = entry.deciding;
@@ -897,7 +898,13 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const fixes = fixesOf(entry);
   const rounds = entry?.fixRounds ?? 0;
   const last = history.at(-1);
-  const at = { round: looping ? fixes : (last?.round ?? fixes), rounds, history };
+  const manual = !looping && !fixes && !entry?.ciStopped && history.every((r) => r.manual);
+  const at = {
+    round: looping ? fixes : (last?.round ?? fixes),
+    rounds,
+    history,
+    ...(manual && { manual }),
+  };
   if (step === "review") return { loop: "reviewing", ...at };
   if (step === "review-fix") return { loop: "fixing", ...at };
   if (step === "ci-fix") return { loop: "ci-fix", ...at };
@@ -1692,19 +1699,17 @@ export function createReviews({
   async function settle(run, posted) {
     const key = taskKey(run.repo, prId(run.number));
     if (!run.auto) {
-      // A maintainer's review (`/mode review`, the dashboard's Review) of a pull request whose
-      // loop the dashboard shows: its latest round, its blocking findings counted with the
-      // tolerance of the loop's own reviews (tolerance(), as the dashboard's Fix reads them),
-      // so that what the task page offers follows it. Not a loop round: it counts no fix run
-      // and starts no loop. With `review.fix`, it may start a fix run while rounds are left:
+      // A maintainer's review (`/mode review`, the dashboard's Review): the latest round the
+      // dashboard shows (`manual`), with or without a loop before it, so that a commit pushed
+      // after it is seen there (issue #535); its blocking findings counted with the tolerance
+      // of the loop's own reviews (tolerance(), as the dashboard's Fix reads them), so that
+      // what the task page offers follows it. Not a loop round: it counts no fix run and
+      // starts no loop. With `review.fix`, it may start a fix run while rounds are left:
       // decided as the loop's steps are (deciding()), so a dashboard Fix meanwhile waits.
       // A CI step stopped without a review (`ciStopped`) shows it too (reviewLoop()), its mark
       // kept: it isn't the loop's own review, which ready again at that head still runs.
       const manual = async () => {
-        const shown = reviewed.get(key);
-        if (shown?.rounds?.length || shown?.ciStopped) {
-          recordRound(run, posted, await tolerance({ ...run, auto: true }));
-        }
+        recordRound(run, posted, await tolerance({ ...run, auto: true }), true);
         return (await startFix(run, posted)).item;
       };
       return run.settings?.review?.fix ? deciding(key, "review", manual) : manual();
@@ -1728,12 +1733,18 @@ export function createReviews({
     });
   }
 
-  // An automatic review posted on pull request `number`: its round of the fix loop, kept in
-  // its entry's `rounds` for the dashboard (reviewLoop()), before startFix() counts the next
-  // fix run. Counts only, never the findings' text. The same round at the same head again
-  // replaces it; `fixRounds`: how many fix runs the repo allows now. `allowed`: the tolerance
-  // its blocking findings are counted with, the review's own by default.
-  function recordRound({ repo, number, settings }, posted, allowed = posted?.review?.allowed) {
+  // A review posted on pull request `number`: its round of the fix loop, kept in its entry's
+  // `rounds` for the dashboard (reviewLoop()), before startFix() counts the next fix run.
+  // Counts only, never the findings' text. The same round at the same head again replaces it;
+  // `fixRounds`: how many fix runs the repo allows now. `allowed`: the tolerance its blocking
+  // findings are counted with, the review's own by default. `manual`: a maintainer's review,
+  // not the loop's own.
+  function recordRound(
+    { repo, number, settings },
+    posted,
+    allowed = posted?.review?.allowed,
+    manual = false,
+  ) {
     const review = posted?.review;
     if (!review) return;
     const key = taskKey(repo, prId(number));
@@ -1748,7 +1759,15 @@ export function createReviews({
     // Posted as a plain comment (GitHub refused the review): not on GitHub's list of reviews,
     // which the dashboard's Fix reads (latestReview()).
     const comment = posted.event === null ? { comment: true } : {};
-    rounds.push({ round, at: now(), head, counts, blocking, ...comment });
+    rounds.push({
+      round,
+      at: now(),
+      head,
+      counts,
+      blocking,
+      ...comment,
+      ...(manual && { manual }),
+    });
     remember(key, entry.head ?? null, {
       rounds: rounds.slice(-ROUNDS_KEPT),
       fixRounds: limitOf(settings, entry),

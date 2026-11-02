@@ -82,6 +82,14 @@ test("pull_request deliveries: its size and commit count when GitHub sends them,
   ]);
 });
 
+test("pull_request deliveries: its head commit, a push's new one too (#535)", () => {
+  const at = (sha) => ({ head: { sha, ref: "issue-30-fix", repo: { full_name: "Org/Repo" } } });
+  assert.equal(map("opened", at("aaa111")).pr.head, "aaa111");
+  assert.equal(map("synchronize", at("bbb222")).pr.head, "bbb222");
+  // A payload without it: none, so the one recorded stays (pulls.mjs record()).
+  assert.equal("head" in map("opened").pr, false);
+});
+
 test("pull_request deliveries outside the allowlist, the App or the actions are ignored", () => {
   assert.equal(map("opened", {}, { repo: "Org/Other" }), null);
   assert.equal(map("opened", {}, { installation: null }), null);
@@ -393,6 +401,48 @@ test("pulls: a pull request recorded without its size keeps the one known", (t) 
   // Another pull request on the task: not the old one's size.
   pulls.record("org/repo#30", pr(40, "draft"));
   assert.deepEqual(pulls.get("org/repo#30"), pr(40, "draft"));
+});
+
+test("pulls: the head commit, kept across a restart, from deliveries, listings and resync (#535)", async (t) => {
+  const path = tempPath(t);
+  let head = "bbb222";
+  const listPulls = async () => [
+    { number: 31, html_url: "u31", state: "open", draft: false, head: { sha: head } },
+    {
+      number: 41,
+      html_url: "u41",
+      body: "Closes #40",
+      state: "open",
+      draft: false,
+      head: { sha: "ccc333", ref: "issue-40-x", repo: { full_name: "org/repo" } },
+    },
+  ];
+  const sized = { additions: 1, deletions: 0, changedFiles: 1, commits: 1 };
+  const getPull = async (repo, number) => ({
+    number,
+    html_url: `u${number}`,
+    state: "open",
+    draft: false,
+    head: { sha: number === 41 ? "ccc333" : head },
+    additions: 1,
+    deletions: 0,
+    changed_files: 1,
+    commits: 1,
+  });
+  const pulls = createPulls({ path, listPulls, getPull });
+  pulls.record("org/repo#30", { ...pr(31, "ready", NOW), head: "aaa111", ...sized });
+  // The listener's own record, its object without a head: the one known stays.
+  pulls.record("org/repo#30", pr(31, "ready", NOW));
+  assert.equal(pulls.get("org/repo#30").head, "aaa111");
+  // A listing finds an older task's, with its head.
+  await pulls.fill(["org/repo#40"]);
+  assert.equal(pulls.get("org/repo#40").head, "ccc333");
+  // A push whose delivery was lost: resync catches it up, not counted as a state change.
+  assert.equal(await pulls.resync(), 0);
+  assert.equal(pulls.get("org/repo#30").head, "bbb222");
+  const next = createPulls({ path, listPulls, getPull });
+  assert.equal(next.get("org/repo#30").head, "bbb222");
+  assert.equal(next.get("org/repo#40").head, "ccc333");
 });
 
 test("pulls: resync lets fill() look up the tasks without one again", async (t) => {

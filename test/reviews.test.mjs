@@ -950,13 +950,22 @@ test("review loop: clean, or stopped when no fix run follows a blocking review",
   await failed.review(HIGH_ONE);
   await failed.fixed("sha-2", "error");
   assert.equal(failed.loop().loop, "stopped");
-  // A maintainer's review (`/mode review`) isn't the loop's.
-  const manual = await loopSetup(t);
+  // A maintainer's review (`/mode review`) isn't the loop's: recorded all the same (#535),
+  // marked as theirs, so the dashboard shows it as "Reviews" and a commit pushed after it.
+  const manual = await loopSetup(t, "review:\n  on: ready\n");
   await manual.reviews.settle(
     { repo: "org/repo", number: 5, base: "trunk", settings: manual.read.settings, auto: false },
     posted(HIGH_ONE),
   );
-  assert.equal(manual.loop(), null);
+  const reviewed = manual.loop();
+  assert.deepEqual([reviewed.loop, reviewed.manual], ["rounds-out", true]);
+  assert.deepEqual(
+    reviewed.history.map((r) => [r.round, r.head, r.blocking, r.manual]),
+    [[0, "sha-1", 1, true]],
+  );
+  // The loop's own review after it: no longer only a maintainer's.
+  await manual.review(HIGH_ONE);
+  assert.equal(manual.loop().manual, undefined);
   // Without review.fix, a review that blocks has no fix round to wait for.
   const single = await loopSetup(t, "review:\n  on: ready\n");
   await single.review(HIGH_ONE);
