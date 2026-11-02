@@ -95,6 +95,7 @@ import { createServicesHttp } from "../listener/services-http.mjs";
 import { createRunEvents } from "../listener/run-events.mjs";
 import { createDiscussionApi } from "../listener/discussions.mjs";
 import { askedOn, closedTasks, createDismissals, setAsideClosed } from "../listener/dismissals.mjs";
+import { createPicks } from "../listener/picks.mjs";
 import { operatorSecrets } from "../listener/secrets.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { createStatus, serverInfo, serverSetup } from "../listener/status.mjs";
@@ -579,6 +580,10 @@ const pulls = createPulls({
 // needs-input label taken off), while each is its task's last (dismissals.mjs).
 const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
+// Auto-picked work that is over: its issue closed, its pull request merged or closed, or the
+// sweep gave its slot to the next issue (picks.mjs, tasks.mjs releasePicks()).
+const picks = createPicks({ path: join(config.dataDir, "picks.json") });
+
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
 // One whose label came off meanwhile sets its run's questions aside, as the delivery would,
 // once the issue itself says so: a listing read page by page can miss one that moved between
@@ -679,6 +684,7 @@ Object.assign(ctx, {
   pulls,
   inputs,
   dismissals,
+  picks,
   order,
   onboarded,
   repoList,
@@ -906,6 +912,7 @@ ctx.autoPickup = createAutoPickup({
     return (key) => taskBusy(key) || keys.has(key.toLowerCase());
   },
   taken: () => ctx.pickedCount(),
+  release: () => ctx.releasePicks(),
   load: (repo) => ctx.repoLoad(repo),
   log,
 });
@@ -965,6 +972,7 @@ const spelled = await ctx.unifySpellings({
 for (const state of keyed) state.respell(spelled);
 // A run since a dismissal shows its task again: its entry is stale.
 dismissals.prune(ctx.runs);
+picks.prune(ctx.runs);
 // Issues and pull requests that closed or merged after their run asked, while no listener heard
 // it: their questions set aside, as the `closed` delivery would have (http.mjs). GitHub says
 // when each closed; a run that asked after that still waits.

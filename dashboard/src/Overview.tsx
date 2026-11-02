@@ -10,6 +10,7 @@ import {
   type ChipId,
   findingsLeft,
   githubUrl,
+  heldText,
   inChip,
   issueList,
   numberOf,
@@ -123,6 +124,7 @@ function Totals({ state, onChip }: { state: State; onChip: (chip: ChipId) => voi
         meta={[
           `of ${plural(state.maxParallel, "slot")}`,
           state.autoPickup && `${state.autoPickup.running} auto-picked`,
+          heldText(state),
           `${state.queued} queued`,
         ]
           .filter(Boolean)

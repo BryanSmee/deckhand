@@ -15,9 +15,10 @@ export const personStarted = (item) => !!item.author && !item.reason;
 
 // What started `item`: "inbox" (an idea or a bug entry), "discussion", "dashboard" (a button, a
 // drag, a message sent from there), "auto-pickup" (the issue's label, added by the run's
-// sender: auto-pickup.mjs) or "comment" (on GitHub).
+// sender: auto-pickup.mjs) or "comment" (on GitHub). What follows a picked run holds its slot
+// (tasks.mjs followsPick()), but was started by its own comment or button.
 export function runTrigger(item) {
-  if (item.autoPickup) return "auto-pickup";
+  if (item.autoPickup && !item.followsPick) return "auto-pickup";
   if (item.trigger === "idea" || item.trigger === "bug") return "inbox";
   if (item.trigger === "discussion") return "discussion";
   return item.dashboard ? "dashboard" : "comment";

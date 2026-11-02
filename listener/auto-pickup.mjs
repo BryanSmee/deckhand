@@ -138,9 +138,11 @@ export function pulledIssues(pulls, repo, bot) {
 // (tasks.mjs), → its mode or null. `reply(repo, number, text)`: the App's comment.
 // `live()`: a predicate of task keys, whether the task has something live (the dashboard's
 // tasks, or a run going or queued), as things are now: it rebuilds the dashboard's tasks, so
-// a sweep builds one for all its candidates, and start() another right before its comment. `taken()`: how many reserved slots auto-picked tasks hold, running or queued
-// (tasks.mjs pickedCount()). `load(repo)`: how many of the repo's tasks are running or queued
-// (tasks.mjs repoLoad()).
+// a sweep builds one for all its candidates, and start() another right before its comment.
+// `taken()`: how many reserved slots auto-picked tasks hold, running or queued (tasks.mjs
+// pickedCount()); `release()`: right before the first issue a sweep starts, the picks that hold
+// none of them end for good (tasks.mjs releasePicks()). `load(repo)`: how many of the repo's
+// tasks are running or queued (tasks.mjs repoLoad()).
 export function createAutoPickup({
   config,
   github,
@@ -150,6 +152,7 @@ export function createAutoPickup({
   reply,
   live,
   taken,
+  release = () => {},
   load = () => 0,
   log = () => {},
   every = (fn, ms) => setInterval(fn, ms),
@@ -220,6 +223,7 @@ export function createAutoPickup({
     // Each repo's settings, read once per sweep.
     const settingsOf = new Map();
     const started = [];
+    let released = false;
     for (const candidate of candidates) {
       if (free <= 0) break;
       const key = taskKey(candidate.repo, candidate.issue.number);
@@ -232,6 +236,14 @@ export function createAutoPickup({
           continue;
         }
         skipped.delete(key);
+        // Right before the first issue starts: the slots counted again (a loop may have gone on
+        // during the calls above), then what no longer holds one gives it up for good.
+        if (!released) {
+          free = Math.min(free, slots - taken());
+          if (free <= 0) break;
+          release();
+          released = true;
+        }
         if (await start(candidate)) {
           started.push(key);
           free--;

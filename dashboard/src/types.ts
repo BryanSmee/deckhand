@@ -411,8 +411,10 @@ export interface State {
   queued: number;
   maxParallel: number;
   // AUTO_PICKUP_SLOTS, within maxParallel, and how many auto-picked runs hold them now; absent
-  // while it is off (or from a listener from before it).
-  autoPickup?: { slots: number; running: number };
+  // while it is off (or from a listener from before it). `taken`: how many slots the picks
+  // hold, running or not (queued, asking, between two loop steps): the sweep picks no issue
+  // for those; none from a listener from before it.
+  autoPickup?: { slots: number; running: number; taken?: number };
   // Each repo's inbox issues and discussions category, for the repos whose config the
   // listener has read: New request offers those it has (listener/work.mjs
   // sendToInbox(), listener/discussions.mjs).
