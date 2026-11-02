@@ -461,7 +461,7 @@ test("deploy/kubernetes: no two services share a writable volume", () => {
 // What a copy's update takes (docs/services.md, Upgrades without downtime): its next copy is
 // ready before the old one stops, which drains within its grace period.
 const GRACE = {
-  edge: 30,
+  edge: 40,
   orchestrator: 300,
   runner: 300,
   broker: 35,
@@ -502,6 +502,11 @@ test("deploy/kubernetes: two copies of each service, one of the proxy, each upda
   // grace period.
   const pause = Number(container("proxy").lifecycle.preStop.exec.command[1]);
   assert.ok(pause + Number(env("proxy").DRAIN_SECONDS) < GRACE.proxy);
+  // Edge too, as the internet's callers (GitHub's webhooks, browsers) don't try a refused
+  // connection again: it pauses until the ingress no longer sends it any, then drains (25 s).
+  const edgePause = Number(container("edge").lifecycle?.preStop?.exec?.command?.[1]);
+  assert.ok(edgePause >= 5, "edge pauses before its drain");
+  assert.ok(edgePause + 25 < GRACE.edge);
 });
 
 test("deploy/kubernetes: every service as compose runs it: not root, no capability, a read-only root", () => {

@@ -11,7 +11,7 @@ the agents): this page is what differs on a cluster.
 
 | Service      | Copies                           | Readiness | Grace (s) | Volumes                                         | Secrets                                          |
 | ------------ | -------------------------------- | --------- | --------- | ----------------------------------------------- | ------------------------------------------------ |
-| edge         | 2, both active                   | `/health` | 30        | `edge-data` (its store)                         | `deckhand-edge`                                  |
+| edge         | 2, both active                   | `/health` | 40        | `edge-data` (its store)                         | `deckhand-edge`                                  |
 | orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data`, `orchestrator-screenshots` | none                                             |
 | runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)    | none (its ServiceAccount's API token)            |
 | broker       | 2, both active                   | `/ready`  | 35        | `broker-store`                                  | `deckhand-broker-key`                            |
