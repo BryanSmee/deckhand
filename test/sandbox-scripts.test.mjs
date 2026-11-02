@@ -184,9 +184,14 @@ test(
       renew.on("exit", (code, signal) => resolve({ code, signal })),
     );
     t.after(() => renew.kill("SIGKILL"));
-    for (let i = 0; i < 400 && !existsSync(sleeps); i++)
+    // A whole line: the shell creates the file for `>>` before `echo` writes in it.
+    const written = () => (existsSync(sleeps) ? readFileSync(sleeps, "utf8") : "");
+    for (let i = 0; i < 400 && !/^\d+\n$/.test(written()); i++)
       await new Promise((r) => setTimeout(r, 25));
-    const pid = Number(readFileSync(sleeps, "utf8").trim());
+    const pid = Number(written().trim());
+    // Never 0 (or worse) below: process.kill(0) would kill this whole process group, the test
+    // runner's with it.
+    assert.ok(Number.isInteger(pid) && pid > 1, `the sleep's pid: ${JSON.stringify(written())}`);
     t.after(() => {
       try {
         process.kill(pid, "SIGKILL");
