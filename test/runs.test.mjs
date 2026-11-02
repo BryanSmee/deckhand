@@ -434,7 +434,8 @@ test("a run whose grace passed while no listener was there: what its sandbox wro
   ctx.stopping = false;
   // Its deadline long gone; its sandbox went on (a background task's turn).
   task.live.graceUntil = Date.now() - 60_000;
-  const next = createRuns({ ...ctx, answerGraceMs: 200, catchUpMs: 100 });
+  // A grace well past the waits below: with 200 ms, a runner pausing 50 ms stopped it first.
+  const next = createRuns({ ...ctx, answerGraceMs: 1000, catchUpMs: 100 });
   const followed = next.follow(task);
   // The follow's backlog: a line written while no listener was there.
   await sleep(30);
