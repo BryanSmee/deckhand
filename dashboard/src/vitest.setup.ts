@@ -2,7 +2,7 @@
 // stream that never speaks (jsdom has neither), and nothing seen: api.ts keeps the backlogs
 // for the page's life. A spec stubs more, or other ones, in its own beforeEach.
 import { cleanup } from "@testing-library/preact";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { forgetBacklogs } from "./api";
 
 beforeEach(() => {
@@ -29,3 +29,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
   forgetBacklogs();
 });
+
+// Preact runs effects after the next frame or 35 ms (its hooks' afterNextFrame()), whichever
+// comes first: a file's last render mustn't leave that timer to fire once jsdom is gone, where it
+// calls a cancelAnimationFrame that no longer exists (#563). Armed after it and for longer, this
+// one fires after it, however late the timers run.
+afterAll(() => new Promise((resolve) => setTimeout(resolve, 50)));

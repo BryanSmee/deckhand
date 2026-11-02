@@ -340,9 +340,12 @@ test("a relayed host to an https: service: over verified TLS, one connection per
 });
 
 test("a relayed host while its service restarts: waited for, sent once, never again", async (t) => {
-  // The service's port, closed until the second wait (an injected clock).
+  // The service, down until the second wait (an injected clock): each connection reset before
+  // its TLS handshake, a connection that wasn't made, as a refused one. Its port stays the
+  // test's: closed and listened on again, it could be another process's meanwhile (#563).
   const relayed = [];
-  const { server: service, url } = await serve(t, (req, res) => {
+  let down = true;
+  const service = createHttpsServer({ ...(await publicCa.certFor("localhost")) }, (req, res) => {
     let body = "";
     req.on("data", (d) => (body += d));
     req.on("end", () => {
@@ -352,18 +355,19 @@ test("a relayed host while its service restarts: waited for, sent once, never ag
       res.end("done");
     });
   });
-  const port = Number(new URL(url).port);
-  await new Promise((resolve) => service.close(resolve));
+  let resets = 0;
+  service.on("connection", (socket) => down && (resets++, socket.resetAndDestroy()));
+  const port = await listening(service);
+  t.after(() => (service.closeAllConnections(), service.close()));
   const clock = { t: 0, sleeps: 0 };
   const wait = {
     now: () => clock.t,
     sleep: async (ms) => {
       clock.t += ms;
-      if (++clock.sleeps === 2)
-        await new Promise((resolve) => service.listen(port, "127.0.0.1", resolve));
+      if (++clock.sleeps === 2) down = false;
     },
   };
-  const { tunnel, authority } = await setup(t, { relayTo: url, wait });
+  const { tunnel, authority } = await setup(t, { relayTo: `https://localhost:${port}`, wait });
 
   // POST through a tunnel to relayed.test → { status, body }.
   async function post(body) {
@@ -398,6 +402,7 @@ test("a relayed host while its service restarts: waited for, sent once, never ag
   assert.deepEqual(await post("push"), { status: 200, body: "done" });
   assert.deepEqual(relayed, [{ method: "POST", url: "/relay/relayed.test/v1/push", body: "push" }]);
   assert.equal(clock.sleeps, 2);
+  assert.equal(resets, 2);
 
   // A request the service got before it died isn't sent again: the sandbox hears it.
   relayed.length = 0;
@@ -408,7 +413,7 @@ test("a relayed host while its service restarts: waited for, sent once, never ag
   assert.equal(clock.sleeps, 2);
 
   // Gone for good: the sandbox hears it after 5 minutes.
-  await new Promise((resolve) => service.close(resolve));
+  down = true;
   const before = clock.t;
   const late = await post("push");
   assert.equal(late.status, 502);

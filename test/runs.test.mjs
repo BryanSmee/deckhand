@@ -224,14 +224,20 @@ test("a queued auto-picked task cancelled frees its reserved slot: the next pick
 
 test("output after the answer postpones its stop", async (t) => {
   const { runner, answers, following } = setup(t, { graceMs: 80 });
+  // The test's clock: a pause between a line and the next 40 ms wait (a busy runner's) would
+  // otherwise let the grace end first (#563).
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.now() });
   runner.out(result("A first answer."));
   for (let i = 0; i < 4; i++) {
-    await sleep(40);
+    t.mock.timers.tick(40);
     runner.out(JSON.stringify({ type: "assistant", message: { content: [] } }));
   }
   // 160 ms after the result, twice the grace: still running, as it wrote meanwhile.
   assert.equal(runner.kills, 0);
   runner.out(result("The final answer."));
+  t.mock.timers.tick(79);
+  assert.equal(runner.kills, 0);
+  t.mock.timers.tick(1);
   await following;
   assert.equal(runner.kills, 1);
   assert.match(answers[0], /^The final answer\./);

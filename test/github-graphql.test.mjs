@@ -1264,8 +1264,15 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
   const start = performance.now();
   assert.equal(await check(worst), null);
   clearInterval(tick);
-  assert.ok(performance.now() - start < 5000);
-  assert.ok(longest < 100, `the thread stalled ${Math.round(longest)} ms`);
+  const took = performance.now() - start;
+  assert.ok(took < 5000);
+  // On the thread, it would stall it the whole check (half a second here). A busy runner
+  // pauses it a while anyway (108 ms seen): measured against the check's own time, which such
+  // a pause makes longer too, not a fixed bound.
+  assert.ok(
+    longest < Math.max(100, took / 2),
+    `the thread stalled ${Math.round(longest)} ms of ${Math.round(took)}`,
+  );
 });
 
 // A document that takes the worker a while: one field repeated, with arguments, in a mutation
