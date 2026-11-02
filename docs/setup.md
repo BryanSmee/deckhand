@@ -1241,6 +1241,31 @@ changes for you:
 - **The listener's keys**: a `run-token.key` or `run-token.pub` left in the orchestrator's data
   volume is no longer read. Delete them.
 
+### Upgrading: the orchestrator runs as `node` (#536)
+
+The orchestrator ran as root, though it holds no Docker socket since the runner service (#503).
+It now runs as the `node` user (uid 1000), with a read-only root filesystem and no capabilities,
+as edge does. What changes for you:
+
+- **Its volumes** (`data`, and the screenshots', `deckhand-screenshots` by default) were written
+  as root: the orchestrator can't write them now, and refuses to start, saying what it can't
+  write. Hand them over once, with the new image pulled and before `docker compose up -d`:
+
+  ```sh
+  docker compose run --rm --no-deps --user root --entrypoint chown orchestrator -R 1000:1000 /data
+  ```
+
+  This runs a short container of the orchestrator's image as root, with both volumes mounted
+  (the screenshots' at `/data/shots`), and nothing else. New volumes are the `node` user's
+  from the start.
+
+- **Your server folder** (`config.yaml`, the grants folder and its `policy/`) is read as uid
+  1000, as the policy service already reads it: the usual `0644` files and `0755` folders are.
+  A `config.yaml` it can't read stops it at start, with `EACCES`.
+- **The mount roots you grant** are resolved as uid 1000 too: a root, or a folder above it,
+  that uid 1000 can't search makes every mount a repo asks for in it refused ("doesn't exist,
+  or the listener can't see it"), not mounted. Make them searchable (`o+x` on the folders).
+
 ### Upgrading: the preview hook is gone (#574)
 
 Deckhand no longer runs a repository's `preview.command` on its pull requests' events: the hook

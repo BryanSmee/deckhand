@@ -244,10 +244,15 @@ services:
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
       # what you grant each repo (hosts, Dockerfile, host mounts, limits), one
       # file per repo and default.yaml, read at each run (docs/security.md). Both optional.
+      # Readable by uid 1000, as the orchestrator runs (the usual 0644 files and 0755 folders).
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
       # Each mount root you grant, at the same path and read-only: the orchestrator resolves the
-      # paths repos ask for (.., symlinks) in it before mounting them into a sandbox.
+      # paths repos ask for (.., symlinks) in it before mounting them into a sandbox, as uid 1000.
       # - /nfs/work:/nfs/work:ro
+    # As the node user (orchestrator/Dockerfile): it writes its volumes alone.
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
 
   # The runs' tokens and the services' own, signed with a key only this service holds; the live
   # runs and their files (inbox, CA, digest, screenshots), which sandboxes reach through the

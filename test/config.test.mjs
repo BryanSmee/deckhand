@@ -9,6 +9,7 @@ import {
   parseConfigFile,
   readConfigFile,
   repoAllowed,
+  unwritableData,
   withCredentialFiles,
 } from "../listener/config.mjs";
 
@@ -671,6 +672,30 @@ test("the plans' logins: found in the credentials folder unless their variable i
     join("/data", "credentials", "codex-auth.json"),
     join("/data", "credentials", "agy-auth.json"),
   ]);
+});
+
+test("the data volume: the orchestrator says what it can't write, with the one-time chown", () => {
+  const denied = (paths) => (path) => {
+    if (paths.includes(path)) throw Object.assign(new Error("denied"), { code: "EACCES" });
+  };
+  const dir = (name, folder = true) => ({ name, isDirectory: () => folder });
+  const list = () => [dir("logs"), dir("shots"), dir("queue.json", false)];
+  // A volume from before: its folder is root's, said once.
+  const root = unwritableData("/data", { access: denied(["/data"]), list });
+  assert.equal(root.length, 1);
+  assert.match(root[0], /^The orchestrator can't write \/data \(EACCES\): it runs as uid 1000/);
+  assert.match(root[0], /--user root --entrypoint chown orchestrator -R 1000:1000 \/data/);
+  // A folder in it, said by name; its files aren't checked.
+  const shots = join("/data", "shots");
+  const some = unwritableData("/data", { access: denied([shots]), list });
+  assert.equal(some.length, 1);
+  assert.match(some[0], /can't write .*shots \(EACCES\)/);
+  assert.deepEqual(unwritableData("/data", { access: () => {}, list }), []);
+  // Nothing there yet: made at start.
+  const missing = () => {
+    throw Object.assign(new Error("missing"), { code: "ENOENT" });
+  };
+  assert.deepEqual(unwritableData("/data", { access: missing, list: missing }), []);
 });
 
 test("the Antigravity CLI: GEMINI_API_KEY or a Google AI plan's login (AGY_AUTH_FILE), its version, tiers and volumes", () => {
