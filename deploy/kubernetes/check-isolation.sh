@@ -104,7 +104,9 @@ while read -r address result; do
             continue
             ;;
           *)
-            echo "WARN  $address refused, and $owner can't say whether it listens: not checked"
+            # Fail closed: an unchecked port could be one the plugin lets through.
+            echo "FAIL  $address refused, and $owner has neither node nor nc to say whether it listens: check it by hand"
+            failed=1
             continue
             ;;
         esac

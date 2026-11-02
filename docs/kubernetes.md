@@ -105,6 +105,13 @@ patches:
                           - { key: default.yaml, path: grants/default.yaml }
                           - { key: acme-api.yaml, path: grants/acme/api.yaml }
                           - { key: grants.rego, path: grants/policy/grants.rego }
+  # The API server's addresses, the runner's and the broker's only way out (step 2).
+  - target: { kind: NetworkPolicy, name: deckhand-api-server }
+    patch: |
+      - op: replace
+        path: /spec/egress/0/to
+        value:
+          - ipBlock: { cidr: 172.18.0.2/32 }
 ```
 
 `config.yaml`'s `allowed_users` is required, as with Compose: edge and the orchestrator don't
@@ -112,8 +119,24 @@ start without it. `config.yaml` is read at start: the pods restart when it chang
 ConfigMap's name carries a hash of it: so do the grants, which the services otherwise read
 again at each run.
 
-**2. Apply it**: `kubectl apply -k .` creates both namespaces, the services, their claims,
-Roles and NetworkPolicies. The pods wait for their Secrets, next.
+**2. The API server's addresses**: the runner (the sandboxes' pods) and the broker (its callers'
+TokenReviews) reach the API server and nothing else, through the `deckhand-api-server`
+NetworkPolicy. Its address in the base is a placeholder that reaches nothing, so both fail
+until your overlay names yours, one `ipBlock` each (the patch above):
+
+```sh
+kubectl get endpointslices -n default -l kubernetes.io/service-name=kubernetes \
+  -o jsonpath='{range .items[*].endpoints[*]}{.addresses[0]}{"\n"}{end}'
+```
+
+They are the addresses NetworkPolicies see: a call to the `kubernetes` Service's IP is
+translated to them first (on 443 or 6443, both let through). Set them again if your control
+plane's addresses change. On Cilium, which matches the API server by identity rather than
+address, add a `CiliumNetworkPolicy` with `toEntities: [kube-apiserver]` for the runner's and the
+broker's pods instead.
+
+Then `kubectl apply -k .` creates both namespaces, the services, their claims, Roles and
+NetworkPolicies. The pods wait for their Secrets, next.
 
 **3. The Secrets**, which the base doesn't hold. Each is one service's alone:
 
@@ -252,8 +275,8 @@ saying why. What it expects, and the manifests give it:
   on `events` (why a pod is stuck) and `networkpolicies`; and in the services' namespace, `get`
   on `services` and `pods` (the proxy's Service, BuildKit's pods), `list` on `networkpolicies`
   and `endpointslices`. The `buildkit` component adds `get` on the registry's pull Secret alone
-  (`resourceNames: [deckhand-registry]`) and `update` on `secrets` in the sandboxes' namespace
-  (its copy there). Nothing cluster-wide but the broker's binding to `system:auth-delegator`,
+  (`resourceNames: [deckhand-registry]`) and `update` on that Secret's copy in the sandboxes'
+  namespace alone (`resourceNames: [deckhand-registry]` too). Nothing cluster-wide but the broker's binding to `system:auth-delegator`,
   which lets it review the tokens its callers present (TokenReview is cluster-scoped). Only the
   runner's and the broker's pods mount their ServiceAccount's API token.
 - **Service tokens bound to the pod**: each service that calls another gets its own service
@@ -268,7 +291,9 @@ saying why. What it expects, and the manifests give it:
   namespaces; each service lets in its callers alone, on its port, and reaches its callees and
   DNS alone (`lib/services.mjs` `CALLS`, as Compose's networks; `test/kubernetes-manifests.test.mjs`
   holds them to it). Edge alone is reached from outside; edge, the github and models services
-  reach the internet on 443, the runner and the broker the API server, and the proxy any host
+  reach the internet on 443, the runner and the broker the API server's addresses alone
+  (`deckhand-api-server`, [Install](#install) step 2; the runner the registries on 443 too with
+  `buildkit`), and the proxy any host
   but the private ranges (add yours to its policy to grant a host of your network). The policy
   service reaches nothing.
 - **The sandboxes' NetworkPolicies**: their pods are labelled `deckhand.role: sandbox`. One
@@ -307,10 +332,13 @@ saying why. What it expects, and the manifests give it:
   stand between them that changes the source address (a service mesh's sidecar, say).
 - **Temporary files in memory**: the github service's `/tmp` (the pushes of repositories
   granted `workflows`, up to 2 GiB each, while checked) and the runner's (checkouts for build
-  contexts) are 4 GiB tmpfs (`emptyDir` with `medium: Memory`): one that would go over it fails
+  contexts) are 2 GiB tmpfs (`emptyDir` with `medium: Memory`): one that would go over it fails
   with `ENOSPC`, that push or that build alone. A disk `emptyDir` over its `sizeLimit` gets its
-  pod evicted instead, cutting every call it serves. They count toward the pods' memory: raise
-  `sizeLimit` with the room your nodes have.
+  pod evicted instead, cutting every call it serves. A tmpfs is charged to its pod's memory, so
+  both pods request 3 GiB (the tmpfs and the process), with the same limit: the scheduler keeps
+  the room, the pod's own cgroup bounds it, and node memory pressure evicts other pods first. To
+  take two large pushes at once on one copy, raise `sizeLimit`, the request and the limit
+  together.
 - **No `<SERVICE>_PORT` variables** (`enableServiceLinks: false`): Kubernetes would set
   `POLICY_PORT=tcp://…` from the `policy` Service, which the services read as a setting of
   theirs, and stop at start.

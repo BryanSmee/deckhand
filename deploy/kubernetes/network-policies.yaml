@@ -2,10 +2,9 @@
 # (docs/security.md#on-kubernetes). Nothing goes in or out of a pod but what a policy below lets
 # through: each service is reached by its callers alone, on its port, and only the services
 # whose Compose network has a way out (edge, the github and models services, the proxy) reach
-# beyond the cluster; the runner and the broker reach the API server.
+# beyond the cluster; the runner and the broker reach the API server's addresses alone.
 #
-# Ways out are written as ipBlocks on 443 (6443 too for the API server, which a cluster may
-# serve there behind its `kubernetes` Service). The proxy's way out leaves out the private
+# Ways out are written as ipBlocks on 443. The proxy's way out leaves out the private
 # ranges, so a sandbox's granted host can't be a pod or a node; add one there to grant a host
 # of your network.
 apiVersion: networking.k8s.io/v1
@@ -174,7 +173,8 @@ spec:
           protocol: TCP
 ---
 # The runner: the orchestrator and the models service (the Antigravity login's refresh) alone;
-# out to the services it calls, the API server, and registries (repo images' digests, pushes).
+# out to the services it calls, and the API server (deckhand-api-server, below); the registries
+# with components/buildkit.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -225,20 +225,10 @@ spec:
       ports:
         - port: 8181
           protocol: TCP
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-        - ipBlock:
-            cidr: "::/0"
-      ports:
-        - port: 443
-          protocol: TCP
-        - port: 6443
-          protocol: TCP
 ---
 # The broker: every service that asks it for its tokens, and the proxy (the sandboxes' calls
 # about their own run); out to the policy service and the API server (its callers'
-# TokenReviews).
+# TokenReviews: deckhand-api-server, below).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -279,16 +269,6 @@ spec:
               app: deckhand-policy
       ports:
         - port: 8181
-          protocol: TCP
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-        - ipBlock:
-            cidr: "::/0"
-      ports:
-        - port: 443
-          protocol: TCP
-        - port: 6443
           protocol: TCP
 ---
 # The github service: edge, the orchestrator, the proxy (the sandboxes' GitHub calls and
@@ -485,3 +465,30 @@ spec:
         - ipBlock:
             cidr: "::/0"
             except: ["fc00::/7", "fe80::/10"]
+---
+# The API server, for the runner (the sandboxes' pods) and the broker (TokenReview), and nothing
+# else of the cluster or beyond: its addresses, which your overlay sets (docs/kubernetes.md,
+# Install). The placeholder (192.0.2.1, a documentation address) reaches nothing, so neither
+# service works until it is set: fail closed. 6443 is where a cluster's API server usually
+# listens behind its `kubernetes` Service, whose address NetworkPolicies see translated.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-api-server
+  namespace: deckhand
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [deckhand-runner, deckhand-broker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 192.0.2.1/32
+      ports:
+        - port: 443
+          protocol: TCP
+        - port: 6443
+          protocol: TCP

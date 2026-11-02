@@ -63,6 +63,14 @@ spec:
               path: /ready
               port: http
             periodSeconds: 5
+          # Its /tmp is a tmpfs (below), charged to this pod: its memory request covers it and
+          # the process's own, so the scheduler keeps the room, and the limit bounds both by the
+          # pod's own cgroup. Raise the three together (docs/kubernetes.md, Temporary files).
+          resources:
+            requests:
+              memory: 3Gi
+            limits:
+              memory: 3Gi
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -94,13 +102,13 @@ spec:
           persistentVolumeClaim:
             claimName: github-data
         # Pushes of repositories granted `workflows`, while checked (up to 2 GiB each). In memory:
-        # a tmpfs of that size, which refuses the push that would go over it (ENOSPC) rather
-        # than the pod's eviction a disk emptyDir over its sizeLimit gets, which would cut every
-        # push and clone this copy serves.
+        # a tmpfs, which refuses the push that would go over it (ENOSPC) rather than the pod's
+        # eviction a disk emptyDir over its sizeLimit gets, which would cut every push and clone
+        # this copy serves.
         - name: tmp
           emptyDir:
             medium: Memory
-            sizeLimit: 4Gi
+            sizeLimit: 2Gi
         - name: server
           projected:
             sources:

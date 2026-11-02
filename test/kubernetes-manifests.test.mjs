@@ -60,14 +60,16 @@ const WAYS_OUT = {
   edge: [443],
   github: [443],
   models: [443],
-  runner: [443, 6443],
-  broker: [443, 6443],
   proxy: "any",
 };
+// The runner and the broker reach the API server's addresses alone (deckhand-api-server): a
+// placeholder the operator replaces, which reaches nothing until then.
+const API = ["runner", "broker"];
+const API_PLACEHOLDER = "192.0.2.1/32";
 
 // A policy peer → who it is: a service, "sandboxes", "buildkitd", "dns", "internet".
 function peer(p) {
-  if (p.ipBlock) return "internet";
+  if (p.ipBlock) return p.ipBlock.cidr === API_PLACEHOLDER ? "api" : "internet";
   const ns = p.namespaceSelector?.matchLabels?.["kubernetes.io/metadata.name"];
   if (ns === "kube-system") return "dns";
   if (ns === SANDBOXES_NS) return "sandboxes";
@@ -92,7 +94,7 @@ function reach(service, policies = of("NetworkPolicy", base)) {
     for (const rule of p.spec.egress ?? []) {
       for (const to of rule.to ?? []) {
         outs.add(peer(to));
-        if (to.ipBlock) out.push(...(rule.ports?.map((x) => x.port) ?? ["any"]));
+        if (peer(to) === "internet") out.push(...(rule.ports?.map((x) => x.port) ?? ["any"]));
       }
     }
   }
@@ -245,6 +247,7 @@ test("deploy/kubernetes: each service's NetworkPolicies let in its callers alone
       ...callees(service),
       ...(service === "policy" ? [] : ["dns"]),
       ...(ways ? ["internet"] : []),
+      ...(API.includes(service) ? ["api"] : []),
     ].sort();
     assert.deepEqual([...outs].sort(), expectedOuts, `what ${service} reaches`);
     if (ways === "any") assert.deepEqual(out, ["any", "any"], service);
@@ -299,6 +302,10 @@ test("components/buildkit: BuildKit's NetworkPolicies pass the runner's check", 
     assert.deepEqual(rule.resources, ["secrets"]);
     assert.deepEqual(rule.resourceNames, ["deckhand-registry"], rule.verbs.join(","));
   }
+  // And the registries, on 443, with it alone.
+  const withBuildkit = reach("runner", policies);
+  assert.ok(withBuildkit.outs.has("internet"));
+  assert.deepEqual([...new Set(withBuildkit.out)], [443]);
   // The runner reaches it: its Service's port, from the runner's pods.
   const runner = reach("runner", policies);
   assert.ok(runner.outs.has("buildkitd"));
@@ -399,11 +406,35 @@ test("deploy/kubernetes: each secret is its own service's, the orchestrator hold
 
 // A disk emptyDir over its sizeLimit evicts the pod, cutting every call it serves; a tmpfs refuses
 // the one write that would go over it.
-test("deploy/kubernetes: the github service's and the runner's /tmp are tmpfs of a fixed size", () => {
+// Gi, Mi → bytes.
+const bytes = (q) => Number(/^(\d+)/.exec(q)[1]) * { Gi: 2 ** 30, Mi: 2 ** 20 }[q.slice(-2)];
+
+test("deploy/kubernetes: the github service's and the runner's /tmp are tmpfs of a fixed size, within their memory", () => {
   for (const service of ["github", "runner"]) {
     const tmp = pod(service).volumes.find((v) => v.name === "tmp");
     assert.equal(tmp.emptyDir.medium, "Memory", service);
-    assert.ok(tmp.emptyDir.sizeLimit, service);
+    // A tmpfs is charged to its pod: the request keeps the room on the node, the limit bounds
+    // it by the pod's cgroup, both above it with room for the process.
+    const { requests, limits } = container(service).resources;
+    assert.equal(requests.memory, limits.memory, service);
+    assert.ok(bytes(requests.memory) >= bytes(tmp.emptyDir.sizeLimit) + 2 ** 29, service);
+  }
+});
+
+// What the manifests set, the services read: SERVICE_NETWORKS=none where the manifests give it
+// (a bound of null, the callers' tokens alone), and REDIS_PASSWORD with every store (redis's
+// STORE_URL names its user, not its password).
+test("the services' entry points: SERVICE_NETWORKS=none, and REDIS_PASSWORD for the store", () => {
+  const server = (dir) => readFileSync(join(import.meta.dirname, "..", dir, "server.mjs"), "utf8");
+  for (const dir of ["edge", "orchestrator", "runner", "github", "models"]) {
+    assert.match(server(dir), /SERVICE_NETWORKS === "none"|serviceNetworks === "none"/, dir);
+  }
+  for (const dir of ["edge", "orchestrator", "runner", "github", "models", "broker"]) {
+    // Each call's URL and the options' first lines.
+    const text = server(dir);
+    const calls = [...text.matchAll(/openStore\(/g)].map((m) => text.slice(m.index, m.index + 200));
+    assert.ok(calls.length, `${dir}: no store`);
+    for (const call of calls) assert.match(call, /password: env\.REDIS_PASSWORD/, dir);
   }
 });
 
