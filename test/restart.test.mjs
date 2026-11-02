@@ -13,6 +13,7 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
+import { logContext, withLogContext } from "../lib/log.mjs";
 import { assertMode, fileLogs, localBroker, tempDir, until } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it. → its id, the broker's handle once restored.
@@ -570,10 +571,10 @@ test("a runner slow to say whether a restored run's inbox is open: the start goe
 // A listener's context for the queue's tests: its tasks (tasks.mjs) and restart.mjs on `store`,
 // with a pause of a minute (`debounceMs`). `startLater` records what is re-armed rather than
 // arming it, unless `real`.
-function queueContext(t, dir, store, { real = false } = {}) {
+function queueContext(t, dir, store, { real = false, log = () => {} } = {}) {
   const ctx = {
     config: { dataDir: dir, users: ["alice"], repos: ["org/repo"], debounceMs: 60_000 },
-    log: () => {},
+    log,
     tasks: new Map(),
     logDir: dir,
     runs: [],
@@ -1061,7 +1062,9 @@ test("a run's end the queue couldn't be written for: over, its put-back comments
   assertMode(kept, 0o600);
 
   // A listener killed now: the next one has the comment, once, and no run.
-  const next = queueContext(t, dir, store);
+  const lines = [];
+  const log = (line) => lines.push({ line, ...logContext() });
+  const next = queueContext(t, dir, store, { log });
   next.broker = createBroker({});
   next.runner = { closed: () => false };
   assert.deepEqual(await next.restoreRuns(), []);
@@ -1195,4 +1198,62 @@ test("a restored run pushes as its saved capabilities say; one saved before them
     [reads, pushes, work, light].map((h) => broker.runOf(h).push),
     [false, true, true, false],
   );
+});
+
+// Its lines and calls name it (#547): a run started, or picked up again after a restart, logs
+// under its repository, issue and run, and a request ID of its own, not its starter's.
+test("a run's lines carry its repository, issue and run, from its start and once picked up again", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  // A run started, under another request's context (a delivery that freed its place).
+  const started = queueContext(t, dir, store);
+  const seen = [];
+  Object.assign(started, {
+    shotsDir: dir,
+    titles: { get: () => null },
+    broker: { register: () => {}, revoke: () => {}, runOf: () => null, secretsOf: () => [] },
+    runner: { state: async () => null, remove: async () => {} },
+    // Its start reads them (begin()): what the context says then.
+    repoSettings: async () => (
+      seen.push(logContext()),
+      { settings: null, errors: [], warnings: [] }
+    ),
+    answer: async () => {},
+    schedule: () => {},
+  });
+  Object.assign(started, createRuns(started), { config: { ...started.config, agent: "nobody" } });
+  const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
+  task.pending.push(queued("1", { queueId: "q-1", replyTo: 1 }));
+  started.tasks.set("org/repo#1", task);
+  await withLogContext({ request: "another" }, () => started.run(task).catch(() => {}));
+  const during = seen.at(-1);
+  assert.deepEqual([during.repo, during.issue], ["org/repo", 1]);
+  assert.match(during.run, /^deckhand-org-repo-1-\d+$/);
+  assert.match(during.request, /^[0-9a-f]{16}$/);
+  // Picked up again by the next orchestrator: the same fields, its own request ID.
+  const id = saveRun(
+    dir,
+    "r2",
+    "2",
+    { agent: "claude" },
+    { task: { repo: "org/repo", id: "2", kind: "issue", number: 2 } },
+  );
+  const lines = [];
+  const log = (line) => lines.push({ line, ...logContext() });
+  const next = queueContext(t, dir, store, { log });
+  next.broker = createBroker({});
+  next.runner = {
+    closed: () => false,
+    relink: async () => {},
+    list: async () => [{ name: "deckhand-org-repo-2", run: id, running: true }],
+    remove: async () => {},
+  };
+  const followed = [];
+  next.follow = () => followed.push(logContext());
+  await next.reattach(await next.restoreRuns());
+  assert.equal(followed.length, 1);
+  assert.deepEqual([followed[0].repo, followed[0].issue, followed[0].run], ["org/repo", 2, id]);
+  assert.match(followed[0].request, /^[0-9a-f]{16}$/);
+  const picked = lines.find((l) => /picked up/.test(l.line));
+  assert.equal(picked.run, id);
 });

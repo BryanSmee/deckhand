@@ -143,7 +143,7 @@ export function createModelsHandler({
         if (!res.headersSent) sendJson(res, { message: error.message }, error.status);
         return;
       }
-      log(`Models: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
+      (log.error ?? log)(`Models: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
       // A half-sent stream must not look complete.
       if (!res.headersSent) sendJson(res, { message: "the models service failed" }, 500);
       else res.destroy();

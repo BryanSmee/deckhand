@@ -141,7 +141,7 @@ export function createEdgeHttp({
         (error) => log(`Rejected a delivery: ${error.message}`),
       )
       .catch((error) => {
-        log(`A delivery: ${error.stack ?? error}`);
+        (log.error ?? log)(`A delivery: ${error.stack ?? error}`);
         if (!res.headersSent) refuse(res, 503, "not kept", "try again");
       });
   }
@@ -287,7 +287,7 @@ export function createEdgeHttp({
     (req, res) => {
       for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
       route(req, res).catch((error) => {
-        log(`${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
+        (log.error ?? log)(`${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
         if (!res.headersSent) res.writeHead(error.status === 503 ? 503 : 500);
         res.end();
       });

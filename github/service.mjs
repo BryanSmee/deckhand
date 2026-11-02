@@ -659,7 +659,7 @@ export function createGithubService({
         handle(req, res).catch((error) => {
           if (res.headersSent) {
             if (!(error instanceof Refused))
-              log(
+              (log.error ?? log)(
                 `GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`,
               );
             return res.destroy();
@@ -668,7 +668,9 @@ export function createGithubService({
           req.resume();
           if (error instanceof Refused)
             return sendJson(res, { message: error.message }, error.status);
-          log(`GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
+          (log.error ?? log)(
+            `GitHub service: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`,
+          );
           sendJson(res, { message: "the github service failed" }, 500);
         }),
       ),

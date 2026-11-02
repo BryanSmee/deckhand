@@ -148,7 +148,7 @@ export function createEgressHttp(ctx) {
 
   // A handler's failure: logged, a 500 when nothing was answered yet.
   const failed = (res) => (error) => {
-    log(`Egress: ${error.stack ?? error}`);
+    (log.error ?? log)(`Egress: ${error.stack ?? error}`);
     if (!res.headersSent) res.writeHead(500).end();
   };
 

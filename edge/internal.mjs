@@ -144,7 +144,9 @@ export function createEdgeInternal({
           if (res.headersSent) return res.destroy();
           if (error instanceof Refused)
             return sendJson(res, { message: error.message }, error.status);
-          log(`Edge's internal port: ${req.method} ${req.url}: ${error.stack ?? error}`);
+          (log.error ?? log)(
+            `Edge's internal port: ${req.method} ${req.url}: ${error.stack ?? error}`,
+          );
           sendJson(res, { message: error.message ?? "failed" }, 500);
         }),
       ),

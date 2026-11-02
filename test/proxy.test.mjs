@@ -305,7 +305,7 @@ test("a push to the github service's name goes there, with the network the polic
   const basic = `Basic ${Buffer.from("x:run-token").toString("base64")}`;
   const text = await via(
     `${SANDBOX_URLS.github}/git/org/repo.git/info/refs?service=git-receive-pack`,
-    { authorization: basic, "x-deckhand-sandbox": "net-other" },
+    { authorization: basic, "x-deckhand-sandbox": "net-other", "x-deckhand-request": "chosen" },
   );
   assert.match(text, /^HTTP\/1\.1 200/);
   assert.deepEqual(asked, ["github"]);
@@ -315,6 +315,8 @@ test("a push to the github service's name goes there, with the network the polic
   assert.equal(pushed.headers.authorization, "Bearer proxy-token");
   assert.equal(pushed.headers["x-deckhand-run-authorization"], basic);
   assert.equal(pushed.headers["x-deckhand-sandbox"], "net-1");
+  // The request ID the service logs it under is the service's own, never the sandbox's (#547).
+  assert.equal(pushed.headers["x-deckhand-request"], undefined);
   // Another path of its (the GitHub gateway's relay, its runs), or one climbing out of it: the
   // proxy's own service token never goes with them.
   for (const path of ["/relay/api.github.com/user", "/runs/r1", "/git/../runs/r1"]) {

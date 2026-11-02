@@ -259,7 +259,7 @@ export function createBrokerHandler({
         if (!res.headersSent) sendJson(res, { message: error.message }, error.status);
         return;
       }
-      log(`Broker: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
+      (log.error ?? log)(`Broker: ${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
       if (!res.headersSent) sendJson(res, { message: "the broker failed" }, 500);
       else res.destroy();
     }

@@ -48,7 +48,7 @@ import {
   SANDBOX_HEADER,
 } from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
-import { createLogger } from "../lib/log.mjs";
+import { createLogger, REQUEST_HEADER } from "../lib/log.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { untilReached } from "./wait.mjs";
 
@@ -73,9 +73,10 @@ export function drainMs(text) {
 // service reads it, and a client's own is dropped.
 export const CLIENT_HEADER = "x-deckhand-client";
 
-// What the services read a sandbox's call by (lib/broker-client.mjs): whatever the client sent
-// in them is dropped.
-const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER];
+// What the services read a sandbox's call by (lib/broker-client.mjs), and the request ID their
+// lines are logged under (lib/log.mjs): whatever the client sent in them is dropped, so a
+// sandbox's call gets an ID of its own at the service, never another webhook's.
+const VOUCHED = [CLIENT_HEADER, SANDBOX_HEADER, RUN_TOKEN_HEADER, RUN_AUTH_HEADER, REQUEST_HEADER];
 
 // "host:443", "[::1]:443" → { host, port }; null when it isn't one.
 export function target(authority) {

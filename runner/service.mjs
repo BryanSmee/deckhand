@@ -523,7 +523,7 @@ export function createRunnerService({
       if (!res.headersSent && value !== undefined) sendJson(res, value);
     } catch (error) {
       if (res.headersSent) {
-        log(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
+        (log.error ?? log)(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
         return res.destroy();
       }
       if (error instanceof Refused) {
@@ -533,7 +533,7 @@ export function createRunnerService({
           error.status,
         );
       }
-      log(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
+      (log.error ?? log)(`${req.method} ${url.pathname}: ${error.stack ?? error}`);
       sendJson(res, { message: error.message ?? String(error) }, 500);
     }
   }

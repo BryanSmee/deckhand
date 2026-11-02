@@ -105,7 +105,7 @@ export function createPolicyService({ engine, guard, log = () => {} }) {
           throw new Refused(404, "no such endpoint");
         } catch (error) {
           if (error instanceof Refused) return send(res, error.status, { error: error.message });
-          log(`${req.method} ${req.url}: ${error.message ?? error}`);
+          (log.error ?? log)(`${req.method} ${req.url}: ${error.message ?? error}`);
           if (!res.headersSent) send(res, 500, { error: "the policy service failed" });
         }
       }),

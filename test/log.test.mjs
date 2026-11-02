@@ -8,6 +8,7 @@ import {
   logContext,
   REQUEST_HEADER,
   requestHeaders,
+  TOO_DEEP,
   withLogContext,
   withRequest,
 } from "../lib/log.mjs";
@@ -134,6 +135,32 @@ test("every line redacted: GitHub's tokens, the service's own secrets, in both f
   );
   log(GITHUB_TOKEN);
   assert.equal(JSON.parse(lines[0]).msg, REDACTED);
+});
+
+test("fields: nothing nested deep is written unredacted; dates, URLs, maps and errors anywhere kept", () => {
+  const { log, lines } = logger();
+  let deep = { token: GITHUB_TOKEN };
+  for (let i = 0; i < 12; i++) deep = { deep };
+  const cycle = { name: "loop" };
+  cycle.self = cycle;
+  log.error("Fields", {
+    deep,
+    cycle,
+    at: new Date(0),
+    url: new URL(`https://example.com/?t=${GITHUB_TOKEN}`),
+    errs: [new Error(`boom ${GITHUB_TOKEN}`)],
+    map: new Map([["k", GITHUB_TOKEN]]),
+    set: new Set([1n]),
+  });
+  assert.ok(!lines[0].includes(GITHUB_TOKEN));
+  const line = JSON.parse(lines[0]);
+  assert.ok(lines[0].includes(TOO_DEEP));
+  assert.equal(line.cycle.name, "loop");
+  assert.equal(line.at, "1970-01-01T00:00:00.000Z");
+  assert.equal(line.url, `https://example.com/?t=${REDACTED}`);
+  assert.match(line.errs[0], /^Error: boom \[redacted\]\n/);
+  assert.deepEqual(line.map, [["k", REDACTED]]);
+  assert.deepEqual(line.set, ["1"]);
 });
 
 test("the context: on every line in it, through awaits; nested ones add to it", async () => {

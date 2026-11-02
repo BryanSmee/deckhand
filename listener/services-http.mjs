@@ -117,7 +117,7 @@ export function createServicesHttp({
         if (error instanceof Refused && error.status === 503) res.setHeader("connection", "close");
         if (error instanceof Refused)
           return sendJson(res, { message: error.message }, error.status);
-        log(`Services port: ${req.method} ${req.url}: ${error.stack ?? error}`);
+        (log.error ?? log)(`Services port: ${req.method} ${req.url}: ${error.stack ?? error}`);
         sendJson(res, { message: "failed" }, 500);
       }),
     ),
