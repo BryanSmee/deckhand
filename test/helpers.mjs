@@ -713,7 +713,7 @@ export function withBlobs(images, readFile) {
 // ranged GET with the whole object, as a server that doesn't do ranges; `overRange`, with a byte
 // more than asked; `headWithoutSize`, a HEAD without its content-length. `objects`: key →
 // Buffer; `requests`: { method, key, headers } of each one that came, failed or not;
-// `arrived(n)`: once `n` of them came.
+// `arrived(n)`: once `n` of them came. `basePath`: where it answers on its host (`/s3`).
 export async function fakeS3(
   t,
   {
@@ -722,6 +722,7 @@ export async function fakeS3(
     region = "us-east-1",
     bucket = "deckhand",
     ignoreRange = false,
+    basePath = "",
     overRange = false,
     headWithoutSize = false,
   } = {},
@@ -744,7 +745,7 @@ export async function fakeS3(
     const body = Buffer.concat(chunks);
     const host = req.headers.host ?? "";
     const [path] = req.url.split("?");
-    const parts = path.slice(1).split("/");
+    const parts = path.slice(basePath.length + 1).split("/");
     const named = host.startsWith(`${bucket}.`) ? bucket : parts.shift();
     const key = parts.map(decodeURIComponent).join("/");
     requests.push({ method: req.method, key, headers: req.headers });

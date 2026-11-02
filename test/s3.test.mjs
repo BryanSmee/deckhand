@@ -350,6 +350,46 @@ test("s3: a key that would climb out of its prefix is refused before any request
   assert.deepEqual([...s3.objects.keys()], ["deckhand/blobs/runs/1.log"]);
   assert.equal(String(await client.get("runs/1.log")), "v");
   assert.throws(() => clientOf(t, s3, { prefix: "a/../b" }), TypeError);
+  // S3's limit holds the prefix too: a key under it alone, past it once joined.
+  const sent = s3.requests.length;
+  await assert.rejects(client.put("x".repeat(1010), "v"), /too long/);
+  assert.equal(s3.requests.length, sent);
+  await client.put("x".repeat(1024 - "deckhand/blobs/".length), "v");
+  assert.equal(s3.requests.length, sent + 1);
+});
+
+test("s3: an endpoint's base path goes before the bucket", async (t) => {
+  const s3 = await fakeS3(t, { basePath: "/s3" });
+  const client = clientOf(t, s3, { endpoint: `${s3.endpoint}/s3/` });
+  await client.put("a/k", "v");
+  assert.equal(String(await client.get("a/k")), "v");
+  assert.deepEqual([...s3.objects.keys()], ["a/k"]);
+});
+
+test("s3: DNS or TLS failing is no network blip: named, not tried again", async (t) => {
+  const s3 = await fakeS3(t);
+  const lookups = [];
+  const failing = (code) => (host, options, callback) => {
+    lookups.push(code);
+    callback(Object.assign(new Error(`getaddrinfo ${code} ${host}`), { code }));
+  };
+  // A name, not an address: lookup() is asked for it.
+  const endpoint = s3.endpoint.replace("127.0.0.1", "s3.test");
+  const missing = clientOf(t, s3, { endpoint, lookup: failing("ENOTFOUND"), retries: 3 });
+  await assert.rejects(missing.get("k"), /^S3Error: S3 get k: ENOTFOUND$/m);
+  assert.deepEqual(lookups, ["ENOTFOUND"]);
+  // A DNS server that didn't answer this time: tried again.
+  const flaky = clientOf(t, s3, { endpoint, lookup: failing("EAI_AGAIN"), retries: 2 });
+  await assert.rejects(flaky.head("k"), /^S3Error: S3 head k: EAI_AGAIN$/m);
+  assert.equal(lookups.length, 4);
+  // A plain-HTTP server behind an https:// endpoint: TLS fails, with its code.
+  const tls = clientOf(t, s3, { endpoint: s3.endpoint.replace("http:", "https:"), retries: 3 });
+  await assert.rejects(tls.get("k"), (error) => {
+    assert.ok(error instanceof S3Error);
+    assert.match(error.message, /^S3 get k: [A-Z_]+$/);
+    return true;
+  });
+  assert.equal(s3.requests.length, 0);
 });
 
 test("s3: virtual-hosted style puts the bucket in the host", async (t) => {
@@ -385,7 +425,7 @@ test("s3: no error, nor the client, holds the secret key or a signature", async 
   assert.match(messages.at(-1), /timed out/);
   s3.fail("reset", "reset");
   messages.push(...(await errorsOf(() => client.put("k", "v"))));
-  assert.match(messages.at(-1), /^S3 put k: (ECONNRESET|socket hang up)$/);
+  assert.match(messages.at(-1), /^S3 put k: ECONNRESET$/);
   const signatures = s3.requests.map(
     (r) => /Signature=([0-9a-f]{64})/.exec(r.headers.authorization)[1],
   );
