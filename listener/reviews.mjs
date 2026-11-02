@@ -134,6 +134,9 @@ export function parseReview(text, { allowed = "low" } = {}) {
   let current = null;
   let started = false;
   let none = false;
+  // A line under Must fix or Comments the parser can't read (a comment without its kind, text
+  // that isn't an item): the model's `request-changes` then stands, `None.` or not.
+  let unsure = false;
   for (const line of lines) {
     const heading = /^#+\s*(must[- ]fix|findings|follow[- ]?ups?|comments)\b/i.exec(line.trim());
     if (heading) {
@@ -149,13 +152,18 @@ export function parseReview(text, { allowed = "low" } = {}) {
     }
     // "None." under a heading, as a bullet or not: no item. Under Must fix, the review says it
     // has no finding (`none`), which lets its verdict read `comment` below.
-    if (started && /^\s*(?:[-*]\s+)?\**(?:none|nothing|n\/a)\b[^\w]*$/i.test(line)) {
+    if (
+      started &&
+      /^\s*(?:(?:[-*+]|\d+[.)])\s+)?[*_`]*(?:none|nothing|n\/a)\b[^\w]*$/i.test(line)
+    ) {
       if (section === "findings") none = true;
       current = null;
       continue;
     }
-    const item = bullet(section, line);
-    if (item) {
+    const found = bullet(section, line);
+    if (found) {
+      const { unmarked, ...item } = found;
+      if (unmarked) unsure = true;
       started = true;
       current = item;
       ({ findings, "follow-ups": followUps, comments })[section].push(item);
@@ -168,7 +176,10 @@ export function parseReview(text, { allowed = "low" } = {}) {
     }
     // An item's text goes on on indented lines.
     if (current && /^\s+\S/.test(line)) current.text += `\n${line.trim()}`;
-    else if (line.trim()) current = null;
+    else if (line.trim()) {
+      current = null;
+      if (started && section !== "follow-ups" && /^\S/.test(line)) unsure = true;
+    }
     if (!started) summary.push(line);
   }
   const said = verdict[1].toLowerCase().replace(" ", "-");
@@ -183,43 +194,45 @@ export function parseReview(text, { allowed = "low" } = {}) {
     rating: Math.min(Number(rating[1]), ...caps),
     verdict: blocks(review, allowed)
       ? "request-changes"
-      : (tolerated || (none && !findings.length)) && said === "request-changes"
+      : (tolerated || (none && !unsure && !findings.length)) && said === "request-changes"
         ? "comment"
         : said,
   };
 }
 
-// An unindented bullet of `section` → its item, or null. A finding's severity ends in bold, a
-// bracket or a separator: not "- Highlights…" in the summary, nor an indented sub-bullet of a
-// finding's text, which would otherwise cap the rating, block and, with `review.fix`, start
-// the fix run. A follow-up starts with its title in bold; a comment with `blocking` or `note`
-// (`non-blocking`, `nit` too) in bold or brackets, a note when it says neither.
+// An unindented bullet or numbered item of `section` → its item, or null. A finding's
+// severity ends in emphasis, a bracket or a separator: not "- Highlights…" in the summary, nor
+// an indented sub-bullet of a finding's text, which would otherwise cap the rating, block and,
+// with `review.fix`, start the fix run. A follow-up starts with its title in bold; a comment
+// with its kind, `blocking` or `note` (`non-blocking`, `nit` too), in bold, italics, backticks
+// or brackets, or bare before a separator. A comment without one is a note marked `unmarked`:
+// it doesn't block, but parseReview() keeps the model's verdict then, as missing a blocking
+// one would fail open.
 function bullet(section, line) {
+  const lead = /^(?:[-*+]|\d+[.)])\s+(?=\S)/.exec(line);
+  if (!lead) return null;
+  const rest = line.slice(lead[0].length);
   if (section === "findings") {
     const m =
-      /^[-*]\s+\**\[?(critical|high|medium|low)(?:\]\**|\*+|\s*[:–—])\s*[:–—-]?\s*(.*)$/i.exec(
-        line,
+      /^[*_`]*\[?(critical|high|medium|low)(?:\][*_`]*|[*_`]+|\s*[:–—])\s*[:–—-]?\s*(.*)$/i.exec(
+        rest,
       );
     return m && { severity: m[1].toLowerCase(), ...located(m[2]) };
   }
-  if (!/^[-*]\s+\S/.test(line)) return null;
-  const rest = line.replace(/^[-*]\s+/, "");
   if (section === "follow-ups") {
-    const m = /^\*\*(.+?)\*\*\s*[:–—-]?\s*(.*)$/.exec(rest);
+    const m = /^(?:\*\*|__)(.+?)(?:\*\*|__)\s*[:–—-]?\s*(.*)$/.exec(rest);
     if (!m) {
       const { text, ...at } = located(rest);
       return { title: titleOf(text), ...at, text: "" };
     }
     return { title: titleOf(m[1]), ...located(m[2]) };
   }
-  // In bold or brackets, a separator inside or after them ("**Blocking:**", "[blocking]:"),
-  // or unbolded with a separator ("blocking: …"). Missing a blocking one fails open (a note
-  // that doesn't block), so every lead a model writes is taken.
+  const kind = String.raw`(blocking|non[- ]blocking|note|nit)(?:\s+(?:comment|remark|question))?`;
   const m =
-    /^(?:\*\*|\[)\s*(blocking|non[- ]blocking|note|nit)\s*[:–—]?\s*(?:\*\*|\])\s*[:–—-]?\s*(.*)$/i.exec(
+    new RegExp(String.raw`^[*_\`\[]+\s*${kind}\s*[:–—]?\s*[*_\`\]]+\s*[:–—-]?\s*(.*)$`, "i").exec(
       rest,
-    ) ?? /^(blocking|non[- ]blocking|note|nit)(?:\s*[:–—]|\s+-)\s*(.*)$/i.exec(rest);
-  if (!m) return { blocking: false, ...located(rest) };
+    ) ?? new RegExp(String.raw`^${kind}(?:\s*[:–—]|\s+-)\s*(.*)$`, "i").exec(rest);
+  if (!m) return { blocking: false, ...located(rest), unmarked: true };
   return { blocking: m[1].toLowerCase() === "blocking", ...located(m[2]) };
 }
 
@@ -2009,9 +2022,17 @@ export function createReviews({
       ...comment,
       ...(theirs && { manual: true }),
     });
+    // Kept apart from the rounds, which a later review at the same head replaces and
+    // ROUNDS_KEPT trims: whether any review listed follow-ups, and the comments GitHub's refused
+    // reviews were posted as, for fileFollowUps() after the merge.
+    const refused = comment.commentId ? [comment.commentId] : [];
     remember(key, entry.head ?? null, {
       rounds: rounds.slice(-ROUNDS_KEPT),
       fixRounds: limitOf(settings, entry),
+      ...((followUps || entry.hasFollowUps) && { hasFollowUps: true }),
+      ...(refused.length && {
+        reviewComments: [...new Set([...(entry.reviewComments ?? []), ...refused])],
+      }),
     });
   }
 
@@ -2291,14 +2312,16 @@ export function createReviews({
   // The follow-ups of the App's reviews of merged pull request `pr` (GitHub's), each filed as an
   // issue labelled FOLLOW_UP_LABEL that links it, then listed in one comment on it. Once per pull
   // request (`followUpsAt`, kept before the first write: a redelivery or a restart files nothing
-  // twice, and a failure midway leaves the rest to the maintainer, logged), and only one whose
-  // rounds counted some (recordRound()): other merges cost no GitHub call. The same title in
-  // several reviews is filed once; one an issue with the label already has is linked, not filed.
+  // twice, and a failure midway leaves the rest to the maintainer, logged), and only one a review
+  // of which listed some (`hasFollowUps`, recordRound()): other merges cost no GitHub call. The
+  // same title in several reviews is filed once; one an issue with the label already has is
+  // linked, not filed.
   // → the issues' numbers, or null.
   async function fileFollowUps(repo, pr) {
     const key = taskKey(repo, prId(pr.number));
     const entry = reviewed.get(key);
-    if (!entry?.rounds?.some((r) => r.followUps) || entry.followUpsAt) return null;
+    const listed = entry?.hasFollowUps || entry?.rounds?.some((r) => r.followUps);
+    if (!listed || entry.followUpsAt) return null;
     const bot = config.bot?.toLowerCase();
     if (!bot) return null;
     const get = (path) => github(repo, "GET", path);
@@ -2312,7 +2335,11 @@ export function createReviews({
     const reviews = (await paginate(get, `/repos/${repo}/pulls/${pr.number}/reviews`)).filter(
       (r) => own(r) && (r.body ?? "").includes(MARKER),
     );
-    const ids = new Set(entry.rounds.map((r) => r.commentId).filter(Boolean));
+    const ids = new Set(
+      [...(entry.reviewComments ?? []), ...(entry.rounds ?? []).map((r) => r.commentId)].filter(
+        Boolean,
+      ),
+    );
     const comments = ids.size
       ? (await paginate(get, `/repos/${repo}/issues/${pr.number}/comments`)).filter(
           (c) => ids.has(c.id) && own(c),
@@ -2867,6 +2894,11 @@ export function createReviews({
       const reviewedFixes = Math.max(reviewedFixesOf(a), reviewedFixesOf(b));
       const ciFixes = Math.max(a.ciFixes ?? 0, b.ciFixes ?? 0);
       const grantedTo = Math.max(a.grantedTo ?? 0, b.grantedTo ?? 0);
+      // The follow-ups either listed, and the comments either posted reviews as.
+      const hasFollowUps = !!(a.hasFollowUps || b.hasFollowUps);
+      const reviewComments = [
+        ...new Set([...(a.reviewComments ?? []), ...(b.reviewComments ?? [])]),
+      ];
       // The last fix run's time goes with the count.
       const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
       return {
@@ -2876,6 +2908,8 @@ export function createReviews({
         ...(reviewedFixes && { reviewedFixes }),
         ...(ciFixes && { ciFixes }),
         ...(grantedTo && { grantedTo }),
+        ...(hasFollowUps && { hasFollowUps }),
+        ...(reviewComments.length && { reviewComments }),
       };
     };
     if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();

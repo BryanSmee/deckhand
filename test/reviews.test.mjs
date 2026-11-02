@@ -2930,9 +2930,17 @@ test("parseReview: None. under any heading is no item; unparsed findings with re
   assert.deepEqual([empty.findings, empty.followUps, empty.comments], [[], [], []]);
   assert.deepEqual([empty.verdict, reviewEvent(empty)], ["comment", "COMMENT"]);
   assert.equal(empty.summary, "Fine.");
-  // Findings in a form the parser misses (a numbered list): the model's verdict stands.
-  const missed = parseReview(
+  // A numbered finding is one.
+  const numbered = parseReview(
     "## Must fix\n\n1. **high** `a.mjs:1`: broken.\n\n## Follow-ups\n\n- **Later**: x.\n\nRating: 4/10\nVerdict: request-changes",
+  );
+  assert.deepEqual(
+    [numbered.findings.map((f) => f.severity), numbered.verdict],
+    [["high"], "request-changes"],
+  );
+  // Findings in a form the parser misses, beside a None.: the model's verdict stands.
+  const missed = parseReview(
+    "## Must fix\n\nNone.\nHigh priority: `a.mjs:1` is broken.\n\nRating: 4/10\nVerdict: request-changes",
   );
   assert.deepEqual([missed.findings, missed.verdict], [[], "request-changes"]);
   const noSection = parseReview("Broken somewhere.\n\nRating: 4/10\nVerdict: request-changes");
@@ -2951,4 +2959,78 @@ test("parseReview: an unbolded lead with an ASCII hyphen", () => {
     ],
   );
   assert.equal(review.verdict, "request-changes");
+});
+
+test("parseReview: every form of a blocking comment blocks, and one without its kind keeps request-changes", () => {
+  const reply = (comment) =>
+    `Fine.\n\n## Must fix\n\nNone.\n\n## Follow-ups\n\nNone.\n\n## Comments\n\n${comment}\n\nRating: 9/10\nVerdict: request-changes`;
+  for (const comment of [
+    "- `blocking` `a.mjs:1`: why?",
+    "- *blocking*: why?",
+    "- __blocking__: why?",
+    "- **[blocking]** why?",
+    "- **Blocking comment**: why?",
+    "1. **blocking** why?",
+    "2) blocking: why?",
+  ]) {
+    const review = parseReview(reply(comment));
+    assert.deepEqual(
+      [review.comments.map((c) => [c.blocking, c.text]), review.verdict, reviewEvent(review)],
+      [[[true, "why?"]], "request-changes", "REQUEST_CHANGES"],
+      comment,
+    );
+  }
+  for (const comment of [
+    "- `note` rename it.",
+    "1. *nit*: rename it.",
+    "- __Note__ - rename it.",
+  ]) {
+    const review = parseReview(reply(comment));
+    assert.deepEqual(
+      [review.comments.map((c) => [c.blocking, c.text]), review.verdict],
+      [[[false, "rename it."]], "comment"],
+      comment,
+    );
+  }
+  // Its kind unreadable, or text that isn't an item under Comments: a note, but the model's
+  // request-changes stands.
+  for (const comment of ["- (blocking) why?", "- Why does this retry forever?", "Why?"]) {
+    const review = parseReview(reply(comment));
+    // As low findings with request-changes: posted as a comment, its verdict text saying so,
+    // and no auto-merge (autoMerge() refuses a request-changes verdict).
+    assert.equal(review.verdict, "request-changes", comment);
+    assert.ok(
+      review.comments.every((c) => !c.blocking && !("unmarked" in c)),
+      comment,
+    );
+  }
+});
+
+test("parseReview: numbered follow-ups are follow-ups", () => {
+  const review = parseReview(
+    "## Follow-ups\n\n1. **Share the helper** `a.mjs:1`: twice.\n2. __Docs__: missing.\n\nRating: 10/10\nVerdict: comment",
+  );
+  assert.deepEqual(
+    review.followUps.map((f) => [f.title, f.path, f.text]),
+    [
+      ["Share the helper", "a.mjs", "twice."],
+      ["Docs", null, "missing."],
+    ],
+  );
+});
+
+test("follow-ups: a later review at the same head, listing none, doesn't lose them", async (t) => {
+  const plain = postedBody(SECTIONS).replace("\n\n<!-- deckhand -->", "");
+  const s = followUpSetup(t, { comments: [plain] });
+  // GitHub refused the first review, posted as comment #1; a maintainer's review at the same
+  // head, told not to list them again, replaces its round.
+  await s.record(SECTIONS, { event: null, commentId: 1 });
+  await s.record(HIGH_ONE);
+  const entry = s.reviews.entry("org/repo", 5);
+  assert.deepEqual(
+    entry.rounds.map((r) => [r.followUps, r.commentId]),
+    [[0, undefined]],
+  );
+  assert.deepEqual([entry.hasFollowUps, entry.reviewComments], [true, [1]]);
+  assert.deepEqual(await s.merged(), [40, 41]);
 });

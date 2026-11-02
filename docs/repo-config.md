@@ -513,7 +513,12 @@ token only reads, and Deckhand posts the review.
   run applies it only when it is cheap and in scope, and a note alone never starts one. Nits
   are notes, not low findings. A blocking comment blocks like a finding, **whatever
   `max_allowed_severity` says** (the reviewer marked it on purpose), caps the rating at 8, and
-  goes to the fix run.
+  goes to the fix run. The kind is read in bold, italics, backticks or brackets, or bare
+  before a separator (`blocking: …`). A comment whose kind can't be read counts as a note,
+  but the review's own verdict then stands: a "request changes" it wrote isn't turned into a
+  comment, so an auto-merge still refuses it. A review's verdict reads "comment" on follow-ups
+  and notes alone only when its Must fix section says `None.` and everything under Must fix
+  and Comments could be read.
 
 A reply in the format from before the sections (a `## Findings` list, as a repository's own
 `review.instructions` may still ask for) reads as must-fix findings, and so do the reviews
