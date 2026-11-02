@@ -247,6 +247,17 @@ async function fakeGitHub(files = {}) {
       if (req.method === "GET" && req.url.startsWith("/repos/org/repo/actions/runs?")) {
         return res.end(files.runs ?? JSON.stringify({ workflow_runs: [] }));
       }
+      // A commit's check runs and statuses (the dashboard's CI status): none unless the test
+      // sets them.
+      if (
+        req.method === "GET" &&
+        /^\/repos\/org\/repo\/commits\/[^/]+\/check-runs\?/.test(req.url)
+      ) {
+        return res.end(files.checks ?? JSON.stringify({ check_runs: [] }));
+      }
+      if (req.method === "GET" && /^\/repos\/org\/repo\/commits\/[^/]+\/status\?/.test(req.url)) {
+        return res.end(files.statuses ?? JSON.stringify({ statuses: [] }));
+      }
       // A pull request's reviews, as a JSON list, when the test sets them.
       const reviewed = /^\/repos\/org\/repo\/pulls\/(\d+)\/reviews\?/.exec(req.url);
       if (req.method === "GET" && reviewed && files[`reviews:${reviewed[1]}`]) {
@@ -2944,31 +2955,58 @@ mounts:
     assert.match(JSON.parse(replies(github)[0].body).body, / · 1\.1 min/);
   });
 
-  test("check_suite and status deliveries: taken, and nothing logged or run for them", async (t) => {
-    const { github, send, listener } = await listen(t, {});
+  test("CI deliveries: the CI of the pull request at that commit read, kept for the dashboard; nothing logged for check_suite and status", async (t) => {
+    const statuses = JSON.stringify({
+      statuses: [{ context: "ci/jenkins", state: "failure", target_url: "https://ci/1" }],
+    });
+    const { dir, github, send, listener } = await listen(t, { statuses });
     const ci = {
       installation: { id: 7 },
       repository: { full_name: "org/repo", default_branch: "trunk" },
       sender: { login: "ci-bot[bot]", type: "Bot" },
     };
+    const head = { ref: "issue-30-fix", sha: "abc", repo: { full_name: "org/repo" } };
+    const pull_request = {
+      number: 31,
+      html_url: "https://github.com/org/repo/pull/31",
+      body: "Closes #30",
+      state: "open",
+      draft: false,
+      head,
+    };
+    await send({ ...ci, action: "synchronize", pull_request }, "pull_request");
+    await listener.until("org/repo#30: pull request #31 ready");
     const calls = github.requests.length;
-    // The same status twice: kept out of the memory of handled deliveries, which would push
-    // out those that matter (a redelivery's GUID), so not "already handled" either.
+    // Another commit's: nothing read. The same status twice: kept out of the memory of handled
+    // deliveries, so not "already handled" either.
     for (const [payload, event, id] of [
-      [{ ...ci, state: "pending", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
-      [{ ...ci, state: "pending", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
+      [{ ...ci, state: "pending", context: "ci/jenkins", sha: "old" }, "status", "s-0"],
+      [{ ...ci, state: "failure", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
+      [{ ...ci, state: "failure", context: "ci/jenkins", sha: "abc" }, "status", "s-1"],
       [{ ...ci, action: "completed", check_suite: { head_sha: "abc" } }, "check_suite", "c-1"],
     ]) {
       assert.equal((await send(payload, event, id)).status, 202, event);
     }
+    await listener.until("org/repo#30: CI of #31 failed");
+    const kept = JSON.parse(readFileSync(join(dir, "pulls.json"), "utf8"))["org/repo#30"];
+    assert.deepEqual(kept.ci, {
+      sha: "abc",
+      state: "failed",
+      runs: [{ name: "ci/jenkins", state: "failed", url: "https://ci/1" }],
+    });
+    const read = github.requests.slice(calls).map((r) => r.path);
+    assert.ok(
+      read.some((p) => p.startsWith("/repos/org/repo/commits/abc/status?")),
+      read.join("\n"),
+    );
+    assert.ok(!read.some((p) => p.includes("old")), read.join("\n"));
     // The next delivery's line: they came before it, and logged nothing.
     await send({ ...ci, action: "opened", issue: { number: 3, labels: [] } }, "issues");
     await listener.until("Delivery: issues opened");
     assert.doesNotMatch(
       listener.output(),
-      /Delivery: (?:status|check_suite)|not a comment|Delivery (?:s|c)-1 again/,
+      /Delivery: (?:status|check_suite)|Passed on: (?:status|check_suite)|Delivery (?:s|c)-1 again/,
     );
-    assert.equal(github.requests.slice(calls).filter((r) => r.path.includes("abc")).length, 0);
   });
 
   test("open questions label an issue; an allowed user's answer takes the label off", async (t) => {

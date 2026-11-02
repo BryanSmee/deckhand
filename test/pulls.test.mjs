@@ -453,3 +453,129 @@ test("a redelivered pull_request delivery: as the pull request is now", () => {
     readyAt: null,
   });
 });
+
+test("pull_request deliveries: the head commit, whose CI the dashboard shows", () => {
+  assert.equal(map("synchronize", { head: { ref: "issue-30-fix", sha: "b2" } }).pr.head, "b2");
+  assert.equal("head" in map("opened").pr, false);
+});
+
+// A pulls store whose CI reads answer from `answers` (sha → ci, or a function of the call),
+// recording the commits read.
+function ciPulls(t, answers = {}) {
+  const read = [];
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [],
+    readCi: async (repo, sha) => {
+      read.push(`${repo}@${sha}`);
+      const answer = answers[sha];
+      return typeof answer === "function" ? answer() : (answer ?? null);
+    },
+  });
+  return { pulls, read };
+}
+const ci = (sha, state, runs = []) => ({ sha, state, runs });
+const failedRun = {
+  name: "test",
+  state: "failed",
+  url: "https://github.com/org/repo/actions/runs/9",
+};
+
+test("pulls: CI of the head read when a delivery says it changed, an older commit's ignored", async (t) => {
+  const { pulls, read } = ciPulls(t, {
+    a1: ci("a1", "running"),
+    b2: ci("b2", "failed", [failedRun]),
+  });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  // A new pull request starts with nothing reported.
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "none"));
+  await pulls.ciChanged("Org/Repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "running"));
+  // Another commit, or another repo's: nothing read.
+  await pulls.ciChanged("org/repo", "zz");
+  await pulls.ciChanged("org/other", "a1");
+  assert.deepEqual(read, ["org/repo@a1"]);
+  // A push: back to nothing reported, at the new head; the old head's runs no longer count.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2" });
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "none"));
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "none"));
+  await pulls.ciChanged("org/repo", "b2");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "failed", [failedRun]));
+  // An edit without a head keeps head and CI; a merge keeps the last CI known, and isn't read.
+  pulls.record("org/repo#30", pr(31, "ready"));
+  assert.equal(pulls.get("org/repo#30").ci.state, "failed");
+  pulls.record("org/repo#30", { ...pr(31, "merged"), head: "b2" });
+  await pulls.ciChanged("org/repo", "b2");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "failed", [failedRun]));
+  assert.deepEqual(read, ["org/repo@a1", "org/repo@b2"]);
+});
+
+test("pulls: CI deliveries while one is read cost one read more, not one each", async (t) => {
+  let release;
+  const answers = {
+    a1: () => new Promise((resolve) => (release = () => resolve(ci("a1", "passed")))),
+  };
+  const { pulls, read } = ciPulls(t, answers);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  const all = [1, 2, 3, 4].map(() => pulls.ciChanged("org/repo", "a1"));
+  release();
+  await new Promise((resolve) => setImmediate(resolve));
+  release();
+  await Promise.all(all);
+  assert.deepEqual(read, ["org/repo@a1", "org/repo@a1"]);
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+});
+
+test("pulls: CI read for one head isn't kept once the pull request moved to another", async (t) => {
+  let pulls;
+  const answers = {
+    a1: async () => {
+      pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2" });
+      return ci("a1", "failed");
+    },
+  };
+  ({ pulls } = ciPulls(t, answers));
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "none"));
+});
+
+test("pulls: resync reads the CI of the open ones not settled for their head, kept across a restart", async (t) => {
+  const path = tempPath(t);
+  const read = [];
+  const readCi = async (repo, sha) => {
+    read.push(sha);
+    if (sha === "err") throw new Error("boom");
+    return ci(sha, "passed");
+  };
+  const listPulls = async () => [
+    { number: 31, html_url: "u31", state: "open", draft: false, head: { sha: "a1" } },
+    // Pushed to without its delivery: the listing has its new head.
+    { number: 33, html_url: "u33", state: "open", draft: false, head: { sha: "c3" } },
+    { number: 35, html_url: "u35", state: "open", draft: false, head: { sha: "err" } },
+  ];
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  const logs = [];
+  const pulls = createPulls({ path, listPulls, readCi, log: (line) => logs.push(line) });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  pulls.record("org/repo#32", sized({ ...pr(33, "ready"), head: "b2" }));
+  pulls.record("org/repo#34", sized({ ...pr(35, "ready"), head: "err" }));
+  pulls.record("org/repo#36", sized({ ...pr(37, "merged"), head: "d4" }));
+  await pulls.resync();
+  assert.deepEqual(read.sort(), ["a1", "c3", "err"]);
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+  assert.equal(pulls.get("org/repo#32").head, "c3");
+  assert.deepEqual(pulls.get("org/repo#32").ci, ci("c3", "passed"));
+  assert.deepEqual(pulls.get("org/repo#34").ci, ci("err", "none"));
+  assert.ok(
+    logs.some((l) => /org\/repo#34: CI of #35: boom/.test(l)),
+    logs.join("\n"),
+  );
+  // Settled: not read again, after a restart either; the one that failed is.
+  const next = createPulls({ path, listPulls, readCi });
+  assert.deepEqual(next.get("org/repo#30").ci, ci("a1", "passed"));
+  read.length = 0;
+  await next.resync();
+  assert.deepEqual(read, ["err"]);
+});

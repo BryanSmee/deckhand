@@ -1,8 +1,8 @@
 // What CI says of a commit: failed, running or passed, over its GitHub Actions runs, its check
 // runs (other Apps' CI, code scanning…) and its commit statuses (older services' CI). One rule
 // for the merge gate and the review's CI step (reviews.mjs), which pass it Actions runs only so
-// far; check runs and statuses are for when they read those too, and the dashboard's CI status
-// (#436).
+// far (`mergeable_state` stands for the rest there), and the dashboard's CI status of a task's
+// pull request (pulls.mjs, #436), over all three (commitCi()).
 
 // Conclusions that pass, of an Actions run or a check run: they neither stop a merge nor start
 // a CI fix run.
@@ -78,4 +78,51 @@ export function latestStatuses(statuses) {
 function newer(x, y) {
   for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return x[i] > y[i];
   return false;
+}
+
+// A commit's CI for the dashboard (pulls.mjs, #436) → { state, runs: [{ name, state, url }] },
+// over ciState()'s input: its state, and each run, check run and status that counts, as running,
+// failed or passed, failed ones first. A cancelled run replaced by a newer one isn't listed, nor
+// the check runs of GitHub Actions when its runs are given: ciState() leaves them out too.
+export function ciSummary(input = {}) {
+  const { runs, checks = [], statuses = [] } = Array.isArray(input) ? { runs: input } : input;
+  const counted = countedRuns(runs ?? []);
+  const others = checks.filter((c) => runs === undefined || c.app?.slug !== ACTIONS_APP);
+  const contexts = latestStatuses(statuses);
+  const { state, failed, going } = ciState({ runs, checks, statuses });
+  const of = (x) => (failed.includes(x) ? "failed" : going.includes(x) ? "running" : "passed");
+  const RANK = { failed: 0, running: 1, passed: 2 };
+  const items = [
+    ...counted.map((r) => ({
+      name: r.name ?? r.display_title ?? "?",
+      state: of(r),
+      url: r.html_url,
+    })),
+    ...others.map((c) => ({ name: c.name ?? "?", state: of(c), url: c.html_url ?? c.details_url })),
+    ...contexts.map((s) => ({ name: s.context ?? "?", state: of(s), url: s.target_url })),
+  ]
+    .map(({ url, ...item }) => ({ ...item, url: typeof url === "string" && url ? url : null }))
+    .sort((a, b) => RANK[a.state] - RANK[b.state]);
+  return { state, runs: items };
+}
+
+// Commit `sha`'s CI as GitHub has it now (`github(repo, method, path, body, expected)`, the
+// App's calls) → { sha, state, runs } (ciSummary()), or null when GitHub gave none of it. Each
+// of its Actions runs, check runs and statuses is left out when GitHub refuses it (an
+// installation that hasn't accepted `checks` or `statuses` yet): without the Actions runs,
+// GitHub Actions' check runs stand for them.
+export async function commitCi(github, repo, sha) {
+  const at = encodeURIComponent(sha);
+  const read = async (path, field) => {
+    const res = await github(repo, "GET", path, undefined, [403, 404, 422]);
+    if (!res.ok) return undefined;
+    return (await res.json())?.[field] ?? [];
+  };
+  const [runs, checks, statuses] = await Promise.all([
+    read(`/repos/${repo}/actions/runs?head_sha=${at}&per_page=100`, "workflow_runs"),
+    read(`/repos/${repo}/commits/${at}/check-runs?per_page=100`, "check_runs"),
+    read(`/repos/${repo}/commits/${at}/status?per_page=100`, "statuses"),
+  ]);
+  if (!runs && !checks && !statuses) return null;
+  return { sha, ...ciSummary({ runs, checks: checks ?? [], statuses: statuses ?? [] }) };
 }

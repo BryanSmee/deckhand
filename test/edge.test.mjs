@@ -89,10 +89,20 @@ test("two copies: a delivery GitHub sends to both, or twice, goes on the stream 
     ],
   );
   assert.ok(two.logs.includes("Delivery guid-1 again: already handled"));
-  // The events nothing reads take no place, in the stream or among the GUIDs.
-  await deliver(one.url, {}, { id: "guid-3", event: "status" });
-  assert.equal((await store.read(DELIVERIES, "orchestrator")).length, 2);
+  // A commit's CI changed (QUIET_EVENTS): on the stream each time, without its GUID, which
+  // takes no place among the GUIDs, nor a log line.
+  for (const copy of [one, two])
+    await deliver(copy.url, { sha: "abc" }, { id: "guid-3", event: "status" });
+  const quiet = (await store.read(DELIVERIES, "orchestrator")).slice(2);
+  assert.deepEqual(
+    quiet.map(({ event }) => [event.id, event.event, event.payload.sha]),
+    [
+      [null, "status", "abc"],
+      [null, "status", "abc"],
+    ],
+  );
   assert.equal(await store.get("deliveries/guid-3"), null);
+  assert.ok(!two.logs.some((line) => /status/.test(line)), two.logs.join("\n"));
 });
 
 test("a delivery: unsigned, badly signed or without an App refused; a secret in it kept out of the store", async (t) => {

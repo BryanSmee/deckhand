@@ -9,7 +9,7 @@
 // two copies share. The copy holding the poller's lease scans (../edge/server.mjs); the
 // redelivery may reach either, which asks the store whether it was one (redelivered()). The
 // next scan, after a restart too, looks back to the last one, within GitHub's 3 days.
-import { UNREAD_EVENTS } from "./github-app.mjs";
+import { QUIET_EVENTS } from "./github-app.mjs";
 import { openStore } from "../lib/store.mjs";
 
 // How long GitHub keeps deliveries.
@@ -26,12 +26,12 @@ const retryable = (d) => !succeeded(d) && (!d.status_code || d.status_code >= 50
 
 // The deliveries to redeliver in a list (newest first, as GitHub has it): per GUID whose
 // attempts all failed, the latest attempt, when it is worth another. Oldest first, so comments
-// queue in the order they were posted. Never the events nothing reads (github-app.mjs
-// UNREAD_EVENTS): a status per state, context and commit would each cost an App call.
+// queue in the order they were posted. Never the events that only say CI changed
+// (github-app.mjs QUIET_EVENTS): a status per state, context and commit would each cost an App call.
 export function failedDeliveries(list) {
   const byGuid = new Map();
   for (const d of list) {
-    if (UNREAD_EVENTS.has(d.event)) continue;
+    if (QUIET_EVENTS.has(d.event)) continue;
     const attempts = byGuid.get(d.guid) ?? [];
     attempts.push(d);
     byGuid.set(d.guid, attempts);

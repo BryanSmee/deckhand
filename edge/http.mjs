@@ -10,7 +10,7 @@ import { createServer } from "node:http";
 import { authPage } from "../listener/auth.mjs";
 import { createSlots, readDelivery, sourceOf } from "../listener/deliveries.mjs";
 import { verified } from "../listener/events.mjs";
-import { UNREAD_EVENTS } from "../listener/github-app.mjs";
+import { QUIET_EVENTS } from "../listener/github-app.mjs";
 import { serveAsset } from "../listener/static.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { readBody } from "../lib/http.mjs";
@@ -148,11 +148,11 @@ export function createEdgeHttp({
     if (!secret || !verified(secret, req.headers["x-hub-signature-256"], body)) {
       return refuse(res, 401, "bad signature (not from this Deckhand's App)", "bad signature");
     }
-    const id = req.headers["x-github-delivery"] || null;
     const event = req.headers["x-github-event"];
-    // Nothing reads them yet (github-app.mjs UNREAD_EVENTS): no log line, nor a place in the
-    // store's delivery ids.
-    if (UNREAD_EVENTS.has(event)) return res.writeHead(202).end();
+    // A commit's CI changed (github-app.mjs QUIET_EVENTS): no log line, nor a place in the
+    // store's delivery ids, so taken without its GUID.
+    const quiet = QUIET_EVENTS.has(event);
+    const id = (!quiet && req.headers["x-github-delivery"]) || null;
     let payload;
     try {
       payload = JSON.parse(body.toString("utf8"));
@@ -184,7 +184,7 @@ export function createEdgeHttp({
           log(`Delivery ${id}: its mark (${error.message ?? error}), kept as taking`),
         );
     }
-    log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
+    if (!quiet) log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
     res.writeHead(202).end();
   }
 

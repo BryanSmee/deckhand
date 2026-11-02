@@ -40,15 +40,17 @@ export const APP_EVENTS = [
   "pull_request_review_comment",
   "workflow_run",
   "push",
-  // CI beyond GitHub Actions (check suites of other Apps, commit statuses): subscribed ahead of
-  // their use (the dashboard's CI status, #436; the review's CI step), see UNREAD_EVENTS.
+  // CI beyond GitHub Actions (check suites of other Apps, commit statuses): the dashboard's CI
+  // status of a task's pull request (pulls.mjs, #436), see QUIET_EVENTS.
   "check_suite",
   "status",
 ];
-// The events of APP_EVENTS nothing reads yet: dropped as they arrive (http.mjs), before any log
-// line or the memory of handled deliveries, and never redelivered (redeliveries.mjs). A status
-// comes for each state of each context on every commit.
-export const UNREAD_EVENTS = new Set(["check_suite", "status"]);
+// The events of APP_EVENTS that only tell the dashboard CI changed on a commit (pulls.mjs
+// ciChanged()): passed on without a log line or a place in the memory of handled deliveries
+// (edge/http.mjs; reading a commit's CI twice is harmless), handled without a log line
+// (http.mjs), and never redelivered (redeliveries.mjs): a status comes for each state of each
+// context on every commit, and the dashboard's Sync reads what was lost.
+export const QUIET_EVENTS = new Set(["check_suite", "status"]);
 // The App's settings page on GitHub (permissions, events, webhook): under the organization
 // that owns it, or the user's settings when it isn't one (or isn't known).
 export function appSettingsUrl(githubUrl, { slug, owner, ownerType }) {
