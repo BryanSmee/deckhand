@@ -136,8 +136,17 @@
   justify-self: start;
 }
 
-.needTitle {
+/* The title, and a pull request's CI after it (CiStatus.tsx). */
+.titleCell {
   grid-area: title;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.needTitle {
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;

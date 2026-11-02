@@ -1288,6 +1288,24 @@ push GitHub took (`branch`, `lastPushAt` on its record): the git gateway reads G
 report for the refs it updated and tells the broker's entry for the run (`watchPushes()`,
 `restart.mjs`), whose record is saved with the run, so a restart keeps them.
 
+A task's pull request carries its `head` commit too, and what CI says of it (`ci`: `{ sha, state, runs }`, #436),
+decided by the rule auto-merge uses (`ci.mjs` `ciState()`) over the commit's Actions runs, check
+runs and commit statuses (`commitCi()`; one GitHub refuses, an installation that hasn't accepted
+`checks` or `statuses`, is left out; any other failure, a rate limit's 403 included, records nothing, rather than CI without that part; each list is read page by page). A `workflow_run`, `check_suite` or `status` delivery for
+the head of an open pull request reads it again (`ciChanged()`, one read at a time per task, one
+more after those that came meanwhile, a failed one included), without holding the delivery's
+place among those the orchestrator handles at once; one for any other commit (an older head)
+changes nothing. A new head (from a delivery no older, by its `updated_at`, than the one that set the last) resets it to `none` and reads it at once: the delivery that said
+it changed may have been handled before the pull request's own. `check_suite` and `status` are
+`QUIET_EVENTS` (`github-app.mjs`): edge passes on only what `ciDelivery()` reads of them
+(`quietPayload()`), for allowed repositories, without their GUID or a log line, and at most one
+per commit the orchestrator hasn't read yet (`ciWaitingKey()`, cleared when it reads it: its
+handling reads the commit's CI after the ones left out), so they never crowd the stream. The
+orchestrator handles them without a log line, and the redeliveries skip them: `resync()`
+starts, once it resolved and four at a time, a read of the CI of each open pull request not
+settled for its head (never read, `none`, still running, or whose last read failed, `ciFailed`: a 5xx or a rate limit records nothing), at start; a user's Sync reads every open one's again (`allCi`), for a delivery lost on a settled head. A merged or closed one keeps the
+last CI known.
+
 ## Agents
 
 Three agents, Claude Code (`claude`), Codex (`codex`) and the Antigravity CLI (`antigravity`),

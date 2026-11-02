@@ -79,6 +79,7 @@ import { createPolicies } from "../listener/policies.mjs";
 import { operatorPolicies } from "../lib/policy-files.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createPulls } from "../listener/pulls.mjs";
+import { commitCi } from "../listener/ci.mjs";
 import { createDecisions } from "../listener/decisions.mjs";
 import { fetchEgressCa } from "../listener/egress.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
@@ -574,6 +575,7 @@ const pulls = createPulls({
   log,
   listPulls: (repo) => listPulls(github, repo),
   getPull: (repo, number) => fetchPull(github, repo, number),
+  readCi: (repo, sha) => commitCi(github, repo, sha),
 });
 
 // Failed runs dismissed from the dashboard, and runs whose questions were set aside (their

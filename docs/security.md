@@ -497,7 +497,13 @@ filesystem, without capabilities.
   both copies, goes on once. It goes on the `deliveries` stream in that store, with the secrets
   edge holds redacted from what people wrote (`storable()`), and only then is answered `202`.
   Once the orchestrator acknowledges it, it goes from the stream, its payload with it (the file
-  store rewrites the stream's file once it holds 100 lines of them).
+  store rewrites the stream's file once it holds 100 lines of them). `check_suite` and `status`
+  deliveries (`QUIET_EVENTS`, which only tell the dashboard a commit's CI changed) are the
+  exception: kept to their installation, repository and commit (`quietPayload()`), only for
+  the repos `ALLOWED_REPOS` lets through (edge reads it too), they go on without their GUID,
+  at most one per commit waiting for the orchestrator (`ci-waiting/<repo>@<sha>`, set-if-absent,
+  cleared when the orchestrator reads that entry, kept 10 minutes at most: `edge/internal.mjs`),
+  so a busy installation's statuses never crowd out the deliveries that start runs.
   The store away: `503`, its GUID freed, and GitHub marks it failed for the redeliveries to ask
   again. Their poller (the App's one write, `POST /as-app/app/hook/deliveries/:id/attempts` at
   the github service, edge's alone) runs on one copy, the holder of the store's lease

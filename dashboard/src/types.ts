@@ -115,6 +115,33 @@ export interface PullRequest {
   deletions?: number;
   changedFiles?: number;
   commits?: number;
+  // Its head commit, and what CI says of it (listener/ci.mjs ciSummary()): its GitHub Actions
+  // runs, other Apps' check runs and commit statuses, failed ones first. Reset to `none` by a
+  // push; the last one known stays once it is merged or closed. Absent until read.
+  head?: string;
+  ci?: Ci;
+  // When GitHub last changed it, as the delivery that recorded it said. Sent, not shown.
+  updatedAt?: number;
+  // Its last CI read failed (a 5xx, a rate limit): `ci` may be out of date until the next one
+  // (listener/pulls.mjs ciStale()). Sent, not shown.
+  ciFailed?: boolean;
+}
+
+// failed when one run failed, else running while one hasn't finished, else passed; none
+// without any.
+export type CiState = "running" | "failed" | "passed" | "none";
+
+export interface Ci {
+  sha: string;
+  state: CiState;
+  runs: CiRun[];
+}
+
+// An Actions run (its workflow's name), a check run, or a commit status (its context).
+export interface CiRun {
+  name: string;
+  state: Exclude<CiState, "none">;
+  url: string | null;
 }
 
 // What a repo's policies (Rego `allow_*` and `deny_*` rules, listener/policies.mjs) decided

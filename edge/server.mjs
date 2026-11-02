@@ -14,6 +14,7 @@
 //   STORE_URL           its store (../lib/store.mjs): file:///data/store, or Redis for two copies
 //                       on several nodes (REDIS_PASSWORD)
 //   ALLOWED_USERS       who may sign in (or allowed_users in config.yaml): required
+//   ALLOWED_REPOS       the repos CI's deliveries are passed on for (or allowed_repos in config.yaml)
 //   PUBLIC_URL, GITHUB_URL, GITHUB_API
 //   ORCHESTRATOR_URL    the orchestrator's services port: http://orchestrator:8083
 //   GITHUB_SERVICE_URL  /setup's conversion, the redeliveries, the App's reads

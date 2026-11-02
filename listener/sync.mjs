@@ -24,7 +24,8 @@ export function createSync({
   // that failed sets `error` and counts 0, the other's count is kept (it did its work). Never
   // throws.
   async function sync(by) {
-    const [scanned, resynced] = await Promise.allSettled([scan(), resync()]);
+    // A user's Sync reads every open pull request's CI again, not only those not settled.
+    const [scanned, resynced] = await Promise.allSettled([scan(), resync({ allCi: by !== null })]);
     const errors = [];
     if (scanned.status === "rejected") {
       // At start, redeliveries.start()'s scan is the one shared here, and it logged it already.

@@ -115,13 +115,14 @@ run's project writes are refused with a message naming the permission; nothing e
 changes. A GitHub App can't reach a project owned by a user account.
 
 Checks and Commit statuses let runs read what CI says of a commit beyond GitHub Actions
-(other services' check runs, commit statuses: `gh pr checks`); the `check_suite` and `status`
-events are subscribed for the orchestrator's own use to come (nothing reads them yet). An App created before then lacks
+(other services' check runs, commit statuses: `gh pr checks`), and the dashboard shows them in
+each pull request's CI status; the `check_suite` and `status` events keep that status current. An App created before then lacks
 them: add **Checks: read** and **Commit statuses: read** in its settings, turn on **Check
 suite** and **Status** under _Subscribe to events_, then accept the new permissions on each
 installation ([below](#when-the-app-needs-a-new-permission)). Until then, where a commit
 has checks, a run's `gh pr checks`, and `gh pr view` without `--json` (it shows them), fail
-with a message naming the permissions; everything else works as before.
+with a message naming the permissions, and the dashboard's CI status counts GitHub Actions
+only; everything else works as before.
 
 Upgrading: runs' reads of checks and projects are new to `allow_github` and `deny_github`
 (`action: "read_checks"` or `"read_projects"`, without a `target` or `change`). A deny rule of
@@ -307,7 +308,11 @@ how many), done, error. Titles come with the webhooks; for tasks from before the
 had them, the orchestrator asks GitHub once and keeps them in `titles.json` in its data volume.
 
 Each task also links to its pull request (the one that closes its issue, or the pull request
-itself), with a badge for its state: draft, ready for review, merged or closed. The
+itself), with a badge for its state: draft, ready for review, merged or closed, and an icon
+for what CI says of its latest commit: running, failed (a red cross) or passed (a green check),
+over its GitHub Actions runs, other services' check runs and commit statuses. Its title lists
+them; in the task's header and the Overview's **Ready for review** rows it links to the failed
+run, else the pull request's Checks tab. The
 `pull_request` webhooks keep it current, in `pulls.json`, and so do the changes Deckhand
 lets through for runs (a run's `gh pr ready`); for tasks from before, the orchestrator looks through each
 repository's 100 most recently updated pull requests once per start, and asks again about the
@@ -543,7 +548,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | Setting                                                                                           | `config.yaml` key                                                                                 | Default                                                                      | What                                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `ALLOWED_USERS`                                                                                   | `allowed_users`                                                                                   | none: required                                                               | GitHub logins that can start runs and sign in to the dashboard (edge and the orchestrator both read it)                                                                                                                                            |
-| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, or `owner/*` for every repo of an account, comma-separated in `.env`; see [Which repositories](#which-repositories))                                                                                              |
+| `ALLOWED_REPOS`                                                                                   | `allowed_repos`                                                                                   | all where the App is installed                                               | narrows the repos (`owner/repo`, or `owner/*` for every repo of an account, comma-separated in `.env`; see [Which repositories](#which-repositories)); edge reads it too, to pass on CI's deliveries for those repos only                          |
 | `CLAUDE_CODE_OAUTH_TOKEN` / `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN`                          | none: a secret, `.env` only                                                                       |                                                                              | Claude credential, the models service's alone, which adds it to the sandboxes' API calls (`ANTHROPIC_AUTH_TOKEN`: a gateway's). With several, runs take the gateway's, then the plan's, then the key ([Agents](#agents-and-providers))             |
 | `ANTHROPIC_BASE_URL`                                                                              | `anthropic_base_url`                                                                              | `https://api.anthropic.com`                                                  | where the models service sends the sandboxes' API calls: a [gateway](#through-a-gateway), say                                                                                                                                                      |
 | `ANTHROPIC_DEFAULT_OPUS_MODEL`, `ANTHROPIC_DEFAULT_SONNET_MODEL`, `ANTHROPIC_DEFAULT_HAIKU_MODEL` | `anthropic_default_opus_model`, `anthropic_default_sonnet_model`, `anthropic_default_haiku_model` | Claude Code's                                                                | the models `opus`, `sonnet` and `haiku` stand for in the sandboxes (a gateway's names)                                                                                                                                                             |

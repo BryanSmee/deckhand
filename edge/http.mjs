@@ -9,13 +9,13 @@
 import { createServer } from "node:http";
 import { authPage } from "../listener/auth.mjs";
 import { createSlots, readDelivery, sourceOf } from "../listener/deliveries.mjs";
-import { verified } from "../listener/events.mjs";
-import { UNREAD_EVENTS } from "../listener/github-app.mjs";
+import { quietPayload, verified } from "../listener/events.mjs";
+import { QUIET_EVENTS } from "../listener/github-app.mjs";
 import { serveAsset } from "../listener/static.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { readBody } from "../lib/http.mjs";
 import { storable } from "../lib/store.mjs";
-import { DELIVERIES } from "./internal.mjs";
+import { ciWaitingKey, DELIVERIES } from "./internal.mjs";
 
 // On every answer: the dashboard's own scripts, styles and images only (its build has no
 // inline script), never in a frame (a page on a sibling domain, which SameSite=Lax lets
@@ -58,6 +58,8 @@ export function local(req) {
 // the redeliveries' poller only asks for those GitHub never saw taken.
 export const deliveryKey = (id) => `deliveries/${id}`;
 export const DELIVERY_TTL_MS = 24 * 3600_000;
+// How long a commit's mark (internal.mjs ciWaitingKey()) lasts, should its entry be lost.
+const CI_WAITING_TTL_MS = 10 * 60_000;
 // A delivery still being taken after this was lost on its way to the stream (a copy that died,
 // a store that failed twice): taken again.
 const TAKING_MS = 60_000;
@@ -148,16 +150,28 @@ export function createEdgeHttp({
     if (!secret || !verified(secret, req.headers["x-hub-signature-256"], body)) {
       return refuse(res, 401, "bad signature (not from this Deckhand's App)", "bad signature");
     }
-    const id = req.headers["x-github-delivery"] || null;
     const event = req.headers["x-github-event"];
-    // Nothing reads them yet (github-app.mjs UNREAD_EVENTS): no log line, nor a place in the
-    // store's delivery ids.
-    if (UNREAD_EVENTS.has(event)) return res.writeHead(202).end();
+    // A commit's CI changed (github-app.mjs QUIET_EVENTS): no log line, nor a place in the
+    // store's delivery ids, so taken without its GUID.
+    const quiet = QUIET_EVENTS.has(event);
+    const id = (!quiet && req.headers["x-github-delivery"]) || null;
     let payload;
+    let waiting = null;
     try {
       payload = JSON.parse(body.toString("utf8"));
     } catch {
       return res.writeHead(202).end();
+    }
+    if (quiet) {
+      // Only what the orchestrator reads of it, for an allowed repo, and one waiting per commit.
+      payload = quietPayload(config, event, payload);
+      if (!payload) return res.writeHead(202).end();
+      const { full_name } = payload.repository;
+      const sha = payload.sha ?? payload.check_suite.head_sha;
+      waiting = ciWaitingKey(full_name, sha);
+      if (!(await store.setIfAbsent(waiting, { at: now() }, { ttlMs: CI_WAITING_TTL_MS }))) {
+        return res.writeHead(202).end();
+      }
     }
     // Deliveries without a GUID are taken.
     if (id && !(await startTaking(store, id, now))) {
@@ -173,6 +187,7 @@ export function createEdgeHttp({
       // Not taken after all: GitHub's redelivery, or the next scan's, is. A mark the store
       // couldn't remove either is taken again once a minute old.
       if (id) await store.delete(deliveryKey(id)).catch(() => false);
+      if (waiting) await store.delete(waiting).catch(() => false);
       throw error;
     }
     // On the stream: taken, whatever this write does. Refused now, GitHub would send it again,
@@ -184,7 +199,7 @@ export function createEdgeHttp({
           log(`Delivery ${id}: its mark (${error.message ?? error}), kept as taking`),
         );
     }
-    log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
+    if (!quiet) log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
     res.writeHead(202).end();
   }
 

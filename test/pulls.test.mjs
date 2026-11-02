@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { pullRequest, replayedPull } from "../listener/events.mjs";
+import { ciDelivery, pullRequest, replayedPull } from "../listener/events.mjs";
+import { commitCi } from "../listener/ci.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -452,4 +453,393 @@ test("a redelivered pull_request delivery: as the pull request is now", () => {
     state: "merged",
     readyAt: null,
   });
+});
+
+test("pull_request deliveries: the head commit, whose CI the dashboard shows", () => {
+  assert.equal(map("synchronize", { head: { ref: "issue-30-fix", sha: "b2" } }).pr.head, "b2");
+  assert.equal("head" in map("opened").pr, false);
+});
+
+// A pulls store whose CI reads answer from `answers` (sha → ci, or a function of the call),
+// recording the commits read.
+function ciPulls(t, answers = {}) {
+  const read = [];
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [],
+    readCi: async (repo, sha) => {
+      read.push(`${repo}@${sha}`);
+      const answer = answers[sha];
+      return typeof answer === "function" ? answer() : (answer ?? null);
+    },
+  });
+  return { pulls, read };
+}
+const ci = (sha, state, runs = []) => ({ sha, state, runs });
+const failedRun = {
+  name: "test",
+  state: "failed",
+  url: "https://github.com/org/repo/actions/runs/9",
+};
+
+// Waits for the reads started without a caller waiting (record()'s).
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+
+test("pulls: CI of the head read when it moves and when a delivery says it changed, an older commit's ignored", async (t) => {
+  const answers = { a1: ci("a1", "running"), b2: ci("b2", "running") };
+  const { pulls, read } = ciPulls(t, answers);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  // A new pull request starts with nothing reported, then its CI is read: a delivery for its
+  // head may have come before its own.
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "none"));
+  await settled();
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "running"));
+  answers.a1 = ci("a1", "passed");
+  await pulls.ciChanged("Org/Repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+  // Another commit, or another repo's: nothing read.
+  await pulls.ciChanged("org/repo", "zz");
+  await pulls.ciChanged("org/other", "a1");
+  assert.deepEqual(read, ["org/repo@a1", "org/repo@a1"]);
+  // A push: back to nothing reported at the new head, then read; the old head's runs no longer
+  // count.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2" });
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "none"));
+  await settled();
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "running"));
+  answers.b2 = ci("b2", "failed", [failedRun]);
+  await pulls.ciChanged("org/repo", "b2");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "failed", [failedRun]));
+  // An edit without a head keeps head and CI, and reads nothing; a merge keeps the last CI
+  // known, and isn't read.
+  pulls.record("org/repo#30", pr(31, "ready"));
+  assert.equal(pulls.get("org/repo#30").ci.state, "failed");
+  pulls.record("org/repo#30", { ...pr(31, "merged"), head: "b2" });
+  await pulls.ciChanged("org/repo", "b2");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "failed", [failedRun]));
+  assert.deepEqual(read, ["org/repo@a1", "org/repo@a1", "org/repo@b2", "org/repo@b2"]);
+});
+
+test("pulls: CI deliveries while one is read cost one read more, not one each", async (t) => {
+  const releases = [];
+  const answers = {
+    a1: () => new Promise((resolve) => releases.push(() => resolve(ci("a1", "passed")))),
+  };
+  const { pulls, read } = ciPulls(t, answers);
+  // Recorded: the read its head starts is the one the deliveries below find going.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  const all = [1, 2, 3, 4].map(() => pulls.ciChanged("org/repo", "a1"));
+  releases.shift()();
+  await settled();
+  releases.shift()();
+  await Promise.all(all);
+  assert.deepEqual(read, ["org/repo@a1", "org/repo@a1"]);
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+});
+
+test("pulls: a CI read that failed is tried again when a delivery asked meanwhile", async (t) => {
+  let calls = 0;
+  let fail;
+  const answers = {
+    a1: () => {
+      calls++;
+      if (calls === 1) return new Promise((resolve, reject) => (fail = reject));
+      return ci("a1", "passed");
+    },
+  };
+  const { pulls } = ciPulls(t, answers);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  const asked = pulls.ciChanged("org/repo", "a1");
+  fail(new Error("GitHub is down"));
+  await asked;
+  assert.equal(calls, 2);
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+});
+
+test("pulls: CI read for one head isn't kept once the pull request moved to another", async (t) => {
+  let pulls;
+  let moved = false;
+  const answers = {
+    a1: async () => {
+      if (!moved) {
+        moved = true;
+        pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2" });
+      }
+      return ci("a1", "failed");
+    },
+  };
+  ({ pulls } = ciPulls(t, answers));
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await settled();
+  await settled();
+  // b2 read nothing (null): reset, not a1's.
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "none"));
+});
+
+test("pulls: resync reads, after it resolves, the CI of the open ones not settled for their head", async (t) => {
+  const path = tempPath(t);
+  const read = [];
+  let reading = false;
+  const readCi = async (repo, sha) => {
+    if (!reading) return null;
+    read.push(sha);
+    if (sha === "err") throw new Error("boom");
+    return ci(sha, "passed");
+  };
+  const listPulls = async () => [
+    { number: 31, html_url: "u31", state: "open", draft: false, head: { sha: "a1" } },
+    // Pushed to without its delivery: the listing has its new head.
+    { number: 33, html_url: "u33", state: "open", draft: false, head: { sha: "c3" } },
+    { number: 35, html_url: "u35", state: "open", draft: false, head: { sha: "err" } },
+  ];
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  const logs = [];
+  const pulls = createPulls({ path, listPulls, readCi, log: (line) => logs.push(line) });
+  // Recorded while GitHub answers nothing of their CI.
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  pulls.record("org/repo#32", sized({ ...pr(33, "ready"), head: "b2" }));
+  pulls.record("org/repo#34", sized({ ...pr(35, "ready"), head: "err" }));
+  pulls.record("org/repo#36", sized({ ...pr(37, "merged"), head: "d4" }));
+  await settled();
+  reading = true;
+  await pulls.resync();
+  await pulls.caughtUp();
+  assert.deepEqual(read.sort(), ["a1", "c3", "err"]);
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+  assert.equal(pulls.get("org/repo#32").head, "c3");
+  assert.deepEqual(pulls.get("org/repo#32").ci, ci("c3", "passed"));
+  assert.deepEqual(pulls.get("org/repo#34").ci, ci("err", "none"));
+  assert.ok(
+    logs.some((l) => /org\/repo#34: CI of #35: boom/.test(l)),
+    logs.join("\n"),
+  );
+  // Settled: not read again, after a restart either; the one that failed is.
+  const next = createPulls({ path, listPulls, readCi });
+  assert.deepEqual(next.get("org/repo#30").ci, ci("a1", "passed"));
+  read.length = 0;
+  await next.resync();
+  await next.caughtUp();
+  assert.deepEqual(read, ["err"]);
+});
+
+test("pulls: a CI read GitHub failed (a 502) leaves the CI known as it was", async (t) => {
+  let fail = false;
+  const answers = {
+    a1: () => {
+      if (fail) throw new Error("GitHub GET /repos/org/repo/commits/a1/status: 502");
+      return ci("a1", "failed", [failedRun]);
+    },
+  };
+  const { pulls } = ciPulls(t, answers);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await settled();
+  fail = true;
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "failed", [failedRun]));
+});
+
+test("pulls: a CI read that ends while resync waits on GitHub: its state still applied, the CI read kept", async (t) => {
+  let listed;
+  const listing = new Promise((resolve) => (listed = resolve));
+  const listPulls = () => listing;
+  let answer = null;
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls,
+    readCi: async (repo, sha) => answer && ci(sha, answer),
+  });
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  await settled();
+  const syncing = pulls.resync();
+  // Its CI read meanwhile: only `ci` changes.
+  answer = "passed";
+  await pulls.ciChanged("org/repo", "a1");
+  // Merged while its delivery was lost.
+  listed([
+    { number: 31, html_url: "u31", state: "closed", merged_at: "2026-11-01", head: { sha: "a1" } },
+  ]);
+  assert.equal(await syncing, 1);
+  assert.equal(pulls.get("org/repo#30").state, "merged");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+});
+
+test("ciDelivery: an Actions run, a check suite or a status → the commit, for allowed repos from the App", () => {
+  const base = { installation: { id: 7 }, repository: { full_name: "org/repo" } };
+  const of = (event, p) => ciDelivery(config, event, { ...base, ...p });
+  for (const action of ["requested", "in_progress", "completed"]) {
+    assert.deepEqual(of("workflow_run", { action, workflow_run: { head_sha: "a1" } }), {
+      repo: "org/repo",
+      sha: "a1",
+    });
+  }
+  assert.deepEqual(of("check_suite", { action: "completed", check_suite: { head_sha: "b2" } }), {
+    repo: "org/repo",
+    sha: "b2",
+  });
+  assert.deepEqual(of("status", { sha: "c3", state: "failure" }), { repo: "org/repo", sha: "c3" });
+  // Another repository, no installation, no commit, another event: none.
+  assert.equal(of("status", { sha: "c3", repository: { full_name: "else/where" } }), null);
+  assert.equal(of("status", { sha: "c3", installation: undefined }), null);
+  assert.equal(of("status", {}), null);
+  assert.equal(of("workflow_run", { workflow_run: {} }), null);
+  assert.equal(of("check_suite", { sha: "c3" }), null);
+  assert.equal(of("pull_request", { sha: "c3", workflow_run: { head_sha: "a1" } }), null);
+});
+
+test("pulls: a rate-limited CI read (a 403) leaves the CI known as it was", async (t) => {
+  let limited = false;
+  const github = async (repo, method, path) => {
+    if (path.includes("/actions/runs")) {
+      return new Response(JSON.stringify({ workflow_runs: [] }));
+    }
+    if (path.includes("/check-runs")) return new Response(JSON.stringify({ check_runs: [] }));
+    if (limited) {
+      return new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0" },
+      });
+    }
+    const failed = { context: "ci/jenkins", state: "failure", target_url: "https://ci/1" };
+    return new Response(JSON.stringify({ statuses: [failed] }));
+  };
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [],
+    readCi: (repo, sha) => commitCi(github, repo, sha),
+  });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await settled();
+  const failed = ci("a1", "failed", [{ name: "ci/jenkins", state: "failed", url: "https://ci/1" }]);
+  assert.deepEqual(pulls.get("org/repo#30").ci, failed);
+  limited = true;
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, failed);
+});
+
+test("pulls: an older delivery handled late doesn't move the head back", async (t) => {
+  const { pulls, read } = ciPulls(t, { b2: ci("b2", "passed") });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2", updatedAt: 2000 });
+  await settled();
+  // The `synchronize` of the commit before, handled after.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", updatedAt: 1000 });
+  await settled();
+  assert.equal(pulls.get("org/repo#30").head, "b2");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "passed"));
+  assert.deepEqual(read, ["org/repo@b2"]);
+  // A newer one moves it, and when it wasn't said, the latest handled does.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "c3", updatedAt: 3000 });
+  assert.equal(pulls.get("org/repo#30").head, "c3");
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "d4" });
+  assert.equal(pulls.get("org/repo#30").head, "d4");
+  assert.equal(pulls.get("org/repo#30").updatedAt, 3000);
+});
+
+test("pulls: an open pull request fill() finds for an older task gets its CI read; a closed one doesn't", async (t) => {
+  const read = [];
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [
+      {
+        number: 31,
+        html_url: "u31",
+        state: "open",
+        draft: false,
+        body: "Closes #30",
+        head: { sha: "a1", ref: "x", repo: { full_name: "org/repo" } },
+      },
+      {
+        number: 33,
+        html_url: "u33",
+        state: "closed",
+        merged_at: "2026-11-01",
+        body: "Closes #32",
+        head: { sha: "b2", ref: "y", repo: { full_name: "org/repo" } },
+      },
+    ],
+    getPull: async () => null,
+    readCi: async (repo, sha) => (read.push(sha), ci(sha, "passed")),
+  });
+  await pulls.fill(["org/repo#30", "org/repo#32"]);
+  await pulls.caughtUp();
+  assert.deepEqual(read, ["a1"]);
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+  assert.equal(pulls.get("org/repo#32").state, "merged");
+  assert.equal(pulls.get("org/repo#32").ci, undefined);
+});
+
+test("pulls: a failed CI read on a settled head is read again at the next resync, kept across a restart", async (t) => {
+  const path = tempPath(t);
+  let fail = false;
+  const read = [];
+  const readCi = async (repo, sha) => {
+    read.push(sha);
+    if (fail) throw new Error("GitHub GET /repos/org/repo/commits/a1/status: 403");
+    return ci(sha, read.length > 2 ? "failed" : "passed");
+  };
+  const listPulls = async () => [];
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  const pulls = createPulls({ path, listPulls, readCi });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  await settled();
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+  // Settled: the next resync at start leaves it.
+  await pulls.resync();
+  await pulls.caughtUp();
+  assert.deepEqual(read, ["a1"]);
+  // A failure was posted, and its read failed: the green check may be wrong now.
+  fail = true;
+  await pulls.ciChanged("org/repo", "a1");
+  assert.equal(pulls.get("org/repo#30").ciFailed, true);
+  assert.equal(pulls.get("org/repo#30").ci.state, "passed");
+  fail = false;
+  const next = createPulls({ path, listPulls, readCi });
+  await next.resync();
+  await next.caughtUp();
+  assert.equal(next.get("org/repo#30").ci.state, "failed");
+  assert.equal("ciFailed" in next.get("org/repo#30"), false);
+});
+
+test("pulls: resync({ allCi }) reads the CI of every open pull request, settled ones too", async (t) => {
+  const read = [];
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  const passed = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [],
+    readCi: async (repo, sha) => (read.push(sha), ci(sha, "passed")),
+  });
+  passed.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  passed.record("org/repo#32", sized({ ...pr(33, "merged"), head: "b2" }));
+  await settled();
+  read.length = 0;
+  await passed.resync();
+  await passed.caughtUp();
+  assert.deepEqual(read, []);
+  await passed.resync({ allCi: true });
+  await passed.caughtUp();
+  assert.deepEqual(read, ["a1"]);
+});
+
+test("pulls: the head resync found keeps GitHub's time: an older synchronize handled after doesn't move it back", async (t) => {
+  const listPulls = async () => [
+    {
+      number: 31,
+      html_url: "u31",
+      state: "open",
+      draft: false,
+      head: { sha: "c3" },
+      updated_at: "2026-11-02T10:00:00Z",
+    },
+  ];
+  const pulls = createPulls({ path: tempPath(t), listPulls, readCi: async () => null });
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1", updatedAt: 1000 }));
+  await pulls.resync();
+  assert.equal(pulls.get("org/repo#30").head, "c3");
+  assert.equal(pulls.get("org/repo#30").updatedAt, Date.parse("2026-11-02T10:00:00Z"));
+  // The synchronize of b2, between a1 and c3, redelivered by the same Sync.
+  const b2 = Date.parse("2026-11-02T09:00:00Z");
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2", updatedAt: b2 });
+  assert.equal(pulls.get("org/repo#30").head, "c3");
 });
