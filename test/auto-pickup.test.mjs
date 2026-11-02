@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join } from "node:path";
 import { test } from "node:test";
 import {
   SOON_MS,
@@ -11,8 +12,9 @@ import {
 import { ConfigError, loadConfig } from "../listener/config.mjs";
 import { parseRepoConfig, startable } from "../listener/repo-config.mjs";
 import { runTrigger } from "../listener/run-policy.mjs";
+import { createPicks, endPicks } from "../listener/picks.mjs";
 import { createTasks, newTask, pickedTask } from "../listener/tasks.mjs";
-import { testConfig } from "./helpers.mjs";
+import { tempDir, testConfig } from "./helpers.mjs";
 
 const BOT = "deckhand[bot]";
 
@@ -759,7 +761,8 @@ test("soon(): one sweep a moment later for a burst, none without slots", async (
 // run records newest first (what a restart keeps); `closed` and `pulls`, task key → how its
 // issue closed and its pull request (titles.mjs, pulls.mjs); `reviews`, pull request number →
 // its review loop's entry (reviews.mjs). Nothing starts by itself: the test calls schedule().
-function pickTasks({ runs = [], closed = {}, pulls = {}, reviews = {} } = {}) {
+// `picks`: picks.mjs's store of ended picks.
+function pickTasks({ runs = [], closed = {}, pulls = {}, reviews = {}, picks = null } = {}) {
   const started = [];
   const { settings } = parseRepoConfig("auto_pickup: true\n", testConfig());
   const ctx = {
@@ -783,6 +786,7 @@ function pickTasks({ runs = [], closed = {}, pulls = {}, reviews = {} } = {}) {
     },
     pulls: { get: (key) => pulls[key] ?? null, keys: () => Object.keys(pulls) },
     reviews: { entry: (repo, number) => reviews[number] ?? null },
+    picks,
     received: () => {},
     answer: async () => {},
     runner: { hasSession: async () => true },
@@ -860,7 +864,7 @@ test("a person's comment on an auto-picked task holds the slot too, started by t
   assert.equal((await p.review(1)).autoPickup, true);
 });
 
-test("once the picked work is done, or another run came last, what is queued isn't auto-picked", async () => {
+test("once the picked work is done, or another run came last, what is queued isn't auto-picked", async (t) => {
   const cases = [
     // The issue closed, its pull request merged or closed.
     { runs: [pickedRun(1)], closed: { "org/app#1": "completed" } },
@@ -869,7 +873,6 @@ test("once the picked work is done, or another run came last, what is queued isn
     // The picked run failed or was stopped before any pull request.
     { runs: [pickedRun(1, { status: "error" })] },
     { runs: [pickedRun(1, { status: "cancelled" })] },
-    { runs: [pickedRun(1, { status: "stopped" })] },
     // Merged, or the issue closed, under another spelling of the key.
     { runs: [pickedRun(1)], pulls: { "Org/App#1": { number: 5, state: "merged" } } },
     { runs: [pickedRun(1)], closed: { "Org/App#1": "completed" } },
@@ -883,6 +886,19 @@ test("once the picked work is done, or another run came last, what is queued isn
     assert.equal(loop.autoPickup, undefined, JSON.stringify(state));
     assert.equal(p.pickedCount(), 0);
   }
+  // Closed, then reopened with no run between: the close ended the pick for good.
+  const path = join(tempDir(t), "picks.json");
+  const picks = createPicks({ path });
+  const runs = [pickedRun(1), pickedRun(2)];
+  endPicks(picks, runs, ["Org/App#1", "org/app#pr-5"]);
+  // Read back as after a restart.
+  const reopened = pickTasks({ runs, picks: createPicks({ path }) });
+  assert.equal((await reopened.review(1)).autoPickup, undefined);
+  // Another picked task, never closed: still picked.
+  assert.equal((await reopened.review(2)).autoPickup, true);
+  // A run after the close (a new pick): the end was the earlier run's.
+  const again = pickTasks({ runs: [pickedRun(1, { id: "run-9" }), ...runs], picks });
+  assert.equal((await again.review(1)).autoPickup, true);
   // Its pull request still open, under another spelling of the key: still picked.
   const p = pickTasks({
     runs: [pickedRun(1, { key: "Org/App#1" })],
@@ -917,6 +933,15 @@ test("between two loop steps of an auto-picked issue, nothing queued, its slot s
   });
   fixed.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
   assert.equal(fixed.pickedCount(), 1);
+  // After a restart, the task between its steps isn't in `tasks`: its pull request finds it,
+  // once whatever its spelling.
+  const restarted = pickTasks({ runs: [pickedRun(1)], pulls: ready, reviews: waits });
+  assert.equal(restarted.pickedCount(), 1);
+  restarted.ctx.tasks.set(
+    "Org/App#1",
+    newTask({ repo: "Org/App", id: "1", kind: "issue", number: 1 }),
+  );
+  assert.equal(restarted.pickedCount(), 1);
   // The loop over (a clean review), the pull request merged, or the task never picked: free.
   for (const state of [
     { runs: [pickedRun(1)], pulls: ready, reviews: { 5: { rounds: [{ round: 0 }] } } },

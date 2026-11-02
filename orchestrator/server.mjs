@@ -95,6 +95,7 @@ import { createServicesHttp } from "../listener/services-http.mjs";
 import { createRunEvents } from "../listener/run-events.mjs";
 import { createDiscussionApi } from "../listener/discussions.mjs";
 import { askedOn, closedTasks, createDismissals, setAsideClosed } from "../listener/dismissals.mjs";
+import { createPicks } from "../listener/picks.mjs";
 import { operatorSecrets } from "../listener/secrets.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { createStatus, serverInfo, serverSetup } from "../listener/status.mjs";
@@ -579,6 +580,9 @@ const pulls = createPulls({
 // needs-input label taken off), while each is its task's last (dismissals.mjs).
 const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
 
+// Auto-picked work that is over: its issue closed, its pull request merged or closed (picks.mjs).
+const picks = createPicks({ path: join(config.dataDir, "picks.json") });
+
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
 // One whose label came off meanwhile sets its run's questions aside, as the delivery would,
 // once the issue itself says so: a listing read page by page can miss one that moved between
@@ -679,6 +683,7 @@ Object.assign(ctx, {
   pulls,
   inputs,
   dismissals,
+  picks,
   order,
   onboarded,
   repoList,

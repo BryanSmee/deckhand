@@ -517,6 +517,8 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     capabilities: session?.capabilities ?? null,
     taskMode: meta.taskMode ?? null,
     reason: meta.reason ?? null,
+    // Auto-picked, or following such a run (newRecord()): what follows it after a restart too.
+    ...(meta.autoPickup && { autoPickup: true }),
     round: meta.round ?? null,
     rounds: meta.rounds ?? null,
     // Logs from before runs kept them have none: those runs can't run again.

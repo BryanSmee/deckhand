@@ -918,6 +918,17 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   return { loop: out ? "rounds-out" : "stopped", ...at };
 }
 
+// The loop of a task's pull request (`entry`, reviewed()) as reviewLoop() has it, from the
+// task's last run `last` (its step while it runs; once over, the step the listener said is on
+// its way) and the reason of its queued run (`queued`), if any: the dashboard's `review`
+// (board.mjs) and whether an auto-picked task keeps its slot between steps (tasks.mjs).
+export function loopState(entry, last, queued = null) {
+  const running = last?.status === "running" ? last.reason : null;
+  const step = [running, queued].find((r) => LOOP_STEPS.includes(r)) ?? null;
+  const settling = last?.status === "ok" && LOOP_STEPS.includes(last.reason) ? last : null;
+  return reviewLoop(entry, step, { settling });
+}
+
 // reviewLoop()'s states between two of the loop's runs: the task is in review (board.mjs), and
 // an auto-picked one keeps its reserved slot (tasks.mjs loopGoing()).
 export const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];

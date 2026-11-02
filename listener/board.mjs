@@ -29,7 +29,7 @@
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
 import { APART } from "./modes.mjs";
-import { LOOP_STEPS, LOOPING, reviewLoop } from "./reviews.mjs";
+import { LOOP_STEPS, LOOPING, loopState } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -281,13 +281,9 @@ const STEPS = LOOP_STEPS;
 // or queued for the loop's next run; a maintainer's comment queued meanwhile stays queued.
 function inReview(t, q, p, reviewed) {
   if (!p) return;
-  const last = t.runs[0];
   // The loop's step: its run going, else queued, whatever else runs (the work run that marked
   // the pull request ready may still be).
-  const running = last?.status === "running" ? last.reason : null;
-  const step = [running, q?.reason].find((r) => STEPS.includes(r)) ?? null;
-  const settling = last?.status === "ok" && STEPS.includes(last.reason) ? last : null;
-  const review = reviewLoop(reviewed(t.repo, p.number), step, { settling });
+  const review = loopState(reviewed(t.repo, p.number), t.runs[0], q?.reason);
   if (!review) return;
   t.review = review;
   if (!LOOPING.includes(review.loop)) return;

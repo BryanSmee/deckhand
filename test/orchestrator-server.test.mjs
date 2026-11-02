@@ -4948,7 +4948,7 @@ mounts:
   test("api/state: a run's questions stop waiting once its issue closes, its pull request merges, or a pull request's label comes off", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
-    const { port, send, listener } = await listen(t, {}, (dir, github) => {
+    const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       for (const [id, key] of [
         ["org-repo-5-1000", "org/repo#5"],
@@ -4960,7 +4960,15 @@ mounts:
         writeFileSync(
           join(dir, "logs", `${id}.log`),
           [
-            { type: "listener", key, repo: "org/repo", taskMode: "work", startedAt: 1000 },
+            // #5 and #9 auto-picked: their close ends the pick (picks.json).
+            {
+              type: "listener",
+              key,
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+              ...(["org/repo#5", "org/repo#9"].includes(key) && { autoPickup: true }),
+            },
             { type: "result", result: asked, duration_ms: 6000 },
           ]
             .map((l) => JSON.stringify(l))
@@ -5014,6 +5022,10 @@ mounts:
       "pull_request",
     );
     await listener.until("org/repo#9: closed, its last run's questions set aside");
+    assert.deepEqual(JSON.parse(readFileSync(join(dir, "picks.json"), "utf8")), {
+      "org/repo#5": "org-repo-5-1000",
+      "org/repo#9": "org-repo-9-1000",
+    });
     // Pull request #22, which would close #12, closed without merging: #12 still asks. Issue
     // #13's `closed`, redelivered from before its run asked: #13 still asks.
     await send(
