@@ -9,7 +9,7 @@
 // shortcuts of every page and of the tasks' list are bound here (keys.ts), with the `?` sheet
 // (Shortcuts.tsx) and Ctrl K (Palette.tsx).
 import { useEffect, useState } from "preact/hooks";
-import { type RepoList, useAppState, useRepos } from "./api";
+import { type RepoList, useAppState, useHealth, useRepos } from "./api";
 import { Board, type BoardView } from "./Board";
 import { Detail } from "./Detail";
 import { type ChipId, CHIPS, inChip, isLive, matchesSearch, repoTabs, sameRepo } from "./format";
@@ -165,6 +165,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
   const visible = inTab.filter((t) => inChip(chip, t) && matchesSearch(t, query));
   const first = visible.find(isLive) ?? visible[0];
   const onSettings = route.page === "settings";
+  // The services' health: the shell's alert, and Settings › Server, which reads it faster.
+  const health = useHealth(onSettings && route.section === "server");
   const onBoard = route.page === "board";
   const overview = isOverview(route);
   useEffect(() => onOverview?.(overview), [overview]);
@@ -207,6 +209,7 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
     error,
     route,
     syncer,
+    health: health.data,
     onRequest: (kind: Request) => setRequest({ kind }),
   };
   const railed = onBoard ? boardRail : rail;
@@ -342,6 +345,8 @@ export function Dashboard({ state, error, repos, refresh, onOverview }: Props) {
                 repos={repos}
                 narrow={!wide}
                 refresh={refresh}
+                health={health.data}
+                healthError={health.error}
                 notify={notify}
                 onOpen={(repo) =>
                   go({ repo: null, task: null, run: null, page: "settings", config: repo })

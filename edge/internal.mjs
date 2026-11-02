@@ -13,10 +13,13 @@
 //                              derived from the webhook secret signs: the orchestrator holds none
 //   POST /redeliveries/scan    the deliveries GitHub couldn't hand over, asked again now (the
 //                              dashboard's Sync) → { count }
+//   GET  /health               { ok, startedAt, version } (../lib/health.mjs), without a token:
+//                              the orchestrator's status page
 //
-// Each route takes the orchestrator's service token alone (serviceGuard()).
+// Each other route takes the orchestrator's service token alone (serviceGuard()).
 import { createServer } from "node:http";
 import { drainable } from "../lib/drain.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { fromKey, fromTag } from "../listener/discussions.mjs";
@@ -61,6 +64,8 @@ export function createEdgeInternal({
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const guard = serviceGuard({ service: "edge", keys, routes: ROUTES, bound, now });
 
@@ -93,8 +98,11 @@ export function createEdgeInternal({
   }
 
   async function handle(req, res) {
-    guard(req);
     const url = new URL(req.url, "http://edge");
+    // The orchestrator's status page's, without a token, as every service's (../lib/health.mjs).
+    if (req.method === "GET" && url.pathname === "/health")
+      return sendJson(res, healthAnswer(health));
+    guard(req);
     const route = `${req.method} ${url.pathname}`;
     if (route === "GET /events") return events(res, url);
     if (route === "POST /events/ack") {

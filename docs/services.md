@@ -93,6 +93,30 @@ and image build against it again. A run's live log reaches the dashboard through
 the orchestrator, which reads it from the runner and answers what edge passes on: edge calls the
 runner for nothing.
 
+## Health
+
+Every service answers `GET /health` without a token, for its probes and the dashboard's status
+page (#560), with the same JSON (`lib/health.mjs`):
+
+```json
+{ "ok": true, "startedAt": 1791990000000, "version": "1.4.0" }
+```
+
+`startedAt`: when it started, in ms; `version`: the release its image was built from
+(`DECKHAND_VERSION`, `dev` from source). The github service adds `app` (whether it holds an App)
+and the runner `active` (whether this copy holds its lease), as before; nothing else, ever: the
+answer needs no token. Edge answers it on its internal port (its public `/health` stays a plain
+`ok`), the egress proxy beside `/ready`, the policy service in JSON now (its status unchanged).
+`/ready` is the readiness probe's: `503` once a service drains, or on a copy waiting for its lease.
+
+The orchestrator asks each one it has a URL for, at most every 10 s, and the dashboard shows
+what it found in Settings › Server: the diagram above, each service green (`up`), blue
+(`starting`: started less than 5 minutes ago) or red (`down`: no answer within 2 s, a refused
+connection, a status other than 2xx, `ok: false`), with its state in words; the outside parts
+and the sandboxes grey, unchecked. A dot by Deckhand's name says when one is down (red) or
+starting (blue). Edge reaches none of them but the orchestrator, the github service and the
+broker, so the checks are the orchestrator's ([architecture.md](architecture.md#around-the-runs)).
+
 ## Upgrades without downtime
 
 A run calls the proxy, the broker, the github, models and policy services while it runs, never

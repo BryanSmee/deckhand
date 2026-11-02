@@ -5667,6 +5667,7 @@ mounts:
     const refused = await get("/api/state");
     assert.equal(refused.status, 401);
     assert.equal((await get("/api/server")).status, 401);
+    assert.equal((await get("/api/health")).status, 401);
     assert.equal(refused.headers.get("x-content-type-options"), "nosniff");
     for (const path of ["/assets/app-1a2b.js", "/index.html", "/nope.js"]) {
       assert.equal((await get(path)).status, 401);
@@ -5723,6 +5724,14 @@ mounts:
     const setup = await (await get("/api/server", session)).json();
     assertShape(setup, SETUP_KEYS, "ServerSetup");
     assert.deepEqual(setup.allowedUsers, ["alice", "bob"]);
+    // The services' health, which the orchestrator probes (health.mjs): never their URLs.
+    const health = await (await get("/api/health", session)).json();
+    assertShape(health, HEALTH_KEYS, "Health");
+    for (const s of health.services) assertShape(s, SERVICE_HEALTH_KEYS, "ServiceHealth");
+    const states = Object.fromEntries(health.services.map((s) => [s.name, s.state]));
+    assert.equal(states.orchestrator, "starting");
+    assert.equal(states.edge, "starting");
+    assert.doesNotMatch(JSON.stringify(health), /127\.0\.0\.1|http:/);
     for (const t of board.tasks) {
       assertShape(t, TASK_KEYS, "Task");
       for (const r of t.runs) assertShape(r, RUN_KEYS, "Run");
@@ -5928,6 +5937,8 @@ mounts:
   const SERVER_KEYS = [["version", "startedAt", "node", "source"], []];
   const SYNC_KEYS = [["at", "by", "redelivered", "pulls", "conflicts"], ["error"]];
   const SETUP_KEYS = [["engine", "proxy", "grants", "allowedUsers", "allowedRepos"], ["claude"]];
+  const HEALTH_KEYS = [["checkedAt", "services"], []];
+  const SERVICE_HEALTH_KEYS = [["name", "state", "startedAt", "version", "checkedAt"], ["reason"]];
   const TASK_KEYS = [
     [
       "key",
