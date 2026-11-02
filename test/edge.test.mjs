@@ -286,16 +286,12 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
     }
     handled.push(entry.id);
   });
-  for (let i = 0; i < 200 && !handled.includes("d3"); i++) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  await until(() => handled.includes("d3"), { what: "d3" });
   // Started in the stream's order, d3 handled while d1 still goes.
   assert.deepEqual(started.slice(0, 3), ["d1", "d2", "d3"]);
   assert.deepEqual(handled, ["d3"]);
   release();
-  for (let i = 0; i < 200 && handled.length < 3; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  await until(() => handled.length >= 3, { what: "d1 and d2" });
   // d1 once; d2 read again after its failure, and handled then.
   assert.deepEqual(handled, ["d3", "d1", "d2"]);
   assert.deepEqual(started, ["d1", "d2", "d3", "d2"]);

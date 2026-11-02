@@ -1269,22 +1269,23 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
 const SLOW = `mutation { addStar(input: { starrableId: "x" }) { starrable { ... on Repository {
   owner { ${"repositories(first: 1) { totalCount } ".repeat(270)} } } } } }`;
 
-test("a document the worker can't validate in time is refused alone; the others go on", async (t) => {
-  // The slow one's time is up as soon as it is sent; the quick one's never is: a real 150 ms
-  // also timed the quick one out on a paused runner, its answer read after its timer.
+test("a document whose time is up is refused alone; the worker started again takes the others", async (t) => {
+  // Its time is up because the fake timer says so, as soon as it is sent (a microtask: before
+  // the worker's answer can be read), whatever the document: a quick one, then. A real 150 ms
+  // with a slow one also timed the next one out on a paused runner, its answer read too late.
   let armed = 0;
   const setTimer = (fn) => (armed++ === 0 && queueMicrotask(fn), { unref() {} });
   const validator = createValidator({ timeoutMs: 150, setTimer, clearTimer: () => {} });
   t.after(validator.close);
-  const [slow, quick] = await Promise.all([
-    validator.check(SLOW, "a"),
+  const [first, next] = await Promise.all([
+    validator.check("{ viewer { id } }", "a"),
     validator.check("{ viewer { login } }", "b"),
   ]);
   assert.equal(armed, 2);
-  assert.equal(slow.status, 503);
-  assert.match(slow.message, /took over/);
+  assert.equal(first.status, 503);
+  assert.match(first.message, /took over 0.15 s/);
   // Validated by the worker started again.
-  assert.equal(quick, null);
+  assert.equal(next, null);
 });
 
 test("a run that floods the validator delays itself only: the runs take turns", async (t) => {

@@ -407,9 +407,9 @@ test("an answer varying on a header is kept for requests without it, Accept in t
   const json = await get("/left-pad", { accept: "application/json" });
   assert.equal(json.headers["x-deckhand-cache"], "miss");
   assert.equal(json.body, "packument as application/json");
-  for (let i = 0; i < 50 && !cache.has(cache.key(url("/left-pad"), undefined, corgi)); i++) {
-    await wait(5);
-  }
+  await until(() => cache.has(cache.key(url("/left-pad"), undefined, corgi)), {
+    what: "the packument in the cache",
+  });
   const again = await get("/left-pad", { accept: corgi });
   assert.equal(again.headers["x-deckhand-cache"], "hit");
   assert.equal(again.body, `packument as ${corgi}`);
@@ -588,7 +588,7 @@ test("a client that disconnects while a cached body is served: its file is close
     });
     req.end();
   });
-  for (let i = 0; i < 100 && !files[0]?.closed; i++) await wait(10);
+  await until(() => files[0]?.closed, { what: "the file's close" });
   assert.deepEqual(files, [{ closed: true }]);
 });
 
