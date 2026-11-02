@@ -155,8 +155,9 @@ export function createPulls({
         }
         const size = pullSize(found);
         // Recorded meanwhile by a delivery: that one is newer.
-        if (!Object.keys(size).length || pulls.get(key) !== pr) continue;
-        pulls.set(key, { ...pr, ...size });
+        const now = pulls.get(key);
+        if (!Object.keys(size).length || !sameBesidesCi(now, pr)) continue;
+        pulls.set(key, { ...now, ...size });
         changed = true;
       }
       if (changed) pulls.save();
@@ -202,17 +203,19 @@ export function createPulls({
             found ??= list.find((p) => p.number === pr.number);
           }
           const state = found && prState(found);
-          // Recorded meanwhile by a delivery: that one is newer.
-          if (!state || pulls.get(key) !== pr) continue;
+          // Recorded meanwhile by a delivery: that one is newer. Only its CI read meanwhile
+          // (readCiOf()): what it found stays.
+          const now = pulls.get(key);
+          if (!state || !sameBesidesCi(now, pr)) continue;
           // Only getPull() has its size: a listing's leaves the one known.
           const size = pullSize(found);
           const resized = Object.entries(size).some(([k, v]) => pr[k] !== v);
           // A head that moved without its delivery: its CI starts again (ciStale()).
           const head = found.head?.sha ?? pr.head;
           if (state === pr.state && !resized && head === pr.head) continue;
-          const moved = head && head !== pr.head && pr.ci?.sha !== head;
+          const moved = head && head !== pr.head && now.ci?.sha !== head;
           pulls.set(key, {
-            ...pr,
+            ...now,
             ...size,
             state,
             url: found.html_url ?? pr.url,
@@ -335,6 +338,15 @@ function mergePulls(kept, moved) {
     readyAt: kept.readyAt ?? moved.readyAt ?? null,
     ...(autoMerged && { autoMerged: true }),
   };
+}
+
+// Whether entries `a` and `b` are the same, but for their CI: readCiOf() writes only that, and
+// the lookups that were going meanwhile still apply.
+function sameBesidesCi(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  const rest = ({ ci, ...other }) => other;
+  return JSON.stringify(rest(a)) === JSON.stringify(rest(b));
 }
 
 // The size fields of a recorded pull request, those it has.

@@ -29,24 +29,3 @@ a.ci:hover {
   color: var(--run);
   background: var(--run-bg);
 }
-
-/* Running: a ring turning, as Spinner's. */
-.ring {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
-  animation: spin 0.8s linear infinite;
-}
-
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-
-/* Reduced motion (Preferences › Motion, else the system's setting): a still ring. */
-:global(.m-reduced) .ring {
-  animation: none;
-}

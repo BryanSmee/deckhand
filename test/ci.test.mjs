@@ -144,11 +144,54 @@ test("commitCi: Actions runs, check runs and statuses read; a refused one left o
     ],
   });
   assert.deepEqual(paths.sort(), [
-    "/repos/org/repo/actions/runs?head_sha=abc&per_page=100",
-    "/repos/org/repo/commits/abc/check-runs?per_page=100",
-    "/repos/org/repo/commits/abc/status?per_page=100",
+    "/repos/org/repo/actions/runs?head_sha=abc&per_page=100&page=1",
+    "/repos/org/repo/commits/abc/check-runs?per_page=100&page=1",
+    "/repos/org/repo/commits/abc/status?per_page=100&page=1",
   ]);
   // Nothing GitHub would give: null, the CI known stays.
   const refused = async () => reply(403, {});
   assert.equal(await commitCi(refused, "org/repo", "abc"), null);
+});
+
+test("commitCi: a failure other than a refusal throws, rather than CI read without that part", async () => {
+  const reply = (status, body) => new Response(JSON.stringify(body), { status });
+  const github = async (repo, method, path) => {
+    if (path.includes("/actions/runs")) {
+      return reply(200, {
+        workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }],
+      });
+    }
+    if (path.includes("/check-runs")) return reply(200, { check_runs: [] });
+    return reply(502, { message: "Bad Gateway" });
+  };
+  await assert.rejects(commitCi(github, "org/repo", "abc"), /status: 502/);
+});
+
+test("commitCi: check runs read page by page, another App's failure on the second page counted", async () => {
+  const reply = (body) => new Response(JSON.stringify(body), { status: 200 });
+  const job = (i) =>
+    check("completed", "success", { name: `job ${i}`, app: { slug: "github-actions" } });
+  const paths = [];
+  const github = async (repo, method, path) => {
+    paths.push(path);
+    if (path.includes("/actions/runs")) {
+      return reply({ workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }] });
+    }
+    if (path.includes("/check-runs")) {
+      const page = Number(new URL(path, "https://x").searchParams.get("page"));
+      const runs =
+        page === 1
+          ? Array.from({ length: 100 }, (_, i) => job(i))
+          : [check("completed", "failure")];
+      return reply({ check_runs: runs });
+    }
+    return reply({ statuses: [] });
+  };
+  const ci = await commitCi(github, "org/repo", "abc");
+  assert.equal(ci.state, "failed");
+  assert.deepEqual(
+    ci.runs.map((r) => r.name),
+    ["build", "CI"],
+  );
+  assert.equal(paths.filter((p) => p.includes("/check-runs")).length, 2);
 });

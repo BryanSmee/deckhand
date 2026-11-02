@@ -119,21 +119,38 @@ function webUrl(url) {
 
 // Commit `sha`'s CI as GitHub has it now (`github(repo, method, path, body, expected)`, the
 // App's calls) → { sha, state, runs } (ciSummary()), or null when GitHub gave none of it. Each
-// of its Actions runs, check runs and statuses is left out when GitHub refuses it (an
+// of its Actions runs, check runs and statuses is left out when GitHub refuses it (REFUSED: an
 // installation that hasn't accepted `checks` or `statuses` yet): without the Actions runs,
-// GitHub Actions' check runs stand for them.
+// GitHub Actions' check runs stand for them. Any other failure throws: CI read without a part
+// GitHub failed to give (a 502) could say passed when it failed. Each list is read page by page
+// (a matrix of over 100 jobs fills the first page of check runs), up to CI_PAGES.
 export async function commitCi(github, repo, sha) {
   const at = encodeURIComponent(sha);
   const read = async (path, field) => {
-    const res = await github(repo, "GET", path, undefined, [403, 404, 422]);
-    if (!res.ok) return undefined;
-    return (await res.json())?.[field] ?? [];
+    const all = [];
+    for (let page = 1; page <= CI_PAGES; page++) {
+      const sep = path.includes("?") ? "&" : "?";
+      const paged = `${path}${sep}per_page=${CI_PER_PAGE}&page=${page}`;
+      const res = await github(repo, "GET", paged, undefined, REFUSED);
+      if (REFUSED.includes(res.status)) return undefined;
+      if (!res.ok) throw new Error(`GitHub GET ${path}: ${res.status}`);
+      const found = (await res.json())?.[field] ?? [];
+      all.push(...found);
+      if (found.length < CI_PER_PAGE) break;
+    }
+    return all;
   };
   const [runs, checks, statuses] = await Promise.all([
-    read(`/repos/${repo}/actions/runs?head_sha=${at}&per_page=100`, "workflow_runs"),
-    read(`/repos/${repo}/commits/${at}/check-runs?per_page=100`, "check_runs"),
-    read(`/repos/${repo}/commits/${at}/status?per_page=100`, "statuses"),
+    read(`/repos/${repo}/actions/runs?head_sha=${at}`, "workflow_runs"),
+    read(`/repos/${repo}/commits/${at}/check-runs`, "check_runs"),
+    read(`/repos/${repo}/commits/${at}/status`, "statuses"),
   ]);
   if (!runs && !checks && !statuses) return null;
   return { sha, ...ciSummary({ runs, checks: checks ?? [], statuses: statuses ?? [] }) };
 }
+
+// What commitCi() takes for GitHub refusing a part of a commit's CI rather than failing.
+const REFUSED = [403, 404, 422];
+const CI_PER_PAGE = 100;
+// The pages read of each list at most: 1,000 runs, check runs or statuses of one commit.
+const CI_PAGES = 10;

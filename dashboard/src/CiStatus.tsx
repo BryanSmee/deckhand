@@ -3,6 +3,7 @@
 // As a link (the task header, the Overview), it opens the failed run, else the pull request's
 // Checks tab; in a row that is a button already (All's list), it is only an icon.
 import * as Icon from "./ui/icons";
+import { Spinner } from "./ui/Spinner";
 import styles from "./CiStatus.module.css";
 import type { CiRun, PullRequest } from "./types";
 
@@ -36,7 +37,7 @@ export function CiStatus({
     ) : state === "passed" ? (
       <Icon.Check size={10} />
     ) : (
-      <span class={styles.ring} />
+      <Spinner size="tiny" label={null} />
     );
   const classes = `${styles.ci} ${styles[state]} ${className}`;
   if (!link) {

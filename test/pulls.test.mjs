@@ -621,3 +621,45 @@ test("pulls: resync reads, after it resolves, the CI of the open ones not settle
   await next.caughtUp();
   assert.deepEqual(read, ["err"]);
 });
+
+test("pulls: a CI read GitHub failed (a 502) leaves the CI known as it was", async (t) => {
+  let fail = false;
+  const answers = {
+    a1: () => {
+      if (fail) throw new Error("GitHub GET /repos/org/repo/commits/a1/status: 502");
+      return ci("a1", "failed", [failedRun]);
+    },
+  };
+  const { pulls } = ciPulls(t, answers);
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await settled();
+  fail = true;
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "failed", [failedRun]));
+});
+
+test("pulls: a CI read that ends while resync waits on GitHub: its state still applied, the CI read kept", async (t) => {
+  let listed;
+  const listing = new Promise((resolve) => (listed = resolve));
+  const listPulls = () => listing;
+  let answer = null;
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls,
+    readCi: async (repo, sha) => answer && ci(sha, answer),
+  });
+  const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
+  pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
+  await settled();
+  const syncing = pulls.resync();
+  // Its CI read meanwhile: only `ci` changes.
+  answer = "passed";
+  await pulls.ciChanged("org/repo", "a1");
+  // Merged while its delivery was lost.
+  listed([
+    { number: 31, html_url: "u31", state: "closed", merged_at: "2026-11-01", head: { sha: "a1" } },
+  ]);
+  assert.equal(await syncing, 1);
+  assert.equal(pulls.get("org/repo#30").state, "merged");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+});
