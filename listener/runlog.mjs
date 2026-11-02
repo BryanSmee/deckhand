@@ -376,8 +376,9 @@ export function newRecord(
     // A review fix run's round, of how many the repo's `review.fix` allows (reviews.mjs).
     round,
     rounds,
-    // Started by the listener from the issue's auto-pickup label (auto-pickup.mjs): it holds
-    // one of AUTO_PICKUP_SLOTS. Only on those runs.
+    // Started by the listener from the issue's auto-pickup label (auto-pickup.mjs), or following
+    // such a run until its work is done (`followsPick`, tasks.mjs followsPick()): it holds one
+    // of AUTO_PICKUP_SLOTS. Only on those runs.
     ...(items.some((i) => i.autoPickup) && { autoPickup: true }),
     // What it was asked to act on, kept in its log's first line: a run that fails can run
     // again with it, after a restart too (the dashboard's Rerun, work.mjs).
@@ -516,6 +517,8 @@ function runOf(logDir, file, max = READ_MAX, log = console.error) {
     capabilities: session?.capabilities ?? null,
     taskMode: meta.taskMode ?? null,
     reason: meta.reason ?? null,
+    // Auto-picked, or following such a run (newRecord()): what follows it after a restart too.
+    ...(meta.autoPickup && { autoPickup: true }),
     round: meta.round ?? null,
     rounds: meta.rounds ?? null,
     // Logs from before runs kept them have none: those runs can't run again.

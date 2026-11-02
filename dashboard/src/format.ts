@@ -300,10 +300,21 @@ export function runningText({
   return `${running - autoPickup.running} + ${autoPickup.running} auto of ${maxParallel} running`;
 }
 
-// What the run count leaves out of auto-pickup: its reserved slots, or nothing when it is off.
+// What the run count leaves out of auto-pickup: its reserved slots, and how many of them picks
+// hold while they aren't running (asking, between two loop steps: the sweep picks nothing for
+// them), or nothing when it is off.
 export function reservedText(state: Pick<State, "autoPickup">): string | null {
   const slots = state.autoPickup?.slots;
-  return slots ? `${plural(slots, "slot")} for auto-pickup` : null;
+  if (!slots) return null;
+  const text = `${plural(slots, "slot")} for auto-pickup`;
+  const held = heldText(state);
+  return held ? `${text} (${held})` : text;
+}
+
+// "1 held between runs": the reserved slots picks hold while not running, or null.
+export function heldText(state: Pick<State, "autoPickup">): string | null {
+  const { running = 0, taken = 0 } = state.autoPickup ?? {};
+  return taken > running ? `${taken - running} held between runs` : null;
 }
 
 // The mode a task runs in, where its kind doesn't say it already: an issue's or a pull

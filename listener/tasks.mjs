@@ -10,6 +10,8 @@ import {
   dashboardLink,
   linkedIssue,
   linkTo,
+  parseKey,
+  prId,
   takeOptions,
   taskKey,
   workItem,
@@ -26,6 +28,7 @@ import {
   taskSandboxName,
 } from "./repo-config.mjs";
 import { queueId } from "./restart.mjs";
+import { LOOPING, loopState } from "./reviews.mjs";
 import { writeEvent } from "./runlog.mjs";
 import { sameTask, taskId } from "./spelling.mjs";
 import { createTaskModes } from "./task-modes.mjs";
@@ -285,6 +288,69 @@ export function createTasks(ctx) {
     return inOrder(accepting, taskKey(item.repo, item.id), () => queue(item));
   }
 
+  // `store`'s entry for task `key` (titles.mjs closed(), pulls.mjs get()) under any spelling of
+  // its repo: one a webhook recorded under another is only unified at a restart.
+  function spelledGet(store, key) {
+    if (!store) return null;
+    const found = store.get(key);
+    if (found) return found;
+    const other = store.keys?.().find((k) => k !== key && sameTask(k, key));
+    return other ? store.get(other) : null;
+  }
+
+  // Task `key`'s last run record, under any spelling: ctx.runs is newest first.
+  const lastRun = (key) => ctx.runs?.find((r) => taskId(r.key) === taskId(key)) ?? null;
+
+  // The review loop's entry of pull request `number` (reviews.mjs entry()), under any spelling
+  // of `repo`: reviews.json's may be another's until a restart unifies them.
+  function reviewEntry(repo, number) {
+    const found = ctx.reviews?.entry?.(repo, number);
+    if (found || !ctx.reviews?.keys) return found ?? null;
+    const key = taskKey(repo, prId(number));
+    const other = ctx.reviews.keys().find((k) => k !== key && sameTask(k, key));
+    const spelled = other && parseKey(other)?.repo;
+    return spelled ? (ctx.reviews.entry(spelled, number) ?? null) : null;
+  }
+
+  // Whether auto-picked task `key` of `repo` still holds its reserved slot with no run of its
+  // own going nor queued: its last run was picked (or followed a pick) and its work isn't done.
+  // That is while the run waits for an answer to its questions (#591: anything on the picked
+  // task until it is done), and while its pull request, open, is between two steps of its review
+  // loop (reviews.mjs loopState(), the dashboard's in-review): waiting for CI, the next step being
+  // decided or on its way. The records, the loop's entry and the set-asides are kept through a
+  // restart. Done: the issue closed, the pull request merged or closed, a close seen since that
+  // run (picks.mjs, a reopen included), its questions set aside (dismissals.mjs), the loop over,
+  // or the slot given to the next issue (releasePicks()).
+  function pickHolds(key, repo) {
+    const last = lastRun(key);
+    if (!last?.autoPickup || ctx.picks?.ended(key, last.id)) return false;
+    const titles = ctx.titles?.closed && { get: ctx.titles.closed, keys: ctx.titles.keys };
+    if (spelledGet(titles, key)) return false;
+    const pr = spelledGet(ctx.pulls, key);
+    const open = pr?.state === "draft" || pr?.state === "ready";
+    if (pr && !open) return false;
+    if (last.status === "needs-input") return !ctx.dismissals?.has?.(last.key, last.id);
+    if (!open) return false;
+    return LOOPING.includes(loopState(reviewEntry(repo, pr.number), last)?.loop);
+  }
+
+  // Whether what is queued now on `task` (null: not in `tasks`) follows an auto-picked run
+  // (#591): only while the task holds its reserved slot, so what it queues can't wait for a slot
+  // the sweep gave away. Its run or first queued item is picked, or its work holds the slot
+  // between runs (pickHolds(): asking, between loop steps). Then it holds the slot too, the
+  // review loop's runs and people's comments alike.
+  function followsPick(task, key, repo) {
+    return (!!task && pickedTask(task)) || pickHolds(key, repo);
+  }
+
+  // Whether auto-picked task `key` of `repo`, nothing of it running nor queued (`task`, null
+  // when it isn't in `tasks`, as after a restart), keeps its reserved slot between its runs
+  // (pickHolds()).
+  function loopGoing(key, repo, task = null) {
+    if (task?.running || task?.pending.length) return false;
+    return pickHolds(key, repo);
+  }
+
   async function queue(item) {
     // Its default branch, as GitHub said: "main" when it didn't.
     item.base ||= "main";
@@ -300,6 +366,11 @@ export function createTasks(ctx) {
     }
     // The latest settings decide the repo's parallel cap.
     if (item.settings) task.settings = item.settings;
+    // Its pick's follow-up (the review loop, a comment): in the reserved slot too, and still
+    // started by what started it for the policies (run-policy.mjs runTrigger()).
+    if (!item.autoPickup && followsPick(task, key, item.repo)) {
+      Object.assign(item, { autoPickup: true, followsPick: true });
+    }
     // A comment that waited (resume()) has its 👀 already.
     if (!item.eyes) ctx.received(item);
     // When it was queued: the run order's, for a task nobody placed (queueOrder()).
@@ -445,9 +516,26 @@ export function createTasks(ctx) {
     }
   }
 
-  // How many of AUTO_PICKUP_SLOTS are taken: auto-picked tasks running, or queued with room in
-  // their repo's max_parallel. One its repo holds back leaves the sweep free to pick an issue
-  // of another repo, which can start now.
+  // The tasks whose last run (`ctx.runs`, newest first) was picked, or followed a pick, and
+  // whose pick hasn't ended (picks.mjs): [{ key, repo, record }], once each.
+  function openPicks() {
+    const seen = new Set();
+    const found = [];
+    for (const r of ctx.runs ?? []) {
+      const id = taskId(r.key);
+      if (seen.has(id)) continue;
+      seen.add(id);
+      const repo = r.repo ?? parseKey(r.key)?.repo;
+      if (!r.autoPickup || !repo || ctx.picks?.ended(r.key, r.id)) continue;
+      found.push({ key: r.key, repo, record: r });
+    }
+    return found;
+  }
+
+  // How many of AUTO_PICKUP_SLOTS are taken: auto-picked tasks running, queued with room in
+  // their repo's max_parallel, or between their runs (loopGoing(): asking, between two loop
+  // steps). One its repo holds back leaves the sweep free to pick an issue of another repo,
+  // which can start now.
   function pickedCount() {
     const list = [...tasks.values()];
     const runningIn = (repo) => list.filter((t) => t.running && t.repo === repo).length;
@@ -457,7 +545,31 @@ export function createTasks(ctx) {
       const cap = t.settings?.maxParallel ?? config.maxParallel;
       return cap >= config.maxParallel || runningIn(t.repo) < cap;
     };
-    return list.filter((t) => pickedTask(t) && (t.running || (t.pending.length && room(t)))).length;
+    const holds = (t) => pickedTask(t) && (t.running || (t.pending.length && room(t)));
+    const counted = list.filter(
+      (t) => holds(t) || loopGoing(taskKey(t.repo, t.id), t.repo, t),
+    ).length;
+    // A task between its runs isn't in `tasks` after a restart (restart.mjs saves those with
+    // something queued or running): its last run's record finds it.
+    const known = new Set(list.map((t) => taskId(taskKey(t.repo, t.id))));
+    const between = openPicks().filter(
+      ({ key, repo }) => !known.has(taskId(key)) && loopGoing(key, repo),
+    );
+    return counted + between.length;
+  }
+
+  // Right before the sweep gives a reserved slot to the next issue (auto-pickup.mjs): the picks
+  // that hold none any more end for good (picks.mjs), their task's last run then. A loop their
+  // pull request starts later (a draft marked ready, a CI step that stopped run again) is then
+  // a run like any other: it can't take back a slot the sweep gave away.
+  function releasePicks() {
+    if (!ctx.picks) return;
+    const byId = new Map([...tasks].map(([key, t]) => [taskId(key), t]));
+    for (const { key, repo, record } of openPicks()) {
+      const t = byId.get(taskId(key));
+      if (t && pickedTask(t) && (t.running || t.pending.length)) continue;
+      if (!pickHolds(key, repo)) ctx.picks.end(key, record.id);
+    }
   }
 
   // How many of `repo`'s tasks are running or queued: what its max_parallel is held against
@@ -480,6 +592,7 @@ export function createTasks(ctx) {
     schedule,
     queueOrder,
     pickedCount,
+    releasePicks,
     repoLoad,
   };
 }

@@ -28,6 +28,7 @@ import { labelAdded } from "./auto-pickup.mjs";
 import { pickedTask } from "./tasks.mjs";
 import { staleFor } from "./work.mjs";
 import { publicRun, stream } from "./runlog.mjs";
+import { endPicks } from "./picks.mjs";
 import { closedAs } from "./titles.mjs";
 import { send, sendJson } from "../lib/http.mjs";
 import { apiRoute } from "./web.mjs";
@@ -182,12 +183,14 @@ export function createHttp(ctx) {
       running: ctx.running,
       queued: queued.length,
       maxParallel: config.maxParallel,
-      // AUTO_PICKUP_SLOTS, within maxParallel, and how many auto-picked runs hold them now;
-      // absent while it is off.
+      // AUTO_PICKUP_SLOTS, within maxParallel, how many auto-picked runs hold them now, and how
+      // many slots the picks hold (tasks.mjs pickedCount()): those running, queued, asking or
+      // between two loop steps, what the sweep counts; absent while it is off.
       ...(config.autoPickupSlots && {
         autoPickup: {
           slots: config.autoPickupSlots,
           running: [...tasks.values()].filter((t) => t.running && pickedTask(t)).length,
+          taken: ctx.pickedCount?.() ?? 0,
         },
       }),
       // Each repo read so far: its inbox issues and discussions category (New request).
@@ -375,6 +378,8 @@ export function createHttp(ctx) {
         const target = payload.issue ?? payload.pull_request;
         const at = Date.parse(target?.merged_at ?? target?.closed_at) || null;
         settleQuestions([closed.key, closed.state === "done" && pr?.key], at);
+        // An auto-picked issue's work is over: a reopen doesn't take its pick back (picks.mjs).
+        endPicks(ctx.picks, ctx.runs, [closed.key, pr?.key].filter(Boolean));
       }
       admitted(ctx.waits.closed(closed.repo, closed.number, closed.state));
     }

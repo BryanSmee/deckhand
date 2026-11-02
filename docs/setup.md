@@ -653,6 +653,20 @@ auto-picked issue is cancelled.
   issue is picked, they keep to 2, and it starts as soon as a slot frees. A repository's
   `max_parallel` counts auto-picked runs too: an issue of a repository at its own cap isn't
   picked, and one picked before its repo filled up holds no slot while it waits for it.
+  What follows a picked run on its task holds the reserved slot too, until the picked work is
+  done: queued during the picked run or behind it, the answer to its questions while it waits
+  for one, and its pull request's review loop (review, fixes, CI, conflicts) until the loop is
+  over, between its steps too (waiting for CI, its next step on its way). People's comments
+  then are in the slot as well, and the next issue isn't picked meanwhile. The slot is free
+  once the loop is over, the picked run left no loop going nor questions, its questions are set
+  aside, the issue closed or its pull request merged or closed. When a sweep then gives it to
+  the next issue, the pick is over for good: what comes next on the task is a run like any
+  other, and a loop its draft starts later doesn't take the slot back, a reopened issue
+  neither. The policies still see those runs as started by the listener or by the comment.
+  A pick that asked keeps its slot until its questions are answered or set aside (the
+  needs-input label taken off, the issue closed), picks from before an update included: the
+  dashboard's run count shows such slots as held between runs ("1 slot for auto-pickup (1 held
+  between runs)"), and no issue is picked for them meanwhile.
 - **What is skipped.** An issue with something live on the dashboard (running, queued,
   waiting, asking), the needs-input label (`NEEDS_INPUT_LABEL`), an open issue it is "blocked
   by", or an open pull request of Deckhand's for it; the next one is picked instead.

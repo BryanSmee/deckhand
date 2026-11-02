@@ -29,7 +29,7 @@
 // dashboard (dismissals.mjs): it keeps its state, but no longer asks for attention.
 import { parseKey, taskKey } from "./events.mjs";
 import { APART } from "./modes.mjs";
-import { LOOP_STEPS, reviewLoop } from "./reviews.mjs";
+import { LOOP_STEPS, LOOPING, loopState } from "./reviews.mjs";
 import { taskId } from "./spelling.mjs";
 
 export const STATES = [
@@ -226,8 +226,8 @@ function settle(t, q, b, w, input, aside = null) {
   t.kind = q?.kind ?? last?.kind ?? w?.kind ?? (b ? "brainstorm" : null);
   t.mode = (q?.mode === "stop" ? "brainstorm" : q?.mode) ?? w?.mode ?? last?.taskMode ?? null;
   t.replyTo = q?.replyTo ?? w?.replyTo ?? last?.replyTo ?? t.number;
-  // Picked by the listener from its auto-pickup label (auto-pickup.mjs): queued so, or its last
-  // run was.
+  // Picked by the listener from its auto-pickup label (auto-pickup.mjs), or what follows such a
+  // run until its work is done (tasks.mjs followsPick()): queued so, or its last run was.
   if (q?.autoPickup || last?.autoPickup) t.autoPickup = true;
   t.since = Math.max(last?.startedAt ?? 0, b?.deadline ?? 0, w?.since ?? 0);
   // What its next run waits for, whatever it is doing now.
@@ -272,8 +272,6 @@ function settle(t, q, b, w, input, aside = null) {
   t.rerunnable = rerunnable(t);
 }
 
-// The loop's states, between two of its runs: the task is in review, not queued or done.
-const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
 // The reasons of the loop's own runs (reviews.mjs).
 const STEPS = LOOP_STEPS;
 
@@ -283,13 +281,9 @@ const STEPS = LOOP_STEPS;
 // or queued for the loop's next run; a maintainer's comment queued meanwhile stays queued.
 function inReview(t, q, p, reviewed) {
   if (!p) return;
-  const last = t.runs[0];
   // The loop's step: its run going, else queued, whatever else runs (the work run that marked
   // the pull request ready may still be).
-  const running = last?.status === "running" ? last.reason : null;
-  const step = [running, q?.reason].find((r) => STEPS.includes(r)) ?? null;
-  const settling = last?.status === "ok" && STEPS.includes(last.reason) ? last : null;
-  const review = reviewLoop(reviewed(t.repo, p.number), step, { settling });
+  const review = loopState(reviewed(t.repo, p.number), t.runs[0], q?.reason);
   if (!review) return;
   t.review = review;
   if (!LOOPING.includes(review.loop)) return;

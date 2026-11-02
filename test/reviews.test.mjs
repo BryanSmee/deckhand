@@ -1781,6 +1781,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     return new Response("{}", { status: 404 });
   };
   const accepted = [];
+  const loops = [];
   const replies = [];
   const scheduled = [];
   const read = parseRepoConfig(yaml, config);
@@ -1788,7 +1789,12 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     path: path ?? join(tempDir(t), "reviews.json"),
     config: { ...config, needsInputLabel: "needs-input" },
     repoSettings: async () => read,
-    accept: async (item) => accepted.push(item),
+    // The loop's state as each item is queued: an auto-picked task's follow-up keeps its
+    // reserved slot only while it goes on (tasks.mjs pickHolds()).
+    accept: async (item) => {
+      accepted.push(item);
+      loops.push(reviewLoop(reviews.entry("org/repo", 5))?.loop ?? null);
+    },
     github,
     busy,
     policies,
@@ -1822,6 +1828,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     gh,
     calls,
     accepted,
+    loops,
     replies,
     ready,
     runDone,
@@ -1944,6 +1951,8 @@ test("review.ci: passed or no run starts the review; no run waits a minute first
     await new Promise((resolve) => setImmediate(resolve));
   }
   assert.equal(none.of("review").length, 1);
+  // Its wait cleared before the review is queued, the CI step still being decided: in the loop.
+  assert.deepEqual(none.loops, ["ci"]);
   // Without review.ci, nothing is asked of CI.
   const off = ciSetup(t, "review:\n  on: ready\n  fix: true\n");
   assert.equal((await off.ready()).reason, "review");
@@ -2038,6 +2047,8 @@ test("review.ci: a failure starts a CI fix run, not a review, with the runs and 
   await s.runDone("sha-2");
   assert.equal(s.of("review").length, 1);
   assert.equal(s.of("ci-fix").length, 1);
+  // Each queued while the CI step was decided: the loop went on.
+  assert.deepEqual(s.loops, ["ci", "ci"]);
 });
 
 test("review.ci: CI fix runs run out, said once, then the review anyway", async (t) => {

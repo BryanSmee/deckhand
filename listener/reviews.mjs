@@ -891,7 +891,8 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   if (!step && entry?.deciding) step = entry.deciding;
   const own = settling && settling.startedAt >= (entry?.nextAt ?? 0);
   if (!step && own && entry?.next === settling.reason) step = settling.reason;
-  const looping = LOOP_STEPS.includes(step) || !!entry?.ciWaiting;
+  // "ci": the CI step being decided (ciRecheck()), its wait cleared before what follows is queued.
+  const looping = LOOP_STEPS.includes(step) || step === "ci" || !!entry?.ciWaiting;
   if (!history.length && !looping && !entry?.ciStopped) return null;
   const fixes = fixesOf(entry);
   const rounds = entry?.fixRounds ?? 0;
@@ -917,6 +918,21 @@ export function reviewLoop(entry, step = null, { settling = null } = {}) {
   const out = fixes >= rounds && last.round >= fixes;
   return { loop: out ? "rounds-out" : "stopped", ...at };
 }
+
+// The loop of a task's pull request (`entry`, reviewed()) as reviewLoop() has it, from the
+// task's last run `last` (its step while it runs; once over, the step the listener said is on
+// its way) and the reason of its queued run (`queued`), if any: the dashboard's `review`
+// (board.mjs) and whether an auto-picked task keeps its slot between steps (tasks.mjs).
+export function loopState(entry, last, queued = null) {
+  const running = last?.status === "running" ? last.reason : null;
+  const step = [running, queued].find((r) => LOOP_STEPS.includes(r)) ?? null;
+  const settling = last?.status === "ok" && LOOP_STEPS.includes(last.reason) ? last : null;
+  return reviewLoop(entry, step, { settling });
+}
+
+// reviewLoop()'s states between two of the loop's runs: the task is in review (board.mjs), and
+// an auto-picked one keeps its reserved slot (tasks.mjs loopGoing()).
+export const LOOPING = ["reviewing", "fixing", "checks", "ci", "ci-fix"];
 
 // The reasons of the loop's own runs.
 export const LOOP_STEPS = ["review", "review-fix", "ci-fix"];
@@ -2154,7 +2170,12 @@ export function createReviews({
   // pull request still waiting or decided.
   const ciQueue = new Map();
   function ciRecheck(key) {
-    const next = (ciQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(() => ciDecide(key));
+    // The loop is on its CI step until what follows the wait is queued: ciDecide() clears the
+    // wait before it queues the review or the CI fix run, and an auto-picked task keeps its
+    // reserved slot only while its loop goes on (tasks.mjs pickHolds()).
+    const decide = () =>
+      reviewed.get(key)?.ciWaiting ? deciding(key, "ci", () => ciDecide(key)) : ciDecide(key);
+    const next = (ciQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(decide);
     ciQueue.set(key, next);
     next
       .finally(() => {
