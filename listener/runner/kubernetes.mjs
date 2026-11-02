@@ -677,9 +677,14 @@ export function createKubernetesRunner({
     api,
     services,
     pullSecret,
+    // Its ports sandboxes may use: EGRESS_PROXY's, and the engines' when the Service has it.
     proxy: async () => {
       const svc = await proxyService(services, config);
-      return { ip: svc?.ip ?? new URL(config.egressProxy).hostname, port: sandboxPorts()[0] };
+      const [main, ...more] = sandboxPorts();
+      return {
+        ip: svc?.ip ?? new URL(config.egressProxy).hostname,
+        ports: [main, ...more.filter((port) => svc?.ports.includes(port))],
+      };
     },
     labels: { ...owner, "deckhand.run": "network-probe", [ROLE]: SANDBOX },
     log,

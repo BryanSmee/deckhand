@@ -1865,7 +1865,17 @@ const PROXY = "10.96.0.11:3128";
 // A runner whose network probe answers `reach(target)` for each of its targets ("host:port",
 // "/udp" after a UDP one), its pod ending `phase` (null: never). `targets()`: what the last
 // probe pod was asked to try; `probes()`: how many were made; `answers.reach` may change.
-function probed(t, { reach = (target) => target === PROXY, phase = "Succeeded", kubernetes } = {}) {
+// `services`, `slices`: the services' namespace's, by default CLUSTER_SERVICES' and CLUSTER_SLICES.
+function probed(
+  t,
+  {
+    reach = (target) => target === PROXY,
+    phase = "Succeeded",
+    kubernetes,
+    services = CLUSTER_SERVICES,
+    slices = CLUSTER_SLICES,
+  } = {},
+) {
   const answers = { reach };
   // Whatever the probe pod's name, its log is what it would print.
   const logs = new Proxy(
@@ -1894,7 +1904,7 @@ function probed(t, { reach = (target) => target === PROXY, phase = "Succeeded", 
     );
   const s = setup(
     t,
-    { policies, slices: CLUSTER_SLICES, logs },
+    { policies, slices, logs },
     {
       kubernetes,
       probeOptions: {
@@ -1910,7 +1920,7 @@ function probed(t, { reach = (target) => target === PROXY, phase = "Succeeded", 
       },
     },
   );
-  for (const [name, svc] of Object.entries(CLUSTER_SERVICES)) s.objects.services.set(name, svc);
+  for (const [name, svc] of Object.entries(services)) s.objects.services.set(name, svc);
   const made = () => s.bodies.filter(isProbe);
   return {
     ...s,
@@ -2070,6 +2080,7 @@ test("network probe: its pod is labelled as a sandbox, meets Pod Security restri
     "deckhand.role": "sandbox",
   });
   assert.equal(isolationProblem([POLICY], pod.metadata.labels), null);
+  assert.deepEqual(restrictedProblems(pod), []);
   const { spec: podSpec_ } = pod;
   assert.equal(podSpec_.automountServiceAccountToken, false);
   assert.equal(podSpec_.enableServiceLinks, false);
@@ -2093,4 +2104,34 @@ test("network probe: its pod is labelled as a sandbox, meets Pod Security restri
     seccompProfile: { type: "RuntimeDefault" },
   });
   assert.deepEqual(container.command.slice(0, 2), ["node", "-e"]);
+});
+
+test("network probe, with an engine: the proxy's engines' port is the proxy's, to be reached when its Service publishes it", async (t) => {
+  const egress = structuredClone(CLUSTER_SERVICES.egress);
+  egress.spec.ports = [{ port: 3128 }, { port: 3129 }];
+  const slices = structuredClone(CLUSTER_SLICES);
+  slices[1].ports = [{ port: 3128 }, { port: 3129 }];
+  const both = (target) => ["10.96.0.11:3128", "10.96.0.11:3129"].includes(target);
+  const p = probed(t, {
+    reach: both,
+    kubernetes: ENGINE,
+    services: { ...CLUSTER_SERVICES, egress },
+    slices,
+  });
+  await p.runner.start(spec());
+  const tried = p.targets();
+  assert.deepEqual(tried.slice(0, 2), ["10.96.0.11:3128", "10.96.0.11:3129"]);
+  // Neither port of the proxy's pods is a leak; the broker's still are.
+  assert.ok(!tried.some((target) => target.startsWith("10.244.3.9:")));
+  assert.ok(tried.includes("10.244.2.5:8081"));
+  // Its Service without 3129: the port isn't tried (engine runs are refused before, saying so).
+  const without = probed(t, { kubernetes: ENGINE });
+  await without.runner.start(spec());
+  assert.ok(!without.targets().some((target) => target.endsWith(":3129")));
+  // Without the engine's settings, 3129 on the proxy's Service must be out of reach.
+  const off = probed(t, { reach: both, services: { ...CLUSTER_SERVICES, egress }, slices });
+  await assert.rejects(
+    off.runner.start(spec()),
+    /reached the Service egress \(10\.96\.0\.11:3129\)/,
+  );
 });

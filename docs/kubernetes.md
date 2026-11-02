@@ -396,7 +396,9 @@ tries a TCP connection, 3 s at most each, to:
 - a public address, `1.1.1.1:443`.
 
 Every one has to be out of reach, and the egress proxy's Service has to answer, so that a pod
-with no network at all doesn't pass as isolated. Any one reached, and the runner refuses every
+with no network at all doesn't pass as isolated: on `EGRESS_PROXY`'s port, and on the engines'
+(3129) too when runs get a [container engine](#container-engine-on-kubernetes) and the Service
+publishes it. Any one reached, and the runner refuses every
 run, the reply on the issue (and the dashboard) naming what the probe reached: use a plugin that
 enforces NetworkPolicies (Calico, Cilium, k3s's kube-router; Flannel alone doesn't). The probe
 pod is removed whatever it found, and its verdict kept until the NetworkPolicies of either

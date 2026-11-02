@@ -149,7 +149,7 @@ export function createNetworkProbe({
   api, // kube-api.mjs, in the sandboxes' namespace
   services = api, // the same, in the services'
   pullSecret, // kube-pull.mjs
-  proxy, // () → { ip, port }: the egress proxy's Service, as sandboxes reach it
+  proxy, // () → { ip, ports }: the egress proxy's Service, as sandboxes reach it, and its ports
   labels, // a sandbox pod's
   log = () => {},
   now = Date.now,
@@ -174,7 +174,9 @@ export function createNetworkProbe({
       list.push({ proto: "tcp", reach: false, ...target });
     };
     const egress = await proxy();
-    add({ what: "the egress proxy", host: egress.ip, port: egress.port, reach: true });
+    for (const port of egress.ports) {
+      add({ what: "the egress proxy", host: egress.ip, port, reach: true });
+    }
     const { items: all = [] } = await services.get("services");
     const { items: slices = [] } = await services.get(
       `${DISCOVERY}/${services.namespace}/endpointslices`,
@@ -196,7 +198,7 @@ export function createNetworkProbe({
       );
       const address = slice?.endpoints.find((e) => e.addresses?.length).addresses[0];
       for (const { port } of tcp(slice?.ports)) {
-        if (ip === egress.ip && port === egress.port) continue;
+        if (ip === egress.ip && egress.ports.includes(port)) continue;
         add({ what: `a pod of the Service ${name}`, host: address, port });
       }
     }
