@@ -160,8 +160,11 @@ const BUILDER_POLICY = {
 // A namespace's API, as kube-api.mjs answers it: objects by resource then name. The pods the
 // images create (installs, checks) end as `install` says ("Succeeded", "Failed", with
 // `exitCode`), their log `installLog`; with `hold`, they run until finish() is called. The
-// BuildKit daemon is a pod behind its Service, under `policies`.
+// BuildKit daemon is a pod behind its Service, under `policies`. `namespace`: the API's;
+// `pull`: whether the registry's Secret is there.
 function fakeApi({
+  namespace = "runs",
+  pull = true,
   install = "Succeeded",
   exitCode = install === "Succeeded" ? 0 : 1,
   installLog = "Claude Code 9.9.9 installed\n",
@@ -174,11 +177,20 @@ function fakeApi({
   const builders = new Map([["buildkitd-0", { metadata: { labels: { app: "buildkitd" } } }]]);
   const objects = {
     pods: new Map(),
-    secrets: new Map([
-      [
-        "pull",
-        { data: { ".dockerconfigjson": Buffer.from(JSON.stringify(PULL)).toString("base64") } },
-      ],
+    secrets: new Map(
+      pull
+        ? [
+            [
+              "pull",
+              {
+                data: { ".dockerconfigjson": Buffer.from(JSON.stringify(PULL)).toString("base64") },
+              },
+            ],
+          ]
+        : [],
+    ),
+    services: new Map([
+      ["egress", { spec: { clusterIP: "10.96.0.11", selector: { app: "deckhand-egress" } } }],
     ]),
     persistentvolumeclaims: new Map(),
     endpointslices: new Map(
@@ -208,7 +220,7 @@ function fakeApi({
     return { store: objects[kind], name };
   };
   const api = {
-    namespace: "runs",
+    namespace,
     async find(path) {
       const { store, name } = split(path);
       const found =
@@ -241,6 +253,11 @@ function fakeApi({
             }
           : {};
       store.set(body.metadata.name, { ...body, status });
+      return body;
+    },
+    async replace(path, body) {
+      const { store, name } = split(path);
+      store.set(name, body);
       return body;
     },
     async remove(path) {
@@ -291,17 +308,24 @@ function setup(
     registry: regOptions,
     image = BASE,
     buildMs,
+    apart = false,
   } = {},
 ) {
   const clock = { at: Date.parse("2026-10-30T10:00:00Z") };
   const registry = fakeRegistry(regOptions);
-  const fake = fakeApi(apiOptions);
+  // Apart: the builder, its policies and the registry's Secret in the services' namespace,
+  // nothing of theirs in the sandboxes'.
+  const services = apart ? fakeApi({ ...apiOptions, namespace: "deckhand" }) : null;
+  const fake = apart
+    ? fakeApi({ ...apiOptions, pull: false, builder: false, policies: [] })
+    : fakeApi(apiOptions);
   const build = fakeBuildctl(registry, clock, buildOptions);
   const logged = [];
   const cfg = { ...config, image, kubernetes: { ...config.kubernetes, ...kubernetes } };
   const backend = createKubernetesImages({
     config: cfg,
     api: fake.api,
+    services: services?.api,
     fetch: registry.fetch,
     buildctl: build.buildctl,
     buildMs,
@@ -326,7 +350,7 @@ function setup(
     }),
     async (repo, path, ref) => (path === "missing" ? null : { sha: contextBlob(`blob@${ref}`) }),
   );
-  return { ...fake, registry, build, backend, images, checkouts, clock, logged };
+  return { ...fake, services, registry, build, backend, images, checkouts, clock, logged };
 }
 
 const access = { hosts: ["pypi.org", "*.debian.org"], trusted: ["pypi.org"] };
@@ -1051,6 +1075,82 @@ test("an agent left to the init container is asked again: a claim made later is 
   // Installed: once per version from then on.
   await images.installAgent(claude, () => {});
   assert.equal(created.filter((o) => o.kind === "Pod").length, 1);
+});
+
+test("apart: the builder and the registry's Secret in the services' namespace, installs in the sandboxes'", async (t) => {
+  const { images, build, created, services } = setup(t, {
+    apart: true,
+    kubernetes: { agentStorageClass: "nfs" },
+  });
+  await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access });
+  // Pushed with the services' namespace's Secret, to the daemon checked there: by its name in
+  // that namespace, as the short one resolves in the runner's own.
+  assert.deepEqual(build.calls[0].dockerConfig, PULL);
+  const args = build.calls[0].args;
+  assert.equal(args[args.indexOf("--addr") + 1], "tcp://buildkitd.deckhand.svc:1234");
+  assert.equal(services.created.length, 0);
+  // The install pod, in the sandboxes' namespace: the Secret copied there, the proxy by its
+  // Service's IP, as the cluster's DNS doesn't know its short name there.
+  await images.installAgent(claude, () => {});
+  const copy = created.find((o) => o.kind === "Secret");
+  assert.equal(copy.metadata.name, "pull");
+  assert.deepEqual(copy.data, services.objects.secrets.get("pull").data);
+  const pod = created.find((o) => o.kind === "Pod");
+  assert.deepEqual(pod.spec.imagePullSecrets, [{ name: "pull" }]);
+  assert.deepEqual(pod.spec.hostAliases, [{ ip: "10.96.0.11", hostnames: ["egress"] }]);
+  assert.equal(services.created.length, 0);
+  // In one namespace, as before: no copy, no hostAliases.
+  const one = setup(t, { kubernetes: { agentStorageClass: "nfs" } });
+  await one.images.installAgent(claude, () => {});
+  assert.equal(one.created.filter((o) => o.kind === "Secret").length, 0);
+  assert.equal(one.created.find((o) => o.kind === "Pod").spec.hostAliases, undefined);
+});
+
+test("apart: a cache's check reaches nothing, so needs no proxy Service, nor gets its hostAliases", async (t) => {
+  const { backend, created, services } = setup(t, {
+    apart: true,
+    kubernetes: { cacheStorageClass: "nfs" },
+  });
+  services.objects.services.delete("egress");
+  assert.deepEqual(await backend.createVolume("dh-cache-org-a-npm"), { code: 0, out: "", err: "" });
+  const pod = created.find((o) => o.kind === "Pod");
+  assert.equal(pod.metadata.labels["deckhand.role"], "check");
+  assert.equal(pod.spec.hostAliases, undefined);
+});
+
+test("apart: the builder's ingress may let in the services' namespace's pods, never another namespace", async (t) => {
+  const anyPod = {
+    ...BUILDER_POLICY,
+    spec: { ...BUILDER_POLICY.spec, ingress: [{ from: [{ podSelector: {} }] }] },
+  };
+  const labels = { app: "buildkitd" };
+  // With the sandboxes there too, `podSelector: {}` picks them: refused.
+  assert.match(builderIsolationProblem([anyPod], labels), /lets sandbox pods reach/);
+  assert.equal(builderIsolationProblem([anyPod], labels, { sandboxesApart: true }), null);
+  const sandboxes = {
+    ...BUILDER_POLICY,
+    spec: {
+      ...BUILDER_POLICY.spec,
+      ingress: [
+        {
+          from: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "runs" } } }],
+        },
+      ],
+    },
+  };
+  assert.match(
+    builderIsolationProblem([sandboxes], labels, { sandboxesApart: true }),
+    /lets traffic in to the BuildKit daemon from beyond the namespace's pods/,
+  );
+  // And the runner asks the services' namespace's policies.
+  const { images, build } = setup(t, { apart: true, api: { policies: [anyPod] } });
+  await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access });
+  assert.equal(build.calls.length, 1);
+  const refused = setup(t, { apart: true, api: { policies: [] } });
+  await assert.rejects(
+    refused.images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access }),
+    /no NetworkPolicy picks the BuildKit daemon's pods for Egress/,
+  );
 });
 
 test("builderIsolationProblem: a DNS rule without `to` is DNS, nothing more", () => {

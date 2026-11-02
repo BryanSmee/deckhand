@@ -7,26 +7,34 @@ import { docker as dockerCli } from "../docker.mjs";
 import { createDockerRunner } from "./docker.mjs";
 import { createDockerImages } from "./images.mjs";
 import { createDockerJobs } from "./jobs.mjs";
-import { createKubeApi, SERVICE_ACCOUNT } from "./kube-api.mjs";
+import { createKubeApi, inClusterFetch, SERVICE_ACCOUNT } from "./kube-api.mjs";
 import { createKubernetesImages } from "./kube-images.mjs";
+import { createPullSecret } from "./kube-pull.mjs";
 import { createKubernetesRunner } from "./kubernetes.mjs";
 
-// `kubeApi`: the tests' (kube-api.mjs createKubeApi() with their fetch).
+// `kubeApi`, `servicesApi`: the tests' (kube-api.mjs createKubeApi() with their fetch), the
+// sandboxes' namespace's and the services' (by default the same).
 export function createBackend({
   config,
   docker = dockerCli,
   kubeApi,
+  servicesApi = kubeApi,
   inboxDir,
   // The broker service's copy of the runs' inboxes and files (inbox.mjs).
   mirror = null,
   log = () => {},
   readNamespace = () => readFileSync(`${SERVICE_ACCOUNT}/namespace`, "utf8").trim(),
+  // namespace → the API in it, with the runner's ServiceAccount (the tests' own).
+  makeApi = inClusterApis(),
 }) {
   if (config.runner === "kubernetes") {
-    const api = kubeApi ?? inCluster(config, readNamespace);
+    const { api, services } = kubeApi
+      ? { api: kubeApi, services: servicesApi }
+      : inCluster(config, readNamespace, makeApi);
+    const pullSecret = createPullSecret({ config, api, services });
     return {
-      runner: createKubernetesRunner({ config, api, inboxDir, mirror, log }),
-      images: createKubernetesImages({ config, api, log }),
+      runner: createKubernetesRunner({ config, api, services, pullSecret, inboxDir, mirror, log }),
+      images: createKubernetesImages({ config, api, services, pullSecret, log }),
       // No short containers: what needs them (an agent's install, a cache's chown, the
       // Antigravity login's refresh) says so.
       jobs: {},
@@ -42,15 +50,26 @@ export function createBackend({
   };
 }
 
-// The API with the runner's ServiceAccount: a runner outside the cluster (or without a token,
-// automountServiceAccountToken: false) stops at start, saying so.
-function inCluster(config, readNamespace) {
+// The API with the runner's ServiceAccount, in the sandboxes' namespace (`api`) and the
+// services' (`services`, the same object when they are one): a runner outside the cluster (or
+// without a token, automountServiceAccountToken: false) stops at start, saying so.
+function inCluster(config, readNamespace, makeApi) {
   try {
-    return createKubeApi({ namespace: config.kubernetes.namespace || readNamespace() });
+    const namespace = config.kubernetes.namespace || readNamespace();
+    const api = makeApi(namespace);
+    const other = config.kubernetes.servicesNamespace;
+    const services = other && other !== namespace ? makeApi(other) : api;
+    return { api, services };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
     throw new ConfigError(
       `RUNNER: kubernetes, but there is no ServiceAccount at ${SERVICE_ACCOUNT} (${error.path}): the runner runs in the cluster, with its ServiceAccount's token mounted (docs/setup.md, Kubernetes runner)`,
     );
   }
+}
+
+// makeApi()'s default: one fetch (the cluster's CA, read once) for every namespace's API.
+function inClusterApis() {
+  let fetch;
+  return (namespace) => createKubeApi({ fetch: (fetch ??= inClusterFetch()), namespace });
 }

@@ -1,11 +1,11 @@
 // What ../images.mjs asks of the backend, on Kubernetes (the Docker runner's: images.mjs here).
 // A cluster's nodes pull from a registry only, so:
 //
-//   - A repo's image is built by a BuildKit daemon in the namespace (KUBERNETES_BUILDKIT),
+//   - A repo's image is built by a BuildKit daemon in the services' namespace (KUBERNETES_BUILDKIT),
 //     driven with buildctl (buildkit.mjs), and pushed to the operator's registry
 //     (KUBERNETES_REGISTRY), whose API (registry.mjs) says whether a tag is there, lists the
 //     tags to prune and deletes them. Its credentials, and the nodes' pull Secret, are one
-//     kubernetes.io/dockerconfigjson Secret (KUBERNETES_REGISTRY_SECRET). The daemon goes out
+//     kubernetes.io/dockerconfigjson Secret (KUBERNETES_REGISTRY_SECRET, kube-pull.mjs). The daemon goes out
 //     through the egress proxy: while a build runs, it may reach the hosts of the repo it
 //     builds (egressFor()), and builds of repos granted other hosts wait for each other.
 //   - An agent is installed once per version into a claim every sandbox mounts read-only, of
@@ -20,11 +20,13 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
+import { kubeName, labelValue } from "./kube-names.mjs";
+import { createPullSecret } from "./kube-pull.mjs";
 import {
+  aliasesOf,
   excludesSandboxes,
   INSTALL_USER,
-  kubeName,
-  labelValue,
+  proxyService,
   quantity,
   selects,
 } from "./kubernetes.mjs";
@@ -44,8 +46,8 @@ const CHECK_MS = 5 * 60_000;
 const NOT_WRITABLE = 97;
 
 // The hosts a registry sends a client to besides itself, known beforehand: the BuildKit daemon
-// pulls through the egress proxy before the listener has seen them (registry.mjs hostsOf()
-// learns the others as the listener reads the registry). Docker Hub's API, token service and
+// pulls through the egress proxy before the runner has seen them (registry.mjs hostsOf()
+// learns the others as the runner reads the registry). Docker Hub's API, token service and
 // layer storage; GitHub's registry's layer storage.
 export const REGISTRY_HOSTS = {
   "docker.io": [
@@ -58,14 +60,17 @@ export const REGISTRY_HOSTS = {
   "ghcr.io": ["pkg-containers.githubusercontent.com"],
 };
 
-// Why the namespace's NetworkPolicies (`policies`) don't isolate the BuildKit daemon's pods
-// (`labels`), or null when they do: one picks them for Egress and one for Ingress, and none of
-// those that pick them lets them out but to the namespace's pods (the egress proxy) and to DNS
-// (UDP or TCP port 53, no range), or in but from the namespace's pods that can't be sandboxes
-// (the listener). Without that, a Dockerfile's RUN steps could skip the proxy, or anything (a
-// sandbox among them: its own policy lets it reach any pod that isn't one) could drive the
-// daemon, which asks for no credentials. Fail closed.
-export function builderIsolationProblem(policies, labels) {
+// Why the services' namespace's NetworkPolicies (`policies`) don't isolate the BuildKit
+// daemon's pods (`labels`), or null when they do: one picks them for Egress and one for
+// Ingress, and none of those that pick them lets them out but to the namespace's pods (the
+// egress proxy) and to DNS (UDP or TCP port 53, no range), or in but from the namespace's pods
+// (the runner's), never from another namespace. Without that, a Dockerfile's RUN steps could
+// skip the proxy, or anything (a sandbox among them) could drive the daemon, which asks for no
+// credentials. Fail closed.
+// With the sandboxes in that namespace too (`sandboxesApart` false), an ingress peer has to
+// rule them out, as their own policy lets them reach any pod that isn't one; apart, none runs
+// there.
+export function builderIsolationProblem(policies, labels, { sandboxesApart = false } = {}) {
   const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
   const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
   for (const type of ["Egress", "Ingress"]) {
@@ -100,7 +105,10 @@ export function builderIsolationProblem(policies, labels) {
         rule.from.some((peer) => peer.ipBlock || peer.namespaceSelector || !peer.podSelector);
       if (wide)
         return `${name} lets traffic in to the BuildKit daemon from beyond the namespace's pods`;
-      if (rule.from.some((peer) => !excludesSandboxes(peer.podSelector, SANDBOX_LABELS))) {
+      if (
+        !sandboxesApart &&
+        rule.from.some((peer) => !excludesSandboxes(peer.podSelector, SANDBOX_LABELS))
+      ) {
         return `${name} lets sandbox pods reach the BuildKit daemon`;
       }
     }
@@ -129,14 +137,15 @@ const notWritable = (claim, user, storageClass) =>
   `the claim ${claim} isn't writable by uid ${user.uid}: its storage class${storageClass ? ` (${storageClass})` : ""} has to apply the pod's fsGroup (for a CSI driver, fsGroupPolicy: File) or give new volumes a root every user can write (docs/setup.md, Kubernetes runner)`;
 // An install pod that hasn't ended by then (stuck Pending, npm hanging) fails, and goes.
 const INSTALL_MS = 15 * 60_000;
-// The pull Secret and the BuildKit pods' addresses, read again after this long.
-const SECRET_TTL_MS = 60_000;
+// The BuildKit pods' addresses, read again after this long.
 const BUILDER_TTL_MS = 10_000;
 const BASE_TTL_MS = 60_000;
 
 export function createKubernetesImages({
   config,
-  api, // kube-api.mjs
+  api, // kube-api.mjs, in the sandboxes' namespace: the install pods, the claims
+  services = api, // the same, in the services' (the same object when they are one): BuildKit
+  pullSecret = createPullSecret({ config, api, services }), // kube-pull.mjs
   fetch = globalThis.fetch, // the registry's
   buildctl = buildctlCli,
   log = () => {},
@@ -147,27 +156,12 @@ export function createKubernetesImages({
   const k = config.kubernetes;
   const owner = { "deckhand.owner": labelValue(config.prefix) };
   const claimPath = (name) => `persistentvolumeclaims/${kubeName(name)}`;
-  let secret = { at: -Infinity, text: null };
+  const apart = services.namespace !== api.namespace;
   let builder = { at: -Infinity, addresses: [] };
   const registry = createRegistry({
     fetch,
-    auths: async () => authsOf(JSON.parse(await pullConfig())),
+    auths: async () => authsOf(JSON.parse(await pullSecret.text())),
   });
-
-  // The pull Secret's docker config, as text ("{}" without one).
-  async function pullConfig() {
-    if (!k.registrySecret) return "{}";
-    if (now() - secret.at < SECRET_TTL_MS) return secret.text;
-    const found = await api.find(`secrets/${kubeName(k.registrySecret)}`);
-    const data = found?.data?.[".dockerconfigjson"];
-    if (!data) {
-      throw new Error(
-        `KUBERNETES_REGISTRY_SECRET: no kubernetes.io/dockerconfigjson Secret ${k.registrySecret} in the namespace ${api.namespace}`,
-      );
-    }
-    secret = { at: now(), text: Buffer.from(data, "base64").toString() };
-    return secret.text;
-  }
 
   // The image's digest in its registry, or null when it isn't there. The base image's too:
   // a new one pushed under the same tag gives repo images a new tag (images.mjs imageTag()).
@@ -225,7 +219,7 @@ export function createKubernetesImages({
     const signal = AbortSignal.timeout(buildMs);
     try {
       const args = buildArgs({
-        addr: k.buildkit,
+        addr: builderAddr(),
         dir,
         dockerfile,
         ref: tag,
@@ -236,7 +230,7 @@ export function createKubernetesImages({
         },
         labels,
       });
-      const built = await withDockerConfig(await pullConfig(), (env) =>
+      const built = await withDockerConfig(await pullSecret.text(), (env) =>
         buildctl(args, { env, onData: output, signal }),
       );
       if (signal.aborted) {
@@ -249,7 +243,7 @@ export function createKubernetesImages({
   }
 
   // The registries of `refs` (the image built, its base), and the hosts each sends a puller
-  // to: those known (REGISTRY_HOSTS), those the listener saw it send it to, and the operator's
+  // to: those known (REGISTRY_HOSTS), those the runner saw it send it to, and the operator's
   // (KUBERNETES_REGISTRY_HOSTS).
   function builderHosts(refs) {
     const found = [...(k.registryHosts ?? [])];
@@ -259,33 +253,44 @@ export function createKubernetesImages({
     return [...new Set(found)];
   }
 
-  // builderIsolationProblem() for the daemon's pods (the endpoints of its Service), checked
-  // again after a while; also a problem: no daemon behind its Service.
+  // The daemon's address for buildctl. Its Service's short name resolves in the runner's own
+  // namespace: apart, it is named in the services' namespace, so that the daemon built on is
+  // the one builderIsolation() checked, wherever the runner runs.
+  function builderAddr() {
+    if (!apart) return k.buildkit;
+    const url = new URL(k.buildkit);
+    return `tcp://${url.hostname}.${services.namespace}.svc:${url.port}`;
+  }
+
+  // builderIsolationProblem() for the daemon's pods (the endpoints of its Service, in the
+  // services' namespace), checked again after a while; also a problem: no daemon behind its
+  // Service.
   let isolation = { at: -Infinity, problem: null };
   async function builderIsolation() {
     if (now() - isolation.at < BUILDER_TTL_MS) return isolation.problem;
     const service = aliasOf(k.buildkit);
-    const { items: slices = [] } = await api.get(`${DISCOVERY}/${api.namespace}/endpointslices`, {
-      labelSelector: `kubernetes.io/service-name=${service}`,
-    });
+    const { items: slices = [] } = await services.get(
+      `${DISCOVERY}/${services.namespace}/endpointslices`,
+      { labelSelector: `kubernetes.io/service-name=${service}` },
+    );
     const pods = slices.flatMap((s) =>
       (s.endpoints ?? []).map((e) => e.targetRef).filter((r) => r?.kind === "Pod"),
     );
     let problem = pods.length
       ? null
-      : `no BuildKit daemon behind the Service ${service} in the namespace ${api.namespace} (KUBERNETES_BUILDKIT)`;
+      : `no BuildKit daemon behind the Service ${service} in the namespace ${services.namespace} (KUBERNETES_BUILDKIT)`;
     if (!problem) {
-      const { items: policies = [] } = await api.get(
-        `${NETWORKING}/${api.namespace}/networkpolicies`,
+      const { items: policies = [] } = await services.get(
+        `${NETWORKING}/${services.namespace}/networkpolicies`,
       );
       for (const ref of pods) {
-        const labels = (await api.find(`pods/${ref.name}`))?.metadata?.labels ?? {};
-        problem = builderIsolationProblem(policies, labels);
+        const labels = (await services.find(`pods/${ref.name}`))?.metadata?.labels ?? {};
+        problem = builderIsolationProblem(policies, labels, { sandboxesApart: apart });
         if (problem) break;
       }
     }
     if (problem) {
-      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the listener reach it (see docs/setup.md, Repo images on Kubernetes)`;
+      problem = `the BuildKit daemon isn't isolated: ${problem}. Its NetworkPolicies let it reach the egress proxy only, and only the runner reach it (see docs/setup.md, Repo images on Kubernetes)`;
     }
     isolation = { at: now(), problem };
     return problem;
@@ -438,7 +443,7 @@ export function createKubernetesImages({
 
   // `spec`: agents' install() and the agent's name. The installer is idempotent (one folder
   // per version, nothing done when it is there): it runs at the first run of each version
-  // after the listener starts, and goes at once when the version is in the claim.
+  // after the runner starts, and goes at once when the version is in the claim.
   async function installAgent({
     name,
     displayName,
@@ -496,6 +501,11 @@ export function createKubernetesImages({
     await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
     await waitGone(pod);
     const limits = { cpu: String(config.limits.cpus), memory: quantity(config.limits.memory) };
+    const pullName = await pullSecret.forPods();
+    // An install pod (`hosts`), apart from the services: the cluster's DNS doesn't know the
+    // proxy's short name in the sandboxes' namespace, so its Service's IP, as sandboxes have it.
+    // A cache's check reaches nothing: no proxy to look up.
+    const aliases = apart && hosts ? aliasesOf(await proxyService(services, config)) : [];
     await api.create("pods", {
       apiVersion: "v1",
       kind: "Pod",
@@ -504,7 +514,8 @@ export function createKubernetesImages({
         restartPolicy: "Never",
         automountServiceAccountToken: false,
         enableServiceLinks: false,
-        ...pullSecrets(),
+        ...(pullName ? { imagePullSecrets: [{ name: pullName }] } : {}),
+        ...(aliases.length ? { hostAliases: aliases } : {}),
         securityContext: {
           runAsNonRoot: true,
           runAsUser: user.uid,
@@ -549,10 +560,6 @@ export function createKubernetesImages({
     }
   }
 
-  function pullSecrets() {
-    return k.registrySecret ? { imagePullSecrets: [{ name: kubeName(k.registrySecret) }] } : {};
-  }
-
   // The pod once it has ended, or null when it doesn't within `timeoutMs`.
   async function ending(pod, timeoutMs) {
     const since = now();
@@ -579,15 +586,17 @@ export function createKubernetesImages({
     }
   }
 
-  // The BuildKit daemon's pod IPs: the endpoints of KUBERNETES_BUILDKIT's Service.
+  // The BuildKit daemon's pod IPs: the endpoints of KUBERNETES_BUILDKIT's Service, in the
+  // services' namespace.
   async function builderAddresses() {
     if (now() - builder.at < BUILDER_TTL_MS) return builder.addresses;
     let addresses = [];
     try {
       const service = aliasOf(k.buildkit);
-      const { items = [] } = await api.get(`${DISCOVERY}/${api.namespace}/endpointslices`, {
-        labelSelector: `kubernetes.io/service-name=${service}`,
-      });
+      const { items = [] } = await services.get(
+        `${DISCOVERY}/${services.namespace}/endpointslices`,
+        { labelSelector: `kubernetes.io/service-name=${service}` },
+      );
       addresses = items.flatMap((s) => (s.endpoints ?? []).flatMap((e) => e.addresses ?? []));
     } catch (error) {
       log(`Looking up the BuildKit daemon: ${error.message}`);

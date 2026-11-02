@@ -9,6 +9,7 @@ import { RunError, runnerRefusal } from "../listener/access.mjs";
 import { claude } from "../listener/agents/claude.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { apiBase, createKubeApi, KubeError } from "../listener/runner/kube-api.mjs";
+import { createPullSecret } from "../listener/runner/kube-pull.mjs";
 import {
   createKubernetesRunner,
   INSTALL_USER,
@@ -48,7 +49,34 @@ const POLICY = {
 };
 
 const SERVICES = {
-  egress: { metadata: { name: "egress" }, spec: { clusterIP: "10.96.0.11" } },
+  egress: {
+    metadata: { name: "egress" },
+    spec: { clusterIP: "10.96.0.11", selector: { app: "deckhand-egress" } },
+  },
+};
+
+// The services' namespace, when the sandboxes have one of their own.
+const SVC = "deckhand";
+
+// Deckhand's policy with the sandboxes apart, as docs/setup.md shows it: the proxy's pods in
+// the services' namespace alone.
+const APART_POLICY = {
+  metadata: { name: "deckhand-sandboxes" },
+  spec: {
+    podSelector: { matchLabels: { "deckhand.role": "sandbox" } },
+    policyTypes: ["Ingress", "Egress"],
+    egress: [
+      {
+        to: [
+          {
+            namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": SVC } },
+            podSelector: { matchLabels: { app: "deckhand-egress" } },
+          },
+        ],
+        ports: [{ port: 3128 }],
+      },
+    ],
+  },
 };
 
 // A namespace's API: `objects` by resource then name; `logs` a pod's log, chunks of text;
@@ -57,20 +85,29 @@ const SERVICES = {
 // `fail` gets the request's `signal`, and may answer a promise that only it ends (an API that
 // never answers); a pod's log may be a function of { follow, signal } giving a Response.
 // `timeoutMs`: createKubeApi()'s.
+// `apart`: the services in a namespace of their own (SVC), with the proxy's Service, its
+// EndpointSlices (`slices`) and `servicePolicies`; `servicesApi` and `servicesObjects` are
+// theirs.
 function fakeApi({
   policies = [POLICY],
   logs = {},
   slices = [],
   fail = () => null,
   timeoutMs,
+  apart = false,
+  servicePolicies = [],
 } = {}) {
-  const objects = {
+  const store = (services = {}) => ({
     pods: new Map(),
     secrets: new Map(),
     persistentvolumeclaims: new Map(),
-    services: new Map(Object.entries(SERVICES)),
+    services: new Map(Object.entries(services)),
     events: new Map(),
-  };
+  });
+  const objects = store(apart ? {} : SERVICES);
+  const servicesObjects = apart ? store(SERVICES) : objects;
+  const namespaces = { [NS]: objects, ...(apart ? { [SVC]: servicesObjects } : {}) };
+  const servicesNs = apart ? SVC : NS;
   const calls = [];
   const bodies = [];
   let uids = 0;
@@ -92,13 +129,15 @@ function fakeApi({
     if (pathname === `/apis/networking.k8s.io/v1/namespaces/${NS}/networkpolicies`) {
       return Response.json({ items: policies });
     }
-    if (pathname === `/apis/discovery.k8s.io/v1/namespaces/${NS}/endpointslices`) {
+    if (apart && pathname === `/apis/networking.k8s.io/v1/namespaces/${SVC}/networkpolicies`) {
+      return Response.json({ items: servicePolicies });
+    }
+    if (pathname === `/apis/discovery.k8s.io/v1/namespaces/${servicesNs}/endpointslices`) {
       return Response.json({ items: slices });
     }
-    const [, kind, name, sub] =
-      pathname.match(new RegExp(`^/api/v1/namespaces/${NS}/(\\w+)(?:/([^/]+))?(?:/(\\w+))?$`)) ??
-      [];
-    const store = objects[kind];
+    const [, ns, kind, name, sub] =
+      pathname.match(/^\/api\/v1\/namespaces\/([^/]+)\/(\w+)(?:\/([^/]+))?(?:\/(\w+))?$/) ?? [];
+    const store = namespaces[ns]?.[kind];
     if (!store) return new Response("no such route", { status: 404 });
     const missing = () =>
       Response.json({ message: `${kind} "${name}" not found` }, { status: 404 });
@@ -126,12 +165,27 @@ function fakeApi({
         metadata: {
           creationTimestamp: new Date(0).toISOString(),
           uid: `uid-${++uids}`,
+          resourceVersion: "1",
           ...body.metadata,
         },
         status: kind === "pods" ? { phase: "Running", podIPs: [{ ip: "10.244.1.7" }] } : {},
       };
       store.set(body.metadata.name, made);
       return Response.json(made, { status: 201 });
+    }
+    if (method === "PUT") {
+      if (!store.has(name)) return missing();
+      const version = store.get(name).metadata.resourceVersion;
+      if (body.metadata.resourceVersion !== version) {
+        return Response.json({ message: "conflict" }, { status: 409 });
+      }
+      // Each change a new version, as the API gives it.
+      const changed = {
+        ...body,
+        metadata: { ...body.metadata, resourceVersion: String(Number(version ?? 0) + 1) },
+      };
+      store.set(name, changed);
+      return Response.json(changed);
     }
     if (method === "DELETE") {
       if (!store.delete(name)) return missing();
@@ -141,14 +195,11 @@ function fakeApi({
     const selector = searchParams.get("labelSelector");
     return Response.json({ items: [...store.values()].filter((o) => matches(o, selector)) });
   };
-  const api = createKubeApi({
-    fetch,
-    base: "https://kube",
-    token: () => "token-1",
-    namespace: NS,
-    timeoutMs,
-  });
-  return { api, calls, bodies, objects };
+  const kubeApi = (namespace) =>
+    createKubeApi({ fetch, base: "https://kube", token: () => "token-1", namespace, timeoutMs });
+  const api = kubeApi(NS);
+  const servicesApi = apart ? kubeApi(SVC) : api;
+  return { api, servicesApi, calls, bodies, objects, servicesObjects };
 }
 
 // `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
@@ -159,12 +210,21 @@ function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {} }
   const logged = [];
   const inboxDir = tempDir(t);
   const clock = { at: Date.parse("2026-10-30T10:00:00Z") };
+  const cfg = { ...config, kubernetes: { ...config.kubernetes, ...kubernetes } };
+  const clockNow = now ?? (() => clock.at);
   const runner = createKubernetesRunner({
-    config: { ...config, kubernetes: { ...config.kubernetes, ...kubernetes } },
+    config: cfg,
     api: fake.api,
+    services: fake.servicesApi,
+    pullSecret: createPullSecret({
+      config: cfg,
+      api: fake.api,
+      services: fake.servicesApi,
+      now: clockNow,
+    }),
     inboxDir,
     log: (line) => logged.push(line),
-    now: now ?? (() => clock.at),
+    now: clockNow,
     sleep: async (ms) => {
       clock.at += ms;
       await sleep(ms);
@@ -495,6 +555,311 @@ test("isolationProblem: any policy that widens what a sandbox may reach or what 
   // Egress only: what comes in isn't denied.
   const egressOnly = { ...POLICY.spec, policyTypes: ["Egress"] };
   assert.match(isolationProblem([{ metadata: {}, spec: egressOnly }], labels), /no NetworkPolicy/);
+});
+
+test("isolationProblem, apart: the egress proxy's pods in the services' namespace, nothing else", () => {
+  const labels = { "deckhand.owner": "dh", "deckhand.role": "sandbox", "deckhand.run": "r" };
+  const proxy = { namespace: SVC, selector: { app: "deckhand-egress" } };
+  assert.equal(isolationProblem([APART_POLICY], labels, { proxy }), null);
+  const withPeer = (peer, ports = [{ port: 3128 }]) => [
+    {
+      metadata: { name: "deckhand-sandboxes" },
+      spec: { ...APART_POLICY.spec, egress: [{ to: [peer], ports }] },
+    },
+  ];
+  const svc = { matchLabels: { "kubernetes.io/metadata.name": SVC } };
+  const egress = { matchLabels: { app: "deckhand-egress" } };
+  // Narrower still, or the same written as expressions: allowed.
+  for (const peer of [
+    { namespaceSelector: svc, podSelector: { matchLabels: { app: "deckhand-egress", v: "2" } } },
+    {
+      namespaceSelector: {
+        matchExpressions: [{ key: "kubernetes.io/metadata.name", operator: "In", values: [SVC] }],
+      },
+      podSelector: {
+        matchExpressions: [{ key: "app", operator: "In", values: ["deckhand-egress"] }],
+      },
+    },
+  ]) {
+    assert.equal(isolationProblem(withPeer(peer), labels, { proxy }), null, JSON.stringify(peer));
+  }
+  // Another pod of the services' namespace, or all of them.
+  for (const podSelector of [
+    { matchLabels: { app: "orchestrator" } },
+    {},
+    undefined,
+    { matchExpressions: [{ key: "app", operator: "In", values: ["deckhand-egress", "broker"] }] },
+    { matchExpressions: [{ key: "app", operator: "NotIn", values: ["broker"] }] },
+  ]) {
+    assert.match(
+      isolationProblem(withPeer({ namespaceSelector: svc, podSelector }), labels, { proxy }),
+      /lets sandbox pods reach pods of the namespace deckhand other than the egress proxy's/,
+      JSON.stringify(podSelector),
+    );
+  }
+  // A third namespace, every namespace, the sandboxes' own pods, an address.
+  for (const peer of [
+    {
+      namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "other" } },
+      podSelector: egress,
+    },
+    { namespaceSelector: {}, podSelector: egress },
+    {
+      namespaceSelector: {
+        matchExpressions: [
+          { key: "kubernetes.io/metadata.name", operator: "In", values: [SVC, "other"] },
+        ],
+      },
+      podSelector: egress,
+    },
+    { namespaceSelector: { matchLabels: { team: "deckhand" } }, podSelector: egress },
+    { podSelector: egress },
+    { podSelector: { matchLabels: { "deckhand.role": "install" } } },
+    { ipBlock: { cidr: "10.244.0.0/16" } },
+  ]) {
+    assert.match(
+      isolationProblem(withPeer(peer), labels, { proxy }),
+      /lets sandbox pods reach beyond the namespace deckhand/,
+      JSON.stringify(peer),
+    );
+  }
+  // A proxy Service without a selector: nothing tells its pods.
+  assert.match(
+    isolationProblem([APART_POLICY], labels, { proxy: { namespace: SVC, selector: {} } }),
+    /other than the egress proxy's .*which has none/,
+  );
+  // Its other ports, as in one namespace.
+  assert.match(
+    isolationProblem(
+      withPeer({ namespaceSelector: svc, podSelector: egress }, [{ port: 8083 }]),
+      labels,
+      {
+        proxy,
+      },
+    ),
+    /reach port 8083 of the egress proxy's pods \(only 3128\)/,
+  );
+  // The single-namespace policy no longer does: its peer is the sandboxes' own namespace.
+  assert.match(isolationProblem([POLICY], labels, { proxy }), /beyond the namespace deckhand/);
+  // Ingress refused as in one namespace.
+  const ingress = { ...APART_POLICY, spec: { ...APART_POLICY.spec, ingress: [{}] } };
+  assert.match(isolationProblem([ingress], labels, { proxy }), /lets traffic in/);
+});
+
+test("start, apart: the pod, its Secret and claims in the sandboxes' namespace, the proxy read in the services'", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const pull = (auth) => ({
+    metadata: { name: "pull", resourceVersion: "1" },
+    type: "kubernetes.io/dockerconfigjson",
+    data: { ".dockerconfigjson": Buffer.from(JSON.stringify({ auths: auth })).toString("base64") },
+  });
+  let time = 0;
+  const { runner, objects, servicesObjects, calls } = setup(
+    t,
+    { apart: true, policies: [APART_POLICY] },
+    { kubernetes, now: () => time },
+  );
+  servicesObjects.secrets.set("pull", pull({ "registry.example.com": { auth: "a" } }));
+  await runner.start(spec());
+  assert.deepEqual([...objects.pods.keys()], ["dh-org-repo-12-abc"]);
+  assert.deepEqual([...objects.persistentvolumeclaims.keys()].sort(), [
+    "dh-org-repo-12-abc-claude",
+    "dh-org-repo-12-abc-workspace",
+  ]);
+  // Nothing made in the services' namespace; only its Service, its Secret read.
+  for (const kind of ["pods", "persistentvolumeclaims", "events"]) {
+    assert.equal(servicesObjects[kind].size, 0, kind);
+  }
+  assert.deepEqual([...servicesObjects.secrets.keys()], ["pull"]);
+  const writes = calls.filter((c) => !c.startsWith("GET"));
+  assert.ok(
+    writes.every((c) => c.includes(`/namespaces/${NS}/`)),
+    writes.join("\n"),
+  );
+  assert.ok(calls.includes(`GET /api/v1/namespaces/${SVC}/services/egress`));
+  assert.ok(calls.includes(`GET /apis/networking.k8s.io/v1/namespaces/${NS}/networkpolicies`));
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  assert.deepEqual(pod.spec.hostAliases, [{ ip: "10.96.0.11", hostnames: ["egress"] }]);
+  // Its pull Secret: a copy of the services' one in its own namespace, as pods pull with.
+  assert.deepEqual(pod.spec.imagePullSecrets, [{ name: "pull" }]);
+  const copy = objects.secrets.get("pull");
+  assert.equal(copy.type, "kubernetes.io/dockerconfigjson");
+  assert.deepEqual(copy.data, servicesObjects.secrets.get("pull").data);
+  assert.equal(copy.metadata.labels["deckhand.owner"], "dh");
+  assert.ok(objects.secrets.has("dh-org-repo-12-abc-1730000000-env"));
+  // Rotated in the services' namespace: the copy follows, once the source is read again.
+  servicesObjects.secrets.set("pull", pull({ "registry.example.com": { auth: "b" } }));
+  time += 61_000;
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1" }));
+  assert.deepEqual(objects.secrets.get("pull").data, servicesObjects.secrets.get("pull").data);
+  // One of that name that isn't the runner's copy is never overwritten: the run is refused.
+  objects.secrets.set("pull", { metadata: { name: "pull", labels: {} }, data: {} });
+  time += 61_000;
+  await assert.rejects(
+    runner.start(spec({ name: "dh-org-repo-14-abc", run: "dh-org-repo-14-abc-1" })),
+    /the Secret pull in the namespace runs isn't the runner's copy of KUBERNETES_REGISTRY_SECRET/,
+  );
+  assert.deepEqual(objects.secrets.get("pull").data, {});
+  assert.equal(objects.pods.has("dh-org-repo-14-abc"), false);
+});
+
+test("start, apart: a pull Secret there that isn't the runner's copy is refused, even holding the same data", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const data = { ".dockerconfigjson": Buffer.from("{}").toString("base64") };
+  const source = { metadata: { name: "pull" }, data };
+  // The same data, labelled the runner's owner but not its copy's role; then one made between
+  // the runner's look and its create (a 409), by someone else.
+  const foreign = { metadata: { name: "pull", labels: { "deckhand.owner": "dh" } }, data };
+  {
+    const { runner, objects, servicesObjects } = setup(
+      t,
+      { apart: true, policies: [APART_POLICY] },
+      { kubernetes },
+    );
+    servicesObjects.secrets.set("pull", source);
+    objects.secrets.set("pull", foreign);
+    await assert.rejects(
+      runner.start(spec()),
+      /the Secret pull in the namespace runs isn't the runner's copy of KUBERNETES_REGISTRY_SECRET \(labelled deckhand.owner: dh and deckhand.role: registry\)/,
+    );
+    assert.equal(objects.pods.size, 0);
+  }
+  let raced = false;
+  const fake = setup(
+    t,
+    {
+      apart: true,
+      policies: [APART_POLICY],
+      fail: ({ method, path, body }) => {
+        if (
+          method !== "POST" ||
+          !path.endsWith(`/namespaces/${NS}/secrets`) ||
+          body.metadata.name !== "pull"
+        ) {
+          return null;
+        }
+        raced = true;
+        fake.objects.secrets.set("pull", foreign);
+        return Response.json({ message: "already exists" }, { status: 409 });
+      },
+    },
+    { kubernetes },
+  );
+  fake.servicesObjects.secrets.set("pull", source);
+  await assert.rejects(fake.runner.start(spec()), /isn't the runner's copy/);
+  assert.ok(raced);
+  assert.equal(fake.objects.pods.size, 0);
+  // Its own copy, made by the other runner meanwhile: used.
+  fake.objects.secrets.set("pull", {
+    metadata: { name: "pull", labels: { "deckhand.owner": "dh", "deckhand.role": "registry" } },
+    data,
+  });
+  await fake.runner.start(spec());
+  assert.equal(fake.objects.pods.size, 1);
+});
+
+test("start, apart: the pull Secret's copy changed or gone under it (another start's) is looked at again", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const config = (auth) => ({
+    ".dockerconfigjson": Buffer.from(JSON.stringify({ auths: { r: { auth } } })).toString("base64"),
+  });
+  const labels = { "deckhand.owner": "dh", "deckhand.role": "registry" };
+  let time = 0;
+  let race = null; // what another start does just before this one's write lands
+  const fake = setup(
+    t,
+    {
+      apart: true,
+      policies: [APART_POLICY],
+      fail: ({ method, path }) => {
+        if (
+          !race ||
+          !path.endsWith(`/namespaces/${NS}/secrets${method === "PUT" ? "/pull" : ""}`)
+        ) {
+          return null;
+        }
+        if (!["PUT", "POST"].includes(method)) return null;
+        const then = race;
+        race = null;
+        return then(method);
+      },
+    },
+    { kubernetes, now: () => time },
+  );
+  const { runner, objects, servicesObjects } = fake;
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("a") });
+  await runner.start(spec());
+  assert.deepEqual(objects.secrets.get("pull").data, config("a"));
+  // Rotated; another start brings the copy up to date between this one's look and its PUT,
+  // whose version is then stale: a 409, looked at again, and found up to date.
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("b") });
+  time += 61_000;
+  let puts = 0;
+  race = () => {
+    puts++;
+    const copy = objects.secrets.get("pull");
+    objects.secrets.set("pull", {
+      ...copy,
+      metadata: { ...copy.metadata, resourceVersion: "9" },
+      data: config("b"),
+    });
+    return null; // this PUT goes on, its resourceVersion now stale
+  };
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1" }));
+  assert.equal(puts, 1);
+  assert.deepEqual(objects.secrets.get("pull").data, config("b"));
+  assert.ok(objects.pods.has("dh-org-repo-13-abc"));
+  // Two starts at once across a rotation: both run, the copy up to date.
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("c") });
+  time += 61_000;
+  await Promise.all([
+    runner.start(spec({ name: "dh-org-repo-14-abc", run: "dh-org-repo-14-abc-1" })),
+    runner.start(spec({ name: "dh-org-repo-15-abc", run: "dh-org-repo-15-abc-1" })),
+  ]);
+  assert.ok(objects.pods.has("dh-org-repo-14-abc") && objects.pods.has("dh-org-repo-15-abc"));
+  assert.deepEqual(objects.secrets.get("pull").data, config("c"));
+  // Made by someone meanwhile (a 409), then gone again: made anew, not "remove it".
+  objects.secrets.delete("pull");
+  time += 61_000;
+  race = () => Response.json({ message: "already exists" }, { status: 409 });
+  await runner.start(spec({ name: "dh-org-repo-16-abc", run: "dh-org-repo-16-abc-1" }));
+  assert.deepEqual(objects.secrets.get("pull").metadata.labels, labels);
+  assert.ok(objects.pods.has("dh-org-repo-16-abc"));
+});
+
+test("start, apart: the single-namespace policy, or a proxy at an address, starts nothing", async (t) => {
+  const { runner, objects } = setup(t, { apart: true });
+  await assert.rejects(
+    runner.start(spec()),
+    /the namespace runs doesn't isolate its sandboxes: the NetworkPolicy deckhand-sandboxes lets sandbox pods reach beyond the namespace deckhand/,
+  );
+  const byAddress = setup(t, { apart: true, policies: [APART_POLICY] });
+  const runner2 = createKubernetesRunner({
+    config: { ...config, egressProxy: "http://10.96.0.11:3128" },
+    api: byAddress.api,
+    services: byAddress.servicesApi,
+    inboxDir: tempDir(t),
+  });
+  await assert.rejects(
+    runner2.start(spec()),
+    /EGRESS_PROXY \(http:\/\/10\.96\.0\.11:3128\) is an address/,
+  );
+  assert.equal(objects.pods.size + byAddress.objects.pods.size, 0);
+  assert.equal(objects.secrets.size + byAddress.objects.secrets.size, 0);
+});
+
+test("proxyAddresses and locate, apart: the proxy's endpoints in the services' namespace, sandboxes in theirs", async (t) => {
+  const slices = [{ endpoints: [{ addresses: ["10.244.2.3"] }] }];
+  const { runner, objects, calls } = setup(t, { apart: true, policies: [APART_POLICY], slices });
+  assert.deepEqual(await runner.proxyAddresses(), ["10.244.2.3"]);
+  assert.match(
+    calls.at(-1),
+    new RegExp(`^GET /apis/discovery.k8s.io/v1/namespaces/${SVC}/endpointslices`),
+  );
+  await runner.start(spec());
+  const { uid } = objects.pods.get("dh-org-repo-12-abc").metadata;
+  assert.deepEqual(await runner.locate("10.244.1.7"), { sandbox: uid, name: null });
+  assert.match(calls.at(-1), new RegExp(`^GET /api/v1/namespaces/${NS}/pods\\?`));
 });
 
 test("selects: matchLabels and matchExpressions", () => {

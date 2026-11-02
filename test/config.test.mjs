@@ -419,9 +419,10 @@ test("RUNNER: docker by default, or kubernetes; another runner stops the listene
   );
 });
 
-test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and claim size", () => {
+test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class and claim size", () => {
   assert.deepEqual(loadConfig({ ALLOWED_USERS: "a" }).kubernetes, {
     namespace: null,
+    servicesNamespace: null,
     pendingMs: 600000,
     storageClass: null,
     sessionSize: "10Gi",
@@ -437,12 +438,14 @@ test("KUBERNETES_*: the runner's namespace, Pending wait, storage class and clai
   const set = loadConfig({
     ALLOWED_USERS: "a",
     KUBERNETES_NAMESPACE: "runs",
+    KUBERNETES_SERVICES_NAMESPACE: "deckhand",
     KUBERNETES_PENDING_MINUTES: "3",
     KUBERNETES_STORAGE_CLASS: "fast",
     KUBERNETES_SESSION_SIZE: "20Gi",
   }).kubernetes;
   assert.deepEqual(set, {
     namespace: "runs",
+    servicesNamespace: "deckhand",
     pendingMs: 180000,
     storageClass: "fast",
     sessionSize: "20Gi",
