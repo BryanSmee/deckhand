@@ -612,7 +612,9 @@ const inputs = createInputs({
         const aside = dismissals.setAsideOn(ctx.runs, key, null, at);
         if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);
       })
-      .catch((error) => log(`${key}: its label: ${error.message ?? error}`));
+      .catch((error) => log(`${key}: its label: ${error.message ?? error}`))
+      // Kept or not, the entry sync() dropped is no longer held (inputs.mjs keep()).
+      .finally(() => inputs.release(key));
   },
 });
 

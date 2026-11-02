@@ -24,10 +24,10 @@ export function createInputs({
 }) {
   const inputs = persistentMap(path);
   const save = inputs.save;
-  // The entries sync() dropped while their issue is looked up (keep()), by taskId(): `entry`,
-  // and `questions` when an edit gave newer ones than the lookup will. A delivery that lists
-  // the issue again starts from `entry` (set()), so its `since` and ticks hold; one that drops
-  // it leaves nothing for keep() to put back.
+  // The entries sync() dropped while their issue is looked up, by taskId(), until keep() or
+  // release() says how the lookup ended. A delivery meanwhile that lists the issue again
+  // starts from the entry (set()), so its `since` and ticks hold; one that drops it leaves
+  // nothing for keep() to put back.
   const dropping = new Map();
 
   // Whether issue `key` waits for input now, its questions and whether the bot ticked them
@@ -51,32 +51,33 @@ export function createInputs({
     save();
   }
 
-  // An edit to the questions or ticks of an issue already listed, or of one dropped by sync()
-  // and being looked up: kept for keep(), whose lookup may predate it.
+  // An edit to the questions or ticks of an issue already listed. One dropped by sync() and
+  // being looked up keeps the ticks for keep(), with the questions its lookup will say: a
+  // delivery with questions lists the issue again (set()).
   function update(key, questions, ignoredTicks) {
     if (inputs.has(key)) return set(key, true, questions, ignoredTicks);
     const held = dropping.get(taskId(key));
-    if (!held) return;
-    if (questions !== undefined) held.questions = questions;
-    if (ignoredTicks !== undefined) {
-      const { ignoredTicks: _, ...entry } = held.entry;
-      held.entry = { ...entry, ...(ignoredTicks && { ignoredTicks: true }) };
-    }
+    if (!held || ignoredTicks === undefined) return;
+    const { ignoredTicks: _, ...entry } = held.entry;
+    held.entry = { ...entry, ...(ignoredTicks && { ignoredTicks: true }) };
   }
 
   // An entry sync() dropped whose issue, looked up on its own, is still open and labelled: a
   // listing read page by page can miss an issue that moved between pages. Its `since` and
-  // ticks as they were, its questions as the body had them when looked up (`questions`), or
-  // as an edit meanwhile gave them. One a delivery listed again or dropped meanwhile stays as
-  // that delivery left it. Whether it was put back.
+  // ticks as they were, its questions as the body had them when looked up. One a delivery
+  // listed again or dropped meanwhile stays as that delivery left it. Whether it was put back.
   function keep(key, questions) {
     const held = dropping.get(taskId(key));
     dropping.delete(taskId(key));
     if (!held || inputs.has(key)) return false;
-    inputs.set(key, { ...held.entry, questions: "questions" in held ? held.questions : questions });
+    inputs.set(key, { ...held.entry, questions });
     save();
     return true;
   }
+
+  // A dropped entry whose lookup ended otherwise (the label off, the issue closed or gone, the
+  // lookup failed): forgotten, so the label put back later starts afresh, as it would have.
+  const release = (key) => dropping.delete(taskId(key));
 
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
   // listed keeps what it had. Resolves to [key, title] pairs, for the dashboard's titles.
@@ -140,6 +141,7 @@ export function createInputs({
     set,
     update,
     keep,
+    release,
     sync,
     list,
     has: (key) => inputs.has(key),

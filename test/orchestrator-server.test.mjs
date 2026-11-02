@@ -5337,7 +5337,7 @@ mounts:
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const files = {};
-    const { dir, port, listener } = await listen(t, files, (dir, github) => {
+    const { dir, port, listener, send } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       for (const n of [5, 8, 11, 14]) {
         writeFileSync(
@@ -5384,7 +5384,7 @@ mounts:
       writeFileSync(
         join(dir, "inputs.json"),
         JSON.stringify({
-          "org/repo#11": { since: 1000, questions: null },
+          "org/repo#11": { since: 1000, questions: null, ignoredTicks: true },
           "org/repo#14": { since: 1000, questions: null },
           "org/repo#16": { since: 2000, questions: null },
         }),
@@ -5451,6 +5451,26 @@ mounts:
         ["org/repo#16", 2000, 2],
       ],
     );
+    // #11's label put back later: a new entry, not the one dropped at start (its time, the
+    // ticks it ignored).
+    const before = Date.now();
+    await send(
+      {
+        action: "labeled",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "main" },
+        issue: { number: 11, title: "Eleven", state: "open", labels: [{ name: "needs-input" }] },
+        label: { name: "needs-input" },
+        sender: { login: "bob", type: "User" },
+      },
+      "issues",
+    );
+    const relabelled = await until(
+      () => JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"))["org/repo#11"],
+      "#11 listed again",
+    );
+    assert.ok(relabelled.since >= before);
+    assert.equal(relabelled.ignoredTicks, undefined);
   });
 
   test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {
