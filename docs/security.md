@@ -480,7 +480,8 @@ agent found elsewhere.
 
 The internet reaches one service only: **edge** (`edge/`, #506, [services.md](services.md)).
 Compose publishes its port (`PORT`, 8080) on `edge-out`, a network of its own. It serves GitHub's
-webhooks (`POST /webhook`), /setup, sign-in and sessions (`listener/auth.mjs`), the dashboard's
+webhooks (`POST /webhook`), /setup, sign-in and sessions (`listener/auth.mjs`; MCP clients' too,
+[MCP clients](#mcp-clients)), the dashboard's
 files and `/health`, and passes the rest on to the orchestrator. It holds three secrets and
 nothing else: the webhook secret, the session key and the OAuth client's (its id and secret), in
 its own volume (`edge-data`, [Edge's and the orchestrator's data](#edges-and-the-orchestrators-data)).
@@ -1965,17 +1966,63 @@ proxy on the host's network calls from loopback too: a request carrying `Forward
 `X-Forwarded-For`, `X-Forwarded-Host` or `X-Real-IP` needs a session. If your proxy adds none
 of them, keep `/status` from it.
 
+### MCP clients
+
+MCP clients (Claude Code, Codex, an editor) sign in to Deckhand as one of its users, through
+edge, which is a small OAuth 2.1 authorization server for the `/mcp` resource, as the
+[MCP authorization spec](https://modelcontextprotocol.io/specification/draft/basic/authorization)
+asks (`edge/oauth.mjs`, #481). It signs its users in with GitHub as the dashboard does: no
+identity provider of its own, nor a secret beyond edge's three.
+
+- **Discovery.** `/mcp` answers `401` without a valid token, with `WWW-Authenticate: Bearer
+resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 9728), which
+  names edge as the authorization server (`/.well-known/oauth-authorization-server`, RFC 8414).
+  Both point at Deckhand's public URL (`PUBLIC_URL`, else the App's).
+- **Registration** (`POST /oauth/register`, RFC 7591): public clients only (no client secret,
+  whatever the client asks for), 1 to 5 redirect URIs, each `https://` or `http://` to
+  `localhost`, `127.0.0.1` or `[::1]` (on the loopback, any port matches, RFC 8252); a custom
+  scheme (`cursor://`) is refused. At most 60 registrations an hour, all clients together; one
+  no one signs in with is gone after a day.
+- **Authorization** (`/oauth/authorize`): PKCE with `S256` is required (`plain`, or none, is
+  refused); the client and its redirect URI must be registered, else the page says so and sends
+  nobody anywhere. Someone not signed in goes through GitHub (`/auth/login?next=…`, which only
+  ever returns to `/oauth/authorize`), and an allowed login then sees a consent page naming the
+  client (its own claim), the login it will act as, the scopes and the redirect URI. Only an
+  allowed login gets that page, and so a code: a login outside `ALLOWED_USERS` is refused at
+  GitHub's callback, as on the dashboard. The consent is a form posted once (its request,
+  in edge's store for 10 minutes, bound to the login), from edge's own origin (`Origin`
+  checked, the session cookie `SameSite=Lax`); the page can't be framed.
+- **Tokens** (`/oauth/token`): the code (5 minutes, once; a code used twice ends the tokens it
+  gave) with its verifier, its client's id and redirect URI, becomes an opaque access token (an
+  hour) and a refresh token (30 days), bound to the login, the client and the resource
+  (`<PUBLIC_URL>/mcp`, RFC 8707: a client naming another is refused). A refresh rotates the
+  refresh token; one used twice (or two refreshes at once) ends its whole family, the client
+  signing in again. Scopes: `deckhand:read` and `deckhand:work` (what a client gets when it
+  asks for neither), and `deckhand:machine`, granted only when asked for (machines, #595);
+  others (`offline_access`) are ignored.
+- **Kept hashed.** Codes, access and refresh tokens are random (256 bits) and kept as their
+  SHA-256 in edge's store (`mcp/…`), which its two copies share: they survive a restart and a
+  handover, and neither the store nor the logs ever hold one.
+- **Every use is checked again**: the token's family still there, its login still in
+  `ALLOWED_USERS`, and its session epoch unchanged. Signing out on the dashboard (which ends
+  that login's sessions everywhere) ends its MCP clients' tokens too; so does Revoke in
+  Settings › MCP clients (the login's own clients, posted from the dashboard's origin), or the
+  client's own `POST /oauth/revoke` (RFC 7009). A login keeps 20 clients at most: a 21st ends
+  the oldest.
+- What a client may then do is its login's, as on the dashboard: `/mcp`'s tools (#482, #483)
+  check `ALLOWED_REPOS` and each repository's `users` on every call.
+
 ## Edge's and the orchestrator's data
 
 **Edge's volume** (`edge-data`, its `/data`) holds its three secrets: whoever reads it can sign
 deliveries as GitHub and sign in users, but not act as the App (its key is the github
 service's). The files holding secrets are the owner's only (`0600`):
 
-| File          | What                                                                                                                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.json`    | the App's names, its webhook secret and its OAuth client's (never its key)                                                                                                    |
-| `session.key` | signs dashboard sessions                                                                                                                                                      |
-| `store/`      | its store: the delivery ids taken, each login's session epoch, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
+| File          | What                                                                                                                                                                                                                               |
+| ------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.json`    | the App's names, its webhook secret and its OAuth client's (never its key)                                                                                                                                                         |
+| `session.key` | signs dashboard sessions                                                                                                                                                                                                           |
+| `store/`      | its store: the delivery ids taken, each login's session epoch, MCP clients' registrations and their tokens' hashes, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
 
 **The orchestrator's volume** (`data`) holds nothing that signs deliveries or sessions; whoever reads it reads the queue and what the runs did, and a running run's
 agent token. The files holding one are the owner's only (`0600`):

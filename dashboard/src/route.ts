@@ -17,7 +17,7 @@
 // No page: a repo's tasks, or the Overview on All. "tasks" on All: every repo's tasks.
 export type Page = "tasks" | "board" | "settings";
 // Settings' tabs besides Repositories (its first, and the one with no `section`).
-export type Section = "preferences" | "server";
+export type Section = "preferences" | "clients" | "server";
 // A repository's settings' tabs besides Config (its first, and the one with no `configTab`).
 export type ConfigTab = "policies" | "capabilities";
 
@@ -46,7 +46,7 @@ export function parseRoute(hash: string): Route {
     return task ? { repo: null, task, run: old.get("run"), page: "tasks" } : overview;
   }
   const [path, query = ""] = h.slice(1).split("?", 2);
-  // Settings: Repositories (#/settings alone too), Preferences or Server.
+  // Settings: Repositories (#/settings alone too), Preferences, MCP clients or Server.
   const repos =
     /^(?:settings\/repositories|repositories)(?:\/([\w.-]+\/[\w.-]+)(?:\/(policies|capabilities))?)?$/.exec(
       path,
@@ -59,7 +59,7 @@ export function parseRoute(hash: string): Route {
       ...(repos[2] ? { configTab: repos[2] as ConfigTab } : {}),
     };
   }
-  const section = /^settings\/(preferences|server)$/.exec(path);
+  const section = /^settings\/(preferences|clients|server)$/.exec(path);
   if (section) return { ...tasks(null), page: "settings", section: section[1] as Section };
   if (/^settings(?:\/[\w-]+)?$/.test(path)) return { ...tasks(null), page: "settings" };
   // The board is one repo's: every repo's graph is the Overview now.

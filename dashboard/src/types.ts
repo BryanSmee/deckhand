@@ -936,3 +936,17 @@ export interface AnalysisResult extends WorkResult {
   number?: number;
   task?: string;
 }
+
+// An MCP client signed in as the user, for Settings › MCP clients: GET api/mcp/clients (edge's
+// own, edge/oauth.mjs clients()), the newest first. `id`: its sign-in's, what Revoke posts
+// (api/mcp/clients/<id>/revoke); `client`: its registration's; `name`: its own claim;
+// `created`, `used`: ms, `used` null until its token was first used.
+export interface McpClient {
+  id: string;
+  name: string;
+  client: string;
+  redirect: string;
+  scopes: string[];
+  created: number;
+  used: number | null;
+}
