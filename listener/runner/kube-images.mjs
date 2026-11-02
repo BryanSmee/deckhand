@@ -20,7 +20,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
-import { kubeName, labelValue } from "./kube-names.mjs";
+import { kubeName, labelValue, restrictedContainer } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import {
   aliasesOf,
@@ -532,12 +532,7 @@ export function createKubernetesImages({
             command,
             env: Object.entries(env).map(([key, value]) => ({ name: key, value: String(value) })),
             resources: { limits, requests: limits },
-            securityContext: {
-              allowPrivilegeEscalation: false,
-              capabilities: { drop: ["ALL"] },
-              runAsNonRoot: true,
-              seccompProfile: { type: "RuntimeDefault" },
-            },
+            securityContext: restrictedContainer(),
             volumeMounts: [{ name: "claim", mountPath: mount }],
           },
         ],

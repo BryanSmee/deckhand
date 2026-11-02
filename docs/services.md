@@ -312,7 +312,8 @@ gap stays (above). The Compose test server keeps it.
   compromised edge, already inside the internal network, gets no more.
 - **The network has to be closed**: with Docker, only the proxy sits on the runs' networks (a
   test reads `compose.yaml`); on Kubernetes, NetworkPolicies need a network plugin that enforces
-  them ([kubernetes.md](kubernetes.md), `deploy/kubernetes/check-isolation.sh`).
+  them, which the runner checks with a probe pod before it starts any run
+  ([kubernetes.md](kubernetes.md#the-network-probe), `deploy/kubernetes/check-isolation.sh`).
 
 ## Rules
 
