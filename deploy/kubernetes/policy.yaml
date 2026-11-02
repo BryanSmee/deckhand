@@ -46,6 +46,13 @@ spec:
               path: /ready
               port: http
             periodSeconds: 5
+          # Its process answers: restarted after a minute without.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

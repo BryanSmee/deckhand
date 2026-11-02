@@ -486,6 +486,13 @@ test("deploy/kubernetes: two copies of each service, one of the proxy, each upda
       READINESS[service] ?? "/ready",
       `${service}'s readiness`,
     );
+    // Liveness on /health, which answers as long as the process does (the proxy has /ready
+    // alone).
+    assert.equal(
+      container(service).livenessProbe?.httpGet?.path,
+      service === "proxy" ? "/ready" : "/health",
+      `${service}'s liveness`,
+    );
     assert.equal(pod(service).terminationGracePeriodSeconds, GRACE[service], service);
   }
   // The proxy drains as long as an agent's call lasts, after its preStop pause, within its

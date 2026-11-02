@@ -63,6 +63,14 @@ spec:
               path: /ready
               port: proxy
             periodSeconds: 5
+          # It answers /ready alone; a stopping copy's 503 restarts nothing, as Kubernetes runs no
+          # liveness probe on a pod that terminates.
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: proxy
+            periodSeconds: 10
+            failureThreshold: 6
           # Agents, git and gh don't try a refused connection again: the old copy keeps taking
           # them until the Service no longer sends it any.
           lifecycle:

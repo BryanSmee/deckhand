@@ -189,7 +189,10 @@ the next copy before the old one stops (`maxUnavailable: 0`, `maxSurge: 1`), whi
 its grace period. The orchestrator's and the runner's copies hand their lease over: the old one
 releases it on SIGTERM and the new one takes it at once. Running sandboxes go on.
 
-Their readiness is `/health`, not `/ready`: `/ready` answers on the acting copy alone, and the
+Every service has a liveness probe on `/health` (the egress proxy's on `/ready`, the only one it
+answers): a process that stops answering is restarted after a minute. The orchestrator's and the
+runner's readiness is `/health` too, not `/ready`, as Compose's health checks
+([setup.md](setup.md#health-checks)): `/ready` answers on the acting copy alone, and the
 next copy only acts once the old one has stopped, so a rolling update waiting for it never ends.
 Both copies sit behind their Service; the waiting one answers `503` with the connection closed
 (and opens no egress policy port), so a caller's next try reaches the copy that acts.
