@@ -1,10 +1,12 @@
 // Dashboard login: GitHub's user-to-server OAuth through the operator's App, for the
 // operator's allowed users only (ALLOWED_USERS).
 //
-//   GET  /auth/login     to GitHub's authorize page, with a state bound to this browser
+//   GET  /auth/login     to GitHub's authorize page, with a state bound to this browser;
+//                        `?next=/oauth/authorize?…`: back to an MCP client's authorize page after
 //   GET  /auth/callback  the code becomes a user token, used once to read the login, then
 //                        revoked; an allowed login gets a session cookie, others a refusal
-//   POST /auth/logout    clears the cookie, and ends the login's sessions everywhere
+//   POST /auth/logout    clears the cookie, and ends the login's sessions everywhere, its MCP
+//                        clients' tokens too (../edge/oauth.mjs)
 //
 // The session is a signed cookie (login, expiry and the login's epoch, HMAC with a key kept in
 // edge's data volume), so it survives a restart. The allowlist is checked again on every
@@ -20,6 +22,9 @@ import { openStore } from "../lib/store.mjs";
 
 export const SESSION_COOKIE = "deckhand_session";
 const STATE_COOKIE = "deckhand_oauth_state";
+// Where the browser goes once signed in, when not the dashboard: an MCP client's authorize page
+// (../edge/oauth.mjs).
+const NEXT_COOKIE = "deckhand_next";
 export const SESSION_MS = 7 * 24 * 3600000;
 const STATE_MS = 10 * 60000;
 
@@ -61,6 +66,12 @@ const CSS = `.button { display: inline-block; margin-top: 1rem; padding: 0.6rem 
 export function authPage(res, status, title, body, headers = {}) {
   return html(res, status, title, body, { headers, css: CSS });
 }
+
+// A `next` that only ever leads to edge's own authorize page: never another site.
+const nextPath = (next) =>
+  typeof next === "string" && next.startsWith("/oauth/authorize?") && !/[\s\\]/.test(next)
+    ? next
+    : null;
 
 // The store key of a login's session epoch.
 const epochKey = (login) => `sessions/${login}`;
@@ -136,7 +147,7 @@ export function createAuth({
     return login;
   }
 
-  function login(res) {
+  function login(res, url) {
     const credentials = app()?.credentials;
     if (!credentials?.client_id) {
       return authPage(
@@ -152,9 +163,14 @@ from edge's logs.</p>`,
     target.searchParams.set("client_id", credentials.client_id);
     target.searchParams.set("redirect_uri", `${publicUrl()}/auth/callback`);
     target.searchParams.set("state", state);
+    const next = nextPath(url?.searchParams.get("next"));
     res.writeHead(302, {
       location: target.href,
-      "set-cookie": cookie(STATE_COOKIE, state, STATE_MS),
+      "set-cookie": [
+        cookie(STATE_COOKIE, state, STATE_MS),
+        // None: an earlier one, from an authorize page left half-way, goes.
+        next ? cookie(NEXT_COOKIE, encodeURIComponent(next), STATE_MS) : cookie(NEXT_COOKIE, "", 0),
+      ],
       "cache-control": "no-store",
     });
     res.end();
@@ -172,7 +188,7 @@ from edge's logs.</p>`,
     const state = url.searchParams.get("state") ?? "";
     const code = url.searchParams.get("code") ?? "";
     const expected = cookies(req)[STATE_COOKIE] ?? "";
-    const clear = cookie(STATE_COOKIE, "", 0);
+    const clear = [cookie(STATE_COOKIE, "", 0), cookie(NEXT_COOKIE, "", 0)];
     if (!credentials?.client_secret || !expected || !same(state, expected) || !code) {
       return authPage(
         res,
@@ -213,9 +229,15 @@ GitHub and sign in here with another account.</p>`,
       );
     }
     log(`Login: ${login} signed in to the dashboard`);
+    let next = null;
+    try {
+      next = nextPath(decodeURIComponent(cookies(req)[NEXT_COOKIE] ?? ""));
+    } catch {
+      // Not ours: the dashboard.
+    }
     res.writeHead(302, {
-      location: "/",
-      "set-cookie": [clear, cookie(SESSION_COOKIE, await issue(login), SESSION_MS)],
+      location: next ?? "/",
+      "set-cookie": [...clear, cookie(SESSION_COOKIE, await issue(login), SESSION_MS)],
       "cache-control": "no-store",
     });
     res.end();
@@ -292,7 +314,7 @@ GitHub and sign in here with another account.</p>`,
     const url = new URL(req.url, "http://localhost");
     if (!url.pathname.startsWith("/auth/")) return false;
     const run = async () => {
-      if (req.method === "GET" && url.pathname === "/auth/login") return login(res);
+      if (req.method === "GET" && url.pathname === "/auth/login") return login(res, url);
       if (req.method === "GET" && url.pathname === "/auth/callback") {
         return callback(req, res, url);
       }
@@ -306,5 +328,7 @@ GitHub and sign in here with another account.</p>`,
     return true;
   }
 
-  return { handle, user, issue };
+  // A login's session epoch: what an MCP client's tokens are bound to as well, so that signing
+  // out everywhere ends them too (../edge/oauth.mjs).
+  return { handle, user, issue, epoch: (login) => epochOf(login.toLowerCase()) };
 }

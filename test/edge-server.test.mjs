@@ -272,3 +272,44 @@ test("a path with dot segments is refused at edge, never passed on as another", 
   assert.equal(edge.asked.length, 0);
   assert.equal((await fetch(`${base}/health`)).status, 200);
 });
+
+test("edge: MCP clients' sign-in, its metadata at the public URL, /mcp's 401, Settings' list its own", async (t) => {
+  const edge = await startEdge(t);
+  const base = `http://127.0.0.1:${edge.port}`;
+  const as = await (await fetch(`${base}/.well-known/oauth-authorization-server`)).json();
+  assert.equal(as.issuer, "https://hooks.example.com");
+  assert.equal(as.token_endpoint, "https://hooks.example.com/oauth/token");
+  const mcp = await fetch(`${base}/mcp`, { method: "POST" });
+  assert.equal(mcp.status, 401);
+  assert.equal(
+    mcp.headers.get("www-authenticate"),
+    'Bearer resource_metadata="https://hooks.example.com/.well-known/oauth-protected-resource/mcp"',
+  );
+  const registered = await fetch(`${base}/oauth/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ client_name: "Claude Code", redirect_uris: ["http://localhost:9/cb"] }),
+  });
+  assert.equal(registered.status, 201);
+  // Signed in to the dashboard: authorize shows the consent page.
+  const { client_id } = await registered.json();
+  const query = new URLSearchParams({
+    response_type: "code",
+    client_id,
+    redirect_uri: "http://localhost:9/cb",
+    code_challenge: "c".repeat(43),
+    code_challenge_method: "S256",
+  });
+  const consent = await fetch(`${base}/oauth/authorize?${query}`, {
+    headers: { cookie: session("alice") },
+  });
+  assert.equal(consent.status, 200);
+  assert.match(await consent.text(), /Claude Code/);
+  // Settings' list: edge's own, never the orchestrator's.
+  const clients = await fetch(`${base}/api/mcp/clients`, { headers: { cookie: session("alice") } });
+  assert.deepEqual(await clients.json(), {
+    resource: "https://hooks.example.com/mcp",
+    clients: [],
+  });
+  assert.equal(edge.asked.length, 0);
+});

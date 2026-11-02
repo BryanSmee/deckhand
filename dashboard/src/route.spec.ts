@@ -39,7 +39,7 @@ test("settings: the repositories, and one's config", () => {
   expect(parseRoute("#/settings/repositories")).toEqual(list);
   expect(parseRoute("#/settings")).toEqual(list);
   expect(parseRoute("#/settings/elsewhere")).toEqual(list);
-  for (const section of ["preferences", "server"] as const) {
+  for (const section of ["preferences", "clients", "server"] as const) {
     const tab = { ...list, section };
     expect(formatRoute(tab)).toBe(`#/settings/${section}`);
     expect(parseRoute(`#/settings/${section}`)).toEqual(tab);
