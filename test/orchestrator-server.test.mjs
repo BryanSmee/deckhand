@@ -180,8 +180,11 @@ async function fakeGitHub(files = {}) {
       if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
       // What a comment waits for ("/after #77"): the test sets its state, as JSON.
       const waitedFor = /^\/repos\/org\/repo\/issues\/(\d+)$/.exec(req.url);
+      // A number: the status GitHub answers instead (a 5xx, a rate limit).
       if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
-        return res.end(files[`issue:${waitedFor[1]}`]);
+        const issue = files[`issue:${waitedFor[1]}`];
+        if (typeof issue === "number") return res.writeHead(issue).end("{}");
+        return res.end(issue);
       }
       // GraphQL's node look-ups (github-graphql.mjs), as JSON, when the test sets them.
       if (req.method === "POST" && req.url === "/graphql" && body.includes("nodes(ids:")) {
@@ -5244,11 +5247,97 @@ mounts:
     assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
   });
 
+  test("an issue's closed or unlabeled delivery redelivered while the issue can't be looked up records the close, leaves the questions", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const failed = (guid) => ({
+      id: 0,
+      guid,
+      delivered_at: new Date().toISOString(),
+      status_code: 503,
+      event: "issues",
+    });
+    const deliveries = JSON.stringify([failed("g-ic"), failed("g-iu")]);
+    // GitHub can't say what #5 and #6 are now: their lookups fail.
+    const { dir, listener, send } = await listen(
+      t,
+      { deliveries, "issue:5": 502, "issue:6": 502 },
+      (dir, github) => {
+        mkdirSync(join(dir, "logs"));
+        for (const n of [5, 6]) {
+          writeFileSync(
+            join(dir, "logs", `org-repo-${n}-1000.log`),
+            [
+              {
+                type: "listener",
+                key: `org/repo#${n}`,
+                repo: "org/repo",
+                taskMode: "work",
+                startedAt: 1000,
+              },
+              { type: "result", result: asked, duration_ms: 6000 },
+            ]
+              .map((l) => JSON.stringify(l))
+              .join("\n") + "\n",
+          );
+        }
+        // Both labelled, waiting for input.
+        writeFileSync(
+          join(dir, "inputs.json"),
+          JSON.stringify({
+            "org/repo#5": { since: 1000, questions: null },
+            "org/repo#6": { since: 1000, questions: null },
+          }),
+        );
+        return { GITHUB_URL: github.url };
+      },
+    );
+    await listener.until("Redelivered g-iu (issues");
+    const later = new Date(Date.now() + 60_000).toISOString();
+    const delivery = (action, issue, extra = {}) => ({
+      action,
+      installation: { id: 7 },
+      repository: { full_name: "org/repo", default_branch: "main" },
+      issue,
+      sender: { login: "bob", type: "User" },
+      ...extra,
+    });
+    const closed = {
+      number: 5,
+      title: "Five",
+      state: "closed",
+      state_reason: "completed",
+      closed_at: later,
+      labels: [],
+    };
+    await send(delivery("closed", closed), "issues", "g-ic");
+    // Handled as sent: the close recorded, for titles, waits and the backlog.
+    const handled = await listener.until(/Delivery: issues \w+ from bob/);
+    assert.match(handled, /Delivery issues closed: redelivered, org\/repo#5 not looked up/);
+    assert.match(handled, /Delivery: issues closed from bob/);
+    await until(() => /"org\/repo#5"/.test(exists(join(dir, "closed.json")) ?? ""), "the close");
+    // #6's label taken off, by its time after the run asked: as sent, it would set them aside.
+    const unlabelled = { number: 6, title: "Six", state: "open", labels: [], updated_at: later };
+    const label = { name: "needs-input" };
+    await send(delivery("unlabeled", unlabelled, { label }), "issues", "g-iu");
+    await listener.until("Delivery: issues unlabeled from bob");
+    assert.match(
+      listener.output(),
+      /Delivery issues unlabeled: redelivered, org\/repo#6 not looked up/,
+    );
+    // But the questions left as they are: either delivery may be older than what GitHub has now
+    // (the label put back, a run that asked since).
+    assert.doesNotMatch(listener.output(), /questions set aside/);
+    assert.equal(exists(join(dir, "dismissed.json")), null);
+    const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
+    assert.deepEqual(Object.keys(inputs).sort(), ["org/repo#5", "org/repo#6"]);
+  });
+
   test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const files = {};
-    const { port, listener } = await listen(t, files, (dir, github) => {
+    const { dir, port, listener, send } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       for (const n of [5, 8, 11, 14]) {
         writeFileSync(
@@ -5290,12 +5379,14 @@ mounts:
       });
       // #11 was labelled when the listener last heard of it; the label's listing no longer has
       // it (inputs.mjs sync()).
-      // #14 too, but GitHub still has it labelled: the listing missed it.
+      // #14 too, but GitHub still has it labelled: the listing missed it. #16 as well, with
+      // questions in its body and no run.
       writeFileSync(
         join(dir, "inputs.json"),
         JSON.stringify({
-          "org/repo#11": { since: 1000, questions: null },
+          "org/repo#11": { since: 1000, questions: null, ignoredTicks: true },
           "org/repo#14": { since: 1000, questions: null },
+          "org/repo#16": { since: 2000, questions: null },
         }),
       );
       const after = new Date(Date.now() + 60_000).toISOString();
@@ -5309,6 +5400,14 @@ mounts:
         number: 14,
         state: "open",
         labels: [{ name: "needs-input" }],
+        body: "## Open questions\n\n1. **Name**: which one?\n   - [ ] A",
+        updated_at: after,
+      });
+      files["issue:16"] = JSON.stringify({
+        number: 16,
+        state: "open",
+        labels: [{ name: "needs-input" }],
+        body: "## Open questions\n\n1. **Size**: how big?\n   - [ ] Small\n2. Why?",
         updated_at: after,
       });
       files.installed = JSON.stringify({
@@ -5321,6 +5420,8 @@ mounts:
     await listener.until(
       "org/repo#11: label removed meanwhile, its last run's questions set aside",
     );
+    await listener.until("org/repo#14: still labelled, though the label's listing missed it");
+    await listener.until("org/repo#16: still labelled, though the label's listing missed it");
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -5332,13 +5433,44 @@ mounts:
       .getSetCookie()
       .find((c) => c.startsWith("deckhand_session="))
       .split(";")[0];
-    const tasks = (await (await get("/api/state", session)).json()).tasks;
+    const { tasks } = await (await get("/api/state", session)).json();
     assert.deepEqual(Object.fromEntries(tasks.map((x) => [x.key, x.state])), {
       "org/repo#5": "done",
       "org/repo#8": "needs-input",
       "org/repo#11": "done",
       "org/repo#14": "needs-input",
+      "org/repo#16": "needs-input",
     });
+    // #14 and #16 still wait for input, since when they did, with their questions as their
+    // bodies have them.
+    const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
+    assert.deepEqual(
+      Object.entries(inputs).map(([key, i]) => [key, i.since, i.questions?.items?.length]),
+      [
+        ["org/repo#14", 1000, 1],
+        ["org/repo#16", 2000, 2],
+      ],
+    );
+    // #11's label put back later: a new entry, not the one dropped at start (its time, the
+    // ticks it ignored).
+    const before = Date.now();
+    await send(
+      {
+        action: "labeled",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "main" },
+        issue: { number: 11, title: "Eleven", state: "open", labels: [{ name: "needs-input" }] },
+        label: { name: "needs-input" },
+        sender: { login: "bob", type: "User" },
+      },
+      "issues",
+    );
+    const relabelled = await until(
+      () => JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"))["org/repo#11"],
+      "#11 listed again",
+    );
+    assert.ok(relabelled.since >= before);
+    assert.equal(relabelled.ignoredTicks, undefined);
   });
 
   test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {

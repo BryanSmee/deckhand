@@ -96,6 +96,61 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   assert.equal(createInputs({ path, listLabelled }).has("org/repo#2"), true);
 });
 
+test("keep: an entry the listing missed comes back as it was, unless a delivery set it since", async (t) => {
+  const path = join(tempDir(t), "inputs.json");
+  let clock = 1;
+  const inputs = createInputs({ path, listLabelled: async () => [], now: () => clock });
+  const old = { items: null, raw: "Which one, before?" };
+  for (const n of [1, 2, 3, 4, 5, 6]) inputs.set(`org/repo#${n}`, true, old);
+  inputs.set("org/repo#1", true, undefined, true);
+  clock = 9;
+  await inputs.sync(["org/repo"]);
+  assert.deepEqual(inputs.keys(), []);
+  const asked = { items: null, raw: "Which one?" };
+  assert.equal(inputs.keep("org/repo#1", asked), true);
+  // Deliveries during the lookups: #2 labelled again (from where it was: its `since`), #3
+  // unlabelled, #5's boxes ticked by someone whose ticks answer nothing.
+  inputs.set("org/repo#2", true, null);
+  inputs.set("org/repo#3", false);
+  inputs.update("org/repo#5", undefined, true);
+  assert.equal(inputs.has("org/repo#5"), false);
+  // Then their lookups answer, with the bodies as they were when looked up.
+  assert.equal(inputs.keep("org/repo#2", asked), false);
+  assert.equal(inputs.keep("org/repo#3", asked), false);
+  assert.equal(inputs.keep("org/repo#5", asked), true);
+  // Never dropped by sync(): nothing to keep.
+  assert.equal(inputs.keep("org/repo#7", asked), false);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "org/repo#1": { since: 1, questions: asked, ignoredTicks: true },
+    "org/repo#2": { since: 1, questions: null },
+    // The ticks kept, the questions the lookup's: those ticks changed no question.
+    "org/repo#5": { since: 1, questions: asked, ignoredTicks: true },
+  });
+  // Kept once: a second answer for #1 changes nothing.
+  inputs.set("org/repo#1", false);
+  assert.equal(inputs.keep("org/repo#1", asked), false);
+  assert.equal(inputs.has("org/repo#1"), false);
+});
+
+test("release: a dropped entry whose lookup didn't keep it is forgotten; the label put back starts afresh", async (t) => {
+  const path = join(tempDir(t), "inputs.json");
+  let clock = 1;
+  const inputs = createInputs({ path, listLabelled: async () => [], now: () => clock });
+  inputs.set("org/repo#4", true, null, true);
+  await inputs.sync(["org/repo"]);
+  // Its lookup: the label is off.
+  inputs.release("org/repo#4");
+  assert.equal(inputs.keep("org/repo#4", null), false);
+  // Days later, the label put back: a new entry, without the old one's time or ticks.
+  clock = 100_000;
+  const asked = { items: [], raw: "Which?" };
+  inputs.set("org/repo#4", true, asked);
+  assert.deepEqual(inputs.list(), [
+    { key: "org/repo#4", repo: "org/repo", since: 100_000, questions: asked },
+  ]);
+  assert.equal(inputs.ticksIgnored("org/repo#4"), false);
+});
+
 test("respell: an issue waiting for input under another spelling moves to the one given", (t) => {
   const path = join(tempDir(t), "inputs.json");
   const inputs = createInputs({ path, listLabelled: async () => [], now: () => 5 });
