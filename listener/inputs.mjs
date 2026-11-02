@@ -8,7 +8,7 @@ import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { allTicked, parseQuestions, questionsSection } from "./questions.mjs";
-import { respellMap } from "./spelling.mjs";
+import { respellMap, taskId } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
@@ -24,10 +24,14 @@ export function createInputs({
 }) {
   const inputs = persistentMap(path);
   const save = inputs.save;
+  // The keys sync() dropped that no delivery set (listed or dropped) since: keep() puts back
+  // only those, its lookup's answer being older than such a delivery.
+  const dropping = new Set();
 
   // Whether issue `key` waits for input now, its questions and whether the bot ticked them
   // when known (undefined: as they were).
   function set(key, on, questions, ignoredTicks) {
+    dropping.delete(taskId(key));
     const was = inputs.get(key);
     if (!on) {
       if (inputs.delete(key)) save();
@@ -50,10 +54,10 @@ export function createInputs({
 
   // An entry sync() dropped whose issue, looked up on its own, is still open and labelled: a
   // listing read page by page can miss an issue that moved between pages. Its `since` and
-  // ticks as they were, its questions as the body has them now. One a delivery listed again
-  // meanwhile stays as that delivery left it.
+  // ticks as they were, its questions as the body has them now. One a delivery listed again or
+  // dropped meanwhile stays as that delivery left it.
   function keep(key, entry, questions) {
-    if (inputs.has(key)) return;
+    if (!dropping.delete(taskId(key)) || inputs.has(key)) return;
     inputs.set(key, { ...entry, questions });
     save();
   }
@@ -86,6 +90,7 @@ export function createInputs({
         if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
         const entry = inputs.get(key);
         inputs.delete(key);
+        dropping.add(taskId(key));
         changed = true;
         dropped(repo, parseKey(key).number, entry);
       }

@@ -5359,12 +5359,14 @@ mounts:
       });
       // #11 was labelled when the listener last heard of it; the label's listing no longer has
       // it (inputs.mjs sync()).
-      // #14 too, but GitHub still has it labelled: the listing missed it.
+      // #14 too, but GitHub still has it labelled: the listing missed it. #16 as well, with
+      // questions in its body and no run.
       writeFileSync(
         join(dir, "inputs.json"),
         JSON.stringify({
           "org/repo#11": { since: 1000, questions: null },
           "org/repo#14": { since: 1000, questions: null },
+          "org/repo#16": { since: 2000, questions: null },
         }),
       );
       const after = new Date(Date.now() + 60_000).toISOString();
@@ -5381,6 +5383,13 @@ mounts:
         body: "## Open questions\n\n1. **Name**: which one?\n   - [ ] A",
         updated_at: after,
       });
+      files["issue:16"] = JSON.stringify({
+        number: 16,
+        state: "open",
+        labels: [{ name: "needs-input" }],
+        body: "## Open questions\n\n1. **Size**: how big?\n   - [ ] Small\n2. Why?",
+        updated_at: after,
+      });
       files.installed = JSON.stringify({
         repositories: [{ full_name: "org/repo", default_branch: "main" }],
       });
@@ -5392,6 +5401,7 @@ mounts:
       "org/repo#11: label removed meanwhile, its last run's questions set aside",
     );
     await listener.until("org/repo#14: still labelled, though the label's listing missed it");
+    await listener.until("org/repo#16: still labelled, though the label's listing missed it");
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -5409,12 +5419,17 @@ mounts:
       "org/repo#8": "needs-input",
       "org/repo#11": "done",
       "org/repo#14": "needs-input",
+      "org/repo#16": "needs-input",
     });
-    // #14 still waits for input, since when it did, with its questions as its body has them.
+    // #14 and #16 still wait for input, since when they did, with their questions as their
+    // bodies have them.
     const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
     assert.deepEqual(
       Object.entries(inputs).map(([key, i]) => [key, i.since, i.questions?.items?.length]),
-      [["org/repo#14", 1000, 1]],
+      [
+        ["org/repo#14", 1000, 1],
+        ["org/repo#16", 2000, 2],
+      ],
     );
   });
 

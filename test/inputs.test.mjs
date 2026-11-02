@@ -97,23 +97,36 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   assert.equal(createInputs({ path, listLabelled }).has("org/repo#2"), true);
 });
 
-test("keep: an entry the listing missed comes back as it was, its questions as given", (t) => {
+test("keep: an entry the listing missed comes back as it was, unless a delivery set it since", async (t) => {
   const path = join(tempDir(t), "inputs.json");
-  const inputs = createInputs({ path, listLabelled: async () => [], now: () => 9 });
+  const dropped = new Map();
+  const inputs = createInputs({
+    path,
+    listLabelled: async () => [],
+    dropped: (repo, number, entry) => dropped.set(number, entry),
+    now: () => 9,
+  });
+  for (const n of [1, 2, 3, 4]) inputs.set(`org/repo#${n}`, true);
+  inputs.set("org/repo#1", true, undefined, true);
+  await inputs.sync(["org/repo"]);
+  assert.deepEqual(inputs.keys(), []);
   const asked = { items: null, raw: "Which one?" };
-  inputs.keep("org/repo#1", { since: 5, questions: null, ignoredTicks: true }, asked);
+  inputs.keep("org/repo#1", dropped.get(1), asked);
+  // A delivery during the lookup: #2 labelled again, #3 unlabelled; then their lookups answer.
+  inputs.set("org/repo#2", true, null);
+  inputs.set("org/repo#3", false);
+  inputs.keep("org/repo#2", dropped.get(2), asked);
+  inputs.keep("org/repo#3", dropped.get(3), asked);
+  // Never dropped by sync(): nothing to keep.
+  inputs.keep("org/repo#5", { since: 1, questions: null }, asked);
   assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
-    "org/repo#1": { since: 5, questions: asked, ignoredTicks: true },
+    "org/repo#1": { since: 9, questions: asked, ignoredTicks: true },
+    "org/repo#2": { since: 9, questions: null },
   });
-  // Listed again by a delivery meanwhile: left as that delivery has it.
-  inputs.set("org/repo#2", true);
-  inputs.keep("org/repo#2", { since: 5, questions: null }, asked);
-  assert.deepEqual(inputs.list()[1], {
-    key: "org/repo#2",
-    repo: "org/repo",
-    since: 9,
-    questions: null,
-  });
+  // Kept once: a second answer for #1 changes nothing.
+  inputs.set("org/repo#1", false);
+  inputs.keep("org/repo#1", dropped.get(1), asked);
+  assert.equal(inputs.has("org/repo#1"), false);
 });
 
 test("respell: an issue waiting for input under another spelling moves to the one given", (t) => {
