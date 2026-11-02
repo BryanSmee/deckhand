@@ -50,8 +50,10 @@ export function createLogs({ store, segmentMax = 8 * 1024 * 1024, timers = globa
   // Where the log is: { stored (the index as kept, null for none), index, openSize, size }, or a
   // log of the old shape as one closed segment ({ legacy: true, … }). Asked each time, not
   // kept: the other copy may have written since (a handover). A closing left half done (the
-  // other copy stalled, or gone) is finished first. The index is read again after the open
-  // segment's size: a segment closed in between would have that size be another's.
+  // other copy stalled, or gone) is finished first, so a read may write the index too (a
+  // compare-and-set finishing what a copy started; GET /logs is unfenced, a draining copy's
+  // included). The index is read again after the open segment's size: a segment closed in
+  // between would have that size be another's.
   async function locate(id) {
     for (;;) {
       const stored = await store.get(indexKey(id));
@@ -208,12 +210,13 @@ export function createLogs({ store, segmentMax = 8 * 1024 * 1024, timers = globa
   }
 
   // Every segment, the open one, the old shape's blob and the index (retention, history.mjs).
+  // The index first, counted before: an append landing meanwhile finds it gone, and takes its
+  // segment back (appendOnce()), rather than leave one that no index names.
   async function remove(id) {
     const count = ((await store.get(indexKey(id)))?.segments.length ?? 0) + 1;
-    let had = false;
+    let had = await store.delete(indexKey(id));
     for (let n = 0; n < count; n++) had = (await store.deleteBlob(segmentKey(id, n))) || had;
-    had = (await store.deleteBlob(legacyKey(id))) || had;
-    return (await store.delete(indexKey(id))) || had;
+    return (await store.deleteBlob(legacyKey(id))) || had;
   }
 
   return { append, read, remove, size: sizeOf };

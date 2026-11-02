@@ -1535,6 +1535,14 @@ describe("listener", options, () => {
       () => [...runLogs(dir).values()][0]?.includes("Its sandbox exited with code 3"),
       "its note",
     );
+    // That note came after the run's end: its log's last segment is closed after it all the same.
+    const [[id, text]] = runLogs(dir);
+    const store = openStore(`file://${join(dir, "runner-store")}`);
+    t.after(() => store.close());
+    await waitUntil(
+      async () => (await store.get(`logs/${id}/index`))?.open === Buffer.byteLength(text),
+      { what: "its last segment closed" },
+    );
   });
 
   test("/agent codex: Codex takes over, handed what Claude left, sticks to the issue and doesn't fall back", async (t) => {

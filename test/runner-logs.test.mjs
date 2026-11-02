@@ -259,3 +259,53 @@ test("an append landing after its log's removal leaves no segment behind", async
   for (const n of [0, 1, 2]) assert.equal(await shared.blobSize(`logs/${ID}/${n}`), null);
   assert.equal(await shared.get(`logs/${ID}/index`), null);
 });
+
+// The same, its write landing in the middle of the removal: the index gone, its segments not yet.
+test("an append landing while its log is removed leaves no segment behind either", async () => {
+  const shared = fileStore();
+  let go;
+  const gate = new Promise((resolve) => (go = resolve));
+  let reached;
+  const writing = new Promise((resolve) => (reached = resolve));
+  let hold = false;
+  const a = createLogs({
+    store: {
+      ...shared,
+      appendBlobAt: async (...args) => {
+        if (hold) {
+          hold = false;
+          reached();
+          await gate;
+        }
+        return shared.appendBlobAt(...args);
+      },
+    },
+    segmentMax: 4,
+  });
+  let pending = null;
+  const b = createLogs({
+    store: {
+      ...shared,
+      deleteBlob: async (key) => {
+        if (pending) {
+          const appending = pending;
+          pending = null;
+          go();
+          // Refused, with what is left of the log then (its first segment, not removed yet).
+          await assert.rejects(appending, LogConflict);
+        }
+        return shared.deleteBlob(key);
+      },
+    },
+    segmentMax: 4,
+  });
+  await b.append(ID, 0, Buffer.from("abcd"));
+  await b.append(ID, 4, Buffer.from("ef"));
+  hold = true;
+  const appending = a.append(ID, 6, Buffer.from("gh"));
+  await writing;
+  pending = appending;
+  assert.equal(await b.remove(ID), true);
+  for (const n of [0, 1, 2]) assert.equal(await shared.blobSize(`logs/${ID}/${n}`), null);
+  assert.equal(await shared.get(`logs/${ID}/index`), null);
+});
