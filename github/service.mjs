@@ -33,6 +33,7 @@ import { RUN_AUTH_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { drainable } from "../lib/drain.mjs";
 import { createFence } from "../lib/fence.mjs";
 import { fingerprintRedactor, MAX_PRINTS } from "../lib/fingerprints.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { repoAllowed } from "../listener/config.mjs";
@@ -200,6 +201,8 @@ export function createGithubService({
   log = () => {},
   // The gateways' own options, the tests' (maxInFlight, idleMs…).
   gatewayOptions = {},
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const guard = serviceGuard({
     service: "github",
@@ -538,9 +541,11 @@ export function createGithubService({
   async function handle(req, res) {
     const url = new URL(req.url, "http://github");
     const path = url.pathname;
-    if (req.method === "GET" && (path === "/health" || path === "/ready")) {
-      const ready = path === "/health" || !draining;
-      return sendJson(res, { ok: ready, app: !!app.get() }, ready ? 200 : 503);
+    if (req.method === "GET" && path === "/health") {
+      return sendJson(res, healthAnswer(health, { app: !!app.get() }));
+    }
+    if (req.method === "GET" && path === "/ready") {
+      return sendJson(res, { ok: !draining, app: !!app.get() }, draining ? 503 : 200);
     }
     const caller = await guarded(req);
     if (path.startsWith("/relay/") || path.startsWith("/git/")) return sandboxCall(req, res, path);

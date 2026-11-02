@@ -14,7 +14,7 @@ import { createSeal } from "../broker/seal.mjs";
 import { MAX_SHOT, MAX_SHOTS } from "../lib/shots.mjs";
 import { openStore } from "../lib/store.mjs";
 import { TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
-import { resetsUnread, testKey } from "./helpers.mjs";
+import { assertHealth, resetsUnread, testKey } from "./helpers.mjs";
 
 // Each caller reaches the broker at an address of its own, as over a network of its own with
 // Docker: the broker's address a call arrives at tells it apart (SERVICE_NETWORKS).
@@ -232,7 +232,9 @@ test("each endpoint takes its callers only, from their own network", async (t) =
   // An endpoint in no table: refused to everyone.
   assert.equal((await orchestrator("GET", "/nothing")).status, 403);
   // Health and readiness, for probes: no token.
-  assert.equal((await call(broker, "127.0.0.1", "GET", "/health")).status, 200);
+  const health = await call(broker, "127.0.0.1", "GET", "/health");
+  assert.equal(health.status, 200);
+  assertHealth(health.json);
   assert.equal((await call(broker, "127.0.0.1", "GET", "/ready")).status, 200);
   broker.server.startDraining();
   assert.equal((await call(broker, "127.0.0.1", "GET", "/ready")).status, 503);

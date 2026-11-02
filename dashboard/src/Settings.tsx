@@ -9,7 +9,7 @@ import { Preferences } from "./Preferences";
 import { needingYou, Repos } from "./Repos";
 import { formatRoute, type Route, type Section } from "./route";
 import { Server } from "./Server";
-import type { State } from "./types";
+import type { Health, State } from "./types";
 import { Count } from "./ui/Count";
 import tabs from "./ui/Tabs.module.css";
 import styles from "./Settings.module.css";
@@ -67,9 +67,23 @@ interface Props {
   onOpen: (repo: string | null) => void;
   // Reads api/state again (Server's Sync now).
   refresh?: () => Promise<void>;
+  // The services' health (api/health) and why it can't be read: Server's.
+  health?: Health | null;
+  healthError?: string | null;
 }
 
-export function Settings({ route, state, error, repos, narrow, notify, onOpen, refresh }: Props) {
+export function Settings({
+  route,
+  state,
+  error,
+  repos,
+  narrow,
+  notify,
+  onOpen,
+  refresh,
+  health,
+  healthError,
+}: Props) {
   const tasks = state?.tasks ?? [];
   return (
     <div class={styles.settings}>
@@ -77,7 +91,15 @@ export function Settings({ route, state, error, repos, narrow, notify, onOpen, r
         <SettingsTabs route={route} count={needingYou(repos.repos, tasks)} class={styles.tabs} />
       )}
       {route.section === "server" ? (
-        <Server state={state} error={error} app={repos.app} refresh={refresh} />
+        <Server
+          state={state}
+          error={error}
+          app={repos.app}
+          refresh={refresh}
+          health={health}
+          healthError={healthError}
+          narrow={narrow}
+        />
       ) : route.section === "clients" ? (
         <Clients />
       ) : route.section === "preferences" ? (

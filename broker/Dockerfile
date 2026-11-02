@@ -11,6 +11,9 @@ COPY lib/ lib/
 # mounted there takes.
 RUN mkdir /keys /data /service-keys && chown node:node /keys /data /service-keys && chmod 700 /keys
 USER node
+# The release it was built from, which its /health says (../lib/health.mjs).
+ARG DECKHAND_VERSION=dev
+ENV DECKHAND_VERSION=$DECKHAND_VERSION
 EXPOSE 8081
 # Node's fetch, which no HTTP_PROXY of the environment takes elsewhere.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=5s \

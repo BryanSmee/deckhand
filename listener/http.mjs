@@ -222,6 +222,16 @@ export function createHttp(ctx) {
     if (url.pathname === "/api/state") return sendJson(res, state(user));
     // Read when Settings › Server opens, not at each poll: it scans the grants folder.
     if (url.pathname === "/api/server") return sendJson(res, ctx.serverSetup());
+    // The services' health (health.mjs), probed at most every 10 s whoever asks: no URL in it.
+    if (url.pathname === "/api/health" && ctx.health) {
+      return ctx.health.check().then(
+        (health) => sendJson(res, health),
+        (error) => {
+          (log.error ?? log)(`api/health: ${error.stack ?? error}`);
+          sendJson(res, { message: "couldn't check the services" }, 500);
+        },
+      );
+    }
     const match = /^\/api\/runs\/([\w.-]+)\/stream$/.exec(url.pathname);
     const run = match && ctx.runsById.get(match[1]);
     const visible = () => sees(user, run.repo ?? repoOf(run.key));

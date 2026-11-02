@@ -50,6 +50,8 @@ import {
   SANDBOX_HEADER,
 } from "../lib/broker-client.mjs";
 import { drain, drainable, drainOnSigterm } from "../lib/drain.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
+import { sendJson } from "../lib/http.mjs";
 import { createLogger, REQUEST_HEADER } from "../lib/log.mjs";
 import { ENGINE_PROXY_PORT, SANDBOX_URLS } from "../lib/services.mjs";
 import { untilReached } from "./wait.mjs";
@@ -226,6 +228,8 @@ export function createProxy({
   log = () => {},
   // Its connections are a run's container engine's (ENGINE_PROXY_PORT): the policy is told.
   engine = false,
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const asEngine = engine ? { engine: true } : {};
   // { address to connect to, whether its answers may be cached, and its HTTPS decrypted to do
@@ -471,8 +475,10 @@ export function createProxy({
 
   // Plain HTTP: the request line holds the absolute URL. The CA's certificate, the
   // orchestrator's to hand to sandboxes, at /deckhand-ca.crt; /ready, for a readiness probe: 503
-  // once draining, on a connection kept alive from before (new ones aren't taken).
+  // once draining, on a connection kept alive from before (new ones aren't taken); /health, every
+  // service's answer (../lib/health.mjs), for the orchestrator's status page.
   async function forward(req, res) {
+    if (req.url === "/health") return sendJson(res, healthAnswer(health));
     if (req.url === "/ready") {
       res.writeHead(draining ? 503 : 200, { "content-type": "text/plain" });
       return res.end(draining ? "draining\n" : "ready\n");

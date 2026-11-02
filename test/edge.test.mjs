@@ -19,6 +19,7 @@ import { createEdgeInternal, DELIVERIES } from "../edge/internal.mjs";
 import { fromDashboard, fromKey, postOf, tagger } from "../listener/discussions.mjs";
 import { createRedeliveries } from "../listener/redeliveries.mjs";
 import {
+  assertHealth,
   listening,
   recordingFetch,
   serve,
@@ -305,6 +306,13 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
   assert.deepEqual(await store.read(DELIVERIES, "orchestrator"), []);
   // Handled, gone from the stream: no reader finds their payloads any more.
   assert.deepEqual(await store.read(DELIVERIES, "anyone"), []);
+});
+
+test("edge's internal port: GET /health without a token, its start and version, nothing else", async (t) => {
+  const { url } = await internal(t);
+  const health = await fetch(`${url}/health`);
+  assert.equal(health.status, 200);
+  assertHealth(await health.json());
 });
 
 test("edge's internal port: the orchestrator's token alone; the App's public parts, never its secrets", async (t) => {

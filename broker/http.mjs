@@ -5,7 +5,8 @@
 //   POST /service-tokens        any service, proven by its network or pod (callers.mjs): its
 //                               tokens for the services it calls
 //   GET  /keys                  the public keys tokens are checked with, offline
-//   GET  /health, /ready        liveness, and readiness (503 once draining)
+//   GET  /health, /ready        liveness ({ ok, startedAt, version }, ../lib/health.mjs), and
+//                               readiness (503 once draining)
 //
 //   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), the `runs` stream
 //   (GET /events, POST /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
@@ -23,6 +24,7 @@ import { createServer } from "node:http";
 import { drainable } from "../lib/drain.mjs";
 import { readBody, readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { createFence } from "../lib/fence.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { issueServiceTokens, serviceGuard } from "../lib/service-token.mjs";
 import { FILES } from "./files.mjs";
 import { runFields, STREAM } from "./runs.mjs";
@@ -92,6 +94,8 @@ export function createBrokerHandler({
   now = Date.now,
   sleep = realSleep,
   log = () => {},
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const guard = serviceGuard({
     service: "broker",
@@ -224,8 +228,10 @@ export function createBrokerHandler({
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://broker");
-    if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/ready")) {
-      const ready = url.pathname === "/health" || !draining();
+    if (req.method === "GET" && url.pathname === "/health")
+      return sendJson(res, healthAnswer(health));
+    if (req.method === "GET" && url.pathname === "/ready") {
+      const ready = !draining();
       return sendJson(res, { ok: ready }, ready ? 200 : 503);
     }
     if (req.method === "GET" && url.pathname === "/keys")

@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { ownSubnets } from "../proxy/addresses.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { blockedAddress, createProxy, egressPolicy, target, v6Bytes } from "../proxy/proxy.mjs";
-import { listening, serve } from "./helpers.mjs";
+import { assertHealth, listening, serve } from "./helpers.mjs";
 
 // An upstream web server, and a proxy allowing `allowed` hosts (all resolving to it).
 async function setup(t, allowed, { blocked = () => false } = {}) {
@@ -48,6 +48,14 @@ function raw(port, head, until) {
     socket.write(head);
   });
 }
+
+test("GET /health: its start and version, nothing else, the policy not asked", async (t) => {
+  const { proxyPort, asked } = await setup(t, []);
+  const health = await fetch(`http://127.0.0.1:${proxyPort}/health`);
+  assert.equal(health.status, 200);
+  assertHealth(await health.json());
+  assert.deepEqual(asked, []);
+});
 
 test("CONNECT to an allowed host tunnels through", async (t) => {
   const { upstreamPort, proxyPort, asked } = await setup(t, ["api.example.com"]);

@@ -21,6 +21,7 @@
 // starts nothing.
 import { createServer } from "node:http";
 import { DRAIN_MS, drain, drainable } from "../lib/drain.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readBody, readJsonBody, Refused, send, sendJson } from "../lib/http.mjs";
 import { createFence } from "../lib/fence.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
@@ -173,6 +174,8 @@ export function createRunnerService({
   // (repo, path, ref) → a file's blob id at `ref` (null: its default branch), or null: the
   // github service's.
   blobOf = async () => null,
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const guard = serviceGuard({
     service: "runner",
@@ -504,7 +507,9 @@ export function createRunnerService({
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://runner");
-    if (url.pathname === "/health") return sendJson(res, { ok: true, active: lease.active() });
+    if (url.pathname === "/health") {
+      return sendJson(res, healthAnswer(health, { active: lease.active() }));
+    }
     // The readiness probe's: only the copy that acts takes calls (Kubernetes' Service).
     if (url.pathname === "/ready") {
       return lease.active() && !stopping

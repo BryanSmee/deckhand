@@ -957,3 +957,28 @@ export interface McpClient {
   created: number;
   used: number | null;
 }
+
+// GET api/health (listener/health.mjs): each service's GET /health, as the orchestrator probed
+// it (at most every 10 s, whoever asks), and the orchestrator itself; a service without a URL is
+// left out. `up`: answered, started 5 minutes ago or more; `starting`: answered, started less
+// than 5 minutes ago (a restart, an update); `down`: no answer, `reason` says why in a word
+// ("timeout", "refused", "HTTP 503"). Times in ms, by the orchestrator's clock; `startedAt` and
+// `version` null when down, or from a service that doesn't say.
+export type ServiceName =
+  "edge" | "orchestrator" | "runner" | "broker" | "github" | "models" | "policy" | "proxy";
+
+export type ServiceState = "up" | "starting" | "down";
+
+export interface ServiceHealth {
+  name: ServiceName;
+  state: ServiceState;
+  startedAt: number | null;
+  version: string | null;
+  checkedAt: number;
+  reason?: string;
+}
+
+export interface Health {
+  checkedAt: number;
+  services: ServiceHealth[];
+}
