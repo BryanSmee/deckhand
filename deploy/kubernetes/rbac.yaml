@@ -59,9 +59,10 @@ metadata:
 automountServiceAccountToken: false
 ---
 # What the runner calls in the sandboxes' namespace (listener/runner/kubernetes.mjs,
-# kube-images.mjs), nothing more: the sandbox, install and check pods, their logs, the runs'
-# Secrets (their environment), the sessions', agents' and caches' claims, the events that say
-# why a pod is stuck, and the NetworkPolicies it checks before every run.
+# kube-images.mjs, kube-probe.mjs), nothing more: the sandbox, install, check and network probe
+# pods, their logs, the runs' Secrets (their environment), the sessions', agents' and caches'
+# claims, the events that say why a pod is stuck, and the NetworkPolicies it checks before
+# every run.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -103,7 +104,8 @@ subjects:
 ---
 # In the services' namespace, reads only: the egress proxy's Service (its cluster IP, the
 # sandboxes' hostAliases, and its selector) and its EndpointSlices (the proxy's pod addresses,
-# for the egress policy), and the NetworkPolicies and pods it checks BuildKit's isolation with.
+# for the egress policy), and the NetworkPolicies and pods it checks BuildKit's isolation with;
+# every Service and EndpointSlice, the addresses its network probe tries from a sandbox's place.
 # Never the services' Secrets: components/buildkit adds the registry's pull Secret, by name.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -112,7 +114,10 @@ metadata:
   namespace: deckhand
 rules:
   - apiGroups: [""]
-    resources: [services, pods]
+    resources: [services]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods]
     verbs: [get]
   - apiGroups: [discovery.k8s.io]
     resources: [endpointslices]

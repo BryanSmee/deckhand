@@ -23,9 +23,10 @@ the agents): this page is what differs on a cluster.
 - **Kubernetes 1.30 or later**, and `kubectl` (its `-k` is kustomize).
 - **A network plugin that enforces NetworkPolicies**: Calico, Cilium, or k3s's own (kube-router).
   One that ignores them (Flannel alone, say) takes them and isolates nothing: a sandbox could
-  then call the services directly, the orchestrator's run tokens among them. Check it once
-  installed ([Install](#install), step 5), and after any change of plugin (#568 will have the
-  runner check it too).
+  then call the services directly, the orchestrator's run tokens among them. The runner checks
+  it itself and refuses every run on a cluster that doesn't
+  ([The network probe](#the-network-probe)); `check-isolation.sh` checks it by hand
+  ([Install](#install), step 5).
 - **A default storage class** for the services' claims (`ReadWriteOnce`), and for the issues'
   session claims (`KUBERNETES_STORAGE_CLASS`). On several nodes, one with `ReadWriteMany` too
   ([Several nodes](#several-nodes)). Optional: a `ReadWriteMany` class for the agents' and
@@ -179,7 +180,8 @@ sh deploy/kubernetes/check-isolation.sh
 It starts a pod labelled as a sandbox in `deckhand-sandboxes`, tries every port of every service's
 pod from there and the egress proxy's, and expects the proxy's alone to answer: 3128, and 3129
 too when its Service publishes it (the `engine` component). A plugin that
-doesn't enforce NetworkPolicies fails it. Then mention Deckhand on an issue
+doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
+([The network probe](#the-network-probe)): its log says what it found. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
 
 ## Updating
@@ -278,8 +280,9 @@ saying why. What it expects, and the manifests give it:
   `create`, `get`, `list` and `delete` on `pods` and `secrets`, `create`, `get` and `delete` on
   `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and `list`
   on `events` (why a pod is stuck) and `networkpolicies`; and in the services' namespace, `get`
-  on `services` and `pods` (the proxy's Service, BuildKit's pods), `list` on `networkpolicies`
-  and `endpointslices`. The `buildkit` component adds `get` on the registry's pull Secret alone
+  on `pods` (BuildKit's), `get` and `list` on `services` (the proxy's Service, and every one
+  for [the network probe](#the-network-probe)), `list` on `networkpolicies` and
+  `endpointslices`. The `buildkit` component adds `get` on the registry's pull Secret alone
   (`resourceNames: [deckhand-registry]`) and `update` on that Secret's copy in the sandboxes'
   namespace alone (`resourceNames: [deckhand-registry]` too). Nothing cluster-wide but the broker's binding to `system:auth-delegator`,
   which lets it review the tokens its callers present (TokenReview is cluster-scoped). Only the
@@ -370,6 +373,44 @@ with the run. An issue's clone and agent session are claims of their own
 (`KUBERNETES_STORAGE_CLASS`, `KUBERNETES_SESSION_SIZE`), kept between its runs. A pod that
 stays Pending longer than `KUBERNETES_PENDING_MINUTES` (no node with the room, an image it
 can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
+
+### The network probe
+
+The checks above read what the NetworkPolicies say; a network plugin that ignores them takes
+them all the same. So the runner also checks that the cluster applies them: each time it takes
+its lease (as it starts, or as its other copy hands over), it starts a probe pod in the
+sandboxes' namespace, `<prefix>-network-probe-<random>`, from `SANDBOX_IMAGE`. It has a sandbox's labels
+(`deckhand.role: sandbox`), so the sandboxes' policies pick it, meets Pod Security
+`restricted` as they do, and holds no Secret, claim or ServiceAccount token. From there it
+tries a TCP connection, 3 s at most each, to:
+
+- every port of every Service of the services' namespace, at its cluster IP and at one of its
+  pods' addresses (some plugins treat the two differently): edge, the orchestrator, the runner,
+  the broker, the github, models and policy services, BuildKit, Redis, whatever else is there;
+- with `KUBERNETES_REGISTRY` set, the registry's host and BuildKit's (`KUBERNETES_BUILDKIT`),
+  and with `STORE_URL=redis://…`, Redis's, as the runner resolves them, wherever they are;
+- the cluster's DNS (the runner's own nameservers, the `kube-dns` Service), TCP and UDP 53:
+  sandboxes get no DNS server, but one reached by its address could carry data out in its
+  lookups;
+- the API server, at the `kubernetes` Service's address (`KUBERNETES_SERVICE_HOST`);
+- a public address, `1.1.1.1:443`.
+
+Every one has to be out of reach, and the egress proxy's Service has to answer, so that a pod
+with no network at all doesn't pass as isolated: on `EGRESS_PROXY`'s port, and on the engines'
+(3129) too when runs get a [container engine](#container-engine-on-kubernetes) and the Service
+publishes it. Any one reached, and the runner refuses every
+run, the reply on the issue (and the dashboard) naming what the probe reached: use a plugin that
+enforces NetworkPolicies (Calico, Cilium, k3s's kube-router; Flannel alone doesn't). The probe
+pod is removed whatever it found, and its verdict kept until the NetworkPolicies of either
+namespace change (the runner reads them before every run) or the runner takes its lease again:
+after a change of plugin, restart it (`kubectl -n deckhand rollout restart deploy/runner`). A
+probe that couldn't tell refuses that run alone, and the next one probes again: its pod didn't
+end within `KUBERNETES_PENDING_MINUTES` and a minute, say, or it reached nothing, the egress
+proxy included (not ready yet on a fresh install, its pod evicted). Each probe's pod has a name
+of its own, so a runner copy taking over doesn't remove the other's mid-probe; one older than a
+probe lasts (a runner stopped mid-probe) is removed at the next probe. Its log lines start with
+`Network probe:`. The API server's own addresses, behind the `kubernetes` Service, and the
+DNS pods' aren't tried: the runner has no right to read them.
 
 ## Namespaces
 
