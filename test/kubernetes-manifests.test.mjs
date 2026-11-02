@@ -3,7 +3,7 @@
 // (lib/services.mjs CALLS), the secrets are each their own service's, nothing but the broker's
 // TokenReviews is cluster-wide, and no two services share a writable volume. The sandboxes'
 // and BuildKit's policies pass the runner's own checks, which it makes before every run and
-// build. kubeconform checks the schemas (docs/kubernetes.md): kustomize isn't needed here, as
+// build. kubeconform checks the schemas (CI's kubernetes job): kustomize isn't needed here, as
 // the files are read as written, with the components' patches.
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";

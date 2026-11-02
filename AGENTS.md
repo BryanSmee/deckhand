@@ -27,7 +27,9 @@ Node 26. The GitHub gateway has one dependency, graphql-js, bundled into a file 
 Run the first four before pushing (the dashboard's when it changed). CI runs them too, a job
 each, on every pull request and push to `main` (`.github/workflows/checks.yml`, GitHub-hosted
 runners): the tests twice, as a user that isn't root and as root in `node:26`, both with the
-real `opa` that `policy-service/Dockerfile` pins, so none of its tests skips there. A pull request's checks can
+real `opa` that `policy-service/Dockerfile` pins, so none of its tests skips there. A
+`kubernetes` job renders `deploy/kubernetes` with kustomize, alone and with each component, and
+validates it with kubeconform. A pull request's checks can
 point at that run. Work runs on this
 repository start with the dashboard's packages installed and graphql-js bundled (`setup` in
 `.deckhand.yaml`) and the npm cache kept between runs.
