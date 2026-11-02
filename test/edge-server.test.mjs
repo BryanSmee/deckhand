@@ -307,6 +307,9 @@ test("edge: MCP clients' sign-in, its metadata at the public URL, /mcp's 401, Se
   assert.match(await consent.text(), /Claude Code/);
   // Settings' list: edge's own, never the orchestrator's.
   const clients = await fetch(`${base}/api/mcp/clients`, { headers: { cookie: session("alice") } });
-  assert.deepEqual(await clients.json(), { clients: [] });
+  assert.deepEqual(await clients.json(), {
+    resource: "https://hooks.example.com/mcp",
+    clients: [],
+  });
   assert.equal(edge.asked.length, 0);
 });

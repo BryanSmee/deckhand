@@ -269,6 +269,26 @@ export function createOAuth({
     res.end();
   }
 
+  // An authorize request refused before the consent page: back to the client only on the user's
+  // own machine (loopback). An https:// redirect URI is anyone's to register, the user's
+  // session or not, so being sent there unasked would be an open redirect (RFC 9700 §4.11.2):
+  // a page says what was refused instead.
+  function requestError(res, client, to, error, description, state) {
+    const url = new URL(to);
+    if (url.protocol === "http:" && LOOPBACK.has(url.hostname)) {
+      return redirectError(res, to, error, description, state);
+    }
+    return authPage(
+      res,
+      400,
+      "Request refused",
+      `<p><strong>${escape(client.name)}</strong> asked to connect in a way this Deckhand refuses:
+<code>${escape(error)}</code>, ${escape(description)}</p>
+<p class="muted">You weren't sent back to <code>${escape(to)}</code>. If you didn't start this
+from an MCP client of yours, close this page.</p>`,
+    );
+  }
+
   const CSS = `.actions { display: flex; gap: 0.75rem; margin-top: 1.5rem; }
       button { padding: 0.6rem 1.2rem; font: inherit; border: 1px solid var(--line); border-radius: 6px; background: transparent; color: inherit; cursor: pointer; }
       button.allow { border-color: var(--accent); background: var(--accent); color: #fff; }
@@ -305,14 +325,15 @@ Connect it again from the client.</p>`,
     }
     const state = p.get("state") ?? "";
     if (p.get("response_type") !== "code") {
-      return redirectError(res, to, "unsupported_response_type", "code only.", state);
+      return requestError(res, client, to, "unsupported_response_type", "code only.", state);
     }
     const challenge = p.get("code_challenge") ?? "";
     if (p.get("code_challenge_method") !== "S256" || !/^[A-Za-z0-9_-]{43,128}$/.test(challenge)) {
-      return redirectError(res, to, "invalid_request", "PKCE with S256 is required.", state);
+      return requestError(res, client, to, "invalid_request", "PKCE with S256 is required.", state);
     }
     if (!ours(p.get("resource"))) {
-      return redirectError(res, to, "invalid_target", `The resource is ${resource()}.`, state);
+      const why = `The resource is ${resource()}.`;
+      return requestError(res, client, to, "invalid_target", why, state);
     }
     const scopes = scopesOf(p.get("scope"));
     const id = random(24);
@@ -645,7 +666,9 @@ on this Deckhand, with your rights on its dashboard:</p>
     if (!login) return send(res, 401, { error: "Sign in first." });
     if (path === "/api/mcp/clients") {
       if (req.method !== "GET") return send(res, 405, { error: "GET only." });
-      return send(res, 200, { clients: await clients(login) });
+      // The address clients connect to: the public URL's, whatever address the dashboard is
+      // opened at (a client checks the metadata names the URL it was given, RFC 9728 §3.3).
+      return send(res, 200, { resource: resource(), clients: await clients(login) });
     }
     const revoking = /^\/api\/mcp\/clients\/([A-Za-z0-9_-]+)\/revoke$/.exec(path);
     if (!revoking) return send(res, 404, { error: "Not found." });

@@ -1990,8 +1990,11 @@ resource_metadata="<PUBLIC_URL>/.well-known/oauth-protected-resource/mcp"` (RFC 
 - **Authorization** (`/oauth/authorize`): PKCE with `S256` is required (`plain`, or none, is
   refused); the client and its redirect URI must be registered, else the page says so and sends
   nobody anywhere. Nobody is sent to a client's redirect URI before signing in, an error
-  included: anyone may register a client, so that would be an open redirect (RFC 9700
-  §4.11.2). Someone not signed in goes through GitHub (`/auth/login?next=…`, which only
+  included, and a request refused before the consent page (`response_type`, PKCE, `resource`)
+  goes back only to a loopback redirect URI, the user's own machine; for an `https://` one, a
+  page says what was refused. Anyone may register a client, so sending someone there unasked
+  would be an open redirect (RFC 9700 §4.11.2). A Deny is sent back, once the consent page
+  has shown where to. Someone not signed in goes through GitHub (`/auth/login?next=…`, which only
   ever returns to `/oauth/authorize`), and an allowed login then sees a consent page naming the
   client (its own claim), the login it will act as, the scopes and the redirect URI. Only an
   allowed login gets that page, and so a code: a login outside `ALLOWED_USERS` is refused at

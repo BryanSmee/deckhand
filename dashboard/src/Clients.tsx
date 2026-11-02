@@ -5,7 +5,7 @@
 import { useState } from "preact/hooks";
 import { postJson, usePolled } from "./api";
 import { ago } from "./format";
-import type { McpClient } from "./types";
+import type { McpClients } from "./types";
 import { Button } from "./ui/Button";
 import styles from "./Clients.module.css";
 
@@ -16,18 +16,19 @@ const SCOPE_NAMES: Record<string, string> = {
 };
 
 export function Clients({ now = Date.now }: { now?: () => number }) {
-  const list = usePolled<{ clients: McpClient[] }>("api/mcp/clients", null);
+  const list = usePolled<McpClients>("api/mcp/clients", null);
   const [revoking, setRevoking] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const clients = list.data?.clients ?? null;
-  const url = `${location.origin}/mcp`;
+  // The public URL's /mcp, which edge says: the page's own origin may be another (a LAN port).
+  const url = list.data?.resource ?? null;
 
   async function revoke(id: string) {
     setRevoking(id);
     setError(null);
     const answer = await postJson<{ revoked?: boolean }>(`api/mcp/clients/${id}/revoke`);
     if (answer.error) setError(answer.error);
-    else list.show((last) => last && { clients: last.clients.filter((c) => c.id !== id) });
+    else list.show((last) => last && { ...last, clients: last.clients.filter((c) => c.id !== id) });
     setRevoking(null);
     await list.reload();
   }
@@ -35,9 +36,10 @@ export function Clients({ now = Date.now }: { now?: () => number }) {
   return (
     <div class={styles.page}>
       <p class={styles.note}>
-        An MCP client connects to <code class={styles.url}>{url}</code>, signs you in with GitHub
-        and asks you to allow it. It acts as you, with your rights on this dashboard. Signing out
-        ends every one of them too.
+        An MCP client connects to{" "}
+        {url ? <code class={styles.url}>{url}</code> : "this Deckhand's /mcp"}, signs you in with
+        GitHub and asks you to allow it. It acts as you, with your rights on this dashboard. Signing
+        out ends every one of them too.
       </p>
       <section class={styles.group} aria-labelledby="mcp-clients">
         <h2 id="mcp-clients">Signed in as you</h2>

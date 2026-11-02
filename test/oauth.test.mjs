@@ -400,6 +400,29 @@ test("not signed in, a request the client would get an error for goes to GitHub,
   }
 });
 
+test("signed in, a refused request to an https:// client is a page, never a redirect there", async (t) => {
+  const s = await serveOAuth(t);
+  const cookie = await s.signIn();
+  // Anyone may register a client, with any https:// redirect URI.
+  const client = (await s.register(["https://evil.example.com/x"])).body.client_id;
+  for (const extra of [
+    { response_type: "x" },
+    { code_challenge_method: "plain" },
+    { resource: "https://elsewhere.example.com/mcp" },
+  ]) {
+    const query = s.authorizeQuery(client, {
+      redirect_uri: "https://evil.example.com/x",
+      ...extra,
+    });
+    const res = await s.call(`/oauth/authorize?${query}`, { cookie });
+    assert.equal(res.status, 400, JSON.stringify(extra));
+    assert.equal(res.headers.get("location"), null);
+    const html = await res.text();
+    assert.match(html, /Request refused/);
+    assert.match(html, /https:\/\/evil\.example\.com\/x/);
+  }
+});
+
 test("the consent: denied, a forged post, and a page used twice", async (t) => {
   const s = await serveOAuth(t);
   const cookie = await s.signIn();
@@ -585,6 +608,9 @@ test("using a token never changes its family: a refresh racing a /mcp call goes 
   const list = async () => (await (await s.call("/api/mcp/clients", { cookie })).json()).clients[0];
   // Not used yet: no "last used".
   assert.equal((await list()).used, null);
+  // The address clients connect to: the public URL's, whatever the dashboard is opened at.
+  const answer = await (await s.call("/api/mcp/clients", { cookie })).json();
+  assert.equal(answer.resource, `${PUBLIC}/mcp`);
   const familyKey = `mcp/families/${(await s.store.get("mcp/logins/alice"))[0]}`;
   const before = await s.store.get(familyKey);
   s.later(2 * 60_000);
