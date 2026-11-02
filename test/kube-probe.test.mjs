@@ -1,7 +1,7 @@
 // The network probe's script (kube-probe.mjs PROBE_SCRIPT), run as its pod runs it: `node -e`
-// with its targets, against a TCP port that listens, one that doesn't, a UDP socket that answers
-// a DNS query and one that never does. test/kubernetes.test.mjs covers what the runner makes of
-// its answer.
+// with its targets, against a TCP port that listens, an address that never answers, a UDP
+// socket that answers a DNS query and one that never does. test/kubernetes.test.mjs covers what
+// the runner makes of its answer.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createSocket } from "node:dgram";
@@ -29,15 +29,13 @@ test("PROBE_SCRIPT: a port that accepts or a DNS server that answers is reached,
   const open = createServer((socket) => socket.destroy());
   const openPort = await listening(open);
   t.after(() => open.close());
-  // A port nothing listens on: one the OS gave, then closed.
-  const shut = createServer();
-  const shutPort = await listening(shut);
-  await new Promise((resolve) => shut.close(resolve));
+  // TEST-NET-1 (RFC 5737): no host has it, so nothing ever answers there, whatever else runs.
+  // Out of reach by timeout (a blackhole) or at once (unreachable), as the network says.
   const dns = await udp(t, true);
   const silent = await udp(t, false);
   const targets = [
     { host: "127.0.0.1", port: openPort, proto: "tcp" },
-    { host: "127.0.0.1", port: shutPort, proto: "tcp" },
+    { host: "192.0.2.1", port: 9, proto: "tcp" },
     { host: "127.0.0.1", port: dns.port, proto: "udp" },
     { host: "127.0.0.1", port: silent.port, proto: "udp" },
   ];

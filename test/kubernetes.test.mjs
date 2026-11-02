@@ -2056,6 +2056,8 @@ test("network probe: a probe pod that fails or never ends refuses the run, is re
     /its probe pod didn't end within 2 min \(Running\)/,
   );
   assert.equal(stuck.objects.pods.size, 0);
+  await assert.rejects(stuck.runner.start(spec()), /its probe pod didn't end/);
+  assert.equal(stuck.probes(), 2, "not kept: probed again");
 });
 
 test("network probe: its pod is labelled as a sandbox, meets Pod Security restricted, and holds nothing", async (t) => {
