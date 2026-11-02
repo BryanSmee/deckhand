@@ -343,8 +343,7 @@ test("deploy/kubernetes: nothing cluster-wide but the broker's TokenReviews; the
     // The Antigravity login refresh's stdin and stdout (kube-attach.mjs).
     "pods/attach: create,get",
     "secrets: create,get,list,delete",
-    // `update`: a session claim from before its folder, marked (kubernetes.mjs ensureClaim()).
-    "persistentvolumeclaims: create,get,update,delete",
+    "persistentvolumeclaims: create,get,delete",
     "events: list",
     "networkpolicies: list",
   ]);
