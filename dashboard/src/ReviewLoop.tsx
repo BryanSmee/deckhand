@@ -4,7 +4,7 @@
 // review's on hover, those that didn't lower the blocking ones marked, and once the loop is
 // over, what the task page offers to do next (Review, Fix).
 import type { ComponentChildren } from "preact";
-import { useId, useRef, useState } from "preact/hooks";
+import { useEffect, useId, useRef, useState } from "preact/hooks";
 import {
   findingsLeft,
   noProgress,
@@ -69,8 +69,9 @@ const MANUAL_ENDS: Record<string, string> = {
 };
 
 // "Review loop · Fix rounds ran out", then "Last review: 2 high ↓" (LastReview);
-// "Reviews · Nothing blocking" when no loop ran, only maintainers' reviews. "· ⚠ Outdated:
-// reviewed abc1234, head is now def5678" once a commit was pushed after the last one.
+// "Reviews · Nothing blocking" when no loop ran, only maintainers' reviews. "⚠ Outdated:
+// reviewed abc1234, head is now def5678" beside the last review once a commit was pushed
+// after it.
 // `actions`: the task page's buttons for a loop that is over.
 export function ReviewRounds({ task, actions }: { task: Task; actions?: ComponentChildren }) {
   const r = task.review;
@@ -82,25 +83,28 @@ export function ReviewRounds({ task, actions }: { task: Task; actions?: Componen
     <section class={styles.rounds} aria-label={name}>
       <h3>
         {name} <span class={styles.state}>· {end}</span>
-        {outdated && (
-          <span class={styles.outdated}>
-            {" · "}
-            <Icon.Warning size={13} class={styles.mark} />
-            Outdated: reviewed{" "}
-            <a
-              class={styles.sha}
-              href={`${task.pr!.url}/commits/${outdated.reviewed}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {shortSha(outdated.reviewed)}
-            </a>
-            , head is now <span class={styles.sha}>{shortSha(outdated.head)}</span>
-          </span>
-        )}
       </h3>
       <FindingsLeft task={task} />
-      {r.history.length > 0 && <LastReview task={task} />}
+      {r.history.length > 0 && (
+        <div class={styles.lastRow}>
+          <LastReview task={task} />
+          {outdated && (
+            <span class={styles.outdated}>
+              <Icon.Warning size={13} class={styles.mark} />
+              Outdated: reviewed{" "}
+              <a
+                class={styles.sha}
+                href={`${task.pr!.url}/commits/${outdated.reviewed}`}
+                target="_blank"
+                rel="noreferrer"
+              >
+                {shortSha(outdated.reviewed)}
+              </a>
+              , head is now <span class={styles.sha}>{shortSha(outdated.head)}</span>
+            </span>
+          )}
+        </div>
+      )}
       {actions && <div class={styles.actions}>{actions}</div>}
     </section>
   );
@@ -113,8 +117,8 @@ const TREND = {
 
 // "Last review: 2 high · 1 low ↓": the last review's counts, and whether it weighs less (a
 // green arrow down) or more (a red one up) than the one before it (reviewTrend(); the points
-// stay hidden). Hovering it lists every review, oldest first, until the mouse leaves: a preview
-// that leaves the page's keys alone. Focusing or clicking it pins the list, a popup's
+// stay hidden). Hovering it lists every review, oldest first, until the mouse leaves or Escape:
+// a preview that leaves focus and the page's keys alone. Focusing or clicking it pins the list, a popup's
 // (ui/popup.ts): Escape, a click elsewhere or Tab closes it, and so does a click on the line.
 function LastReview({ task }: { task: Task }) {
   const r = task.review!;
@@ -137,6 +141,16 @@ function LastReview({ task }: { task: Task }) {
     queueMicrotask(() => (closing.current = false));
   };
   usePopup(pinned, close, { box, button: () => button.current });
+  // A preview closes on Escape too, leaving focus and the key to whatever has them.
+  useEffect(() => {
+    if (!hover || pinned) return;
+    const keys = (e: KeyboardEvent) => e.key === "Escape" && setHover(false);
+    document.addEventListener("keydown", keys);
+    return () => document.removeEventListener("keydown", keys);
+  }, [hover, pinned]);
+  // Focus that left with the window (another tab, another app) comes back to the line on its
+  // own: no one asked for the list then.
+  const away = useRef(false);
   const last = r.history.length - 1;
   const trend = reviewTrend(r.history);
   const of = r.rounds ? ` of ${r.rounds}` : "";
@@ -154,7 +168,11 @@ function LastReview({ task }: { task: Task }) {
         class={styles.line}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
-        onFocus={() => !closing.current && setPinned(true)}
+        onFocus={() => {
+          if (!closing.current && !away.current) setPinned(true);
+          away.current = false;
+        }}
+        onBlur={() => (away.current = !document.hasFocus())}
         onPointerDown={() => (wasPinned.current = pinned)}
         onClick={(e) => {
           // Enter or Space (no pointer, detail 0): the list is as the line's focus left it.

@@ -21,8 +21,9 @@
   min-width: 0;
 }
 
-/* A commit pushed after the last review, next to the state. */
+/* A commit pushed after the last review, beside its line. */
 .outdated {
+  font-size: 12px;
   font-weight: 500;
   color: var(--warn);
 }
@@ -67,6 +68,15 @@ a.sha {
 .state {
   font-weight: 400;
   color: var(--text-3);
+}
+
+/* The last review's line, and beside it the Outdated mark, wrapping on a phone. */
+.lastRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 14px;
+  font-size: 12.5px;
 }
 
 /* "Last review: 2 high ↓", the list of every review under it. */

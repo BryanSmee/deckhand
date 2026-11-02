@@ -79,9 +79,11 @@ beforeEach(() => {
 test("the task page says Outdated with both shas, the row a mark; a new round clears them", () => {
   const { rerender } = render(<Dashboard state={withTask({})} error={null} />);
   const section = screen.getByRole("region", { name: "Review loop" });
-  const heading = within(section).getByRole("heading");
-  expect(heading.textContent).toBe(
-    "Review loop · Nothing blocking · Outdated: reviewed aaaaaaa, head is now bbbbbbb",
+  expect(within(section).getByRole("heading").textContent).toBe("Review loop · Nothing blocking");
+  // Beside the last review's line.
+  const line = within(section).getByRole("button", { name: /^Last review:/ });
+  expect(line.parentElement!.parentElement!.textContent).toContain(
+    "Outdated: reviewed aaaaaaa, head is now bbbbbbb",
   );
   expect(within(section).getByRole("link", { name: "aaaaaaa" }).getAttribute("href")).toBe(
     `${URL}/commits/${REVIEWED}`,
@@ -197,7 +199,7 @@ test("a maintainer's reviews alone, no loop: Reviews, its state without fix roun
       error={null}
     />,
   );
-  expect(
-    within(screen.getByRole("region", { name: "Reviews" })).getByRole("heading").textContent,
-  ).toBe("Reviews · Nothing blocking · Outdated: reviewed aaaaaaa, head is now bbbbbbb");
+  const clean = screen.getByRole("region", { name: "Reviews" });
+  expect(within(clean).getByRole("heading").textContent).toBe("Reviews · Nothing blocking");
+  expect(clean.textContent).toContain("Outdated: reviewed aaaaaaa, head is now bbbbbbb");
 });

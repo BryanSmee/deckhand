@@ -177,7 +177,7 @@ test("the last review's arrow: down and green when it weighs less, up and red wh
   );
 });
 
-test("hovering previews every review; focus or a click pins them, until Escape, Tab, a click", () => {
+test("hovering previews every review; focus or a click pins them, until Escape, Tab, a click", async () => {
   const rounds = detail(loop());
   const line = within(rounds).getByRole("button", { name: /^Last review:/ });
   const box = line.parentElement!;
@@ -199,13 +199,17 @@ test("hovering previews every review; focus or a click pins them, until Escape, 
     "R2 2 high · 1 mediumno progress sha-2",
   ];
 
-  // Hovered: a preview, which leaves the page's keys and focus alone.
+  // Hovered: a preview, which leaves the page's keys and focus alone; Escape closes it.
   fireEvent.mouseEnter(box);
   expect(line.getAttribute("aria-expanded")).toBe("true");
   expect(rows()).toEqual(ALL);
   expect(list()!.hasAttribute("data-popup")).toBe(false);
-  fireEvent.keyDown(document, { key: "Escape" });
+  const escape = fireEvent.keyDown(document, { key: "Escape" });
+  expect(escape).toBe(true); // not prevented
+  expect(list()).toBeNull();
   expect(document.activeElement).toBe(document.body);
+  fireEvent.mouseLeave(box);
+  fireEvent.mouseEnter(box);
   expect(rows()).toEqual(ALL);
   fireEvent.mouseLeave(box);
   expect(list()).toBeNull();
@@ -241,6 +245,22 @@ test("hovering previews every review; focus or a click pins them, until Escape, 
   click();
   expect(list()).toBeNull();
   expect(line.getAttribute("aria-expanded")).toBe("false");
+
+  // Closed, focus on the line: the window losing focus and getting it back doesn't open it.
+  // (A moment later: the close's own focus guard is over.)
+  await act(async () => {});
+  const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+  act(() => line.blur());
+  hasFocus.mockReturnValue(true);
+  act(() => line.focus());
+  expect(list()).toBeNull();
+  // A focus of the user's after that does.
+  act(() => line.blur());
+  act(() => line.focus());
+  expect(rows()).toEqual(ALL);
+  hasFocus.mockRestore();
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(list()).toBeNull();
 
   // Tab closes it too.
   act(() => line.blur());
