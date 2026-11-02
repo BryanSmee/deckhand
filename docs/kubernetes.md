@@ -32,7 +32,13 @@ the agents): this page is what differs on a cluster.
   ([Install](#install), step 5).
 - **A default storage class** for the services' claims (`ReadWriteOnce`), and for the issues'
   session claims (`KUBERNETES_STORAGE_CLASS`). On several nodes, one with `ReadWriteMany` too
-  ([Several nodes](#several-nodes)). Optional: a `ReadWriteMany` class for the agents' and
+  ([Several nodes](#several-nodes)). A sandbox mounts a folder of each session claim
+  (`.deckhand-session`), not its root, which a block volume's filesystem fills with
+  `lost+found`. Claims made before Deckhand did so (without the annotation
+  `deckhand.layout: folder`) are still mounted at their root, where their clone and session
+  are. On such a class, delete those whose issue's runs fail on `lost+found` (git's clone:
+  `already exists and is not an empty directory`, #643), the issue's `-workspace` claim and
+  its agent's: its next run makes them again. Optional: a `ReadWriteMany` class for the agents' and
   caches' claims ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes)).
 - **The kubelet**: a `containerLogMaxSize` above `RUN_LOG_MAX_MB` (the default 10 MiB rotates a
   run's log away, and a runner restarted mid-run then misses or repeats lines: it logs a
@@ -701,8 +707,9 @@ What it takes:
   claims among them. A filesystem that can't (NFS, among others) may still let the pod start,
   its owners wrong: on k3s's `nfs-csi`, the sandbox saw its files as `nobody` (65534), and
   wrote new ones root's on the server, writable only because of how that export maps owners.
-  Git (2.35.2 and later) refuses a repository its user doesn't own, so a clone seen as
-  `nobody`'s is one the sandbox can't use: expect such runs to fail.
+  The sandbox trusts `/workspace` whoever owns it (git's `safe.directory`, as a new claim's
+  root is root's), but files seen as `nobody`'s may not be its to write: expect such runs to
+  fail.
   `local-path` and Longhorn keep uid 1000 across runs with and without an engine. Check your
   classes with a pod of that kind before granting `docker`: write a file in an engine's pod,
   then `ls -ln` it there and in a pod without one.

@@ -176,6 +176,12 @@ agent_missing() {
 source "$agents/$SANDBOX_AGENT.sh"
 agent_check
 
+# /workspace is the issue's own volume, which only its runs write, but a new one may be root's:
+# a Kubernetes claim's root, or the kubelet's subPath folder, whose group alone fsGroup changes
+# (#643). Git checks the owner, and would refuse the clone as "dubious ownership".
+git config --global --get-all safe.directory 2> /dev/null | grep -qx /workspace ||
+  git config --global --add safe.directory /workspace
+
 if [ -n "${SANDBOX_NO_CLONE:-}" ]; then
   # Nothing to clone (the GitHub gateway refuses this run): an empty helper list, so git asks
   # nobody.

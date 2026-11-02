@@ -18,7 +18,8 @@
 //     start() refuses to run without them (isolationProblem()), nor on a cluster that doesn't
 //     enforce them, as a probe pod labelled as a sandbox finds (kube-probe.mjs). The egress
 //     proxy knows a sandbox by its pod IP (locate()).
-//   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs.
+//   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs, a folder of
+//     it mounted (SESSION_FOLDER) unless it is from before.
 //   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
 //     fails its run, saying why (follow()), and a leftover one is removed rather than waited
 //     for (wait()).
@@ -87,6 +88,15 @@ export const INSTALL_USER = { uid: 1001, gid: 1001 };
 // container's name.
 const AGENT_INIT = "deckhand.agent-init";
 export const INIT_CONTAINER = "agent-install";
+
+// The folder of a session claim its sandbox mounts (podSpec()), not the claim's root: a block
+// volume's filesystem (ext4 on Longhorn, EBS, Ceph RBD…) holds lost+found there, and
+// entrypoint.sh's clone wants an empty /workspace (#643). Made by the kubelet at the first
+// mount. LAYOUT marks the claims made since (ensureClaim()): one from before has its clone or
+// session at its root, still mounted there, so that its issue goes on where it was.
+export const SESSION_FOLDER = ".deckhand-session";
+const LAYOUT = "deckhand.layout";
+const FOLDER = "folder";
 
 // The engine's sidecar (podSpec()), and its storage's volume.
 const ENGINE_CONTAINER = "engine";
@@ -292,7 +302,8 @@ export function agentInitContainer({ image, command, env, resources, volumeMount
 // (KUBERNETES_REGISTRY_SECRET); `agentInit`: { volume, image, command, env } when the agent
 // has no claim: an emptyDir, which an init container fills as INSTALL_USER before the
 // sandbox mounts it read-only. `engine`: { image, runtimeClass, env, size } for a run granted
-// a container engine (engine.mjs): its sidecar, below.
+// a container engine (engine.mjs): its sidecar, below. `rooted`: the session volumes whose
+// claim is from before SESSION_FOLDER, mounted at its root.
 export function podSpec(
   { name, image, user, limits, caps = [], volumes = [] },
   {
@@ -306,6 +317,7 @@ export function podSpec(
     pullSecret = null,
     agentInit = null,
     engine = null,
+    rooted = [],
   },
 ) {
   if (!user) throw new Error("the sandbox spec has no user");
@@ -314,12 +326,15 @@ export function podSpec(
   const resources = { cpu: String(limits.cpus), memory: quantity(limits.memory) };
   const claimed = [...new Set(volumes.map((v) => v.name))];
   const init = agentInit && claimed.includes(agentInit.volume) ? agentInit : null;
-  const mountOf = (v) => ({
-    name: `v${claimed.indexOf(v.name)}`,
-    mountPath: v.path,
-    ...(v.readOnly ? { readOnly: true } : {}),
-    ...(v.subpath ? { subPath: v.subpath } : {}),
-  });
+  const mountOf = (v) => {
+    const subPath = v.kind === "session" && !rooted.includes(v.name) ? SESSION_FOLDER : v.subpath;
+    return {
+      name: `v${claimed.indexOf(v.name)}`,
+      mountPath: v.path,
+      ...(v.readOnly ? { readOnly: true } : {}),
+      ...(subPath ? { subPath } : {}),
+    };
+  };
   return {
     apiVersion: "v1",
     kind: "Pod",
@@ -562,8 +577,11 @@ export function createKubernetesRunner({
       }
       await checkEnforced(policies);
       const pullName = await pullSecret.forPods();
+      const rooted = [];
       for (const v of volumes.filter((v) => v.kind === "session")) {
-        if (await ensureClaim(v.name)) made.push(claimPath(v.name));
+        const claim = await ensureClaim(v.name);
+        if (claim === "made") made.push(claimPath(v.name));
+        if (claim === "rooted") rooted.push(v.name);
       }
       const agentInit = await agentInstall(volumes.find((v) => v.kind === "agent"));
       const sidecar = engine ? engineSpec() : null;
@@ -598,6 +616,7 @@ export function createKubernetesRunner({
           pullSecret: pullName,
           agentInit,
           engine: sidecar,
+          rooted,
         }),
       );
       made.push(podPath(name));
@@ -728,16 +747,18 @@ export function createKubernetesRunner({
     }
   }
 
-  // The session volume's claim, made when missing. → true when it was made now.
+  // The session volume's claim, made when missing. → "made" when it was made now, "rooted"
+  // for one from before SESSION_FOLDER (no LAYOUT), else null.
   async function ensureClaim(volume) {
-    if (await api.find(claimPath(volume))) return false;
+    const claim = await api.find(claimPath(volume));
+    if (claim) return claim.metadata?.annotations?.[LAYOUT] === FOLDER ? null : "rooted";
     await api.create("persistentvolumeclaims", {
       apiVersion: "v1",
       kind: "PersistentVolumeClaim",
       metadata: {
         name: kubeName(volume),
         labels: { ...owner, [ROLE]: "session" },
-        annotations: { "deckhand.volume": volume },
+        annotations: { "deckhand.volume": volume, [LAYOUT]: FOLDER },
       },
       spec: {
         accessModes: ["ReadWriteOnce"],
@@ -745,7 +766,7 @@ export function createKubernetesRunner({
         ...(storageClass ? { storageClassName: storageClass } : {}),
       },
     });
-    return true;
+    return "made";
   }
 
   async function pods() {
