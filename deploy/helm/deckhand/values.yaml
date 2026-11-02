@@ -1,0 +1,127 @@
+# Deckhand's chart (docs/kubernetes.md#install-with-helm). These defaults render the kustomize
+# base, deploy/kubernetes: set what is yours in a values file of your own (`-f`), as an overlay
+# would patch it. Secrets are never values: make them with kubectl and secrets.mjs, as with the
+# base (docs/kubernetes.md, Install, step 3).
+
+image:
+  # Every service's image is <repository>-<service>:<tag> (deckhand-edge, deckhand-runner…).
+  repository: ghcr.io/bryansmee/deckhand
+  # A release (v1.2.3) or a digest's tag; empty: the chart's appVersion.
+  tag: ""
+  # SANDBOX_IMAGE, a reference the nodes can pull; empty: <repository>-sandbox:<tag>, which has
+  # to match the services' release.
+  sandbox: ""
+
+# The services' namespace and the sandboxes' (docs/kubernetes.md#namespaces): two, never one.
+# The chart makes both, with their Pod Security labels, so install its release in another
+# namespace (your context's, `default`), not with `--namespace deckhand --create-namespace`.
+# `create: false` if you make them yourself, labelled as namespaces.yaml labels them.
+namespaces:
+  create: true
+  services: deckhand
+  sandboxes: deckhand-sandboxes
+
+# config.yaml and the grants folder, mounted at /etc/deckhand (docs/setup.md#settings,
+# docs/security.md#the-grants-folder). `--set-file server.config=config.yaml` reads yours.
+# Read at start: the pods restart when they change, as the ConfigMap's name carries their hash.
+server:
+  config: |
+    # Deckhand's settings, as server.example/config.yaml (every key: docs/setup.md#settings), under
+    # the key config.yaml: your overlay or the chart's values replace them with yours
+    # (docs/kubernetes.md, Install). Read at start: the pods restart when it changes, as the
+    # ConfigMap's name has a hash of it.
+
+    # GitHub logins allowed to start runs and sign in: required, none starts otherwise.
+    allowed_users: []
+  # The grants folder's files, by their path in it: default.yaml, acme/api.yaml,
+  # policy/grants.rego… The orchestrator, the runner, the github and policy services read them.
+  grants:
+    default.yaml: |
+      # What every repository's sandboxes get, as server.example/grants/default.yaml
+      # (docs/security.md#the-grants-folder). Nothing set: nothing granted.
+
+# Any other setting of the orchestrator, the runner and the models service, in deckhand-env
+# (docs/setup.md#settings): MAX_PARALLEL, KUBERNETES_SESSION_SIZE, KUBERNETES_REGISTRY_HOSTS…
+# One the values below set (KUBERNETES_NAMESPACE, SANDBOX_IMAGE…) is refused, naming the value.
+env: {}
+
+# The API server's addresses, the runner's and the broker's only way out (docs/kubernetes.md,
+# Install, step 2). The placeholder reaches nothing: neither works until you set yours.
+apiServer:
+  cidrs: [192.0.2.1/32]
+
+# Fixed at install, as the claims' storage classes below: a claim's access mode and class can't
+# change (docs/kubernetes.md#install-with-helm says how to move). Where the services keep their stores: `file`, each on its own claim, its copies on one node;
+# or `redis`, in Valkey (components/redis), for copies on several nodes, with the deckhand-redis
+# Secret made beforehand (docs/kubernetes.md#several-nodes).
+store: file
+
+redis:
+  image: valkey/valkey:8.1-alpine
+  size: 5Gi
+  # Empty: the cluster's default class.
+  storageClass: ""
+
+# The services' claims. Empty classes: the cluster's default. With `store: redis`, the
+# orchestrator's and the runner's claims are ReadWriteMany (sharedStorageClass, else
+# storageClass), and edge's, the broker's, the github and models services' go.
+persistence:
+  storageClass: ""
+  sharedStorageClass: ""
+  sizes:
+    edge-data: 1Gi
+    orchestrator-data: 5Gi
+    orchestrator-screenshots: 5Gi
+    runner-data: 5Gi
+    broker-store: 2Gi
+    github-data: 10Gi
+    models-store: 1Gi
+    egress-cache: 12Gi
+
+# The sandboxes' claims, which the runner makes (docs/kubernetes.md): each issue's session
+# (KUBERNETES_STORAGE_CLASS), the caches' and the agents' (ReadWriteMany:
+# KUBERNETES_CACHE_STORAGE_CLASS, KUBERNETES_AGENT_STORAGE_CLASS). Empty: unset, so the sessions
+# on the cluster's default class, no caches, and each sandbox installs its agent itself.
+sandboxes:
+  storageClass: ""
+  cacheStorageClass: ""
+  agentStorageClass: ""
+
+# Repositories' own images (docs/kubernetes.md#repo-images): rootless BuildKit (the buildkit
+# component), which lowers the services' namespace's Pod Security to `privileged`, and the
+# registry the runner pushes to (`registry`, read with BuildKit alone), whose pull Secret you
+# make beforehand.
+buildkit:
+  enabled: false
+  image: moby/buildkit:v0.25.1-rootless
+  # Your registry's host, when it runs in the cluster: its pulls skip the proxy.
+  noProxy: ""
+
+registry:
+  # KUBERNETES_REGISTRY (registry.example.com/deckhand): required for repo images, and read with
+  # buildkit.enabled alone (refused without it).
+  url: ""
+  # KUBERNETES_REGISTRY_SECRET, a kubernetes.io/dockerconfigjson Secret in the services'
+  # namespace.
+  secretName: deckhand-registry
+
+# A container engine for the runs granted one (docs/kubernetes.md#container-engine-on-kubernetes):
+# the engine component, Sysbox's dockerd as a sidecar under its RuntimeClass, and the egress
+# proxy's engines' port (3129). Once Sysbox runs on the nodes.
+engine:
+  enabled: false
+  # ENGINE_IMAGE; empty: <image.repository>-engine:<image.tag>, the services' release.
+  image: ""
+  # KUBERNETES_ENGINE_RUNTIME_CLASS: the RuntimeClass Sysbox's install makes.
+  runtimeClass: sysbox-runc
+
+# Your ingress, to edge's port 8080 alone: GitHub's webhooks and the dashboard, over HTTPS.
+ingress:
+  enabled: false
+  className: ""
+  # Your Deckhand's host (deckhand.example.com): required with the ingress.
+  host: ""
+  annotations: {}
+  # The certificate's Secret (or one your annotations have cert-manager make); empty: no TLS
+  # here, as when your load balancer ends it.
+  tlsSecretName: ""

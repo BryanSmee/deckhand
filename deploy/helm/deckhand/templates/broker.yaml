@@ -1,0 +1,83 @@
+# deploy/kubernetes/broker.yaml: the key that signs the runs' tokens and the services' own (the
+# deckhand-broker-key Secret, made once), the live runs and their files.
+{{- $redis := eq .Values.store "redis" }}
+{{- $ns := include "deckhand.ns" . }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: broker
+  namespace: {{ $ns }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    app: deckhand-broker
+spec:
+  replicas: 2
+  {{- include "deckhand.strategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      app: deckhand-broker
+  template:
+    metadata:
+      labels:
+        app: deckhand-broker
+    spec:
+      serviceAccountName: deckhand-broker
+      enableServiceLinks: false
+      automountServiceAccountToken: true
+      terminationGracePeriodSeconds: 35
+      {{- include "deckhand.podSecurityContext" false | nindent 6 }}
+      {{- if not $redis }}
+      {{- include "deckhand.sameNode" "deckhand-broker" | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: broker
+          image: {{ include "deckhand.image" (list . "broker") }}
+          ports:
+            - name: http
+              containerPort: 8081
+          env:
+            # Who calls, by its pod's service account (rbac.yaml): each service its own.
+            - name: SERVICE_ACCOUNTS
+              value: edge={{ $ns }}:deckhand-edge,orchestrator={{ $ns }}:deckhand-orchestrator,runner={{ $ns }}:deckhand-runner,github={{ $ns }}:deckhand-github,models={{ $ns }}:deckhand-models,proxy={{ $ns }}:deckhand-egress
+            {{- if $redis }}
+            {{- include "deckhand.redisStore" "broker" | nindent 12 }}
+            {{- end }}
+          {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
+          {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: key
+              mountPath: /keys
+              readOnly: true
+            - name: store
+              mountPath: /data
+      volumes:
+        - name: key
+          secret:
+            secretName: deckhand-broker-key
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        - name: store
+          {{- if $redis }}
+          emptyDir: {}
+          {{- else }}
+          persistentVolumeClaim:
+            claimName: broker-store
+          {{- end }}
+{{- if not $redis }}
+---
+{{ include "deckhand.claim" (list . "broker-store" "ReadWriteOnce") }}
+{{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: broker
+  namespace: {{ $ns }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: deckhand-broker
+  ports:
+    - name: http
+      port: 8081
+      targetPort: http

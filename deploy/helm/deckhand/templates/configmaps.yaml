@@ -1,0 +1,28 @@
+# kustomization.yaml's configMapGenerator: config.yaml and the grants (deckhand-server), and the
+# settings the orchestrator, the runner and the models service share (deckhand-env). Their
+# names carry a hash of their data, so the pods that read them restart when it changes. Kept
+# when an upgrade replaces them, as `kubectl apply -k` leaves kustomize's: a pod of the old
+# release rescheduled while the new one fails to roll out still finds its own.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deckhand.serverName" . }}
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  {{- include "deckhand.serverData" . | nindent 2 }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deckhand.envName" . }}
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  {{- include "deckhand.envData" . | nindent 2 }}

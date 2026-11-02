@@ -3,3 +3,5 @@ dashboard/package-lock.json
 listener/vendor/package-lock.json
 listener/vendor/graphql.mjs
 listener/vendor/github.graphql
+# Helm templates: YAML with Go templates in it, which prettier would reject.
+deploy/helm/deckhand/templates

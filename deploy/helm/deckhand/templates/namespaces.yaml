@@ -1,0 +1,27 @@
+{{- include "deckhand.check" . }}
+{{- if .Values.namespaces.create }}
+# deploy/kubernetes/namespaces.yaml: the services' namespace and the sandboxes', both
+# `restricted`, but the services' with BuildKit (buildkit.yaml). Kept by `helm uninstall`, with
+# what they hold that isn't the chart's: the Secrets you made, the sessions' claims.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: {{ .Values.buildkit.enabled | ternary "privileged" "restricted" }}
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    helm.sh/resource-policy: keep
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ include "deckhand.sandboxesNs" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+  annotations:
+    helm.sh/resource-policy: keep
+{{- end }}

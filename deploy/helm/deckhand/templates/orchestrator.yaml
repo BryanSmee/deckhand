@@ -1,0 +1,94 @@
+# deploy/kubernetes/orchestrator.yaml: the queue and the runs' lives, no secret, no way out. Two
+# copies, active/passive through its lease; its readiness is /health, as a probe on /ready would
+# never let a rolling update go on.
+{{- $redis := eq .Values.store "redis" }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: orchestrator
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+    app: deckhand-orchestrator
+spec:
+  replicas: 2
+  {{- include "deckhand.strategy" . | nindent 2 }}
+  selector:
+    matchLabels:
+      app: deckhand-orchestrator
+  template:
+    metadata:
+      labels:
+        app: deckhand-orchestrator
+    spec:
+      serviceAccountName: deckhand-orchestrator
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 300
+      {{- include "deckhand.podSecurityContext" false | nindent 6 }}
+      {{- if not $redis }}
+      {{- include "deckhand.sameNode" "deckhand-orchestrator" | nindent 6 }}
+      {{- end }}
+      containers:
+        - name: orchestrator
+          image: {{ include "deckhand.image" (list . "orchestrator") }}
+          ports:
+            - name: egress-policy
+              containerPort: 8082
+            - name: services
+              containerPort: 8083
+          envFrom:
+            - configMapRef:
+                name: {{ include "deckhand.envName" . }}
+          env:
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            {{- if $redis }}
+            {{- include "deckhand.redisStore" "orchestrator" | nindent 12 }}
+            {{- end }}
+          {{- include "deckhand.probes" (list "services" "/health" "/health") | nindent 10 }}
+          {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: screenshots
+              mountPath: /data/shots
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: orchestrator-data
+        - name: screenshots
+          persistentVolumeClaim:
+            claimName: orchestrator-screenshots
+        {{- include "deckhand.serverVolume" (list . true) | nindent 8 }}
+        {{- include "deckhand.brokerTokenVolume" . | nindent 8 }}
+---
+{{ include "deckhand.claim" (list . "orchestrator-data" ($redis | ternary "ReadWriteMany" "ReadWriteOnce")) }}
+---
+{{ include "deckhand.claim" (list . "orchestrator-screenshots" ($redis | ternary "ReadWriteMany" "ReadWriteOnce")) }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: orchestrator
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  selector:
+    app: deckhand-orchestrator
+  ports:
+    - name: egress-policy
+      port: 8082
+      targetPort: egress-policy
+    - name: services
+      port: 8083
+      targetPort: services
