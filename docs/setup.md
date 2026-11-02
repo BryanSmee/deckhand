@@ -1263,8 +1263,9 @@ collector. With Loki:
 To send the lines to your own stack with Docker, a `compose.override.yaml` beside
 `compose.yaml` (Compose reads it with `docker compose up -d`, no flag needed) gives each service
 another driver: `fluentd`, `gelf`, `journald`, `loki` (Grafana's plugin, installed on the host
-first) or any other. A driver other than `json-file` takes none of its options, and with most
-`docker compose logs` has nothing to show. With GELF, say:
+first) or any other. A driver other than `json-file` takes none of its options;
+`docker compose logs` still reads the lines, from the local copy Docker keeps beside any driver
+(its dual logging, unless `cache-disabled`). With GELF, say:
 
 ```yaml
 # compose.override.yaml: an anchor is a file's own, so this one names each service again.
@@ -1290,13 +1291,15 @@ services:
 Every service in `compose.yaml` has a health check, which calls its own `/ready` (or `/health`)
 with `node -e "fetch(…)"`, which every image can run: once a second while it starts, then every
 30 s. `docker compose ps` shows each one `healthy`, `starting` or `unhealthy`. A service starts
-only once those it calls are healthy (`depends_on` with `condition: service_healthy`): the broker
-first, whose public keys the others check service tokens with, then the policy service, the
-github and models services, edge and the runner, and the orchestrator last. The orchestrator's
-and the runner's check `/health`, which a copy waiting for the lease answers too (its `/ready`
-is 503 until it acts, [Two copies](#two-copies)); the others' check `/ready`, which turns 503
-once a stopping copy drains. Docker doesn't restart an unhealthy container by itself: its logs
-say why.
+only once those it needs at its start are healthy (`depends_on` with
+`condition: service_healthy`; one it calls only later, it calls again until that one answers):
+the broker first, whose public keys the others check service tokens with, then the policy
+service, the github and models services, edge and the runner, and the orchestrator last.
+
+The orchestrator's and the runner's check `/health`, which a copy waiting for the lease answers
+too (its `/ready` is 503 until it acts, [Two copies](#two-copies)), and edge's, which has no
+`/ready`; the others' check `/ready`, which turns 503 once a stopping copy drains. Docker
+doesn't restart an unhealthy container by itself: its logs say why.
 
 ## Updating
 
@@ -1649,12 +1652,13 @@ until they move to the store, #505); `/ready` answers only on the one acting, fo
 probe. Ready-made manifests are on their way (issue #396); until then, this is what the
 runner expects ([Namespaces](#namespaces) says which goes where).
 
-- **Probes**, on every service's pods: a `livenessProbe` on `/health` and a `readinessProbe` on
-  `/ready`, both on the port its Service names (edge's 8080, the orchestrator's 8083, the
-  broker's 8081, the policy service's 8181, the egress proxy's 3128, the others' 8080). `/ready`
-  is 503 on a copy that drains, and on an orchestrator's or a runner's copy waiting for its
-  lease, which keeps it out of its Service ([Health checks](#health-checks) has a command every
-  image can run).
+- **Probes**, on every service's pods, on the port its Service names (edge's 8080, the
+  orchestrator's 8083, the broker's 8081, the policy service's 8181, the egress proxy's 3128,
+  the others' 8080): a `livenessProbe` on `/health` and a `readinessProbe` on `/ready`, but for
+  edge, which answers `/health` alone (both probes on it), and the egress proxy, which answers
+  `/ready` alone (both on it). `/ready` is 503 on a copy that drains, and on an orchestrator's
+  or a runner's copy waiting for its lease, which keeps it out of its Service
+  ([Health checks](#health-checks) has a command every image can run).
 - **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none), in
   the sandboxes' namespace: `create`, `get`, `list` and `delete` on `pods`, `secrets` and
   `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and

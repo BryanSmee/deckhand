@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { calls } from "../lib/services.mjs";
+import { CALLS, calls } from "../lib/services.mjs";
 import { AGENT_SECRETS } from "../listener/agents/index.mjs";
 import { createNetworks } from "../listener/runner/networks.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
@@ -447,6 +447,17 @@ test("the subnet check fails on one written apart, two that overlap, one in Dock
   ]);
 });
 
+// Text for `docker compose logs`, JSON with one line in .env for a collector (#547): the
+// services' own default, unset, is JSON (lib/log.mjs).
+test("compose.yaml: every Deckhand service logs as LOG_FORMAT says, text by default", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  for (const name of Object.keys(RUNS)) {
+    const { environment = {} } = compose.services[name];
+    assert.equal(environment.LOG_FORMAT, "${LOG_FORMAT:-text}", `${name}'s LOG_FORMAT`);
+    assert.equal(environment.LOG_LEVEL, "${LOG_LEVEL:-}", `${name}'s LOG_LEVEL`);
+  }
+});
+
 // The ports compose.yaml's services are reached on: those their callers' URLs name
 // (http://broker:8081), and those it publishes.
 function portsOf(compose, name) {
@@ -479,12 +490,8 @@ test("compose.yaml: every long-running service has a health check on its own por
     }
   }
   // The orchestrator starts once every service it calls is ready.
-  assert.deepEqual(Object.keys(compose.services.orchestrator.depends_on).sort(), [
-    "broker",
-    "edge",
-    "github",
-    "models",
-    "policy",
-    "runner",
-  ]);
+  assert.deepEqual(
+    Object.keys(compose.services.orchestrator.depends_on).sort(),
+    [...CALLS.orchestrator].sort(),
+  );
 });
