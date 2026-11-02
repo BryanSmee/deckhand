@@ -5823,6 +5823,7 @@ mounts:
       "dryRun",
       "position",
       "startsFirst",
+      "canWait",
     ],
   ];
   const QUESTIONS_KEYS = [["source", "items", "raw"], ["runId"]];

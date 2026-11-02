@@ -154,6 +154,8 @@ export function Detail({
   };
   // Discussions have no comment command to stop them by, nor the API's.
   const stoppable = STOPPABLE.includes(t.state) && t.number !== null && !discussion;
+  // Waiting for a slot: Stop takes it out of the queue, nothing to lose, no question.
+  const unqueue = t.state === "queued" && t.number !== null && !discussion;
   const asking = confirming === t.key;
   const stop = async () => {
     setConfirming(null);
@@ -286,7 +288,8 @@ export function Detail({
   };
   keys.review = () => (offers.review && !pending ? void review("review") : false);
   keys.fix = () => (offers.fix && !pending ? void review("fix") : false);
-  keys.stop = () => (stoppable && stopping !== t.key ? setConfirming(t.key) : false);
+  keys.stop = () =>
+    stopping === t.key ? false : stoppable ? setConfirming(t.key) : unqueue ? void stop() : false;
   // ] and [: every run in turn, not only those with a tab.
   const order = [
     ...(discussion ? [THREAD] : []),
@@ -401,6 +404,20 @@ export function Detail({
                   onClick={() => setConfirming(t.key)}
                 >
                   Stop
+                </Button>
+              )}
+              {unqueue && (
+                <Button
+                  variant="danger"
+                  size={size}
+                  icon={<Icon.Stop size={11} />}
+                  pending={stopping === t.key}
+                  pendingLabel="Removing…"
+                  title="Takes it out of the queue: its queued comments are dropped"
+                  shortcut="stop"
+                  onClick={stop}
+                >
+                  Remove from queue
                 </Button>
               )}
               {stoppable && asking && (

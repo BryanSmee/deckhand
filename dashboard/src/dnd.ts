@@ -6,6 +6,10 @@ export const ISSUE_TYPE = "application/x-deckhand-issue";
 // A brainstorm card's: its issue number. Not ISSUE_TYPE: the column doesn't take its own cards
 // back, and a drop elsewhere knows it is a brainstorm.
 export const BRAINSTORM_TYPE = "application/x-deckhand-brainstorm";
+// A Queued card's: its task's key ("org/app#42"). On another Queued card it moves in the run
+// order, on the Backlog tab it goes back to the backlog, on the graph it queues after a node
+// (or moves in line, on a queued node's edges).
+export const QUEUED_TYPE = "application/x-deckhand-queued";
 // A link dragged from a page, GitHub's included.
 export const LINK_TYPES = ["text/uri-list", "text/plain"];
 
@@ -19,7 +23,8 @@ export interface Look {
 // The card being dragged, which a drag over can't read from the data: the board says what a
 // drop would do with it ("Queue #31 after #19") and draws its ghost. Null: none of ours (a
 // link, or nothing).
-export type Carried = { type: string; number: number } & Look;
+// `key`: a Queued card's task.
+export type Carried = { type: string; number: number; key?: string } & Look;
 let carried: Carried | null = null;
 export const carriedCard = () => carried;
 
@@ -39,6 +44,14 @@ export const dragOf = (type: string, number: number, url: string, look: Look) =>
   if (e.dataTransfer) e.dataTransfer.effectAllowed = "copyMove";
   if (blank) e.dataTransfer?.setDragImage?.(blank, 0, 0);
   carried = { type, number, ...look };
+};
+
+// A Queued card's drag: the browser draws it (no ghost on the graph), the board says what a
+// drop would do.
+export const queuedDrag = (key: string, number: number) => (e: DragEvent) => {
+  e.dataTransfer?.setData(QUEUED_TYPE, key);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+  carried = { type: QUEUED_TYPE, number, key, status: "Queued", title: "" };
 };
 
 // Its end, dropped or not.

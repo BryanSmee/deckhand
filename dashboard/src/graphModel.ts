@@ -40,6 +40,7 @@ export function pendingName(p: Pick<Pending, "action">): string {
   if (p.action === "queue") return "Queueing…";
   if (p.action === "plan") return "Laying out…";
   if (p.action === "dequeue") return "Removing its wait…";
+  if (p.action === "cancel") return "Back to the backlog…";
   return "Stopping…";
 }
 
@@ -176,8 +177,9 @@ export function brainstormsOf(tasks: Task[], pending: Pending[] = []): Brainstor
 
 // The tasks and arrows as they will be once `pending` is done: a queued issue gets an arrow
 // from what it waits for, a started one none, a parent laid out with its sub-issues ("plan")
-// waits, its arrows the listener's to tell, a dequeued one leaves (unless it ran before:
-// then it stays, without its arrows). A stopped brainstorm doesn't move. The keys it touches
+// waits, its arrows the listener's to tell, a dequeued one or a queued one taken out of the
+// queue leaves (unless it ran before: then it stays, without its arrows). A stopped brainstorm
+// doesn't move. The keys it touches
 // come back too, with the last action on each.
 function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
   const touched = new Map<string, Pending>();
@@ -187,7 +189,7 @@ function withPending(tasks: Task[], edges: Edge[], pending: Pending[]) {
     if (p.action === "stop") continue;
     edges = edges.filter((e) => e.to !== key);
     const task = tasks.find((t) => t.key === key);
-    if (p.action === "dequeue") {
+    if (p.action === "dequeue" || p.action === "cancel") {
       if (task && !task.runs.length) tasks = tasks.filter((t) => t !== task);
       continue;
     }
@@ -316,6 +318,32 @@ export function ordinal(n: number): string {
 // Whether a queued task moves in the run order: not a brainstorm, which starts first anyway.
 export const reorderable = (t: Task) => t.state === "queued" && !!t.position && !t.startsFirst;
 
+// Whether a queued task can leave the queue for a wait (Queue after…) or the backlog: an
+// issue's (research's too), waiting for a slot, whether it moves in the run order or starts
+// first (another mode apart from work's); a brainstorm's first run too, which nothing ran for
+// yet. Not a reply to a brainstorm going on: its task stays a brainstorm, not back in the
+// backlog.
+export const unqueueable = (t: Task) =>
+  t.state === "queued" &&
+  !!t.position &&
+  t.number !== null &&
+  (t.kind === "issue" || t.kind === "research" || (t.kind === "brainstorm" && !t.runs.length));
+
+// Whether it can wait for another issue instead (Queue after…, a drop on a node's middle): not
+// when its queued comments only reply to its last run (the listener's `canWait`).
+export const waitable = (t: Task) => unqueueable(t) && !!t.canWait;
+
+// `line` (inLine()'s) less the tasks an action on its way takes out of the queue: back to the
+// backlog, or queued after another issue.
+export const stillInLine = (line: Task[], pending: Pending[]) => {
+  const leaving = new Set(
+    pending
+      .filter((p) => p.action === "cancel" || p.action === "queue")
+      .map((p) => `${p.repo}#${p.number}`),
+  );
+  return leaving.size ? line.filter((t) => !leaving.has(t.key)) : line;
+};
+
 // `tasks` (every repo's the user sees) with the queued ones' places as they will be once
 // `moving` is done (the Queued tab and the graph's badges show a move at once), and those
 // queued in run order. As listener/order.mjs move() does: the whole line with the task taken
@@ -350,6 +378,17 @@ export function alreadyThere(line: Task[], key: string, onto: Task, before: bool
   return at >= 0 && movers[at + (before ? 1 : -1)]?.key === onto.key;
 }
 
+// Whether queued task `key` let go at `side` (0 its left edge, 1 its right) of `target` moves
+// in line: both move in the run order (`line`: inLine()'s), and it is on the target's edges.
+// Elsewhere it queues after the target, if anything.
+export function onEdge(line: Task[], key: string, target: string, side: number): boolean {
+  const dragged = line.find((t) => t.key === key);
+  const onto = line.find((t) => t.key === target);
+  return (
+    !!dragged && reorderable(dragged) && !!onto && reorderable(onto) && !(side > 0.3 && side < 0.7)
+  );
+}
+
 // Where a queued node dropped on another queued one moves it: on its left edge before it, on
 // its right edge after it (`line`: inLine()'s, every repo's). `side`: where on the target it was
 // let go, 0 its left edge, 1 its right. Null: its middle, or where it is already.
@@ -359,8 +398,8 @@ export function moveOnto(
   target: string,
   side: number,
 ): OrderMove | null {
-  const onto = line.find((t) => t.key === target);
-  if (key === target || !onto || !reorderable(onto) || (side > 0.3 && side < 0.7)) return null;
+  if (key === target || !onEdge(line, key, target, side)) return null;
+  const onto = line.find((t) => t.key === target)!;
   const before = side <= 0.3;
   if (alreadyThere(line, key, onto, before)) return null;
   return before ? { key, before: target } : { key, after: target };
@@ -394,7 +433,7 @@ export const movable = (
     ? n.kind === "issue"
     : stopped(n.task)
       ? n.kind === "issue" && listed.has(n.number)
-      : reorderable(n.task) || waitsForAnswers(n.task));
+      : reorderable(n.task) || waitable(n.task) || waitsForAnswers(n.task));
 
 // An open issue's task whose last run was stopped, failed or cut short by a restart.
 const stopped = (t: Task) =>
