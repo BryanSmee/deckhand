@@ -64,6 +64,7 @@ async function setup(
   const asked = [];
   const authority = createAuthority({ dir: join(temp(t, "egress"), "ca") });
   await authority.ready();
+  const cache = createCache({ dir: temp(t, "egress-cache"), max: cacheOn ? 1024 * 1024 : 0 });
   const proxy = createProxy({
     policy: async (ip, host) => {
       asked.push(host);
@@ -91,7 +92,7 @@ async function setup(
       return [{ address: "127.0.0.1", family: 4 }];
     },
     blocked: () => false,
-    cache: createCache({ dir: temp(t, "egress-cache"), max: cacheOn ? 1024 * 1024 : 0 }),
+    cache,
     authority,
     upstreamCa,
     githubService,
@@ -151,19 +152,34 @@ async function setup(
     });
   }
 
-  return { get, tunnel, seen, heard, asked, authority, proxy, proxyPort, plainPort, upstreamPort };
+  return {
+    get,
+    tunnel,
+    seen,
+    heard,
+    asked,
+    authority,
+    cache,
+    proxy,
+    proxyPort,
+    plainPort,
+    upstreamPort,
+  };
 }
 
 test("HTTPS to a cached host: decrypted with Deckhand's CA, and the second GET is a hit", async (t) => {
-  const { get, seen, authority, upstreamPort } = await setup(t);
+  const { get, seen, authority, cache, upstreamPort } = await setup(t);
   const ca = authority.certificate();
   const first = await get("cached.test", "/pkg.tgz", ca);
   assert.equal(first.status, 200);
   assert.equal(first.body, "body of /pkg.tgz");
   assert.equal(first.headers["x-deckhand-cache"], "miss");
   assert.equal(first.issuer, nameOf(ca));
-  // The cache writes behind the client: give it a moment.
-  await new Promise((resolve) => setTimeout(resolve, 100));
+  // The cache writes behind the client: once it has.
+  const key = cache.key(`https://cached.test:${upstreamPort}/pkg.tgz`);
+  for (let i = 0; i < 1000 && !cache.has(key); i++) {
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
   const second = await get("cached.test", "/pkg.tgz", ca);
   assert.equal(second.body, "body of /pkg.tgz");
   assert.equal(second.headers["x-deckhand-cache"], "hit");

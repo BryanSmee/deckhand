@@ -396,7 +396,8 @@ test("two copies: the redeliveries' poller runs on the one holding its lease, th
       store,
       name: "edge/redeliveries",
       holder: name,
-      ttlMs: 300,
+      // Long enough that a paused runner doesn't let it expire: stop() hands it over.
+      ttlMs: 10_000,
       pollMs: 10,
       onActive: () => redeliveries.start(),
       onPassive: () => redeliveries.stop(),
@@ -405,13 +406,18 @@ test("two copies: the redeliveries' poller runs on the one holding its lease, th
   });
   for (const { poller } of copies) await poller.start();
   t.after(() => Promise.all(copies.map(({ poller }) => poller.stop())));
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  const scans = async (check) => {
+    for (let i = 0; i < 500 && !check(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  };
+  await scans(() => listed.length >= 3);
   assert.ok(listed.length >= 3, `scans: ${listed.length}`);
   assert.deepEqual([...new Set(listed)], ["one"]);
   // The first copy stops: the other takes the lease at once, and scans from then on.
   await copies[0].poller.stop();
   const before = listed.length;
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await scans(() => listed.length >= before + 3);
   assert.deepEqual([...new Set(listed.slice(before))], ["two"]);
 });
 

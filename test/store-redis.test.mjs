@@ -176,7 +176,8 @@ test("resp: a dropped connection fails the calls in flight, the next call reconn
   const client = redisClient(redis.url, { password: "secret" });
   t.after(() => client.close());
   const lost = client.call("ECHO", "x");
-  await sleep(50);
+  // Once the server has read it, after the AUTH: the connection dropped is the one it was on.
+  for (let i = 0; i < 500 && !redis.got.some(([name]) => name === "ECHO"); i++) await sleep(10);
   redis.drop();
   await assert.rejects(lost, /closed|ECONNRESET/);
   hang = false;
@@ -188,11 +189,12 @@ test("resp: a dropped connection fails the calls in flight, the next call reconn
 test("resp: a call nothing answers fails in time, and the next one connects again", async (t) => {
   let answer = false;
   const redis = await fakeRedis(t, () => (answer ? "+PONG\r\n" : undefined));
-  const client = redisClient(redis.url, { timeoutMs: 100 });
+  // Long enough for the second call to connect again and be answered on a paused runner.
+  const client = redisClient(redis.url, { timeoutMs: 500 });
   t.after(() => client.close());
   const started = Date.now();
-  await assert.rejects(client.call("PING"), /didn't answer within 100 ms/);
-  assert.ok(Date.now() - started < 1000);
+  await assert.rejects(client.call("PING"), /didn't answer within 500 ms/);
+  assert.ok(Date.now() - started < 5000);
   answer = true;
   assert.equal(await client.call("PING"), "PONG");
 });

@@ -60,7 +60,7 @@ async function setup(t, routes = {}, { max = 1024 * 1024, entryMax = 1024 * 1024
   // Once the download it just served is written (or not) to disk.
   const stored = async (path, encoding) => {
     const key = cache.key(url(path), encoding);
-    for (let i = 0; i < 50 && !cache.has(key); i++) await wait(5);
+    for (let i = 0; i < 1000 && !cache.has(key); i++) await wait(5);
     return cache.has(key);
   };
   const files = () => readdirSync(dir).sort();
@@ -68,7 +68,7 @@ async function setup(t, routes = {}, { max = 1024 * 1024, entryMax = 1024 * 1024
 }
 
 test("a second GET on a cached host is answered from disk", async (t) => {
-  const { get, seen, stored, files } = await setup(t);
+  const { get, seen, stored, files, cache } = await setup(t);
   const first = await get("/pkg.deb");
   assert.equal(first.status, 200);
   assert.equal(first.body, "body of /pkg.deb");
@@ -81,7 +81,7 @@ test("a second GET on a cached host is answered from disk", async (t) => {
   assert.equal(second.headers["content-length"], String("body of /pkg.deb".length));
   assert.equal(seen.length, 1);
   // One body and its metadata, no temporary file (once its last use is written).
-  await wait(20);
+  await cache.settled();
   assert.equal(files().length, 2);
   assert.match(files()[0], /^[0-9a-f]{64}\.body$/);
 });
@@ -512,7 +512,7 @@ test("a client that disconnects mid-download leaves no entry behind", async (t) 
       res.on("close", upstreamClosed);
     },
   };
-  const { files, upstreamPort, proxyPort } = await setup(t, routes);
+  const { files, cache, upstreamPort, proxyPort } = await setup(t, routes);
   await new Promise((resolve) => {
     const req = request(
       { host: "127.0.0.1", port: proxyPort, path: `http://cached.test:${upstreamPort}/slow` },
@@ -528,7 +528,8 @@ test("a client that disconnects mid-download leaves no entry behind", async (t) 
     req.end();
   }).catch(() => {});
   await closed;
-  await wait(30);
+  // Its download dropped before the upstream's, so its file's removal is under way by now.
+  await cache.settled();
   assert.deepEqual(files(), []);
 });
 

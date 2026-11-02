@@ -1254,25 +1254,15 @@ test("the gateway's validator runs in a worker: the listener's thread goes on me
   // The slowest shape under the caps: one field repeated in a selection set.
   const worst = `mutation { addStar(input: { starrableId: "x" }) { starrable { ... on Repository {
     owner { ... on User { ${"login ".repeat(MAX_TOKENS - 40)} } } } } } }`;
-  let longest = 0;
-  let last = performance.now();
-  const tick = setInterval(() => {
-    const now = performance.now();
-    longest = Math.max(longest, now - last);
-    last = now;
-  }, 5);
+  // How busy this thread's event loop was meanwhile: on the thread, the check holds it the
+  // whole time (half a second here); in the worker, it waits. Not a bound on its longest pause:
+  // a runner at its CPU quota pauses the whole process, which such a bound took for a stall.
+  const before = performance.eventLoopUtilization();
   const start = performance.now();
   assert.equal(await check(worst), null);
-  clearInterval(tick);
-  const took = performance.now() - start;
-  assert.ok(took < 5000);
-  // On the thread, it would stall it the whole check (half a second here). A busy runner
-  // pauses it a while anyway (108 ms seen): measured against the check's own time, which such
-  // a pause makes longer too, not a fixed bound.
-  assert.ok(
-    longest < Math.max(100, took / 2),
-    `the thread stalled ${Math.round(longest)} ms of ${Math.round(took)}`,
-  );
+  assert.ok(performance.now() - start < 5000);
+  const { utilization } = performance.eventLoopUtilization(before);
+  assert.ok(utilization < 0.5, `the thread was busy ${Math.round(utilization * 100)}% of it`);
 });
 
 // A document that takes the worker a while: one field repeated, with arguments, in a mutation
@@ -1281,12 +1271,17 @@ const SLOW = `mutation { addStar(input: { starrableId: "x" }) { starrable { ... 
   owner { ${"repositories(first: 1) { totalCount } ".repeat(270)} } } } } }`;
 
 test("a document the worker can't validate in time is refused alone; the others go on", async (t) => {
-  const validator = createValidator({ timeoutMs: 150 });
+  // The slow one's time is up as soon as it is sent; the quick one's never is: a real 150 ms
+  // also timed the quick one out on a paused runner, its answer read after its timer.
+  let armed = 0;
+  const setTimer = (fn) => (armed++ === 0 && queueMicrotask(fn), { unref() {} });
+  const validator = createValidator({ timeoutMs: 150, setTimer });
   t.after(validator.close);
   const [slow, quick] = await Promise.all([
     validator.check(SLOW, "a"),
     validator.check("{ viewer { login } }", "b"),
   ]);
+  assert.equal(armed, 2);
   assert.equal(slow.status, 503);
   assert.match(slow.message, /took over/);
   // Validated by the worker started again.

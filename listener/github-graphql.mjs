@@ -513,7 +513,7 @@ export function parseCall(body, schema = githubSchema()) {
 // `maxInFlight` bounds how many a run sends at once). A document
 // validated for over `timeoutMs` is refused alone, the worker stopped and started again for the
 // rest (its time counted once the worker has built GitHub's schema).
-export function createValidator({ timeoutMs = VALIDATE_MS } = {}) {
+export function createValidator({ timeoutMs = VALIDATE_MS, setTimer = setTimeout } = {}) {
   let worker = null;
   let next = 0;
   // run → its documents waiting, in order; the runs in turn (a Map keeps the order they came
@@ -559,7 +559,7 @@ export function createValidator({ timeoutMs = VALIDATE_MS } = {}) {
     current = queue.shift();
     queues.delete(run);
     if (queue.length) queues.set(run, queue);
-    current.timer = setTimeout(() => {
+    current.timer = setTimer(() => {
       const stuck = worker;
       worker = null;
       stuck?.terminate();

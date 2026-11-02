@@ -1141,9 +1141,13 @@ test("tasks.mjs: a pause armed from a saved deadline ends at it, not after a pau
   ctx.startLater(task, dueAt);
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.deepEqual(started, []);
-  await new Promise((resolve) => setTimeout(resolve, 200));
+  for (let i = 0; i < 500 && !started.length; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assert.equal(started.length, 1);
-  assert.ok(started[0][1] >= dueAt - 5 && started[0][1] < dueAt + 150);
+  // Its own pause would end a minute on: well before that, however late a busy runner fires
+  // the timer (over 150 ms seen).
+  assert.ok(started[0][1] >= dueAt - 5 && started[0][1] < dueAt + 10_000);
   // Saved with it.
   assert.equal((await ctx.store.get(QUEUE_KEY))["org/repo#7"].dueAt, dueAt);
 });

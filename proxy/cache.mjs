@@ -295,7 +295,8 @@ export function createCache({
       return total + pending;
     },
     has: (key) => index.has(key),
-    // Once the files removed and the downloads dropped so far are gone from the disk.
+    // Once the files removed and the downloads dropped so far are gone from the disk, and the
+    // last uses written.
     async settled() {
       while (background.size) await Promise.all(background);
     },
@@ -329,12 +330,12 @@ export function createCache({
       }
     },
 
-    // Used now: last to be removed. Written in the background.
+    // Used now: last to be removed. Written in the background (settled() waits for it).
     touch(key, meta) {
       const entry = index.get(key);
       if (!entry) return;
       entry.lastUsed = now();
-      writeMeta(key, { ...meta, lastUsed: entry.lastUsed }).catch(() => {});
+      inBackground(writeMeta(key, { ...meta, lastUsed: entry.lastUsed }).catch(() => {}));
     },
 
     // A 304 confirmed it: its new headers, stored now.

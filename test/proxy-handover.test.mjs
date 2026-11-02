@@ -114,7 +114,9 @@ test("two proxies: the old one's agent stream finishes as it drains, new connect
   assert.equal(drained, null);
   streams[0].end("data: 3\n\n");
   assert.equal(await stream.body(), "data: 1\n\ndata: 2\n\ndata: 3\n\n");
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  for (let i = 0; i < 500 && drained === null; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
   assert.equal(drained, true);
   assert.deepEqual(clients, ["net-1", "net-1"]);
 });
