@@ -2694,6 +2694,8 @@ function followUpSetup(
       return new Response("{}", { status: label });
     if (method === "POST" && path === "/repos/org/repo/issues") {
       if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
+      // Listed with the label from then on, as GitHub would.
+      existing.push({ number: next, title: body.title });
       return Response.json({ number: next++ }, { status: 201 });
     }
     return new Response("{}", { status: 404 });
@@ -3228,7 +3230,11 @@ test("parseReview: a blocking comment under Must fix blocks; a note there keeps 
     "request-changes",
   );
   const note = parseReview(reply("- **note** rename it."), { allowed: "medium" });
-  assert.deepEqual([note.comments, note.verdict], [[], "request-changes"]);
+  // Moved to Comments, still shown.
+  assert.deepEqual(
+    [note.comments, note.verdict],
+    [[{ blocking: false, path: null, line: null, text: "rename it." }], "request-changes"],
+  );
 });
 
 test("follow-ups: two deliveries of one merge at once file once", async (t) => {
@@ -3260,7 +3266,10 @@ test("follow-ups: a blocking comment under Follow-ups blocks, whatever the model
   const note = parseReview(
     "## Must fix\n\nNone.\n\n## Follow-ups\n\n- **note** rename it.\n\nRating: 9/10\nVerdict: comment",
   );
-  assert.deepEqual([note.followUps, note.comments, note.verdict], [[], [], "comment"]);
+  assert.deepEqual(
+    [note.followUps, note.comments, note.verdict],
+    [[], [{ blocking: false, path: null, line: null, text: "rename it." }], "comment"],
+  );
 });
 
 test("follow-ups: the label made with its colour, a refusal logged", async (t) => {
@@ -3326,4 +3335,96 @@ test("follow-ups: a separator inside the bold is no part of the title; both spel
     s.filed().map((c) => c.body.title),
     ["Share the retry helper with the uploader"],
   );
+});
+
+test("misplaced and unclear items are posted, never filed, and the fix run is told to treat unclear ones as blocking", () => {
+  const reply = `Mixed up.
+
+## Must fix
+
+None.
+- **note** \`a.mjs:2\`: rename it.
+
+## Follow-ups
+
+- **[medium] Retry forever** \`a.mjs:3\`: it never stops.
+- Share the retry helper \`a.mjs:9\`: twice.
+
+## Comments
+
+- (blocking) must not merge until it's split.
+
+Rating: 9/10
+Verdict: request-changes
+`;
+  const review = parseReview(reply);
+  assert.deepEqual(review.followUps, []);
+  assert.equal(review.verdict, "request-changes");
+  assert.deepEqual(
+    review.comments.map((c) => [c.blocking, !!c.unclear, c.text]),
+    [
+      [false, false, "rename it."],
+      [false, true, "**[medium] Retry forever** `a.mjs:3`: it never stops."],
+      [false, true, "Share the retry helper `a.mjs:9`: twice."],
+      [false, true, "(blocking) must not merge until it's split."],
+    ],
+  );
+  const body = reviewBody(review, reply, "f");
+  assert.match(body, /^\*\*Verdict: request changes\*\*/);
+  assert.match(body, /## Comments \(4\)\n\n- \*\*unclear\*\* \*\*\[medium\] Retry forever\*\*/);
+  assert.match(body, /- \*\*unclear\*\* Share the retry helper `a\.mjs:9`: twice\./);
+  assert.match(body, /- \*\*unclear\*\* \(blocking\) must not merge/);
+  assert.match(body, /- \*\*note\*\* `a\.mjs:2`: rename it\./);
+  assert.doesNotMatch(body, /## Follow-ups/);
+  // Read back as posted.
+  const back = parsePostedReview(body);
+  assert.deepEqual(
+    back.comments.map((c) => [c.blocking, !!c.unclear]),
+    [
+      [false, true],
+      [false, true],
+      [false, true],
+      [false, false],
+    ],
+  );
+  const fix = fixMessage(review, 5);
+  assert.match(fix, /Treat an \*\*unclear\*\* comment as blocking/);
+  assert.match(fix, /- \*\*unclear\*\* \(blocking\) must not merge/);
+});
+
+test("follow-ups: a review recorded after the merge's delivery files its own", async (t) => {
+  // The merge came while the review ran: its round wasn't recorded yet.
+  const s = followUpSetup(t, { posted: [postedBody(SECTIONS)] });
+  await s.record(HIGH_ONE);
+  assert.equal(await s.merged(), null);
+  assert.equal(s.reviews.entry("org/repo", 5).mergedSeen, true);
+  await s.record(SECTIONS);
+  assert.deepEqual(
+    s.filed().map((c) => c.body.title),
+    ["Share the retry helper with the uploader", "Docs: the cache's limits"],
+  );
+  assert.match(s.replies.at(-1)[1], /filed #40, #41\.$/);
+});
+
+test("follow-ups: a late review after some were filed files only its new ones, its comment only them", async (t) => {
+  const second = SECTIONS.replace(
+    /## Follow-ups[\s\S]*?## Comments/,
+    "## Follow-ups\n\n- **Log the misses**: none are.\n\n## Comments",
+  );
+  const bodies = [postedBody(SECTIONS)];
+  const s = followUpSetup(t, { posted: bodies });
+  await s.record(SECTIONS);
+  assert.deepEqual(await s.merged(), [40, 41]);
+  // A maintainer's review posted on the merged pull request.
+  bodies.push(postedBody(second));
+  await s.record(second, { pr: { ...posted().pr, state: "closed", merged: true } });
+  assert.deepEqual(
+    s.filed().map((c) => c.body.title),
+    ["Share the retry helper with the uploader", "Docs: the cache's limits", "Log the misses"],
+  );
+  assert.equal(s.replies.length, 2);
+  assert.match(s.replies[1][1], /listed this one for other issues: filed #42\.$/);
+  // The same review again: nothing new, nothing said.
+  await s.record(second, { pr: { ...posted().pr, state: "closed", merged: true } });
+  assert.deepEqual([s.filed().length, s.replies.length], [3, 2]);
 });

@@ -2495,6 +2495,8 @@ only from the comment whose id its round kept when the orchestrator posted it (`
 the App's other comments, a run's reply among them, are never read for follow-ups. They are
 read only after a merge (a pull request closed without one files none), and
 once per pull request (`reviews.json`): a redelivered webhook or a restart files nothing twice.
+A review posted after the merge's delivery (it was still running) files its own follow-ups once
+it is recorded, linking those an issue already has.
 A merge files at most 10, the rest listed by title (as code) in its comment, and only bullets
 with a bold title count (not one saying there is none, nor one led by a comment's kind or a
 severity: an item under the wrong heading, never filed; a blocking comment there blocks, and
