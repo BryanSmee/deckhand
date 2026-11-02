@@ -674,39 +674,67 @@ test("the plans' logins: found in the credentials folder unless their variable i
   ]);
 });
 
-test("the data volume: the orchestrator says what it can't write, with the one-time chown", () => {
+test("the data volume: the orchestrator says what it can't write, anywhere in it, with the one-time chown", () => {
+  // A volume as the code joins its paths below /data (`\` on Windows): folder → its entries.
+  const at = (...parts) => join("/data", ...parts);
+  const entry = (name, kind = "dir") => ({
+    name,
+    isDirectory: () => kind === "dir",
+    isSymbolicLink: () => kind === "link",
+  });
+  const tree = {
+    "/data": [entry("logs"), entry("store"), entry("queue.json", "file"), entry("x", "link")],
+    [at("logs")]: [entry("r1.json", "file")],
+    [at("store")]: [entry("state.json", "file"), entry("streams")],
+    [at("store", "streams")]: [entry("deliveries", "file")],
+  };
+  const list = (path) => tree[path];
   const asked = [];
   const denied =
-    (paths) =>
-    (path, mode = 0) => {
+    (paths, code = "EACCES") =>
+    (path, mode) => {
       asked.push([path, mode]);
-      if (paths.includes(path)) throw Object.assign(new Error("denied"), { code: "EACCES" });
+      if (paths.includes(path)) throw Object.assign(new Error("denied"), { code });
     };
-  const dir = (name, folder = true) => ({ name, isDirectory: () => folder });
-  const list = () => [dir("logs"), dir("shots"), dir("queue.json", false)];
-  // A volume from before: its folder is root's, said once, with the chown that works under
-  // the service's cap_drop.
-  const root = unwritableData("/data", { access: denied(["/data"]), list });
-  assert.equal(root.length, 1);
-  assert.match(root[0], /^The orchestrator can't write \/data \(EACCES\): it runs as uid 1000/);
-  assert.match(
-    root[0],
-    /--user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 \/data/,
-  );
-  // What is in it, folders and files, each said by name: a top folder chowned alone (no -R).
-  const shots = join("/data", "shots");
-  const queue = join("/data", "queue.json");
-  asked.length = 0;
-  const some = unwritableData("/data", { access: denied([shots, queue]), list });
-  assert.equal(some.length, 2);
-  assert.match(some[0], /can't write .*shots \(EACCES\)/);
-  assert.match(some[1], /can't write .*queue\.json \(EACCES\)/);
-  // A file needs writing, not searching.
-  assert.deepEqual(
-    asked.find(([path]) => path === queue),
-    [queue, constants.W_OK],
-  );
+  const chown =
+    /docker compose stop orchestrator.*--user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 \/data/;
   assert.deepEqual(unwritableData("/data", { access: () => {}, list }), []);
+
+  // What a root orchestrator still running during the chown leaves: store/'s files root's
+  // again, two levels down. Each said, then the chown, with the orchestrator stopped.
+  const state = at("store", "state.json");
+  const stream = at("store", "streams", "deliveries");
+  const again = unwritableData("/data", { access: denied([state, stream]), list });
+  assert.equal(again.length, 3);
+  assert.match(again[0], /^The orchestrator can't write .*state\.json \(EACCES\)$/);
+  assert.match(again[1], /^The orchestrator can't write .*deliveries \(EACCES\)$/);
+  assert.match(again[2], /^It runs as uid 1000/);
+  assert.match(again[2], chown);
+  // A file needs writing, a folder searching too; a link isn't followed.
+  assert.deepEqual(
+    asked.find(([path]) => path === state),
+    [state, constants.W_OK],
+  );
+  assert.deepEqual(
+    asked.find(([path]) => path === at("store")),
+    [at("store"), constants.W_OK | constants.X_OK],
+  );
+  assert.ok(!asked.some(([path]) => path === at("x")));
+
+  // A volume from before, root's throughout (8 paths, the link not one): a few, how many more,
+  // the chown once.
+  const everything = () => {
+    throw Object.assign(new Error("denied"), { code: "EACCES" });
+  };
+  const root = unwritableData("/data", { access: everything, list, shown: 2 });
+  assert.equal(root.length, 4);
+  assert.match(root[0], /^The orchestrator can't write \/data \(EACCES\)$/);
+  assert.match(root[2], /^… and 6 more in \/data$/);
+  assert.match(root[3], chown);
+
+  // Another cause (a volume mounted read-only): said as it is, without the chown.
+  const readOnly = unwritableData("/data", { access: denied(["/data"], "EROFS"), list });
+  assert.deepEqual(readOnly, ["The orchestrator can't write /data (EROFS)"]);
   // Nothing there yet: made at start.
   const missing = () => {
     throw Object.assign(new Error("missing"), { code: "ENOENT" });

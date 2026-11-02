@@ -61,7 +61,9 @@ import {
   forwarder,
   grantsPolicy,
   servePolicies,
+  isRoot,
   needsBash,
+  needsModes,
   tempDir,
   testKey,
 } from "./helpers.mjs";
@@ -632,6 +634,55 @@ async function sandboxProxy({ policyPort, token, urls }) {
   server.unref();
   return { server, port: server.address().port };
 }
+
+// Not root (#536): a data volume it can't write, one a root orchestrator of the release before
+// wrote last, stops it at start, naming what and the chown. Only what comes before is started:
+// the broker, for its service tokens, and the models service, which it asks before its settings.
+test(
+  "the orchestrator doesn't start on a data volume it can't write, and says the chown",
+  { skip: (isRoot && "root writes anywhere") || needsModes },
+  async (t) => {
+    const dir = tempDir(t);
+    const broker = createBrokerService({
+      store: openStore("memory:"),
+      key: testKey(),
+      callers: createCallers({ networks: "orchestrator=127.0.0.0/8" }),
+      keysDir: join(dir, "keys"),
+    }).server;
+    const models = createServer((req, res) =>
+      res.end(
+        JSON.stringify(
+          req.url.startsWith("/credentials") ? { names: [] } : { salt: "s", values: [] },
+        ),
+      ),
+    );
+    for (const server of [broker, models]) {
+      await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+      t.after(() => (server.closeAllConnections(), server.close()));
+    }
+    // Its store's state, root's again after the chown (the old orchestrator still saving it).
+    const data = join(dir, "data");
+    const state = join(data, "store", "state.json");
+    mkdirSync(dirname(state), { recursive: true });
+    writeFileSync(state, '{"keys":{"queue":{"value":["kept"]}}}');
+    chmodSync(state, 0o400);
+    const { child, output } = start({
+      DATA_DIR: data,
+      ALLOWED_USERS: "alice",
+      GRANTS_DIR: join(dir, "grants"),
+      BROKER_SERVICE_URL: `http://127.0.0.1:${broker.address().port}`,
+      MODELS_SERVICE_URL: `http://127.0.0.1:${models.address().port}`,
+    });
+    t.after(() => child.kill("SIGKILL"));
+    const code = await new Promise((resolve) => child.on("close", resolve));
+    assert.equal(code, 1, output());
+    assert.match(output(), /The orchestrator can't write .*state\.json \(EACCES\)/);
+    assert.match(output(), /docker compose stop orchestrator.*--cap-add CHOWN/);
+    // Nothing written: no folder of its own made, the state as it was.
+    assert.ok(!existsSync(join(data, "logs")));
+    assert.match(readFileSync(state, "utf8"), /kept/);
+  },
+);
 
 // Each test runs its own listener, fake GitHub and fake Docker in its own temp dir, on ports
 // the OS picks, and mostly waits on them: they run side by side, two per core (eight at most).

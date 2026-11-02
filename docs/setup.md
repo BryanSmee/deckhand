@@ -1248,18 +1248,29 @@ It now runs as the `node` user (uid 1000), with a read-only root filesystem and 
 as edge does. What changes for you:
 
 - **Its volumes** (`data`, and the screenshots', `deckhand-screenshots` by default) were written
-  as root: the orchestrator can't write them now, and refuses to start, saying what it can't
-  write. Hand them over once, with the new image pulled and before `docker compose up -d`:
+  as root: the orchestrator can't write them now, and refuses to start, listing what it can't
+  write. Hand them over once, with the orchestrator stopped, instead of the usual update:
 
   ```sh
+  docker compose pull
+  docker compose stop orchestrator
   docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data
+  docker compose up -d
   ```
 
-  This runs a short container of the orchestrator's image as root, with both volumes mounted
-  (the screenshots' at `/data/shots`), and nothing else. It keeps the service's settings, so
-  `--cap-add CHOWN` gives back the one capability `chown` needs: without it, root gets
-  `Operation not permitted`. Keep `-R`: the files in the volume are root's too. New volumes
-  are the `node` user's from the start.
+  - **Stop it first.** The orchestrator of the earlier release runs as root and saves its
+    store every few seconds: left running, it makes `store/`'s files root's again right after
+    the `chown`. The sandboxes keep running meanwhile, as in any update. If you already ran
+    `docker compose up -d` and the new orchestrator refuses to start, the same four commands
+    apply.
+  - **The `chown`** runs a short container of the orchestrator's new image as root, with both
+    volumes mounted (the screenshots' at `/data/shots`), and nothing else. It keeps the
+    service's settings, so `--cap-add CHOWN` gives back the one capability `chown` needs:
+    without it, root gets `Operation not permitted`. Keep `-R`: the files in the volume are
+    root's too. The orchestrator checks the whole volume at start, so a file left behind is
+    named rather than failing later.
+
+  New volumes are the `node` user's from the start.
 
 - **Your server folder** (`config.yaml`, the grants folder and its `policy/`) is read as uid
   1000, as the policy service already reads it: the usual `0644` files and `0755` folders are.

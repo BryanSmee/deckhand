@@ -285,33 +285,53 @@ export function readConfigFile(env, read) {
 }
 
 // What the orchestrator can't write of its data volume, said at start, before it refuses to
-// start: it runs as uid 1000 (#536), where the listener before it wrote that volume as root. The
-// folder and what is in it (logs, shots, store, the state files), not deeper: a volume from
-// before is root's throughout. The chown needs CHOWN back: `compose run` keeps the service's
-// cap_drop. → lines for the log, [] when all is writable.
-export function unwritableData(dir, { access = accessSync, list = readdirSync } = {}) {
-  const fix = `it runs as uid 1000, and a data volume from an earlier release is root's: hand it over once with \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\` (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`;
-  const unwritable = (path, folder = true) => {
+// start: it runs as uid 1000 (#536), where the listener before it wrote that volume as root.
+// The whole volume, without following links: a root orchestrator still running during the
+// chown makes store/'s files root's again, which would otherwise fail one write at a time.
+// `shown` paths, then how many more. The chown needs CHOWN back (`compose run` keeps the
+// service's cap_drop), and is the fix for a permission only. → lines for the log, [] when all
+// is writable.
+export function unwritableData(dir, { access = accessSync, list = readdirSync, shown = 5 } = {}) {
+  const found = [];
+  const writable = (path, folder) => {
     try {
       access(path, folder ? constants.W_OK | constants.X_OK : constants.W_OK);
-      return null;
+      return true;
     } catch (error) {
-      return error.code === "ENOENT"
-        ? null
-        : `The orchestrator can't write ${path} (${error.code}): ${fix}`;
+      if (error.code !== "ENOENT") found.push({ path, code: error.code });
+      return false;
     }
   };
-  const top = unwritable(dir);
-  if (top) return [top];
-  let entries = [];
-  try {
-    entries = list(dir, { withFileTypes: true });
-  } catch {
-    // Not there yet: made below, as the orchestrator's.
+  const walk = (path) => {
+    // A folder it can't write may still be listed: what is in it is said too.
+    writable(path, true);
+    let entries;
+    try {
+      entries = list(path, { withFileTypes: true });
+    } catch (error) {
+      // Not there yet: made at start, as the orchestrator's.
+      if (error.code !== "ENOENT" && !found.some((f) => f.path === path)) {
+        found.push({ path, code: error.code });
+      }
+      return;
+    }
+    for (const entry of entries) {
+      const child = join(path, entry.name);
+      if (entry.isDirectory()) walk(child);
+      else if (!entry.isSymbolicLink()) writable(child, false);
+    }
+  };
+  walk(dir);
+  const lines = found
+    .slice(0, shown)
+    .map(({ path, code }) => `The orchestrator can't write ${path} (${code})`);
+  if (found.length > shown) lines.push(`… and ${found.length - shown} more in ${dir}`);
+  if (found.some(({ code }) => code === "EACCES" || code === "EPERM")) {
+    lines.push(
+      `It runs as uid 1000, and a data volume from an earlier release is root's. With the orchestrator stopped (\`docker compose stop orchestrator\`: one still running as root writes its store again), hand the volume over once with \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\`, then \`docker compose up -d\` (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`,
+    );
   }
-  return entries
-    .map((entry) => unwritable(join(dir, entry.name), entry.isDirectory()))
-    .filter(Boolean);
+  return lines;
 }
 
 // The plans' logins the models service holds and refreshes, at their fixed names in its
