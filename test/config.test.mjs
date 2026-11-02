@@ -419,7 +419,7 @@ test("RUNNER: docker by default, or kubernetes; another runner stops the listene
   );
 });
 
-test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class and claim size", () => {
+test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class, claim and engine sizes", () => {
   assert.deepEqual(loadConfig({ ALLOWED_USERS: "a" }).kubernetes, {
     namespace: null,
     servicesNamespace: null,
@@ -434,6 +434,8 @@ test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class and cla
     cacheSize: "10Gi",
     agentStorageClass: null,
     agentSize: "5Gi",
+    engineRuntimeClass: null,
+    engineSize: "20Gi",
   });
   const set = loadConfig({
     ALLOWED_USERS: "a",
@@ -442,6 +444,8 @@ test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class and cla
     KUBERNETES_PENDING_MINUTES: "3",
     KUBERNETES_STORAGE_CLASS: "fast",
     KUBERNETES_SESSION_SIZE: "20Gi",
+    KUBERNETES_ENGINE_RUNTIME_CLASS: "sysbox-runc",
+    KUBERNETES_ENGINE_SIZE: "50Gi",
   }).kubernetes;
   assert.deepEqual(set, {
     namespace: "runs",
@@ -457,6 +461,8 @@ test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class and cla
     cacheSize: "10Gi",
     agentStorageClass: null,
     agentSize: "5Gi",
+    engineRuntimeClass: "sysbox-runc",
+    engineSize: "50Gi",
   });
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_PENDING_MINUTES: "0" }),
@@ -465,6 +471,10 @@ test("KUBERNETES_*: the runner's namespaces, Pending wait, storage class and cla
   assert.throws(
     () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_SESSION_SIZE: "lots" }),
     /KUBERNETES_SESSION_SIZE: expected a size/,
+  );
+  assert.throws(
+    () => loadConfig({ ALLOWED_USERS: "a", KUBERNETES_ENGINE_SIZE: "big" }),
+    /KUBERNETES_ENGINE_SIZE: expected a size/,
   );
 });
 

@@ -313,6 +313,10 @@ docker compose up -d
 - **Only for runs the policies give the `docker` capability** (Deckhand's defaults: work runs
   and, once its policies allow it, a repository's own modes), never for comments on a pull
   request from a fork.
+- **On Kubernetes** ([Container engine on Kubernetes](kubernetes.md#container-engine-on-kubernetes)):
+  `docker: { cache: true }` is ignored, every run's engine starting empty, and setuid programs
+  (`sudo`, `su`, a Dockerfile's `RUN sudo …`) fail in the engine's containers: run such steps
+  as root (`USER root`) instead.
 - **Podman**: when the operator runs Podman rather than Sysbox, `docker build` uses the
   classic builder (`DOCKER_BUILDKIT=0`), and some buildx and compose features differ.
 

@@ -270,6 +270,11 @@ test("engineFor: the repo's `docker` with its grant and the operator's SANDBOX_E
   const open = engineFor(config, task({}), docker, access, false, (m) => notes.push(m), true);
   assert.deepEqual(open, { limits: { cpus: 3 }, cache: null });
   assert.deepEqual(notes, ["No engine cache: this run reaches the open internet"]);
+  // On Kubernetes, its storage is gone with the pod: no cache kept, and the log says so.
+  notes.length = 0;
+  const kube = testConfig({ SANDBOX_ENGINE: "sysbox", RUNNER: "kubernetes" });
+  assert.deepEqual(engine(kube, {}, docker, access), { limits: { cpus: 3 }, cache: null });
+  assert.deepEqual(notes, ["No engine cache: the Kubernetes runner keeps none"]);
 });
 
 test("research: refused without the `research` grant, naming it; a broken grant file too", async (t) => {

@@ -16,6 +16,42 @@
 #   bash, git log…      any other command, run in the clone
 set -euo pipefail
 
+# SANDBOX_REAP=1 (the Kubernetes runner, in a pod with a container engine, #573, which shares no
+# process namespace, as Sysbox advises): this script stays PID 1, reaping the orphans that the
+# pod's pause process otherwise would (bash reaps every child it is sent), and runs itself
+# again as its child, which gets SIGTERM and SIGINT and whose status is this one's.
+if [ -n "${SANDBOX_REAP:-}" ] && [ "$$" = 1 ] && [ -z "${DECKHAND_REAPING:-}" ]; then
+  export DECKHAND_REAPING=1
+  reap=$(mktemp -d)
+  pending=
+  # The child once its pid is known; a signal before that is passed on once it is.
+  pass_on() {
+    if [ -s "$reap/pid" ]; then
+      kill "-$1" "$(cat "$reap/pid")" 2> /dev/null || true
+    else
+      pending=$1
+    fi
+  }
+  trap 'pass_on TERM' TERM
+  trap 'pass_on INT' INT
+  # A subshell keeps the child's status: its own `wait` is never interrupted (it traps
+  # nothing), where this shell's is at every signal it passes on, and may then lose it. Without
+  # job control, bash starts a background command with SIGINT and SIGQUIT ignored, which no
+  # trap can undo: `env` gives the child their defaults, as a pod without an engine has them.
+  (
+    env --default-signal=INT,QUIT "$0" "$@" &
+    echo "$!" > "$reap/pid"
+    status=0
+    wait "$!" || status=$?
+    echo "$status" > "$reap/status"
+  ) &
+  keeper=$!
+  while [ ! -s "$reap/pid" ] && kill -0 "$keeper" 2> /dev/null; do sleep 0.1; done
+  [ -z "$pending" ] || pass_on "$pending"
+  while kill -0 "$keeper" 2> /dev/null; do wait "$keeper" || true; done
+  exit "$(cat "$reap/status" 2> /dev/null || echo 1)"
+fi
+
 # SANDBOX_TAG_STDERR=1 (the Kubernetes runner, whose pod log has stdout and stderr in one
 # stream): this script runs again under deckhand-tagged, which merges both into stdout, whole
 # lines only, each stderr line (the setup's, the agent's) starting with an ASCII record
@@ -250,14 +286,17 @@ fi
 
 # The run's container engine (../listener/runner/engine.mjs): the containers it builds and
 # runs get the egress proxy by address (from the docker CLI's config), since they can't
-# resolve names on the run's network. Then the engine gets a minute to come up, so the
-# setup can use it.
+# resolve names on the run's network. Where the engine shares the sandbox's address (a
+# Kubernetes pod), on the proxy's engines' port (DECKHAND_ENGINE_PROXY): their connections are
+# the engine's, not the sandbox's. Then the engine gets a minute to come up, so the setup can
+# use it.
 if [ -n "${DOCKER_HOST:-}" ]; then
-  if [ -n "${HTTPS_PROXY:-}" ]; then
-    rest=${HTTPS_PROXY#*://}
+  egress=${DECKHAND_ENGINE_PROXY:-${HTTPS_PROXY:-}}
+  if [ -n "$egress" ]; then
+    rest=${egress#*://}
     host=${rest%%[:/]*}
     address=$(getent hosts "$host" | awk '{ print $1; exit }') || true
-    proxy=${HTTPS_PROXY/"$host"/${address:-$host}}
+    proxy=${egress/"$host"/${address:-$host}}
     proxy=${proxy%/}
     mkdir -p "$HOME/.docker"
     jq -n --arg proxy "$proxy" \

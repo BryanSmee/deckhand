@@ -34,7 +34,57 @@ const config = {
   runner: "kubernetes",
   egressProxy: "http://egress:3128",
   kubernetes: { pendingMs: 600000, storageClass: "fast", sessionSize: "10Gi" },
+  // An engine only with KUBERNETES_ENGINE_RUNTIME_CLASS too (ENGINE below).
+  engine: "sysbox",
+  engineImage: "dh-engine",
 };
+
+// The settings that give runs a container engine (#573).
+const ENGINE = { engineRuntimeClass: "sysbox-runc", engineSize: "20Gi" };
+
+// Pod Security `restricted` as Kubernetes 1.35 checks it (its pod-security-admission's policy/
+// checks, enforce-version latest), for the fields Deckhand's pods set: why `pod` fails it, or
+// [] when it passes. A pod in its own user namespace (hostUsers: false) may run as root.
+function restrictedProblems(pod) {
+  const s = pod.spec;
+  const problems = [];
+  if (s.hostNetwork || s.hostPID || s.hostIPC) problems.push("host namespaces");
+  const userns = s.hostUsers === false;
+  const allowedVolumes = [
+    "configMap",
+    "csi",
+    "downwardAPI",
+    "emptyDir",
+    "ephemeral",
+    "persistentVolumeClaim",
+    "projected",
+    "secret",
+  ];
+  for (const v of s.volumes ?? []) {
+    const kind = Object.keys(v).find((k) => k !== "name");
+    if (!allowedVolumes.includes(kind)) problems.push(`volume ${v.name}: ${kind}`);
+  }
+  const containers = [...(s.initContainers ?? []), ...s.containers];
+  const podSc = s.securityContext ?? {};
+  for (const c of containers) {
+    const sc = c.securityContext ?? {};
+    if (sc.privileged) problems.push(`${c.name}: privileged`);
+    if (sc.allowPrivilegeEscalation !== false) problems.push(`${c.name}: privilege escalation`);
+    if (!sc.capabilities?.drop?.includes("ALL")) problems.push(`${c.name}: capabilities kept`);
+    if ((sc.capabilities?.add ?? []).some((cap) => cap !== "NET_BIND_SERVICE")) {
+      problems.push(`${c.name}: capabilities added`);
+    }
+    const seccomp = sc.seccompProfile?.type ?? podSc.seccompProfile?.type;
+    if (!["RuntimeDefault", "Localhost"].includes(seccomp)) problems.push(`${c.name}: seccomp`);
+    if (sc.procMount && sc.procMount !== "Default") problems.push(`${c.name}: procMount`);
+    if ((c.ports ?? []).some((p) => p.hostPort)) problems.push(`${c.name}: hostPort`);
+    if (userns) continue;
+    if ((sc.runAsNonRoot ?? podSc.runAsNonRoot) !== true) problems.push(`${c.name}: may be root`);
+    if ((sc.runAsUser ?? podSc.runAsUser) === 0) problems.push(`${c.name}: runs as root`);
+  }
+  if (!userns && podSc.runAsUser === 0) problems.push("the pod runs as root");
+  return problems;
+}
 
 // Deckhand's policy, as docs/kubernetes.md shows it.
 const POLICY = {
@@ -51,7 +101,11 @@ const POLICY = {
 const SERVICES = {
   egress: {
     metadata: { name: "egress" },
-    spec: { clusterIP: "10.96.0.11", selector: { app: "deckhand-egress" } },
+    spec: {
+      clusterIP: "10.96.0.11",
+      selector: { app: "deckhand-egress" },
+      ports: [{ port: 3128 }, { port: 3129 }],
+    },
   },
 };
 
@@ -205,12 +259,16 @@ function fakeApi({
 // `now`: a clock of the test's own, else one that the runner's sleep() moves forward (its
 // retries and polls take time); `sleep(ms)` is called too.
 // `kubernetes`: more of config.kubernetes.
-function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {} } = {}) {
+function setup(t, options = {}, { now, sleep = async () => {}, kubernetes = {}, engine } = {}) {
   const fake = fakeApi(options);
   const logged = [];
   const inboxDir = tempDir(t);
   const clock = { at: Date.parse("2026-10-30T10:00:00Z") };
-  const cfg = { ...config, kubernetes: { ...config.kubernetes, ...kubernetes } };
+  const cfg = {
+    ...config,
+    ...(engine ? { engine } : {}),
+    kubernetes: { ...config.kubernetes, ...kubernetes },
+  };
   const clockNow = now ?? (() => clock.at);
   const runner = createKubernetesRunner({
     config: cfg,
@@ -366,6 +424,7 @@ test("podSpec: Pod Security restricted, no token, no restart, the grant's limits
       requests: { cpu: "2", memory: "4Gi" },
     });
   }
+  assert.deepEqual(restrictedProblems(pod), []);
   // Fail closed, as sandboxArgs(): no user or limits, no sandbox; nor capabilities.
   assert.throws(() => podSpec(spec({ user: undefined }), {}), /no user/);
   assert.throws(() => podSpec(spec({ limits: undefined }), {}), /no limits/);
@@ -874,15 +933,137 @@ test("selects: matchLabels and matchExpressions", () => {
   assert.ok(!selects(expr("DoesNotExist"), labels));
 });
 
-test("start: an engine, a host mount or a cache is refused", async (t) => {
+test("start: an engine without Sysbox's RuntimeClass, a host mount or a cache is refused", async (t) => {
   const { runner, objects } = setup(t);
-  await assert.rejects(runner.start(spec({ engine: { limits: {} } })), /no container engine/);
+  await assert.rejects(
+    runner.start(spec({ engine: { limits: {} } })),
+    /only with Sysbox's RuntimeClass/,
+  );
+  // Podman's engine never: its seccomp is unconfined.
+  const podman = setup(t, {}, { kubernetes: ENGINE, engine: "podman" });
+  await assert.rejects(
+    podman.runner.start(spec({ engine: { limits: {} } })),
+    /only with Sysbox's RuntimeClass/,
+  );
+  assert.equal(podman.objects.pods.size, 0);
   const mount = { kind: "mount", name: "/srv", path: "/srv" };
   await assert.rejects(runner.start(spec({ volumes: [mount] })), /no host path/);
   // A cache only with a class to make its claims of (KUBERNETES_CACHE_STORAGE_CLASS).
   const cache = { kind: "cache", name: "c", path: "/c" };
   await assert.rejects(runner.start(spec({ volumes: [cache] })), /no cache/);
   assert.equal(objects.pods.size + objects.secrets.size, 0);
+});
+
+test("start: an engine with Sysbox's RuntimeClass is a sidecar in the pod, root in its user namespace alone", async (t) => {
+  const { runner, objects } = setup(t, {}, { kubernetes: ENGINE });
+  const engine = { limits: { cpus: "2", memory: "4g", pids: 2048 }, cache: null };
+  // An agent without a claim: its install's init container too.
+  const volumes = [agentVolume, ...spec().volumes.slice(1)];
+  assert.deepEqual(await runner.start(spec({ engine, volumes })), {
+    engine: { backend: "sysbox", cached: false },
+  });
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  const s = pod.spec;
+  // Every container under Sysbox, in the pod's own user namespace.
+  assert.equal(s.runtimeClassName, "sysbox-runc");
+  assert.equal(s.hostUsers, false);
+  // The agent's install first, then the engine: a sidecar (restartPolicy Always), up before
+  // the sandbox starts and stopped once it exits.
+  assert.deepEqual(
+    s.initContainers.map((c) => c.name),
+    ["agent-install", "engine"],
+  );
+  const sidecar = s.initContainers[1];
+  assert.equal(sidecar.restartPolicy, "Always");
+  assert.equal(sidecar.image, "dh-engine");
+  // Its API on the pod's loopback only: the node reaches the pod's address whatever the policy.
+  assert.deepEqual(sidecar.args, [
+    "dockerd",
+    "--host=unix:///var/run/docker.sock",
+    "--host=tcp://127.0.0.1:2375",
+  ]);
+  // Its way out, the proxy's engines' port: what the engine pulls isn't decrypted.
+  assert.deepEqual(sidecar.env, [{ name: "EGRESS_PROXY", value: "http://egress:3129" }]);
+  // Root for dockerd, which Sysbox maps to an unprivileged user; nothing else relaxed.
+  assert.deepEqual(sidecar.securityContext, {
+    allowPrivilegeEscalation: false,
+    capabilities: { drop: ["ALL"] },
+    runAsNonRoot: false,
+    seccompProfile: { type: "RuntimeDefault" },
+    runAsUser: 0,
+    runAsGroup: 0,
+  });
+  assert.deepEqual(sidecar.resources, {
+    limits: { cpu: "2", memory: "4Gi" },
+    requests: { cpu: "2", memory: "4Gi" },
+  });
+  assert.deepEqual(sidecar.volumeMounts, [{ name: "engine", mountPath: "/var/lib/docker" }]);
+  assert.deepEqual(s.volumes.at(-1), { name: "engine", emptyDir: { sizeLimit: "20Gi" } });
+  // No process namespace shared, as Sysbox advises: the sandbox's entrypoint reaps instead.
+  assert.equal(s.shareProcessNamespace, false);
+  // The sandbox itself as without an engine: its user, nothing relaxed.
+  const [c] = s.containers;
+  assert.equal(c.securityContext.runAsNonRoot, true);
+  assert.equal(s.securityContext.runAsUser, 1000);
+  // It reaches the engine at `engine`, in the pod, and its containers the proxy's engines' port.
+  const env = Object.fromEntries(c.env.map((e) => [e.name, e.value]));
+  assert.equal(env.DOCKER_HOST, "tcp://engine:2375");
+  assert.equal(env.DECKHAND_ENGINE_PROXY, "http://egress:3129");
+  assert.equal(env.SANDBOX_REAP, "1");
+  assert.deepEqual(s.hostAliases, [
+    { ip: "10.96.0.11", hostnames: ["egress"] },
+    { ip: "127.0.0.1", hostnames: ["engine"] },
+  ]);
+  // Still Pod Security `restricted`, as Kubernetes 1.35 checks it.
+  assert.deepEqual(restrictedProblems(pod), []);
+  // Without its user namespace, that root would fail it.
+  assert.deepEqual(restrictedProblems({ ...pod, spec: { ...s, hostUsers: undefined } }), [
+    "engine: may be root",
+    "engine: runs as root",
+  ]);
+  // A run without an engine gets none of it, the RuntimeClass set or not.
+  objects.pods.clear();
+  await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999", volumes }));
+  const plain = objects.pods.get("dh-org-repo-12-abc").spec;
+  assert.equal(plain.runtimeClassName, undefined);
+  assert.equal(plain.shareProcessNamespace, true);
+  assert.ok(!plain.containers[0].env.some((e) => e.name === "SANDBOX_REAP"));
+  assert.equal(plain.hostUsers, undefined);
+  assert.deepEqual(
+    plain.initContainers.map((c) => c.name),
+    ["agent-install"],
+  );
+});
+
+test("start: an engine whose proxy Service has no engines' port starts nothing, saying so", async (t) => {
+  const { runner, objects } = setup(t, {}, { kubernetes: ENGINE });
+  const egress = structuredClone(objects.services.get("egress"));
+  egress.spec.ports = [{ port: 3128 }];
+  objects.services.set("egress", egress);
+  const engine = { limits: { cpus: "2", memory: "4g" }, cache: null };
+  await assert.rejects(
+    runner.start(spec({ engine })),
+    /the Service egress in the namespace runs has no port 3129, the egress proxy's engines' port/,
+  );
+  assert.equal(objects.pods.size + objects.secrets.size, 0);
+  // A run without an engine doesn't need it.
+  await runner.start(spec());
+  assert.equal(objects.pods.size, 1);
+});
+
+test("start: with an engine, the proxy's engines' port may be in the sandboxes' policy, no other", async (t) => {
+  const both = structuredClone(POLICY);
+  both.spec.egress[0].ports = [{ port: 3128 }, { port: 3129 }];
+  // Without the RuntimeClass, a policy that lets them reach 3129 is too wide.
+  const off = setup(t, { policies: [both] });
+  await assert.rejects(off.runner.start(spec()), /lets sandbox pods reach port 3129/);
+  const on = setup(t, { policies: [both] }, { kubernetes: ENGINE });
+  await on.runner.start(spec());
+  assert.equal(on.objects.pods.size, 1);
+  const wider = structuredClone(both);
+  wider.spec.egress[0].ports.push({ port: 8082 });
+  const other = setup(t, { policies: [wider] }, { kubernetes: ENGINE });
+  await assert.rejects(other.runner.start(spec()), /lets sandbox pods reach port 8082/);
 });
 
 test("start: with a cache class, a cache is its claim, mounted read-write", async (t) => {
@@ -1250,8 +1431,22 @@ test("pendingReason: an init container's image it can't pull, or its install run
     "ErrImagePull: denied",
   );
   assert.equal(
-    pendingReason({ status: { initContainerStatuses: [{ state: { running: {} } }] } }),
+    pendingReason({
+      status: { initContainerStatuses: [{ name: "agent-install", state: { running: {} } }] },
+    }),
     INSTALLING,
+  );
+  // The engine's sidecar running says nothing about the agent's install.
+  assert.equal(
+    pendingReason({
+      status: {
+        initContainerStatuses: [
+          { name: "agent-install", state: { terminated: { exitCode: 0 } } },
+          { name: "engine", state: { running: {} } },
+        ],
+      },
+    }),
+    null,
   );
 });
 
@@ -1471,6 +1666,17 @@ test("runnerRefusal: what Kubernetes can't run yet, granted, gets a reply naming
     null,
   );
   assert.equal(runnerRefusal(config, { docker: {} }, { grant, mounts: [] }, null), null);
+  // With Sysbox's RuntimeClass, the engine runs (#573); Podman's still doesn't.
+  const sysbox = { ...config, kubernetes: { ...config.kubernetes, ...ENGINE } };
+  assert.equal(runnerRefusal(sysbox, { docker: {} }, { grant, mounts: [] }, engine), null);
+  assert.equal(
+    runnerRefusal({ ...sysbox, engine: "auto" }, { docker: {} }, { grant, mounts: [] }, engine),
+    null,
+  );
+  assert.match(
+    runnerRefusal({ ...sysbox, engine: "podman" }, { docker: {} }, { grant, mounts: [] }, engine),
+    /doesn't support a container engine \(`docker`\) yet/,
+  );
   assert.equal(runnerRefusal(config, {}, { grant, mounts: [] }, null), null);
   // A `preview` left in the config, from before #574: ignored, so not refused for it.
   const { settings: left } = parseRepoConfig("preview: ./preview.sh\n", config);

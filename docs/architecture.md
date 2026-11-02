@@ -557,8 +557,11 @@ line's `tool`, `output` and starting `step` entries (`at`, ms). `dashboard/src/t
   config and the operator's `SANDBOX_ENGINE`) gets a second container on its network,
   `engine` (`runner/engine.mjs`: dockerd under Sysbox, or rootless Podman), started before
   the sandbox and removed with it; the sandbox's `docker` CLI talks to it (`DOCKER_HOST`),
-  and its address counts as the sandbox's for the egress proxy. Never for a fork's pull request;
-  Deckhand's default policies give it to work runs only.
+  and its address counts as the sandbox's for the egress proxy. On Kubernetes (#573), Sysbox's
+  dockerd is a sidecar in the sandbox's pod instead (`runner/kubernetes.mjs`, under
+  `KUBERNETES_ENGINE_RUNTIME_CLASS`), which shares the sandbox's address: it reaches the proxy on
+  its engines' port (3129), which the proxy tells the policy (`engine=1`). Never for a fork's
+  pull request; Deckhand's default policies give it to work runs only.
 - **Who may run**: only comments from `ALLOWED_USERS`, on repos where the App is installed
   (narrowed by `ALLOWED_REPOS` if set), are acted on: the sandbox runs without permission
   prompts and can push.

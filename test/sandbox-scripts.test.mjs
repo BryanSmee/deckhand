@@ -1,6 +1,7 @@
 // The sandbox's scripts: git's credential helper and the gh wrapper hand out the run token
 // (the GitHub gateway swaps it for a token), the entrypoint, the agents' scripts.
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -15,7 +16,7 @@ import {
 import { join, sep } from "node:path";
 import { test } from "node:test";
 import { liveMessage } from "../listener/prompts.mjs";
-import { needsBash, needsProc, scriptEnv, serve, tempDir } from "./helpers.mjs";
+import { isRoot, needsBash, needsProc, scriptEnv, serve, tempDir } from "./helpers.mjs";
 
 const bin = join(import.meta.dirname, "..", "sandbox") + sep;
 
@@ -864,6 +865,123 @@ test(
 
     // After every branch that sets the prompt, before agent_run.
     assert.match(script, /prompt\+="\n\n\$engine"\n[^]*?agent_run "\$session" "\$prompt"/);
+  },
+);
+
+// The reaper, from the entrypoint's own SANDBOX_REAP block, as PID 1 would run it (the test's
+// shell isn't PID 1: that check is left out): the script again as its child, with its exit
+// status, SIGTERM passed on to it, twice, and SIGINT, which its child has at its default (bash
+// would start it ignored). Its reaping, in a PID namespace of the test's own where the kernel
+// lets the test make one (`unshare`), skipped elsewhere.
+function reaperScript(t) {
+  const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
+  const block = /^if \[ -n "\$\{SANDBOX_REAP:-\}" \][^]*?^fi$/m.exec(script)[0];
+  const dir = tempDir(t, "reap-");
+  const reaper = join(dir, "entrypoint");
+  // Past the block, as the entrypoint goes on in its child: exits 3; or traps the signal $2,
+  // waiting for it; or leaves orphans behind and counts the zombies left once they ended.
+  writeFileSync(
+    reaper,
+    `#!/bin/bash\n${block}\n` +
+      'if [ "$1" = wait ]; then trap "trap \'\' $2; echo got $2; exit 7" "$2"; echo ready; sleep 30 & wait; fi\n' +
+      'if [ "$1" = orphans ]; then for i in 1 2 3; do (sleep 0.2 &); done; sleep 1;\n' +
+      '  grep -l "^[0-9]* ([^)]*) Z" /proc/[0-9]*/stat 2> /dev/null | wc -l; exit 0; fi\n' +
+      'echo "child $DECKHAND_REAPING"; exit 3\n',
+  );
+  chmodSync(reaper, 0o755);
+  return { block, reaper };
+}
+
+test(
+  "SANDBOX_REAP: the entrypoint runs itself as its child, passing on SIGTERM and SIGINT and its status",
+  { skip: needsBash },
+  async (t) => {
+    const { reaper } = reaperScript(t);
+    // Not PID 1 here: the check left out.
+    const asPid1 = reaper + "-as-pid-1";
+    writeFileSync(asPid1, readFileSync(reaper, "utf8").replace(' && [ "$$" = 1 ]', ""));
+    chmodSync(asPid1, 0o755);
+    assert.ok(!readFileSync(asPid1, "utf8").includes('"$$"'));
+    const env = scriptEnv(t, { SANDBOX_REAP: "1" });
+    const done = spawnSync(asPid1, [], { env, encoding: "utf8" });
+    assert.equal(done.stdout, "child 1\n");
+    assert.equal(done.status, 3);
+    for (const signal of ["TERM", "INT"]) {
+      const waiting = spawn(asPid1, ["wait", signal], { env });
+      let out = "";
+      let err = "";
+      waiting.stderr.on("data", (chunk) => (err += chunk));
+      // Once the child waits, its trap set, and again while it handles it (the reaper's `wait`
+      // interrupted as the child exits must still give the child's status).
+      const sent = new Set();
+      waiting.stdout.on("data", (chunk) => {
+        out += chunk;
+        for (const at of ["ready", `got ${signal}`]) {
+          if (out.includes(at) && !sent.has(at)) sent.add(at) && waiting.kill(`SIG${signal}`);
+        }
+      });
+      const [code] = await once(waiting, "exit");
+      assert.equal(code, 7, `${signal}: ${out}${err}`);
+      assert.match(out, new RegExp(`got ${signal}`));
+    }
+  },
+);
+
+// A user that isn't root maps itself to root in a user namespace of its own (-r).
+const UNSHARE = [...(isRoot ? [] : ["-r"]), "-pf", "--mount-proc"];
+const ownPidNamespace = !needsBash && spawnSync("unshare", [...UNSHARE, "true"]).status === 0;
+
+test(
+  "SANDBOX_REAP: as PID 1, the entrypoint reaps the orphans its child leaves",
+  { skip: needsBash || (!ownPidNamespace && "no unprivileged PID namespace here") },
+  (t) => {
+    const { reaper } = reaperScript(t);
+    const env = scriptEnv(t, { SANDBOX_REAP: "1" });
+    const result = spawnSync("unshare", [...UNSHARE, reaper, "orphans"], {
+      env,
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), "0");
+  },
+);
+
+// The docker CLI's config, from the entrypoint's own engine block: the containers the engine
+// builds and runs get the egress proxy by address, on the engines' port where the runner gives
+// one (a Kubernetes pod, #573), so their connections are the engine's.
+test(
+  "the engine's containers get the proxy by address, on the engines' port when there is one",
+  { skip: needsBash },
+  (t) => {
+    const script = readFileSync(`${bin}entrypoint.sh`, "utf8");
+    const block = /^if \[ -n "\$\{DOCKER_HOST:-\}" \]; then\n[^]*?^fi$/m.exec(script)[0];
+    const proxyOf = (env) => {
+      const dir = tempDir(t, "engine-config-");
+      writeFileSync(join(dir, "docker"), "#!/bin/sh\nexit 0\n");
+      writeFileSync(join(dir, "getent"), '#!/bin/sh\necho "10.96.0.11 $2"\n');
+      chmodSync(join(dir, "docker"), 0o755);
+      chmodSync(join(dir, "getent"), 0o755);
+      const result = spawnSync("bash", ["-c", block], {
+        env: scriptEnv(t, {
+          PATH: `${dir}:${process.env.PATH}`,
+          HOME: dir,
+          DOCKER_HOST: "tcp://engine:2375",
+          HTTPS_PROXY: "http://egress:3128",
+          ...env,
+        }),
+        encoding: "utf8",
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return JSON.parse(readFileSync(join(dir, ".docker", "config.json"), "utf8")).proxies.default;
+    };
+    assert.deepEqual(proxyOf({}), {
+      httpProxy: "http://10.96.0.11:3128",
+      httpsProxy: "http://10.96.0.11:3128",
+      noProxy: "localhost,127.0.0.1",
+    });
+    const pod = proxyOf({ DECKHAND_ENGINE_PROXY: "http://egress:3129" });
+    assert.equal(pod.httpsProxy, "http://10.96.0.11:3129");
+    assert.equal(pod.httpProxy, "http://10.96.0.11:3129");
   },
 );
 

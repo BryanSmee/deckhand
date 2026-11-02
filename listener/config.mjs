@@ -198,6 +198,11 @@ export const SETTINGS = {
   KUBERNETES_CACHE_SIZE: { default: "10Gi", parse: storageSize },
   KUBERNETES_AGENT_STORAGE_CLASS: { default: (s) => s.KUBERNETES_CACHE_STORAGE_CLASS },
   KUBERNETES_AGENT_SIZE: { default: "5Gi", parse: storageSize },
+  // The container engine on Kubernetes (#573): the RuntimeClass Sysbox installed on the nodes
+  // (empty: runs that would get an engine are refused), and how much its storage, an emptyDir
+  // per run, may take.
+  KUBERNETES_ENGINE_RUNTIME_CLASS: { default: null },
+  KUBERNETES_ENGINE_SIZE: { default: "20Gi", parse: storageSize },
   // The container engine sidecar of runs whose repo is granted `docker`
   // (runner/engine.mjs); none until the operator picks one.
   SANDBOX_ENGINE: { default: null, parse: engineSetting },
@@ -547,6 +552,8 @@ function sandboxConfig(env, s) {
       cacheSize: s.KUBERNETES_CACHE_SIZE,
       agentStorageClass: s.KUBERNETES_AGENT_STORAGE_CLASS,
       agentSize: s.KUBERNETES_AGENT_SIZE,
+      engineRuntimeClass: s.KUBERNETES_ENGINE_RUNTIME_CLASS,
+      engineSize: s.KUBERNETES_ENGINE_SIZE,
     },
     maxParallel: s.MAX_PARALLEL,
     autoPickupSlots: s.AUTO_PICKUP_SLOTS,
