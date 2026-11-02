@@ -91,6 +91,29 @@ test("an allowed user gets a session; the user token is revoked", async (t) => {
   assert.deepEqual(JSON.parse(revoke.init.body), { access_token: "user-token" });
 });
 
+test("signed in, back to an MCP client's authorize page; never to another site", async (t) => {
+  const s = await serveAuth(t);
+  const next = "/oauth/authorize?client_id=c&state=x";
+  const res = await s.get(`/auth/login?next=${encodeURIComponent(next)}`);
+  const kept = value(res, "deckhand_next");
+  assert.equal(kept, `deckhand_next=${encodeURIComponent(next)}`);
+  const back = await s.get(
+    "/auth/callback?code=good&state=state1",
+    `deckhand_oauth_state=state1; ${kept}`,
+  );
+  assert.equal(back.headers.get("location"), next);
+  assert.match(value(back, "deckhand_next"), /^deckhand_next=$/);
+  for (const elsewhere of ["https://evil.example.com/", "//evil.example.com/", "/api/state"]) {
+    const asked = await s.get(`/auth/login?next=${encodeURIComponent(elsewhere)}`);
+    assert.equal(value(asked, "deckhand_next"), undefined);
+    const forged = await s.get(
+      "/auth/callback?code=good&state=state1",
+      `deckhand_oauth_state=state1; deckhand_next=${encodeURIComponent(elsewhere)}`,
+    );
+    assert.equal(forged.headers.get("location"), "/");
+  }
+});
+
 test("a user outside ALLOWED_USERS is refused, by name", async (t) => {
   const s = await serveAuth(t, { login: "mallory" });
   const res = await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");

@@ -1,5 +1,5 @@
 // Edge's public HTTP server (#506), the only one the internet reaches: GitHub's webhooks, /setup,
-// sign-in, the dashboard's files, and its API, /status and the runs' screenshots, which it passes
+// sign-in (the dashboard's, and MCP clients', oauth.mjs), the dashboard's files, and its API, /status and the runs' screenshots, which it passes
 // on to the orchestrator with the signed-in user (forward.mjs).
 //
 // A delivery is verified (its HMAC), taken once (its GUID set-if-absent in edge's store, which
@@ -81,7 +81,8 @@ async function startTaking(store, id, now) {
   return store.compareAndSet(key, found, mark, { ttlMs: DELIVERY_TTL_MS });
 }
 
-// `app`: app.mjs's; `auth`, `setup`: ../listener/auth.mjs's and setup.mjs's; `orchestrator`:
+// `app`: app.mjs's; `auth`, `setup`: ../listener/auth.mjs's and setup.mjs's; `oauth`: MCP
+// clients' sign-in (oauth.mjs), none: not served; `orchestrator`:
 // forward.mjs's; `redeliveries`: whether a delivery is one edge asked again (redelivered());
 // `dashboardDir`: the dashboard's build; `stopping()`: true once SIGTERM came.
 export function createEdgeHttp({
@@ -89,6 +90,7 @@ export function createEdgeHttp({
   app,
   auth,
   setup,
+  oauth = null,
   store,
   orchestrator,
   redeliveries,
@@ -253,6 +255,8 @@ export function createEdgeHttp({
     if (req.method === "GET" && path.startsWith("/shots/")) return forward(req, res);
     if (setup.handle(req, res)) return;
     if (auth.handle(req, res)) return;
+    // Before the API: Settings' list of MCP clients is edge's own, their tokens in its store.
+    if (oauth?.handle(req, res)) return;
     if (req.method === "POST" && path === "/webhook") return webhook(req, res);
     if (path === "/status") {
       if (local(req)) return forward(req, res, { isLocal: true });
