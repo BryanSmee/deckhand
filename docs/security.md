@@ -2843,7 +2843,8 @@ sandbox ──(its run's network, internal: no route out)──▶ egress proxy 
   and the outside one. Being on all of them, it is the only path between two runs: it
   connects to the hosts a run may reach only, and to a private address only for a host you
   list by name (below). It handles HTTP `CONNECT` (HTTPS, and anything tunnelled) and plain HTTP
-  requests. For each one, it asks the orchestrator's egress policy whether the sandbox at that source
+  requests, `https://` ones too (see [HTTPS and Deckhand's CA](#https-and-deckhands-ca)). For
+  each one, it asks the orchestrator's egress policy whether the sandbox at that source
   address may reach that host; the orchestrator matches the address to the running sandbox (the
   runner's `docker inspect`) and answers from that run's list. Only the proxy may ask: the
   orchestrator compares
@@ -2959,6 +2960,15 @@ proxy ends the client's TLS itself, with a certificate for that host signed by a
 own, and serves the requests inside through the cache above (or hands them to the service that relays them); what isn't served from it goes on to the host over TLS, which the proxy checks
 against Node's trust store. Everything else keeps the raw tunnel, and the client sees the
 real server's certificate.
+
+Some clients don't open a tunnel for HTTPS: busybox `wget` (Alpine's) sends the whole URL to the
+proxy instead (`GET https://host/path`), unencrypted on the run's network. The proxy takes it as
+a `CONNECT` to that host: the same policy answer, and the request goes on to the host over TLS it
+checks against Node's trust store, or to the service that relays it. It is cached only where the
+host's `CONNECT` would be decrypted, so a container engine's (never decrypted) is sent on, never
+kept. The proxy reads nothing the client had encrypted: such a client never encrypted it. (busybox
+`wget` also shuts its side of the connection down once the request is sent: the proxy keeps the
+connection open until it has answered.)
 
 - **The CA** is made by the proxy on its first start (the `openssl` CLI, in its image),
   in its volume (`ca/` in the `egress-cache` volume), and kept across restarts: a new

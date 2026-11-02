@@ -90,6 +90,9 @@ test("plain HTTP is forwarded for allowed hosts only", async (t) => {
   assert.match(ok, /^HTTP\/1\.1 200/);
   assert.match(ok, new RegExp(`upstream GET /a\\?b=1 host=plain\\.example\\.com:${upstreamPort}`));
   assert.match(await via(`http://other.example.com:${upstreamPort}/`), /^HTTP\/1\.1 403/);
+  // HTTPS in absolute form (busybox wget's, #635): asked as for a CONNECT, refused alike.
+  assert.match(await via("https://other.example.com/"), /^HTTP\/1\.1 403[^]*refused other/);
+  assert.match(await via("ftp://plain.example.com/"), /^HTTP\/1\.1 400[^]*https:\/\/ URL/);
   // Not a proxy request at all.
   assert.match(await via("/direct"), /^HTTP\/1\.1 400/);
 });

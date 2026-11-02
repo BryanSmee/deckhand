@@ -152,8 +152,31 @@ async function setup(
     });
   }
 
+  // An absolute-form request through the proxy, no CONNECT (busybox wget's HTTPS, #635) →
+  // { status, headers, body }.
+  const absolute = (url, headers = {}) =>
+    new Promise((resolve, reject) => {
+      const req = request(
+        {
+          host: "127.0.0.1",
+          port: proxyPort,
+          path: url,
+          headers: { connection: "close", ...headers },
+        },
+        (res) => {
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (d) => (body += d));
+          res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, body }));
+        },
+      );
+      req.on("error", reject);
+      req.end();
+    });
+
   return {
     get,
+    absolute,
     tunnel,
     seen,
     heard,
@@ -856,4 +879,90 @@ test("an agent's relayed host goes to the models service, with the proxy's token
   const out = await get("agent.test", "/%2e%2e/credentials", authority.certificate());
   assert.equal(out.status, 400);
   assert.equal(heard.length, 1);
+});
+
+test("an absolute-form https:// request (no CONNECT): on over verified TLS, as the policy says", async (t) => {
+  const { absolute, seen, cache, upstreamPort } = await setup(t);
+  const other = await absolute(`https://other.test:${upstreamPort}/x?y=1`, {
+    "x-deckhand-client": "10.9.0.7",
+    "proxy-authorization": "Basic eA==",
+  });
+  assert.equal(other.status, 200);
+  assert.equal(other.body, "body of /x?y=1");
+  assert.equal(other.headers["x-deckhand-cache"], undefined);
+  assert.deepEqual(seen, [{ url: "/x?y=1", host: `other.test:${upstreamPort}` }]);
+
+  // A cached host's: through the cache, as its CONNECT's would be.
+  const url = `https://cached.test:${upstreamPort}/pkg.tgz`;
+  assert.equal((await absolute(url)).headers["x-deckhand-cache"], "miss");
+  await until(() => cache.has(cache.key(url)), { what: "/pkg.tgz in the cache" });
+  const hit = await absolute(url);
+  assert.equal(hit.body, "body of /pkg.tgz");
+  assert.equal(hit.headers["x-deckhand-cache"], "hit");
+
+  // A container engine's (its HTTPS never decrypted): sent on, never cached.
+  const engine = await setup(t, { decrypt: false });
+  const sent = await engine.absolute(`https://cached.test:${engine.upstreamPort}/z`);
+  assert.equal(sent.body, "body of /z");
+  assert.equal(sent.headers["x-deckhand-cache"], undefined);
+  assert.equal(
+    engine.cache.has(engine.cache.key(`https://cached.test:${engine.upstreamPort}/z`)),
+    false,
+  );
+
+  // A certificate that doesn't verify: refused, not passed on.
+  const someCa = createAuthority({ dir: temp(t, "some-ca") });
+  await someCa.ready();
+  const unverified = await setup(t, { upstreamCa: someCa.certificate() });
+  const refused = await unverified.absolute(`https://other.test:${unverified.upstreamPort}/x`);
+  assert.equal(refused.status, 502);
+  assert.match(refused.body, /refused other\.test's certificate/);
+  assert.equal(unverified.seen.length, 0);
+});
+
+test("an absolute-form https:// request to a relayed host goes to its service, never the host", async (t) => {
+  const heard = [];
+  const github = await serve(t, (req, res) => {
+    heard.push({ url: req.url, headers: req.headers });
+    res.end("ok");
+  });
+  const { absolute, seen } = await setup(t, { relayTo: github.url });
+  const res = await absolute("https://github.test/repos/o/r?x=1", {
+    authorization: "token run-token",
+    "x-deckhand-sandbox": "net-other",
+  });
+  assert.equal(res.body, "ok");
+  assert.equal(heard.length, 1);
+  assert.equal(heard[0].url, "/relay/github.test/repos/o/r?x=1");
+  assert.equal(heard[0].headers.authorization, "Bearer proxy-token");
+  assert.equal(heard[0].headers["x-deckhand-run-authorization"], "token run-token");
+  assert.equal(heard[0].headers["x-deckhand-sandbox"], "net-1");
+  // Its dot segments are resolved under the host's own /relay/<host>/, never above it.
+  await absolute("https://github.test/../../egress?ip=10.0.0.2");
+  assert.equal(heard[1].url, "/relay/github.test/egress?ip=10.0.0.2");
+  assert.equal(seen.length, 0);
+
+  // No service for it: refused, never sent to the host.
+  const nowhere = await setup(t);
+  const refused = await nowhere.absolute("https://agent.test/v1/x");
+  assert.equal(refused.status, 502);
+  assert.equal(nowhere.seen.length, 0);
+});
+
+test("an absolute-form https:// request whose client half-closes once it is sent still gets its answer", async (t) => {
+  // busybox wget shuts its side down after an https:// URL's request, proxy or not: the answer,
+  // which waits for the policy here, comes after that.
+  let answer;
+  const held = new Promise((resolve) => (answer = resolve));
+  const { proxyPort, upstreamPort, asked } = await setup(t, { held });
+  const socket = netConnect({ port: proxyPort, host: "127.0.0.1", allowHalfOpen: true });
+  socket.end(
+    `GET https://other.test:${upstreamPort}/late HTTP/1.1\r\nhost: other.test\r\nconnection: close\r\n\r\n`,
+  );
+  await until(() => asked.length === 1, { what: "the policy asked" });
+  answer();
+  let text = "";
+  for await (const chunk of socket) text += chunk;
+  assert.match(text, /^HTTP\/1\.1 200/);
+  assert.match(text, /body of \/late/);
 });

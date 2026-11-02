@@ -1,6 +1,7 @@
 // Deckhand's egress proxy: the only way out of the sandboxes' network, which is internal (no
-// route out). It handles HTTP CONNECT (HTTPS and anything tunnelled) and plain HTTP requests,
-// and for each one asks the orchestrator whether the sandbox at that source address may reach
+// route out). It handles HTTP CONNECT (HTTPS and anything tunnelled) and plain HTTP requests
+// (an absolute-form https:// one too, which some clients send in place of a CONNECT), and for
+// each one asks the orchestrator whether the sandbox at that source address may reach
 // that host (POLICY_URL, ../listener/egress.mjs decides). Anything else, or an orchestrator that
 // doesn't answer, is refused. No dependencies: node:http, node:net, node:dns.
 //
@@ -450,34 +451,49 @@ export function createProxy({
         res.writeHead(400, { "content-type": "text/plain" });
         return res.end("Deckhand's egress proxy: expected a path\n");
       }
-      if (relayed) {
-        // GitHub's to the github service, an agent's to the models service: none else is.
-        const service = github ? githubService : models ? modelsService : null;
-        const url = service && relayTarget(`${service.url}/relay`, to.host, req.url);
-        if (!url) {
-          res.writeHead(service ? 400 : 502, { "content-type": "text/plain" });
-          return res.end(
-            service
-              ? "Deckhand's egress proxy: not a path it relays\n"
-              : `Deckhand's egress proxy has no service to relay ${to.host} to\n`,
-          );
-        }
-        const sent = github
-          ? toService(req, res, githubService, url, sandbox, "the github service")
-          : toModels(req, res, url, sandbox);
-        return sent.catch(() => res.destroy());
-      }
+      if (relayed) return toRelayed(req, res, to.host, req.url, { github, models, sandbox });
       const name = isIP(to.host) === 6 ? `[${to.host}]` : to.host;
       const url = new URL(`https://${name}:${to.port}${req.url}`);
       relay(req, res, { address, url, host: to.host }, true);
     }),
   );
 
-  // Plain HTTP: the request line holds the absolute URL. The CA's certificate, the
+  // A relayed host's request (`path`: origin-form): GitHub's to the github service, an agent's to
+  // the models service, none else.
+  function toRelayed(req, res, host, path, { github, models, sandbox }) {
+    const service = github ? githubService : models ? modelsService : null;
+    const url = service && relayTarget(`${service.url}/relay`, host, path);
+    if (!url) {
+      res.writeHead(service ? 400 : 502, { "content-type": "text/plain" });
+      return res.end(
+        service
+          ? "Deckhand's egress proxy: not a path it relays\n"
+          : `Deckhand's egress proxy has no service to relay ${host} to\n`,
+      );
+    }
+    const sent = github
+      ? toService(req, res, githubService, url, sandbox, "the github service")
+      : toModels(req, res, url, sandbox);
+    return sent.catch(() => res.destroy());
+  }
+
+  // Plain HTTP: the request line holds the absolute URL. An https:// one too, from clients that
+  // send their HTTPS requests that way rather than through a CONNECT (busybox wget, Alpine's,
+  // #635): it reached the proxy unencrypted, so the proxy sends it on over TLS it verifies, as
+  // the policy says for a CONNECT to that host; cached only where a CONNECT's would be (its
+  // HTTPS decrypted: never an engine's). The CA's certificate, the
   // orchestrator's to hand to sandboxes, at /deckhand-ca.crt; /ready, for a readiness probe: 503
   // once draining, on a connection kept alive from before (new ones aren't taken); /health, every
   // service's answer (../lib/health.mjs), for the orchestrator's status page.
   async function forward(req, res) {
+    // Only an https:// URL's client may half-close (server.httpAllowHalfOpen, below): any other's
+    // end before its answer is the client gone, as Node has it by default, which stops its
+    // download (a client gone and one half-closed look the same, until a write fails).
+    if (!/^https:/i.test(req.url)) {
+      const left = () => req.socket.destroy();
+      req.socket.once("end", left);
+      res.on("close", () => req.socket.off("end", left));
+    }
     if (req.url === "/health") return sendJson(res, healthAnswer(health));
     if (req.url === "/ready") {
       res.writeHead(draining ? 503 : 200, { "content-type": "text/plain" });
@@ -502,30 +518,35 @@ export function createProxy({
     } catch {
       url = null;
     }
-    if (url?.protocol !== "http:") {
+    const https = url?.protocol === "https:";
+    if (url?.protocol !== "http:" && !https) {
       res.writeHead(400, { "content-type": "text/plain" });
-      return res.end("Deckhand's egress proxy: expected an http:// URL or CONNECT\n");
+      return res.end("Deckhand's egress proxy: expected an http:// or https:// URL, or CONNECT\n");
     }
     const forwarded = FORWARDED.get(url.origin);
     if (forwarded) return toNamed(req, res, url, forwarded).catch(() => res.destroy());
     const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    // Its request sent, an https:// one's client half-closes (busybox wget): not gone yet.
+    const gone = () => (!https && req.socket.readableEnded) || req.socket.destroyed;
     let decision;
     try {
-      decision = await decide(
-        req.socket.remoteAddress,
-        host,
-        () => req.socket.readableEnded || req.socket.destroyed,
-      );
+      decision = await decide(req.socket.remoteAddress, host, gone);
     } catch (error) {
       res.writeHead(error.cause === 502 ? 502 : 403, { "content-type": "text/plain" });
       return res.end(`${error instanceof Refused ? error.message : "refused"}\n`);
     }
     // A relayed host has no address to go to: its calls are a service's, over HTTPS only.
+    if (decision.relay && https) {
+      const { service, models, sandbox } = decision;
+      const to = { github: service === "github", models, sandbox };
+      return toRelayed(req, res, host, url.pathname + url.search, to);
+    }
     if (decision.relay) {
       res.writeHead(403, { "content-type": "text/plain" });
       return res.end(`Deckhand's egress proxy relays ${host} over HTTPS only\n`);
     }
-    relay(req, res, { address: decision.address, url, host }, decision.cache);
+    const cacheOk = decision.cache && (!https || decision.decrypt);
+    relay(req, res, { address: decision.address, url, host }, cacheOk);
   }
 
   // A sandbox's call to a service's name (#511): on to that service, with the network (or pod) it
@@ -721,6 +742,11 @@ export function createProxy({
   }
 
   const server = drainable(createServer(forward));
+  // A client that half-closes once its request is sent still gets its answer: busybox wget does
+  // for an https:// URL, even through a proxy (#635), and Node otherwise ends the connection
+  // before answering (an undocumented property of node:http's server, there since Node 0.x).
+  // Only for those URLs: forward() ends the others when their client does.
+  server.httpAllowHalfOpen = true;
   server.on("connect", (req, client, head) => {
     tunnel(req, client, head).catch(() => client.destroy());
   });
