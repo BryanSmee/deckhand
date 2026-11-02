@@ -348,3 +348,14 @@ test("a run's network: the runner joins the proxy to it, and nothing else", asyn
   await networks.create("deckhand-run-1");
   assert.deepEqual(connected, ["egress-container"]);
 });
+
+test("compose.yaml: edge gets ALLOWED_REPOS, as the orchestrator does: it passes on CI's deliveries for those repos only", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  for (const name of ["edge", "orchestrator"]) {
+    assert.equal(
+      compose.services[name].environment.ALLOWED_REPOS,
+      "${ALLOWED_REPOS:-}",
+      `${name}'s ALLOWED_REPOS`,
+    );
+  }
+});

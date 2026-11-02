@@ -735,3 +735,36 @@ test("pulls: an older delivery handled late doesn't move the head back", async (
   assert.equal(pulls.get("org/repo#30").head, "d4");
   assert.equal(pulls.get("org/repo#30").updatedAt, 3000);
 });
+
+test("pulls: an open pull request fill() finds for an older task gets its CI read; a closed one doesn't", async (t) => {
+  const read = [];
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [
+      {
+        number: 31,
+        html_url: "u31",
+        state: "open",
+        draft: false,
+        body: "Closes #30",
+        head: { sha: "a1", ref: "x", repo: { full_name: "org/repo" } },
+      },
+      {
+        number: 33,
+        html_url: "u33",
+        state: "closed",
+        merged_at: "2026-11-01",
+        body: "Closes #32",
+        head: { sha: "b2", ref: "y", repo: { full_name: "org/repo" } },
+      },
+    ],
+    getPull: async () => null,
+    readCi: async (repo, sha) => (read.push(sha), ci(sha, "passed")),
+  });
+  await pulls.fill(["org/repo#30", "org/repo#32"]);
+  await pulls.caughtUp();
+  assert.deepEqual(read, ["a1"]);
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+  assert.equal(pulls.get("org/repo#32").state, "merged");
+  assert.equal(pulls.get("org/repo#32").ci, undefined);
+});

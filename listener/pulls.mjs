@@ -125,6 +125,8 @@ export function createPulls({
     if (fetching || (!missing.length && !unsized(unique).length)) return fetching;
     fetching = (async () => {
       let changed = false;
+      // The open ones found, whose CI is read after: no delivery may come for a CI already done.
+      const opened = [];
       for (const repo of new Set(missing.map((t) => t.repo))) {
         listed.add(repo);
         let list;
@@ -146,6 +148,7 @@ export function createPulls({
             ...(pr.head?.sha && { head: pr.head.sha }),
           });
           changed = true;
+          if (pr.head?.sha && open(pulls.get(t.key))) opened.push(t.key);
         }
       }
       for (const key of unsized(unique)) {
@@ -166,6 +169,7 @@ export function createPulls({
         changed = true;
       }
       if (changed) pulls.save();
+      if (opened.length) catchUp(opened);
     })()
       // Nobody awaits it (http.mjs state()): a failure is logged, never thrown.
       .catch((error) => log(`Pull requests: ${error.message ?? error}`))
