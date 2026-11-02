@@ -3090,3 +3090,46 @@ test("follow-ups: at most FOLLOW_UPS_MAX filed per pull request, the rest listed
     /; not filed, past 10 per pull request: `Follow-up 11`, `Follow-up 12`\.$/,
   );
 });
+
+test("follow-ups: a bold 'none' files nothing; a misplaced blocking comment or finding keeps the verdict", () => {
+  const reply = (line) =>
+    `## Must fix\n\nNone.\n\n## Follow-ups\n\n${line}\n\nRating: 10/10\nVerdict: request-changes`;
+  for (const line of [
+    "- **No follow-ups.**",
+    "- **None found**",
+    "- **Nothing to file.**",
+    "- __No follow-ups__",
+  ]) {
+    const review = parseReview(reply(line));
+    assert.deepEqual([review.followUps, review.verdict], [[], "comment"], line);
+  }
+  for (const line of [
+    "- **blocking** `a.mjs:1`: must not merge",
+    "- **Blocking:** must not merge",
+    "- **high** `a.mjs:1`: broken.",
+  ]) {
+    const review = parseReview(reply(line));
+    assert.deepEqual([review.followUps, review.verdict], [[], "request-changes"], line);
+  }
+  // A title that only starts like one is a follow-up.
+  assert.equal(
+    parseReview(reply("- **No retry on 5xx**: z")).followUps[0].title,
+    "No retry on 5xx",
+  );
+});
+
+test("follow-ups: a title closes on the marker it opened with", () => {
+  const review = parseReview(
+    "## Follow-ups\n\n- **Rename __init__ hook** `a.py:1`: x.\n- __Docs **too**__: y.\n\nRating: 10/10\nVerdict: comment",
+  );
+  assert.deepEqual(
+    review.followUps.map((f) => [f.title, f.path, f.text]),
+    [
+      ["Rename __init__ hook", "a.py", "x."],
+      ["Docs **too**", null, "y."],
+    ],
+  );
+  // Read back from the posted review, its title whole.
+  const back = parsePostedReview(reviewBody(review, "", "f"));
+  assert.equal(back.followUps[0].title, "Rename __init__ hook");
+});

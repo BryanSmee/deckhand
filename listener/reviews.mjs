@@ -162,9 +162,13 @@ export function parseReview(text, { allowed = "low" } = {}) {
     }
     const found = bullet(section, line);
     if (found) {
-      const { unmarked, ...item } = found;
-      if (unmarked) unsure = true;
+      const { unmarked, misplaced, ...item } = found;
+      if (unmarked || misplaced) unsure = true;
       started = true;
+      if (misplaced) {
+        current = null;
+        continue;
+      }
       current = item;
       ({ findings, "follow-ups": followUps, comments })[section].push(item);
       continue;
@@ -223,8 +227,17 @@ function bullet(section, line) {
   if (section === "follow-ups") {
     // Only with its title in bold: each one becomes a public issue after the merge, so a bullet
     // in another form ("- No follow-ups.") is no follow-up, rather than an issue of that title.
-    const m = /^(?:\*\*|__)(.+?)(?:\*\*|__)\s*[:–—-]?\s*(.*)$/.exec(rest);
-    return m && { title: titleOf(m[1]), ...located(m[2]) };
+    const m = /^(?:\*\*(.+?)\*\*|__(.+?)__)\s*[:–—-]?\s*(.*)$/.exec(rest);
+    if (!m) return null;
+    const title = titleOf(m[1] ?? m[2]);
+    // "**No follow-ups.**", "**None found**": nothing to file.
+    if (NOTHING.test(title)) return null;
+    // A comment's kind or a severity as its title: a blocking comment or a finding under the
+    // wrong heading. Neither filed nor dropped quietly: `misplaced`, so the verdict stands.
+    if (/^(?:blocking|non[- ]blocking|note|nit|critical|high|medium|low)\W*$/i.test(title)) {
+      return { misplaced: true };
+    }
+    return { title, ...located(m[3]) };
   }
   const kind = String.raw`(blocking|non[- ]blocking|note|nit)(?:\s+(?:comment|remark|question))?`;
   const m =
@@ -234,6 +247,10 @@ function bullet(section, line) {
   if (!m) return { blocking: false, ...located(rest), unmarked: true };
   return { blocking: m[1].toLowerCase() === "blocking", ...located(m[2]) };
 }
+
+// A follow-up's title saying there is none: "No follow-ups.", "None found", "Nothing to file".
+const NOTHING =
+  /^(?:n\/a|(?:no|none|nothing)(?:\s+(?:follow[- ]?ups?|issues?|found|here|left|needed|so far|to (?:file|report|add|list)))*)\W*$/i;
 
 // A follow-up's title, on one line, as long as GitHub takes an issue's (256).
 const titleOf = (text) => String(text).replace(/\s+/g, " ").trim().slice(0, 256);

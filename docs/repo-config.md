@@ -507,7 +507,10 @@ token only reads, and Deckhand posts the review.
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
   (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
   comments (only the comments Deckhand posted them as, recorded in `reviews.json`). Only a
-  bullet with its title in bold is a follow-up: `- No follow-ups.` or `None.` files nothing.
+  bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
+  `- No follow-ups.` or `- **None found**` files nothing. A title that is only a comment's
+  kind or a severity (`- **blocking** …` under Follow-ups: an item under the wrong heading)
+  is filed neither, and keeps the review's own verdict, as an unreadable comment does.
   A pull request closed without a merge files none, and a merge files at most 10 (the rest
   listed by title in the comment). The issue's body says the text is a review model's
   output, to check against the code, and quotes it. The review is told not to list again a
@@ -556,7 +559,9 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   adds is what the review should look at. On an issue it is refused, with a reply.
 - **The verdict on GitHub**: changes requested when there is a critical, high or medium
   finding or a blocking comment, a comment otherwise (follow-ups and notes alone included,
-  whose "request changes" verdict, should the review write one, reads "comment"); the verdict in the review's text says "request changes" then
+  whose "request changes" verdict, should the review write one, reads "comment" when its Must
+  fix section says `None.` and everything under it and Comments could be read, as under
+  Comments above); the verdict in the review's text says "request changes" then
   too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
   doesn't let the App request changes on its own pull requests: those get a comment review, the
   verdict in its text. A reply whose format Deckhand can't read is posted as a comment

@@ -2495,7 +2495,8 @@ the App's other comments, a run's reply among them, are never read for follow-up
 read only after a merge (a pull request closed without one files none), and
 once per pull request (`reviews.json`): a redelivered webhook or a restart files nothing twice.
 A merge files at most 10, the rest listed by title (as code) in its comment, and only bullets
-with a bold title count. The repository turns it off with `review.follow_ups: false`, read
+with a bold title count (not one saying there is none, nor one titled with a comment's kind or
+a severity: an item under the wrong heading). The repository turns it off with `review.follow_ups: false`, read
 again from its default branch at the merge: so does a `review` block that is gone, and a
 config with errors files nothing. There is no policy decision of its own for it (`deny_*`):
 like the review and the comments the orchestrator posts, it is Deckhand's own write.
