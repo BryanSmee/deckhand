@@ -1,0 +1,152 @@
+# One ServiceAccount per service: the broker tells its callers apart by them (SERVICE_ACCOUNTS
+# in broker.yaml), from the token each pod presents, projected for it (audience
+# deckhand-broker). Only the runner's and the broker's pods mount their account's API token:
+# the runner drives the sandboxes' pods, the broker reviews its callers' tokens.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-edge
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-orchestrator
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-runner
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-broker
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-github
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-models
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-policy
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: deckhand-egress
+  namespace: deckhand
+automountServiceAccountToken: false
+---
+# What the runner calls in the sandboxes' namespace (listener/runner/kubernetes.mjs,
+# kube-images.mjs), nothing more: the sandbox, install and check pods, their logs, the runs'
+# Secrets (their environment), the sessions', agents' and caches' claims, the events that say
+# why a pod is stuck, and the NetworkPolicies it checks before every run.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deckhand-runner
+  namespace: deckhand-sandboxes
+rules:
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [pods/log]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, get, list, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    verbs: [create, get, delete]
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deckhand-runner
+  namespace: deckhand-sandboxes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deckhand-runner
+subjects:
+  - kind: ServiceAccount
+    name: deckhand-runner
+    namespace: deckhand
+---
+# In the services' namespace, reads only: the egress proxy's Service (its cluster IP, the
+# sandboxes' hostAliases, and its selector) and its EndpointSlices (the proxy's pod addresses,
+# for the egress policy), and the NetworkPolicies and pods it checks BuildKit's isolation with.
+# Never the services' Secrets: components/buildkit adds the registry's pull Secret, by name.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: deckhand-runner
+  namespace: deckhand
+rules:
+  - apiGroups: [""]
+    resources: [services, pods]
+    verbs: [get]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [list]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: deckhand-runner
+  namespace: deckhand
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: deckhand-runner
+subjects:
+  - kind: ServiceAccount
+    name: deckhand-runner
+    namespace: deckhand
+---
+# The broker reviews the tokens its callers' pods present (TokenReview, broker/callers.mjs):
+# Kubernetes' own role for that, the only binding beyond a namespace. It lets the broker
+# create TokenReviews and SubjectAccessReviews, nothing else.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: deckhand-broker-auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: deckhand-broker
+    namespace: deckhand

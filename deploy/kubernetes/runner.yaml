@@ -1,0 +1,167 @@
+# The runner (docs/architecture.md#the-runner-service): the only pods with the Kubernetes API's
+# credentials (rbac.yaml's Roles, nothing cluster-wide), which start, follow and remove the
+# sandboxes' pods in deckhand-sandboxes. Two copies, active/passive through its lease: as the
+# orchestrator's, the waiting one answers 503 with the connection closed, and the readiness
+# probe is /health, so a rolling update can start the next copy before the old one releases it.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: runner
+  namespace: deckhand
+  labels:
+    app: deckhand-runner
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-runner
+  template:
+    metadata:
+      labels:
+        app: deckhand-runner
+    spec:
+      serviceAccountName: deckhand-runner
+      # Its own pods only: the API's token, for the Roles in rbac.yaml.
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: true
+      # It ends its output streams, lets its calls finish (DRAIN_SECONDS, 280 s: an image's
+      # build), then releases its lease. Sandboxes keep running.
+      terminationGracePeriodSeconds: 300
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # The runs' inboxes are files of its volume (ReadWriteOnce): its copies on one node.
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-runner
+      containers:
+        - name: runner
+          image: ghcr.io/bryansmee/deckhand-runner:latest
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: deckhand-env
+          env:
+            # Its callers' service tokens tell the orchestrator and the models service apart,
+            # and network-policies.yaml lets only their pods in.
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            - name: SERVICE_KEYS_DIR
+              value: /service-keys
+            # Its image's user has no home: buildctl's and git's files go to /tmp.
+            - name: HOME
+              value: /tmp
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          # Its process answers: restarted after a minute without.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          # Its /tmp is a tmpfs (below), charged to this pod: its memory request covers it and
+          # the process's own, so the scheduler keeps the room, and the limit bounds both by the
+          # pod's own cgroup. Raise the three together (docs/kubernetes.md, Temporary files).
+          resources:
+            requests:
+              memory: 3Gi
+            limits:
+              memory: 3Gi
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: service-keys
+              mountPath: /service-keys
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        # Its store (the runs' logs and events, its lease) and the runs' inboxes.
+        - name: data
+          persistentVolumeClaim:
+            claimName: runner-data
+        # Repositories' checkouts, for build contexts. In memory: a tmpfs of that size, which
+        # fails the build that would go over it (ENOSPC) rather than evict the runner, as a disk
+        # emptyDir over its sizeLimit would.
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
+                    - key: default.yaml
+                      path: grants/default.yaml
+        # The broker's public key: its callers' service tokens are checked with it, offline.
+        - name: service-keys
+          configMap:
+            name: deckhand-service-keys
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: deckhand-broker
+                  path: broker-token
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: runner-data
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: runner
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-runner
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http

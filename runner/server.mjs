@@ -57,7 +57,9 @@ try {
   process.exit(1);
 }
 
-const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`);
+const store = openStore(env.STORE_URL || `file://${join(config.dataDir, "store")}`, {
+  password: env.REDIS_PASSWORD,
+});
 
 // The orchestrator's services port: a run's first tokens (which the orchestrator has the broker service sign, with the claims it decided). The
 // github service (#502): the repos' tarballs and blobs.

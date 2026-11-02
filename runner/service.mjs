@@ -527,6 +527,9 @@ export function createRunnerService({
         return res.destroy();
       }
       if (error instanceof Refused) {
+        // Not this copy's to answer (it waits, or stops): the connection isn't kept for the next
+        // call, which then reaches the copy that acts, behind one Service on Kubernetes.
+        if (error.status === 503) res.setHeader("connection", "close");
         return sendJson(
           res,
           { message: error.message, ...(error.size !== undefined && { size: error.size }) },

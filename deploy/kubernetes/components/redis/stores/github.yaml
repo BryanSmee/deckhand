@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github
+  namespace: deckhand
+spec:
+  template:
+    spec:
+      containers:
+        - name: github
+          env:
+            - name: STORE_URL
+              value: "redis://github@redis:6379?prefix=deckhand:github:"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deckhand-redis
+                  key: github
+      # Its store is in Redis now; the git mirrors are a cache each copy keeps: its copies on any node.
+      affinity: null
+      volumes:
+        - name: data
+          persistentVolumeClaim: null
+          emptyDir: {}

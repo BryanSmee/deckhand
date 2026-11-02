@@ -14,8 +14,8 @@ import { createGitHubApp, GITHUB_HEADERS, saveCredentials } from "../listener/gi
 // How long a conversion's answer is kept for the listener to ask again.
 const SETUP_KEPT_MS = 60 * 60_000;
 
-const KEPT = ["id", "slug", "client_id", "pem", "owner", "html_url", "bot_id", "created_at"];
-const kept = (credentials) =>
+export const KEPT = ["id", "slug", "client_id", "pem", "owner", "html_url", "bot_id", "created_at"];
+export const kept = (credentials) =>
   Object.fromEntries(KEPT.filter((k) => credentials[k] != null).map((k) => [k, credentials[k]]));
 
 export function createAppHolder({
@@ -86,37 +86,8 @@ export function createAppHolder({
       return { credentials: kept.credentials };
     }
     if (app) return { status: 409, message: "the github service holds an App already" };
-    const res = await fetch(`${api}/app-manifests/${code}/conversions`, {
-      method: "POST",
-      headers: GITHUB_HEADERS,
-    });
-    if (!res.ok) {
-      log(`Setup: GitHub refused the manifest code: ${res.status} ${await res.text()}`);
-      return { status: 502, message: `GitHub refused the manifest code: ${res.status}` };
-    }
-    const made = await res.json();
-    // The bot's user id makes its commits link to it; GitHub shows them without it anyway.
-    let botId = null;
-    try {
-      const bot = await fetch(`${api}/users/${encodeURIComponent(`${made.slug}[bot]`)}`, {
-        headers: GITHUB_HEADERS,
-      });
-      if (bot.ok) botId = (await bot.json()).id;
-    } catch {
-      // Commits then use the bot's name alone.
-    }
-    const credentials = {
-      id: made.id,
-      slug: made.slug,
-      client_id: made.client_id,
-      client_secret: made.client_secret,
-      webhook_secret: made.webhook_secret,
-      pem: made.pem,
-      owner: made.owner?.login ?? null,
-      html_url: made.html_url,
-      bot_id: botId,
-      created_at: new Date(now()).toISOString(),
-    };
+    const credentials = await convertManifest({ code, api, fetch, now, log });
+    if (credentials.status) return credentials;
     const { pem: _, ...rest } = credentials;
     writeJsonAtomic(
       setupFile,
@@ -125,9 +96,52 @@ export function createAppHolder({
     );
     save(credentials);
     sweep();
-    log(`Setup: GitHub App ${made.slug} (id ${made.id}) stored`);
+    log(`Setup: GitHub App ${credentials.slug} (id ${credentials.id}) stored`);
     return { credentials: rest };
   }
 
   return { get: () => app, info, handOver, convert };
+}
+
+// GitHub's answer to /setup's manifest code → the App's credentials, its key and edge's secrets
+// with them, as /setup stores them (convert() here; deploy/kubernetes/secrets.mjs on an
+// operator's machine). → { status, message } when GitHub refused the code.
+export async function convertManifest({
+  code,
+  api = "https://api.github.com",
+  fetch = globalThis.fetch,
+  now = Date.now,
+  log = () => {},
+}) {
+  const res = await fetch(`${api}/app-manifests/${code}/conversions`, {
+    method: "POST",
+    headers: GITHUB_HEADERS,
+  });
+  if (!res.ok) {
+    log(`Setup: GitHub refused the manifest code: ${res.status} ${await res.text()}`);
+    return { status: 502, message: `GitHub refused the manifest code: ${res.status}` };
+  }
+  const made = await res.json();
+  // The bot's user id makes its commits link to it; GitHub shows them without it anyway.
+  let botId = null;
+  try {
+    const bot = await fetch(`${api}/users/${encodeURIComponent(`${made.slug}[bot]`)}`, {
+      headers: GITHUB_HEADERS,
+    });
+    if (bot.ok) botId = (await bot.json()).id;
+  } catch {
+    // Commits then use the bot's name alone.
+  }
+  return {
+    id: made.id,
+    slug: made.slug,
+    client_id: made.client_id,
+    client_secret: made.client_secret,
+    webhook_secret: made.webhook_secret,
+    pem: made.pem,
+    owner: made.owner?.login ?? null,
+    html_url: made.html_url,
+    bot_id: botId,
+    created_at: new Date(now()).toISOString(),
+  };
 }

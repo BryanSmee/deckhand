@@ -1,0 +1,154 @@
+# Edge (docs/services.md#edge-and-the-orchestrator): the only pods the internet reaches, through
+# your ingress to the Service's port 8080. Its internal port, 8083, is the orchestrator's alone
+# (network-policies.yaml). It holds the webhook secret, the session key and the OAuth client's,
+# in its own Secret (deckhand-edge). Two copies, both active on one store. Its readiness is
+# /health: it has no /ready, and stops taking connections as it drains.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: edge
+  namespace: deckhand
+  labels:
+    app: deckhand-edge
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: deckhand-edge
+  template:
+    metadata:
+      labels:
+        app: deckhand-edge
+    spec:
+      serviceAccountName: deckhand-edge
+      # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
+      enableServiceLinks: false
+      automountServiceAccountToken: false
+      # Its drain (DRAIN_SECONDS, 25 s: a live log until the browser reconnects), as compose's
+      # stop_grace_period.
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      # Its copies share its volume (ReadWriteOnce): one node (components/redis says more).
+      affinity:
+        podAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - topologyKey: kubernetes.io/hostname
+              labelSelector:
+                matchLabels:
+                  app: deckhand-edge
+      containers:
+        - name: edge
+          image: ghcr.io/bryansmee/deckhand-edge:latest
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: internal
+              containerPort: 8083
+          env:
+            # The orchestrator's service token tells it apart, and this Deployment's
+            # NetworkPolicy lets only its pods reach 8083.
+            - name: SERVICE_NETWORKS
+              value: none
+            - name: SERVICE_ACCOUNT_TOKEN_FILE
+              value: /var/run/secrets/deckhand/broker-token
+            # Its App's credentials (app.json, without the key) and session key, from its
+            # Secret; its store in its volume.
+            - name: DATA_DIR
+              value: /etc/deckhand-edge
+            - name: STORE_URL
+              value: file:///data/store
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+          # Its process answers: restarted after a minute without.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            failureThreshold: 6
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: app
+              mountPath: /etc/deckhand-edge
+              readOnly: true
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
+            - name: broker-token
+              mountPath: /var/run/secrets/deckhand
+              readOnly: true
+      volumes:
+        # Its store: the deliveries taken, the sessions' sign-outs, the stream to the orchestrator.
+        - name: data
+          persistentVolumeClaim:
+            claimName: edge-data
+        # app.json (the webhook secret, the OAuth client's) and session.key: deckhand-edge,
+        # which secrets.mjs makes (docs/kubernetes.md). Read only: /setup stays closed.
+        - name: app
+          secret:
+            secretName: deckhand-edge
+            defaultMode: 288 # 0440: its group, fsGroup, reads it
+        - name: server
+          projected:
+            sources:
+              - configMap:
+                  name: deckhand-server
+                  items:
+                    - key: config.yaml
+                      path: config.yaml
+        - name: broker-token
+          projected:
+            sources:
+              - serviceAccountToken:
+                  audience: deckhand-broker
+                  path: broker-token
+                  expirationSeconds: 3600
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: edge-data
+  namespace: deckhand
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+# Your ingress sends the webhooks and browsers to port 8080 (docs/kubernetes.md, Ingress); 8083
+# is the orchestrator's EDGE_URL.
+apiVersion: v1
+kind: Service
+metadata:
+  name: edge
+  namespace: deckhand
+spec:
+  selector:
+    app: deckhand-edge
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+    - name: internal
+      port: 8083
+      targetPort: internal

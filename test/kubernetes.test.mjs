@@ -36,7 +36,7 @@ const config = {
   kubernetes: { pendingMs: 600000, storageClass: "fast", sessionSize: "10Gi" },
 };
 
-// Deckhand's policy, as docs/setup.md shows it.
+// Deckhand's policy, as docs/kubernetes.md shows it.
 const POLICY = {
   metadata: { name: "deckhand-sandboxes" },
   spec: {
@@ -58,7 +58,7 @@ const SERVICES = {
 // The services' namespace, when the sandboxes have one of their own.
 const SVC = "deckhand";
 
-// Deckhand's policy with the sandboxes apart, as docs/setup.md shows it: the proxy's pods in
+// Deckhand's policy with the sandboxes apart, as docs/kubernetes.md shows it: the proxy's pods in
 // the services' namespace alone.
 const APART_POLICY = {
   metadata: { name: "deckhand-sandboxes" },
@@ -453,7 +453,7 @@ test("start: without the namespace's NetworkPolicy, no run, and the reply says w
   const { runner, objects } = setup(t, { policies: [] });
   await assert.rejects(
     runner.start(spec()),
-    /the namespace runs doesn't isolate its sandboxes: no NetworkPolicy picks the sandbox pods for both Ingress and Egress.*docs\/setup\.md/,
+    /the namespace runs doesn't isolate its sandboxes: no NetworkPolicy picks the sandbox pods for both Ingress and Egress.*docs\/kubernetes\.md/,
   );
   assert.equal(objects.pods.size + objects.secrets.size + objects.persistentvolumeclaims.size, 0);
   // Its Services missing: no way to the broker or the proxy.

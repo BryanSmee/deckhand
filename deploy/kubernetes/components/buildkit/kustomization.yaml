@@ -1,0 +1,54 @@
+# Repo images (docs/kubernetes.md, Repo images): rootless BuildKit in the services' namespace,
+# its NetworkPolicies, and what the runner needs to push and pull through your registry. In
+# your overlay, `components: [<this folder>]`, with KUBERNETES_REGISTRY set in deckhand-env and
+# the deckhand-registry pull Secret made beforehand (a kubernetes.io/dockerconfigjson one).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - buildkit.yaml
+
+configMapGenerator:
+  - name: deckhand-env
+    namespace: deckhand
+    behavior: merge
+    literals:
+      - KUBERNETES_REGISTRY_SECRET=deckhand-registry
+      - KUBERNETES_BUILDKIT=tcp://buildkitd:1234
+
+patches:
+  # Rootless BuildKit can't meet Pod Security `restricted` (buildkit.yaml): the services'
+  # namespace allows it, and still warns of any other pod that doesn't.
+  - target:
+      kind: Namespace
+      name: deckhand
+    patch: |
+      - op: replace
+        path: /metadata/labels/pod-security.kubernetes.io~1enforce
+        value: privileged
+  # The registry's pull Secret, read by name alone in the services' namespace; its copy in the
+  # sandboxes', which the runner brings up to date.
+  - target:
+      kind: Role
+      name: deckhand-runner
+      namespace: deckhand
+    patch: |
+      - op: add
+        path: /rules/-
+        value:
+          apiGroups: [""]
+          resources: [secrets]
+          resourceNames: [deckhand-registry]
+          verbs: [get]
+  - target:
+      kind: Role
+      name: deckhand-runner
+      namespace: deckhand-sandboxes
+    patch: |
+      - op: add
+        path: /rules/-
+        value:
+          apiGroups: [""]
+          resources: [secrets]
+          resourceNames: [deckhand-registry]
+          verbs: [update]
