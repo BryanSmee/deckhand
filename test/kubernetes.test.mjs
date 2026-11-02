@@ -1273,8 +1273,10 @@ test("start: the network gate first, from the base image: the API server and the
     { what: "the cluster's DNS", host: "10.96.0.10", port: 53, reach: false },
     { what: "the egress proxy", host: "10.96.0.11", port: 3128, reach: true },
   ]);
-  // As long as the pod may stay Pending (KUBERNETES_PENDING_MINUTES).
-  assert.equal(gate.command[4], "600000");
+  // Its deadline before the pod's Pending one (KUBERNETES_PENDING_MINUTES from its creation),
+  // so that its own failure, saying what it still reached, is what the run is told.
+  const created = Date.parse("2026-10-30T10:00:00Z");
+  assert.equal(gate.command[4], String(created + 600_000 - 30_000));
   // No secret of the run's, and Pod Security `restricted` still.
   assert.equal(gate.envFrom, undefined);
   assert.ok(!JSON.stringify(gate).includes("s3cret"));
@@ -1305,12 +1307,32 @@ test("follow: a network gate that never saw its NetworkPolicies apply fails the 
     runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
     (error) =>
       error instanceof RunError &&
-      /its NetworkPolicies didn't apply within 10 min: still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 600 s\. Nothing of the run's ran/.test(
+      /its NetworkPolicies didn't apply: still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 600 s\. Nothing of the run's ran/.test(
         error.message,
       ),
   );
   assert.ok(calls.some((c) => c.includes("/log?container=network-gate")));
   assert.ok(logged.some((line) => /its NetworkPolicies didn't apply/.test(line)));
+});
+
+test("follow: a gate still waiting past KUBERNETES_PENDING_MINUTES points to the NetworkPolicies, not 'make room'", async (t) => {
+  // Its own deadline came first unless the node's clock is far off the runner's: said all the same.
+  const { runner, objects } = setup(t);
+  await runner.start(spec());
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  pod.metadata.creationTimestamp = "2026-10-30T09:00:00Z";
+  pod.status = {
+    phase: "Pending",
+    initContainerStatuses: [{ name: "network-gate", state: { running: {} } }],
+    containerStatuses: [{ state: { waiting: { reason: "PodInitializing" } } }],
+  };
+  await assert.rejects(
+    runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} }),
+    (error) =>
+      /stayed Pending for 10 min \(its init container waits for its NetworkPolicies to apply\)\. The operator can check that the cluster's network plugin enforces NetworkPolicies/.test(
+        error.message,
+      ),
+  );
 });
 
 test("installing: while its init container hasn't ended, whatever the pod's phase says yet", async (t) => {

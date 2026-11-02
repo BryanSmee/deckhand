@@ -15,6 +15,7 @@ import {
   gateProblem,
   gating,
   LEAK,
+  MARGIN_MS,
   proxyTarget,
 } from "../listener/runner/kube-gate.mjs";
 import { listening } from "./helpers.mjs";
@@ -29,9 +30,11 @@ async function open(t) {
   return { server, port };
 }
 
-// The gate run on `targets`, waiting `waitMs` at most: { code, out }.
+// The gate run on `targets`, waiting `waitMs` at most (its deadline that long from now):
+// { code, out }.
 async function gate(targets, waitMs) {
-  const child = spawn(process.execPath, ["-e", GATE_SCRIPT, JSON.stringify(targets), waitMs]);
+  const until = String(Date.now() + waitMs);
+  const child = spawn(process.execPath, ["-e", GATE_SCRIPT, JSON.stringify(targets), until]);
   let out = "";
   let err = "";
   child.stdout.on("data", (chunk) => (out += chunk));
@@ -96,15 +99,19 @@ test("forbiddenTargets: the API server's Service and the cluster's DNS, none ref
     throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
   };
   assert.throws(() => forbiddenTargets({ env: {}, resolvConf: none }), /knows no address/);
-  // The gate's container, from the base image, small, waiting KUBERNETES_PENDING_MINUTES.
+  // The gate's container, from the base image, small, giving up MARGIN_MS before
+  // KUBERNETES_PENDING_MINUTES from now, or before its caller's own limit.
   const config = { image: "dh-sandbox", kubernetes: { pendingMs: 600_000 } };
-  const container = createNetworkGate({ config, env, resolvConf }).container({
-    proxy: { host: "10.96.0.11", port: 3128 },
-  });
+  const now = () => 1_000_000;
+  const gates = createNetworkGate({ config, env, resolvConf, now });
+  const container = gates.container({ proxy: { host: "10.96.0.11", port: 3128 } });
   assert.equal(container.name, "network-gate");
   assert.equal(container.image, "dh-sandbox");
   assert.deepEqual(container.command.slice(0, 2), ["node", "-e"]);
-  assert.equal(container.command[4], "600000");
+  assert.equal(container.command[4], String(1_000_000 + 600_000 - MARGIN_MS));
+  assert.equal(gates.container({ withinMs: 300_000 }).command[4], String(1_000_000 + 270_000));
+  // A limit shorter than the margin: one round, then its verdict.
+  assert.equal(gates.container({ withinMs: 10_000 }).command[4], "1000000");
   assert.deepEqual(JSON.parse(container.command[3]).at(-1), {
     what: "the egress proxy",
     host: "10.96.0.11",
@@ -134,9 +141,9 @@ test("proxyTarget, failedGate, gating, gateProblem", () => {
   assert.equal(gating(pod({ running: {} })), true);
   assert.equal(gating(pod({ terminated: { exitCode: 0 } })), false);
   assert.equal(
-    gateProblem(LEAK, "still reached x", 600_000),
-    "its NetworkPolicies didn't apply within 10 min: still reached x",
+    gateProblem(LEAK, "still reached x"),
+    "its NetworkPolicies didn't apply: still reached x",
   );
-  assert.match(gateProblem(CLOSED, "never reached y", 600_000), /reach the egress proxy/);
-  assert.equal(gateProblem(137, "", 600_000), "its init container network-gate failed (exit 137)");
+  assert.match(gateProblem(CLOSED, "never reached y"), /reach the egress proxy/);
+  assert.equal(gateProblem(137, ""), "its init container network-gate failed (exit 137)");
 });

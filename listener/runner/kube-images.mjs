@@ -173,7 +173,7 @@ export function createKubernetesImages({
   now = Date.now,
   sleep = delay,
   buildMs = BUILD_MS,
-  networkGate = createNetworkGate({ config }), // kube-gate.mjs's, shared with the runner's (index.mjs)
+  networkGate = createNetworkGate({ config, now }), // kube-gate.mjs's, shared with the runner's (index.mjs)
 }) {
   const k = config.kubernetes;
   const owner = { "deckhand.owner": labelValue(config.prefix) };
@@ -515,8 +515,9 @@ export function createKubernetesImages({
   // first. One that goes out through the egress proxy (`proxied`), apart from the services, gets
   // the proxy's Service's IP (hostAliases), as sandboxes do: the cluster's DNS doesn't know its
   // short name in the sandboxes' namespace. `spec`: its containers and volumes. Its network
-  // gate first, before `spec`'s init containers: waiting for the proxy too when `proxied`.
-  async function startPod(pod, { role, labels = {}, user, proxied, spec }) {
+  // gate first, before `spec`'s init containers: waiting for the proxy too when `proxied`, and
+  // giving up before `withinMs` from now, when its caller stops waiting for the pod.
+  async function startPod(pod, { role, labels = {}, user, proxied, withinMs, spec }) {
     await api.remove(`pods/${pod}`, { gracePeriodSeconds: 0 }).catch(() => {});
     await waitGone(pod);
     const pullName = await pullSecret.forPods();
@@ -524,6 +525,7 @@ export function createKubernetesImages({
     const aliases = apart && proxied ? aliasesOf(proxySvc) : [];
     const gateInit = networkGate.container({
       proxy: proxied ? proxyTarget(config, proxySvc) : null,
+      withinMs: Math.min(withinMs, k.pendingMs),
     });
     await api.create("pods", {
       apiVersion: "v1",
@@ -549,7 +551,7 @@ export function createKubernetesImages({
     const said = [];
     await readLog(pod, (chunk) => said.push(chunk), { container: GATE_CONTAINER });
     const last = Buffer.concat(said).toString().trim().split("\n").at(-1);
-    return gateProblem(code, last, k.pendingMs);
+    return gateProblem(code, last);
   }
 
   // The pod gone, whatever its outcome; logged when the API refuses.
@@ -581,6 +583,8 @@ export function createKubernetesImages({
       role,
       user,
       proxied: Boolean(hosts),
+      // ending() waits that long from now.
+      withinMs: timeoutMs,
       spec: {
         containers: [
           {
@@ -692,6 +696,7 @@ export function createKubernetesImages({
       labels: { "deckhand.job": labelValue(pod) },
       user,
       proxied: true,
+      withinMs: until - now(),
       spec: {
         ...(init ? { initContainers: [init] } : {}),
         containers: [

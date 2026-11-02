@@ -357,7 +357,7 @@ function setup(
     buildctl: build.buildctl,
     buildMs,
     log: (line) => logged.push(line),
-    networkGate: createNetworkGate({ config: cfg, ...GATE_OPTIONS }),
+    networkGate: createNetworkGate({ config: cfg, ...GATE_OPTIONS, now: () => clock.at }),
     now: () => clock.at,
     // Time passes, and other tasks get their turn.
     sleep: async (ms) => {
@@ -699,7 +699,7 @@ test("a pod whose NetworkPolicies don't apply: its network gate fails it before 
   const output = [];
   await assert.rejects(
     images.installAgent(claude, (chunk) => output.push(chunk.toString())),
-    /installing Claude 9\.9\.9 failed: its NetworkPolicies didn't apply within 10 min: still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 600 s/,
+    /installing Claude 9\.9\.9 failed: its NetworkPolicies didn't apply: still reached the Kubernetes API server \(10\.96\.0\.1:443\) after 600 s/,
   );
   // The installer never ran: no log of its.
   assert.deepEqual(output, []);
@@ -711,7 +711,7 @@ test("a pod whose NetworkPolicies don't apply: its network gate fails it before 
   });
   await assert.rejects(
     checks.images.caches("org/a", ["/home/node/.npm"], BASE),
-    /its NetworkPolicies didn't apply within 10 min: still reached the cluster's DNS/,
+    /its NetworkPolicies didn't apply: still reached the cluster's DNS/,
   );
 });
 
@@ -730,7 +730,13 @@ test("no class and no claim: nothing installed here, the sandbox's init containe
 });
 
 test("caches: claims of the cache class, the sandbox's by its fsGroup, no chown job", async (t) => {
-  const { images, created } = setup(t, { kubernetes: { cacheStorageClass: "nfs" } });
+  const { images, created, api, clock } = setup(t, { kubernetes: { cacheStorageClass: "nfs" } });
+  let madeAt;
+  const create = api.create;
+  api.create = async (kind, body) => {
+    if (kind === "pods") madeAt ??= clock.at;
+    return create(kind, body);
+  };
   assert.equal(images.keepsCaches, true);
   assert.equal(images.noCaches, null);
   const found = await images.caches("org/a", ["/home/node/.npm"], BASE);
@@ -747,6 +753,9 @@ test("caches: claims of the cache class, the sandbox's by its fsGroup, no chown 
   assert.equal(check.spec.containers[0].env.length, 0);
   // Its network gate waits for no proxy: it may reach nothing at all.
   assert.ok(gateTargets(check.spec.initContainers[0]).every((target) => !target.reach));
+  // It gives up before the check's own limit (5 min from the pod's creation): its failure is
+  // what the run is told.
+  assert.equal(Number(check.spec.initContainers[0].command[4]), madeAt + 5 * 60_000 - 30_000);
   assert.equal(claim.metadata.labels["deckhand.role"], "cache");
   assert.equal(claim.metadata.annotations["deckhand.cache"], "/home/node/.npm");
   assert.deepEqual(claim.spec, {
@@ -1506,7 +1515,7 @@ test("Kubernetes: a refresh pod whose NetworkPolicies don't apply fails before a
   assert.equal(result.code, -1);
   assert.match(
     result.err,
-    /^the pod dh-job-antigravity-refresh: its NetworkPolicies didn't apply within 10 min: still reached the cluster's DNS \(10\.96\.0\.10:53\) after 600 s$/,
+    /^the pod dh-job-antigravity-refresh: its NetworkPolicies didn't apply: still reached the cluster's DNS \(10\.96\.0\.10:53\) after 600 s$/,
   );
   assert.deepEqual(attached, []);
   assert.deepEqual(logs, [

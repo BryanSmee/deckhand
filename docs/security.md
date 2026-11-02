@@ -1373,8 +1373,9 @@ run when the probe reaches anything but the egress proxy
 checks it by hand. Some plugins apply a new pod's policies a moment after it starts (kube-router):
 every pod of the sandboxes' namespace, the probe's included, first waits in an init container
 until the API server and the DNS are out of reach and the proxy answers, and fails past
-`KUBERNETES_PENDING_MINUTES` ([kubernetes.md](kubernetes.md#the-network-gate)). Each service's own ingress policy is a second line: with
-the sandboxes' policies gone, a sandbox reaches edge's public port alone.
+`KUBERNETES_PENDING_MINUTES` ([kubernetes.md](kubernetes.md#the-network-gate)). Each service's
+own ingress policy is a second line: with the sandboxes' policies gone, a sandbox reaches edge's
+public port alone.
 
 **The API server** is no pod: the runner's and the broker's way to it is an `ipBlock` of its
 addresses, which the operator sets (`deckhand-api-server`, [kubernetes.md](kubernetes.md#install)),

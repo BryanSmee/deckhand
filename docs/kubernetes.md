@@ -488,10 +488,13 @@ tries a TCP connection (3 s at most each) to:
 
 It ends once the first are out of reach (refused, or no answer) and the proxy answers: the pod's
 rules are in place, not its network merely down. On a plugin that applies them by then, that is
-one round, about 3 s (its connections giving up). Past `KUBERNETES_PENDING_MINUTES`, it fails, and
-its pod with it, before anything of the run: the reply on the issue says what it still reached
-(`its NetworkPolicies didn't apply within 10 min: still reached the Kubernetes API server (…)`),
-or that the proxy never answered.
+one round, about 3 s (its connections giving up). Otherwise it fails, and its pod with it,
+before anything of the run, 30 s before the runner would give up on the pod:
+`KUBERNETES_PENDING_MINUTES` after its creation (a cache's check or a job: their own, shorter,
+limit). The reply on the issue then says what it still reached (`its NetworkPolicies didn't
+apply: still reached the Kubernetes API server (…) after 570 s`), or that the proxy never
+answered. Its deadline is a time, read on the node's clock: one far off the runner's leaves the
+pod Pending until the runner removes it, its reply saying the gate was still waiting.
 
 What it waits for is one of the pod's rules applied, seen through two addresses its policies
 forbid and one they allow; it takes the rest to be applied with them. kube-router applies a pod's
@@ -536,9 +539,10 @@ namespace change (the runner reads them before every run) or the runner takes it
 after a change of plugin, restart it (`kubectl -n deckhand rollout restart deploy/runner`). A
 probe that couldn't tell refuses that run alone, and the next one probes again: its pod didn't
 end within `KUBERNETES_PENDING_MINUTES` and a minute, say, or its gate never reached the egress
-proxy (not ready yet on a fresh install, its pod evicted), or the probe itself didn't. Each probe's pod has a name
-of its own, so a runner copy taking over doesn't remove the other's mid-probe; one older than a
-probe lasts (a runner stopped mid-probe) is removed at the next probe. Its log lines start with
+proxy (not ready yet on a fresh install, its pod evicted), or the probe itself didn't. Each
+probe's pod has a name of its own, so a runner copy taking over doesn't remove the other's
+mid-probe; one older than a probe lasts (a runner stopped mid-probe) is removed at the next
+probe. Its log lines start with
 `Network probe:`. The API server's own addresses, behind the `kubernetes` Service, and the
 DNS pods' aren't tried: the runner has no right to read them.
 

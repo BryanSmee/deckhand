@@ -543,6 +543,7 @@ export function createKubernetesRunner({
   // kube-gate.mjs's, shared with kube-images.mjs (index.mjs), else made here.
   networkGate = createNetworkGate({
     config,
+    now,
     env: probeOptions.env,
     resolvConf: probeOptions.resolvConf,
   }),
@@ -991,7 +992,7 @@ export function createKubernetesRunner({
         await readLog(name, { container: GATE_CONTAINER }, AbortSignal.timeout(WATCH_MS), (line) =>
           said.push(line),
         ).catch((error) => log(`The gate's log of ${name}: ${error.message}`));
-        const problem = gateProblem(gated, lastLine(said), pendingMs);
+        const problem = gateProblem(gated, lastLine(said));
         log(`${name}: ${problem}`);
         throw new RunError(
           `The sandbox couldn't start on the Kubernetes runner: ${problem}. Nothing of the run's ran. The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes.md, The network gate). Comment again to retry.`,
@@ -1016,10 +1017,14 @@ export function createKubernetesRunner({
         const why = await whyPending(name, pod);
         log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
         await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
+        // Its gate gives up before this, saying what it still reached; unless the node's clock is
+        // far off the runner's, or the pod took that long to start it.
         const fix =
           why === INSTALLING
             ? "The operator can check that the agent's install reaches its hosts through the egress proxy, or set KUBERNETES_AGENT_STORAGE_CLASS to install it once per version"
-            : "The operator can make room in the cluster, or check the image";
+            : why === GATING
+              ? "The operator can check that the cluster's network plugin enforces NetworkPolicies, and how long it takes to apply them to a new pod (see docs/kubernetes.md, The network gate)"
+              : "The operator can make room in the cluster, or check the image";
         throw new RunError(
           `The sandbox couldn't start on the Kubernetes runner: its pod stayed Pending for ${minutes(pendingMs)} min (${why}). ${fix} (KUBERNETES_PENDING_MINUTES sets the wait). Comment again to retry.`,
         );

@@ -16,12 +16,13 @@
 //   - a public address (PUBLIC).
 //
 // Every one has to fail, and the egress proxy's Service has to answer: a pod with no network at
-// all doesn't pass as isolated. It tries them once its network gate (kube-gate.mjs) has seen its
-// NetworkPolicies apply, a verdict on what the cluster enforces rather than on how fast it applies
-// it; a gate that still reached the API server or the DNS past its deadline is a verdict too. A target reached is a verdict, kept until the namespaces'
-// NetworkPolicies change or the runner takes its lease again (reset()); a probe that couldn't
-// tell (its pod didn't end, an API error, the proxy not answering: not ready yet, evicted) isn't,
-// and the next run's start tries again. Fail closed either way.
+// all doesn't pass as isolated. It tries them once its network gate (kube-gate.mjs) has seen
+// its NetworkPolicies apply: a verdict on what the cluster enforces rather than on how fast it
+// applies it. A target reached is a verdict, and so is a gate that still reached the API server
+// or the DNS at its deadline: kept until the namespaces' NetworkPolicies change or the runner
+// takes its lease again (reset()). A probe that couldn't tell (its pod didn't end, an API error,
+// the proxy not answering: not ready yet, evicted) isn't, and the next run's start tries again.
+// Fail closed either way.
 import { lookup as dnsLookup } from "node:dns/promises";
 import { readFileSync } from "node:fs";
 import { randomBytes } from "node:crypto";
@@ -30,17 +31,19 @@ import { setTimeout as delay } from "node:timers/promises";
 import { SANDBOX_USER } from "../sandbox-spec.mjs";
 import {
   CLOSED,
+  CONNECT_MS,
   createNetworkGate,
   failedGate,
   GATE_CONTAINER,
   gateProblem,
   LEAK,
   nameservers,
+  TCP_TRY,
 } from "./kube-gate.mjs";
 import { kubeName, restrictedContainer } from "./kube-names.mjs";
 
-// How long a connection is tried before it counts as out of reach.
-export const CONNECT_MS = 3000;
+// How long a connection is tried before it counts as out of reach: the gate's (kube-gate.mjs).
+export { CONNECT_MS };
 
 // An address of the internet that answers on 443 (Cloudflare's resolver).
 export const PUBLIC = { host: "1.1.1.1", port: 443 };
@@ -59,14 +62,7 @@ export const PROBE_SCRIPT = `
 const net = require("node:net");
 const dgram = require("node:dgram");
 const ms = ${CONNECT_MS};
-const tcp = ({ host, port }) => new Promise((resolve) => {
-  const socket = net.connect({ host, port, timeout: ms });
-  const done = (reached) => { socket.destroy(); resolve(reached); };
-  socket.on("connect", () => done(true));
-  socket.on("timeout", () => done(false));
-  socket.on("error", () => done(false));
-});
-const udp = ({ host, port }) => new Promise((resolve) => {
+${TCP_TRY}const udp = ({ host, port }) => new Promise((resolve) => {
   const socket = dgram.createSocket(net.isIPv6(host) ? "udp6" : "udp4");
   let over = false;
   const done = (reached) => {
@@ -168,7 +164,7 @@ export function createNetworkProbe({
   env = process.env,
   lookup = (host) => dnsLookup(host, { all: true }),
   resolvConf = () => readFileSync("/etc/resolv.conf", "utf8"),
-  gate = createNetworkGate({ config, env, resolvConf }), // kube-gate.mjs
+  gate = createNetworkGate({ config, env, resolvConf, now }), // kube-gate.mjs
 }) {
   const apart = services.namespace !== api.namespace;
   // The probe's verdict, for the policies it was made under.
@@ -316,7 +312,7 @@ export function createNetworkProbe({
         if (gated === CLOSED) {
           throw new Error(`its probe pod ${said}, which sandboxes go out through: is it ready?`);
         }
-        throw new Error(`its probe pod's ${gateProblem(gated, said, config.kubernetes.pendingMs)}`);
+        throw new Error(`its probe pod's ${gateProblem(gated, said)}`);
       }
       const res = await api.stream(
         `${podPath}/log`,
