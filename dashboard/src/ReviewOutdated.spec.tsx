@@ -157,6 +157,11 @@ test("a maintainer's reviews alone, no loop: Reviews, its state without fix roun
   expect(within(section).getByRole("listitem").getAttribute("title")).toMatch(
     /^A maintainer's review: 1 blocking/,
   );
+  // Without `review.fix` (no rounds): Review, never Fix.
+  expect(reviewOffers(task({ review: manual({ loop: "rounds-out" }) }))).toEqual({
+    review: true,
+    fix: false,
+  });
   rerender(
     <Dashboard
       state={withTask({ review: manual({ loop: "clean", history: [round(0, REVIEWED)] }) })}

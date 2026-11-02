@@ -1755,7 +1755,11 @@ export function createReviews({
       SEVERITIES.map((s) => [s, review.findings.filter((f) => f.severity === s).length]),
     );
     const blocking = above(review, allowed).length;
-    const rounds = (entry.rounds ?? []).filter((r) => r.round !== round || r.head !== head);
+    const same = (r) => r.round === round && r.head === head;
+    // A maintainer's review replacing the loop's own of that head is still a loop's round: a
+    // loop ran (reviewLoop() `manual`).
+    const theirs = manual && !(entry.rounds ?? []).some((r) => same(r) && !r.manual);
+    const rounds = (entry.rounds ?? []).filter((r) => !same(r));
     // Posted as a plain comment (GitHub refused the review): not on GitHub's list of reviews,
     // which the dashboard's Fix reads (latestReview()).
     const comment = posted.event === null ? { comment: true } : {};
@@ -1766,7 +1770,7 @@ export function createReviews({
       counts,
       blocking,
       ...comment,
-      ...(manual && { manual }),
+      ...(theirs && { manual: true }),
     });
     remember(key, entry.head ?? null, {
       rounds: rounds.slice(-ROUNDS_KEPT),
