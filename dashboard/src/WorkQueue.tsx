@@ -278,6 +278,10 @@ export function WorkQueue({
             {
               label: "Back to backlog",
               aria: `Take ${ref} out of the queue, back to the backlog`,
+              // An icon beside the others on a wide screen, the row on one line; in the menu on
+              // a phone.
+              iconOnly: !touch,
+              icon: touch ? undefined : <Icon.Close size={14} />,
               run: () => act({ action: "cancel", number: t.number! }),
               disabled: still || busy,
             },
