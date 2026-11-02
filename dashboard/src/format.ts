@@ -115,11 +115,13 @@ export function loopLine(t: Pick<Task, "review">): string | null {
 
 const SEVERITIES = ["critical", "high", "medium", "low"] as const;
 
-// A review's points, every finding weighed by its severity (not only the blocking ones): what
-// the task page compares a review with the one before it by. Never shown.
+// A review's points, every finding weighed by its severity (not only the blocking ones), and a
+// blocking comment as a medium finding (it caps the rating as one does); notes and follow-ups
+// weigh nothing: what the task page compares a review with the one before it by. Never shown.
 const WEIGHTS = { critical: 8, high: 5, medium: 3, low: 1 } as const;
-export const reviewScore = (r: Pick<ReviewRound, "counts">) =>
-  SEVERITIES.reduce((sum, s) => sum + (r.counts[s] ?? 0) * WEIGHTS[s], 0);
+export const reviewScore = (r: Pick<ReviewRound, "counts" | "comments">) =>
+  SEVERITIES.reduce((sum, s) => sum + (r.counts[s] ?? 0) * WEIGHTS[s], 0) +
+  (r.comments?.blocking ?? 0) * WEIGHTS.medium;
 
 // The last review against the one before it: "better" with fewer points, "worse" with more;
 // null when they weigh the same or it's the only one.

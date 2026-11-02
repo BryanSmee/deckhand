@@ -290,6 +290,13 @@ test("hovering previews every review; focus or a click pins them, until Escape, 
 test("a review's points: low 1, medium 3, high 5, critical 8, every finding counted", () => {
   expect(reviewScore(HISTORY[0])).toBe(24);
   expect(reviewScore(HISTORY[2])).toBe(13);
+  // A blocking comment weighs as a medium finding; notes and follow-ups nothing.
+  const sections: ReviewRound = {
+    ...HISTORY[2],
+    followUps: 4,
+    comments: { blocking: 1, notes: 5 },
+  };
+  expect(reviewScore(sections)).toBe(16);
   expect(reviewScore(round(3, {}, 0))).toBe(0);
   expect(reviewTrend(HISTORY)).toBe("worse");
   expect(reviewTrend(HISTORY.slice(0, 2))).toBe("better");
