@@ -555,7 +555,7 @@ export function createKubernetesRunner({
     });
     if (problem) {
       throw new Error(
-        `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/setup.md, Kubernetes runner)`,
+        `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/kubernetes.md)`,
       );
     }
   }
@@ -725,7 +725,7 @@ export function createKubernetesRunner({
     // gone, and lines were read twice or will be skipped.
     if (seen.out + seen.err < skip.out + skip.err) {
       log(
-        `The log of ${name} has ${seen.out + seen.err} lines, fewer than the ${skip.out + skip.err} already read: the kubelet rotated it. Set its containerLogMaxSize above RUN_LOG_MAX_MB (docs/setup.md)`,
+        `The log of ${name} has ${seen.out + seen.err} lines, fewer than the ${skip.out + skip.err} already read: the kubelet rotated it. Set its containerLogMaxSize above RUN_LOG_MAX_MB (docs/kubernetes.md, Requirements)`,
       );
     }
   }

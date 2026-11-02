@@ -257,7 +257,8 @@ let acting = false;
 const services = createServicesHttp({
   // The broker service's keys.
   keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
-  bound: networkCallers(config.serviceNetworks),
+  // none on Kubernetes: the callers' service tokens, and NetworkPolicies (deploy/kubernetes/).
+  bound: config.serviceNetworks === "none" ? null : networkCallers(config.serviceNetworks),
   pendingTokens,
   edge: () => edgeReady,
   active: () => acting,

@@ -574,7 +574,7 @@ function sandboxConfig(env, s) {
 function registryCredentials(s) {
   if (s.KUBERNETES_REGISTRY && !s.KUBERNETES_REGISTRY_SECRET) {
     throw new ConfigError(
-      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/setup.md, Repo images on Kubernetes)",
+      "KUBERNETES_REGISTRY is set without KUBERNETES_REGISTRY_SECRET: name the dockerconfigjson Secret with its push credentials, for a registry that requires them to pull, push and delete (docs/kubernetes.md, Repo images on Kubernetes)",
     );
   }
 }
@@ -615,17 +615,12 @@ function requiredSettings(env, { setting }, { users = true } = {}) {
   }
 }
 
-// SERVICE_NETWORKS, checked now: a typo would refuse every call of the runner's. `none` (the
-// runner's, where the network can't tell) means nothing here: the orchestrator has to know which
-// address is the runner's, and edge's. On Kubernetes, where every call arrives at the pod's one address,
-// `runner=0.0.0.0/0` says so, and a NetworkPolicy lets only the runner's pods reach the port.
+// SERVICE_NETWORKS, checked now: a typo would refuse every call of the runner's. `none` on
+// Kubernetes (deploy/kubernetes/), where every call arrives at the pod's one address: the
+// callers' service tokens tell them apart, and NetworkPolicies let only their pods in.
 function serviceNetworks(text) {
   const value = String(text ?? "").trim();
-  if (value === "none") {
-    throw new ConfigError(
-      "SERVICE_NETWORKS: none is the runner's; edge and the orchestrator need their callers' networks (the orchestrator's: runner=<subnet>,edge=<subnet>; on Kubernetes runner+edge=0.0.0.0/0, with a NetworkPolicy that lets only the runner's and edge's pods reach SERVICES_PORT: docs/setup.md, Kubernetes runner)",
-    );
-  }
+  if (value === "none") return value;
   try {
     networkCallers(value);
   } catch (error) {
@@ -701,7 +696,7 @@ function buildkitAddress(text, { label }) {
     return value;
   }
   throw new ConfigError(
-    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the services' namespace by its short name, got ${text} (docs/setup.md, Repo images on Kubernetes)`,
+    `${label}: expected tcp://<the daemon's Service name>:<port> (tcp://buildkitd:1234), a Service of the services' namespace by its short name, got ${text} (docs/kubernetes.md, Repo images on Kubernetes)`,
   );
 }
 

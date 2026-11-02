@@ -641,6 +641,8 @@ test("handover on release: the waiting copy takes over at once, finds the sandbo
   // The waiting copy takes no call.
   const passive = await call(b.url, "GET", "/sandboxes", { sub: "orchestrator" });
   assert.equal(passive.status, 503);
+  // Behind one Service (Kubernetes), the caller's next try opens another connection.
+  assert.equal(passive.headers.get("connection"), "close");
   assert.equal((await fetch(`${b.url}/ready`)).status, 503);
   assert.equal((await fetch(`${a.url}/ready`)).status, 200);
   // The client tries the copies in turn: it reaches the one that acts.

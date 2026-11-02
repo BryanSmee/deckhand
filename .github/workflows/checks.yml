@@ -121,6 +121,9 @@ jobs:
         run: |
           node --check edge/server.mjs orchestrator/server.mjs runner/server.mjs broker/server.mjs github/server.mjs models/server.mjs
           node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged
+          node --check deploy/kubernetes/secrets.mjs
+      - name: sh -n
+        run: sh -n deploy/kubernetes/check-isolation.sh
       - name: bash -n
         run: |
           for f in sandbox/*.sh sandbox/agents/*.sh sandbox/agents/claude/install \
@@ -130,6 +133,50 @@ jobs:
             sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh \
             test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do
             bash -n "$f" || exit 1
+          done
+
+  # deploy/kubernetes rendered by kustomize, alone and with each component, and every object
+  # checked against Kubernetes' schemas (#396). test/kubernetes-manifests.test.mjs reads the files
+  # as written; a broken generator or patch only shows here. Both tools pinned by version and
+  # sha256, as opa is: a self-hosted runner has no kubectl to lean on.
+  kubernetes:
+    runs-on: [self-hosted, Linux] # TODO: change to ubuntu-latest on public release
+    timeout-minutes: 10
+    env:
+      KUSTOMIZE_VERSION: 5.8.3
+      KUSTOMIZE_SHA256: cb9e31198d3f63b44848bd0afc4c8efc56e6cfef9c93a4a39a211940e6decd61
+      KUBECONFORM_VERSION: 0.8.0
+      KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kustomize and kubeconform
+        working-directory: ${{ runner.temp }}
+        run: |
+          curl -fsSLo kustomize.tgz "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2Fv${KUSTOMIZE_VERSION}/kustomize_v${KUSTOMIZE_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo kubeconform.tgz "https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}/kubeconform-linux-amd64.tar.gz"
+          printf '%s  kustomize.tgz\n%s  kubeconform.tgz\n' "$KUSTOMIZE_SHA256" "$KUBECONFORM_SHA256" | sha256sum -c -
+          mkdir -p bin
+          tar -xzf kustomize.tgz -C bin kustomize
+          tar -xzf kubeconform.tgz -C bin kubeconform
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: kustomize version && kubeconform -v
+      # An overlay per combination, outside the repository as an operator's would be, with
+      # relative paths: kustomize refuses an absolute one. pipefail: a kustomize that fails gives
+      # kubeconform nothing, which it would pass.
+      - name: Render and validate
+        run: |
+          set -o pipefail
+          for combination in "" redis buildkit "redis buildkit"; do
+            overlay=$(mktemp -d -p "$RUNNER_TEMP")
+            base=$(realpath --relative-to="$overlay" "$GITHUB_WORKSPACE/deploy/kubernetes")
+            printf 'resources: [%s]\n' "$base" > "$overlay/kustomization.yaml"
+            components=""
+            for c in $combination; do components="$components${components:+, }$base/components/$c"; done
+            if [ -n "$components" ]; then
+              printf 'components: [%s]\n' "$components" >> "$overlay/kustomization.yaml"
+            fi
+            echo "base${combination:+ with $combination}:"
+            kustomize build --load-restrictor LoadRestrictionsNone "$overlay" | kubeconform -strict -summary
           done
 
   format:

@@ -1030,9 +1030,9 @@ in it gives: [The broker service](security.md#the-broker-service) in security.md
 **The broker service's own update.** Compose runs one copy, which drains on SIGTERM for 30 s
 (`DRAIN_SECONDS`: the inboxes' long polls, uploads in flight), then the next one starts on the
 same store and key: the proxy waits for it meanwhile, as for the orchestrator (`proxy/wait.mjs`). On
-Kubernetes (#396, which also has to give every copy the same key), two copies on one store,
-both active (Redis, #509): a rolling update would start the new one first, then the old one, out
-of rotation (`/ready` answers `503`), drains. Either copy would answer any call: the live runs, their files and their events are in the store, so a run
+Kubernetes (`deploy/kubernetes/broker.yaml`, both mounting the key's Secret), two copies on one
+store, both active: a rolling update starts the new one first, then the old one, out of rotation
+(`/ready` answers `503`), drains. Either copy would answer any call: the live runs, their files and their events are in the store, so a run
 ended through one renews through neither, and an inbox read through one goes on from the same
 offset through the other.
 

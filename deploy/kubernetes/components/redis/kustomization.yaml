@@ -1,0 +1,60 @@
+# The stores in Redis, for copies on several nodes (docs/kubernetes.md, Several nodes): in your
+# overlay, `components: [<this folder>]`, with the deckhand-redis Secret made beforehand.
+#
+# Each service's store goes to Redis, under its own user and keys (redis.yaml, stores/). Edge,
+# the broker, the github and models services keep nothing else on disk: their copies may go to
+# any node. The orchestrator's state and screenshots and the runner's inboxes are still files
+# (until #613): their claims become ReadWriteMany, which your default storage class has to
+# provide (or a patch naming one), so that the copy taking over on another node finds them. The
+# proxy's copies stay on one node, by their podAffinity: the next one, during an update, shares
+# its volume (its CA).
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+
+resources:
+  - redis.yaml
+
+patches:
+  - path: stores/edge.yaml
+  - path: stores/orchestrator.yaml
+  - path: stores/runner.yaml
+  - path: stores/broker.yaml
+  - path: stores/github.yaml
+  - path: stores/models.yaml
+  # Shared by copies on several nodes.
+  - target:
+      kind: PersistentVolumeClaim
+      name: orchestrator-data|orchestrator-screenshots|runner-data
+    patch: |
+      - op: replace
+        path: /spec/accessModes
+        value: [ReadWriteMany]
+  # Their stores' volumes, no longer used.
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: edge-data
+        namespace: deckhand
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: broker-store
+        namespace: deckhand
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: github-data
+        namespace: deckhand
+  - patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: PersistentVolumeClaim
+      metadata:
+        name: models-store
+        namespace: deckhand

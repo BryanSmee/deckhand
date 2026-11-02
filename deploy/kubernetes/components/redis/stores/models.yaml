@@ -1,0 +1,24 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: models
+  namespace: deckhand
+spec:
+  template:
+    spec:
+      containers:
+        - name: models
+          env:
+            - name: STORE_URL
+              value: "redis://models@redis:6379?prefix=deckhand:models:"
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: deckhand-redis
+                  key: models
+      # Its store is in Redis now: nothing of its own on disk, its copies on any node.
+      affinity: null
+      volumes:
+        - name: store
+          persistentVolumeClaim: null
+          emptyDir: {}
