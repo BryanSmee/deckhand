@@ -674,7 +674,7 @@ export function createWorkApi({
   // A task waiting for a slot queued after issue `after`: out of the queue, its newest comment
   // that starts a run waits for `after` instead (runs.mjs unqueue()), with the text of its
   // author's queued comments, its author and its mode unless another is picked; the others'
-  // comments are dropped, which the App's comment says. Waiting already, that wait is replaced. `after` done already: it stays
+  // comments are dropped, which the App's comment says. `after` done already: it stays
   // queued, as it would start now anyway.
   async function requeue(repo, user, { number, after, mode, settings, answers }) {
     const key = taskKey(repo, number);

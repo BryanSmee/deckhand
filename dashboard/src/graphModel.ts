@@ -320,13 +320,14 @@ export const reorderable = (t: Task) => t.state === "queued" && !!t.position && 
 
 // Whether a queued task can leave the queue for a wait (Queue after…) or the backlog: an
 // issue's (research's too), waiting for a slot, whether it moves in the run order or starts
-// first (another mode apart from work's). Not a brainstorm's reply: its task stays a
-// brainstorm, not back in the backlog.
+// first (another mode apart from work's); a brainstorm's first run too, which nothing ran for
+// yet. Not a reply to a brainstorm going on: its task stays a brainstorm, not back in the
+// backlog.
 export const unqueueable = (t: Task) =>
   t.state === "queued" &&
   !!t.position &&
   t.number !== null &&
-  (t.kind === "issue" || t.kind === "research");
+  (t.kind === "issue" || t.kind === "research" || (t.kind === "brainstorm" && !t.runs.length));
 
 // Whether it can wait for another issue instead (Queue after…, a drop on a node's middle): not
 // when its queued comments only reply to its last run (the listener's `canWait`).

@@ -5,7 +5,7 @@ import { createEvent, fireEvent, render, screen, waitFor, within } from "@testin
 import { beforeEach, expect, test, vi } from "vitest";
 import { Dashboard } from "./App";
 import { inLine, moveOnto, stillInLine } from "./graphModel";
-import { BACKLOG, makeState, makeTask, mockApi, queueAfter, transfer } from "./testUtils";
+import { BACKLOG, makeRuns, makeState, makeTask, mockApi, queueAfter, transfer } from "./testUtils";
 
 // `canWait`: a comment of its starts a run, which can wait for another issue instead.
 const queued = (number: number, position: number, extra = {}) =>
@@ -18,10 +18,16 @@ const queued = (number: number, position: number, extra = {}) =>
     ...extra,
   });
 
-// #44 a brainstorm, which starts first; #41 next, then another repo's task (acme/api#9), then
+// #44 a brainstorm's reply (it ran before), which starts first; #41 next, then another repo's task (acme/api#9), then
 // #42 and #43.
 const LINE = [
-  queued(44, 1, { startsFirst: true, kind: "brainstorm", mode: "brainstorm" }),
+  queued(44, 1, {
+    startsFirst: true,
+    kind: "brainstorm",
+    mode: "brainstorm",
+    canWait: false,
+    runs: makeRuns("acme/app#44", 1),
+  }),
   queued(41, 2),
   queued(9, 3, { repo: "acme/api", key: "acme/api#9", title: "Elsewhere" }),
   queued(42, 4),
@@ -150,11 +156,30 @@ test("Back to backlog and Queue after… send cancel and queue; the card leaves 
   await waitFor(() =>
     expect(api.bodies().at(-1)).toEqual({ action: "queue", number: 41, after: 42 }),
   );
-  // Neither for a brainstorm, which starts first, nor a pull request's task.
+  // Neither for a reply to a brainstorm going on, nor a pull request's task.
   for (const ref of ["#44", "#43"]) {
     expect(within(list).queryByRole("button", { name: `Queue ${ref} after…` })).toBeNull();
     expect(within(list).queryByRole("button", { name: new RegExp(`^Take ${ref} out`) })).toBeNull();
   }
+});
+
+test("a brainstorm queued to start (no run yet) can go back to the backlog, or wait", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  // `/mode brainstorm` on a backlog issue while every slot is busy.
+  const start = queued(46, 1, { startsFirst: true, kind: "brainstorm", mode: "brainstorm" });
+  render(<Dashboard state={makeState({}, [start, queued(41, 2)])} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  const list = screen.getByRole("list", { name: "Tasks waiting for a slot, in run order" });
+  const card = within(list).getByText("Queued 46").closest("li")!;
+  expect(within(card).queryByRole("button", { name: "Run #46 next" })).toBeNull();
+  expect(within(card).getByRole("button", { name: "Queue #46 after…" })).toBeTruthy();
+  const data = transfer();
+  fireEvent.dragStart(card, { dataTransfer: data });
+  const tab = screen.getByRole("tab", { name: /^Backlog/ });
+  fireEvent.dragOver(tab, { dataTransfer: data });
+  fireEvent.drop(tab, { dataTransfer: data });
+  await waitFor(() => expect(api.bodies()).toEqual([{ action: "cancel", number: 46 }]));
+  fireEvent.dragEnd(card);
 });
 
 test("a queued task with replies to its last run only: Back to backlog, but no Queue after", async () => {
