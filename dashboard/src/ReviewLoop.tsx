@@ -113,24 +113,30 @@ const TREND = {
 
 // "Last review: 2 high · 1 low ↓": the last review's counts, and whether it weighs less (a
 // green arrow down) or more (a red one up) than the one before it (reviewTrend(); the points
-// stay hidden). Hovering, focusing or tapping it lists every review, oldest first; Escape, a
-// click elsewhere or Tab closes the list (ui/popup.ts), and so does the mouse leaving, unless
-// focus is on the line.
+// stay hidden). Hovering it lists every review, oldest first, until the mouse leaves: a preview
+// that leaves the page's keys alone. Focusing or clicking it pins the list, a popup's
+// (ui/popup.ts): Escape, a click elsewhere or Tab closes it, and so does a click on the line.
 function LastReview({ task }: { task: Task }) {
   const r = task.review!;
-  const [open, setOpen] = useState(false);
+  const [hover, setHover] = useState(false);
+  const [pinned, setPinned] = useState(false);
+  const open = hover || pinned;
   const box = useRef<HTMLDivElement>(null);
   const button = useRef<HTMLButtonElement>(null);
   const id = useId();
-  // Escape closes the list, then focuses the line (ui/popup.ts): that focus mustn't open it
+  // Escape closes the list, then focuses the line (ui/popup.ts): that focus mustn't pin it
   // again. Set while the popup closes, cleared once its handler is done.
   const closing = useRef(false);
+  // Pinned before the click's pointer went down: the press itself focuses the line, which pins.
+  const wasPinned = useRef(false);
+  // Closed by the keys or a click, the list stays shut under a mouse at rest on the line.
   const close = () => {
     closing.current = true;
-    setOpen(false);
+    setPinned(false);
+    setHover(false);
     queueMicrotask(() => (closing.current = false));
   };
-  usePopup(open, close, { box, button: () => button.current });
+  usePopup(pinned, close, { box, button: () => button.current });
   const last = r.history.length - 1;
   const trend = reviewTrend(r.history);
   const of = r.rounds ? ` of ${r.rounds}` : "";
@@ -139,10 +145,8 @@ function LastReview({ task }: { task: Task }) {
     <div
       ref={box}
       class={styles.last}
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => {
-        if (document.activeElement !== button.current) setOpen(false);
-      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
     >
       <button
         ref={button}
@@ -150,11 +154,15 @@ function LastReview({ task }: { task: Task }) {
         class={styles.line}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
-        onFocus={() => !closing.current && setOpen(true)}
-        onClick={() => {
+        onFocus={() => !closing.current && setPinned(true)}
+        onPointerDown={() => (wasPinned.current = pinned)}
+        onClick={(e) => {
+          // Enter or Space (no pointer, detail 0): the list is as the line's focus left it.
+          const before = e.detail ? wasPinned.current : pinned;
+          if (before) return close();
           // Safari doesn't focus a button clicked: the popup's Escape brings focus back here.
           button.current?.focus();
-          setOpen(true);
+          setPinned(true);
         }}
       >
         <span class={styles.label}>Last review:</span> {roundCounts(r.history[last])}
@@ -166,7 +174,12 @@ function LastReview({ task }: { task: Task }) {
         )}
       </button>
       {open && (
-        <ol id={id} class={styles.list} aria-label="Every review, oldest first" data-popup>
+        <ol
+          id={id}
+          class={styles.list}
+          aria-label="Every review, oldest first"
+          data-popup={pinned || undefined}
+        >
           {r.history.map((h, i) => (
             <li
               key={`${h.round}-${h.at}`}

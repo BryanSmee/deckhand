@@ -177,13 +177,21 @@ test("the last review's arrow: down and green when it weighs less, up and red wh
   );
 });
 
-test("hovering, focusing or clicking the line lists every review; Escape, Tab, a click away close it", () => {
+test("hovering previews every review; focus or a click pins them, until Escape, Tab, a click", () => {
   const rounds = detail(loop());
   const line = within(rounds).getByRole("button", { name: /^Last review:/ });
+  const box = line.parentElement!;
+  const list = () => within(rounds).queryByRole("list", { name: "Every review, oldest first" });
   const rows = () =>
-    within(within(rounds).getByRole("list", { name: "Every review, oldest first" }))
+    within(list()!)
       .getAllByRole("listitem")
       .map((li) => li.textContent);
+  // A mouse click: the press focuses the line, then the click.
+  const click = () => {
+    fireEvent.pointerDown(line);
+    act(() => line.focus());
+    fireEvent.click(line, { detail: 1 });
+  };
   // Oldest first, the one that didn't lower the blocking findings marked, each with its commit.
   const ALL = [
     "R0 1 critical · 3 high · 1 low sha-0",
@@ -191,40 +199,54 @@ test("hovering, focusing or clicking the line lists every review; Escape, Tab, a
     "R2 2 high · 1 mediumno progress sha-2",
   ];
 
-  fireEvent.mouseEnter(line.parentElement!);
+  // Hovered: a preview, which leaves the page's keys and focus alone.
+  fireEvent.mouseEnter(box);
   expect(line.getAttribute("aria-expanded")).toBe("true");
   expect(rows()).toEqual(ALL);
-  fireEvent.mouseLeave(line.parentElement!);
-  expect(within(rounds).queryByRole("list")).toBeNull();
+  expect(list()!.hasAttribute("data-popup")).toBe(false);
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(document.activeElement).toBe(document.body);
+  expect(rows()).toEqual(ALL);
+  fireEvent.mouseLeave(box);
+  expect(list()).toBeNull();
 
+  // Focused: pinned, a popup's; Escape closes it, focus staying on the line.
   act(() => line.focus());
   expect(rows()).toEqual(ALL);
-  fireEvent.keyDown(document, { key: "Escape" });
-  expect(within(rounds).queryByRole("list")).toBeNull();
-  expect(document.activeElement).toBe(line);
-
-  // A tap: open, and it stays while focus is on it, whatever the mouse does.
-  fireEvent.click(line);
-  fireEvent.mouseLeave(line.parentElement!);
-  expect(rows()).toEqual(ALL);
-  fireEvent.pointerDown(document.body);
-  expect(within(rounds).queryByRole("list")).toBeNull();
-
-  fireEvent.click(line);
-  fireEvent.keyDown(document, { key: "Tab" });
-  expect(within(rounds).queryByRole("list")).toBeNull();
-
-  // Opened by the mouse, focus elsewhere: Escape closes it, though it focuses the line.
-  act(() => line.blur());
-  expect(document.activeElement).toBe(document.body);
-  fireEvent.mouseEnter(line.parentElement!);
-  expect(rows()).toEqual(ALL);
+  expect(list()!.hasAttribute("data-popup")).toBe(true);
   act(() => {
     fireEvent.keyDown(document, { key: "Escape" });
   });
-  expect(within(rounds).queryByRole("list")).toBeNull();
+  expect(list()).toBeNull();
   expect(document.activeElement).toBe(line);
+  // Enter opens it again, and closes it.
+  fireEvent.click(line);
+  expect(rows()).toEqual(ALL);
+  fireEvent.click(line);
+  expect(list()).toBeNull();
+  act(() => line.blur());
+
+  // Clicked after a hover: it stays once the mouse leaves; a click away closes it.
+  fireEvent.mouseEnter(box);
+  click();
+  fireEvent.mouseLeave(box);
+  expect(rows()).toEqual(ALL);
+  fireEvent.pointerDown(document.body);
+  expect(list()).toBeNull();
+
+  // A second click on the line closes it, the mouse still over it.
+  fireEvent.mouseEnter(box);
+  click();
+  expect(rows()).toEqual(ALL);
+  click();
+  expect(list()).toBeNull();
   expect(line.getAttribute("aria-expanded")).toBe("false");
+
+  // Tab closes it too.
+  act(() => line.blur());
+  click();
+  fireEvent.keyDown(document, { key: "Tab" });
+  expect(list()).toBeNull();
 });
 
 test("a review's points: low 1, medium 3, high 5, critical 8, every finding counted", () => {
@@ -246,6 +268,16 @@ test("a clean loop: plain Ready for review, its rounds still listed", () => {
   expect(screen.queryByText(/findings? left/)).toBeNull();
   const rounds = screen.getByRole("region", { name: "Review loop" });
   expect(within(rounds).getByText(/Nothing blocking/)).toBeTruthy();
+  act(() =>
+    within(rounds)
+      .getByRole("button", { name: /^Last review:/ })
+      .focus(),
+  );
+  expect(
+    within(within(rounds).getByRole("list", { name: "Every review, oldest first" }))
+      .getAllByRole("listitem")
+      .map((li) => li.textContent),
+  ).toEqual(["R0 1 critical · 3 high · 1 low sha-0", "R1 1 low sha-1"]);
   expect(within(rounds).queryByText("no progress")).toBeNull();
 });
 
