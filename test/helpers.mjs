@@ -710,8 +710,10 @@ export function withBlobs(images, readFile) {
 // doesn't match as S3 does (403 SignatureDoesNotMatch, its body quoting the signature).
 // `fail(...modes)`: the next requests, one mode each, fail instead: { status, code } (a 503
 // SlowDown), "hang" (never answers), "reset" (the connection dropped). `ignoreRange`: answers a
-// ranged GET with the whole object, as a server that doesn't do ranges. `objects`: key →
-// Buffer; `requests`: { method, key, headers } of each one that came, failed or not.
+// ranged GET with the whole object, as a server that doesn't do ranges; `overRange`, with a byte
+// more than asked; `headWithoutSize`, a HEAD without its content-length. `objects`: key →
+// Buffer; `requests`: { method, key, headers } of each one that came, failed or not;
+// `arrived(n)`: once `n` of them came.
 export async function fakeS3(
   t,
   {
@@ -720,11 +722,14 @@ export async function fakeS3(
     region = "us-east-1",
     bucket = "deckhand",
     ignoreRange = false,
+    overRange = false,
+    headWithoutSize = false,
   } = {},
 ) {
   const sign = signer({ accessKeyId, secretAccessKey, region });
   const objects = new Map();
   const requests = [];
+  const arrivals = []; // { count, resolve }
   const failures = [];
   const AUTH =
     /^AWS4-HMAC-SHA256 Credential=([^/]+)\/(\d{8})\/([^/]+)\/s3\/aws4_request, SignedHeaders=([a-z0-9;-]+), Signature=([0-9a-f]{64})$/;
@@ -743,6 +748,7 @@ export async function fakeS3(
     const named = host.startsWith(`${bucket}.`) ? bucket : parts.shift();
     const key = parts.map(decodeURIComponent).join("/");
     requests.push({ method: req.method, key, headers: req.headers });
+    for (const waiting of arrivals) if (requests.length >= waiting.count) waiting.resolve();
 
     const failure = failures.shift();
     if (failure === "hang") return;
@@ -785,7 +791,10 @@ export async function fakeS3(
         res.writeHead(204);
         return res.end();
       case "HEAD":
-        res.writeHead(object ? 200 : 404, object ? { "content-length": object.length } : {});
+        res.writeHead(
+          object ? 200 : 404,
+          object && !headWithoutSize ? { "content-length": object.length } : {},
+        );
         return res.end();
       case "GET": {
         if (!object) return xml(res, 404, "NoSuchKey");
@@ -796,7 +805,8 @@ export async function fakeS3(
         }
         const start = Number(range[1]);
         if (start >= object.length) return xml(res, 416, "InvalidRange");
-        const end = Math.min(range[2] ? Number(range[2]) : Infinity, object.length - 1);
+        const asked = (range[2] ? Number(range[2]) : Infinity) + (overRange ? 1 : 0);
+        const end = Math.min(asked, object.length - 1);
         res.writeHead(206, {
           "content-length": end - start + 1,
           "content-range": `bytes ${start}-${end}/${object.length}`,
@@ -818,6 +828,10 @@ export async function fakeS3(
     objects,
     requests,
     fail: (...modes) => failures.push(...modes),
+    arrived: (count) =>
+      requests.length >= count
+        ? Promise.resolve()
+        : new Promise((resolve) => arrivals.push({ count, resolve })),
   };
 }
 

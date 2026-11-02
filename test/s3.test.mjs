@@ -25,7 +25,7 @@ const SUITE_HEADERS = { host: "example.amazonaws.com", "x-amz-date": "20150830T1
 const suiteAuth = (signature) =>
   `AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=${signature}`;
 
-test("s3: the signer matches the SigV4 test suite (get-vanilla, query order, post-vanilla)", () => {
+test("s3: the signer matches the SigV4 test suite (vanilla, query order, POST, UTF-8 and space paths)", () => {
   const sign = signer(SUITE);
   const request = { method: "GET", path: "/", headers: SUITE_HEADERS, payloadHash: EMPTY_SHA256 };
   assert.equal(
@@ -45,6 +45,16 @@ test("s3: the signer matches the SigV4 test suite (get-vanilla, query order, pos
   assert.equal(
     sign({ ...request, method: "POST" }),
     suiteAuth("5da7c1a2acd57cee7505fc6676e4e544621c30862966e37dddb68e92efbe5d6b"),
+  );
+  // Paths that need encoding, as the client encodes keys: part by part, `/` kept.
+  const path = (raw) => raw.split("/").map(uriEncode).join("/");
+  assert.equal(
+    sign({ ...request, path: path("/ሴ") }),
+    suiteAuth("8318018e0b0f223aa2bbf98705b62bb787dc9c0e678f255a891fd03141be5d85"),
+  );
+  assert.equal(
+    sign({ ...request, path: path("/example space/") }),
+    suiteAuth("652487583200325589f1fba4c7e578f72c47cb61beeca81406b39ddec1366741"),
   );
 });
 
@@ -252,19 +262,65 @@ test("s3: a 4xx isn't tried again", async (t) => {
   assert.equal(s3.requests.length, 3);
 });
 
-test("s3: a call that takes too long fails, retries included", async (t) => {
+test("s3: a call that takes too long fails at its deadline", async (t) => {
   const s3 = await fakeS3(t);
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now: Date.parse("2026-11-02T00:00:00Z") });
   const client = clientOf(t, s3, { timeoutMs: 200 });
   s3.fail("hang");
-  const start = Date.now();
-  await assert.rejects(client.get("k"), /^S3Error: S3 get k: timed out after 200 ms$/m);
-  assert.ok(Date.now() - start < 2000);
+  let settled = false;
+  const call = client.get("k").finally(() => (settled = true));
+  await s3.arrived(1);
+  t.mock.timers.tick(199);
+  await new Promise(setImmediate);
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  await assert.rejects(call, /^S3Error: S3 get k: timed out after 200 ms$/m);
   assert.equal(s3.requests.length, 1);
-  // A server failing until the deadline: the call stops there too.
-  const slow = clientOf(t, s3, { timeoutMs: 200, retries: 100, delayMs: 50 });
+});
+
+test("s3: a server failing until the deadline: no retry starts past it", async (t) => {
+  const s3 = await fakeS3(t);
+  // The waits move the clock on, not time.
+  let clock = Date.parse("2026-11-02T00:00:00Z");
+  const waits = [];
+  const client = clientOf(t, s3, {
+    timeoutMs: 200,
+    retries: 100,
+    delayMs: 50,
+    now: () => new Date(clock),
+    sleep: async (ms) => (waits.push(ms), (clock += ms)),
+  });
   s3.fail(...Array(100).fill({ status: 500, code: "InternalError" }));
-  await assert.rejects(slow.put("k", "v"), /500 InternalError/);
-  assert.ok(s3.requests.length < 20, `${s3.requests.length} requests`);
+  await assert.rejects(client.put("k", "v"), /^S3Error: S3 put k: 500 InternalError$/m);
+  assert.equal(s3.requests.length, waits.length + 1);
+  assert.ok(waits.length >= 2 && waits.length <= 3, `${waits}`);
+  assert.ok(clock < Date.parse("2026-11-02T00:00:00.200Z"));
+});
+
+test("s3: an error that isn't the network's is thrown as it is, not tried again", async (t) => {
+  const s3 = await fakeS3(t);
+  const client = clientOf(t, s3, { now: () => new Date(NaN) });
+  await assert.rejects(client.put("k", "v"), RangeError);
+  assert.equal(s3.requests.length, 0);
+});
+
+test("s3: the calls work apart from the client, as callbacks", async (t) => {
+  const s3 = await fakeS3(t);
+  const { put, get, head, delete: remove } = clientOf(t, s3);
+  await put("k", "abc");
+  assert.deepEqual(await get("k", { length: 0 }), Buffer.alloc(0));
+  assert.equal(await get("missing", { length: 0 }), null);
+  assert.equal(await head("k"), 3);
+  await remove("k");
+  assert.equal(await head("k"), null);
+});
+
+test("s3: a server sending more than the range, or no size, isn't believed", async (t) => {
+  const s3 = await fakeS3(t, { overRange: true, headWithoutSize: true });
+  const client = clientOf(t, s3);
+  await client.put("blob", "0123456789");
+  assert.equal(String(await client.get("blob", { offset: 2, length: 3 })), "234");
+  await assert.rejects(client.head("blob"), /^S3Error: S3 head blob: no size$/m);
 });
 
 test("s3: a key that would climb out of its prefix is refused before any request", async (t) => {
