@@ -68,12 +68,14 @@ Questions for the maintainer, wherever you ask them (a run that stops to ask, an
 ```
 
 - One numbered item per question, each answerable in a line: an optional short `**Title**:`,
-  then the question on the same line. Explanation lines, if any, go indented under it,
-  before the options, as plain text (not bullets).
+  then the question on the same line (a `**Question?**:` with nothing after it is read as
+  the question itself). Explanation lines, if any, go indented under it, before the options,
+  as plain text (not bullets).
 - Options are an indented task list (`- [ ]`). The maintainer picks one per question: when
   combining two of them makes sense, add that combination as an option of its own.
 - End your pick with `(recommended)`, on one option at most: the dashboard ticks it in
-  advance. No options: a free-text question. Every question also gets a free-text answer.
+  advance. A reason goes inside it, `(recommended: simplest)`, and shows as `(simplest)`.
+  No options: a free-text question. Every question also gets a free-text answer.
 - Leave every box unticked (`- [ ]`). A ticked one (`- [x]`), in an issue's section or in
   your reply, is the maintainer's answer: once every question has one, the issue no longer
   waits for input, or your session goes on as with a reply.
