@@ -3542,3 +3542,41 @@ test("follow-ups past the cap are listed once, not again by each later review", 
   await s.record(more, { pr: { ...posted().pr, state: "closed", merged: true } });
   assert.equal(s.replies.length, 2);
 });
+
+test("severity sub-headings stay in Must fix; a finding or a blocking comment under another heading is read", () => {
+  // Deckhand's own posted layout, as the thread shows it.
+  for (const verdict of ["comment", "request-changes"]) {
+    const review = parseReview(
+      `## Must fix\n\n### 🟠 High (1)\n\n- **high** \`a.mjs:1\`: broken.\n\nRating: 9/10\nVerdict: ${verdict}`,
+    );
+    assert.deepEqual(
+      [review.findings.map((f) => f.severity), review.verdict, reviewEvent(review), review.rating],
+      [["high"], "request-changes", "REQUEST_CHANGES", 5],
+      verdict,
+    );
+  }
+  const old = parseReview(
+    "## Findings\n\n### High\n\n- **high** `a.mjs:1`: broken.\n\nRating: 9/10\nVerdict: comment",
+  );
+  assert.deepEqual(
+    old.findings.map((f) => f.severity),
+    ["high"],
+  );
+  // A heading named another way: its blocking comment blocks, its finding is one.
+  const named = parseReview(
+    "## Must fix\n\nNone.\n\n## Blocking comments\n\n- **blocking** `a.mjs:1`: must not merge.\n\n## Problems\n\n- **medium** `b.mjs:2`: slow.\n\nRating: 9/10\nVerdict: request-changes",
+  );
+  assert.deepEqual(
+    [named.comments.map((c) => [c.blocking, c.text]), named.findings.map((f) => f.severity)],
+    [[[true, "must not merge."]], ["medium"]],
+  );
+  assert.deepEqual([named.verdict, reviewEvent(named)], ["request-changes", "REQUEST_CHANGES"]);
+  assert.match(reviewBody(named, "", "f"), /- \*\*blocking\*\* `a\.mjs:1`: must not merge\./);
+  // Never a follow-up from there.
+  const titled = parseReview(
+    "## Must fix\n\nNone.\n\n## Later\n\n- **Share the helper** `a.mjs:1`: twice.\n\nRating: 10/10\nVerdict: request-changes",
+  );
+  assert.deepEqual([titled.followUps, titled.comments], [[], []]);
+  // Something else there: the model's request-changes stands, None. or not.
+  assert.equal(titled.verdict, "request-changes");
+});

@@ -141,12 +141,15 @@ export function parseReview(text, { allowed = "low" } = {}) {
   // (a misplaced comment or finding): the model's `request-changes` stands whatever else the
   // reply has, tolerated findings included, as it may be a blocking comment.
   let doubtful = false;
+  // The depth of the section's heading ("##": 2): a deeper one is inside it.
+  let depth = 0;
   for (const line of lines) {
-    const heading = /^#+\s*(must[- ]fix|findings|follow[- ]?ups?|comments)\b/i.exec(line.trim());
+    const heading = /^(#+)\s*(must[- ]fix|findings|follow[- ]?ups?|comments)\b/i.exec(line.trim());
     if (heading) {
       started = true;
       current = null;
-      const name = heading[1].toLowerCase();
+      depth = heading[1].length;
+      const name = heading[2].toLowerCase();
       section = name.startsWith("follow")
         ? "follow-ups"
         : name === "comments"
@@ -154,11 +157,15 @@ export function parseReview(text, { allowed = "low" } = {}) {
           : "findings";
       continue;
     }
-    // Any other heading after the review's own (`## Checks`, `## Acceptance criteria`, `## Out
-    // of scope`) ends the section: what is under it is no item, never filed nor blocking.
-    if (started && /^#+\s/.test(line.trim())) {
-      section = "other";
+    // Any other heading after the review's own: a deeper one stays inside its section (a
+    // severity's "### 🟠 High (1)" under Must fix, as Deckhand posts them); one as deep or less
+    // (`## Checks`, `## Acceptance criteria`, `## Blocking comments`) ends it. Under it, only
+    // what reads as a finding or a comment is an item (bullet()), never a follow-up; anything
+    // else keeps the model's `request-changes`.
+    const other = started && /^(#+)\s/.exec(line.trim());
+    if (other) {
       current = null;
+      if (section === "other" || other[1].length <= depth) section = "other";
       continue;
     }
     // "None." under a heading, as a bullet or not: no item. Under Must fix, the review says it
@@ -173,11 +180,16 @@ export function parseReview(text, { allowed = "low" } = {}) {
     }
     const found = bullet(section, line, started);
     if (found) {
-      const { unmarked, misplaced, comment, ...item } = found;
+      const { unmarked, misplaced, comment, skip, ...item } = found;
       if (unmarked || misplaced) unsure = doubtful = true;
       started = true;
+      if (skip) {
+        current = null;
+        continue;
+      }
       current = item;
-      ({ findings, "follow-ups": followUps, comments })[comment ? "comments" : section].push(item);
+      const into = comment ? "comments" : item.severity ? "findings" : section;
+      ({ findings, "follow-ups": followUps, comments })[into].push(item);
       continue;
     }
     if (/^\W*(rating|verdict)\W/i.test(line)) {
@@ -192,6 +204,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
       if (started && ["findings", "comments"].includes(section) && /^\S/.test(line)) {
         unsure = true;
       }
+      if (section === "other" && /^\S/.test(line)) unsure = doubtful = true;
     }
     if (!started) summary.push(line);
   }
@@ -237,7 +250,18 @@ export function parseReview(text, { allowed = "low" } = {}) {
 // is no summary's either.
 function bullet(section, line, started = true) {
   const lead = /^(?:[-*+]|\d+[.)])\s+(?=\S)/.exec(line);
-  if (!lead || section === "other") return null;
+  if (!lead) return null;
+  if (section === "other") {
+    // A finding or a comment under another heading: read as one (a blocking one blocks); a
+    // note keeps the model's verdict. Anything else is no item, and keeps it too.
+    const rest = line.slice(lead[0].length);
+    const severity = bullet("findings", line, false);
+    if (severity?.severity) return severity;
+    const kind = commentKind(rest);
+    if (!kind) return { misplaced: true, skip: true };
+    if (kind[1].toLowerCase() !== "blocking") return { ...note(kind[2]), misplaced: true };
+    return { comment: true, blocking: true, ...located(kind[2]) };
+  }
   const rest = line.slice(lead[0].length);
   if (section === "findings") {
     const m =
