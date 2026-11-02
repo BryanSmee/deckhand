@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { closeSync, openSync, readSync, statSync } from "node:fs";
 import { partEnd } from "../lib/redact.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
+import { LOGIN_REFRESH_MARGIN_MS, MIN_REFRESH_MS } from "../lib/services.mjs";
 
 // What the orchestrator waits for the runner, for the calls a run's life needs: an update of
 // the runner, a slow pull of its image. A run doesn't fail for it.
@@ -23,6 +24,9 @@ const POLICY_WAIT_MS = 10_000;
 const APPEND_MAX = 4 * 1024 * 1024;
 // After a failed append, the next try.
 const APPEND_RETRY_MS = 5000;
+// The longest pause between two tries of a call (../lib/service-client.mjs maxRetryMs's
+// default): what the login's refresh keeps of its lease for the last one.
+const REFRESH_RETRY_MAX_MS = 5000;
 
 const path = (...parts) => parts.map((p) => encodeURIComponent(p)).join("/");
 
@@ -467,9 +471,25 @@ export function createRunnerClient({
   };
 
   // `agy models` on the login's volume (../models/antigravity-login.mjs): { code, out, err }.
-  // Once: its refresh token is spent by the first.
-  const refreshLogin = (input) =>
-    models.json("POST", "/logins/antigravity/refresh", { body: { input }, once: true });
+  // Once: its refresh token is spent by the first. `timeoutMs`: what is left of the models
+  // service's lease on the login, which the runner ends its job within. A runner that doesn't
+  // answer (a handover's 503s, a refused connection: the call never reached it) is asked again,
+  // its next copy first, each try saying what is left of the lease at that moment, and none
+  // once too little is for the runner to start the job: the last retry goes out at most
+  // REFRESH_RETRY_MAX_MS after the client's wait.
+  function refreshLogin(input, { timeoutMs } = {}) {
+    const route = "/logins/antigravity/refresh";
+    if (timeoutMs === undefined) return models.json("POST", route, { body: { input }, once: true });
+    const until = now() + timeoutMs;
+    return models.json("POST", route, {
+      body: () => ({ input, timeoutMs: until - now() }),
+      once: true,
+      waitMs: Math.max(
+        0,
+        timeoutMs - LOGIN_REFRESH_MARGIN_MS - MIN_REFRESH_MS - REFRESH_RETRY_MAX_MS,
+      ),
+    });
+  }
 
   return {
     runner: {

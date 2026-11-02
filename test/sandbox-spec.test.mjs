@@ -288,8 +288,8 @@ test("createBackend: Docker's runner, images and jobs, or Kubernetes'; another r
     kubeApi: { namespace: "runs" },
   });
   assert.equal(typeof kube.runner.start, "function");
-  // No short containers: an agent's install and the login refresh say so.
-  assert.deepEqual(kube.jobs, {});
+  // A pod for the login refresh, its one job there (kube-images.mjs runJob()).
+  assert.equal(kube.jobs.run, kube.images.runJob);
   assert.throws(() => createBackend({ config: { runner: "nomad" } }), /RUNNER: expected docker/);
   // Outside the cluster: no ServiceAccount, no start.
   assert.throws(

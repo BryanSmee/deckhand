@@ -992,8 +992,9 @@ Then restart the models service and the orchestrator. The models service logs `A
 Google AI plan's login, from /data/credentials/agy-auth.json` at start, or why it can't use it.
 When the access token is within 5 minutes of its expiry, it has `agy` refresh it: the runner runs
 `agy models` in a short container of the sandbox image, on a volume of its own
-(`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs), once for
-all runs, and the models service keeps the new token in its store, sealed. When Google refuses
+(`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs; on
+Kubernetes, a pod of its own: [Agents on Kubernetes](kubernetes.md#agents-on-kubernetes)), once
+for all runs, and the models service keeps the new token in its store, sealed. When Google refuses
 the refresh (the login was revoked), runs fail with "sign in with `agy` again": repeat the steps
 above; the models service reads the new file without a restart. `GEMINI_API_KEY`, when set too, wins.
 
