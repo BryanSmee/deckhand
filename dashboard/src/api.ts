@@ -17,6 +17,7 @@ import type {
   DiscussionResult,
   DiscussionStart,
   Entry,
+  Health,
   InboxEntry,
   InboxResult,
   LaneNaming,
@@ -148,6 +149,24 @@ export function usePolled<T>(
 }
 
 const POLL_MS = 3000;
+// The services' health (api/health): every 15 s while the status page is open, every minute
+// else, for the shell's alert. The orchestrator probes them at most every 10 s anyway.
+export const HEALTH_OPEN_MS = 15_000;
+export const HEALTH_MS = 60_000;
+
+// api/health, polled faster while `open` (Settings › Server), and read at once as it opens.
+export function useHealth(open: boolean): Polled<Health> {
+  const polled = usePolled<Health>("api/health", null);
+  // usePolled() reads it as it mounts: only a later opening reads it again.
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (open && mounted.current) void polled.reload();
+    mounted.current = true;
+    const timer = setInterval(() => void polled.reload(), open ? HEALTH_OPEN_MS : HEALTH_MS);
+    return () => clearInterval(timer);
+  }, [open]);
+  return polled;
+}
 
 export interface AppState {
   state: State | null;

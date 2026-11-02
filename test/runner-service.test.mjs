@@ -23,7 +23,14 @@ import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
 import { grantsFrom } from "../listener/grants.mjs";
-import { fakeDocker, grantedOf, listenToRestart, tempDir, until } from "./helpers.mjs";
+import {
+  assertHealth,
+  fakeDocker,
+  grantedOf,
+  listenToRestart,
+  tempDir,
+  until,
+} from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const signing = { privateKey, kid: keyId(publicKey) };
@@ -179,6 +186,13 @@ const client = (urls, extra = {}) =>
     runWaitMs: 5000,
     ...extra,
   });
+
+test("GET /health: without a token, its start, version and whether this copy acts, nothing else", async (t) => {
+  const { url, lease } = await copy(t, { store: fileStore(), backend: host() });
+  const health = await fetch(`${url}/health`);
+  assert.equal(health.status, 200);
+  assertHealth(await health.json(), { active: lease.active() });
+});
 
 test("each caller gets its own endpoints only, from its own network, with a valid token", async (t) => {
   const store = fileStore();

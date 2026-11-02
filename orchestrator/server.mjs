@@ -110,6 +110,7 @@ import { createOrder } from "../listener/order.mjs";
 import { createTitles } from "../listener/titles.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createWorkApi } from "../listener/work.mjs";
+import { createHealth } from "../listener/health.mjs";
 
 // How long the egress policy's answers in flight get once the rest is saved: they are quick.
 const POLICY_DRAIN_MS = 5000;
@@ -254,7 +255,11 @@ async function listenWhenFree(server, port, host) {
 let edgeReady = null;
 // Whether this copy acts: from the lease's taking until SIGTERM.
 let acting = false;
+// The version the images were built from, its repository and when this orchestrator started:
+// api/state's, and its own /health (../lib/health.mjs).
+const server = serverInfo(env);
 const services = createServicesHttp({
+  health: server,
   // The broker service's keys.
   keys: { get: (kid) => brokerService.serviceKeys().get(kid) },
   // none on Kubernetes: the callers' service tokens, and NetworkPolicies (deploy/kubernetes/).
@@ -319,8 +324,9 @@ leaseLost = () => {
 
 // Edge (../edge/, #506): the verified deliveries' stream, the App's public parts, the
 // dashboard's "from" tags, the redeliveries' scan.
+const edgeUrl = env.EDGE_URL || "http://edge:8083";
 const edge = createEdgeClient({
-  urls: env.EDGE_URL || "http://edge:8083",
+  urls: edgeUrl,
   token: () => brokerCaller.header("edge"),
   log,
 });
@@ -371,9 +377,22 @@ function skip(reason) {
 // has stored one.
 const ctx = {
   // The version the images were built from, its repository and when this listener started.
-  server: serverInfo(env),
+  server,
   // How it is set up (engine, egress proxy, grants, who may sign in): GET api/server.
   serverSetup: () => serverSetup(config),
+  // The services' health, each one's GET /health (GET api/health: the status page).
+  health: createHealth({
+    urls: {
+      edge: edgeUrl,
+      runner: config.runnerUrl,
+      broker: config.brokerServiceUrl,
+      github: config.githubServiceUrl,
+      models: config.modelsServiceUrl,
+      policy: config.policyServiceUrl,
+      proxy: config.egressProxy,
+    },
+    self: { name: "orchestrator", startedAt: server.startedAt, version: server.version },
+  }),
   config,
   log,
   skip,

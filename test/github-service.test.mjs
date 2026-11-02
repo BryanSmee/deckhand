@@ -18,7 +18,14 @@ import { createGithubService, GITHUB_STATUS, mutates } from "../github/service.m
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { fingerprints } from "../lib/redact.mjs";
 import { loadConfig } from "../listener/config.mjs";
-import { allowingPolicies, localBroker, serve, tempDir, testKey } from "./helpers.mjs";
+import {
+  allowingPolicies,
+  assertHealth,
+  localBroker,
+  serve,
+  tempDir,
+  testKey,
+} from "./helpers.mjs";
 
 const PEM = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey.export({
   type: "pkcs8",
@@ -147,6 +154,13 @@ async function setup(t, { answer, gatewayOptions, bound, env } = {}) {
     });
   return { github, store, key, a, b, call, run, relayed };
 }
+
+test("GET /health: without a token, its start, version and whether it has an App, nothing else", async (t) => {
+  const { a } = await setup(t);
+  const health = await fetch(`${a.url}/health`);
+  assert.equal(health.status, 200);
+  assertHealth(await health.json(), { app: true });
+});
 
 test("each route takes its callers only: edge reads, the runner gets tarballs, the orchestrator writes", async (t) => {
   const { a, call, github } = await setup(t, {

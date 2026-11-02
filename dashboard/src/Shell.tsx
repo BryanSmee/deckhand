@@ -16,13 +16,14 @@ import {
   sameRepo,
   shortRepo,
 } from "./format";
+import { HealthAlert } from "./Health";
 import { withKey } from "./keys";
 import type { Permission } from "./notify";
 import { needingYou } from "./Repos";
 import { SettingsTabs } from "./Settings";
 import { formatRoute, isOverview, type Route } from "./route";
 import type { Syncer } from "./Sync";
-import type { State } from "./types";
+import type { Health, State } from "./types";
 import { Button, IconButton } from "./ui/Button";
 import { type Segment, Segmented } from "./ui/Choice";
 import * as Icon from "./ui/icons";
@@ -60,6 +61,8 @@ const repoHref = (route: Route, repo: string | null) => {
 interface Common {
   state: State | null;
   route: Route;
+  // The services' health (api/health): a dot by Deckhand's name when one is down or starting.
+  health?: Health | null;
 }
 
 interface SidebarProps extends Common {
@@ -73,7 +76,7 @@ interface SidebarProps extends Common {
 }
 
 export function Sidebar(props: SidebarProps) {
-  const { state, route, repos, rail, onRail, onRequest, notify } = props;
+  const { state, route, repos, rail, onRail, onRequest, notify, health = null } = props;
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const waiting = needingYou(repos?.repos ?? null, state?.tasks ?? []);
   const toggle = (
@@ -98,6 +101,7 @@ export function Sidebar(props: SidebarProps) {
             Deckhand
           </a>
         )}
+        <HealthAlert health={health} class={rail ? styles.railAlert : undefined} />
         {!rail && toggle}
       </div>
       {state && <NewRequest onPick={onRequest} form={rail ? "icon" : "full"} />}
@@ -457,7 +461,7 @@ interface TopBarProps extends Common {
 // then the run slots and the user; Search on the Tasks page, and New request. Under it, the
 // listener's error, if any: the sidebar's run slots say it on a wide screen.
 export function TopBar(props: TopBarProps) {
-  const { state, route, error, onRequest, onSearch } = props;
+  const { state, route, error, onRequest, onSearch, health = null } = props;
   const [sheet, setSheet] = useState(false);
   const counts = repoCounts(state?.tasks ?? [], route.repo);
   const settings = route.page === "settings";
@@ -478,6 +482,7 @@ export function TopBar(props: TopBarProps) {
           <span class={styles.switcherLabel}>{label}</span>
           <Icon.ChevronDown class={styles.chevron} />
         </button>
+        <HealthAlert health={health} />
         {state && <PlanBars plans={state.plans} now={state.now} form="phone" />}
         {onSearch && (
           <IconButton

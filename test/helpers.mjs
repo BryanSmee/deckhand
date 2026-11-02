@@ -1001,3 +1001,16 @@ export function capabilityPolicies({
     },
   };
 }
+
+// A service's GET /health answer (lib/health.mjs), parsed: { ok, startedAt, version } and
+// `extra`, the fields that service sends beside them, nothing else.
+export function assertHealth(body, extra = {}) {
+  assert.deepEqual(
+    Object.keys(body).sort(),
+    ["ok", "startedAt", "version", ...Object.keys(extra)].sort(),
+  );
+  assert.equal(body.ok, true);
+  assert.ok(Number.isFinite(body.startedAt) && body.startedAt > 0, "startedAt: epoch ms");
+  assert.equal(typeof body.version, "string");
+  for (const [name, value] of Object.entries(extra)) assert.deepEqual(body[name], value, name);
+}

@@ -10,11 +10,13 @@
 //   redacts them from runs' output without them (GET /fingerprints), a run's API state (GET
 //   /runs/:id/api), how much of each plan the runs used (GET /usage, `?poll=1` while a dashboard
 //   is open: usage.mjs), and the `models` stream (GET /events, POST /events/ack);
-//   GET /health, /ready: liveness, and readiness (503 once draining).
+//   GET /health, /ready: liveness ({ ok, startedAt, version }, ../lib/health.mjs), and readiness
+//   (503 once draining).
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:http";
 import { AGENT_TOKEN_HEADERS, RUN_TOKEN_HEADER } from "../lib/broker-client.mjs";
 import { drainable } from "../lib/drain.mjs";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { fingerprints } from "../lib/redact.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
@@ -70,6 +72,8 @@ export function createModelsHandler({
   // so that the listener holds one set, whichever copy it asks.
   salt = randomBytes(16).toString("hex"),
   log = () => {},
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const guard = serviceGuard({ service: "models", keys, routes: ROUTES, bound, now });
 
@@ -99,8 +103,10 @@ export function createModelsHandler({
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://models");
-    if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/ready")) {
-      const ready = url.pathname === "/health" || !draining();
+    if (req.method === "GET" && url.pathname === "/health")
+      return sendJson(res, healthAnswer(health));
+    if (req.method === "GET" && url.pathname === "/ready") {
+      const ready = !draining();
       return sendJson(res, { ok: ready }, ready ? 200 : 503);
     }
     guard(req);

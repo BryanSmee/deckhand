@@ -15,6 +15,7 @@
 // Each route names its callers (ROUTES, serviceGuard()), whose service tokens come from the
 // broker service and are checked with its keys: the user header counts from edge's token alone.
 import { createServer } from "node:http";
+import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { withRequest } from "../lib/log.mjs";
@@ -52,6 +53,8 @@ export function createServicesHttp({
   allowed = () => true,
   log = () => {},
   now = Date.now,
+  // What GET /health says: when it started, its version (../lib/health.mjs).
+  health = healthInfo(),
 }) {
   const guard = serviceGuard({ service: "orchestrator", keys, routes: ROUTES, bound, now });
 
@@ -84,7 +87,8 @@ export function createServicesHttp({
 
   async function handle(req, res) {
     const url = new URL(req.url, "http://orchestrator");
-    if (req.method === "GET" && url.pathname === "/health") return sendJson(res, { ok: true });
+    if (req.method === "GET" && url.pathname === "/health")
+      return sendJson(res, healthAnswer(health));
     if (req.method === "GET" && url.pathname === "/ready") {
       return sendJson(res, { ok: active() }, active() ? 200 : 503);
     }

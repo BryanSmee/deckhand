@@ -28,6 +28,9 @@ COPY policy/ policy/
 ENV NODE_ENV=production
 # Nothing it does needs root: its files are read-only, its sets staged in /tmp.
 USER node
+# The release it was built from, which its /health says (../lib/health.mjs).
+ARG DECKHAND_VERSION=dev
+ENV DECKHAND_VERSION=$DECKHAND_VERSION
 # Its callers' calls (POLICY_SERVICE_URL), on its internal network only; /health and /ready too.
 EXPOSE 8181
 CMD ["node", "policy-service/service.mjs"]
