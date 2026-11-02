@@ -9,7 +9,7 @@ import { agentFor } from "../listener/agents/index.mjs";
 import { createPreparation } from "../listener/preparation.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
 import { sandboxEnv, sandboxSpec, sessionOf } from "../listener/sandbox-spec.mjs";
-import { capabilityPolicies, grantedOf, tempDir, testConfig } from "./helpers.mjs";
+import { capabilityPolicies, grantedOf, needsPosixPaths, tempDir, testConfig } from "./helpers.mjs";
 
 const REPO_YAML = `setup: npm ci
 instructions: AGENTS.md
@@ -708,32 +708,36 @@ test("a pull request that can't be looked up, with a policy denying forks `push`
   );
 });
 
-test("a run with the open internet gets no host mount, which says so", async (t) => {
-  const nfs = join(realpathSync(tempDir(t)), "nfs");
-  mkdirSync(join(nfs, "data"), { recursive: true });
-  const grant = `mounts: [${nfs}]\n`;
-  const grants = ["research"];
-  const yaml = `mounts:\n  - ${nfs}/data\n`;
-  // The operator gives work runs the open internet, the risky combination named too.
-  const internet = capabilityPolicies({
-    operator: () => ["pull", "push", "internet", "pull+internet"],
-  });
-  const { parts, notes } = await workRun(t, "org/repo", {
-    grant,
-    grants,
-    yaml,
-    policies: internet,
-  });
-  assert.deepEqual(parts.access.mounts, []);
-  assert.deepEqual(parts.access.hosts, ["*"]);
-  assert.ok(notes.some((n) => /^No host mounts: this run reaches the open internet/.test(n)));
-  // Without it, the mount as granted.
-  const plain = await workRun(t, "org/repo", { grant, grants, yaml });
-  assert.deepEqual(
-    plain.parts.access.mounts.map((m) => m.target),
-    [`${nfs}/data`],
-  );
-});
+test(
+  "a run with the open internet gets no host mount, which says so",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const nfs = join(realpathSync(tempDir(t)), "nfs");
+    mkdirSync(join(nfs, "data"), { recursive: true });
+    const grant = `mounts: [${nfs}]\n`;
+    const grants = ["research"];
+    const yaml = `mounts:\n  - ${nfs}/data\n`;
+    // The operator gives work runs the open internet, the risky combination named too.
+    const internet = capabilityPolicies({
+      operator: () => ["pull", "push", "internet", "pull+internet"],
+    });
+    const { parts, notes } = await workRun(t, "org/repo", {
+      grant,
+      grants,
+      yaml,
+      policies: internet,
+    });
+    assert.deepEqual(parts.access.mounts, []);
+    assert.deepEqual(parts.access.hosts, ["*"]);
+    assert.ok(notes.some((n) => /^No host mounts: this run reaches the open internet/.test(n)));
+    // Without it, the mount as granted.
+    const plain = await workRun(t, "org/repo", { grant, grants, yaml });
+    assert.deepEqual(
+      plain.parts.access.mounts.map((m) => m.target),
+      [`${nfs}/data`],
+    );
+  },
+);
 
 test("a run with the open internet gets no caches, which later runs trust, and says so", async (t) => {
   const internet = capabilityPolicies({

@@ -13,7 +13,7 @@ import { createBroker } from "../broker/server.mjs";
 import { signServiceToken } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { SESSION_COOKIE, SESSION_MS } from "../listener/auth.mjs";
-import { listening, serve, tempDir, testKey } from "./helpers.mjs";
+import { listening, needsSignals, serve, tempDir, testKey } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 const KEY = Buffer.alloc(32, 3);
@@ -70,7 +70,7 @@ async function startEdge(t) {
     res.writeHead(200, { "content-type": "application/json" }).end('{"answered":true}');
   });
   const child = spawn(process.execPath, ["edge/server.mjs"], {
-    cwd: new URL("..", import.meta.url).pathname,
+    cwd: join(import.meta.dirname, ".."),
     env: {
       PATH: process.env.PATH,
       PORT: "0",
@@ -181,6 +181,7 @@ test("edge: a delivery taken once, read and acknowledged by the orchestrator; th
   // Its poller scans at start, holding the lease.
   await edge.until("edge/redeliveries: lease taken");
   // SIGTERM: the lease given back, the requests drained, then it exits.
+  if (needsSignals) return t.skip(`its SIGTERM: ${needsSignals}`);
   const exited = new Promise((resolve) => edge.child.on("exit", resolve));
   edge.child.kill("SIGTERM");
   assert.equal(await exited, 0);

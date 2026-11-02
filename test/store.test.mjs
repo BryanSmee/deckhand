@@ -16,7 +16,7 @@ import { randomBytes } from "node:crypto";
 import { sealWith } from "../lib/seal.mjs";
 import { nextEpoch, openStore, storable } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
-import { tempDir } from "./helpers.mjs";
+import { needsPosixRename, tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
 storeContract("memory", (t, clock) => fileStore({ now: clock.now }));
@@ -275,38 +275,42 @@ test("file: two copies on one folder see each other's keys, leases and streams a
   );
 });
 
-test("file: two processes' increments on one folder are never lost; a crashed one's lock is taken over", async (t) => {
-  const dir = tempDir(t);
-  const script = `
+test(
+  "file: two processes' increments on one folder are never lost; a crashed one's lock is taken over",
+  { skip: needsPosixRename },
+  async (t) => {
+    const dir = tempDir(t);
+    const script = `
     import { fileStore } from ${JSON.stringify(new URL("../lib/store-file.mjs", import.meta.url).href)};
     const store = fileStore({ dir: process.argv[1] });
     for (let i = 0; i < 100; i++) await store.increment("n");
   `;
-  const { spawn } = await import("node:child_process");
-  const run = () =>
-    new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir], {
-        stdio: ["ignore", "inherit", "inherit"],
+    const { spawn } = await import("node:child_process");
+    const run = () =>
+      new Promise((resolve, reject) => {
+        const child = spawn(process.execPath, ["--input-type=module", "-e", script, dir], {
+          stdio: ["ignore", "inherit", "inherit"],
+        });
+        child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
       });
-      child.on("exit", (code) => (code === 0 ? resolve() : reject(new Error(`exit ${code}`))));
-    });
-  await Promise.all([run(), run()]);
-  assert.equal(await fileStore({ dir }).get("n"), 200);
-  // A lock left behind, old enough: not waited for forever.
-  writeFileSync(join(dir, "state.lock"), "12345");
-  const { utimesSync } = await import("node:fs");
-  const old = new Date(Date.now() - 60_000);
-  utimesSync(join(dir, "state.lock"), old, old);
-  assert.equal(await fileStore({ dir }).increment("n"), 201);
-  // Left behind again, and four processes racing to take it over: one at a time, none lost
-  // (a takeover never removes the lock another process made anew).
-  for (let round = 0; round < 3; round++) {
+    await Promise.all([run(), run()]);
+    assert.equal(await fileStore({ dir }).get("n"), 200);
+    // A lock left behind, old enough: not waited for forever.
     writeFileSync(join(dir, "state.lock"), "12345");
+    const { utimesSync } = await import("node:fs");
+    const old = new Date(Date.now() - 60_000);
     utimesSync(join(dir, "state.lock"), old, old);
-    await Promise.all([run(), run(), run(), run()]);
-  }
-  assert.equal(await fileStore({ dir }).get("n"), 201 + 3 * 400);
-});
+    assert.equal(await fileStore({ dir }).increment("n"), 201);
+    // Left behind again, and four processes racing to take it over: one at a time, none lost
+    // (a takeover never removes the lock another process made anew).
+    for (let round = 0; round < 3; round++) {
+      writeFileSync(join(dir, "state.lock"), "12345");
+      utimesSync(join(dir, "state.lock"), old, old);
+      await Promise.all([run(), run(), run(), run()]);
+    }
+    assert.equal(await fileStore({ dir }).get("n"), 201 + 3 * 400);
+  },
+);
 
 test("file: acknowledged with drop, a stream's events leave its memory and, past 100, its file (#506)", async (t) => {
   const dir = tempDir(t);

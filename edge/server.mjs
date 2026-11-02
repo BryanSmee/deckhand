@@ -23,7 +23,7 @@
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { activePassive } from "../lib/active.mjs";
 import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
@@ -151,7 +151,7 @@ const http = createEdgeHttp({
   store,
   orchestrator,
   redeliveries,
-  dashboardDir: env.DASHBOARD_DIR || new URL("../dashboard/dist", import.meta.url).pathname,
+  dashboardDir: env.DASHBOARD_DIR || fileURLToPath(new URL("../dashboard/dist", import.meta.url)),
   secrets,
   stopping: () => stopping,
   log,

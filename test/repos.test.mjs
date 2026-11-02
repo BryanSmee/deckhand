@@ -17,7 +17,13 @@ import {
   refreshFor,
   repoStatus,
 } from "../listener/repos.mjs";
-import { capabilityPolicies, recordingFetch, tempDir, testConfig } from "./helpers.mjs";
+import {
+  capabilityPolicies,
+  needsPosixPaths,
+  recordingFetch,
+  tempDir,
+  testConfig,
+} from "./helpers.mjs";
 
 const throwing = (error) => {
   throw error;
@@ -544,46 +550,54 @@ const statuses = async (api) =>
     (await call(api, "GET", "/api/repos")).body.repos.map((r) => [r.repo, r.status]),
   );
 
-test("a config the operator's grants refuse is invalid: no run starts there", async (t) => {
-  const { api, cases } = refusedSetup(t);
-  // Each file parses: only the grants refuse it.
-  assert.deepEqual(await statuses(api), {
-    "org/docker": "invalid",
-    "org/dockerfile": "invalid",
-    "org/mounts": "invalid",
-  });
-  for (const repo of Object.keys(cases)) {
-    const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
-    assert.deepEqual(body.errors, [], repo);
-    assert.equal(body.repo.status, "invalid", repo);
-  }
-});
+test(
+  "a config the operator's grants refuse is invalid: no run starts there",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const { api, cases } = refusedSetup(t);
+    // Each file parses: only the grants refuse it.
+    assert.deepEqual(await statuses(api), {
+      "org/docker": "invalid",
+      "org/dockerfile": "invalid",
+      "org/mounts": "invalid",
+    });
+    for (const repo of Object.keys(cases)) {
+      const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
+      assert.deepEqual(body.errors, [], repo);
+      assert.equal(body.repo.status, "invalid", repo);
+    }
+  },
+);
 
-test("a fully granted config is configured; editing a grant shows without GitHub", async (t) => {
-  const { api, gh, cases, grants } = refusedSetup(t);
-  await statuses(api);
-  const reads = configReads(gh.calls);
-  grants.files = Object.fromEntries(
-    Object.entries(cases).map(([repo, [, grant]]) => [`org/${repo}.yaml`, `${grant}\n`]),
-  );
-  grants.names = Object.fromEntries(
-    Object.entries(cases).map(([repo, [, , names]]) => [`org/${repo}`, names]),
-  );
-  assert.deepEqual(await statuses(api), {
-    "org/docker": "configured",
-    "org/dockerfile": "configured",
-    "org/mounts": "configured",
-  });
-  for (const repo of Object.keys(cases)) {
-    const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
-    assert.equal(body.repo.status, "configured", repo);
-  }
-  // The list read no config again: the grants are checked against the kept settings.
-  assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
-  grants.files = {};
-  grants.names = {};
-  assert.equal((await statuses(api))["org/docker"], "invalid");
-});
+test(
+  "a fully granted config is configured; editing a grant shows without GitHub",
+  { skip: needsPosixPaths },
+  async (t) => {
+    const { api, gh, cases, grants } = refusedSetup(t);
+    await statuses(api);
+    const reads = configReads(gh.calls);
+    grants.files = Object.fromEntries(
+      Object.entries(cases).map(([repo, [, grant]]) => [`org/${repo}.yaml`, `${grant}\n`]),
+    );
+    grants.names = Object.fromEntries(
+      Object.entries(cases).map(([repo, [, , names]]) => [`org/${repo}`, names]),
+    );
+    assert.deepEqual(await statuses(api), {
+      "org/docker": "configured",
+      "org/dockerfile": "configured",
+      "org/mounts": "configured",
+    });
+    for (const repo of Object.keys(cases)) {
+      const { body } = await call(api, "GET", `/api/repos/org/${repo}/config`);
+      assert.equal(body.repo.status, "configured", repo);
+    }
+    // The list read no config again: the grants are checked against the kept settings.
+    assert.equal(configReads(gh.calls), reads + Object.keys(cases).length);
+    grants.files = {};
+    grants.names = {};
+    assert.equal((await statuses(api))["org/docker"], "invalid");
+  },
+);
 
 test("a repo's broken grant makes that repo invalid only", async () => {
   const { api } = apiSetup({

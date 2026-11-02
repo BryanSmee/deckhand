@@ -14,7 +14,7 @@ import { createSeal } from "../broker/seal.mjs";
 import { MAX_SHOT, MAX_SHOTS } from "../lib/shots.mjs";
 import { openStore } from "../lib/store.mjs";
 import { TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
-import { testKey } from "./helpers.mjs";
+import { resetsUnread, testKey } from "./helpers.mjs";
 
 // Each caller reaches the broker at an address of its own, as over a network of its own with
 // Docker: the broker's address a call arrives at tells it apart (SERVICE_NETWORKS).
@@ -380,7 +380,6 @@ test("screenshots: into the run's folder, images only, capped, then on the strea
   assert.equal((await put("page.png", Buffer.concat([PNG, Buffer.from("x")]))).status, 204);
   assert.equal((await put("page.gif", PNG)).status, 400);
   assert.equal((await put("fake.png", Buffer.from("GIF89a"))).status, 415);
-  assert.equal((await put("big.png", Buffer.alloc(MAX_SHOT + 1))).status, 413);
   assert.ok(MAX_SHOTS >= MAX_SHOT);
   // The orchestrator reads the stream, copies the screenshot, deletes it here, acknowledges.
   const { events } = (await orchestrator("GET", "/events")).json;
@@ -410,6 +409,22 @@ test("screenshots: into the run's folder, images only, capped, then on the strea
     body: PNG,
   });
   assert.equal(refused.status, 403);
+});
+
+test("screenshots: one over the cap is refused unread", { skip: resetsUnread }, async (t) => {
+  const { copies } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const { token } = await started(orchestrator);
+  const big = await sandboxCall(proxy, "PUT", "/run/shots/big.png", token, "net-a", {
+    body: Buffer.alloc(MAX_SHOT + 1),
+  });
+  assert.equal(big.status, 413);
+  assert.deepEqual(
+    (await orchestrator("GET", "/events")).json.events.map(({ event }) => event.type),
+    ["started"],
+  );
 });
 
 test("screenshots: the run's total is capped, whatever the orchestrator copied away", async (t) => {

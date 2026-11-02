@@ -3,7 +3,7 @@ import { chmodSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createStatus, serverInfo, serverSetup } from "../listener/status.mjs";
-import { isRoot, tempDir, testConfig } from "./helpers.mjs";
+import { isRoot, needsModes, tempDir, testConfig } from "./helpers.mjs";
 
 // A grants folder on disk, { "path/in/it": text }, and settings reading it.
 function setupWith(t, files, settings = {}) {
@@ -159,7 +159,7 @@ test("serverSetup: errors in several files name each, and never a path", (t) => 
 
 test(
   "serverSetup: a grants folder that can't be listed names no file",
-  { skip: isRoot && "root lists any folder" },
+  { skip: needsModes || (isRoot && "root lists any folder") },
   (t) => {
     const { dir } = setupWith(t, { "acme/api.yaml": "hosts: [cdn.example.org]\n" });
     // Its error's file is "" (grants.mjs walkGrants()): the folder itself.

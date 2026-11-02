@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { readFileSync, statSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createWaits, issueList, waitsFor } from "../listener/waits.mjs";
-import { tempDir } from "./helpers.mjs";
+import { assertMode, tempDir } from "./helpers.mjs";
 
 // `t` null: removed when the file's tests end.
 const tempPath = (t = null) => join(tempDir(t), "waits.json");
@@ -95,7 +95,7 @@ test("a comment waits for open issues, says so, and keeps its 👀", async () =>
   assert.equal(saved.item.eyes, 4242);
   assert.equal(saved.item.text, "Do it.");
   assert.equal(saved.item.author, "alice");
-  assert.equal(statSync(w.path).mode & 0o777, 0o600);
+  assertMode(w.path, 0o600);
   // Read again when it starts; not kept.
   assert.equal(saved.item.settings, undefined);
   assert.equal(saved.item.after, undefined);

@@ -23,7 +23,7 @@ import {
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
-import { buildContext, contextBlob, isRoot, tempDir, withBlobs } from "./helpers.mjs";
+import { buildContext, contextBlob, isRoot, needsBash, tempDir, withBlobs } from "./helpers.mjs";
 
 const REGISTRY = "registry.example.com";
 const BASE = "ghcr.io/acme/deckhand-sandbox:1.2";
@@ -360,7 +360,7 @@ test("a repo's Dockerfile is built by buildctl, pushed to the registry, then reu
       labels: { "deckhand.repo": "org/a" },
     }),
   );
-  assert.ok(args.includes(`dockerfile=${dir}/docker`));
+  assert.ok(args.includes(`dockerfile=${join(dir, "docker")}`));
   assert.ok(args.includes("filename=Dockerfile"));
   assert.ok(args.includes(`type=image,name=${first},push=true`));
   // Its credentials: the pull Secret's, handed over in a file of its own.
@@ -693,7 +693,7 @@ test("an agent's claim its storage doesn't hand to the install's user: said, not
   );
 });
 
-test("writable(): a check of the mount point, then the command", (t) => {
+test("writable(): a check of the mount point, then the command", { skip: needsBash }, (t) => {
   const dir = tempDir(t);
   const run = (...command) => {
     const [shell, ...args] = writable(dir, ...command);
@@ -707,7 +707,7 @@ test("writable(): a check of the mount point, then the command", (t) => {
 
 test(
   "writable(): a mount point it can't write; a claim filled beforehand needs no write",
-  { skip: isRoot && "root writes anywhere" },
+  { skip: needsBash || (isRoot && "root writes anywhere") },
   (t) => {
     const dir = tempDir(t);
     const run = (...command) => {

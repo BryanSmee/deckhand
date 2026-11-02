@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { statSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -10,7 +9,7 @@ import {
   sessionKey,
 } from "../listener/auth.mjs";
 import { openStore } from "../lib/store.mjs";
-import { serve, tempDir, testConfig } from "./helpers.mjs";
+import { assertMode, serve, tempDir, testConfig } from "./helpers.mjs";
 
 const credentials = { client_id: "Iv1.x", client_secret: "cs" };
 
@@ -191,6 +190,6 @@ test("the session key is created once, owner-only, and kept", (t) => {
   const dir = tempDir(t, "deckhand-key-");
   const key = sessionKey(dir);
   assert.equal(key.length, 32);
-  assert.equal(statSync(join(dir, "session.key")).mode & 0o777, 0o600);
+  assertMode(join(dir, "session.key"), 0o600);
   assert.deepEqual(sessionKey(dir), key);
 });

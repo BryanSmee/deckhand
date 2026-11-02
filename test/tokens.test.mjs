@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { generateKeyPairSync, sign } from "node:crypto";
-import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
@@ -15,7 +15,7 @@ import {
   TokenError,
   verifyToken,
 } from "../lib/tokens.mjs";
-import { tempDir } from "./helpers.mjs";
+import { assertMode, tempDir } from "./helpers.mjs";
 
 const NOW = 1_900_000_000_000;
 const pair = () => {
@@ -97,7 +97,7 @@ test("a token over the size limit is never signed", () => {
 test("the signing key is made once, owner-only, and the same after a restart", (t) => {
   const dir = tempDir(t);
   const first = signingKey(dir);
-  assert.equal(statSync(`${dir}/run-token.key`).mode & 0o777, 0o600);
+  assertMode(join(dir, "run-token.key"), 0o600);
   const again = signingKey(dir);
   assert.equal(again.kid, first.kid);
   const token = signToken(claims, { ...first, audience: RUN_AUDIENCE, ttlMs: 60_000, now: NOW });
@@ -140,7 +140,7 @@ test("publishKey and keyFolder: the broker's public keys for the services that c
   const [name] = readdirSync(dir);
   assert.equal(name, `${key.kid}.pem`);
   assert.match(readFileSync(join(dir, name), "utf8"), /^-----BEGIN PUBLIC KEY-----/);
-  assert.equal(statSync(join(dir, name)).mode & 0o777, 0o644);
+  assertMode(join(dir, name), 0o644);
   // A token checks with it.
   assert.equal(
     verifyToken(signed(), { keys: folder, audience: RUN_AUDIENCE, now: NOW }).jti,

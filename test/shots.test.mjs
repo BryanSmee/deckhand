@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createServer } from "node:http";
 import { after, before, test } from "node:test";
 import { createHttp } from "../listener/http.mjs";
-import { tempDir } from "./helpers.mjs";
+import { needsBash, tempDir } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
 let base, server;
@@ -25,7 +25,8 @@ before(async () => {
   symlinkSync("page.png", join(dir, "sibling.png"));
   symlinkSync(dataDir, join(dir, "dir.png"));
   linkSync(join(dataDir, "app.json"), join(dir, "hard.png"));
-  execFileSync("mkfifo", [join(dir, "fifo.png")]);
+  // Not on Windows, which has no FIFO (its test skips there).
+  if (!needsBash) execFileSync("mkfifo", [join(dir, "fifo.png")]);
   // The folder itself as a link: the run can't do that, but nothing should follow it either.
   symlinkSync(dir, join(shotsDir, "fedcba9876543210fedcba98"));
 
@@ -63,9 +64,13 @@ test("a link in a run's folder is a 404, wherever it points", async () => {
 });
 
 // A blocking open would wait for a writer, with the whole orchestrator (a regression hangs here).
-test("a FIFO in a run's folder is a 404, and doesn't block the orchestrator", async () => {
-  assert.equal((await fetch(`${base}/${folder}/fifo.png`)).status, 404);
-});
+test(
+  "a FIFO in a run's folder is a 404, and doesn't block the orchestrator",
+  { skip: needsBash },
+  async () => {
+    assert.equal((await fetch(`${base}/${folder}/fifo.png`)).status, 404);
+  },
+);
 
 test("missing files and other names are a 404", async () => {
   for (const path of [`${folder}/none.png`, `${folder}/page.txt`, "nothex/page.png"]) {

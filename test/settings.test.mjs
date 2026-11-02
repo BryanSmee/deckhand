@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { FILE_SETTINGS, SETTINGS } from "../listener/config.mjs";
 
-const root = new URL("../", import.meta.url).pathname;
+const root = join(import.meta.dirname, "..");
 
 function sources(dir) {
   return readdirSync(join(root, dir), { recursive: true })
