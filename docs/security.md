@@ -2099,6 +2099,9 @@ them first" (`work.mjs` `asking()`), and the run's questions can no longer be an
 from its form or by ticking its reply's boxes (`answer()`, `ticked()`). So a label removal by
 someone outside `ALLOWED_USERS` can let one of the repo's users start that issue from the
 dashboard without answering its run's questions; what starts is still checked as any start is.
+This is on purpose: the label is how the maintainer says the questions no longer hold, and the
+dashboard follows what it shows (`work.test.mjs`, "wait_for_answers and a run's questions set
+aside").
 Comment triggers aren't held back for a run's questions either way (`tasks.mjs`
 `unanswered()`); an issue's own open questions still go by the label. The label put back asks
 again, and so does the dismiss API's `undo` for that run (the dashboard shows no Undo for

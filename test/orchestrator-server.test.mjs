@@ -180,8 +180,11 @@ async function fakeGitHub(files = {}) {
       if (req.url === "/user") return res.end(JSON.stringify({ login: "alice" }));
       // What a comment waits for ("/after #77"): the test sets its state, as JSON.
       const waitedFor = /^\/repos\/org\/repo\/issues\/(\d+)$/.exec(req.url);
+      // A number: the status GitHub answers instead (a 5xx, a rate limit).
       if (req.method === "GET" && waitedFor && files[`issue:${waitedFor[1]}`]) {
-        return res.end(files[`issue:${waitedFor[1]}`]);
+        const issue = files[`issue:${waitedFor[1]}`];
+        if (typeof issue === "number") return res.writeHead(issue).end("{}");
+        return res.end(issue);
       }
       // GraphQL's node look-ups (github-graphql.mjs), as JSON, when the test sets them.
       if (req.method === "POST" && req.url === "/graphql" && body.includes("nodes(ids:")) {
@@ -5244,11 +5247,77 @@ mounts:
     assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
   });
 
+  test("an issue's closed delivery redelivered while the issue can't be looked up records the close, sets nothing aside", async (t) => {
+    const asked =
+      "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
+    const deliveries = JSON.stringify([
+      {
+        id: 0,
+        guid: "g-ic",
+        delivered_at: new Date().toISOString(),
+        status_code: 503,
+        event: "issues",
+      },
+    ]);
+    // GitHub can't say what #5 is now: its lookup fails.
+    const { dir, listener, send } = await listen(
+      t,
+      { deliveries, "issue:5": 502 },
+      (dir, github) => {
+        mkdirSync(join(dir, "logs"));
+        writeFileSync(
+          join(dir, "logs", "org-repo-5-1000.log"),
+          [
+            {
+              type: "listener",
+              key: "org/repo#5",
+              repo: "org/repo",
+              taskMode: "work",
+              startedAt: 1000,
+            },
+            { type: "result", result: asked, duration_ms: 6000 },
+          ]
+            .map((l) => JSON.stringify(l))
+            .join("\n") + "\n",
+        );
+        return { GITHUB_URL: github.url };
+      },
+    );
+    await listener.until("Redelivered g-ic (issues");
+    const closed = {
+      number: 5,
+      title: "Five",
+      state: "closed",
+      state_reason: "completed",
+      closed_at: new Date(Date.now() + 60_000).toISOString(),
+      labels: [],
+    };
+    await send(
+      {
+        action: "closed",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "main" },
+        issue: closed,
+        sender: { login: "bob", type: "User" },
+      },
+      "issues",
+      "g-ic",
+    );
+    // Handled as sent: the close recorded, for titles, waits and the backlog.
+    const handled = await listener.until(/Delivery: issues \w+ from bob/);
+    assert.match(handled, /Delivery issues closed: redelivered, org\/repo#5 not looked up/);
+    assert.match(handled, /Delivery: issues closed from bob/);
+    await until(() => /"org\/repo#5"/.test(exists(join(dir, "closed.json")) ?? ""), "the close");
+    // But its questions left as they are: the delivery may be older than the run that asked.
+    assert.doesNotMatch(listener.output(), /questions set aside/);
+    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
+  });
+
   test("at start: an issue closed, or unlabelled, while no listener heard it sets its run's questions aside", async (t) => {
     const asked =
       "<!-- needs-input -->\n## Needs your input\n\n1. **Name**: which one?\n   - [ ] A";
     const files = {};
-    const { port, listener } = await listen(t, files, (dir, github) => {
+    const { dir, port, listener } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       for (const n of [5, 8, 11, 14]) {
         writeFileSync(
@@ -5309,6 +5378,7 @@ mounts:
         number: 14,
         state: "open",
         labels: [{ name: "needs-input" }],
+        body: "## Open questions\n\n1. **Name**: which one?\n   - [ ] A",
         updated_at: after,
       });
       files.installed = JSON.stringify({
@@ -5321,6 +5391,7 @@ mounts:
     await listener.until(
       "org/repo#11: label removed meanwhile, its last run's questions set aside",
     );
+    await listener.until("org/repo#14: still labelled, though the label's listing missed it");
     const base = `http://127.0.0.1:${port}`;
     const get = (path, cookie) =>
       fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
@@ -5332,13 +5403,19 @@ mounts:
       .getSetCookie()
       .find((c) => c.startsWith("deckhand_session="))
       .split(";")[0];
-    const tasks = (await (await get("/api/state", session)).json()).tasks;
+    const { tasks } = await (await get("/api/state", session)).json();
     assert.deepEqual(Object.fromEntries(tasks.map((x) => [x.key, x.state])), {
       "org/repo#5": "done",
       "org/repo#8": "needs-input",
       "org/repo#11": "done",
       "org/repo#14": "needs-input",
     });
+    // #14 still waits for input, since when it did, with its questions as its body has them.
+    const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
+    assert.deepEqual(
+      Object.entries(inputs).map(([key, i]) => [key, i.since, i.questions?.items?.length]),
+      [["org/repo#14", 1000, 1]],
+    );
   });
 
   test("api/state: a task's pull request in its fix loop has its review, in review between runs", async (t) => {

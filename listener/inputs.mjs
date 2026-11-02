@@ -12,8 +12,9 @@ import { respellMap } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
-// has them. `dropped(repo, number)`: an issue sync() found no longer labelled (or no longer
-// open), as an `unlabeled` delivery would have said (questions.mjs applyInput()).
+// has them. `dropped(repo, number, entry)`: an issue sync() found no longer labelled (or no
+// longer open), as an `unlabeled` delivery would have said (questions.mjs applyInput()), with
+// the entry it deleted: keep() puts it back if the listing only missed the issue.
 export function createInputs({
   path,
   listLabelled,
@@ -47,6 +48,16 @@ export function createInputs({
     if (inputs.has(key)) set(key, true, questions, ignoredTicks);
   }
 
+  // An entry sync() dropped whose issue, looked up on its own, is still open and labelled: a
+  // listing read page by page can miss an issue that moved between pages. Its `since` and
+  // ticks as they were, its questions as the body has them now. One a delivery listed again
+  // meanwhile stays as that delivery left it.
+  function keep(key, entry, questions) {
+    if (inputs.has(key)) return;
+    inputs.set(key, { ...entry, questions });
+    save();
+  }
+
   // Replaces what is known of each repo in `repos` with GitHub's list. A repo that can't be
   // listed keeps what it had. Resolves to [key, title] pairs, for the dashboard's titles.
   async function sync(repos) {
@@ -73,9 +84,10 @@ export function createInputs({
       }
       for (const key of inputs.keys()) {
         if (!sameRepo(parseKey(key)?.repo, repo) || found.has(key)) continue;
+        const entry = inputs.get(key);
         inputs.delete(key);
         changed = true;
-        dropped(repo, parseKey(key).number);
+        dropped(repo, parseKey(key).number, entry);
       }
       // Bodies edited meanwhile: their questions as they are now.
       for (const [key, entry] of found) {
@@ -106,6 +118,7 @@ export function createInputs({
   return {
     set,
     update,
+    keep,
     sync,
     list,
     has: (key) => inputs.has(key),

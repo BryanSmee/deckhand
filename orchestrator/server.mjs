@@ -80,6 +80,7 @@ import { operatorPolicies } from "../lib/policy-files.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { commitCi } from "../listener/ci.mjs";
+import { parseQuestions, questionsSection } from "../listener/questions.mjs";
 import { createDecisions } from "../listener/decisions.mjs";
 import { fetchEgressCa } from "../listener/egress.mjs";
 import { createRepoCheck } from "../listener/repo-check.mjs";
@@ -587,19 +588,23 @@ const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json
 const picks = createPicks({ path: join(config.dataDir, "picks.json") });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
-// One whose label came off meanwhile sets its run's questions aside, as the delivery would,
-// once the issue itself says so: a listing read page by page can miss one that moved between
-// pages. Its `updated_at` is when, at the latest: a run that asked since still waits.
+// One the listing no longer has is asked about on its own: a listing read page by page can
+// miss one that moved between pages. Still open and labelled, it is listed again; its label
+// off meanwhile, it sets its run's questions aside, as the delivery would. Its `updated_at` is
+// when, at the latest: a run that asked since still waits.
 const inputs = createInputs({
   path: join(config.dataDir, "inputs.json"),
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
-  dropped: (repo, number) => {
+  dropped: (repo, number, entry) => {
     const key = taskKey(repo, number);
-    if (!askedOn(ctx.runs, key)) return;
     lookup(repo, `/repos/${repo}/issues/${number}`)
       .then((issue) => {
-        if (issue?.state === "open" && hasLabel(issue.labels, config.needsInputLabel)) return;
+        if (issue?.state === "open" && hasLabel(issue.labels, config.needsInputLabel)) {
+          inputs.keep(key, entry, parseQuestions(questionsSection(issue.body)));
+          return log(`${key}: still labelled, though the label's listing missed it`);
+        }
+        if (!askedOn(ctx.runs, key)) return;
         const at = Date.parse(issue?.updated_at) || null;
         const aside = dismissals.setAsideOn(ctx.runs, key, null, at);
         if (aside) log(`${aside}: label removed meanwhile, its last run's questions set aside`);

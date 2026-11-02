@@ -322,29 +322,41 @@ export function createHttp(ctx) {
   }
 
   // A redelivered `issues` delivery that moves a run's questions or closes something, handled
-  // only if the issue still matches it (events.mjs replayedIssue()).
+  // only if the issue still matches it (events.mjs replayedIssue()). One whose issue can't be
+  // looked up (a 5xx, a rate limit) is handled as delivered but for the questions: GitHub had
+  // its 202 and won't send it again, and a lost `closed` would leave titles, waits and the
+  // backlog thinking the issue open. Its questions are left as they are, for a stale delivery
+  // must not set aside those of a run that asked since.
   function replayIssue(event, payload, work) {
     const repo = payload?.repository?.full_name;
     const number = payload?.issue?.number;
     if (!repo || !number) return dispatch(event, payload, work);
     const path = `/repos/${repo}/issues/${number}`;
+    const said = `Delivery ${event} ${payload.action}`;
     work.push(
       admitted(
-        getJson(ctx.github, repo, path, [404, 410]).then((current) => {
-          if (!current) {
-            return log(`Delivery ${event} ${payload.action}: ${repo}#${number} is gone`);
-          }
-          const now = replayedIssue(payload, current);
-          log(`Delivery ${event} ${payload.action}: redelivered, as ${repo}#${number} is now`);
-          return Promise.all(dispatch(event, now, []));
-        }),
+        getJson(ctx.github, repo, path, [404, 410]).then(
+          (current) => {
+            if (!current) return log(`${said}: ${repo}#${number} is gone`);
+            const now = replayedIssue(payload, current);
+            log(`${said}: redelivered, as ${repo}#${number} is now`);
+            return Promise.all(dispatch(event, now, []));
+          },
+          (error) => {
+            log(
+              `${said}: redelivered, ${repo}#${number} not looked up (${error.message ?? error}): handled as sent, its questions left as they are`,
+            );
+            return Promise.all(dispatch(event, payload, [], { questions: false }));
+          },
+        ),
       ),
     );
   }
 
   // A verified delivery: onboarding, a pull request's state or a comment. What
-  // it admits goes in `work`, returned.
-  function dispatch(event, payload, work) {
+  // it admits goes in `work`, returned. `questions: false`: none of the questions' changes
+  // (set aside, listed, taken back), for a redelivery whose issue couldn't be looked up.
+  function dispatch(event, payload, work, { questions = true } = {}) {
     const admitted = (promise) => work.push(admittedAs(promise));
     const { app } = ctx;
     // CI changed on a commit: the dashboard's CI status of the pull requests at it (pulls.mjs).
@@ -388,7 +400,7 @@ export function createHttp(ctx) {
         // Merged, the issue it closes too; closed without merging, only its own task.
         const target = payload.issue ?? payload.pull_request;
         const at = Date.parse(target?.merged_at ?? target?.closed_at) || null;
-        settleQuestions([closed.key, closed.state === "done" && pr?.key], at);
+        if (questions) settleQuestions([closed.key, closed.state === "done" && pr?.key], at);
         // An auto-picked issue's work is over: a reopen doesn't take its pick back (picks.mjs).
         endPicks(ctx.picks, ctx.runs, [closed.key, pr?.key].filter(Boolean));
       }
@@ -404,7 +416,7 @@ export function createHttp(ctx) {
       admitted(n === touched.merged ? ctx.waits.merged(repo, n) : ctx.waits.recheck(repo, n));
     }
     // Open questions and answers to them: the needs-input label (questions.mjs).
-    const input = inputEvent(config, event, payload, app.identity().name);
+    const input = questions && inputEvent(config, event, payload, app.identity().name);
     if (input) admitted(applyInput(ctx, input));
     // Nothing runs for an issue being opened, edited, labelled or closed: the graph's backlog
     // is read again now, for its next poll.

@@ -1672,6 +1672,67 @@ test("wait_for_answers off: an issue with open questions starts and queues witho
   assert.deepEqual(w.labels, []);
 });
 
+// docs/security.md, Dashboard: a set-aside goes by the needs-input label, which anyone with the
+// repo's triage permission can take off, and the gate goes by the board's state, which follows.
+test("wait_for_answers and a run's questions set aside: the start no longer held, nor its answers taken", async () => {
+  const w = setup({ issues: { 5: open("Five") }, board: ["org/app#5"] });
+  const runs = [
+    {
+      id: "run-5",
+      key: "org/app#5",
+      repo: "org/app",
+      kind: "issue",
+      replyTo: 5,
+      startedAt: 10,
+      finishedAt: 20,
+      status: "needs-input",
+      questions: { items: QUESTIONS, raw: "1. …" },
+    },
+  ];
+  // The task as board() has it now, the set-asides included.
+  const now = () => {
+    const tasks = boardOf({
+      runs,
+      queued: [],
+      brainstorms: [],
+      inputs: [],
+      dismissals: w.dismissals.list(),
+    });
+    w.tasks["org/app#5"] = tasks.find((t) => t.key === "org/app#5");
+    return w.tasks["org/app#5"].state;
+  };
+  const edited = QUESTIONS.map((q) => ({
+    ...q,
+    options: q.options.map((o, j) => ({ ...o, checked: j === 0 })),
+  }));
+  const start = () => post(w, { action: "start", number: 5 });
+  assert.equal(now(), "needs-input");
+  assert.equal((await start()).status, 409);
+  // The label taken off by someone outside ALLOWED_USERS (or the issue closed): set aside.
+  assert.equal(w.dismissals.setAsideOn(runs, "org/app#5", "mallory", 30), "org/app#5");
+  assert.equal(now(), "done");
+  // Its questions can't be answered from the dashboard, nor by ticking the reply's boxes.
+  const answered = await answer(w, { number: 5, text: "Yes" });
+  assert.equal(answered.status, 409);
+  assert.match(answered.body.error, /isn't waiting for answers/);
+  assert.match(
+    await w.api.ticked("org/app", "alice", { number: 5, pr: false, items: edited }),
+    /not the questions waiting for answers/,
+  );
+  // The label put back: held again.
+  assert.equal(w.dismissals.restoreOn(runs, "org/app#5"), "org/app#5");
+  assert.equal(now(), "needs-input");
+  assert.equal((await start()).status, 409);
+  assert.deepEqual([w.comments, w.accepted], [[], []]);
+  // Set aside again: a Start goes through, without answers, as a fresh run.
+  w.dismissals.setAsideOn(runs, "org/app#5", "mallory", 50);
+  assert.equal(now(), "done");
+  const started = await start();
+  assert.equal(started.status, 200);
+  assert.equal(started.body.message, "#5 started.");
+  assert.deepEqual([w.accepted[0].trigger, w.accepted[0].text], ["work", ""]);
+});
+
 test("answer then queue: one App comment with the answers, held after the other issue, label off", async () => {
   const w = setup({
     issues: { 5: open("Five"), 7: open("Seven") },

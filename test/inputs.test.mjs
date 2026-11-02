@@ -64,7 +64,7 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   const inputs = createInputs({
     path,
     listLabelled,
-    dropped: (repo, number) => dropped.push([repo, number]),
+    dropped: (repo, number, entry) => dropped.push([repo, number, entry]),
     now: () => 5,
     log: (l) => logs.push(l),
   });
@@ -84,8 +84,9 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
     "org/repo#2": Date.parse("2026-10-15T12:00:00Z"),
   });
   assert.match(logs[0], /org\/down: 502/);
-  // #1's run, if it asked, has its questions set aside, as the delivery would have.
-  assert.deepEqual(dropped, [["org/repo", 1]]);
+  // #1's run, if it asked, has its questions set aside, as the delivery would have. The entry
+  // goes with it, for keep().
+  assert.deepEqual(dropped, [["org/repo", 1, { since: 5, questions: null }]]);
   // Its questions from the listing's body.
   const questions = Object.fromEntries(inputs.list().map((i) => [i.key, i.questions]));
   assert.deepEqual(questions["org/repo#2"], {
@@ -94,6 +95,25 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   });
   assert.equal(questions["org/repo#4"], null);
   assert.equal(createInputs({ path, listLabelled }).has("org/repo#2"), true);
+});
+
+test("keep: an entry the listing missed comes back as it was, its questions as given", (t) => {
+  const path = join(tempDir(t), "inputs.json");
+  const inputs = createInputs({ path, listLabelled: async () => [], now: () => 9 });
+  const asked = { items: null, raw: "Which one?" };
+  inputs.keep("org/repo#1", { since: 5, questions: null, ignoredTicks: true }, asked);
+  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+    "org/repo#1": { since: 5, questions: asked, ignoredTicks: true },
+  });
+  // Listed again by a delivery meanwhile: left as that delivery has it.
+  inputs.set("org/repo#2", true);
+  inputs.keep("org/repo#2", { since: 5, questions: null }, asked);
+  assert.deepEqual(inputs.list()[1], {
+    key: "org/repo#2",
+    repo: "org/repo",
+    since: 9,
+    questions: null,
+  });
 });
 
 test("respell: an issue waiting for input under another spelling moves to the one given", (t) => {
