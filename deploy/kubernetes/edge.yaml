@@ -30,7 +30,7 @@ spec:
       enableServiceLinks: false
       automountServiceAccountToken: false
       # The preStop pause (10 s), then its drain (DRAIN_SECONDS, 25 s: a live log until the
-      # browser reconnects), as compose's stop_grace_period.
+      # browser reconnects).
       terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
@@ -56,6 +56,10 @@ spec:
             - name: internal
               containerPort: 8083
           env:
+            # Its default, written here so test/kubernetes-manifests.test.mjs holds it to the
+            # grace period above.
+            - name: DRAIN_SECONDS
+              value: "25"
             # The orchestrator's service token tells it apart, and this Deployment's
             # NetworkPolicy lets only its pods reach 8083.
             - name: SERVICE_NETWORKS

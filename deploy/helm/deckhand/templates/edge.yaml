@@ -37,6 +37,8 @@ spec:
             - name: internal
               containerPort: 8083
           env:
+            - name: DRAIN_SECONDS
+              value: "25"
             - name: SERVICE_NETWORKS
               value: none
             - name: SERVICE_ACCOUNT_TOKEN_FILE
