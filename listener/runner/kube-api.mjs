@@ -52,8 +52,9 @@ export function apiBase(env = process.env) {
 }
 
 // `base`: the API server's URL; `token()`: the bearer token, read at each call, as the
-// kubelet rotates it; `namespace`: where everything the runner makes lives; `timeoutMs`: how
-// long a call (not a stream, whose caller says when to stop) waits for its whole answer.
+// kubelet rotates it; `namespace`: the one relative paths are in (the runner has one API per
+// namespace, index.mjs: the sandboxes' and the services'); `timeoutMs`: how long a call (not
+// a stream, whose caller says when to stop) waits for its whole answer.
 export function createKubeApi({
   fetch = inClusterFetch(),
   base = apiBase(),
@@ -119,6 +120,8 @@ export function createKubeApi({
       }
     },
     create: (path, body) => answer("POST", path, { body }),
+    // The whole object, in place (its metadata.resourceVersion, when set, guards the change).
+    replace: (path, body) => answer("PUT", path, { body }),
     // False when it was gone already.
     remove: async (path, query) => {
       try {

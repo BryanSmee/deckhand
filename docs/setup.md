@@ -1110,7 +1110,8 @@ else set it in the service's `environment`, for example in a `compose.override.y
 | `GRANTS_DIR`                                                                                                                       | `grants_dir`                     | `/etc/deckhand/grants`                                                                                  | what you grant each repo, one file each: hosts, cached hosts, host mounts, limits, projects; and your policies in `policy/`, with the grants (Dockerfile, engine…: [the grants](security.md#the-grants)) (the server folder's). The runner must read the same folder: it checks every sandbox spec and build against it again, and the grants with the policy service (`compose.yaml` gives it the orchestrator's)                 |
 | `INSTALL_NETWORK`                                                                                                                  | `install_network`                | `bridge`                                                                                                | network of the agents' install containers (they need npm and GitHub's releases), and of the Antigravity CLI's login refresh                                                                                                                                                                                                                                                                                                        |
 | `RUNNER`                                                                                                                           | `runner`                         | `docker`                                                                                                | where sandboxes run: `docker`, the host's Docker, or `kubernetes`, pods of the cluster the runner runs in (see [Kubernetes runner](#kubernetes-runner)); another value stops the orchestrator and the runner at start, saying so                                                                                                                                                                                                   |
-| `KUBERNETES_NAMESPACE`                                                                                                             | `kubernetes_namespace`           | the runner's own                                                                                        | the namespace of the [Kubernetes runner](#kubernetes-runner)'s pods, Secrets and claims, which has to hold the orchestrator's, the runner's and the egress proxy's pods too                                                                                                                                                                                                                                                        |
+| `KUBERNETES_NAMESPACE`                                                                                                             | `kubernetes_namespace`           | the runner's own                                                                                        | the sandboxes' namespace: the [Kubernetes runner](#kubernetes-runner)'s sandbox and install pods, their Secrets and claims                                                                                                                                                                                                                                                                                                         |
+| `KUBERNETES_SERVICES_NAMESPACE`                                                                                                    | `kubernetes_services_namespace`  | `KUBERNETES_NAMESPACE`                                                                                  | the services' namespace, the runner's own: the egress proxy's Service, BuildKit and the registry's pull Secret ([Namespaces](#namespaces))                                                                                                                                                                                                                                                                                         |
 | `KUBERNETES_PENDING_MINUTES`                                                                                                       | `kubernetes_pending_minutes`     | `10`                                                                                                    | how long a sandbox's pod may stay Pending (no room, an image it can't pull) before its run fails, with the reason in its reply                                                                                                                                                                                                                                                                                                     |
 | `KUBERNETES_STORAGE_CLASS`                                                                                                         | `kubernetes_storage_class`       | the cluster's default                                                                                   | the storage class of the issues' session claims                                                                                                                                                                                                                                                                                                                                                                                    |
 | `KUBERNETES_SESSION_SIZE`                                                                                                          | `kubernetes_session_size`        | `10Gi`                                                                                                  | the size of each session claim (an issue's clone, and its agent's session)                                                                                                                                                                                                                                                                                                                                                         |
@@ -1517,15 +1518,18 @@ Two copies of the runner may run, one acting and the other waiting for its lease
 (`STORE_URL`, [The store](#the-store)), and the runs' inboxes (its `runs` volume, ReadWriteMany,
 until they move to the store, #505); `/ready` answers only on the one acting, for the readiness
 probe. Ready-made manifests are on their way (issue #396); until then, this is what the
-runner expects in its namespace (`KUBERNETES_NAMESPACE`, by default the runner's own).
-That namespace has to hold the orchestrator's and the egress proxy's pods and Services too: the
-policy check below accepts no peer in another namespace, so sandboxes elsewhere could never
-be allowed to reach them, and every run would be refused.
+runner expects ([Namespaces](#namespaces) says which goes where).
 
-- **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none): `create`, `get`, `list` and `delete` on
-  `pods`, `secrets` and `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log` and `services`, and `list` on
-  `events` (why a pod is stuck), `networkpolicies` (`networking.k8s.io`) and `endpointslices` (`discovery.k8s.io`).
-  Nothing cluster-wide.
+- **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none), in
+  the sandboxes' namespace: `create`, `get`, `list` and `delete` on `pods`, `secrets` and
+  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and
+  `list` on `events` (why a pod is stuck) and `networkpolicies` (`networking.k8s.io`). With
+  the services in a namespace of their own, `update` on `secrets` there too (the registry's
+  copy), and another Role in the services' namespace: `get` on `services` and `pods`, `list`
+  on `networkpolicies` and `endpointslices` (`discovery.k8s.io`), and `get` on the registry's
+  pull Secret alone (`resourceNames: [<KUBERNETES_REGISTRY_SECRET>]`), never the services' own
+  Secrets. In one namespace, the first Role with `get` on `services` and `list` on
+  `endpointslices` covers it all. Nothing cluster-wide.
 - **The orchestrator and the runner**, each telling the other's calls by NetworkPolicies, as every
   call reaches a pod at its one address (#505 brings a proof of the caller's own, its pod's
   projected service account token):
@@ -1567,13 +1571,15 @@ be allowed to reach them, and every run would be refused.
   (`STORE_URL=file:///data/store`, on a volume of its own); two on Redis (`STORE_URL=redis://…`,
   `REDIS_PASSWORD`, see [The store](#the-store)), both mounting the same key Secret: a copy
   with another key would sign tokens the other refuses.
-- **NetworkPolicies** that isolate the sandboxes. Their pods are labelled
+- **NetworkPolicies** that isolate the sandboxes, in their namespace. Their pods are labelled
   `deckhand.role: sandbox`. One policy has to pick them for both `Ingress` and `Egress`, and
-  none that picks them may let anything in, or let them out to anything but the namespace's
-  other pods (the egress proxy's, never other sandboxes): no `ipBlock`, no `namespaceSelector`,
-  and each rule naming its ports, the egress proxy's only (`EGRESS_PROXY`'s: never the
-  orchestrator's services port, which gives the runner's tokens). The runner checks it before every run and refuses to start one otherwise,
-  saying why. For example:
+  none that picks them may let anything in, or let them out to anything but the egress
+  proxy's pods, each rule naming its ports, the egress proxy's only (`EGRESS_PROXY`'s: never
+  the orchestrator's services port, which gives the runner's tokens). In one namespace, a peer
+  is a `podSelector` alone that never picks a sandbox (no `ipBlock`, no `namespaceSelector`);
+  with the services apart, it is the proxy's pods there alone (below). The runner checks it
+  before every run and refuses to start one otherwise, saying why. For example, in one
+  namespace:
 
   ```yaml
   apiVersion: networking.k8s.io/v1
@@ -1584,6 +1590,25 @@ be allowed to reach them, and every run would be refused.
     policyTypes: [Ingress, Egress]
     egress:
       - to: [{ podSelector: { matchLabels: { app: deckhand-egress } } }]
+        ports: [{ port: 3128 }]
+  ```
+
+  With the services apart, each peer names the services' namespace by its
+  `kubernetes.io/metadata.name` and asks for every label of the egress proxy Service's
+  `selector`, so it picks no pod the Service doesn't (another pod of the services' namespace,
+  any pod of a third, or of the sandboxes' own, is refused):
+
+  ```yaml
+  apiVersion: networking.k8s.io/v1
+  kind: NetworkPolicy
+  metadata: { name: deckhand-sandboxes, namespace: deckhand-sandboxes }
+  spec:
+    podSelector: { matchLabels: { deckhand.role: sandbox } }
+    policyTypes: [Ingress, Egress]
+    egress:
+      - to:
+          - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: deckhand } }
+            podSelector: { matchLabels: { app: deckhand-egress } }
         ports: [{ port: 3128 }]
   ```
 
@@ -1653,6 +1678,50 @@ container engine (`docker`; a run without the `docker` capability, a fork's or o
 as under Docker), or its own image (`dockerfile`) without `KUBERNETES_REGISTRY`. So is the
 Antigravity CLI's plan login, which the runner refreshes in a container.
 
+### Namespaces
+
+Two settings, which may name one namespace (the default) or two:
+
+- **The sandboxes' namespace** (`KUBERNETES_NAMESPACE`, by default the runner's own): the
+  sandbox pods, the agents' install pods and the caches' checks, the runs' Secrets, the
+  sessions', agents' and caches' claims, and the sandboxes' NetworkPolicies. Nothing else
+  runs there, so it can enforce Pod Security `restricted`
+  (`pod-security.kubernetes.io/enforce: restricted` on the namespace), a last line should a
+  pod's own spec ever be wrong.
+- **The services' namespace** (`KUBERNETES_SERVICES_NAMESPACE`, by default the sandboxes'):
+  every service (edge, the orchestrator, the runner itself, the broker, the github, models
+  and policy services, the egress proxy), their Secrets, BuildKit (rootless BuildKit can't
+  meet `restricted`), an in-cluster registry and the registry's pull Secret. The runner runs
+  here: `KUBERNETES_BUILDKIT` names BuildKit's Service by its short name, which resolves in
+  the runner's namespace.
+
+With two, the runner reads the proxy's Service and EndpointSlices and BuildKit's endpoints,
+pods and NetworkPolicies in the services' namespace, and keeps a copy of the registry's pull
+Secret (`KUBERNETES_REGISTRY_SECRET`) in the sandboxes', under the same name and labelled
+`deckhand.role: registry`, as a pod pulls only with a Secret of its own namespace: made at the
+first pod that needs it, brought up to date within a minute of a change. A Secret of that
+name there that isn't its copy is never overwritten: runs are refused, saying so. The proxy's
+own NetworkPolicy, in the services' namespace, lets in the sandboxes' namespace's sandbox and
+install pods on its port:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: { name: deckhand-egress-ingress, namespace: deckhand }
+spec:
+  podSelector: { matchLabels: { app: deckhand-egress } }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: deckhand-sandboxes } }
+          podSelector:
+            matchExpressions: [{ key: deckhand.role, operator: In, values: [sandbox, install] }]
+      ports: [{ port: 3128 }]
+```
+
+Install pods reach the proxy by its Service's IP there (`hostAliases`, as sandboxes do), not
+through the cluster's DNS, which doesn't know its short name in the sandboxes' namespace.
+
 ### Repo images on Kubernetes
 
 A repository granted its own image (`dockerfile`, and `branch_docker_images` for a
@@ -1671,20 +1740,21 @@ cluster and pushed to a registry, as nodes only pull from one:
   runner doesn't start without it), of type `kubernetes.io/dockerconfigjson`, whose
   credentials may pull from, push to and delete from the registry. The registry has to require them for all three, pulls included: sandboxes and builds can reach an in-cluster one, any run's sandbox among them (a research run's, a fork's, a repository's without the `dockerfile` grant). A registry that lets anyone push would let one run replace another repository's image, which then runs with that repository's grant; one that lets anyone pull would let any run read every repository's image, which holds whatever its Dockerfile copied of a private checkout. (On Docker, sandboxes can't read the host's images.) An in-cluster registry is best also kept out of the sandboxes' reach: a NetworkPolicy that lets only the runner, BuildKit and the nodes in. Sandbox pods, install pods and init containers pull with this Secret,
   and the runner reads it (its Role's `get` on `secrets` covers it) to push through BuildKit
-  and prune. It replaces the ServiceAccount's own `imagePullSecrets`, which Kubernetes adds
+  and prune. It lives in the services' namespace; with the sandboxes apart, the runner copies
+  it to theirs ([Namespaces](#namespaces)). It replaces the ServiceAccount's own `imagePullSecrets`, which Kubernetes adds
   only to a pod that lists none: when `SANDBOX_IMAGE` comes from a private registry, the
   Secret has to hold that registry's credentials too. For a repository with its own image,
   `SANDBOX_IMAGE` has to be readable through its registry's API as well: the runner reads
   its digest there (anonymously for a public one, such as ghcr.io's releases). Runs on the
   base image alone don't look it up: the nodes pull it as they can.
 - **A BuildKit daemon** (`moby/buildkit`, rootless), a Deployment with a Service named after
-  `KUBERNETES_BUILDKIT`'s host, in the namespace. The runner drives it with `buildctl`
+  `KUBERNETES_BUILDKIT`'s host, in the services' namespace. The runner drives it with `buildctl`
   (in its image), with the checkout as the build's context and `DECKHAND_BASE` as on Docker.
   Only the runner may reach it, and it goes out only through the egress proxy: set
   `HTTPS_PROXY` and `HTTP_PROXY` to `EGRESS_PROXY` in its Deployment, with `NO_PROXY` for an
   in-cluster registry, and give its pods NetworkPolicies that one picks for `Egress` and one
   for `Ingress`, letting them out to the namespace's pods only (the proxy, an in-cluster
-  registry) and to DNS (UDP or TCP port 53, no `endPort`), and in only from the namespace's pods that can't be sandboxes (the runner's: a peer has to ask for a label sandbox pods don't have, or a `deckhand.role` other than `sandbox`, as a sandbox's own policy lets it reach any pod but another sandbox). The
+  registry) and to DNS (UDP or TCP port 53, no `endPort`), and in only from the namespace's pods (no `namespaceSelector`, never the sandboxes' namespace). In one namespace with the sandboxes, those have to be pods that can't be sandboxes (the runner's: a peer has to ask for a label sandbox pods don't have, or a `deckhand.role` other than `sandbox`, as a sandbox's own policy lets it reach any pod but another sandbox); apart, any pod of the services' namespace may be let in. The
   runner checks them before every build, as it checks the sandboxes', and refuses to build
   otherwise, saying why (the Role's `get` on `pods` and `list` on `networkpolicies` and
   `endpointslices` cover it). The proxy asks the orchestrator about the daemon's pod IPs (the
@@ -1707,12 +1777,13 @@ every sandbox mounts read-only, as on Docker:
 - **With `KUBERNETES_AGENT_STORAGE_CLASS`** (by default `KUBERNETES_CACHE_STORAGE_CLASS`), a
   `ReadWriteMany` class (NFS, CephFS, EFS…), or a claim of that name made beforehand: the
   runner makes the claim when it is missing, and before the first run of each version a pod
-  of its own (`deckhand.role: install`) runs the base image's installer into it, then goes. It
+  of its own (`deckhand.role: install`), in the sandboxes' namespace, runs the base image's installer into it, then goes. It
   meets Pod Security `restricted`: it runs as uid 1001, neither root nor the sandbox's user,
   so no sandbox can change what the next one runs, and sandboxes mount the claim read-only.
   It goes out through the egress proxy, which lets it reach its agent's install hosts only
   (npm's registry; GitHub's releases for the Antigravity CLI): its NetworkPolicy has to let it
-  reach the proxy (and the cluster's DNS, as it resolves `egress` there).
+  reach the proxy (and, in one namespace, the cluster's DNS, as it resolves `egress` there;
+  with the services apart, it gets the proxy's IP through `hostAliases` instead).
 - **Without either**, each sandbox installs its agent itself, in an init container (uid 1001
   too) that fills an `emptyDir` the sandbox then mounts read-only: no shared storage, but a
   slower start, which counts toward `KUBERNETES_PENDING_MINUTES`. While its pod is still

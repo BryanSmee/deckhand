@@ -1,18 +1,22 @@
 // The Kubernetes runner: the runner interface of docker.mjs (its header lists the methods),
-// with each sandbox a bare Pod in one namespace (KUBERNETES_NAMESPACE), through the API
-// (kube-api.mjs). The listener stays the only writer of its state; the sandboxes are what
-// spread over the cluster's nodes.
+// with each sandbox a bare Pod in the sandboxes' namespace (KUBERNETES_NAMESPACE), through the
+// API (kube-api.mjs). The services, the egress proxy and BuildKit are in the services'
+// namespace (KUBERNETES_SERVICES_NAMESPACE), by default the same one; apart, the sandboxes'
+// can enforce Pod Security `restricted`, which rootless BuildKit can't meet, and the runner's
+// Role there covers none of the services' Secrets. The orchestrator stays the only writer of
+// the runs' state; the sandboxes are what spread over the cluster's nodes.
 //
 //   - A run's environment goes into a Secret of its own (envFrom), never inline in the Pod,
 //     deleted with the run. The run's files (inbox, CA, digest) come from the broker service
-//     through the egress proxy, as under Docker: no volume is shared with the listener.
+//     through the egress proxy, as under Docker: no volume is shared with the runner.
 //   - The Pod meets Pod Security `restricted` (podSpec()), gets no ServiceAccount token and no
 //     DNS server (a lookup fails at once, as on Docker's internal network): `egress` (the host
-//     of EGRESS_PROXY) is the namespace's Service of that name, through hostAliases. The
-//     services' names it calls (lib/services.mjs SANDBOX_URLS) are the proxy's to read.
-//   - No network per run: the namespace's NetworkPolicies isolate every sandbox, and start()
-//     refuses to run without them (isolationProblem()). The egress proxy knows a sandbox by its
-//     pod IP (address()).
+//     of EGRESS_PROXY) is the services' namespace's Service of that name, through hostAliases
+//     (proxyService()). The services' names it calls (lib/services.mjs SANDBOX_URLS) are the
+//     proxy's to read.
+//   - No network per run: the sandboxes' namespace's NetworkPolicies isolate every sandbox, and
+//     start() refuses to run without them (isolationProblem()). The egress proxy knows a
+//     sandbox by its pod IP (locate()).
 //   - Each session volume is a PersistentVolumeClaim, kept between the issue's runs.
 //   - A Pod Pending longer than KUBERNETES_PENDING_MINUTES (no room, an image it can't pull)
 //     fails its run, saying why (follow()), and a leftover one is removed rather than waited
@@ -149,15 +153,45 @@ export function excludesSandboxes(selector = {}, labels) {
   return false;
 }
 
-// Why the namespace's NetworkPolicies (`policies`) don't isolate a sandbox pod with `labels`,
-// or null when they do: one of them picks it for both Ingress and Egress, and none of those
-// that pick it lets anything in, nor lets it out to anything but other pods of the namespace
-// that aren't sandboxes (the egress proxy). Policies add up, so a single wider one is enough to
-// refuse: fail closed.
+// The label every namespace carries, its name (Kubernetes sets it): what a namespaceSelector
+// names one namespace by.
+const NAMESPACE_NAME = "kubernetes.io/metadata.name";
+
+// Whether a selector asks for `key` to be `value`, and so picks nothing else on that key: in
+// its matchLabels, or as an `In` of that value alone.
+const pins = (selector, key, value) =>
+  selector?.matchLabels?.[key] === value ||
+  (selector?.matchExpressions ?? []).some(
+    (e) => e.key === key && e.operator === "In" && e.values?.length === 1 && e.values[0] === value,
+  );
+
+// Why a peer of a sandbox's egress rule could be more than the egress proxy's pods in the
+// services' namespace, or null: its namespaceSelector names that namespace (NAMESPACE_NAME),
+// and its podSelector asks for every label of the proxy Service's selector, so it picks no pod
+// the Service doesn't. Anything wider is refused, whatever else it asks for.
+function proxyPeerProblem(peer, proxy) {
+  if (peer.ipBlock || !pins(peer.namespaceSelector, NAMESPACE_NAME, proxy.namespace)) {
+    return `beyond the namespace ${proxy.namespace} (a namespaceSelector on ${NAMESPACE_NAME}: ${proxy.namespace} and a podSelector, nothing else)`;
+  }
+  const wanted = Object.entries(proxy.selector ?? {});
+  if (!wanted.length || !wanted.every(([k, v]) => pins(peer.podSelector, k, v))) {
+    return `pods of the namespace ${proxy.namespace} other than the egress proxy's (a podSelector with its Service's selector${wanted.length ? `, ${wanted.map(([k, v]) => `${k}: ${v}`).join(", ")}` : ", which has none"})`;
+  }
+  return null;
+}
+
+// Why the sandboxes' namespace's NetworkPolicies (`policies`) don't isolate a sandbox pod with
+// `labels`, or null when they do: one of them picks it for both Ingress and Egress, and none
+// of those that pick it lets anything in, nor lets it out to anything but the egress proxy.
+// Policies add up, so a single wider one is enough to refuse: fail closed.
+// In one namespace with the services (no `proxy`), a peer is a podSelector of that namespace
+// that never picks a sandbox; with the services apart (`proxy`: { namespace, selector }, the
+// services' namespace and the proxy Service's selector), the proxy's pods there alone
+// (proxyPeerProblem()), none of the sandboxes' own namespace.
 // Each rule to them names its ports, among `ports` (the proxy's): a sandbox that could reach
 // another port of a pod there (the orchestrator's services port) would get what only the
 // runner may.
-export function isolationProblem(policies, labels, { ports = [3128] } = {}) {
+export function isolationProblem(policies, labels, { ports = [3128], proxy = null } = {}) {
   const picking = policies.filter((p) => selects(p.spec?.podSelector, labels));
   const types = (p) => p.spec.policyTypes ?? (p.spec.egress ? ["Ingress", "Egress"] : ["Ingress"]);
   if (!picking.some((p) => types(p).includes("Ingress") && types(p).includes("Egress"))) {
@@ -169,6 +203,11 @@ export function isolationProblem(policies, labels, { ports = [3128] } = {}) {
     for (const rule of p.spec.egress ?? []) {
       if (!rule.to?.length) return `${name} lets sandbox pods reach anything`;
       for (const peer of rule.to) {
+        if (proxy) {
+          const problem = proxyPeerProblem(peer, proxy);
+          if (problem) return `${name} lets sandbox pods reach ${problem}`;
+          continue;
+        }
         if (peer.ipBlock || peer.namespaceSelector || !peer.podSelector) {
           return `${name} lets sandbox pods reach beyond the namespace's pods`;
         }
@@ -184,12 +223,33 @@ export function isolationProblem(policies, labels, { ports = [3128] } = {}) {
           );
       if (wide) {
         const what = wide.port === undefined ? "every port" : `port ${wide.port}`;
-        return `${name} lets sandbox pods reach ${what} of the namespace's pods (only ${ports.join(" and ")})`;
+        const whose = proxy ? "the egress proxy's pods" : "the namespace's pods";
+        return `${name} lets sandbox pods reach ${what} of ${whose} (only ${ports.join(" and ")})`;
       }
     }
   }
   return null;
 }
+
+// The egress proxy's Service, in the services' namespace (`services`, kube-api.mjs): the
+// cluster IP sandboxes and install pods reach it at by its name (hostAliases: they have no DNS,
+// or none that knows it) and its selector, the proxy's pods (isolationProblem()). Null when
+// EGRESS_PROXY is an address.
+export async function proxyService(services, config) {
+  const host = aliasOf(config.egressProxy);
+  if (!host) return null;
+  const service = await services.find(`services/${host}`);
+  const ip = service?.spec?.clusterIP;
+  if (!ip || ip === "None") {
+    throw new Error(
+      `no Service ${host} with a cluster IP in the namespace ${services.namespace}: sandboxes reach ${config.egressProxy} through it`,
+    );
+  }
+  return { ip, hostnames: [host], selector: service.spec.selector ?? {} };
+}
+
+// proxyService()'s answer as a pod's hostAliases.
+export const aliasesOf = (proxy) => (proxy ? [{ ip: proxy.ip, hostnames: proxy.hostnames }] : []);
 
 // A sandbox spec (sandbox-spec.mjs) as a Pod, Pod Security `restricted` throughout: its user,
 // no privilege gain, no capability, the runtime's seccomp profile. `secret`: the Secret its
@@ -376,16 +436,18 @@ const WATCH_MS = 30_000;
 
 export function createKubernetesRunner({
   config,
-  api, // kube-api.mjs
-  inboxDir, // the runs folder, in the listener's own volume
+  api, // kube-api.mjs, in the sandboxes' namespace
+  services = api, // the same, in the services' (the same object when they are one)
+  pullSecret, // kube-pull.mjs createPullSecret()'s
+  inboxDir, // the runs folder, in the runner's own volume
   log = () => {},
   now = Date.now,
   sleep = delay,
   mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
   watchMs = WATCH_MS,
 }) {
-  const { pendingMs, storageClass, sessionSize, cacheStorageClass, registrySecret } =
-    config.kubernetes;
+  const { pendingMs, storageClass, sessionSize, cacheStorageClass } = config.kubernetes;
+  const apart = services.namespace !== api.namespace;
   const inbox = createInbox({ inboxDir, mirror });
   // Runs whose Secret exists before their pod does: relink() leaves them alone.
   const starting = new Set();
@@ -418,8 +480,12 @@ export function createKubernetesRunner({
     const made = []; // what start() created, removed again if it fails
     starting.add(run);
     try {
-      await checkIsolation(podLabels);
-      const aliases = await hostAliases();
+      const { items: policies = [] } = await api.get(
+        `${NETWORKING}/${api.namespace}/networkpolicies`,
+      );
+      const proxy = await proxyService(services, config);
+      checkIsolation(policies, podLabels, proxy);
+      const pullName = await pullSecret.forPods();
       for (const v of volumes.filter((v) => v.kind === "session")) {
         if (await ensureClaim(v.name)) made.push(claimPath(v.name));
       }
@@ -441,8 +507,8 @@ export function createKubernetesRunner({
           secret,
           // Not secrets: where the run's files are.
           env: { ...inbox.env(ca, digest), SANDBOX_TAG_STDERR: "1" },
-          aliases,
-          pullSecret: registrySecret ? kubeName(registrySecret) : null,
+          aliases: aliasesOf(proxy),
+          pullSecret: pullName,
           agentInit,
         }),
       );
@@ -497,34 +563,24 @@ export function createKubernetesRunner({
   // The port sandboxes reach the proxy on: none other (isolationProblem()).
   const sandboxPorts = () => [Number(new URL(config.egressProxy).port || 3128)];
 
-  // Fail closed: without the namespace's NetworkPolicies, a sandbox would reach anything.
-  async function checkIsolation(labels) {
-    const { items = [] } = await api.get(`${NETWORKING}/${api.namespace}/networkpolicies`);
-    const problem = isolationProblem(items, labels, { ports: sandboxPorts() });
+  // Fail closed: without the sandboxes' namespace's NetworkPolicies (`policies`), a sandbox
+  // would reach anything. `proxy`: proxyService()'s, whose pods alone they may reach in the
+  // services' namespace, when it is another one.
+  function checkIsolation(policies, labels, proxy) {
+    if (apart && !proxy) {
+      throw new Error(
+        `EGRESS_PROXY (${config.egressProxy}) is an address: with sandboxes apart from the services (KUBERNETES_SERVICES_NAMESPACE), it names the egress proxy's Service, whose pods alone they may reach`,
+      );
+    }
+    const problem = isolationProblem(policies, labels, {
+      ports: sandboxPorts(),
+      proxy: apart ? { namespace: services.namespace, selector: proxy.selector } : null,
+    });
     if (problem) {
       throw new Error(
         `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/setup.md, Kubernetes runner)`,
       );
     }
-  }
-
-  // The proxy's host name, as sandboxes call it (EGRESS_PROXY), → the namespace's Service of that
-  // name: sandboxes have no DNS.
-  async function hostAliases() {
-    const byIp = new Map();
-    for (const url of [config.egressProxy]) {
-      const host = aliasOf(url);
-      if (!host) continue; // an address already
-      const service = await api.find(`services/${host}`);
-      const ip = service?.spec?.clusterIP;
-      if (!ip || ip === "None") {
-        throw new Error(
-          `no Service ${host} with a cluster IP in the namespace ${api.namespace}: sandboxes reach ${url} through it`,
-        );
-      }
-      byIp.set(ip, [...(byIp.get(ip) ?? []), host]);
-    }
-    return [...byIp].map(([ip, hostnames]) => ({ ip, hostnames }));
   }
 
   // The session volume's claim, made when missing. → true when it was made now.
@@ -622,7 +678,7 @@ export function createKubernetesRunner({
   }
 
   // Resolves once the pod's log ends (it exited, or the API closed the stream: state() tells).
-  // `skip`: { out, err } lines already read by a previous listener. The log has the agent's
+  // `skip`: { out, err } lines already read by a previous follower (the runner's copy before). The log has the agent's
   // output and the rest in one stream, told apart by STDERR_TAG. A pod that stays Pending past
   // KUBERNETES_PENDING_MINUTES is removed, and its run fails with the reason.
   //
@@ -791,8 +847,8 @@ export function createKubernetesRunner({
     return now() - since >= pendingMs;
   }
 
-  // Until it exits. A leftover stuck Pending (an image it can't pull; one a restarted listener
-  // found without saved state, which nothing follows) would never exit: past the limit, it is
+  // Until it exits. A leftover stuck Pending (an image it can't pull; one a restarted
+  // orchestrator found without saved state, which nothing follows) would never exit: past the limit, it is
   // removed instead, its requests given back to the cluster.
   async function wait(name) {
     for (;;) {
@@ -935,7 +991,8 @@ export function createKubernetesRunner({
     return uid;
   }
 
-  // The IPs of the pods behind the egress Service, ready or not (one starting still relays).
+  // The IPs of the pods behind the egress Service, in the services' namespace, ready or not
+  // (one starting still relays).
   async function proxyAddresses({ fresh = false } = {}) {
     const age = now() - proxy.at;
     if (age < PROXY_TTL_MS && !(fresh && age >= PROXY_RETRY_MS)) return proxy.addresses;
@@ -943,9 +1000,10 @@ export function createKubernetesRunner({
     let addresses = [];
     try {
       const service = aliasOf(config.egressProxy);
-      const { items = [] } = await api.get(`${DISCOVERY}/${api.namespace}/endpointslices`, {
-        labelSelector: `kubernetes.io/service-name=${service}`,
-      });
+      const { items = [] } = await services.get(
+        `${DISCOVERY}/${services.namespace}/endpointslices`,
+        { labelSelector: `kubernetes.io/service-name=${service}` },
+      );
       addresses = [
         ...new Set(items.flatMap((s) => (s.endpoints ?? []).flatMap((e) => e.addresses ?? []))),
       ];
