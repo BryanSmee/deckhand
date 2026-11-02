@@ -1,7 +1,7 @@
 // The operator's settings, from the environment and config.yaml. Names of images, volumes and
 // networks come from here so nothing in the listener is tied to one deployment. What the
 // operator grants one repo (hosts, mounts, limits) is in its grants folder instead (grants.mjs).
-import { existsSync } from "node:fs";
+import { accessSync, constants, existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import {
   AGENT_SECRETS,
@@ -282,6 +282,66 @@ export function readConfigFile(env, read) {
     parse: parseConfigFile,
     ...(read && { read }),
   });
+}
+
+// The screenshots' folder of the data volume: one folder per run, which the orchestrator makes
+// and deletes whole, the screenshots in them only read. Its first level is checked, not the
+// screenshots: 90 days of them, read at every start, would delay each one, and each handover
+// (#536). The rest is cheap to walk (logs/ is flat, its summaries read at start anyway).
+const SHOTS = "shots";
+
+// What the orchestrator can't write of its data volume, said at start, before it refuses to
+// start: it runs as uid 1000 (#536), where the listener before it wrote that volume as root.
+// The volume in depth (store/ above all: a root orchestrator still running during the chown
+// makes its files root's again, which would otherwise fail one write at a time), but the
+// screenshots (SHOTS), without following links. `shown` paths, then how many more. The hint is for a
+// permission only: stop the orchestrator, then hand the volume over, with compose (whose `run`
+// keeps the service's cap_drop: CHOWN given back) or on Kubernetes (fsGroup). → lines for the
+// log, [] when all is writable.
+export function unwritableData(dir, { access = accessSync, list = readdirSync, shown = 5 } = {}) {
+  const found = [];
+  const writable = (path, folder) => {
+    try {
+      access(path, folder ? constants.W_OK | constants.X_OK : constants.W_OK);
+      return true;
+    } catch (error) {
+      if (error.code !== "ENOENT") found.push({ path, code: error.code });
+      return false;
+    }
+  };
+  // `deep`: whether the folders in it are walked too, or only checked.
+  const walk = (path, deep = true) => {
+    // A folder it can't write may still be listed: what is in it is said too.
+    writable(path, true);
+    let entries;
+    try {
+      entries = list(path, { withFileTypes: true });
+    } catch (error) {
+      // Not there yet: made at start, as the orchestrator's.
+      if (error.code !== "ENOENT" && !found.some((f) => f.path === path)) {
+        found.push({ path, code: error.code });
+      }
+      return;
+    }
+    for (const entry of entries) {
+      const child = join(path, entry.name);
+      if (!entry.isDirectory()) {
+        if (!entry.isSymbolicLink()) writable(child, false);
+      } else if (!deep) writable(child, true);
+      else walk(child, !(path === dir && entry.name === SHOTS));
+    }
+  };
+  walk(dir);
+  const lines = found
+    .slice(0, shown)
+    .map(({ path, code }) => `The orchestrator can't write ${path} (${code})`);
+  if (found.length > shown) lines.push(`… and ${found.length - shown} more in ${dir}`);
+  if (found.some(({ code }) => code === "EACCES" || code === "EPERM")) {
+    lines.push(
+      `It runs as uid 1000, and a data volume from an earlier release is root's. Stop the orchestrator first (one still running as root writes its store again), then hand the volume over once. Compose: \`docker compose stop orchestrator\`, \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\`, then \`docker compose up -d\`. Kubernetes: scale it to 0, then \`fsGroup: 1000\` on its pod, or a one-time chown init container (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`,
+    );
+  }
+  return lines;
 }
 
 // The plans' logins the models service holds and refreshes, at their fixed names in its

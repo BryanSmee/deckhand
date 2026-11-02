@@ -541,7 +541,9 @@ settings is one (`test/networks.test.mjs` reads `compose.yaml`'s environments), 
 volume is mounted in it; its `data` volume holds its state. It **has no way
 out**: every network it is on is internal ([The services' networks](#the-services-networks)).
 Its ports: the services port (8083: the runner's `POST /runs/:run/tokens`, edge's `/edge/*`)
-and the egress policy's (8082, the egress proxy's). None is published.
+and the egress policy's (8082, the egress proxy's). None is published. It runs as `node`
+(uid 1000, #536), on a read-only root filesystem, without capabilities: it writes its volumes
+alone, and reads the server folder and the mount roots you grant as that user.
 
 - **One copy acts.** Two may run: the acting one holds the store's lease `orchestrator`
   (`lib/active.mjs`, 15 seconds, `LEASE_SECONDS`, renewed every third of its life); the other
