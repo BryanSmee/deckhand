@@ -599,7 +599,8 @@ export function createRuns(ctx) {
   // knows, then its sandbox is stopped. The follow loop sees it exit and finish() ends the
   // run as cancelled. Comments waiting for a follow-up run stay queued. A task with no run
   // going loses its queued comments instead. `by`: who stopped it. Returns "running",
-  // "queued" or null when there was nothing to stop.
+  // "queued" (no run: the task is back in the backlog), "following" (comments behind a run
+  // that is ending) or null when there was nothing to stop.
   function cancel(key, by) {
     const task = ctx.tasks.get(key);
     if (!task) return null;
@@ -620,9 +621,10 @@ export function createRuns(ctx) {
     }
     if (live?.cancelled) return "running";
     if (!task.pending.length) return null;
+    const following = task.running;
     dropPending(task, key, task.pending.length);
     log(`${key}: queued comments dropped by ${by}`);
-    return "queued";
+    return following ? "following" : "queued";
   }
 
   // The first `n` of the task's queued comments go, their 👀 off, and it leaves the run order.

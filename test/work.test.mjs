@@ -981,12 +981,13 @@ test("queue: a task waiting for a slot leaves the queue and waits, its comment a
   assert.deepEqual(w.accepted, []);
   const wait = w.waits.get("org/app#5");
   assert.deepEqual(wait.blockers, [7]);
-  // The comment that queued it waits: its text, author and mode, its 👀.
+  // The comment that queued it waits: its text, author and mode, the 👀 it has (not asked for
+  // again: nothing awaited between the queue and the wait).
   assert.deepEqual(
     [wait.item.text, wait.item.author, wait.item.modeLine, wait.item.comment.id],
     ["please", "bob", "brainstorm", 42],
   );
-  assert.deepEqual(w.eyes, [42]);
+  assert.deepEqual(w.eyes, []);
   assert.deepEqual(w.comments, [
     [
       5,
@@ -1017,6 +1018,27 @@ test("queue: a task waiting for a slot takes the mode picked; stays queued after
   await post(w, { action: "queue", number: 5, after: 7, mode: "work" });
   assert.equal(w.waits.get("org/app#5").item.modeLine, null);
   assert.match(w.comments[0][1], /now waits for #7\. It starts/);
+});
+
+test("queue: a queued `/mode` comment alone, work picked, waits as a trigger comment", async () => {
+  // "/mode brainstorm" without the trigger line: no trigger (events.mjs splitTrigger()).
+  const modeOnly = { ...QUEUED["org/app#5"], trigger: null };
+  const w = setup({
+    issues: { 5: open("Five"), 7: open("Seven") },
+    queued: { "org/app#5": modeOnly },
+  });
+  assert.equal((await post(w, { action: "queue", number: 5, after: 7, mode: "work" })).status, 200);
+  const { item } = w.waits.get("org/app#5");
+  // Something to start once #7 is done: work, as the dashboard picked.
+  assert.deepEqual([item.trigger, item.modeLine], ["work", null]);
+  // No mode picked: its own mode line starts it.
+  const kept = setup({
+    issues: { 5: open("Five"), 7: open("Seven") },
+    queued: { "org/app#5": modeOnly },
+  });
+  await post(kept, { action: "queue", number: 5, after: 7 });
+  const held = kept.waits.get("org/app#5").item;
+  assert.deepEqual([held.trigger, held.modeLine], [null, "brainstorm"]);
 });
 
 test("queue: refused for a task with a run going, or one started during the checks", async () => {
@@ -1455,7 +1477,12 @@ test("cancel: the run stops or the queue is dropped, with the App's comment wher
   const w = setup({
     issues: { 5: open("Five") },
     tasks: { "org/app#5": { state: "working", replyTo: 9 } },
-    cancels: { "org/app#5": "running", "org/app#pr-8": "queued" },
+    cancels: {
+      "org/app#5": "running",
+      "org/app#pr-8": "queued",
+      "org/app#6": "queued",
+      "org/app#7": "following",
+    },
   });
   const res = await post(w, { action: "cancel", number: 5 });
   assert.equal(res.status, 200);
@@ -1465,12 +1492,21 @@ test("cancel: the run stops or the queue is dropped, with the App's comment wher
   assert.deepEqual(w.comments, [[9, "Stopped from the dashboard by @alice."]]);
   const pr = await post(w, { action: "cancel", number: 8, pr: true });
   assert.equal(pr.status, 200);
-  assert.equal(pr.body.message, "#8 is back in the backlog.");
+  // A pull request's: no backlog to go back to.
+  assert.equal(pr.body.message, "#8's queued comments dropped.");
   assert.deepEqual(w.cancelled.at(-1), ["org/app#pr-8", "alice"]);
+  assert.deepEqual(w.comments.at(-1), [8, "Queued comments dropped from the dashboard by @alice."]);
+  // An issue's with no run: back in the backlog.
+  const issue = await post(w, { action: "cancel", number: 6 });
+  assert.equal(issue.body.message, "#6 is back in the backlog.");
   assert.deepEqual(w.comments.at(-1), [
-    8,
+    6,
     "Taken out of the queue from the dashboard by @alice: back in the backlog.",
   ]);
+  // Behind a run that is ending: its task isn't in the backlog.
+  const behind = await post(w, { action: "cancel", number: 7 });
+  assert.equal(behind.body.message, "#7's queued comments dropped.");
+  assert.deepEqual(w.comments.at(-1), [7, "Queued comments dropped from the dashboard by @alice."]);
   assert.deepEqual(w.accepted, []);
 });
 

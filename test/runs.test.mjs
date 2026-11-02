@@ -256,7 +256,8 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   // An auto-picked one's slot is free again.
   assert.equal(asked, 1);
   assert.equal(runs.unqueue("org/repo#13", "alice"), null);
-  // A follow-up behind a run going, a reply that starts nothing, a pull request's: they stay.
+  // A follow-up behind a run going (or ending), a reply that starts nothing, a pull request's:
+  // they stay.
   queued("14", [item("more")], { running: true });
   queued("15", [item("reply", { trigger: null })]);
   queued("16", [item("pr", { kind: "pr" })]);
@@ -265,6 +266,9 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
     assert.equal(runs.unqueue(`org/repo#${id}`, "alice"), null);
     assert.equal(ctx.tasks.get(`org/repo#${id}`).pending.length, 1);
   }
+  // Cancelled, the one behind a run says so: it isn't back in the backlog.
+  assert.equal(runs.cancel("org/repo#14", "alice"), "following");
+  assert.equal(runs.cancel("org/repo#15", "alice"), "queued");
   await runner.kill();
   await following;
 });

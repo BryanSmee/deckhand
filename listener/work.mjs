@@ -673,12 +673,17 @@ export function createWorkApi({
     if ((await waitable(repo, number, after)) !== "open") {
       return `#${after} is done already: #${number} stays queued.`;
     }
+    // Its 👀 known first: out of the queue, it is saved as a wait at once, with nothing awaited
+    // between (an orchestrator stopping then would lose it).
+    await queuedItem(key)?.eyes?.catch?.(() => null);
     // Started meanwhile (a slot freed during the checks).
     const item = unqueue(key, user);
     if (!item) refuse(409, `#${number} is running or queued: it can't be moved now.`);
-    if (mode) item.modeLine = mode === "work" ? null : mode;
+    // A mode picked starts as a trigger comment with that mode would: a `/mode` comment alone
+    // has no trigger, and with work picked, no mode line either.
+    if (mode) Object.assign(item, { trigger: "work", modeLine: mode === "work" ? null : mode });
     if (answers) item.text = answers;
-    await waits.hold(item, [after]);
+    await waits.hold(item, [after], { eyes: true });
     // It waits already: a failed comment doesn't make it fail.
     const also = answers ? `\n\n${answers}` : "";
     await comment(
@@ -729,12 +734,18 @@ export function createWorkApi({
     const what = cancel(key, user);
     if (!what) refuse(409, `Nothing is running or queued on #${number}.`);
     // Stopped already: a failed comment doesn't make it fail.
+    // Back in the backlog: an issue's task with no run. Behind a run that is ending, or a pull
+    // request's, its queued comments are just dropped.
+    const backlog = what === "queued" && !pr;
     const text =
       what === "running"
         ? `Stopped from the dashboard by @${user}.`
-        : `Taken out of the queue from the dashboard by @${user}: back in the backlog.`;
+        : backlog
+          ? `Taken out of the queue from the dashboard by @${user}: back in the backlog.`
+          : `Queued comments dropped from the dashboard by @${user}.`;
     await comment(repo, replyTo, text).catch((error) => log(`${key}: ${error.message ?? error}`));
-    return what === "running" ? `#${number} stops.` : `#${number} is back in the backlog.`;
+    if (what === "running") return `#${number} stops.`;
+    return backlog ? `#${number} is back in the backlog.` : `#${number}'s queued comments dropped.`;
   }
 
   // Answers to the open questions of the task of issue (or pull request) `number`, as one App
