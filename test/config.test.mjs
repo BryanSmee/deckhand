@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ConfigError,
@@ -675,21 +675,37 @@ test("the plans' logins: found in the credentials folder unless their variable i
 });
 
 test("the data volume: the orchestrator says what it can't write, with the one-time chown", () => {
-  const denied = (paths) => (path) => {
-    if (paths.includes(path)) throw Object.assign(new Error("denied"), { code: "EACCES" });
-  };
+  const asked = [];
+  const denied =
+    (paths) =>
+    (path, mode = 0) => {
+      asked.push([path, mode]);
+      if (paths.includes(path)) throw Object.assign(new Error("denied"), { code: "EACCES" });
+    };
   const dir = (name, folder = true) => ({ name, isDirectory: () => folder });
   const list = () => [dir("logs"), dir("shots"), dir("queue.json", false)];
-  // A volume from before: its folder is root's, said once.
+  // A volume from before: its folder is root's, said once, with the chown that works under
+  // the service's cap_drop.
   const root = unwritableData("/data", { access: denied(["/data"]), list });
   assert.equal(root.length, 1);
   assert.match(root[0], /^The orchestrator can't write \/data \(EACCES\): it runs as uid 1000/);
-  assert.match(root[0], /--user root --entrypoint chown orchestrator -R 1000:1000 \/data/);
-  // A folder in it, said by name; its files aren't checked.
+  assert.match(
+    root[0],
+    /--user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 \/data/,
+  );
+  // What is in it, folders and files, each said by name: a top folder chowned alone (no -R).
   const shots = join("/data", "shots");
-  const some = unwritableData("/data", { access: denied([shots]), list });
-  assert.equal(some.length, 1);
+  const queue = join("/data", "queue.json");
+  asked.length = 0;
+  const some = unwritableData("/data", { access: denied([shots, queue]), list });
+  assert.equal(some.length, 2);
   assert.match(some[0], /can't write .*shots \(EACCES\)/);
+  assert.match(some[1], /can't write .*queue\.json \(EACCES\)/);
+  // A file needs writing, not searching.
+  assert.deepEqual(
+    asked.find(([path]) => path === queue),
+    [queue, constants.W_OK],
+  );
   assert.deepEqual(unwritableData("/data", { access: () => {}, list }), []);
   // Nothing there yet: made at start.
   const missing = () => {

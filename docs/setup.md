@@ -1252,12 +1252,14 @@ as edge does. What changes for you:
   write. Hand them over once, with the new image pulled and before `docker compose up -d`:
 
   ```sh
-  docker compose run --rm --no-deps --user root --entrypoint chown orchestrator -R 1000:1000 /data
+  docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data
   ```
 
   This runs a short container of the orchestrator's image as root, with both volumes mounted
-  (the screenshots' at `/data/shots`), and nothing else. New volumes are the `node` user's
-  from the start.
+  (the screenshots' at `/data/shots`), and nothing else. It keeps the service's settings, so
+  `--cap-add CHOWN` gives back the one capability `chown` needs: without it, root gets
+  `Operation not permitted`. Keep `-R`: the files in the volume are root's too. New volumes
+  are the `node` user's from the start.
 
 - **Your server folder** (`config.yaml`, the grants folder and its `policy/`) is read as uid
   1000, as the policy service already reads it: the usual `0644` files and `0755` folders are.

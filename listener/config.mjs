@@ -286,13 +286,14 @@ export function readConfigFile(env, read) {
 
 // What the orchestrator can't write of its data volume, said at start, before it refuses to
 // start: it runs as uid 1000 (#536), where the listener before it wrote that volume as root. The
-// folder and the folders in it (logs, shots, store), not every file: a volume from before is
-// root's throughout. → lines for the log, [] when all is writable.
+// folder and what is in it (logs, shots, store, the state files), not deeper: a volume from
+// before is root's throughout. The chown needs CHOWN back: `compose run` keeps the service's
+// cap_drop. → lines for the log, [] when all is writable.
 export function unwritableData(dir, { access = accessSync, list = readdirSync } = {}) {
-  const fix = `it runs as uid 1000, and a data volume from an earlier release is root's: hand it over once with \`docker compose run --rm --no-deps --user root --entrypoint chown orchestrator -R 1000:1000 /data\` (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`;
-  const unwritable = (path) => {
+  const fix = `it runs as uid 1000, and a data volume from an earlier release is root's: hand it over once with \`docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data\` (docs/setup.md#upgrading-the-orchestrator-runs-as-node-536)`;
+  const unwritable = (path, folder = true) => {
     try {
-      access(path, constants.W_OK | constants.X_OK);
+      access(path, folder ? constants.W_OK | constants.X_OK : constants.W_OK);
       return null;
     } catch (error) {
       return error.code === "ENOENT"
@@ -309,8 +310,7 @@ export function unwritableData(dir, { access = accessSync, list = readdirSync } 
     // Not there yet: made below, as the orchestrator's.
   }
   return entries
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => unwritable(join(dir, entry.name)))
+    .map((entry) => unwritable(join(dir, entry.name), entry.isDirectory()))
     .filter(Boolean);
 }
 
