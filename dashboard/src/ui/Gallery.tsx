@@ -296,7 +296,20 @@ function Theme({ name, class: theme }: { name: string; class: string }) {
           <Fold title="Setup" tone="done" meta="6s">
             <p class={styles.line}>Sandbox acme-app-19 · network through the egress proxy</p>
           </Fold>
-          <Fold title="Work" tone="err" meta={<StatusBadge tone="err" label="1 failed" />} open>
+          <Fold title="Work" tone="done" meta="1 failed command · 2m 50s">
+            <p class={styles.line}>A command that exited non-zero: counted, not flagged.</p>
+          </Fold>
+          <Fold
+            title="Work"
+            tone="err"
+            meta={
+              <>
+                <StatusBadge tone="err" label="Ended in error" />
+                4m 05s
+              </>
+            }
+            open
+          >
             <p class={styles.line}>I'll add exponential backoff to the delivery queue.</p>
             <Fold title="Read · 5 files" meta="14:04">
               <p class={styles.line}>listener/deliveries.mjs, listener/tasks.mjs, …</p>
