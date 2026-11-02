@@ -144,9 +144,10 @@ export function checkAction(body) {
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
-// "running", "queued", "following" or null. `queuedTask(key)`, `unqueue(key, user)`: a task waiting for a
-// slot whose latest comment can wait for another issue instead, and taking it out of the queue
-// for that (runs.mjs). `analysis`: run digests (analysis.mjs createAnalysis()).
+// "running", "queued", "following" or null. `queuedTask(key)`, `unqueue(key, user)`: a task
+// waiting for a slot whose newest comment that starts a run can wait for another issue
+// instead, with its author's queued comments, and taking it out of the queue for that
+// (runs.mjs). `analysis`: run digests (analysis.mjs createAnalysis()).
 // `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
 // `dismissals`: the failed runs dismissed from the dashboard, and the runs whose questions
 // were set aside, which the API's undo takes back too (dismissals.mjs).
@@ -669,9 +670,10 @@ export function createWorkApi({
     return `#${number} waits for #${after}.`;
   }
 
-  // A task waiting for a slot queued after issue `after`: out of the queue, its latest comment
-  // waits for `after` instead (runs.mjs unqueue()), with its text, author and mode unless
-  // another is picked. Waiting already, that wait is replaced. `after` done already: it stays
+  // A task waiting for a slot queued after issue `after`: out of the queue, its newest comment
+  // that starts a run waits for `after` instead (runs.mjs unqueue()), with the text of its
+  // author's queued comments, its author and its mode unless another is picked; the others'
+  // comments are dropped, which the App's comment says. Waiting already, that wait is replaced. `after` done already: it stays
   // queued, as it would start now anyway.
   async function requeue(repo, user, { number, after, mode, settings, answers }) {
     const key = taskKey(repo, number);
@@ -696,7 +698,7 @@ export function createWorkApi({
     const wanted = modeOf(held);
     known(wanted);
     // No await from queuedTask() above: unqueue() holds that same comment.
-    const item = unqueue(key, user);
+    const { item, dropped } = unqueue(key, user) ?? {};
     if (!item) refuse(409, `#${number} is running or queued: it can't be moved now.`);
     // A mode picked starts as a trigger comment with that mode would: a `/mode` comment alone
     // has no trigger, and with work picked, no mode line either.
@@ -705,10 +707,13 @@ export function createWorkApi({
     await waits.hold(item, [after], { eyes: true });
     // It waits already: a failed comment doesn't make it fail.
     const also = answers ? `\n\n${answers}` : "";
+    const others = dropped
+      ? ` ${dropped === 1 ? "A comment" : `${dropped} comments`} queued by someone else ${dropped === 1 ? "was" : "were"} dropped: only its author's go with it. Post again to add ${dropped === 1 ? "it" : "them"}.`
+      : "";
     await comment(
       repo,
       number,
-      `Moved from the dashboard by @${user}: no longer queued, now waits for #${after}${inMode(wanted)}. It starts when #${after} is done (closed as completed, or merged).${also}`,
+      `Moved from the dashboard by @${user}: no longer queued, now waits for #${after}${inMode(wanted)}. It starts when #${after} is done (closed as completed, or merged).${others}${also}`,
     ).catch((error) => log(`${key}: ${error.message ?? error}`));
     return `#${number} waits for #${after}.`;
   }

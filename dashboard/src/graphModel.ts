@@ -322,6 +322,10 @@ export const reorderable = (t: Task) => t.state === "queued" && !!t.position && 
 // issue's, in the run order.
 export const unqueueable = (t: Task) => reorderable(t) && t.kind === "issue" && t.number !== null;
 
+// Whether it can wait for another issue instead (Queue after…, a drop on a node's middle): not
+// when its queued comments only reply to its last run (the listener's `canWait`).
+export const waitable = (t: Task) => unqueueable(t) && !!t.canWait;
+
 // `line` (inLine()'s) less the tasks an action on its way takes out of the queue: back to the
 // backlog, or queued after another issue.
 export const stillInLine = (line: Task[], pending: Pending[]) => {

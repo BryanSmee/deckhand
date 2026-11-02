@@ -42,7 +42,7 @@ import {
   moveOnto,
   onEdge,
   stillInLine,
-  unqueueable,
+  waitable,
   workLists,
 } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
@@ -249,7 +249,7 @@ export function Board({
     const task = everyLine.find((t) => t.key === key);
     return (
       !!task &&
-      unqueueable(task) &&
+      waitable(task) &&
       node?.number != null &&
       node.key !== key &&
       sameRepo(node.repo, repo)

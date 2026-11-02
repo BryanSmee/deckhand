@@ -622,27 +622,24 @@ export function createRuns(ctx) {
     if (live?.cancelled) return "running";
     if (!task.pending.length) return null;
     const following = task.running;
-    dropPending(task, key, task.pending.length);
+    dropPending(task, key);
     log(`${key}: queued comments dropped by ${by}`);
     return following ? "following" : "queued";
   }
 
-  // The first `n` of the task's queued comments go, their 👀 off (but `keep`'s), and it leaves
-  // the run order. Waiting for a slot or their pause, or for a run that is ending. An
-  // auto-picked one frees its reserved slot: the next labelled issue, without waiting for the
-  // next sweep.
-  function dropPending(task, key, n, keep = null) {
+  // The task's queued comments go, their 👀 off (but `keep`'s), and it leaves the run order.
+  // Waiting for a slot or their pause, or for a run that is ending. An auto-picked one frees
+  // its reserved slot: the next labelled issue, without waiting for the next sweep.
+  function dropPending(task, key, keep = null) {
     const picked = !task.running && pickedTask(task);
     clearTimeout(task.timer);
     task.ready = false;
-    const kept = task.pending.splice(n);
     for (const item of task.pending.splice(0)) {
       if (item !== keep) ctx.track(ctx.settle(item, "cancelled"));
     }
     ctx.saveQueue?.();
     ctx.order?.drop(key);
     if (picked) ctx.autoPickup?.soon();
-    return kept;
   }
 
   // A task waiting for a slot, no run going or ending (a follow-up waits for that one): { item },
@@ -658,23 +655,32 @@ export function createRuns(ctx) {
     return { item: item ?? null };
   }
 
-  // queuedTask()'s task out of the queue: its item is returned for its wait (waits.mjs
-  // hold()), which keeps that comment's 👀, author and mode line, with the text of every
-  // comment queued, as the run would have read them (events.mjs commentsText()). The others
-  // lose their 👀. `by`: who moved it. Null when queuedTask() has no item.
+  // queuedTask()'s task out of the queue: { item, dropped }. `item` is returned for its wait
+  // (waits.mjs hold()), which keeps that comment's 👀, author and mode line, with the text of
+  // every comment its author queued, as the run would have read them (events.mjs
+  // commentsText()). The wait has one author, whom the run's checks see (tasks.mjs
+  // noLongerAllowed()): another author's comments aren't folded in, but dropped (`dropped`, how
+  // many). The others lose their 👀. `by`: who moved it. Null when queuedTask() has no item.
   function unqueue(key, by) {
     const task = ctx.tasks.get(key);
     const held = queuedTask(key)?.item;
     if (!held) return null;
-    const texts = task.pending.map((i) => i.text).filter(Boolean);
-    dropPending(task, key, task.pending.length, held);
-    log(`${key}: taken out of the queue by ${by}, to wait`);
+    const own = task.pending.filter((i) => i === held || sameAuthor(i, held));
+    const texts = own.map((i) => i.text).filter(Boolean);
+    const dropped = task.pending.length - own.length;
+    dropPending(task, key, held);
+    log(
+      `${key}: taken out of the queue by ${by}, to wait (${dropped} comment(s) by others dropped)`,
+    );
     // Queued again once its wait ends (tasks.mjs queue()): its mode, its place in line and no
     // auto-pickup slot then.
     const item = { ...held, text: texts.join("\n\n---\n\n") };
     for (const k of ["mode", "queuedAt", "queueId", "autoPickup"]) delete item[k];
-    return item;
+    return { item, dropped };
   }
+
+  // GitHub's logins regardless of case; none known (the listener's own items) isn't anyone's.
+  const sameAuthor = (a, b) => !!a.author && a.author.toLowerCase() === b.author?.toLowerCase();
 
   // A cancelled run's end: a short reply, no fallback, and nothing put back in the queue
   // (what was delivered went with the run). Its session and pushed commits stay. One stopped

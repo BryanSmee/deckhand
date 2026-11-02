@@ -210,7 +210,8 @@ function setup({
       if (w.started) return null;
       const item = w.queued[key];
       delete w.queued[key];
-      return item ? { ...item } : null;
+      // `w.dropped`: other authors' comments queued with it.
+      return item ? { item: { ...item }, dropped: w.dropped ?? 0 } : null;
     },
     taskOf: (key) =>
       w.tasks[key] ??
@@ -1058,6 +1059,16 @@ test("queue: refused for a task with a run going, or one started during the chec
   assert.deepEqual(q.unqueued, [["org/app#5", "alice"]]);
   for (const x of [w, q]) assert.equal(x.waits.get("org/app#5"), undefined);
   assert.deepEqual([w.comments, q.comments], [[], []]);
+});
+
+test("queue: other authors' comments queued with it are dropped, the App's comment says so", async () => {
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") }, queued: QUEUED });
+  w.dropped = 2;
+  assert.equal((await post(w, { action: "queue", number: 5, after: 7 })).status, 200);
+  assert.match(
+    w.comments[0][1],
+    /\(closed as completed, or merged\)\. 2 comments queued by someone else were dropped: only its author's go with it\. Post again to add them\.$/,
+  );
 });
 
 test("queue: a task waiting for a slot with replies only is refused, saying why", async () => {

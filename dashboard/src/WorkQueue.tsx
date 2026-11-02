@@ -25,7 +25,14 @@ import {
   queuedDrag,
 } from "./dnd";
 import { issueList, plural, sameRepo, STATE_NAMES, when } from "./format";
-import { alreadyThere, type BrainstormCard, ordinal, reorderable, unqueueable } from "./graphModel";
+import {
+  alreadyThere,
+  type BrainstormCard,
+  ordinal,
+  reorderable,
+  unqueueable,
+  waitable,
+} from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import type { OrderMove, Task, WorkAction } from "./types";
 import { Button, IconButton } from "./ui/Button";
@@ -267,7 +274,7 @@ export function WorkQueue({
         disabled: still || i === movers.length - 1,
       },
       // An issue's: it leaves the queue, to wait for another issue or for nothing.
-      ...(unqueueable(t)
+      ...(waitable(t)
         ? [
             {
               label: "After…",
@@ -275,6 +282,10 @@ export function WorkQueue({
               after: (after: number) => act({ action: "queue", number: t.number!, after }),
               disabled: still || busy,
             },
+          ]
+        : []),
+      ...(unqueueable(t)
+        ? [
             {
               label: "Back to backlog",
               aria: `Take ${ref} out of the queue, back to the backlog`,

@@ -120,6 +120,9 @@ export function createHttp(ctx) {
         // A brainstorm, or another mode whose runs are apart from work's (modes.mjs `volumes`):
         // before any work run, whatever the order.
         ...(isApart(t.pending.at(-1).mode) && { startsFirst: true }),
+        // A comment of its that starts a run can wait for another issue instead (runs.mjs
+        // queuedTask(): the dashboard's Queue after…); not when it only replies to its last run.
+        ...(ctx.queuedTask?.(taskKey(t.repo, t.id))?.item && { canWait: true }),
         // Picked from its auto-pickup label (auto-pickup.mjs), for one of the reserved slots.
         ...(!t.running && pickedTask(t) && { autoPickup: true }),
       }));

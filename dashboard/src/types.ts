@@ -228,6 +228,9 @@ export interface Task {
   // order, and doesn't move.
   position?: number;
   startsFirst?: boolean;
+  // Queued: it can wait for another issue instead (Queue after…), its queued comments having
+  // one that starts a run, not only replies to its last run (listener/runs.mjs queuedTask()).
+  canWait?: boolean;
   // Picked by the listener from its auto-pickup label (listener/auto-pickup.mjs): queued so, or
   // its last run was.
   autoPickup?: boolean;

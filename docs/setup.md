@@ -384,7 +384,8 @@ node's left or right edge moves it before or after that one (dropped in the open
 An issue's queued task can also leave the line: **Queue after…** (or a drop of its card or node
 on the middle of another node, or anywhere on a node that isn't queued) makes it wait for that
 issue instead, as `/after` does: its last trigger (or `/mode`) comment waits, in its mode,
-with the text of every comment queued. **Back to backlog** (or a drop of its card on the
+with the text of every comment its author queued (another's are dropped, the App's comment
+says so). **Back to backlog** (or a drop of its card on the
 Backlog tab) drops its queued comments. Neither while a run is going on it: a comment queued
 behind that run waits for it. A task queued with replies to its last run only can't wait: take
 it out of the queue, then queue it after the issue.

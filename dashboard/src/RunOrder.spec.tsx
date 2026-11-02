@@ -7,8 +7,16 @@ import { Dashboard } from "./App";
 import { inLine, moveOnto, stillInLine } from "./graphModel";
 import { BACKLOG, makeState, makeTask, mockApi, queueAfter, transfer } from "./testUtils";
 
+// `canWait`: a comment of its starts a run, which can wait for another issue instead.
 const queued = (number: number, position: number, extra = {}) =>
-  makeTask({ number, title: `Queued ${number}`, state: "queued", position, ...extra });
+  makeTask({
+    number,
+    title: `Queued ${number}`,
+    state: "queued",
+    position,
+    canWait: true,
+    ...extra,
+  });
 
 // #44 a brainstorm, which starts first; #41 next, then another repo's task (acme/api#9), then
 // #42 and #43.
@@ -147,6 +155,35 @@ test("Back to backlog and Queue after… send cancel and queue; the card leaves 
     expect(within(list).queryByRole("button", { name: `Queue ${ref} after…` })).toBeNull();
     expect(within(list).queryByRole("button", { name: new RegExp(`^Take ${ref} out`) })).toBeNull();
   }
+});
+
+test("a queued task with replies to its last run only: Back to backlog, but no Queue after", async () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  render(
+    <Dashboard
+      state={makeState({}, [queued(41, 1, { canWait: false }), queued(42, 2)])}
+      error={null}
+    />,
+  );
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  expect(screen.queryByRole("button", { name: "Queue #41 after…" })).toBeNull();
+  expect(screen.getByRole("button", { name: /^Take #41 out of the queue/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Queue #42 after…" })).toBeTruthy();
+  // On the graph, let go on another node's middle: no label, nothing sent.
+  const from = screen.getByRole("listitem", { name: /^#41 Queued 41:/ });
+  const start = boxOf(from);
+  const target = boxOf(screen.getByRole("listitem", { name: /^#42 Queued 42:/ }));
+  const middle = { clientX: target.x + target.w / 2, clientY: target.y + target.h / 2 };
+  fireEvent.pointerDown(from, {
+    button: 0,
+    pointerId: 1,
+    clientX: start.x + 5,
+    clientY: start.y + 5,
+  });
+  fireEvent.pointerMove(from, { pointerId: 1, ...middle });
+  expect(screen.queryByText(/^Queue #41 after/)).toBeNull();
+  fireEvent.pointerUp(from, { pointerId: 1, ...middle });
+  expect(api.bodies()).toEqual([]);
 });
 
 test("a Queued card dropped on the Backlog tab goes back to the backlog", async () => {

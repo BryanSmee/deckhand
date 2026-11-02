@@ -236,6 +236,7 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   };
   const item = (text, extra = {}) => ({
     kind: "issue",
+    author: "alice",
     trigger: "work",
     mode: "work",
     text,
@@ -251,10 +252,14 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   const latest = runs.unqueue("org/repo#13", "alice");
   // Every queued comment's text, as the run would have read them.
   assert.deepEqual(latest, {
-    kind: "issue",
-    trigger: "work",
-    text: "first\n\n---\n\nsecond",
-    modeLine: "review",
+    item: {
+      kind: "issue",
+      author: "alice",
+      trigger: "work",
+      text: "first\n\n---\n\nsecond",
+      modeLine: "review",
+    },
+    dropped: 0,
   });
   assert.deepEqual(task.pending, []);
   assert.deepEqual(settled, ["cancelled"]);
@@ -279,12 +284,25 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   const reply = item("and this too", { trigger: null, comment: { id: 2 } });
   const both = queued("17", [trigger, reply]);
   assert.equal(runs.queuedTask("org/repo#17").item, trigger);
-  const held = runs.unqueue("org/repo#17", "alice");
+  const { item: held, dropped: none } = runs.unqueue("org/repo#17", "alice");
+  assert.equal(none, 0);
   assert.equal(held.comment.id, 1);
   assert.equal(held.modeLine, "review");
   assert.equal(held.text, "do it\n\n---\n\nand this too");
   assert.deepEqual(both.pending, []);
   assert.deepEqual(settled, ["cancelled", "cancelled"]);
+  // Another author's comments don't go with it (the wait has one author, whom the run's checks
+  // see): dropped and counted. The held one's author in another case is the same login.
+  queued("18", [
+    item("from alice", { comment: { id: 3 } }),
+    item("from bob", { trigger: null, author: "bob", comment: { id: 4 } }),
+    item("alice again", { trigger: null, author: "Alice", comment: { id: 5 } }),
+  ]);
+  const mixed = runs.unqueue("org/repo#18", "alice");
+  assert.equal(mixed.dropped, 1);
+  assert.equal(mixed.item.author, "alice");
+  assert.equal(mixed.item.text, "from alice\n\n---\n\nalice again");
+  assert.deepEqual(settled.slice(2), ["cancelled", "cancelled"]);
   // Cancelled, the one behind a run says so: it isn't back in the backlog.
   assert.equal(runs.cancel("org/repo#14", "alice"), "following");
   assert.equal(runs.cancel("org/repo#15", "alice"), "queued");
