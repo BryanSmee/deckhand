@@ -2172,7 +2172,7 @@ export function createReviews({
   function ciRecheck(key) {
     // The loop is on its CI step until what follows the wait is queued: ciDecide() clears the
     // wait before it queues the review or the CI fix run, and an auto-picked task keeps its
-    // reserved slot only while its loop goes on (tasks.mjs loopHolds()).
+    // reserved slot only while its loop goes on (tasks.mjs pickHolds()).
     const decide = () =>
       reviewed.get(key)?.ciWaiting ? deciding(key, "ci", () => ciDecide(key)) : ciDecide(key);
     const next = (ciQueue.get(key) ?? Promise.resolve()).catch(() => {}).then(decide);

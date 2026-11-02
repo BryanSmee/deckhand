@@ -1790,7 +1790,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
     config: { ...config, needsInputLabel: "needs-input" },
     repoSettings: async () => read,
     // The loop's state as each item is queued: an auto-picked task's follow-up keeps its
-    // reserved slot only while it goes on (tasks.mjs loopHolds()).
+    // reserved slot only while it goes on (tasks.mjs pickHolds()).
     accept: async (item) => {
       accepted.push(item);
       loops.push(reviewLoop(reviews.entry("org/repo", 5))?.loop ?? null);

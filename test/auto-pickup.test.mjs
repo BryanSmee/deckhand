@@ -885,20 +885,26 @@ test("a person's comment on an auto-picked task holds the slot too, started by t
   }
 });
 
-test("a picked run that asked: its slot is free, the sweep picks the next issue, the answer runs in a standard slot", async () => {
+test("a picked run that asked keeps its slot until answered: the answer is the pick's, the sweep picks nothing", async () => {
   for (const pulls of [{}, { "org/app#1": { number: 5, state: "draft" } }]) {
-    const p = pickTasks({ runs: [pickedRun(1, { status: "needs-input" })], pulls });
+    const asked = [pickedRun(1, { status: "needs-input" })];
+    const p = pickTasks({ runs: asked, pulls });
+    // After a restart too: the task isn't in `tasks`, its record finds it.
+    assert.equal(p.pickedCount(), 1);
     p.ctx.tasks.set("org/app#1", newTask({ repo: "org/app", id: "1", kind: "issue", number: 1 }));
-    assert.equal(p.pickedCount(), 0);
-    // The sweep picks #2, which runs in the reserved slot.
-    await p.queue(2, { trigger: "work", author: "alice", autoPickup: true });
-    p.schedule();
-    assert.deepEqual(p.started, ["2"]);
-    // The answer isn't the pick's: a standard slot, at once.
+    assert.equal(p.pickedCount(), 1);
+    const { pickup } = setup({ repos: { "org/a": { issues: [issue(2, 1)] } }, taken: 1 });
+    assert.deepEqual(await pickup.sweep(), []);
+    // The answer runs in the reserved slot, as the pick's.
     const answer = await p.comment(1);
-    assert.equal(answer.autoPickup, undefined);
+    assert.deepEqual([answer.autoPickup, answer.followsPick], [true, true]);
     p.schedule();
-    assert.deepEqual(p.started, ["2", "1"]);
+    assert.deepEqual(p.started, ["1"]);
+    // Its questions set aside (the label taken off, dismissals.mjs): the slot is free.
+    const aside = pickTasks({ runs: asked, pulls });
+    aside.ctx.dismissals = { has: (key, runId) => key === "org/app#1" && runId === "run-1" };
+    assert.equal(aside.pickedCount(), 0);
+    assert.equal((await aside.comment(1)).autoPickup, undefined);
   }
 });
 
@@ -1023,22 +1029,32 @@ test("a slot the sweep counted free is given up for good: the loop its draft sta
   assert.equal(review.autoPickup, undefined);
   p.schedule();
   assert.deepEqual(p.started, ["2", "1"]);
-  // A full sweep gives nothing up.
+  // A full sweep gives nothing up, nor one with a free slot and nothing to start: the pick
+  // goes on, its loop still the pick's when it starts.
   const full = setup({ taken: 1, release: () => released.push(true) });
   assert.deepEqual(await full.pickup.sweep(), []);
+  const none = setup({ repos: { "org/a": { issues: [] } }, release: () => released.push(true) });
+  assert.deepEqual(await none.pickup.sweep(), []);
+  const skipped = setup({
+    repos: { "org/a": { issues: [issue(3, 1)] } },
+    live: ["org/a#3"],
+    release: () => released.push(true),
+  });
+  assert.deepEqual(await skipped.pickup.sweep(), []);
   assert.equal(released.length, 1);
 });
 
 test("releasePicks(): a pick still holding its slot (queued, running, its loop going) is kept", async (t) => {
   const picks = createPicks({ path: join(tempDir(t), "picks.json") });
-  const runs = [pickedRun(1), pickedRun(2), pickedRun(3, { status: "needs-input" })];
+  const runs = [pickedRun(1), pickedRun(2), pickedRun(3, { status: "needs-input" }), pickedRun(4)];
   const p = pickTasks(looping({ runs, picks }));
-  // #1's loop waits for CI; #2 has its picked item queued; #3 asked: given up.
+  // #1's loop waits for CI; #2 has its picked item queued; #3 waits for an answer; #4 left
+  // nothing going: given up.
   await p.queue(2, { trigger: "work", author: "alice", autoPickup: true });
   p.releasePicks();
   assert.deepEqual(
-    [1, 2, 3].map((n) => picks.ended(`org/app#${n}`, `run-${n}`)),
-    [false, false, true],
+    [1, 2, 3, 4].map((n) => picks.ended(`org/app#${n}`, `run-${n}`)),
+    [false, false, false, true],
   );
 });
 

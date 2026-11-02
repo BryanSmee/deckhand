@@ -1,9 +1,9 @@
 // Auto-picked work that is over (#591), by task id ("org/repo#12", lowercased) → the id of its
-// last run then: the issue closed, its pull request merged or closed, or the sweep gave its
-// slot away (tasks.mjs releasePicks()). What is queued on the
-// task after that doesn't follow the pick (tasks.mjs followsPick()), the issue reopened too,
-// while that run is still the task's last. A new run replaces nothing here: it isn't picked, so
-// nothing follows it. Kept in picks.json, one entry per picked task.
+// last run then: the issue closed, its pull request merged or closed, or the sweep gave its slot
+// away (tasks.mjs releasePicks()). What is queued on the task after that doesn't follow the
+// pick (tasks.mjs followsPick()), the issue reopened too, while that run is still the task's
+// last. A new run replaces nothing here: it isn't picked, so nothing follows it. Kept in
+// picks.json, one entry per picked task.
 import { taskId } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
 
