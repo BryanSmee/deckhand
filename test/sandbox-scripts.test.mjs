@@ -5,6 +5,7 @@ import { once } from "node:events";
 import { execFile, spawn, spawnSync } from "node:child_process";
 import {
   chmodSync,
+  chownSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -492,6 +493,40 @@ test("the entrypoint trusts /workspace before cloning into it", { skip: needsBas
   });
   assert.equal(all.stdout, "/workspace\n");
 });
+
+// What that trust is for: a clone in a folder another user owns (a new claim's root, root's, for
+// the sandbox's user) is one git refuses, until the folder is in safe.directory. Root is the
+// one user here who can make a folder another's: the entrypoint's lines, on that folder.
+test(
+  "the entrypoint's trust lets git use a clone in a folder another user owns",
+  { skip: (!isRoot && "only root makes a folder another user owns") || needsBash },
+  (t) => {
+    const code = readFileSync(`${bin}entrypoint.sh`, "utf8");
+    const trust = code.match(/^git config --global --get-all safe\.directory.*\n.*\n/m)[0];
+    const root = tempDir(t, "deckhand-claim-");
+    const workspace = join(root, "workspace");
+    mkdirSync(workspace);
+    chownSync(workspace, 1000, 1000);
+    const env = scriptEnv(t, { HOME: join(root, "home"), GIT_CONFIG_NOSYSTEM: "1" });
+    mkdirSync(env.HOME);
+    const git = (...args) => spawnSync("git", args, { env, encoding: "utf8" });
+    assert.equal(git("init", "-q", "--bare", join(root, "src.git")).status, 0);
+    assert.equal(git("clone", "-q", join(root, "src.git"), workspace).status, 0);
+    // The clone's own files are root's, its folder isn't: git's check is on the folder.
+    assert.match(git("-C", workspace, "status").stderr, /dubious ownership/);
+    const trusted = spawnSync(
+      "bash",
+      ["-euo", "pipefail", "-c", trust.replaceAll("/workspace", workspace)],
+      {
+        env,
+        encoding: "utf8",
+      },
+    );
+    assert.equal(trusted.status, 0, trusted.stderr);
+    const status = git("-C", workspace, "status");
+    assert.equal(status.status, 0, status.stderr);
+  },
+);
 
 // Claude Code's commands live in its agent script only: the entrypoint is the same for every
 // agent.

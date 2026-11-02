@@ -391,6 +391,42 @@ test("start: a claim per session volume, the Pod, then a Secret with the run's e
   calls.length = 0;
   await runner.start(spec({ run: "dh-org-repo-12-abc-1730000999" }));
   assert.equal(calls.filter((c) => c.startsWith("POST")).length, 2); // Pod, Secret
+  // Claims of the folder's layout: their folder again, where the last run left its session.
+  const next = objects.pods.get("dh-org-repo-12-abc").spec.containers[0].volumeMounts;
+  assert.deepEqual(
+    next.map((m) => m.subPath),
+    [undefined, ".deckhand-session", ".deckhand-session"],
+  );
+});
+
+// A session claim's folder, not its root (#643), unless it is from before (`rooted`); what
+// isn't a session (the agent, a cache) keeps its root, or the subpath its spec names.
+test("podSpec: session volumes mount their folder, rooted ones and the others their root", () => {
+  const cache = { kind: "cache", name: "dh-cache-org-repo-npm", path: "/home/node/.npm" };
+  const named = { kind: "cache", name: "dh-cache-org-repo-x", path: "/x", subpath: "x" };
+  const volumes = [...spec().volumes, cache, named];
+  const options = { pod: "p", labels: {}, annotations: {}, secret: "s" };
+  const mounts = (pod) =>
+    pod.spec.containers[0].volumeMounts.map((m) => `${m.mountPath}:${m.subPath ?? ""}`);
+  assert.deepEqual(mounts(podSpec(spec({ volumes }), options)), [
+    "/opt/claude-code:",
+    "/workspace:.deckhand-session",
+    "/home/node/.claude:.deckhand-session",
+    "/home/node/.npm:",
+    "/x:x",
+  ]);
+  const rooted = podSpec(spec({ volumes }), {
+    ...options,
+    // Only a session volume's name counts: the agent's has no folder to leave.
+    rooted: ["dh-org-repo-12-abc-workspace", "dh-claude-code"],
+  });
+  assert.deepEqual(mounts(rooted), [
+    "/opt/claude-code:",
+    "/workspace:",
+    "/home/node/.claude:.deckhand-session",
+    "/home/node/.npm:",
+    "/x:x",
+  ]);
 });
 
 test("podSpec: Pod Security restricted, no token, no restart, the grant's limits", () => {
@@ -482,6 +518,28 @@ test("start: a claim from before its folder is mounted at its root, its session 
   });
   assert.ok(!calls.some((c) => /^(PUT|PATCH|DELETE) .*persistentvolumeclaims/.test(c)));
   assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
+});
+
+// An issue at work before the update: both its claims from before, its session there already
+// (runs.mjs continues it, task-modes.mjs takes its replies), both at their root, none made.
+test("start: an issue whose claims are both from before goes on at their root", async (t) => {
+  const { runner, objects, calls } = setup(t);
+  for (const name of ["dh-org-repo-12-abc-workspace", "dh-org-repo-12-abc-claude"]) {
+    objects.persistentvolumeclaims.set(name, {
+      metadata: { name, annotations: { "deckhand.volume": name } },
+    });
+  }
+  assert.equal(await runner.hasSession("dh-org-repo-12-abc", claude), true);
+  await runner.start(spec());
+  const mounts = objects.pods.get("dh-org-repo-12-abc").spec.containers[0].volumeMounts;
+  assert.deepEqual(mounts.slice(1), [
+    { name: "v1", mountPath: "/workspace" },
+    { name: "v2", mountPath: "/home/node/.claude" },
+  ]);
+  assert.ok(!calls.some((c) => /persistentvolumeclaims$/.test(c) && c.startsWith("POST")));
+  for (const claim of objects.persistentvolumeclaims.values()) {
+    assert.equal(claim.metadata.annotations["deckhand.layout"], undefined);
+  }
 });
 
 test("start: a Secret refused removes the Pod made before it", async (t) => {
