@@ -532,7 +532,8 @@ export function hasLabel(labels, name) {
 // A pull request as GitHub has it → { key, pr } for the dashboard (pulls.mjs record()): the
 // task of the issue it closes, else its own. `readyAt`: when it turned ready, if it just did.
 // Its size and commit count when GitHub sent them: a single pull request and webhooks have
-// them, listings don't. `head`: its head commit, whose CI the dashboard shows (pulls.mjs).
+// them, listings don't. `head`: its head commit, whose CI the dashboard shows (pulls.mjs), with
+// `updatedAt`.
 export function pullEntry(repo, pr, readyAt = null) {
   return {
     key: taskKey(repo, linkedIssue(pr, repo) ?? prId(pr.number)),
@@ -543,6 +544,8 @@ export function pullEntry(repo, pr, readyAt = null) {
       readyAt,
       ...pullSize(pr),
       ...(typeof pr.head?.sha === "string" && { head: pr.head.sha }),
+      // When GitHub last changed it: an older delivery handled late doesn't move the head back.
+      ...(Number.isFinite(Date.parse(pr.updated_at)) && { updatedAt: Date.parse(pr.updated_at) }),
     },
   };
 }

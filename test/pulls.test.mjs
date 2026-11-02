@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { pullRequest, replayedPull } from "../listener/events.mjs";
+import { ciDelivery, pullRequest, replayedPull } from "../listener/events.mjs";
+import { commitCi } from "../listener/ci.mjs";
 import { createPulls } from "../listener/pulls.mjs";
 import { tempDir, testConfig } from "./helpers.mjs";
 
@@ -662,4 +663,75 @@ test("pulls: a CI read that ends while resync waits on GitHub: its state still a
   assert.equal(await syncing, 1);
   assert.equal(pulls.get("org/repo#30").state, "merged");
   assert.deepEqual(pulls.get("org/repo#30").ci, ci("a1", "passed"));
+});
+
+test("ciDelivery: an Actions run, a check suite or a status → the commit, for allowed repos from the App", () => {
+  const base = { installation: { id: 7 }, repository: { full_name: "org/repo" } };
+  const of = (event, p) => ciDelivery(config, event, { ...base, ...p });
+  for (const action of ["requested", "in_progress", "completed"]) {
+    assert.deepEqual(of("workflow_run", { action, workflow_run: { head_sha: "a1" } }), {
+      repo: "org/repo",
+      sha: "a1",
+    });
+  }
+  assert.deepEqual(of("check_suite", { action: "completed", check_suite: { head_sha: "b2" } }), {
+    repo: "org/repo",
+    sha: "b2",
+  });
+  assert.deepEqual(of("status", { sha: "c3", state: "failure" }), { repo: "org/repo", sha: "c3" });
+  // Another repository, no installation, no commit, another event: none.
+  assert.equal(of("status", { sha: "c3", repository: { full_name: "else/where" } }), null);
+  assert.equal(of("status", { sha: "c3", installation: undefined }), null);
+  assert.equal(of("status", {}), null);
+  assert.equal(of("workflow_run", { workflow_run: {} }), null);
+  assert.equal(of("check_suite", { sha: "c3" }), null);
+  assert.equal(of("pull_request", { sha: "c3", workflow_run: { head_sha: "a1" } }), null);
+});
+
+test("pulls: a rate-limited CI read (a 403) leaves the CI known as it was", async (t) => {
+  let limited = false;
+  const github = async (repo, method, path) => {
+    if (path.includes("/actions/runs")) {
+      return new Response(JSON.stringify({ workflow_runs: [] }));
+    }
+    if (path.includes("/check-runs")) return new Response(JSON.stringify({ check_runs: [] }));
+    if (limited) {
+      return new Response(JSON.stringify({ message: "API rate limit exceeded" }), {
+        status: 403,
+        headers: { "x-ratelimit-remaining": "0" },
+      });
+    }
+    const failed = { context: "ci/jenkins", state: "failure", target_url: "https://ci/1" };
+    return new Response(JSON.stringify({ statuses: [failed] }));
+  };
+  const pulls = createPulls({
+    path: tempPath(t),
+    listPulls: async () => [],
+    readCi: (repo, sha) => commitCi(github, repo, sha),
+  });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1" });
+  await settled();
+  const failed = ci("a1", "failed", [{ name: "ci/jenkins", state: "failed", url: "https://ci/1" }]);
+  assert.deepEqual(pulls.get("org/repo#30").ci, failed);
+  limited = true;
+  await pulls.ciChanged("org/repo", "a1");
+  assert.deepEqual(pulls.get("org/repo#30").ci, failed);
+});
+
+test("pulls: an older delivery handled late doesn't move the head back", async (t) => {
+  const { pulls, read } = ciPulls(t, { b2: ci("b2", "passed") });
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "b2", updatedAt: 2000 });
+  await settled();
+  // The `synchronize` of the commit before, handled after.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "a1", updatedAt: 1000 });
+  await settled();
+  assert.equal(pulls.get("org/repo#30").head, "b2");
+  assert.deepEqual(pulls.get("org/repo#30").ci, ci("b2", "passed"));
+  assert.deepEqual(read, ["org/repo@b2"]);
+  // A newer one moves it, and when it wasn't said, the latest handled does.
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "c3", updatedAt: 3000 });
+  assert.equal(pulls.get("org/repo#30").head, "c3");
+  pulls.record("org/repo#30", { ...pr(31, "ready"), head: "d4" });
+  assert.equal(pulls.get("org/repo#30").head, "d4");
+  assert.equal(pulls.get("org/repo#30").updatedAt, 3000);
 });

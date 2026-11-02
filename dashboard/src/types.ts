@@ -120,6 +120,8 @@ export interface PullRequest {
   // push; the last one known stays once it is merged or closed. Absent until read.
   head?: string;
   ci?: Ci;
+  // When GitHub last changed it, as the delivery that recorded it said. Sent, not shown.
+  updatedAt?: number;
 }
 
 // failed when one run failed, else running while one hasn't finished, else passed; none

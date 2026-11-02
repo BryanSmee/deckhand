@@ -195,3 +195,29 @@ test("commitCi: check runs read page by page, another App's failure on the secon
   );
   assert.equal(paths.filter((p) => p.includes("/check-runs")).length, 2);
 });
+
+test("commitCi: a 403 that is a rate limit throws; one that refuses the permission leaves that part out", async () => {
+  const runs = { workflow_runs: [{ name: "CI", status: "completed", conclusion: "success" }] };
+  const answer = (statusReply) => async (repo, method, path) => {
+    if (path.includes("/actions/runs")) return new Response(JSON.stringify(runs));
+    if (path.includes("/check-runs")) return new Response(JSON.stringify({ check_runs: [] }));
+    return statusReply();
+  };
+  const limited = [
+    () => new Response("{}", { status: 403, headers: { "x-ratelimit-remaining": "0" } }),
+    () => new Response("{}", { status: 403, headers: { "retry-after": "60" } }),
+    () =>
+      new Response(JSON.stringify({ message: "You have exceeded a secondary rate limit." }), {
+        status: 403,
+      }),
+  ];
+  for (const reply of limited) {
+    await assert.rejects(commitCi(answer(reply), "org/repo", "abc"), /status: 403/);
+  }
+  const permission = () =>
+    new Response(JSON.stringify({ message: "Resource not accessible by integration" }), {
+      status: 403,
+      headers: { "x-ratelimit-remaining": "4999" },
+    });
+  assert.equal((await commitCi(answer(permission), "org/repo", "abc")).state, "passed");
+});

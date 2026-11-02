@@ -132,7 +132,7 @@ export async function commitCi(github, repo, sha) {
       const sep = path.includes("?") ? "&" : "?";
       const paged = `${path}${sep}per_page=${CI_PER_PAGE}&page=${page}`;
       const res = await github(repo, "GET", paged, undefined, REFUSED);
-      if (REFUSED.includes(res.status)) return undefined;
+      if (await refused(res)) return undefined;
       if (!res.ok) throw new Error(`GitHub GET ${path}: ${res.status}`);
       const found = (await res.json())?.[field] ?? [];
       all.push(...found);
@@ -151,6 +151,18 @@ export async function commitCi(github, repo, sha) {
 
 // What commitCi() takes for GitHub refusing a part of a commit's CI rather than failing.
 const REFUSED = [403, 404, 422];
+
+// Whether `res` refuses that part for good (refused()), not for now: a 403 that is a rate limit
+// (no requests left, a `retry-after`, or a body that says so) is a failure, as a 5xx is: read
+// without that part, CI could say passed when it failed.
+async function refused(res) {
+  if (!REFUSED.includes(res.status)) return false;
+  if (res.status !== 403) return true;
+  if (res.headers?.get?.("x-ratelimit-remaining") === "0") return false;
+  if (res.headers?.get?.("retry-after")) return false;
+  const text = await res.text().catch(() => "");
+  return !/rate limit/i.test(text);
+}
 const CI_PER_PAGE = 100;
 // The pages read of each list at most: 1,000 runs, check runs or statuses of one commit.
 const CI_PAGES = 10;

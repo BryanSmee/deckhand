@@ -73,8 +73,12 @@ export function createPulls({
     // one known stays.
     const size = before ? knownSize(before) : {};
     // The head and its CI known stay, unless the pull request moved to another head: its CI
-    // starts again, nothing reported yet.
-    const head = pr.head ?? before?.head;
+    // starts again, nothing reported yet. Not back to an older one: a delivery older than the
+    // one that set it (a redelivery, two handled at once ending out of order) keeps it.
+    const older =
+      pr.updatedAt != null && before?.updatedAt != null && pr.updatedAt < before.updatedAt;
+    const head = older ? (before.head ?? pr.head) : (pr.head ?? before?.head);
+    const updatedAt = Math.max(pr.updatedAt ?? 0, before?.updatedAt ?? 0) || undefined;
     const ci = !head
       ? before?.ci
       : before?.ci?.sha === head
@@ -86,6 +90,7 @@ export function createPulls({
       readyAt,
       ...(autoMerged && { autoMerged: true }),
       ...(head && { head }),
+      ...(updatedAt && { updatedAt }),
       ...(ci && { ci }),
     });
     pulls.save();
@@ -249,7 +254,10 @@ export function createPulls({
   function catchUp(keys) {
     const queue = [...keys];
     const worker = async () => {
-      while (queue.length) await readCiOf(queue.shift());
+      while (queue.length) {
+        const key = queue.shift();
+        await readCiOf(key).catch((error) => log(`${key}: CI: ${error.message ?? error}`));
+      }
     };
     const run = () => Promise.all(Array.from({ length: CI_AT_ONCE }, worker));
     catching = catching.then(run, run);

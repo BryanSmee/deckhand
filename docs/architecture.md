@@ -1291,11 +1291,11 @@ report for the refs it updated and tells the broker's entry for the run (`watchP
 A task's pull request carries its `head` commit too, and what CI says of it (`ci`: `{ sha, state, runs }`, #436),
 decided by the rule auto-merge uses (`ci.mjs` `ciState()`) over the commit's Actions runs, check
 runs and commit statuses (`commitCi()`; one GitHub refuses, an installation that hasn't accepted
-`checks` or `statuses`, is left out; any other failure records nothing, rather than CI without that part; each list is read page by page). A `workflow_run`, `check_suite` or `status` delivery for
+`checks` or `statuses`, is left out; any other failure, a rate limit's 403 included, records nothing, rather than CI without that part; each list is read page by page). A `workflow_run`, `check_suite` or `status` delivery for
 the head of an open pull request reads it again (`ciChanged()`, one read at a time per task, one
 more after those that came meanwhile, a failed one included), without holding the delivery's
 place among those the orchestrator handles at once; one for any other commit (an older head)
-changes nothing. A new head resets it to `none` and reads it at once: the delivery that said
+changes nothing. A new head (from a delivery no older, by its `updated_at`, than the one that set the last) resets it to `none` and reads it at once: the delivery that said
 it changed may have been handled before the pull request's own. `check_suite` and `status` are
 `QUIET_EVENTS` (`github-app.mjs`): edge passes on only what `ciDelivery()` reads of them
 (`quietPayload()`), for allowed repositories, without their GUID or a log line, and at most one

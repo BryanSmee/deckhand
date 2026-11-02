@@ -3014,6 +3014,15 @@ mounts:
       listener.output(),
       /Delivery: (?:status|check_suite)|Passed on: (?:status|check_suite)|Delivery (?:s|c)-1 again/,
     );
+    // An Actions run going on that head: its CI read again, Actions runs first among them.
+    const since = github.requests.length;
+    const workflow_run = { id: 9, name: "CI", head_sha: "abc", status: "in_progress" };
+    await send({ ...ci, action: "in_progress", workflow_run }, "workflow_run", "w-1");
+    await github.waitFor(
+      (r) =>
+        github.requests.indexOf(r) >= since &&
+        r.path.startsWith("/repos/org/repo/actions/runs?head_sha=abc&"),
+    );
   });
 
   test("open questions label an issue; an allowed user's answer takes the label off", async (t) => {
