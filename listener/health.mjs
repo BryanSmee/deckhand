@@ -4,11 +4,12 @@
 // are kept CACHE_MS, so that many dashboards open don't each probe every service. What it
 // says never holds a service's URL or what it answered beyond its start, version and warnings
 // (what it said of its setup at start: its blobs taking Redis's memory, ../lib/blobs.mjs).
-export const MAX_WARNINGS = 5;
-export const WARNING_LENGTH = 300;
 import { SERVICES } from "../lib/services.mjs";
 
 export const TIMEOUT_MS = 2000;
+// What is kept of a service's warnings: a few, each cut short.
+export const MAX_WARNINGS = 5;
+export const WARNING_LENGTH = 300;
 export const CACHE_MS = 10_000;
 // Started this recently: "starting", a recent restart or update, rather than "up".
 export const STARTING_MS = 5 * 60_000;

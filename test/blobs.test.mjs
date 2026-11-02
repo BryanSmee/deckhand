@@ -3,7 +3,7 @@
 // the check at start, the warning, and the secret key kept out of the store and the log.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
@@ -82,6 +82,29 @@ for (const [name, open] of Object.entries(BACKENDS)) {
     assert.equal((await blobs.read("logs/run-1/1")).toString(), "été");
   });
 
+  test(`blobs (${name}): a key and a key under it, and a long key, as S3 keeps them`, async (t) => {
+    const blobs = await open(t);
+    await blobs.put("logs/r1", "segment list");
+    await blobs.put("logs/r1/2", "a segment");
+    assert.equal((await blobs.read("logs/r1")).toString(), "segment list");
+    assert.equal((await blobs.read("logs/r1/2")).toString(), "a segment");
+    // The other way round too.
+    await blobs.put("files/r1/a/b", "deep");
+    await blobs.put("files/r1/a", "shallow");
+    assert.equal((await blobs.read("files/r1/a/b")).toString(), "deep");
+    assert.equal(await blobs.size("files/r1/a"), 7);
+    // A part far past a file name's 255 bytes, and a whole key near S3's 1024.
+    const long = `files/r1/${"x".repeat(400)}/${"y".repeat(500)}`;
+    const other = `${long.slice(0, -1)}z`;
+    await blobs.put(long, "long");
+    await blobs.put(other, "other");
+    assert.equal((await blobs.read(long)).toString(), "long");
+    assert.equal((await blobs.read(other)).toString(), "other");
+    await blobs.delete(long);
+    assert.equal(await blobs.size(long), null);
+    assert.equal(await blobs.size(other), 5);
+  });
+
   test(`blobs (${name}): keys climbing out are refused`, async (t) => {
     const blobs = await open(t);
     for (const key of ["", "../x", "a/../../x", "/etc/passwd", "a//b", "a\\b", "a/./b"]) {
@@ -129,10 +152,11 @@ test("blobs (file): a put lands whole, and nothing is left beside it", async (t)
   const dir = tempDir(t);
   const blobs = openBlobs(pathToFileURL(dir).href);
   await blobs.put("logs/a/0", "x".repeat(100_000));
-  assert.equal(readFileSync(join(dir, "logs", "a", "0"), "utf8").length, 100_000);
-  assert.deepEqual(readdirSync(join(dir, "logs", "a")), ["0"]);
+  // One file in the folder itself, named as the store names its blobs' files.
+  assert.deepEqual(readdirSync(dir), ["logs%2Fa%2F0"]);
+  assert.equal(readFileSync(join(dir, "logs%2Fa%2F0"), "utf8").length, 100_000);
   await checkBlobs(blobs);
-  assert.deepEqual(readdirSync(join(dir, ".deckhand-check")), []);
+  assert.deepEqual(readdirSync(dir), ["logs%2Fa%2F0"]);
 });
 
 test("BLOB_URL: what isn't blob storage, or puts credentials in the URL, is refused", async (t) => {
@@ -150,6 +174,7 @@ test("BLOB_URL: what isn't blob storage, or puts credentials in the URL, is refu
   refused(`s3://deckhand?endpoint=${s3.endpoint}&style=virtual`, /unknown style/);
   refused(`s3://deckhand?endpoint=ftp://host`, /not an http\(s\) endpoint/);
   refused(`s3://deckhand?endpoint=${s3.endpoint}`, /needs BLOB_ACCESS_KEY_ID/, {});
+  refused(`s3://deckhand/%zz?endpoint=${s3.endpoint}`, /^BLOB_URL: not a valid prefix$/);
   refused("", /no store/, {});
   // The secret key is in no message.
   try {
@@ -162,18 +187,21 @@ test("BLOB_URL: what isn't blob storage, or puts credentials in the URL, is refu
 test("blobCredentials: the variables or their _FILE forms, both or neither", (t) => {
   assert.equal(blobCredentials({}), null);
   assert.deepEqual(
-    blobCredentials({ BLOB_ACCESS_KEY_ID: "AKID", BLOB_SECRET_ACCESS_KEY: "s3cr3t" }),
-    { accessKeyId: "AKID", secretAccessKey: "s3cr3t" },
+    blobCredentials({
+      BLOB_ACCESS_KEY_ID: "AKID",
+      BLOB_SECRET_ACCESS_KEY: "s3cr3t-0123456789abcdef",
+    }),
+    { accessKeyId: "AKID", secretAccessKey: "s3cr3t-0123456789abcdef" },
   );
   const dir = tempDir(t);
   writeFileSync(join(dir, "id"), "AKID\n");
-  writeFileSync(join(dir, "secret"), "s3cr3t\n");
+  writeFileSync(join(dir, "secret"), "s3cr3t-0123456789abcdef\n");
   assert.deepEqual(
     blobCredentials({
       BLOB_ACCESS_KEY_ID_FILE: join(dir, "id"),
       BLOB_SECRET_ACCESS_KEY_FILE: join(dir, "secret"),
     }),
-    { accessKeyId: "AKID", secretAccessKey: "s3cr3t" },
+    { accessKeyId: "AKID", secretAccessKey: "s3cr3t-0123456789abcdef" },
   );
   assert.throws(() => blobCredentials({ BLOB_ACCESS_KEY_ID: "AKID" }), /set both, or neither/);
   assert.throws(
@@ -195,8 +223,18 @@ test("blobCredentials: the variables or their _FILE forms, both or neither", (t)
       e instanceof BlobError &&
       /BLOB_SECRET_ACCESS_KEY_FILE: can't read .* \(ENOENT\)/.test(e.message),
   );
+  // A secret key redact() would leave as it is (under 16 characters): refused, fail closed.
+  assert.throws(
+    () =>
+      blobCredentials({ BLOB_ACCESS_KEY_ID: "minioadmin", BLOB_SECRET_ACCESS_KEY: "minioadmin" }),
+    (e) =>
+      e instanceof BlobError && /BLOB_SECRET_ACCESS_KEY: 16 characters at least/.test(e.message),
+  );
   assert.deepEqual(blobSecrets(null), []);
-  assert.deepEqual(blobSecrets({ accessKeyId: "AKID", secretAccessKey: "s3cr3t" }), ["s3cr3t"]);
+  assert.deepEqual(
+    blobSecrets({ accessKeyId: "AKID", secretAccessKey: "s3cr3t-0123456789abcdef" }),
+    ["s3cr3t-0123456789abcdef"],
+  );
 });
 
 test("the check at start: a wrong key or a bucket that doesn't exist says what failed", async (t) => {
@@ -233,6 +271,20 @@ test("the check at start: a wrong key or a bucket that doesn't exist says what f
     credentialsOf(s3),
     /can't write an object: .*ECONNREFUSED/,
   );
+});
+
+test("the check at start: a key that may write but not read leaves no object behind", async (t) => {
+  const s3 = await fakeS3(t);
+  const blobs = openBlobs(s3Url(s3), { credentials: credentialsOf(s3), s3: S3_OPTIONS });
+  t.after(() => blobs.close());
+  // The PUT goes through, the GET is refused.
+  s3.fail(null, { status: 403, code: "AccessDenied" });
+  await assert.rejects(checkBlobs(blobs), /can't read an object: .*403 AccessDenied/);
+  assert.deepEqual(
+    s3.requests.map((r) => r.method),
+    ["PUT", "GET", "DELETE"],
+  );
+  assert.equal(s3.objects.size, 0);
 });
 
 test("the check at start: a folder that can't be written says so", async (t) => {
@@ -278,7 +330,8 @@ test("the warning: Redis as the store and no BLOB_URL, and only then", async (t)
   assert.deepEqual(set.warnings, []);
   assert.equal(set.blobs.kind, "file");
   assert.deepEqual(lines, [["info", `Blob storage: file, ${dir}`]]);
-  assert.ok(existsSync(join(dir, ".deckhand-check")));
+  // Its check's object gone.
+  assert.deepEqual(readdirSync(dir), []);
 });
 
 test("the secret key: refused in a store value, redacted from its blobs and its log", async () => {

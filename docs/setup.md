@@ -1725,8 +1725,11 @@ second place for what will never change again, which each one's `BLOB_URL` names
   `region` is `us-east-1` when left out (Garage's is `garage`). The key pair is
   `BLOB_ACCESS_KEY_ID` and `BLOB_SECRET_ACCESS_KEY`, or `BLOB_ACCESS_KEY_ID_FILE` and
   `BLOB_SECRET_ACCESS_KEY_FILE`, the paths of files holding them (a Kubernetes Secret's): never
-  in the URL, which is refused with them. Give the key access to that bucket alone.
-- **`file:///<folder>`**: a folder, for one node (Redis as the store, the blobs on a volume).
+  in the URL, which is refused with them. The secret key has 16 characters at least (shorter, it
+  couldn't be told apart from ordinary text to redact it, and the service doesn't start): MinIO's
+  default `minioadmin` won't do. Give the key access to that bucket alone.
+- **`file:///<folder>`**: a folder, for one node (Redis as the store, the blobs on a volume):
+  one file per key, directly in it, named as the store names its own blobs' files.
 - **unset**: none, the blobs stay in the store, as before.
 
 Only the runner and the broker get these settings: the orchestrator, edge, the github and the
