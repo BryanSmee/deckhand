@@ -18,7 +18,15 @@ import { createEdgeHttp } from "../edge/http.mjs";
 import { createEdgeInternal, DELIVERIES } from "../edge/internal.mjs";
 import { fromDashboard, fromKey, postOf, tagger } from "../listener/discussions.mjs";
 import { createRedeliveries } from "../listener/redeliveries.mjs";
-import { listening, recordingFetch, serve, tempDir, testConfig, testKey } from "./helpers.mjs";
+import {
+  listening,
+  recordingFetch,
+  serve,
+  tempDir,
+  testConfig,
+  testKey,
+  until,
+} from "./helpers.mjs";
 
 // As long as a real one: redact() leaves out shorter ones (lib/redact.mjs MIN_LENGTH).
 const SECRET = "webhook-secret-0123456789abcdef";
@@ -278,16 +286,12 @@ test("the orchestrator reads the deliveries, acknowledges each once handled; one
     }
     handled.push(entry.id);
   });
-  for (let i = 0; i < 200 && !handled.includes("d3"); i++) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  await until(() => handled.includes("d3"), { what: "d3" });
   // Started in the stream's order, d3 handled while d1 still goes.
   assert.deepEqual(started.slice(0, 3), ["d1", "d2", "d3"]);
   assert.deepEqual(handled, ["d3"]);
   release();
-  for (let i = 0; i < 200 && handled.length < 3; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
+  await until(() => handled.length >= 3, { what: "d1 and d2" });
   // d1 once; d2 read again after its failure, and handled then.
   assert.deepEqual(handled, ["d3", "d1", "d2"]);
   assert.deepEqual(started, ["d1", "d2", "d3", "d2"]);
@@ -396,7 +400,8 @@ test("two copies: the redeliveries' poller runs on the one holding its lease, th
       store,
       name: "edge/redeliveries",
       holder: name,
-      ttlMs: 300,
+      // Long enough that a paused runner doesn't let it expire: stop() hands it over.
+      ttlMs: 10_000,
       pollMs: 10,
       onActive: () => redeliveries.start(),
       onPassive: () => redeliveries.stop(),
@@ -405,13 +410,12 @@ test("two copies: the redeliveries' poller runs on the one holding its lease, th
   });
   for (const { poller } of copies) await poller.start();
   t.after(() => Promise.all(copies.map(({ poller }) => poller.stop())));
-  await new Promise((resolve) => setTimeout(resolve, 150));
-  assert.ok(listed.length >= 3, `scans: ${listed.length}`);
+  await until(() => listed.length >= 3, { what: "the first copy's scans" });
   assert.deepEqual([...new Set(listed)], ["one"]);
   // The first copy stops: the other takes the lease at once, and scans from then on.
   await copies[0].poller.stop();
   const before = listed.length;
-  await new Promise((resolve) => setTimeout(resolve, 150));
+  await until(() => listed.length >= before + 3, { what: "the other copy's scans" });
   assert.deepEqual([...new Set(listed.slice(before))], ["two"]);
 });
 

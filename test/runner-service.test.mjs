@@ -22,7 +22,7 @@ import { createEvents } from "../runner/events.mjs";
 import { createLogs } from "../runner/logs.mjs";
 import { createRunnerService, ROUTES } from "../runner/service.mjs";
 import { grantsFrom } from "../listener/grants.mjs";
-import { fakeDocker, grantedOf, listenToRestart, tempDir } from "./helpers.mjs";
+import { fakeDocker, grantedOf, listenToRestart, tempDir, until } from "./helpers.mjs";
 
 const { privateKey, publicKey } = generateKeyPairSync("ed25519");
 const signing = { privateKey, kid: keyId(publicKey) };
@@ -92,13 +92,15 @@ function host({ lines = ['{"type":"result","result":"Done."}'] } = {}) {
 
 // One copy of the runner service, listening; its lease on `store` (shared by the copies).
 // `bound`: its callers' networks; `brokerTokens`: what the broker gives a run being started.
+// `ttlMs`: long by default, so that a paused runner doesn't let it expire (a 503 then); the
+// expiry's tests set theirs.
 // The grants folder, and what the operator's policies grant: org/repo may build its Dockerfile.
 const grants = () => grantsFrom({ "org/repo.yaml": "hosts: [pypi.org]\n" }, config);
 const granted = grantedOf(["dockerfile"], "org/repo");
 
 async function copy(
   t,
-  { store, backend, ttlMs = 400, bound, brokerTokens, imageFor, blobOf } = {},
+  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf } = {},
 ) {
   let service;
   const lease = activePassive({
@@ -175,14 +177,6 @@ const client = (urls, extra = {}) =>
     runWaitMs: 5000,
     ...extra,
   });
-
-const until = async (check, what) => {
-  for (let i = 0; i < 300; i++) {
-    if (await check()) return;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  throw new Error(`timed out waiting for ${what}`);
-};
 
 test("each caller gets its own endpoints only, from its own network, with a valid token", async (t) => {
   const store = fileStore();
@@ -324,7 +318,7 @@ test("the orchestrator's fencing epoch: none refused, a stale one refused, the n
   // The other copy, once it acts, refuses the same: the newest is in the store.
   const b = await copy(t, { store, backend });
   await a.lease.stop();
-  await until(() => b.lease.active(), "the other copy's lease");
+  await until(() => b.lease.active(), { what: "the other copy's lease" });
   assert.equal(await status(b.url, 2), 409);
   const refused = await call(b.url, "POST", "/sandboxes", {
     sub: "orchestrator",
@@ -533,9 +527,9 @@ test("a log's append whose answer was lost is taken once; a stale epoch's is ref
   const { logs } = client(a.url, { fetch: losing });
   const file = logs.open("dh-o-a-1-1");
   file.write("one\n");
-  await until(() => cut < 0 || file.size === 0, "the cut");
+  await until(() => cut < 0 || file.size === 0, { what: "the cut" });
   file.write("two\n");
-  await until(async () => (await logs.text("dh-o-a-1-1")) === "one\ntwo\n", "the log");
+  await until(async () => (await logs.text("dh-o-a-1-1")) === "one\ntwo\n", { what: "the log" });
   assert.equal(await file.flushed(), true);
   // A newer listener writes now: this one's appends are refused, said, and tried again later,
   // not in a loop.
@@ -604,7 +598,9 @@ test("a log written while the runner is away is sent once it is back, in order",
     await new Promise((resolve) => service.server.close(resolve));
   });
   file.write("three\n");
-  await until(async () => (await logs.text("dh-o-a-1-1")) === "one\ntwo\nthree\n", "the log");
+  await until(async () => (await logs.text("dh-o-a-1-1")) === "one\ntwo\nthree\n", {
+    what: "the log",
+  });
 });
 
 test("handover on release: the waiting copy takes over at once, finds the sandboxes, their logs and events", async (t) => {
@@ -630,7 +626,7 @@ test("handover on release: the waiting copy takes over at once, finds the sandbo
   const first = a.lease.epoch();
   const released = Date.now();
   await a.service.stop({ graceMs: 1000 });
-  await until(() => b.lease.active(), "the other copy's lease");
+  await until(() => b.lease.active(), { what: "the other copy's lease" });
   assert.ok(Date.now() - released < 1000, `took ${Date.now() - released} ms`);
   // A higher epoch than the copy before it.
   assert.ok(b.lease.epoch() > first);
@@ -644,7 +640,7 @@ test("handover on release: the waiting copy takes over at once, finds the sandbo
   assert.equal(backend.runs(), 1);
   // The run's events: its start, then its end with its exit code, seen by the copy acting.
   backend.containers.get("dh-o-a-1").running = false;
-  await until(async () => (await both.events.read()).length === 2, "the end's event");
+  await until(async () => (await both.events.read()).length === 2, { what: "the end's event" });
   const events = await both.events.read();
   assert.deepEqual(
     events.map(({ event }) => [event.type, event.run]),
@@ -674,10 +670,10 @@ test("handover on expiry: a copy that stopped answering loses the lease, the oth
   await runner.start(SPEC);
   const first = a.lease.epoch();
   frozen = true;
-  await until(() => b.lease.active(), "the lease's expiry");
+  await until(() => b.lease.active(), { what: "the lease's expiry" });
   assert.ok(b.lease.epoch() > first);
   // The frozen copy took itself out by its own clock: it takes no more calls.
-  await until(() => !a.lease.active(), "the first copy's loss");
+  await until(() => !a.lease.active(), { what: "the first copy's loss" });
   assert.equal((await call(a.url, "GET", "/sandboxes", { sub: "orchestrator" })).status, 503);
   const runnerB = client(b.url).runner;
   assert.deepEqual(await runnerB.list(), [{ name: "dh-o-a-1", run: "dh-o-a-1-1", running: true }]);
@@ -759,7 +755,7 @@ test(
     file.write("on a\n");
     await file.flushed();
     await a.service.stop({ graceMs: 1000 });
-    await until(() => b.lease.active(), "the other copy's lease");
+    await until(() => b.lease.active(), { what: "the other copy's lease" });
     await both.runner.start(SPEC);
     assert.equal(backend.runs(), 1);
     file.write("on b\n");
@@ -857,7 +853,7 @@ test("stop: the lease goes once the calls are done", async (t) => {
   const a = await copy(t, { store, backend });
   const b = await copy(t, { store, backend });
   assert.equal(await a.service.stop({ graceMs: 5000 }), true);
-  await until(() => b.lease.active(), "the other copy's lease");
+  await until(() => b.lease.active(), { what: "the other copy's lease" });
 });
 
 // A push between the Dockerfile's lookup and the download of the files: planned again, once.
