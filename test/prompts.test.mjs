@@ -167,6 +167,31 @@ test("prompts: onboarding and the sandbox's rules point to Deckhand's own source
   assert.match(rules, /`\/usr\/local\/share\/deckhand\/src`/);
 });
 
+test("prompts: the sandbox's rules ask about a blocker left after the work, the pull request ready", () => {
+  const rules = readFileSync(new URL("../prompts/sandbox.md", import.meta.url), "utf8");
+  assert.match(rules, /Stop and ask after the work too, when it is done but something only the/);
+  assert.match(
+    rules,
+    /a write the task needs that Deckhand refused \(`Deckhand: …`\), a file\nyou may not edit, a secret, setting or grant to add/,
+  );
+  assert.match(
+    rules,
+    /pull request as usual, ready for review \(only the maintainer's step is left; no WIP commit\)/,
+  );
+  assert.match(rules, /one question per blocker[^]*`- \[ \] Done, carry on` and `- \[ \] Drop it`/);
+  assert.match(rules, /When the task needs that write, it is a blocker for the maintainer/);
+  const review = readFileSync(new URL("../prompts/review.md", import.meta.url), "utf8");
+  assert.match(
+    review,
+    /that a run already asked them about \(a reply starting with `<!-- needs-input -->` in the\n {3}thread\) stays a finding while it blocks the merge, but say it waits on the maintainer/,
+  );
+  const work = promptFor(issue, { mode: "work", settings, grant });
+  assert.match(
+    work,
+    /A step only the maintainer can\ntake that still blocks the merge once the rest is done[^]*is a\nquestion too, the pull request ready/,
+  );
+});
+
 test("prompts: a repo's mode, with `push` or not, with its instructions", () => {
   const own = { name: "audit" };
   const read = ["pull", "read:issues"];
@@ -221,6 +246,13 @@ test("prompts: work runs are told whether their pushes may change workflow files
       promptFor(task, { ...extra, grant: granted }),
       /Pushes may add or change files under `\.github\/workflows\/`[^]*top-level `permissions:`[^]*mention `secrets`/,
     );
+    // What a workflow needs beyond that is asked of the maintainer, not left in prose (#551).
+    for (const g of [grant, granted]) {
+      assert.match(
+        promptFor(task, { ...extra, grant: g }),
+        /[Aa]sk the maintainer for (what a workflow would need beyond that|them) when the task needs\s+(it|them)\s+\(see "Stopping to ask" in your instructions; say in the pull request what (it needs|they need) too\)/,
+      );
+    }
   }
   // A mode's run without `push` never pushes, nor a fork's pull request: nothing to say.
   const light = { ...mode, own: { name: "audit" }, capabilities: ["pull"] };

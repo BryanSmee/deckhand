@@ -524,7 +524,10 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   `max_allowed_severity`) on Deckhand's own pull request, linked to the issue it worked on,
   starts a work run in that issue's session. Its message is the review's findings, all of them
   (medium and low too), with the instruction to fix each one or say why not, rerun the checks
-  and push; it pushes like any work run, and replies on the pull request. Not while the issue
+  and push; it pushes like any work run, and replies on the pull request. A finding it can't
+  fix because the change the issue needs is one only you can make (a file it may not edit, a
+  write Deckhand refuses) is a question instead: its reply asks, and the loop stops at the
+  needs-input label. A change only a finding asks for is never asked: it is left, and said why. Not while the issue
   has a run going or queued (a maintainer's comment came first) or the pull request or its
   issue has the needs-input label. With `merge`, once it is over, Deckhand reviews the
   commit it pushed (a review that starts by itself, so `deny_review` applies), which decides

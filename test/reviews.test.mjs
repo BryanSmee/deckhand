@@ -617,7 +617,15 @@ function fixSetup(t, yaml = FIX, options = {}) {
 test("fixMessage: what to do, then every finding by severity, the low ones too", () => {
   const text = fixMessage(parseReview(MESSAGE), 5);
   assert.match(text, /^The automated review of pull request #5 requested changes\./);
-  assert.match(text, /Stop and ask if a fix needs a decision only the maintainer can make\./);
+  assert.match(
+    text,
+    /Stop and ask if a fix needs a decision only the maintainer can make, or a change the issue itself needs that the rules above or Deckhand refuse you: one question per such finding/,
+  );
+  // A finding can't make itself the maintainer's question: only what the issue needs is asked.
+  assert.match(
+    text,
+    /A change only a finding asks for is never a question: leave it, and say why in your reply\./,
+  );
   assert.match(
     text,
     /review threads \(inline comments\) on what you fixed, reply in each with what changed and the commit; leave them open/,
