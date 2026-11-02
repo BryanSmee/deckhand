@@ -1083,8 +1083,11 @@ test("apart: the builder and the registry's Secret in the services' namespace, i
     kubernetes: { agentStorageClass: "nfs" },
   });
   await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access });
-  // Pushed with the services' namespace's Secret.
+  // Pushed with the services' namespace's Secret, to the daemon checked there: by its name in
+  // that namespace, as the short one resolves in the runner's own.
   assert.deepEqual(build.calls[0].dockerConfig, PULL);
+  const args = build.calls[0].args;
+  assert.equal(args[args.indexOf("--addr") + 1], "tcp://buildkitd.deckhand.svc:1234");
   assert.equal(services.created.length, 0);
   // The install pod, in the sandboxes' namespace: the Secret copied there, the proxy by its
   // Service's IP, as the cluster's DNS doesn't know its short name there.

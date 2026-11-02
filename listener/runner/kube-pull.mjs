@@ -9,6 +9,8 @@ import { kubeName, labelValue } from "./kubernetes.mjs";
 const SECRET_TTL_MS = 60_000;
 
 const KEY = ".dockerconfigjson";
+// The copy's deckhand.role.
+const ROLE = "registry";
 
 // `api`: the sandboxes' namespace's; `services`: the services' (the same object, or the same
 // namespace, when they are one).
@@ -40,9 +42,15 @@ export function createPullSecret({ config, api, services = api, now = Date.now }
     return Buffer.from(await data(), "base64").toString();
   }
 
+  // Whether a Secret is the runner's copy: its labels, both.
+  const ours = (secret) =>
+    secret?.metadata?.labels?.["deckhand.owner"] === owner &&
+    secret?.metadata?.labels?.["deckhand.role"] === ROLE;
+
   // The name for a pod's imagePullSecrets (null without one), its copy in the sandboxes'
-  // namespace made, or brought up to date, first. One there that isn't the runner's copy is
-  // left alone, and refused when it differs: the runner never overwrites what it didn't make.
+  // namespace made, or brought up to date, first. One of that name there that isn't the
+  // runner's copy is refused, whatever it holds: the runner neither overwrites nor uses what it
+  // didn't make.
   async function forPods() {
     if (!name || !apart) return name;
     const value = await data();
@@ -52,25 +60,31 @@ export function createPullSecret({ config, api, services = api, now = Date.now }
       kind: "Secret",
       metadata: {
         name,
-        labels: { "deckhand.owner": owner, "deckhand.role": "registry" },
+        labels: { "deckhand.owner": owner, "deckhand.role": ROLE },
         annotations: { "deckhand.copy-of": `${services.namespace}/${name}` },
         ...extra,
       },
       type: "kubernetes.io/dockerconfigjson",
       data: { [KEY]: value },
     });
-    const copy = await api.find(`secrets/${name}`);
+    let copy = await api.find(`secrets/${name}`);
     if (!copy) {
-      await api.create("secrets", body()).catch((error) => {
-        // Made meanwhile, by the other copy of the runner: checked at the next start.
+      try {
+        await api.create("secrets", body());
+        copied = { at: now(), data: value };
+        return name;
+      } catch (error) {
         if (error.status !== 409) throw error;
-      });
-    } else if (copy.data?.[KEY] !== value) {
-      if (copy.metadata?.labels?.["deckhand.owner"] !== owner) {
-        throw new Error(
-          `the Secret ${name} in the namespace ${api.namespace} isn't the runner's copy of KUBERNETES_REGISTRY_SECRET and differs from it: remove it, and the runner makes its own`,
-        );
+        // Made meanwhile (by the other copy of the runner, or not): checked as one found.
+        copy = await api.find(`secrets/${name}`);
       }
+    }
+    if (!ours(copy)) {
+      throw new Error(
+        `the Secret ${name} in the namespace ${api.namespace} isn't the runner's copy of KUBERNETES_REGISTRY_SECRET (labelled deckhand.owner: ${owner} and deckhand.role: ${ROLE}): remove it, and the runner makes its own`,
+      );
+    }
+    if (copy.data?.[KEY] !== value) {
       await api.replace(
         `secrets/${name}`,
         body({ resourceVersion: copy.metadata.resourceVersion }),

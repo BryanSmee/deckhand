@@ -306,6 +306,47 @@ test("createBackend: Docker's runner, images and jobs, or Kubernetes'; another r
   );
 });
 
+test("createBackend: on Kubernetes, one API per namespace, a single one when they are the same", async () => {
+  const made = [];
+  const asked = [];
+  const makeApi = (namespace) => {
+    made.push(namespace);
+    return {
+      namespace,
+      find: async () => null,
+      get: async (path) => (asked.push(`${namespace} ${path}`), { items: [] }),
+    };
+  };
+  const backend = (kubernetes, own = "own") =>
+    createBackend({
+      config: { runner: "kubernetes", prefix: "dh", egressProxy: "http://egress:3128", kubernetes },
+      readNamespace: () => own,
+      makeApi,
+    });
+  const cases = [
+    [{ namespace: "runs", servicesNamespace: "deckhand" }, ["runs", "deckhand"]],
+    [{ namespace: "runs", servicesNamespace: "runs" }, ["runs"]],
+    [{ namespace: "runs", servicesNamespace: null }, ["runs"]],
+    // The sandboxes' namespace then is the runner's own.
+    [{ namespace: null, servicesNamespace: "deckhand" }, ["own", "deckhand"]],
+    [{ namespace: null, servicesNamespace: null }, ["own"]],
+  ];
+  for (const [kubernetes, namespaces] of cases) {
+    made.length = 0;
+    asked.length = 0;
+    const { runner } = backend(kubernetes);
+    assert.deepEqual(made, namespaces, JSON.stringify(kubernetes));
+    // The proxy's endpoints are the services' namespace's, the sandboxes' pods their own.
+    await runner.proxyAddresses();
+    await runner.locate("10.244.1.7");
+    const [sandboxes, services = sandboxes] = namespaces;
+    assert.deepEqual(asked, [
+      `${services} /apis/discovery.k8s.io/v1/namespaces/${services}/endpointslices`,
+      `${sandboxes} pods`,
+    ]);
+  }
+});
+
 // Fail closed: never a sandbox as the image's user, or without the operator's limits.
 test("sandboxArgs: a spec without a user or limits is refused", () => {
   assert.throws(() => sandboxArgs({ limits, volumes: [] }), /the sandbox spec has no user/);

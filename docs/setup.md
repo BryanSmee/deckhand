@@ -1692,15 +1692,19 @@ Two settings, which may name one namespace (the default) or two:
   every service (edge, the orchestrator, the runner itself, the broker, the github, models
   and policy services, the egress proxy), their Secrets, BuildKit (rootless BuildKit can't
   meet `restricted`), an in-cluster registry and the registry's pull Secret. The runner runs
-  here: `KUBERNETES_BUILDKIT` names BuildKit's Service by its short name, which resolves in
-  the runner's namespace.
+  here too. With the namespaces apart, it reaches BuildKit as
+  `<KUBERNETES_BUILDKIT's host>.<services' namespace>.svc`, so the daemon it builds on is the
+  one whose NetworkPolicies it checked, wherever it runs (the short name resolves in the
+  runner's own namespace).
 
 With two, the runner reads the proxy's Service and EndpointSlices and BuildKit's endpoints,
 pods and NetworkPolicies in the services' namespace, and keeps a copy of the registry's pull
 Secret (`KUBERNETES_REGISTRY_SECRET`) in the sandboxes', under the same name and labelled
 `deckhand.role: registry`, as a pod pulls only with a Secret of its own namespace: made at the
 first pod that needs it, brought up to date within a minute of a change. A Secret of that
-name there that isn't its copy is never overwritten: runs are refused, saying so. The proxy's
+name there that isn't its copy (both labels, `deckhand.owner` and `deckhand.role: registry`)
+is neither overwritten nor used, even when it holds the same credentials: runs are refused,
+saying so, until it is removed. The proxy's
 own NetworkPolicy, in the services' namespace, lets in the sandboxes' namespace's sandbox and
 install pods on its port:
 

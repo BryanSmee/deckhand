@@ -34,6 +34,9 @@ import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
 import { proxyEnv } from "../egress.mjs";
 import { createInbox } from "./inbox.mjs";
+// A cycle (kube-pull.mjs names its Secret with kubeName()): each uses the other's functions
+// only once called.
+import { createPullSecret } from "./kube-pull.mjs";
 import { splitLines } from "./lines.mjs";
 import { aliasOf } from "./networks.mjs";
 
@@ -438,7 +441,7 @@ export function createKubernetesRunner({
   config,
   api, // kube-api.mjs, in the sandboxes' namespace
   services = api, // the same, in the services' (the same object when they are one)
-  pullSecret, // kube-pull.mjs createPullSecret()'s
+  pullSecret = createPullSecret({ config, api, services }), // kube-pull.mjs
   inboxDir, // the runs folder, in the runner's own volume
   log = () => {},
   now = Date.now,
@@ -483,8 +486,8 @@ export function createKubernetesRunner({
       const { items: policies = [] } = await api.get(
         `${NETWORKING}/${api.namespace}/networkpolicies`,
       );
-      const proxy = await proxyService(services, config);
-      checkIsolation(policies, podLabels, proxy);
+      const proxySvc = await proxyService(services, config);
+      checkIsolation(policies, podLabels, proxySvc);
       const pullName = await pullSecret.forPods();
       for (const v of volumes.filter((v) => v.kind === "session")) {
         if (await ensureClaim(v.name)) made.push(claimPath(v.name));
@@ -507,7 +510,7 @@ export function createKubernetesRunner({
           secret,
           // Not secrets: where the run's files are.
           env: { ...inbox.env(ca, digest), SANDBOX_TAG_STDERR: "1" },
-          aliases: aliasesOf(proxy),
+          aliases: aliasesOf(proxySvc),
           pullSecret: pullName,
           agentInit,
         }),
@@ -564,17 +567,17 @@ export function createKubernetesRunner({
   const sandboxPorts = () => [Number(new URL(config.egressProxy).port || 3128)];
 
   // Fail closed: without the sandboxes' namespace's NetworkPolicies (`policies`), a sandbox
-  // would reach anything. `proxy`: proxyService()'s, whose pods alone they may reach in the
+  // would reach anything. `proxySvc`: proxyService()'s, whose pods alone they may reach in the
   // services' namespace, when it is another one.
-  function checkIsolation(policies, labels, proxy) {
-    if (apart && !proxy) {
+  function checkIsolation(policies, labels, proxySvc) {
+    if (apart && !proxySvc) {
       throw new Error(
         `EGRESS_PROXY (${config.egressProxy}) is an address: with sandboxes apart from the services (KUBERNETES_SERVICES_NAMESPACE), it names the egress proxy's Service, whose pods alone they may reach`,
       );
     }
     const problem = isolationProblem(policies, labels, {
       ports: sandboxPorts(),
-      proxy: apart ? { namespace: services.namespace, selector: proxy.selector } : null,
+      proxy: apart ? { namespace: services.namespace, selector: proxySvc.selector } : null,
     });
     if (problem) {
       throw new Error(

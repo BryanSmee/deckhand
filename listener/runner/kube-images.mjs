@@ -220,7 +220,7 @@ export function createKubernetesImages({
     const signal = AbortSignal.timeout(buildMs);
     try {
       const args = buildArgs({
-        addr: k.buildkit,
+        addr: builderAddr(),
         dir,
         dockerfile,
         ref: tag,
@@ -252,6 +252,15 @@ export function createKubernetesImages({
       found.push(host, ...(REGISTRY_HOSTS[host] ?? []), ...registry.hostsOf(host));
     }
     return [...new Set(found)];
+  }
+
+  // The daemon's address for buildctl. Its Service's short name resolves in the runner's own
+  // namespace: apart, it is named in the services' namespace, so that the daemon built on is
+  // the one builderIsolation() checked, wherever the runner runs.
+  function builderAddr() {
+    if (!apart) return k.buildkit;
+    const url = new URL(k.buildkit);
+    return `tcp://${url.hostname}.${services.namespace}.svc:${url.port}`;
   }
 
   // builderIsolationProblem() for the daemon's pods (the endpoints of its Service, in the

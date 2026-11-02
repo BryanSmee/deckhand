@@ -696,6 +696,61 @@ test("start, apart: the pod, its Secret and claims in the sandboxes' namespace, 
   assert.equal(objects.pods.has("dh-org-repo-14-abc"), false);
 });
 
+test("start, apart: a pull Secret there that isn't the runner's copy is refused, even holding the same data", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const data = { ".dockerconfigjson": Buffer.from("{}").toString("base64") };
+  const source = { metadata: { name: "pull" }, data };
+  // The same data, labelled the runner's owner but not its copy's role; then one made between
+  // the runner's look and its create (a 409), by someone else.
+  const foreign = { metadata: { name: "pull", labels: { "deckhand.owner": "dh" } }, data };
+  {
+    const { runner, objects, servicesObjects } = setup(
+      t,
+      { apart: true, policies: [APART_POLICY] },
+      { kubernetes },
+    );
+    servicesObjects.secrets.set("pull", source);
+    objects.secrets.set("pull", foreign);
+    await assert.rejects(
+      runner.start(spec()),
+      /the Secret pull in the namespace runs isn't the runner's copy of KUBERNETES_REGISTRY_SECRET \(labelled deckhand.owner: dh and deckhand.role: registry\)/,
+    );
+    assert.equal(objects.pods.size, 0);
+  }
+  let raced = false;
+  const fake = setup(
+    t,
+    {
+      apart: true,
+      policies: [APART_POLICY],
+      fail: ({ method, path, body }) => {
+        if (
+          method !== "POST" ||
+          !path.endsWith(`/namespaces/${NS}/secrets`) ||
+          body.metadata.name !== "pull"
+        ) {
+          return null;
+        }
+        raced = true;
+        fake.objects.secrets.set("pull", foreign);
+        return Response.json({ message: "already exists" }, { status: 409 });
+      },
+    },
+    { kubernetes },
+  );
+  fake.servicesObjects.secrets.set("pull", source);
+  await assert.rejects(fake.runner.start(spec()), /isn't the runner's copy/);
+  assert.ok(raced);
+  assert.equal(fake.objects.pods.size, 0);
+  // Its own copy, made by the other runner meanwhile: used.
+  fake.objects.secrets.set("pull", {
+    metadata: { name: "pull", labels: { "deckhand.owner": "dh", "deckhand.role": "registry" } },
+    data,
+  });
+  await fake.runner.start(spec());
+  assert.equal(fake.objects.pods.size, 1);
+});
+
 test("start, apart: the single-namespace policy, or a proxy at an address, starts nothing", async (t) => {
   const { runner, objects } = setup(t, { apart: true });
   await assert.rejects(

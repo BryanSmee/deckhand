@@ -24,11 +24,13 @@ export function createBackend({
   mirror = null,
   log = () => {},
   readNamespace = () => readFileSync(`${SERVICE_ACCOUNT}/namespace`, "utf8").trim(),
+  // namespace → the API in it, with the runner's ServiceAccount (the tests' own).
+  makeApi = inClusterApis(),
 }) {
   if (config.runner === "kubernetes") {
     const { api, services } = kubeApi
       ? { api: kubeApi, services: servicesApi }
-      : inCluster(config, readNamespace);
+      : inCluster(config, readNamespace, makeApi);
     const pullSecret = createPullSecret({ config, api, services });
     return {
       runner: createKubernetesRunner({ config, api, services, pullSecret, inboxDir, mirror, log }),
@@ -51,14 +53,12 @@ export function createBackend({
 // The API with the runner's ServiceAccount, in the sandboxes' namespace (`api`) and the
 // services' (`services`, the same object when they are one): a runner outside the cluster (or
 // without a token, automountServiceAccountToken: false) stops at start, saying so.
-function inCluster(config, readNamespace) {
+function inCluster(config, readNamespace, makeApi) {
   try {
     const namespace = config.kubernetes.namespace || readNamespace();
-    const fetch = inClusterFetch();
-    const api = createKubeApi({ fetch, namespace });
+    const api = makeApi(namespace);
     const other = config.kubernetes.servicesNamespace;
-    const services =
-      other && other !== namespace ? createKubeApi({ fetch, namespace: other }) : api;
+    const services = other && other !== namespace ? makeApi(other) : api;
     return { api, services };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
@@ -66,4 +66,10 @@ function inCluster(config, readNamespace) {
       `RUNNER: kubernetes, but there is no ServiceAccount at ${SERVICE_ACCOUNT} (${error.path}): the runner runs in the cluster, with its ServiceAccount's token mounted (docs/setup.md, Kubernetes runner)`,
     );
   }
+}
+
+// makeApi()'s default: one fetch (the cluster's CA, read once) for every namespace's API.
+function inClusterApis() {
+  let fetch;
+  return (namespace) => createKubeApi({ fetch: (fetch ??= inClusterFetch()), namespace });
 }
