@@ -1706,7 +1706,10 @@ name there that isn't its copy (both labels, `deckhand.owner` and `deckhand.role
 is neither overwritten nor used, even when it holds the same credentials: runs are refused,
 saying so, until it is removed. The proxy's
 own NetworkPolicy, in the services' namespace, lets in the sandboxes' namespace's sandbox and
-install pods on its port:
+install pods on its port, and whatever of the services' namespace goes out through it too:
+BuildKit's pods ([below](#repo-images-on-kubernetes), their `HTTPS_PROXY`). A policy that picks
+the proxy's pods for `Ingress` drops all it doesn't let in, so leaving them out fails every
+repo image's build, which the runner's check of BuildKit's own policies doesn't see:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
@@ -1720,6 +1723,7 @@ spec:
         - namespaceSelector: { matchLabels: { kubernetes.io/metadata.name: deckhand-sandboxes } }
           podSelector:
             matchExpressions: [{ key: deckhand.role, operator: In, values: [sandbox, install] }]
+        - podSelector: { matchLabels: { app: buildkitd } } # BuildKit, in this namespace
       ports: [{ port: 3128 }]
 ```
 

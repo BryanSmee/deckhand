@@ -502,9 +502,10 @@ export function createKubernetesImages({
     await waitGone(pod);
     const limits = { cpu: String(config.limits.cpus), memory: quantity(config.limits.memory) };
     const pullName = await pullSecret.forPods();
-    // Apart from the services, the cluster's DNS doesn't know the proxy's short name in the
-    // sandboxes' namespace: its Service's IP, as sandboxes have it.
-    const aliases = apart ? aliasesOf(await proxyService(services, config)) : [];
+    // An install pod (`hosts`), apart from the services: the cluster's DNS doesn't know the
+    // proxy's short name in the sandboxes' namespace, so its Service's IP, as sandboxes have it.
+    // A cache's check reaches nothing: no proxy to look up.
+    const aliases = apart && hosts ? aliasesOf(await proxyService(services, config)) : [];
     await api.create("pods", {
       apiVersion: "v1",
       kind: "Pod",

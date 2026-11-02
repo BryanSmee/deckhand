@@ -1106,6 +1106,18 @@ test("apart: the builder and the registry's Secret in the services' namespace, i
   assert.equal(one.created.find((o) => o.kind === "Pod").spec.hostAliases, undefined);
 });
 
+test("apart: a cache's check reaches nothing, so needs no proxy Service, nor gets its hostAliases", async (t) => {
+  const { backend, created, services } = setup(t, {
+    apart: true,
+    kubernetes: { cacheStorageClass: "nfs" },
+  });
+  services.objects.services.delete("egress");
+  assert.deepEqual(await backend.createVolume("dh-cache-org-a-npm"), { code: 0, out: "", err: "" });
+  const pod = created.find((o) => o.kind === "Pod");
+  assert.equal(pod.metadata.labels["deckhand.role"], "check");
+  assert.equal(pod.spec.hostAliases, undefined);
+});
+
 test("apart: the builder's ingress may let in the services' namespace's pods, never another namespace", async (t) => {
   const anyPod = {
     ...BUILDER_POLICY,
