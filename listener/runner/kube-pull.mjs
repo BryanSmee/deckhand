@@ -3,7 +3,7 @@
 // services' namespace, kube-images.mjs), and what pods pull with. A pod only pulls with a
 // Secret of its own namespace: when sandboxes have one of their own, the runner keeps a copy
 // there, under the same name, and its Role reads no other Secret of the services' namespace.
-import { kubeName, labelValue } from "./kubernetes.mjs";
+import { kubeName, labelValue } from "./kube-names.mjs";
 
 // The Secret read again, and its copy checked, after this long.
 const SECRET_TTL_MS = 60_000;
@@ -67,31 +67,33 @@ export function createPullSecret({ config, api, services = api, now = Date.now }
       type: "kubernetes.io/dockerconfigjson",
       data: { [KEY]: value },
     });
-    let copy = await api.find(`secrets/${name}`);
-    if (!copy) {
+    // Another start may make or update it meanwhile (the other copy of the runner, a run
+    // starting beside this one, as the queue starts several): a 409 looks again, a few times.
+    for (let tries = 0; tries < 3; tries++) {
+      const copy = await api.find(`secrets/${name}`);
       try {
-        await api.create("secrets", body());
-        copied = { at: now(), data: value };
-        return name;
+        if (!copy) {
+          await api.create("secrets", body());
+        } else if (!ours(copy)) {
+          throw new Error(
+            `the Secret ${name} in the namespace ${api.namespace} isn't the runner's copy of KUBERNETES_REGISTRY_SECRET (labelled deckhand.owner: ${owner} and deckhand.role: ${ROLE}): remove it, and the runner makes its own`,
+          );
+        } else if (copy.data?.[KEY] !== value) {
+          await api.replace(
+            `secrets/${name}`,
+            body({ resourceVersion: copy.metadata.resourceVersion }),
+          );
+        }
       } catch (error) {
-        if (error.status !== 409) throw error;
-        // Made meanwhile (by the other copy of the runner, or not): checked as one found.
-        copy = await api.find(`secrets/${name}`);
+        if (error.status === 409) continue;
+        throw error;
       }
+      copied = { at: now(), data: value };
+      return name;
     }
-    if (!ours(copy)) {
-      throw new Error(
-        `the Secret ${name} in the namespace ${api.namespace} isn't the runner's copy of KUBERNETES_REGISTRY_SECRET (labelled deckhand.owner: ${owner} and deckhand.role: ${ROLE}): remove it, and the runner makes its own`,
-      );
-    }
-    if (copy.data?.[KEY] !== value) {
-      await api.replace(
-        `secrets/${name}`,
-        body({ resourceVersion: copy.metadata.resourceVersion }),
-      );
-    }
-    copied = { at: now(), data: value };
-    return name;
+    throw new Error(
+      `the Secret ${name} in the namespace ${api.namespace}, the runner's copy of KUBERNETES_REGISTRY_SECRET, kept changing while it was brought up to date: comment again to retry`,
+    );
   }
 
   return { text, forPods };

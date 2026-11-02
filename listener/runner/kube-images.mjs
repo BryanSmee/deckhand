@@ -20,13 +20,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { egressPolicy, proxyEnv } from "../egress.mjs";
 import { buildArgs, buildctl as buildctlCli, withDockerConfig } from "./buildkit.mjs";
+import { kubeName, labelValue } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import {
   aliasesOf,
   excludesSandboxes,
   INSTALL_USER,
-  kubeName,
-  labelValue,
   proxyService,
   quantity,
   selects,

@@ -28,14 +28,12 @@
 //
 // Not here yet, refused before a run starts (access.mjs runnerRefusal()): a container engine
 // and host mounts.
-import { createHash } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { RunError } from "../access.mjs";
 import { agentFor } from "../agents/index.mjs";
 import { proxyEnv } from "../egress.mjs";
 import { createInbox } from "./inbox.mjs";
-// A cycle (kube-pull.mjs names its Secret with kubeName()): each uses the other's functions
-// only once called.
+import { kubeName, labelValue } from "./kube-names.mjs";
 import { createPullSecret } from "./kube-pull.mjs";
 import { splitLines } from "./lines.mjs";
 import { aliasOf } from "./networks.mjs";
@@ -85,32 +83,8 @@ const ENV = "sandbox-env";
 const NETWORKING = "/apis/networking.k8s.io/v1/namespaces";
 const DISCOVERY = "/apis/discovery.k8s.io/v1/namespaces";
 
-const hash = (text) => createHash("sha256").update(text).digest("hex");
-
-// An RFC 1123 subdomain: dot-separated labels of letters, digits and inner dashes.
-const SUBDOMAIN = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$/;
-
-// A sandbox, Secret or claim name as Kubernetes takes it (a DNS subdomain): Deckhand's names
-// as they are when they are one, else made one (dots too become dashes: a repo named
-// `.github` gives "-.github"), with a hash of the original so two never meet.
-export function kubeName(name) {
-  if (name.length <= 253 && SUBDOMAIN.test(name)) return name;
-  const clean = name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .slice(0, 200)
-    .replace(/^-+|-+$/g, "");
-  return `${clean || "deckhand"}-${hash(name).slice(0, 10)}`;
-}
-
-// A label's value (63 characters at most, fewer kinds of them): as it is when it fits, else
-// a hash. The value itself goes in an annotation beside it.
-export function labelValue(value) {
-  const text = String(value);
-  return /^[A-Za-z0-9]([A-Za-z0-9._-]{0,61}[A-Za-z0-9])?$/.test(text)
-    ? text
-    : hash(text).slice(0, 40);
-}
+// Where they are now (kube-names.mjs), for the modules and tests that import them from here.
+export { kubeName, labelValue };
 
 // Docker's amounts ("4g", "512m", grants.mjs) → Kubernetes' quantities ("4Gi", "512Mi").
 export function quantity(memory) {

@@ -165,6 +165,7 @@ function fakeApi({
         metadata: {
           creationTimestamp: new Date(0).toISOString(),
           uid: `uid-${++uids}`,
+          resourceVersion: "1",
           ...body.metadata,
         },
         status: kind === "pods" ? { phase: "Running", podIPs: [{ ip: "10.244.1.7" }] } : {},
@@ -174,11 +175,17 @@ function fakeApi({
     }
     if (method === "PUT") {
       if (!store.has(name)) return missing();
-      if (body.metadata.resourceVersion !== store.get(name).metadata.resourceVersion) {
+      const version = store.get(name).metadata.resourceVersion;
+      if (body.metadata.resourceVersion !== version) {
         return Response.json({ message: "conflict" }, { status: 409 });
       }
-      store.set(name, body);
-      return Response.json(body);
+      // Each change a new version, as the API gives it.
+      const changed = {
+        ...body,
+        metadata: { ...body.metadata, resourceVersion: String(Number(version ?? 0) + 1) },
+      };
+      store.set(name, changed);
+      return Response.json(changed);
     }
     if (method === "DELETE") {
       if (!store.delete(name)) return missing();
@@ -751,6 +758,75 @@ test("start, apart: a pull Secret there that isn't the runner's copy is refused,
   assert.equal(fake.objects.pods.size, 1);
 });
 
+test("start, apart: the pull Secret's copy changed or gone under it (another start's) is looked at again", async (t) => {
+  const kubernetes = { registrySecret: "pull" };
+  const config = (auth) => ({
+    ".dockerconfigjson": Buffer.from(JSON.stringify({ auths: { r: { auth } } })).toString("base64"),
+  });
+  const labels = { "deckhand.owner": "dh", "deckhand.role": "registry" };
+  let time = 0;
+  let race = null; // what another start does just before this one's write lands
+  const fake = setup(
+    t,
+    {
+      apart: true,
+      policies: [APART_POLICY],
+      fail: ({ method, path }) => {
+        if (
+          !race ||
+          !path.endsWith(`/namespaces/${NS}/secrets${method === "PUT" ? "/pull" : ""}`)
+        ) {
+          return null;
+        }
+        if (!["PUT", "POST"].includes(method)) return null;
+        const then = race;
+        race = null;
+        return then(method);
+      },
+    },
+    { kubernetes, now: () => time },
+  );
+  const { runner, objects, servicesObjects } = fake;
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("a") });
+  await runner.start(spec());
+  assert.deepEqual(objects.secrets.get("pull").data, config("a"));
+  // Rotated; another start brings the copy up to date between this one's look and its PUT,
+  // whose version is then stale: a 409, looked at again, and found up to date.
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("b") });
+  time += 61_000;
+  let puts = 0;
+  race = () => {
+    puts++;
+    const copy = objects.secrets.get("pull");
+    objects.secrets.set("pull", {
+      ...copy,
+      metadata: { ...copy.metadata, resourceVersion: "9" },
+      data: config("b"),
+    });
+    return null; // this PUT goes on, its resourceVersion now stale
+  };
+  await runner.start(spec({ name: "dh-org-repo-13-abc", run: "dh-org-repo-13-abc-1" }));
+  assert.equal(puts, 1);
+  assert.deepEqual(objects.secrets.get("pull").data, config("b"));
+  assert.ok(objects.pods.has("dh-org-repo-13-abc"));
+  // Two starts at once across a rotation: both run, the copy up to date.
+  servicesObjects.secrets.set("pull", { metadata: { name: "pull" }, data: config("c") });
+  time += 61_000;
+  await Promise.all([
+    runner.start(spec({ name: "dh-org-repo-14-abc", run: "dh-org-repo-14-abc-1" })),
+    runner.start(spec({ name: "dh-org-repo-15-abc", run: "dh-org-repo-15-abc-1" })),
+  ]);
+  assert.ok(objects.pods.has("dh-org-repo-14-abc") && objects.pods.has("dh-org-repo-15-abc"));
+  assert.deepEqual(objects.secrets.get("pull").data, config("c"));
+  // Made by someone meanwhile (a 409), then gone again: made anew, not "remove it".
+  objects.secrets.delete("pull");
+  time += 61_000;
+  race = () => Response.json({ message: "already exists" }, { status: 409 });
+  await runner.start(spec({ name: "dh-org-repo-16-abc", run: "dh-org-repo-16-abc-1" }));
+  assert.deepEqual(objects.secrets.get("pull").metadata.labels, labels);
+  assert.ok(objects.pods.has("dh-org-repo-16-abc"));
+});
+
 test("start, apart: the single-namespace policy, or a proxy at an address, starts nothing", async (t) => {
   const { runner, objects } = setup(t, { apart: true });
   await assert.rejects(
@@ -762,7 +838,6 @@ test("start, apart: the single-namespace policy, or a proxy at an address, start
     config: { ...config, egressProxy: "http://10.96.0.11:3128" },
     api: byAddress.api,
     services: byAddress.servicesApi,
-    pullSecret: createPullSecret({ config, api: byAddress.api, services: byAddress.servicesApi }),
     inboxDir: tempDir(t),
   });
   await assert.rejects(
@@ -1510,7 +1585,6 @@ test("follow: a log stream that outlives its pod is let go, the rest of the log 
   const runner = createKubernetesRunner({
     config,
     api: fakes.api,
-    pullSecret: createPullSecret({ config, api: fakes.api }),
     inboxDir: tempDir(t),
     log: (line) => logged.push(line),
     sleep: async () => {},
