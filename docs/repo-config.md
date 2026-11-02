@@ -531,7 +531,8 @@ token only reads, and Deckhand posts the review.
   review's own verdict. A comment whose kind can't be read is posted as **unclear**, and
   so is an item under Must fix that is no finding: when the review's own verdict asks for
   changes, it blocks as a blocking comment does (it may be why), and the fix run is told to
-  treat it as blocking; with the review's "comment", it is shown and doesn't block. A deeper
+  treat it as blocking; with the review's "comment", it is posted as a note and
+  doesn't block, nor does the fix run treat it as blocking. A deeper
   heading stays in its section (`### 🟠 High (1)` under Must fix, as Deckhand posts them);
   any other heading after the review's own (`## Checks`, `## Blocking comments`) ends it.
   Under it, a finding or a comment still reads as one (a blocking one blocks), nothing is a

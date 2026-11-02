@@ -349,9 +349,11 @@ const titleOf = (text) =>
 // An `unclear` one (its kind unread, or an item under the wrong heading) blocks too when the
 // model asked for changes (`unclearBlocks`: it may be why): the fix run is told to treat it as
 // blocking (fixMessage()), so the loop, the event and the merge do the same. With the model's
-// `comment`, it is shown, not blocking.
+// `comment`, it is shown, not blocking: posted as a note (commentSection()), and read back as
+// one. A posted review's `unclear` comments are those that blocked (parsePostedReview()).
+const unclearBlocking = (review, c) => c.unclear && review.unclearBlocks !== false;
 const blockingComments = (review) =>
-  (review.comments ?? []).filter((c) => c.blocking || (c.unclear && review.unclearBlocks));
+  (review.comments ?? []).filter((c) => c.blocking || unclearBlocking(review, c));
 
 // Whether `review` blocks with `allowed`: a finding above it, or a blocking comment.
 const blocks = (review, allowed = "low") =>
@@ -403,7 +405,8 @@ export function parsePostedReview(body, { allowed = "low" } = {}) {
     comments,
     rating: Number(head[2]),
     verdict: head[1].replace(" ", "-"),
-    unclearBlocks: head[1] === "request changes",
+    // Only an unclear comment that blocked is posted as one (commentSection()).
+    unclearBlocks: true,
     allowed,
   };
 }
@@ -483,11 +486,13 @@ function followUpSection(review, blob = null, filed = true) {
 
 // The comments, if any, as one section, the blocking ones first.
 function commentSection(review, blob = null) {
-  // Blocking first, then those whose kind was unread (`unclear`), then the notes.
-  const rank = (c) => (c.blocking ? 0 : c.unclear ? 1 : 2);
+  // Blocking first, then those whose kind was unread (`unclear`) and that block, then the notes,
+  // an unclear one that doesn't block among them: so it reads back as it was decided.
+  const rank = (c) => (c.blocking ? 0 : unclearBlocking(review, c) ? 1 : 2);
   const list = [...(review.comments ?? [])].sort((a, b) => rank(a) - rank(b));
   if (!list.length) return [];
-  const lead = (c) => (c.blocking ? "**blocking** " : c.unclear ? "**unclear** " : "**note** ");
+  const lead = (c) =>
+    c.blocking ? "**blocking** " : unclearBlocking(review, c) ? "**unclear** " : "**note** ";
   const items = list.map((c) => itemLine(c, blob, lead(c)));
   return [`## Comments (${list.length})\n\n${items.join("\n")}`];
 }
@@ -527,7 +532,7 @@ export function fixMessage(
   const notes = comments.length
     ? "\n- Fix the findings and the **blocking** comments. Apply a **note** only when it is cheap and in the pull request's scope; otherwise leave it, and say why in your reply."
     : "";
-  const unclear = review.comments?.some((c) => c.unclear)
+  const unclear = review.comments?.some((c) => unclearBlocking(review, c))
     ? "\n- Treat an **unclear** comment as blocking: the review didn't say whether it blocks, or put it under the wrong heading."
     : "";
   const n = review.followUps?.length ?? 0;

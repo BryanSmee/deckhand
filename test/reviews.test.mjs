@@ -25,6 +25,7 @@ import {
   postReview,
   reviewThread,
   reviewBody,
+  mergeBlockers,
   reviewCandidate,
   reviewEvent,
   reviewLoop,
@@ -3437,7 +3438,8 @@ test("an item under Must fix that is no finding is an unclear comment, blocking 
     shown.comments.map((c) => [c.blocking, c.unclear, c.text]),
     [[false, true, "**Share the retry helper** `a.mjs:3`: duplicated with b.mjs"]],
   );
-  assert.match(reviewBody(shown, "", "f"), /- \*\*unclear\*\* \*\*Share the retry helper\*\*/);
+  // Not blocking: posted as a note, so it reads back as one.
+  assert.match(reviewBody(shown, "", "f"), /- \*\*note\*\* \*\*Share the retry helper\*\*/);
   // The model's comment: shown, not blocking.
   assert.deepEqual([shown.verdict, reviewEvent(shown), shown.rating], ["comment", "COMMENT", 9]);
   // Its request-changes: blocking, so the event and the fix run follow it.
@@ -3579,4 +3581,30 @@ test("severity sub-headings stay in Must fix; a finding or a blocking comment un
   assert.deepEqual([titled.followUps, titled.comments], [[], []]);
   // Something else there: the model's request-changes stands, None. or not.
   assert.equal(titled.verdict, "request-changes");
+});
+
+test("an unclear comment is decided once: posted, read back and told to the fix run alike", () => {
+  // A real finding forces request-changes; the model wrote comment, so the unclear item doesn't block.
+  const reply =
+    "## Must fix\n\n- **high** `a.mjs:1`: bug.\n\n## Follow-ups\n\n- Share the retry helper with the uploader (`b.mjs:3`).\n\nRating: 6/10\nVerdict: comment";
+  const review = parseReview(reply);
+  assert.deepEqual([review.verdict, reviewEvent(review)], ["request-changes", "REQUEST_CHANGES"]);
+  assert.equal(mergeBlockers(review).length, 1);
+  assert.equal(blockingText(review), "1 high finding");
+  const body = reviewBody(review, reply, "f");
+  assert.match(body, /- \*\*note\*\* Share the retry helper/);
+  const back = parsePostedReview(body);
+  assert.equal(mergeBlockers(back).length, 1);
+  assert.equal(blockingText(back), "1 high finding");
+  // The fix run isn't told to treat it as blocking, read back or not.
+  for (const r of [review, back]) {
+    const fix = fixMessage(r, 5);
+    assert.doesNotMatch(fix, /Treat an \*\*unclear\*\*/);
+    assert.match(fix, /- \*\*note\*\* Share the retry helper/);
+  }
+  // With the model's request-changes, it blocks, alike everywhere.
+  const asked = parseReview(reply.replace("Verdict: comment", "Verdict: request-changes"));
+  const askedBack = parsePostedReview(reviewBody(asked, "", "f"));
+  assert.deepEqual([mergeBlockers(asked).length, mergeBlockers(askedBack).length], [2, 2]);
+  assert.match(fixMessage(askedBack, 5), /Treat an \*\*unclear\*\* comment as blocking/);
 });
