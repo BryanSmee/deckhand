@@ -627,43 +627,51 @@ export function createRuns(ctx) {
     return following ? "following" : "queued";
   }
 
-  // The first `n` of the task's queued comments go, their 👀 off, and it leaves the run order.
-  // Waiting for a slot or their pause, or for a run that is ending. An auto-picked one frees
-  // its reserved slot: the next labelled issue, without waiting for the next sweep.
-  function dropPending(task, key, n) {
+  // The first `n` of the task's queued comments go, their 👀 off (but `keep`'s), and it leaves
+  // the run order. Waiting for a slot or their pause, or for a run that is ending. An
+  // auto-picked one frees its reserved slot: the next labelled issue, without waiting for the
+  // next sweep.
+  function dropPending(task, key, n, keep = null) {
     const picked = !task.running && pickedTask(task);
     clearTimeout(task.timer);
     task.ready = false;
     const kept = task.pending.splice(n);
-    for (const item of task.pending.splice(0)) ctx.track(ctx.settle(item, "cancelled"));
+    for (const item of task.pending.splice(0)) {
+      if (item !== keep) ctx.track(ctx.settle(item, "cancelled"));
+    }
     ctx.saveQueue?.();
     ctx.order?.drop(key);
     if (picked) ctx.autoPickup?.soon();
     return kept;
   }
 
-  // The latest comment of a task waiting for a slot that can wait for another issue instead
-  // (the dashboard's Queue after…, work.mjs): an issue's trigger or `/mode` comment, no run
-  // going or ending (a follow-up waits for that one). Null otherwise.
-  function queuedItem(key) {
+  // A task waiting for a slot, no run going or ending (a follow-up waits for that one): { item },
+  // its newest comment that starts a run (an issue's trigger or `/mode` comment), which can
+  // wait for another issue instead (the dashboard's Queue after…, work.mjs); `item` null when
+  // none does (replies to its last run only). Null otherwise.
+  function queuedTask(key) {
     const task = ctx.tasks.get(key);
     if (!task || task.running || task.live || !task.pending.length) return null;
-    const item = task.pending.at(-1);
-    const starts = item.trigger === "work" || !!item.modeLine;
-    return item.kind === "issue" && starts ? item : null;
+    const item = task.pending.findLast(
+      (i) => i.kind === "issue" && (i.trigger === "work" || !!i.modeLine),
+    );
+    return { item: item ?? null };
   }
 
-  // queuedItem()'s task out of the queue, the other comments' 👀 off: its latest comment is
-  // returned for its wait (waits.mjs hold()), which keeps that comment's 👀, text, author and
-  // mode line. `by`: who moved it. Null when queuedItem() is.
+  // queuedTask()'s task out of the queue: its item is returned for its wait (waits.mjs
+  // hold()), which keeps that comment's 👀, author and mode line, with the text of every
+  // comment queued, as the run would have read them (events.mjs commentsText()). The others
+  // lose their 👀. `by`: who moved it. Null when queuedTask() has no item.
   function unqueue(key, by) {
     const task = ctx.tasks.get(key);
-    if (!queuedItem(key)) return null;
-    const [latest] = dropPending(task, key, task.pending.length - 1);
+    const held = queuedTask(key)?.item;
+    if (!held) return null;
+    const texts = task.pending.map((i) => i.text).filter(Boolean);
+    dropPending(task, key, task.pending.length, held);
     log(`${key}: taken out of the queue by ${by}, to wait`);
     // Queued again once its wait ends (tasks.mjs queue()): its mode, its place in line and no
     // auto-pickup slot then.
-    const item = { ...latest };
+    const item = { ...held, text: texts.join("\n\n---\n\n") };
     for (const k of ["mode", "queuedAt", "queueId", "autoPickup"]) delete item[k];
     return item;
   }
@@ -1012,7 +1020,7 @@ export function createRuns(ctx) {
     }
   }
 
-  return { run, follow, ending, dropRefused, cancel, queuedItem, unqueue, teardown };
+  return { run, follow, ending, dropRefused, cancel, queuedTask, unqueue, teardown };
 }
 
 // A run's record mode once its capabilities are decided (runs.mjs begin()'s reopen()): null when

@@ -383,9 +383,11 @@ buttons. On the graph, a queued node shows its place ("2nd"), and dragging it on
 node's left or right edge moves it before or after that one (dropped in the open, it stays).
 An issue's queued task can also leave the line: **Queue after…** (or a drop of its card or node
 on the middle of another node, or anywhere on a node that isn't queued) makes it wait for that
-issue instead, as `/after` does, with the comment that queued it and its mode; **Back to
-backlog** (or a drop of its card on the Backlog tab) drops its queued comments. Neither while a
-run is going on it: a comment queued behind that run waits for it.
+issue instead, as `/after` does: its last trigger (or `/mode`) comment waits, in its mode,
+with the text of every comment queued. **Back to backlog** (or a drop of its card on the
+Backlog tab) drops its queued comments. Neither while a run is going on it: a comment queued
+behind that run waits for it. A task queued with replies to its last run only can't wait: take
+it out of the queue, then queue it after the issue.
 Brainstorms always start before work runs and don't move. A task whose repository is at its
 `max_parallel` is skipped, and the next one starts: the order is a priority, not a strict line.
 Tasks you never moved go after the ones you did, in the order they were queued. Each card has

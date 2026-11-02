@@ -144,7 +144,7 @@ export function checkAction(body) {
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
-// "running", "queued" or null. `queuedItem(key)`, `unqueue(key, user)`: a task waiting for a
+// "running", "queued", "following" or null. `queuedTask(key)`, `unqueue(key, user)`: a task waiting for a
 // slot whose latest comment can wait for another issue instead, and taking it out of the queue
 // for that (runs.mjs). `analysis`: run digests (analysis.mjs createAnalysis()).
 // `lanes`: the lanes' names (lanes.mjs), which a plan and the dashboard's renaming set.
@@ -168,7 +168,7 @@ export function createWorkApi({
   inputs = { set() {}, has: () => false },
   runOf = () => null,
   cancel = () => null,
-  queuedItem = () => null,
+  queuedTask = () => null,
   unqueue = () => null,
   analysis = createAnalysis({ runs: () => [] }),
   lanes = createLanes(),
@@ -380,7 +380,7 @@ export function createWorkApi({
   // The checks a comment passes, for the signed-in `user`: the repo's config without errors,
   // the user in both the operator's and the repo's users, an open issue (a pull request when
   // `pr`) with no run going or queued; `queued`: or one waiting for a slot that can wait
-  // instead (queuedItem()). Returns { settings, base, issue }; throws Refused.
+  // instead (queuedTask()). Returns { settings, base, issue }; throws Refused.
   async function checked(repo, user, number, pr = false, queued = false) {
     const { settings, base } = await checkedRepo(repo, user);
     const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
@@ -391,7 +391,14 @@ export function createWorkApi({
     }
     if (issue.state !== "open") refuse(409, `#${number} is closed.`);
     const key = taskKey(repo, number);
-    if (busy(key) && !(queued && queuedItem(key))) {
+    if (busy(key) && !(queued && queuedTask(key)?.item)) {
+      // Queued, but only replies to its last run: nothing that starts a run of its own to wait.
+      if (queued && queuedTask(key)) {
+        refuse(
+          409,
+          `#${number}'s queued comments only reply to its last run: they can't wait for another issue. Take it out of the queue, then queue it after one.`,
+        );
+      }
       refuse(409, `#${number} is running or queued: it can't be moved now.`);
     }
     return { settings, base, issue };
@@ -470,7 +477,7 @@ export function createWorkApi({
     if (!answers && asks && asking(settings, key)) {
       refuse(409, `#${number} has open questions: answer them first.`);
     }
-    if (action === "queue" && queuedItem(key)) {
+    if (action === "queue" && queuedTask(key)?.item) {
       return requeue(repo, user, { number, after, mode, settings, answers });
     }
     const wait = waits.get(key);
@@ -668,21 +675,33 @@ export function createWorkApi({
   // queued, as it would start now anyway.
   async function requeue(repo, user, { number, after, mode, settings, answers }) {
     const key = taskKey(repo, number);
-    const wanted = mode ?? queuedItem(key).modeLine ?? "work";
-    if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
+    const modeOf = (item) => mode ?? item.modeLine ?? "work";
+    const known = (wanted) => {
+      if (!modeNames(settings).includes(wanted)) refuse(422, `${repo} has no mode \`${wanted}\`.`);
+    };
+    known(modeOf(queuedTask(key).item));
     if ((await waitable(repo, number, after)) !== "open") {
       return `#${after} is done already: #${number} stays queued.`;
     }
-    // Its 👀 known first: out of the queue, it is saved as a wait at once, with nothing awaited
-    // between (an orchestrator stopping then would lose it).
-    await queuedItem(key)?.eyes?.catch?.(() => null);
-    // Started meanwhile (a slot freed during the checks).
+    // The comment that waits, once its 👀 is known: out of the queue, it is saved as a wait at
+    // once, with nothing awaited between (an orchestrator stopping then would lose it). A newer
+    // one queued meanwhile is waited for in turn. Gone: started meanwhile (a slot freed).
+    let held = null;
+    for (;;) {
+      held = queuedTask(key)?.item;
+      if (!held) refuse(409, `#${number} is running or queued: it can't be moved now.`);
+      await held.eyes?.catch?.(() => null);
+      if (queuedTask(key)?.item === held) break;
+    }
+    const wanted = modeOf(held);
+    known(wanted);
+    // No await from queuedTask() above: unqueue() holds that same comment.
     const item = unqueue(key, user);
     if (!item) refuse(409, `#${number} is running or queued: it can't be moved now.`);
     // A mode picked starts as a trigger comment with that mode would: a `/mode` comment alone
     // has no trigger, and with work picked, no mode line either.
     if (mode) Object.assign(item, { trigger: "work", modeLine: mode === "work" ? null : mode });
-    if (answers) item.text = answers;
+    if (answers) item.text = [item.text, answers].filter(Boolean).join("\n\n---\n\n");
     await waits.hold(item, [after], { eyes: true });
     // It waits already: a failed comment doesn't make it fail.
     const also = answers ? `\n\n${answers}` : "";

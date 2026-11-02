@@ -23,7 +23,8 @@ const ORIGIN = "https://deckhand.example.com";
 // `tasks`: the board's, by key (api/state's, with their questions). `events`: an issue's
 // timeline, by number. Issues the backlog lists as waiting for input are in `w.listed`, and on
 // the board as board.mjs makes them. `queued`: the tasks waiting for a slot that can wait
-// instead (runs.mjs queuedItem()), their latest comment by key; busy too.
+// instead (runs.mjs queuedTask()), the comment that would wait by key (null: replies only); busy
+// too.
 function setup({
   env = {},
   settings = {},
@@ -202,8 +203,8 @@ function setup({
     boardKeys: () => new Set(board),
     liveKeys: () => new Set(live),
     busy: (key) => busy.includes(key) || key in w.queued,
-    queuedItem: (key) => w.queued[key] ?? null,
-    // `w.started`: its run started since queuedItem() (a slot freed).
+    queuedTask: (key) => (key in w.queued ? { item: w.queued[key] } : null),
+    // `w.started`: its run started since queuedTask() (a slot freed).
     unqueue: (key, user) => {
       w.unqueued.push([key, user]);
       if (w.started) return null;
@@ -1057,6 +1058,29 @@ test("queue: refused for a task with a run going, or one started during the chec
   assert.deepEqual(q.unqueued, [["org/app#5", "alice"]]);
   for (const x of [w, q]) assert.equal(x.waits.get("org/app#5"), undefined);
   assert.deepEqual([w.comments, q.comments], [[], []]);
+});
+
+test("queue: a task waiting for a slot with replies only is refused, saying why", async () => {
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") }, queued: { "org/app#5": null } });
+  const res = await post(w, { action: "queue", number: 5, after: 7 });
+  assert.equal(res.status, 409);
+  assert.match(res.body.error, /^#5's queued comments only reply to its last run/);
+  assert.deepEqual([w.unqueued, w.comments], [[], []]);
+});
+
+test("queue: a newer comment queued while the 👀 is awaited waits instead, its mode named", async () => {
+  const w = setup({ issues: { 5: open("Five"), 7: open("Seven") } });
+  const newer = { ...QUEUED["org/app#5"], modeLine: null, comment: { id: 43 } };
+  // The first comment's 👀 lands once the newer one is queued.
+  const first = {
+    ...QUEUED["org/app#5"],
+    eyes: Promise.resolve().then(() => (w.queued["org/app#5"] = newer)),
+  };
+  w.queued["org/app#5"] = first;
+  assert.equal((await post(w, { action: "queue", number: 5, after: 7 })).status, 200);
+  const { item } = w.waits.get("org/app#5");
+  assert.equal(item.comment.id, 43);
+  assert.match(w.comments[0][1], /now waits for #7\. It starts/);
 });
 
 // #10's sub-issues are #11, #12 and #13, and #11 is blocked by #12: the issue's example.

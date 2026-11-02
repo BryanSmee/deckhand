@@ -247,9 +247,15 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
     item("first", { autoPickup: true }),
     item("second", { modeLine: "review" }),
   ]);
-  assert.equal(runs.queuedItem("org/repo#13").text, "second");
+  assert.equal(runs.queuedTask("org/repo#13").item.text, "second");
   const latest = runs.unqueue("org/repo#13", "alice");
-  assert.deepEqual(latest, { kind: "issue", trigger: "work", text: "second", modeLine: "review" });
+  // Every queued comment's text, as the run would have read them.
+  assert.deepEqual(latest, {
+    kind: "issue",
+    trigger: "work",
+    text: "first\n\n---\n\nsecond",
+    modeLine: "review",
+  });
   assert.deepEqual(task.pending, []);
   assert.deepEqual(settled, ["cancelled"]);
   assert.deepEqual(dropped, ["org/repo#13"]);
@@ -262,10 +268,23 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   queued("15", [item("reply", { trigger: null })]);
   queued("16", [item("pr", { kind: "pr" })]);
   for (const id of ["14", "15", "16"]) {
-    assert.equal(runs.queuedItem(`org/repo#${id}`), null);
+    // Waiting for a slot with replies only: queued, but nothing to wait.
+    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), id === "14" ? null : { item: null });
     assert.equal(runs.unqueue(`org/repo#${id}`, "alice"), null);
     assert.equal(ctx.tasks.get(`org/repo#${id}`).pending.length, 1);
   }
+  // A trigger, then a plain comment while it waited: the trigger waits, with both texts; the
+  // follow-up's 👀 goes.
+  const trigger = item("do it", { modeLine: "review", comment: { id: 1 } });
+  const reply = item("and this too", { trigger: null, comment: { id: 2 } });
+  const both = queued("17", [trigger, reply]);
+  assert.equal(runs.queuedTask("org/repo#17").item, trigger);
+  const held = runs.unqueue("org/repo#17", "alice");
+  assert.equal(held.comment.id, 1);
+  assert.equal(held.modeLine, "review");
+  assert.equal(held.text, "do it\n\n---\n\nand this too");
+  assert.deepEqual(both.pending, []);
+  assert.deepEqual(settled, ["cancelled", "cancelled"]);
   // Cancelled, the one behind a run says so: it isn't back in the backlog.
   assert.equal(runs.cancel("org/repo#14", "alice"), "following");
   assert.equal(runs.cancel("org/repo#15", "alice"), "queued");
