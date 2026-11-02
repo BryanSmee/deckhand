@@ -24,7 +24,8 @@ the agents): this page is what differs on a cluster.
 - **A network plugin that enforces NetworkPolicies**: Calico, Cilium, or k3s's own (kube-router).
   One that ignores them (Flannel alone, say) takes them and isolates nothing: a sandbox could
   then call the services directly, the orchestrator's run tokens among them. Check it once
-  installed ([Install](#install), step 5), and after any change of plugin.
+  installed ([Install](#install), step 5), and after any change of plugin (#568 will have the
+  runner check it too).
 - **A default storage class** for the services' claims (`ReadWriteOnce`), and for the issues'
   session claims (`KUBERNETES_STORAGE_CLASS`). On several nodes, one with `ReadWriteMany` too
   ([Several nodes](#several-nodes)). Optional: a `ReadWriteMany` class for the agents' and
