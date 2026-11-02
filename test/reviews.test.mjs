@@ -3012,7 +3012,7 @@ test("parseReview: every form of a blocking comment blocks, and one without its 
   }
   // Its kind unreadable, or text that isn't an item under Comments: a note, but the model's
   // request-changes stands.
-  for (const comment of ["- (blocking) why?", "- Why does this retry forever?", "Why?"]) {
+  for (const comment of ["- {blocking} why?", "- Why does this retry forever?", "Why?"]) {
     const review = parseReview(reply(comment));
     // As low findings with request-changes: posted as a comment, its verdict text saying so,
     // and no auto-merge (autoMerge() refuses a request-changes verdict).
@@ -3352,7 +3352,7 @@ None.
 
 ## Comments
 
-- (blocking) must not merge until it's split.
+- {blocking} must not merge until it's split.
 
 Rating: 9/10
 Verdict: request-changes
@@ -3366,14 +3366,14 @@ Verdict: request-changes
       [false, false, "rename it."],
       [false, true, "**[medium] Retry forever** `a.mjs:3`: it never stops."],
       [false, true, "Share the retry helper `a.mjs:9`: twice."],
-      [false, true, "(blocking) must not merge until it's split."],
+      [false, true, "{blocking} must not merge until it's split."],
     ],
   );
   const body = reviewBody(review, reply, "f");
   assert.match(body, /^\*\*Verdict: request changes\*\*/);
   assert.match(body, /## Comments \(4\)\n\n- \*\*unclear\*\* \*\*\[medium\] Retry forever\*\*/);
   assert.match(body, /- \*\*unclear\*\* Share the retry helper `a\.mjs:9`: twice\./);
-  assert.match(body, /- \*\*unclear\*\* \(blocking\) must not merge/);
+  assert.match(body, /- \*\*unclear\*\* \{blocking\} must not merge/);
   assert.match(body, /- \*\*note\*\* `a\.mjs:2`: rename it\./);
   assert.doesNotMatch(body, /## Follow-ups/);
   // Read back as posted.
@@ -3389,7 +3389,7 @@ Verdict: request-changes
   );
   const fix = fixMessage(review, 5);
   assert.match(fix, /Treat an \*\*unclear\*\* comment as blocking/);
-  assert.match(fix, /- \*\*unclear\*\* \(blocking\) must not merge/);
+  assert.match(fix, /- \*\*unclear\*\* \{blocking\} must not merge/);
 });
 
 test("follow-ups: a review recorded after the merge's delivery files its own", async (t) => {
@@ -3427,4 +3427,88 @@ test("follow-ups: a late review after some were filed files only its new ones, i
   // The same review again: nothing new, nothing said.
   await s.record(second, { pr: { ...posted().pr, state: "closed", merged: true } });
   assert.deepEqual([s.filed().length, s.replies.length], [3, 2]);
+});
+
+test("an item under Must fix that is no finding, or under a heading the parser doesn't know, is an unclear comment", () => {
+  for (const reply of [
+    "## Must fix\n\n- **Share the retry helper** `a.mjs:3`: duplicated with b.mjs\n\nRating: 9/10\nVerdict: comment",
+    "## Must fix\n\nNone.\n\n## Out of scope\n\n- **Share the retry helper** `a.mjs:3`: duplicated with b.mjs\n\nRating: 9/10\nVerdict: comment",
+  ]) {
+    const review = parseReview(reply);
+    assert.deepEqual(
+      review.comments.map((c) => [c.blocking, c.unclear, c.text]),
+      [[false, true, "**Share the retry helper** `a.mjs:3`: duplicated with b.mjs"]],
+      reply,
+    );
+    // Posted, and blocking: the fix run treats it so, and the review does too.
+    assert.match(
+      reviewBody(review, reply, "f"),
+      /- \*\*unclear\*\* \*\*Share the retry helper\*\*/,
+    );
+    assert.deepEqual(
+      [review.verdict, reviewEvent(review), review.rating],
+      ["request-changes", "REQUEST_CHANGES", 8],
+      reply,
+    );
+  }
+  // A summary's bullets, before any heading, stay the summary's.
+  const summary = parseReview(
+    "Adds X.\n- Highlights: the cache.\n\n## Must fix\n\nNone.\n\nRating: 10/10\nVerdict: comment",
+  );
+  assert.deepEqual([summary.comments, summary.verdict], [[], "comment"]);
+});
+
+test("an unclear comment blocks: the event, the fix run, the merge and the round's count", async (t) => {
+  const reply =
+    "## Must fix\n\nNone.\n\n## Comments\n\n- {blocking} must not merge until X.\n\nRating: 9/10\nVerdict: request-changes";
+  const review = parseReview(reply);
+  assert.equal(reviewEvent(review), "REQUEST_CHANGES");
+  assert.equal(blockingText(review), "1 blocking comment");
+  const { fix } = fixSetup(t);
+  const item = await fix(posted(reply));
+  assert.match(item.text, /Treat an \*\*unclear\*\* comment as blocking/);
+  const s = await loopSetup(t);
+  await s.review(reply);
+  const [round] = s.loop().history;
+  assert.deepEqual([round.blocking, round.comments], [1, { blocking: 1, notes: 0 }]);
+  // (blocking) and (note) are read.
+  assert.deepEqual(
+    parseReview(reply.replace("{blocking}", "(blocking)")).comments.map((c) => [
+      c.blocking,
+      !!c.unclear,
+    ]),
+    [[true, false]],
+  );
+  assert.deepEqual(
+    parseReview(reply.replace("{blocking}", "(note)")).comments.map((c) => [
+      c.blocking,
+      !!c.unclear,
+    ]),
+    [[false, false]],
+  );
+});
+
+test("follow-ups past the cap are listed once, not again by each later review", async (t) => {
+  const many = Array.from({ length: FOLLOW_UPS_MAX + 2 }, (_, i) => `- **Follow-up ${i + 1}**: x.`);
+  const message = `## Must fix\n\nNone.\n\n## Follow-ups\n\n${many.join("\n")}\n\nRating: 10/10\nVerdict: comment`;
+  const bodies = [postedBody(message)];
+  const s = followUpSetup(t, { posted: bodies });
+  await s.record(message);
+  await s.merged();
+  assert.match(s.replies[0][1], /`Follow-up 11`, `Follow-up 12`\.$/);
+  // A later review on the merged pull request with one more: only it is listed.
+  const more = message.replace(
+    "- **Follow-up 1**: x.",
+    "- **Follow-up 1**: x.\n- **Follow-up 13**: x.",
+  );
+  bodies.push(postedBody(more));
+  await s.record(more, { pr: { ...posted().pr, state: "closed", merged: true } });
+  assert.equal(s.replies.length, 2);
+  assert.match(
+    s.replies[1][1],
+    /listed this one for other issues: not filed, past 10 per pull request: `Follow-up 13`\.$/,
+  );
+  // And again: nothing new, nothing said.
+  await s.record(more, { pr: { ...posted().pr, state: "closed", merged: true } });
+  assert.equal(s.replies.length, 2);
 });

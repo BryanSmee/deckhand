@@ -510,9 +510,9 @@ token only reads, and Deckhand posts the review.
   bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
   `- No follow-ups.` or `- **None found**` files nothing. An item under the wrong heading is
   never filed, but posted under Comments: a blocking comment there (`- **blocking** …`, in
-  any form Comments reads) blocks as one under Comments does; a note stays a note; a finding
-  (`- high: …`) there, and any other bullet without a bold title, is posted as **unclear**.
-  Each keeps the review's own verdict, as an unreadable comment does.
+  any form Comments reads) blocks as one under Comments does; a note stays a note and keeps
+  the review's own verdict; a finding (`- high: …`) there, and any other bullet without a bold
+  title, is posted as **unclear**, which blocks (below).
   A pull request closed without a merge files none, and a merge files at most 10 (the rest
   listed by title in the comment). The issue's body says the text is a review model's
   output, to check against the code, and quotes it. The review is told not to list again a
@@ -525,13 +525,13 @@ token only reads, and Deckhand posts the review.
   run applies it only when it is cheap and in scope, and a note alone never starts one. Nits
   are notes, not low findings. A blocking comment blocks like a finding, **whatever
   `max_allowed_severity` says** (the reviewer marked it on purpose), caps the rating at 8, and
-  goes to the fix run. The kind is read in bold, italics, backticks or brackets, or bare
-  before a separator (`blocking: …`). A blocking comment put under Must fix
+  goes to the fix run. The kind is read in bold, italics, backticks, brackets or
+  parentheses, or bare before a separator (`blocking: …`). A blocking comment put under Must fix
   blocks as one under Comments does, and a note there is posted under Comments and keeps the
-  review's own verdict. A comment whose kind can't be read is posted as **unclear**: it
-  doesn't block by itself, the fix run is told to treat it as blocking, and the review's own
-  verdict then stands: a "request changes" it wrote isn't turned into a
-  comment, so an auto-merge still refuses it. A review's verdict reads "comment" on follow-ups
+  review's own verdict. A comment whose kind can't be read is posted as **unclear**, and
+  so is an item under Must fix that is no finding, or one under a heading Deckhand doesn't
+  know: it blocks as a blocking comment does (failing closed: the reviewer may have meant it
+  so), and the fix run is told to treat it as blocking. A review's verdict reads "comment" on follow-ups
   and notes alone only when its Must fix section says `None.` and everything under Must fix
   and Comments could be read.
 

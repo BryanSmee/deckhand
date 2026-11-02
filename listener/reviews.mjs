@@ -164,7 +164,7 @@ export function parseReview(text, { allowed = "low" } = {}) {
       current = null;
       continue;
     }
-    const found = bullet(section, line);
+    const found = bullet(section, line, started);
     if (found) {
       const { unmarked, misplaced, comment, ...item } = found;
       if (unmarked || misplaced) unsure = doubtful = true;
@@ -215,7 +215,9 @@ export function parseReview(text, { allowed = "low" } = {}) {
 // or brackets, or bare before a separator. A comment without one is a note marked `unmarked`:
 // it doesn't block, but parseReview() keeps the model's verdict then, as missing a blocking
 // one would fail open.
-function bullet(section, line) {
+// `started`: a heading or an item came before, so a bullet under Must fix that is no finding
+// is no summary's either.
+function bullet(section, line, started = true) {
   const lead = /^(?:[-*+]|\d+[.)])\s+(?=\S)/.exec(line);
   if (!lead) return null;
   const rest = line.slice(lead[0].length);
@@ -226,9 +228,14 @@ function bullet(section, line) {
       );
     if (m) return { severity: m[1].toLowerCase(), ...located(m[2]) };
     // A comment under Must fix, moved to its section: a blocking one blocks there as anywhere;
-    // a note is `misplaced` too, and the model's verdict stands.
+    // a note is `misplaced` too, and the model's verdict stands. Anything else after a heading
+    // (a follow-up there, an item under a heading the parser doesn't know): an `unclear`
+    // comment, shown rather than lost.
     const kind = commentKind(rest);
-    if (!kind) return null;
+    if (!kind) {
+      if (!started || NOTHING.test(titleOf(located(rest).text))) return null;
+      return { ...note(rest), unclear: true, misplaced: true };
+    }
     if (kind[1].toLowerCase() !== "blocking") return { ...note(kind[2]), misplaced: true };
     return { comment: true, blocking: true, ...located(kind[2]) };
   }
@@ -267,12 +274,12 @@ function bullet(section, line) {
 const note = (text) => ({ comment: true, blocking: false, ...located(text) });
 
 // A comment's kind leading `rest` (a bullet's text) → [, kind, text], or null: `blocking` or
-// `note` (`non-blocking`, `nit` too, "blocking comment"), in bold, italics, backticks or
-// brackets, or bare before a separator.
+// `note` (`non-blocking`, `nit` too, "blocking comment"), in bold, italics, backticks,
+// brackets or parentheses, or bare before a separator.
 function commentKind(rest) {
   const kind = String.raw`(blocking|non[- ]blocking|note|nit)(?:\s+(?:comment|remark|question))?`;
   return (
-    new RegExp(String.raw`^[*_\`\[]+\s*${kind}\s*[:–—]?\s*[*_\`\]]+\s*[:–—-]?\s*(.*)$`, "i").exec(
+    new RegExp(String.raw`^[*_\`\[(]+\s*${kind}\s*[:–—]?\s*[*_\`\])]+\s*[:–—-]?\s*(.*)$`, "i").exec(
       rest,
     ) ?? new RegExp(String.raw`^${kind}(?:\s*[:–—]|\s+-)\s*(.*)$`, "i").exec(rest)
   );
@@ -297,7 +304,10 @@ const titleOf = (text) =>
     .slice(0, 256);
 
 // The comments of `review` that block (all of its blocking ones, whatever its tolerance).
-const blockingComments = (review) => (review.comments ?? []).filter((c) => c.blocking);
+// An `unclear` one (its kind unread, or an item under the wrong heading) blocks too: the fix
+// run is told to treat it as blocking (fixMessage()), so the loop, the event and the merge
+// do the same (fail closed).
+const blockingComments = (review) => (review.comments ?? []).filter((c) => c.blocking || c.unclear);
 
 // Whether `review` blocks with `allowed`: a finding above it, or a blocking comment.
 const blocks = (review, allowed = "low") =>
@@ -2556,11 +2566,17 @@ export function createReviews({
       filed.push(made.number);
     }
     log(`${key}: merged, ${filed.length} follow-up issue(s) filed, ${left.length} left`);
-    if (filed.length) keep(key, { followUpsFiled: before + filed.length });
+    // The titles left past the cap and listed already (`followUpsLeft`): never said twice.
+    const said = new Set(reviewed.get(key)?.followUpsLeft ?? []);
+    const unsaid = left.filter((title) => !said.has(titleKey(title)));
+    keep(key, {
+      ...(filed.length && { followUpsFiled: before + filed.length }),
+      ...(unsaid.length && { followUpsLeft: [...said, ...unsaid.map(titleKey)] }),
+    });
     // After a late review, only what is new: the merge's comment listed the rest.
-    if (late && !filed.length && !left.length) return filed;
-    if (!filed.length && !linked.length && !left.length) return filed;
-    await reply(repo, pr.number, followUpsText(filed, late ? [] : linked, left));
+    if (late && !filed.length && !unsaid.length) return filed;
+    if (!filed.length && !linked.length && !unsaid.length) return filed;
+    await reply(repo, pr.number, followUpsText(filed, late ? [] : linked, unsaid));
     return filed;
   }
 
