@@ -477,7 +477,10 @@ interface SectionProps {
 }
 
 function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle }: SectionProps) {
-  const tone = s.failures ? "err" : s.current ? "run" : "done";
+  const tone = s.failed ? "err" : s.current ? "run" : "done";
+  // A failed command flags the section only where it makes it fail (fails()): elsewhere, its
+  // count is plain text.
+  const flagged = s.phase === "image" || s.phase === "push";
   return (
     <Fold
       title={PHASE_TITLES[s.phase]}
@@ -495,13 +498,16 @@ function SectionView({ section: s, filter, open, onToggle, hits, isOpen, toggle 
           ) : (
             <span class={styles.counts}>{counts(s)}</span>
           )}
-          {s.failures > 0 && (
-            <StatusBadge
-              tone="err"
-              label={failed(s)}
-              class={`${styles.badge} ${hits !== null ? styles.searchBadge : ""}`}
-            />
-          )}
+          {s.failures > 0 &&
+            (flagged ? (
+              <StatusBadge
+                tone="err"
+                label={failed(s)}
+                class={`${styles.badge} ${hits !== null ? styles.searchBadge : ""}`}
+              />
+            ) : (
+              <span class={hits !== null ? styles.searchBadge : undefined}>{failed(s)}</span>
+            ))}
           {s.seconds !== null && <span class={styles.mono}>{shortDuration(s.seconds)}</span>}
         </>
       }
