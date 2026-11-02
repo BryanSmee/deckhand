@@ -92,13 +92,15 @@ function host({ lines = ['{"type":"result","result":"Done."}'] } = {}) {
 
 // One copy of the runner service, listening; its lease on `store` (shared by the copies).
 // `bound`: its callers' networks; `brokerTokens`: what the broker gives a run being started.
+// `ttlMs`: long by default, so that a paused runner doesn't let it expire (a 503 then); the
+// expiry's tests set theirs.
 // The grants folder, and what the operator's policies grant: org/repo may build its Dockerfile.
 const grants = () => grantsFrom({ "org/repo.yaml": "hosts: [pypi.org]\n" }, config);
 const granted = grantedOf(["dockerfile"], "org/repo");
 
 async function copy(
   t,
-  { store, backend, ttlMs = 400, bound, brokerTokens, imageFor, blobOf } = {},
+  { store, backend, ttlMs = 10_000, bound, brokerTokens, imageFor, blobOf } = {},
 ) {
   let service;
   const lease = activePassive({

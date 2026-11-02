@@ -326,23 +326,24 @@ test(
     assert.equal((await b.lease("orchestrator")).holder, "copy-a");
     // Released on SIGTERM: the other copy takes it at once, with a higher epoch.
     assert.equal(await a.release("orchestrator", "copy-a", first.epoch), true);
-    const second = await b.acquire("orchestrator", "copy-b", { ttlMs: 300 });
+    // A second: long enough to outlive the next call on a paused runner.
+    const second = await b.acquire("orchestrator", "copy-b", { ttlMs: 1000 });
     assert.ok(second.epoch > first.epoch);
     // Copy b stops renewing (killed, its node gone): once it expires, a takes it back.
-    assert.equal(await a.acquire("orchestrator", "copy-a", { ttlMs: 300 }), null);
-    await sleep(400);
+    assert.equal(await a.acquire("orchestrator", "copy-a", { ttlMs: 1000 }), null);
+    await sleep(1100);
     const third = await a.acquire("orchestrator", "copy-a", { ttlMs: 10_000 });
     assert.ok(third.epoch > second.epoch);
-    assert.equal(await b.renew("orchestrator", "copy-b", second.epoch, { ttlMs: 300 }), null);
+    assert.equal(await b.renew("orchestrator", "copy-b", second.epoch, { ttlMs: 1000 }), null);
 
     // What one copy writes, the other reads; a key's TTL is Redis's own.
-    await a.set("session", { user: "alice" }, { ttlMs: 200 });
+    await a.set("session", { user: "alice" }, { ttlMs: 1000 });
     assert.deepEqual(await b.get("session"), { user: "alice" });
     const client = redisClient(redisUrl);
     t.after(() => client.close());
     const pttl = await client.call("PTTL", `${prefix}k:session`);
-    assert.ok(pttl > 0 && pttl <= 200, `PTTL ${pttl}`);
-    await sleep(300);
+    assert.ok(pttl > 0 && pttl <= 1000, `PTTL ${pttl}`);
+    await sleep(1100);
     assert.equal(await b.get("session"), null);
 
     // An event one copy appended, the next one reads until acknowledged.
