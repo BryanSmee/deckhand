@@ -96,7 +96,7 @@ export function createAppHolder({
     );
     save(credentials);
     sweep();
-    log(`Setup: GitHub App ${made.slug} (id ${made.id}) stored`);
+    log(`Setup: GitHub App ${credentials.slug} (id ${credentials.id}) stored`);
     return { credentials: rest };
   }
 
