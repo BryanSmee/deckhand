@@ -23,8 +23,8 @@ const ORIGIN = "https://deckhand.example.com";
 // `tasks`: the board's, by key (api/state's, with their questions). `events`: an issue's
 // timeline, by number. Issues the backlog lists as waiting for input are in `w.listed`, and on
 // the board as board.mjs makes them. `queued`: the tasks waiting for a slot that can wait
-// instead (runs.mjs queuedTask()), the comment that would wait by key (null: replies only); busy
-// too.
+// instead (runs.mjs queuedTask()), the comment that would wait by key (null: replies only,
+// "other": none that starts a run, not replies either: an inbox entry, a wrap-up); busy too.
 function setup({
   env = {},
   settings = {},
@@ -76,6 +76,8 @@ function setup({
   let commentId = 500;
   const github = async (repo, method, path, body) => {
     w.calls.push(`${method} ${path}`);
+    // A test acts while GitHub is asked (`w.onCall`): a slot freeing, say.
+    w.onCall?.(method, path);
     // A test holds GitHub's answers with `w.hold = promise`, or fails them with `w.down`.
     await w.hold;
     if (w.down) return new Response("{}", { status: 502 });
@@ -203,11 +205,16 @@ function setup({
     boardKeys: () => new Set(board),
     liveKeys: () => new Set(live),
     busy: (key) => busy.includes(key) || key in w.queued,
-    queuedTask: (key) => (key in w.queued ? { item: w.queued[key] } : null),
-    // `w.started`: its run started since queuedTask() (a slot freed).
+    // `w.started`: its run started (a slot freed): no longer waiting for one.
+    queuedTask: (key) => {
+      if (w.started || !(key in w.queued)) return null;
+      const item = w.queued[key];
+      return item === "other"
+        ? { item: null, replies: false }
+        : { item: item ?? null, replies: item === null };
+    },
     unqueue: (key, user) => {
       w.unqueued.push([key, user]);
-      if (w.started) return null;
       const item = w.queued[key];
       delete w.queued[key];
       // `w.dropped`: other authors' comments queued with it.
@@ -1043,7 +1050,7 @@ test("queue: a queued `/mode` comment alone, work picked, waits as a trigger com
   assert.deepEqual([held.trigger, held.modeLine], [null, "brainstorm"]);
 });
 
-test("queue: refused for a task with a run going, or one started during the checks", async () => {
+test("queue: refused for a task with a run going, or one started while GitHub is asked", async () => {
   // A run going, or a follow-up behind one: busy, not a queued item.
   const w = setup({ issues: { 5: open("Five"), 7: open("Seven") }, busy: ["org/app#5"] });
   const res = await post(w, { action: "queue", number: 5, after: 7 });
@@ -1052,13 +1059,27 @@ test("queue: refused for a task with a run going, or one started during the chec
   // Only `queue` moves a queued one: a start is refused as before.
   const q = setup({ issues: { 5: open("Five"), 7: open("Seven") }, queued: QUEUED });
   assert.equal((await post(q, { action: "start", number: 5 })).status, 409);
-  // A slot freed while GitHub was asked (`w.started`): nothing to take out, nothing waits.
-  q.started = true;
+  // A slot freed while GitHub says whether #7 is open (requeue()'s check): it runs, nothing
+  // to take out, nothing waits.
+  q.onCall = (method, path) => {
+    if (path.endsWith("/issues/7")) q.started = true;
+  };
   const late = await post(q, { action: "queue", number: 5, after: 7 });
   assert.equal(late.status, 409);
-  assert.deepEqual(q.unqueued, [["org/app#5", "alice"]]);
-  for (const x of [w, q]) assert.equal(x.waits.get("org/app#5"), undefined);
-  assert.deepEqual([w.comments, q.comments], [[], []]);
+  assert.equal(late.body.error, "#5 is running or queued: it can't be moved now.");
+  // Or while its own issue is read (checked()'s): refused there.
+  const early = setup({ issues: { 5: open("Five"), 7: open("Seven") }, queued: QUEUED });
+  early.onCall = (method, path) => {
+    if (path.endsWith("/issues/5")) early.started = true;
+  };
+  const before = await post(early, { action: "queue", number: 5, after: 7 });
+  assert.equal(before.status, 409);
+  assert.equal(before.body.error, "#5 is running or queued: it can't be moved now.");
+  for (const x of [w, q, early]) {
+    assert.deepEqual(x.unqueued, []);
+    assert.equal(x.waits.get("org/app#5"), undefined);
+    assert.deepEqual(x.comments, []);
+  }
 });
 
 test("queue: other authors' comments queued with it are dropped, the App's comment says so", async () => {
@@ -1069,6 +1090,17 @@ test("queue: other authors' comments queued with it are dropped, the App's comme
     w.comments[0][1],
     /\(closed as completed, or merged\)\. 2 comments queued by someone else were dropped: only its author's go with it\. Post again to add them\.$/,
   );
+});
+
+test("queue: a queued inbox entry or wrap-up is refused as busy, not as replies", async () => {
+  const w = setup({
+    issues: { 5: open("Five"), 7: open("Seven") },
+    queued: { "org/app#5": "other" },
+  });
+  const res = await post(w, { action: "queue", number: 5, after: 7 });
+  assert.equal(res.status, 409);
+  assert.equal(res.body.error, "#5 is running or queued: it can't be moved now.");
+  assert.deepEqual([w.unqueued, w.comments], [[], []]);
 });
 
 test("queue: a task waiting for a slot with replies only is refused, saying why", async () => {

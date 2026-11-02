@@ -394,7 +394,8 @@ export function createWorkApi({
     const key = taskKey(repo, number);
     if (busy(key) && !(queued && queuedTask(key)?.item)) {
       // Queued, but only replies to its last run: nothing that starts a run of its own to wait.
-      if (queued && queuedTask(key)) {
+      // Others (an inbox entry, a wrap-up) can't wait either, nor leave for one later.
+      if (queued && queuedTask(key)?.replies) {
         refuse(
           409,
           `#${number}'s queued comments only reply to its last run: they can't wait for another issue. Take it out of the queue, then queue it after one.`,

@@ -642,17 +642,20 @@ export function createRuns(ctx) {
     if (picked) ctx.autoPickup?.soon();
   }
 
-  // A task waiting for a slot, no run going or ending (a follow-up waits for that one): { item },
-  // its newest comment that starts a run (an issue's trigger or `/mode` comment), which can
-  // wait for another issue instead (the dashboard's Queue after…, work.mjs); `item` null when
-  // none does (replies to its last run only). Null otherwise.
+  // A task waiting for a slot, no run going or ending (a follow-up waits for that one):
+  // { item, replies }. `item`: its newest comment that starts a run (an issue's trigger or
+  // `/mode` comment), which can wait for another issue instead (the dashboard's Queue after…,
+  // work.mjs); null when none does. `replies`: none does, and every comment queued is a plain
+  // reply to its last run (not an inbox entry, a wrap-up, a pull request's…). Null otherwise.
   function queuedTask(key) {
     const task = ctx.tasks.get(key);
     if (!task || task.running || task.live || !task.pending.length) return null;
     const item = task.pending.findLast(
       (i) => i.kind === "issue" && (i.trigger === "work" || !!i.modeLine),
     );
-    return { item: item ?? null };
+    const replies =
+      !item && task.pending.every((i) => i.kind === "issue" && !i.trigger && !i.modeLine);
+    return { item: item ?? null, replies };
   }
 
   // queuedTask()'s task out of the queue: { item, dropped }. `item` is returned for its wait

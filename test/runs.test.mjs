@@ -274,9 +274,20 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   queued("16", [item("pr", { kind: "pr" })]);
   for (const id of ["14", "15", "16"]) {
     // Waiting for a slot with replies only: queued, but nothing to wait.
-    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), id === "14" ? null : { item: null });
+    const replies = {
+      14: null,
+      15: { item: null, replies: true },
+      16: { item: null, replies: false },
+    };
+    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), replies[id]);
     assert.equal(runs.unqueue(`org/repo#${id}`, "alice"), null);
     assert.equal(ctx.tasks.get(`org/repo#${id}`).pending.length, 1);
+  }
+  // An inbox entry or a wrap-up: nothing to wait, and not replies either.
+  queued("19", [item("an idea", { trigger: "idea" })]);
+  queued("20", [item("", { trigger: "stop", mode: "stop" })]);
+  for (const id of ["19", "20"]) {
+    assert.deepEqual(runs.queuedTask(`org/repo#${id}`), { item: null, replies: false });
   }
   // A trigger, then a plain comment while it waited: the trigger waits, with both texts; the
   // follow-up's 👀 goes.
