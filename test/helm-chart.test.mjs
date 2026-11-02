@@ -104,16 +104,21 @@ for (const [values, components] of [
 }
 
 test(
-  "helm: `helm uninstall` keeps the namespaces and the claims, with the Secrets and data in them",
+  "helm: `helm uninstall` keeps the namespaces, the claims and the sandboxes' isolation; an upgrade keeps the old ConfigMaps",
   { skip },
   (t) => {
     const kept = helm(t, { store: "redis" })
       .filter((o) => o.metadata.annotations?.[KEEP] === "keep")
-      .map(keyOf)
+      .map((o) => keyOf(o).replace(/-[0-9a-f]{10}$/, ""))
       .sort();
     assert.deepEqual(kept, [
+      "ConfigMap deckhand/deckhand-env",
+      "ConfigMap deckhand/deckhand-server",
       "Namespace /deckhand",
       "Namespace /deckhand-sandboxes",
+      "NetworkPolicy deckhand-sandboxes/deckhand-default-deny",
+      "NetworkPolicy deckhand-sandboxes/deckhand-installs",
+      "NetworkPolicy deckhand-sandboxes/deckhand-sandboxes",
       "PersistentVolumeClaim deckhand/egress-cache",
       "PersistentVolumeClaim deckhand/orchestrator-data",
       "PersistentVolumeClaim deckhand/orchestrator-screenshots",
@@ -145,17 +150,26 @@ test(
   (t) => {
     const server = {
       config: "allowed_users: [someone]\n",
-      grants: { "default.yaml": "hosts: []\n", "acme/api.yaml": "docker: true\n" },
+      grants: {
+        "default.yaml": "hosts: []\n",
+        "a/b-c.yaml": "hosts: [a.example]\n",
+        "a-b/c.yaml": "hosts: [b.example]\n",
+      },
     };
     const objects = helm(t, { server });
     const map = objects.find(
       (o) => o.kind === "ConfigMap" && o.metadata.name.startsWith("deckhand-server-"),
     );
-    assert.deepEqual(map.data, {
-      "config.yaml": server.config,
-      "default.yaml": server.grants["default.yaml"],
-      "acme-api.yaml": server.grants["acme/api.yaml"],
-    });
+    // Each grant mounted at its path, from a key of its own: a/b-c.yaml and a-b/c.yaml, which
+    // a slash turned into a dash would give one key, keep their own files.
+    const grantsOf = (items) =>
+      Object.fromEntries(items.map(({ key, path }) => [path, map.data[key]]));
+    assert.equal(map.data["config.yaml"], server.config);
+    assert.equal(map.data["default.yaml"], server.grants["default.yaml"]);
+    assert.equal(Object.keys(map.data).length, 4);
+    for (const key of Object.keys(map.data).filter((k) => k.includes("-"))) {
+      assert.match(key, /^[0-9a-f]{8}\.[a-z-]+\.yaml$/);
+    }
     for (const d of deployments(objects)) {
       const volume = d.spec.template.spec.volumes.find((v) => v.name === "server");
       if (!volume) continue;
@@ -163,19 +177,23 @@ test(
       assert.equal(name, map.metadata.name, d.metadata.name);
       const grants = ["orchestrator", "runner", "github", "policy"].includes(d.metadata.name);
       assert.deepEqual(
-        items,
-        [
-          { key: "config.yaml", path: "config.yaml" },
+        grantsOf(items),
+        {
+          "config.yaml": server.config,
           ...(grants
-            ? [
-                { key: "acme-api.yaml", path: "grants/acme/api.yaml" },
-                { key: "default.yaml", path: "grants/default.yaml" },
-              ]
-            : []),
-        ],
+            ? Object.fromEntries(
+                Object.entries(server.grants).map(([path, text]) => [`grants/${path}`, text]),
+              )
+            : {}),
+        },
         d.metadata.name,
       );
     }
+    // A grant whose key another file already has is refused, never mounted in its place.
+    assert.match(
+      helmFails(t, { server: { grants: { "config.yaml": "hosts: []\n" } } }),
+      /already taken/,
+    );
     // Another config.yaml, another name: the pods that mount it roll.
     const changed = helm(t, { server: { ...server, config: "allowed_users: [other]\n" } });
     const renamed = changed.find(

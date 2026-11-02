@@ -46,14 +46,24 @@ app.kubernetes.io/part-of: deckhand
 {{- define "deckhand.serverData" -}}
 {{- $data := dict "config.yaml" .Values.server.config -}}
 {{- range $path, $text := .Values.server.grants }}
-{{- $_ := set $data (include "deckhand.grantKey" $path) $text }}
+{{- $key := include "deckhand.grantKey" $path }}
+{{- if hasKey $data $key }}
+{{- fail (printf "server.grants: %q would take the ConfigMap key %q, already taken" $path $key) }}
+{{- end }}
+{{- $_ := set $data $key $text }}
 {{- end }}
 {{- toYaml $data }}
 {{- end }}
 
-{{/* A grant's key in deckhand-server: its path, without slashes (acme/api.yaml: acme-api.yaml). */}}
+{{/* A grant's key in deckhand-server, which can't hold a slash: a top-level file's name as it is
+(default.yaml), else its path's hash before its path without slashes (acme/api.yaml:
+<hash>.acme-api.yaml), as a-b/c.yaml and a/b-c.yaml would otherwise share one key. */}}
 {{- define "deckhand.grantKey" -}}
-{{ replace "/" "-" . }}
+{{- if contains "/" . -}}
+{{ sha256sum . | trunc 8 }}.{{ replace "/" "-" . }}
+{{- else -}}
+{{ . }}
+{{- end -}}
 {{- end }}
 
 {{/* The generated ConfigMaps' names carry a hash of their data, as kustomize's do: pods that

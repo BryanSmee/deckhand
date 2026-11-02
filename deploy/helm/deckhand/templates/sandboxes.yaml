@@ -1,5 +1,6 @@
 # deploy/kubernetes/sandboxes.yaml: the sandboxes' namespace's NetworkPolicies. Nothing comes in,
-# and the egress proxy's port is the only way out; the runner checks them before every run.
+# and the egress proxy's port is the only way out; the runner checks them before every run. Kept
+# by `helm uninstall`, as their namespace is: a sandbox still running there stays isolated.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -7,6 +8,8 @@ metadata:
   namespace: {{ include "deckhand.sandboxesNs" . }}
   labels:
     {{- include "deckhand.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   podSelector: {}
   policyTypes: [Ingress, Egress]
@@ -19,6 +22,8 @@ metadata:
   namespace: {{ include "deckhand.sandboxesNs" $ }}
   labels:
     {{- include "deckhand.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
 spec:
   podSelector:
     matchLabels:

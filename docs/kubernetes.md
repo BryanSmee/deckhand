@@ -250,13 +250,18 @@ first install.
 
 `values.yaml` in the chart says more of each. To update, change `image.tag` and
 `helm upgrade deckhand deploy/helm/deckhand -f values.yaml`, from a checkout at the new release:
-the services update as [below](#updating). A change of `server` renames its ConfigMap, as
-kustomize's hash does, and the pods that read it restart. The base's objects, made by
+the services update as [below](#updating). A change of `server` or `env` renames its ConfigMap,
+as kustomize's hash does, and the pods that read it restart. The old one stays, as
+`kubectl apply -k` leaves kustomize's: an old pod rescheduled while a bad config stalls the
+rollout still starts. They pile up, as kustomize's do; delete those no pod names. The base's objects, made by
 `kubectl apply -k`, aren't the chart's: Helm refuses to install over them, so pick one, or let
 Helm adopt them (the `meta.helm.sh/release-name` and `meta.helm.sh/release-namespace`
 annotations and the `app.kubernetes.io/managed-by: Helm` label on each) before the first install.
 `helm uninstall` keeps both namespaces and the services' claims (`helm.sh/resource-policy: keep`),
-with your Secrets and the stores in them: delete the namespaces yourself to remove everything.
+with your Secrets and the stores in them, and the sandboxes' NetworkPolicies: the runner makes the
+sandbox pods itself, so a run going on at that moment keeps running, isolated as before, with no
+proxy left to reach. Remove those pods (`kubectl -n deckhand-sandboxes delete pods --all`), or
+delete both namespaces to remove everything.
 
 ## Updating
 
