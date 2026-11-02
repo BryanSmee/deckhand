@@ -3,6 +3,7 @@
 import assert from "node:assert/strict";
 import {
   appendFileSync,
+  chmodSync,
   linkSync,
   readdirSync,
   readFileSync,
@@ -16,7 +17,7 @@ import { randomBytes } from "node:crypto";
 import { sealWith } from "../lib/seal.mjs";
 import { nextEpoch, openStore, storable } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
-import { needsPosixRename, tempDir } from "./helpers.mjs";
+import { isRoot, needsModes, needsPosixRename, tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
 storeContract("memory", (t, clock) => fileStore({ now: clock.now }));
@@ -54,6 +55,26 @@ test("file: keys, leases, streams, consumers and blobs outlive a restart", async
   await after.appendBlob("log", "b");
   assert.equal((await after.readBlob("log")).toString(), "ab");
 });
+
+// A state file another user's process wrote (the root orchestrator of the release before, #536):
+// read as empty, the next save would write over the queue and the consumers for good.
+test(
+  "file: a state file it can't read stops it, rather than being taken for empty and written over",
+  { skip: (isRoot && "root reads anywhere") || needsModes },
+  async (t) => {
+    const dir = tempDir(t);
+    const before = fileStore({ dir });
+    await before.set("queue", ["kept"]);
+    await before.close();
+    const state = join(dir, "state.json");
+    const saved = readFileSync(state, "utf8");
+    chmodSync(state, 0o000);
+    assert.throws(() => fileStore({ dir }), { code: "EACCES" });
+    chmodSync(state, 0o600);
+    assert.equal(readFileSync(state, "utf8"), saved);
+    assert.deepEqual(await fileStore({ dir }).get("queue"), ["kept"]);
+  },
+);
 
 test("file: a state file taken back to an older one still gives a new, higher epoch", async (t) => {
   const dir = tempDir(t);

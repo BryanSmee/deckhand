@@ -42,6 +42,7 @@ import {
   loadConfig,
   modelsServiceUrl,
   readConfigFile,
+  unwritableData,
   withModelCredentials,
 } from "../listener/config.mjs";
 import { activePassive } from "../lib/active.mjs";
@@ -193,6 +194,12 @@ try {
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
   console.error(error.message);
+  process.exit(1);
+}
+// Not root (#536): a data volume it can't write would fail run after run, so it doesn't start.
+const unwritable = unwritableData(config.dataDir);
+if (unwritable.length) {
+  for (const line of unwritable) console.error(line);
   process.exit(1);
 }
 const logDir = join(config.dataDir, "logs");

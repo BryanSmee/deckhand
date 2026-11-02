@@ -242,6 +242,33 @@ test("compose.yaml: only the runner mounts the Docker socket, only the models se
   assert.ok(models.volumes.some((v) => /:\/data\/credentials:ro$/.test(String(v))));
 });
 
+// The services but the runner run as node, without capabilities, and on a read-only root but the
+// github service: what a hole in one of them gets is that user's (#536). An exception has to say
+// why here.
+const AS_ROOT = { runner: "the host's Docker socket, root-equivalent anyway" };
+const WRITES_ITS_ROOT = { github: "its git mirrors and pushes' spool, in the temp folder" };
+
+test("compose.yaml and the Dockerfiles: every service but the runner runs as node, read-only and without capabilities", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  for (const name of Object.keys(RUNS)) {
+    const service = compose.services[name];
+    const dockerfile = readFileSync(join(root, service.build.dockerfile), "utf8");
+    // The final stage's last USER: what the released image runs as.
+    const final = dockerfile.split(/^FROM /m).at(-1);
+    const user = [...final.matchAll(/^USER (\S+)/gm)].at(-1)?.[1];
+    assert.ok(!service.user, `${name}: compose sets its user`);
+    if (AS_ROOT[name]) {
+      assert.equal(user, undefined, `${name}: root, for ${AS_ROOT[name]}`);
+      continue;
+    }
+    assert.equal(user, "node", `${name}: its Dockerfile's USER`);
+    assert.deepEqual(service.cap_drop, ["ALL"], `${name}: cap_drop`);
+    assert.ok(!service.cap_add, `${name}: cap_add`);
+    assert.deepEqual(service.security_opt, ["no-new-privileges:true"], `${name}: security_opt`);
+    assert.equal(service.read_only, WRITES_ITS_ROOT[name] ? undefined : true, `${name}: read_only`);
+  }
+});
+
 // The runner checks again what the orchestrator decided (the grants, the names it gives Docker
 // objects, the agents' volumes): given other values, it refuses every run, or checks against
 // other grants than the orchestrator built the spec from.

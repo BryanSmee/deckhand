@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { readFileSync } from "node:fs";
+import { constants, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ConfigError,
@@ -9,6 +9,7 @@ import {
   parseConfigFile,
   readConfigFile,
   repoAllowed,
+  unwritableData,
   withCredentialFiles,
 } from "../listener/config.mjs";
 
@@ -671,6 +672,95 @@ test("the plans' logins: found in the credentials folder unless their variable i
     join("/data", "credentials", "codex-auth.json"),
     join("/data", "credentials", "agy-auth.json"),
   ]);
+});
+
+test("the data volume: the orchestrator says what it can't write, anywhere in it, with the one-time chown", () => {
+  // A volume as the code joins its paths below /data (`\` on Windows): folder → its entries.
+  const at = (...parts) => join("/data", ...parts);
+  const entry = (name, kind = "dir") => ({
+    name,
+    isDirectory: () => kind === "dir",
+    isSymbolicLink: () => kind === "link",
+  });
+  const tree = {
+    "/data": [
+      entry("logs"),
+      entry("store"),
+      entry("queue.json", "file"),
+      entry("x", "link"),
+      entry("shots"),
+    ],
+    [at("logs")]: [entry("r1.json", "file")],
+    [at("store")]: [entry("state.json", "file"), entry("streams")],
+    [at("store", "streams")]: [entry("deliveries", "file")],
+    [at("shots")]: [entry("run1")],
+    [at("shots", "run1")]: [entry("a.png", "file")],
+  };
+  const list = (path) => tree[path];
+  const asked = [];
+  const denied =
+    (paths, code = "EACCES") =>
+    (path, mode) => {
+      asked.push([path, mode]);
+      if (paths.includes(path)) throw Object.assign(new Error("denied"), { code });
+    };
+  const chown =
+    /Compose: `docker compose stop orchestrator`, `docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 \/data`, then `docker compose up -d`\. Kubernetes: scale it to 0, then `fsGroup: 1000`/;
+  assert.deepEqual(unwritableData("/data", { access: () => {}, list }), []);
+
+  // What a root orchestrator still running during the chown leaves: store/'s files root's
+  // again, two levels down. Each said, then the chown, with the orchestrator stopped.
+  const state = at("store", "state.json");
+  const stream = at("store", "streams", "deliveries");
+  const again = unwritableData("/data", { access: denied([state, stream]), list });
+  assert.equal(again.length, 3);
+  assert.match(again[0], /^The orchestrator can't write .*state\.json \(EACCES\)$/);
+  assert.match(again[1], /^The orchestrator can't write .*deliveries \(EACCES\)$/);
+  assert.match(again[2], /^It runs as uid 1000/);
+  assert.match(again[2], chown);
+  // A file needs writing, a folder searching too; a link isn't followed.
+  assert.deepEqual(
+    asked.find(([path]) => path === state),
+    [state, constants.W_OK],
+  );
+  assert.deepEqual(
+    asked.find(([path]) => path === at("store")),
+    [at("store"), constants.W_OK | constants.X_OK],
+  );
+  assert.ok(!asked.some(([path]) => path === at("x")));
+
+  // shots/: its first level only. A run's screenshot folder is checked (made and deleted
+  // through it), not the screenshots in it: 90 days of them aren't read at every start. logs/'s
+  // files are (r1.json, in the count below).
+  const run = at("shots", "run1");
+  const png = join(run, "a.png");
+  asked.length = 0;
+  assert.match(
+    unwritableData("/data", { access: denied([run, png]), list })[0],
+    /run1 \(EACCES\)$/,
+  );
+  assert.equal(unwritableData("/data", { access: denied([png]), list }).length, 0);
+  assert.ok(!asked.some(([path]) => path === png));
+
+  // A volume from before, root's throughout (10 paths, the link and the screenshot not among
+  // them): a few, how many more, the hint once.
+  const everything = () => {
+    throw Object.assign(new Error("denied"), { code: "EACCES" });
+  };
+  const root = unwritableData("/data", { access: everything, list, shown: 2 });
+  assert.equal(root.length, 4);
+  assert.match(root[0], /^The orchestrator can't write \/data \(EACCES\)$/);
+  assert.match(root[2], /^… and 8 more in \/data$/);
+  assert.match(root[3], chown);
+
+  // Another cause (a volume mounted read-only): said as it is, without the chown.
+  const readOnly = unwritableData("/data", { access: denied(["/data"], "EROFS"), list });
+  assert.deepEqual(readOnly, ["The orchestrator can't write /data (EROFS)"]);
+  // Nothing there yet: made at start.
+  const missing = () => {
+    throw Object.assign(new Error("missing"), { code: "ENOENT" });
+  };
+  assert.deepEqual(unwritableData("/data", { access: missing, list: missing }), []);
 });
 
 test("the Antigravity CLI: GEMINI_API_KEY or a Google AI plan's login (AGY_AUTH_FILE), its version, tiers and volumes", () => {

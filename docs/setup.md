@@ -1241,6 +1241,52 @@ changes for you:
 - **The listener's keys**: a `run-token.key` or `run-token.pub` left in the orchestrator's data
   volume is no longer read. Delete them.
 
+### Upgrading: the orchestrator runs as `node` (#536)
+
+The orchestrator ran as root, though it holds no Docker socket since the runner service (#503).
+It now runs as the `node` user (uid 1000), with a read-only root filesystem and no capabilities,
+as edge does. What changes for you:
+
+- **Its volumes** (`data`, and the screenshots', `deckhand-screenshots` by default) were written
+  as root: the orchestrator can't write them now, and refuses to start, listing what it can't
+  write. Hand them over once, with the orchestrator stopped, instead of the usual update:
+
+  ```sh
+  docker compose pull
+  docker compose stop orchestrator
+  docker compose run --rm --no-deps --user root --cap-add CHOWN --entrypoint chown orchestrator -R 1000:1000 /data
+  docker compose up -d
+  ```
+
+  - **Stop it first.** The orchestrator of the earlier release runs as root and saves its
+    store every few seconds: left running, it makes `store/`'s files root's again right after
+    the `chown`. The sandboxes keep running meanwhile, as in any update. If you already ran
+    `docker compose up -d` and the new orchestrator refuses to start, the same four commands
+    apply.
+  - **The `chown`** runs a short container of the orchestrator's new image as root, with both
+    volumes mounted (the screenshots' at `/data/shots`), and nothing else. It keeps the
+    service's settings, so `--cap-add CHOWN` gives back the one capability `chown` needs:
+    without it, root gets `Operation not permitted`. Keep `-R`: the files in the volume are
+    root's too. The orchestrator checks the volume at start, so a file left behind is named
+    rather than failing later, but for the screenshots themselves (`shots/<run>/`, not read
+    at every start): one left root's fails only when it is served.
+
+  New volumes are the `node` user's from the start.
+
+- **On Kubernetes**, the orchestrator's pod refuses to start the same way on a claim the
+  earlier release wrote. A rolling update would start the new pod beside the old one, still
+  root, so: scale the orchestrator to 0, give its pod the security context in
+  [Kubernetes runner](#kubernetes-runner) (`fsGroup: 1000` hands its claims over as they are
+  mounted, or a one-time `chown` init container where the storage ignores `fsGroup`), then
+  update its image and scale it back.
+
+- **Your server folder** (`config.yaml`, the grants folder and its `policy/`) is read as uid
+  1000, as the policy service already reads it: the usual `0644` files and `0755` folders are.
+  A `config.yaml` it can't read stops it at start, with `EACCES`.
+- **The mount roots you grant** are resolved as uid 1000 too: a root, or a folder above it,
+  that uid 1000 can't search makes every mount a repo asks for in it refused ("doesn't exist,
+  or the listener can't see it"), not mounted. Make them searchable (`o+x` on the folders).
+
 ### Upgrading: the preview hook is gone (#574)
 
 Deckhand no longer runs a repository's `preview.command` on its pull requests' events: the hook
@@ -1534,6 +1580,27 @@ ignores them leaves the sandboxes unisolated, whatever the policy says.
   `/tmp`; a NetworkPolicy letting in the orchestrator, the github service and the runner alone (which asks it the grants) and letting nothing out keeps it as
   closed as Compose's internal network. Its pods may be two, behind a readiness probe on
   `/ready`, with `maxUnavailable: 0`: an update fails no decision.
+- **The orchestrator's pod** runs as the image's `node` user (#536), on a read-only filesystem:
+
+  ```yaml
+  securityContext: # the pod's
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000 # its data and screenshots' claims, writable by it
+  containers:
+    - name: orchestrator
+      securityContext:
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+        capabilities: { drop: [ALL] }
+  ```
+
+  A storage class that ignores `fsGroup` (`hostPath`, some NFS) leaves a claim an earlier
+  release wrote root's, and the orchestrator refuses to start, saying so. Hand it over once,
+  with the orchestrator scaled to 0, by an init container from its image with the same mounts,
+  removed once it has run: `runAsUser: 0`, `capabilities: { drop: [ALL], add: [CHOWN] }`,
+  `command: [chown, -R, "1000:1000", /data]`.
+
 - **The agents**: see [Agents on Kubernetes](#agents-on-kubernetes).
 - **Grace periods**: `terminationGracePeriodSeconds: 300` on the orchestrator's pods and the
   runner's, and about 30 on edge's and the egress proxy's. On SIGTERM the orchestrator lets the
