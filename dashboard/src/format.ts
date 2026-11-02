@@ -115,11 +115,13 @@ export function loopLine(t: Pick<Task, "review">): string | null {
 
 const SEVERITIES = ["critical", "high", "medium", "low"] as const;
 
-// A review's points, every finding weighed by its severity (not only the blocking ones): what
-// the task page compares a review with the one before it by. Never shown.
+// A review's points, every finding weighed by its severity (not only the blocking ones), and a
+// blocking comment as a medium finding (it caps the rating as one does); notes and follow-ups
+// weigh nothing: what the task page compares a review with the one before it by. Never shown.
 const WEIGHTS = { critical: 8, high: 5, medium: 3, low: 1 } as const;
-export const reviewScore = (r: Pick<ReviewRound, "counts">) =>
-  SEVERITIES.reduce((sum, s) => sum + (r.counts[s] ?? 0) * WEIGHTS[s], 0);
+export const reviewScore = (r: Pick<ReviewRound, "counts" | "comments">) =>
+  SEVERITIES.reduce((sum, s) => sum + (r.counts[s] ?? 0) * WEIGHTS[s], 0) +
+  (r.comments?.blocking ?? 0) * WEIGHTS.medium;
 
 // The last review against the one before it: "better" with fewer points, "worse" with more;
 // null when they weigh the same or it's the only one.
@@ -140,7 +142,8 @@ export function findingsLeft(t: Pick<Task, "review">): string | null {
   const last = r?.history.at(-1);
   if (!r || !["rounds-out", "stopped"].includes(r.loop) || !last?.blocking) return null;
   const parts: string[] = [];
-  let left = last.blocking;
+  const comments = last.comments?.blocking ?? 0;
+  let left = last.blocking - comments;
   for (const s of SEVERITIES) {
     const n = Math.min(last.counts[s] ?? 0, left);
     if (n) parts.push(`${n} ${s}`);
@@ -149,7 +152,10 @@ export function findingsLeft(t: Pick<Task, "review">): string | null {
   }
   const what = parts.length > 1 ? `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}` : parts[0];
   const after = last.round ? `after ${plural(last.round, "fix round")}` : "after the review";
-  return `${what ?? last.blocking} ${last.blocking === 1 ? "finding" : "findings"} left ${after}`;
+  const findings = last.blocking - comments;
+  const found = findings ? `${what ?? findings} ${findings === 1 ? "finding" : "findings"}` : null;
+  const said = comments ? plural(comments, "blocking comment") : null;
+  return `${[found, said].filter(Boolean).join(" and ")} left ${after}`;
 }
 
 // The loop's ends, where the task page offers to review its pull request again.
@@ -196,9 +202,14 @@ export function reviewOutdated(
 // A commit's short sha, as GitHub shows it.
 export const shortSha = (sha: string) => sha.slice(0, 7);
 
-// A review's findings by severity: "1 critical · 3 high", "no findings".
+// A review's findings by severity, then its comments and follow-ups: "1 critical · 3 high",
+// "1 low · 1 blocking comment · 2 notes · 1 follow-up", "no findings".
 export function roundCounts(r: ReviewRound): string {
   const parts = SEVERITIES.filter((s) => r.counts[s]).map((s) => `${r.counts[s]} ${s}`);
+  const { blocking = 0, notes = 0 } = r.comments ?? {};
+  if (blocking) parts.push(plural(blocking, "blocking comment"));
+  if (notes) parts.push(plural(notes, "note"));
+  if (r.followUps) parts.push(plural(r.followUps, "follow-up"));
   return parts.join(" · ") || "no findings";
 }
 

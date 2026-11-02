@@ -451,6 +451,8 @@ export function createHttp(ctx) {
     }
     // A push to a pull request waiting for CI (`review.ci`): the wait moves to its new head.
     if (event === "pull_request") admitted(ctx.reviews.pushed(event, payload));
+    // A merged pull request: the follow-ups its reviews listed, filed as issues.
+    if (event === "pull_request") admitted(ctx.reviews.closed(event, payload));
     // A GitHub Actions run that completed on a commit an auto-merge or a review waits on.
     if (event === "workflow_run") admitted(ctx.reviews.checksDone(event, payload));
     // The operator's checks first, so only comments that may run cost a config read.

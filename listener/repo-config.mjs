@@ -59,6 +59,7 @@ const REVIEW_KEYS = [
   "ci_wait",
   "ci_fix",
   "request",
+  "follow_ups",
 ];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
@@ -409,6 +410,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     ciWait: CI_WAIT_MINUTES,
     ciFix: CI_FIX_RUNS,
     request: [],
+    // Deckhand files the reviews' follow-ups as issues once a pull request is merged
+    // (reviews.mjs fileFollowUps()), unless `follow_ups: false`.
+    followUps: true,
   };
   if (value === true) {
     settings.review = review;
@@ -460,6 +464,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
       const cap = config.maxFixRounds;
       if (Number.isInteger(v) && v >= 0 && v <= cap) review.ciFix = v;
       else bad(k, `expected a whole number of CI fix runs from 0 to ${cap}`);
+    } else if (k === "follow_ups") {
+      if (typeof v === "boolean") review.followUps = v;
+      else bad(k, "expected true or false");
     } else if (k === "request") {
       // Reviewers requested on Deckhand's ready pull requests (reviewers.mjs): only narrows
       // ALLOWED_USERS, like `users`; never a team (GitHub's "org/team").
@@ -516,7 +523,10 @@ export function reviewText(review) {
     review.maxAllowedSeverity === "medium" &&
     "medium findings allowed";
   const request = review.request?.length && `reviewers: ${review.request.join(", ")}`;
-  return [when, ci, fix, merge, medium, request, review.instructions].filter(Boolean).join(" · ");
+  const followUps = review.followUps === false && "follow-ups not filed";
+  return [when, ci, fix, merge, medium, request, followUps, review.instructions]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 // The operator's value of `field`, as the repo's default: a file can only narrow or replace it.

@@ -113,6 +113,7 @@ review:
   # ci_fix: 1 # CI fix runs per pull request, with fix (0 to the operator's MAX_FIX_ROUNDS)
   # request: [alice] # reviewers asked on Deckhand's pull request once it is ready, and again
   #                  # after a fix pushed (see Reviewers below); allowed users only
+  # follow_ups: false # don't file the reviews' follow-ups as issues after a merge (on by default)
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -170,6 +171,7 @@ projects:
 | `review.ci`                             | `false`                                 | `wait`: an automatic review waits for CI, and a failure starts a CI fix run instead (see CI before the review)                                  |
 | `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                                         |
 | `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                              |
+| `review.follow_ups`                     | `true`                                  | `false`: the reviews' follow-ups aren't filed as issues once a pull request is merged (see Reviews)                                             |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                     |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                      |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                  |
@@ -485,10 +487,62 @@ those of brainstorms (`brainstorm_agent`, `brainstorm_model`).
 
 ### Reviews
 
-The built-in review reads a pull request and posts **one GitHub review**: its findings grouped
-by severity (`critical`, `high`, `medium`, `low`), each with its file and line and a suggested
-fix, a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
+The built-in review reads a pull request and posts **one GitHub review**, in three sections,
+then a rating out of 10 and a verdict. It never pushes, edits code or creates issues: its
 token only reads, and Deckhand posts the review.
+
+- **Must fix**: what is wrong in this pull request (an acceptance criterion not met, a claim
+  the code contradicts, a security hole, a bug the change introduces, a missing test for a
+  decision it makes), grouped by severity (`critical`, `high`, `medium`, `low`), each with its
+  file and line and a suggested fix. These are the findings: they block, cap the rating, and
+  go to the fix run, as below.
+- **Follow-ups**: real problems that aren't this pull request's to fix: a bug in code it
+  didn't change, duplication with code it didn't touch, a refactor or an improvement beyond
+  the issue. Each has a title and a short description. They **never block**, never cap the
+  rating, and the fix run leaves them alone. **Once the pull request is merged**, Deckhand
+  files each one as an issue labelled `follow-up` (the label is created if the repository
+  doesn't have it), whose body links the pull request ("Follow-up of #5") and the review it
+  came from, then lists them in one comment on the pull request. The same title in several
+  reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
+  is linked instead; each merge files its follow-ups once, across redeliveries and restarts
+  (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
+  comments (only the comments Deckhand posted them as, recorded in `reviews.json`). Only a
+  bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
+  `- No follow-ups.` or `- **None found**` files nothing. An item under the wrong heading is
+  never filed, but posted under Comments: a blocking comment there (`- **blocking** …`, in
+  any form Comments reads) blocks as one under Comments does; a note stays a note and keeps
+  the review's own verdict; a finding (`- high: …`) there, and any other bullet without a bold
+  title, is posted as **unclear** (below).
+  A pull request closed without a merge files none, and a merge files at most 10 (the rest
+  listed by title in the comment). The issue's body says the text is a review model's
+  output, to check against the code, and quotes it. The review is told not to list again a
+  follow-up an earlier review of Deckhand's listed. **`follow_ups: false`** turns the filing
+  off (the review's prompt, its Follow-ups section and the fix run's message say they are left
+  to the maintainer): the repository's config is read again from the default branch at the merge, and a
+  `review` block that is gone, or a config with errors, files nothing either.
+- **Comments**: remarks that aren't defects (a naming choice, a question, a suggestion, a
+  nit), each marked **blocking** or **note**. A note never blocks nor caps the rating; the fix
+  run applies it only when it is cheap and in scope, and a note alone never starts one. Nits
+  are notes, not low findings. A blocking comment blocks like a finding, **whatever
+  `max_allowed_severity` says** (the reviewer marked it on purpose), caps the rating at 8, and
+  goes to the fix run. The kind is read in bold, italics, backticks, brackets or
+  parentheses, or bare before a separator (`blocking: …`). A blocking comment put under Must fix
+  blocks as one under Comments does, and a note there is posted under Comments and keeps the
+  review's own verdict. A comment whose kind can't be read is posted as **unclear**, and
+  so is an item under Must fix that is no finding: when the review's own verdict asks for
+  changes, it blocks as a blocking comment does (it may be why), and the fix run is told to
+  treat it as blocking; with the review's "comment", it is posted as a note and
+  doesn't block, nor does the fix run treat it as blocking. A deeper
+  heading stays in its section (`### 🟠 High (1)` under Must fix, as Deckhand posts them);
+  any other heading after the review's own (`## Checks`, `## Blocking comments`) ends it.
+  Under it, a finding or a comment still reads as one (a blocking one blocks), nothing is a
+  follow-up, and anything else is no item but keeps the review's own "request changes". A review's verdict reads "comment" on follow-ups
+  and notes alone only when its Must fix section says `None.` and everything under Must fix
+  and Comments could be read.
+
+A reply in the format from before the sections (a `## Findings` list, as a repository's own
+`review.instructions` may still ask for) reads as must-fix findings, and so do the reviews
+Deckhand posted before them, when the dashboard's Fix reads one back.
 
 - **Claims and acceptance criteria first.** Before security, the review lists the
   acceptance criteria of the issue the pull request closes (and the decisions settled in
@@ -498,7 +552,7 @@ token only reads, and Deckhand posts the review.
   verify (a check it can't run) is said in the summary, not filed as a finding. Unsure
   between two severities, it picks the higher one.
 - **The rating follows the findings**: at most 3/10 with a critical finding, 5 with a high
-  one, 8 with a medium one; 10 only with no finding above low. Deckhand caps the rating
+  one, 8 with a medium one or a blocking comment; 10 only with no finding above low. Deckhand caps the rating
   it posts by these numbers, whatever the review wrote; below the cap, it is shown as
   written.
 
@@ -515,7 +569,10 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
 - **`/mode review`** on a pull request, from an allowed user, reviews it now; what the comment
   adds is what the review should look at. On an issue it is refused, with a reply.
 - **The verdict on GitHub**: changes requested when there is a critical, high or medium
-  finding, a comment otherwise; the verdict in the review's text says "request changes" then
+  finding or a blocking comment, a comment otherwise (follow-ups and notes alone included,
+  whose "request changes" verdict, should the review write one, reads "comment" when its Must
+  fix section says `None.` and everything under it and Comments could be read, as under
+  Comments above); the verdict in the review's text says "request changes" then
   too, whatever the review wrote. It never approves: that stays the maintainer's. GitHub
   doesn't let the App request changes on its own pull requests: those get a comment review, the
   verdict in its text. A reply whose format Deckhand can't read is posted as a comment
@@ -525,13 +582,16 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
 - **No loops**: without `fix`, the review starts no run. To act on it, comment with the trigger
   ("Deckhand, fix the high findings").
 - **`fix: true`**: a review that requests changes (a critical, high or medium finding, above
-  `max_allowed_severity`) on Deckhand's own pull request, linked to the issue it worked on,
-  starts a work run in that issue's session. Its message is the review's findings, all of them
-  (medium and low too), with the instruction to fix each one or say why not, rerun the checks
-  and push; it pushes like any work run, and replies on the pull request. A finding it can't
-  fix because the change the issue needs is one only you can make (a file it may not edit, a
-  write Deckhand refuses) is a question instead: its reply asks, and the loop stops at the
-  needs-input label. A change only a finding asks for is never asked: it is left, and said why. Not while the issue
+  `max_allowed_severity`, or a blocking comment) on Deckhand's own pull request, linked to the
+  issue it worked on, starts a work run in that issue's session. Its message is the review's
+  findings, all of them (medium and low too), and its comments, with the instruction to fix
+  each finding and blocking comment or say why not, to apply a note only when it is cheap and
+  in scope, rerun the checks and push; the follow-ups are only counted there, as Deckhand files
+  them after the merge; it pushes like any work run, and replies on the pull request. A finding
+  it can't fix because the change the issue needs is one only you can make (a file it may not
+  edit, a write Deckhand refuses) is a question instead: its reply asks, and the loop stops at
+  the needs-input label. A change only a finding asks for is never asked: it is left, and said
+  why. Not while the issue
   has a run going or queued (a maintainer's comment came first) or the pull request or its
   issue has the needs-input label. With `merge`, once it is over, Deckhand reviews the
   commit it pushed (a review that starts by itself, so `deny_review` applies), which decides
@@ -544,10 +604,11 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   `merge`. The loop stops when:
   - **the threshold is met**: the last review has no finding above `max_allowed_severity`
     (`low`, the default: no critical, high or medium finding; `medium`: no critical or high
-    one). That review is posted as a comment and starts no fix run;
-  - **the rounds run out**: after `n` fix runs, the last review still has findings above it. A
-    "No more fix runs" comment names their severities and the number of fix runs (with
-    `merge`, the "Not merged automatically" comment says it instead);
+    one) and no blocking comment. That review is posted as a comment and starts no fix run;
+  - **the rounds run out**: after `n` fix runs, the last review still has findings above it
+    or a blocking comment. A "No more fix runs" comment names their severities (and the
+    blocking comments) and the number of fix runs (with `merge`, the "Not merged
+    automatically" comment says it instead);
   - **a fix ends badly**: it failed or pushed nothing (its push isn't reviewed), or a
     [policy](#policies) refused the fix (`deny_fix`, a comment says why) or the review after
     it (`deny_review`);
@@ -618,7 +679,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   run, so `fix: 3` can cost up to four reviews and three work runs per pull request.
 
 `on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
-`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix` and `request` are its only
+`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix`, `request` and `follow_ups` are its only
 keys: any other, or a bad value, is an error.
 
 #### Reviewers
@@ -726,8 +787,9 @@ nothing blocking. It takes both sides:
 **The flow**, all in Deckhand (never in a sandbox, whose token can't merge):
 
 1. The pull request turns ready, and the review runs as usual.
-2. Nothing blocking (no critical, high or medium finding; medium allowed with
-   `max_allowed_severity`, below): the merge, after the gates below.
+2. Nothing blocking (no critical, high or medium finding, medium allowed with
+   `max_allowed_severity`, below, and no blocking comment): the merge, after the gates below.
+   Its follow-ups are filed as issues once it is merged, as after any merge (see Reviews).
 3. Blocking findings, with `fix`: the fix loop runs as usual (see Reviews). The review that
    ends it decides the merge (without `fix`, the first review decides it): it merges only
    with nothing blocking, as in step 2.
@@ -748,8 +810,9 @@ they don't block), the review is posted as a comment rather than "request change
 write one anyway), starts no fix run, and merges, the medium findings left as its comments
 for the maintainer. So with `fix` too, a review with only medium (and low) findings spends no
 fix run on them: the loop stops there. Without `merge`, it is the fix loop's threshold alone.
-Critical and high findings always block, and a "request changes" verdict with only low
-findings still does. `low`, the default: any medium finding blocks.
+Critical and high findings always block, and so do blocking comments; a "request changes"
+verdict with only low findings still does. `low`, the default: any medium finding blocks.
+Follow-ups and notes never block a merge.
 
 **The gates**, asked of GitHub right before the merge; each refusal is a comment:
 
