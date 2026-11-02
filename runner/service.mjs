@@ -95,17 +95,27 @@ function named(value, what) {
   return value;
 }
 
+// What `agy models` reaches when it refreshes the login (checked against agy 1.4.0): Google's
+// OAuth token endpoint, then the CLI's own calls (../listener/agents/antigravity.mjs hosts),
+// tunnelled, never relayed: this is the one place the real tokens go out. Its telemetry stays
+// refused, as for runs.
+export const REFRESH_HOSTS = ["oauth2.googleapis.com", ...antigravity.hosts];
+
 // The Antigravity login's refresh (../models/antigravity-login.mjs, the models service's, #504):
 // `agy models` in a short container of its own on the login's volume, the token file in on
 // stdin (its expiry in the past, so that `agy` refreshes it) and the one `agy` left out. Outside
 // the runs' networks (INSTALL_NETWORK, as the installs): no repo or agent input runs here. Only
-// that: the caller sends the file, never a container's spec. → { code, out, err }, or null for
-// a backend without short containers.
+// that: the caller sends the file, never a container's spec. On Kubernetes, a pod of its own
+// (../listener/runner/kube-images.mjs runJob()): the login's volume an emptyDir, gone with it,
+// and `hosts` what it reaches through the egress proxy (Google's OAuth, then `agy`'s own
+// calls); its agent installed by an init container when it has no claim (`agent`).
+// → { code, out, err }, or null for a backend without short containers.
 export function loginRefresh({ config, images, jobs }) {
   if (!jobs?.run) return null;
   return async (input) => {
     await images.installAgent(antigravity, () => {});
     const { code, out, err } = await jobs.run({
+      name: "antigravity-refresh",
       image: config.image,
       network: "install",
       user: SANDBOX_USER,
@@ -116,6 +126,8 @@ export function loginRefresh({ config, images, jobs }) {
       ],
       entrypoint: "deckhand-antigravity-refresh",
       input,
+      hosts: REFRESH_HOSTS,
+      agent: antigravity.install(config),
     });
     return { code, out: String(out ?? ""), err: String(err ?? "") };
   };

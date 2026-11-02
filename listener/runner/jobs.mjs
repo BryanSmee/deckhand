@@ -1,6 +1,7 @@
 // The Docker runner's short containers that aren't sandboxes: an agent's install, a cache
-// volume's chown and the Antigravity login's refresh (jobs: run()). A backend without them
-// refuses what needs them (../../models/antigravity-login.mjs).
+// volume's chown and the Antigravity login's refresh (jobs: run()). Kubernetes runs that refresh
+// in a pod of its own (kube-images.mjs runJob()). A backend without them refuses what needs
+// them (../../models/antigravity-login.mjs).
 import { envArgs, hardening, userArg, volumeArgs } from "../docker.mjs";
 
 export function createDockerJobs({ config, docker }) {

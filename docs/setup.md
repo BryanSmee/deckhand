@@ -992,7 +992,8 @@ Then restart the models service and the orchestrator. The models service logs `A
 Google AI plan's login, from /data/credentials/agy-auth.json` at start, or why it can't use it.
 When the access token is within 5 minutes of its expiry, it has `agy` refresh it: the runner runs
 `agy models` in a short container of the sandbox image, on a volume of its own
-(`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs), once for
+(`<AGY_VOLUME>-login`), outside the runs' networks (`INSTALL_NETWORK`, as the installs; on
+Kubernetes, a pod of its own: [Agents on Kubernetes](#agents-on-kubernetes)), once for
 all runs, and the models service keeps the new token in its store, sealed. When Google refuses
 the refresh (the login was revoked), runs fail with "sign in with `agy` again": repeat the steps
 above; the models service reads the new file without a restart. `GEMINI_API_KEY`, when set too, wins.
@@ -1532,7 +1533,9 @@ runner expects ([Namespaces](#namespaces) says which goes where).
 
 - **RBAC**: a Role for the runner's ServiceAccount (edge and the orchestrator need none), in
   the sandboxes' namespace: `create`, `get`, `list` and `delete` on `pods`, `secrets` and
-  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, and
+  `persistentvolumeclaims` (the agents', caches' and sessions'), `get` on `pods/log`, `create`
+  and `get` on `pods/attach` (the Antigravity CLI's login refresh,
+  [Agents on Kubernetes](#agents-on-kubernetes): `create` from Kubernetes 1.35, `get` before), and
   `list` on `events` (why a pod is stuck) and `networkpolicies` (`networking.k8s.io`). With
   the services in a namespace of their own, `update` on `secrets` there too (the registry's
   copy), and another Role in the services' namespace: `get` on `services` and `pods`, `list`
@@ -1685,8 +1688,7 @@ can't pull) is removed, and its run fails with Kubernetes' reason in its reply.
 
 Not on Kubernetes yet: a run whose repository has host mounts (`mounts`) is refused, with a reply naming the runner, and so is one that would get a
 container engine (`docker`; a run without the `docker` capability, a fork's or one without `SANDBOX_ENGINE` goes without,
-as under Docker), or its own image (`dockerfile`) without `KUBERNETES_REGISTRY`. So is the
-Antigravity CLI's plan login, which the runner refreshes in a container.
+as under Docker), or its own image (`dockerfile`) without `KUBERNETES_REGISTRY`.
 
 ### Namespaces
 
@@ -1808,6 +1810,18 @@ every sandbox mounts read-only, as on Docker:
   Pending (the init container running), the egress proxy lets it reach the agent's install
   hosts only, nothing of the run's own; once the sandbox starts, those hosts are gone again.
   A failed install fails the run, with the installer's output in the run's log.
+
+The Antigravity CLI's plan login ([Antigravity CLI](#antigravity-cli)) is refreshed by a pod of
+its own, `<NAME_PREFIX>-job-antigravity-refresh`, in the sandboxes' namespace, which meets Pod
+Security `restricted` as the sandbox's user, with no ServiceAccount token and no Secret. The
+runner sends it the token file on its stdin and reads back the refreshed one from its stdout,
+through the API server (`pods/attach`, over WebSocket, `v5.channel.k8s.io`: Kubernetes 1.30 or
+later), never through its spec; `~/.gemini` is an `emptyDir` there, no claim. It mounts the
+agent's claim read-only (or, without one, installs the CLI in an init container, as sandboxes
+do), and is labelled `deckhand.role: install`, so the install pods' NetworkPolicies cover it:
+the egress proxy lets it reach Google's OAuth (`oauth2.googleapis.com`) and the CLI's own hosts
+only, tunnelled. It is removed once it ends, whatever its outcome; the kubelet's copy of its
+log (which holds the refreshed file) goes with it.
 
 The shared claims (agents', caches') are written by their pods' users, uid 1001 for the
 installs and 1000 for the sandboxes, as the pods' `fsGroup` makes a new claim theirs. That

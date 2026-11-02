@@ -1287,7 +1287,12 @@ point at the models service, and its calls go to Google directly, so it is kept 
   `POST /logins/antigravity/refresh`, which only the models service may call: it never holds the
   Docker socket) in a short container of the sandbox image (no capabilities, as `node`), on a
   volume of its own (`<AGY_VOLUME>-login`), outside the runs' networks, with the login's expiry
-  set in the past; it reads back the file `agy` wrote and keeps it sealed in its store. One
+  set in the past; it reads back the file `agy` wrote and keeps it sealed in its store. On
+  Kubernetes it is a pod of its own (Pod Security `restricted`, no ServiceAccount token, no
+  Secret, `~/.gemini` an `emptyDir`): the file goes in on its stdin and comes back on its
+  stdout through the API server's `pods/attach`, never in its spec, and the egress proxy lets
+  it reach Google's OAuth and the CLI's own hosts only, tunnelled. It is removed once it ends,
+  whatever its outcome. One
   refresh at a time, for all runs and every copy of the service. The login's tokens are redacted
   from runs' output like the other credentials.
 

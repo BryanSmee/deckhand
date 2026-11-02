@@ -550,7 +550,7 @@ test("with GEMINI_API_KEY: only agy's calls go on, not files, cached contents or
 test("a runner without short containers refuses the refresh, naming itself: nothing installed", async (t) => {
   const file = loginFile(t, tokenFile("ya29.old", "2026-10-17T12:04:00Z"));
   let installs = 0;
-  // The runner has none (Kubernetes): no refresh, so nothing to install for one.
+  // The runner has none: no refresh, so nothing to install for one.
   const refresh = loginRefresh({ config, images: { installAgent: () => installs++ }, jobs: {} });
   assert.equal(refresh, null);
   const login = createAntigravityLogin({

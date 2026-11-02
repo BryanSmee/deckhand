@@ -8,7 +8,8 @@
 //
 // The refresh is `agy`'s own: the service doesn't reimplement Google's OAuth with a client
 // secret taken from the binary. When the access token is within 5 minutes of its expiry, the
-// runner service runs `agy models` in a short container on the login's own volume
+// runner service runs `agy models` in a short container on the login's own volume (a pod of its
+// own on Kubernetes, the file in and out through the API server's attach)
 // (../sandbox/agents/antigravity/refresh, ../runner/service.mjs loginRefresh()), with the file's
 // expiry set in the past so that `agy` refreshes it, and hands the file back: the models service
 // never holds the Docker socket.

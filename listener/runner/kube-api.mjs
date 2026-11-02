@@ -5,6 +5,7 @@
 import { readFileSync } from "node:fs";
 import { request } from "node:https";
 import { Readable } from "node:stream";
+import { exchange, handshake, handshakeProblem, inClusterUpgrade } from "./kube-attach.mjs";
 
 export const SERVICE_ACCOUNT = "/var/run/secrets/kubernetes.io/serviceaccount";
 
@@ -54,9 +55,11 @@ export function apiBase(env = process.env) {
 // `base`: the API server's URL; `token()`: the bearer token, read at each call, as the
 // kubelet rotates it; `namespace`: the one relative paths are in (the runner has one API per
 // namespace, index.mjs: the sandboxes' and the services'); `timeoutMs`: how long a call (not
-// a stream, whose caller says when to stop) waits for its whole answer.
+// a stream, whose caller says when to stop) waits for its whole answer; `upgrade`: what opens
+// a WebSocket for attach() (kube-attach.mjs inClusterUpgrade(), the tests' own).
 export function createKubeApi({
   fetch = inClusterFetch(),
+  upgrade = inClusterUpgrade({ ca: () => readFileSync(`${SERVICE_ACCOUNT}/ca.crt`) }),
   base = apiBase(),
   token = () => readFileSync(`${SERVICE_ACCOUNT}/token`, "utf8").trim(),
   namespace,
@@ -135,5 +138,29 @@ export function createKubeApi({
     // The answer itself, its body read as it comes (a followed log), until `signal` aborts:
     // no time limit of its own.
     stream: (path, query, signal) => call("GET", path, { query, signal }),
+    // A container's stdin, stdout and stderr (`path`: pods/<name>/attach, kube-attach.mjs):
+    // `input`, then its end; → { out, err, error } once the container ended. Until `signal`
+    // aborts, as stream().
+    attach: async (path, query, { input, signal } = {}) => {
+      const { key, headers } = handshake();
+      const res = await upgrade(
+        url(path, query),
+        { authorization: `Bearer ${token()}`, ...headers },
+        signal,
+      );
+      if (res.status !== 101) {
+        let message = res.text ?? "";
+        try {
+          message = JSON.parse(message).message ?? message;
+        } catch {}
+        throw new KubeError(`GET ${path}`, res.status, message);
+      }
+      const problem = handshakeProblem(res, key);
+      if (problem) {
+        res.socket.destroy();
+        throw new KubeError(`GET ${path}`, res.status, problem);
+      }
+      return exchange(res, { input, signal });
+    },
   };
 }

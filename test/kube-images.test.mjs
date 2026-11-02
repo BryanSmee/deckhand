@@ -23,6 +23,7 @@ import {
 import { INSTALL_USER } from "../listener/runner/kubernetes.mjs";
 import { authsOf, challenge, createRegistry, parseRef } from "../listener/runner/registry.mjs";
 import { SANDBOX_USER } from "../listener/sandbox-spec.mjs";
+import { loginRefresh } from "../runner/service.mjs";
 import { buildContext, contextBlob, isRoot, needsBash, tempDir, withBlobs } from "./helpers.mjs";
 
 const REGISTRY = "registry.example.com";
@@ -1171,4 +1172,198 @@ test("builderIsolationProblem: a DNS rule without `to` is DNS, nothing more", ()
     builderIsolationProblem([policy({ ports: [{ port: 53, endPort: 65535 }] })], labels),
     /lets the BuildKit daemon reach anything/,
   );
+});
+
+// The Antigravity login's refresh on Kubernetes (runner/service.mjs loginRefresh(), with
+// runJob() as its jobs): the job's pod runs until it is attached to, then ends with
+// `exitCode`; `attach(input)` answers what the container printed. `attached`: the inputs sent.
+function refreshOn(t, { exitCode = 0, attach, ...options } = {}) {
+  const s = setup(t, options);
+  const find = s.api.find;
+  const ended = new Set();
+  s.api.find = async (path) => {
+    const found = await find(path);
+    if (!found || !path.startsWith("pods/dh-job-")) return found;
+    const done = ended.has(path);
+    return {
+      ...found,
+      status: {
+        phase: done ? (exitCode ? "Failed" : "Succeeded") : "Running",
+        podIP: "10.244.2.9",
+        containerStatuses: [{ state: done ? { terminated: { exitCode } } : { running: {} } }],
+      },
+    };
+  };
+  const attached = [];
+  s.api.attach = async (path, query, { input }) => {
+    attached.push({ path, query, input });
+    try {
+      return await attach(input);
+    } finally {
+      ended.add(path.replace(/\/attach$/, ""));
+    }
+  };
+  const refresh = loginRefresh({
+    config: { ...config, agyLoginVolume: "dh-antigravity-login" },
+    images: s.images,
+    jobs: { run: s.backend.runJob },
+  });
+  return { ...s, refresh, attached };
+}
+
+test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, no Secret, no token, removed", async (t) => {
+  const reached = {};
+  const { refresh, attached, created, objects, removed, images } = refreshOn(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    attach: async (input) => {
+      // While it runs: Google's OAuth and agy's own hosts, tunnelled; nothing else.
+      for (const host of [
+        "oauth2.googleapis.com",
+        "daily-cloudcode-pa.googleapis.com",
+        "github.com",
+        "play.googleapis.com",
+        "example.com",
+      ]) {
+        reached[host] = await images.egressFor("10.244.2.9", host);
+      }
+      return { out: `${input} refreshed`, err: "" };
+    },
+  });
+  assert.deepEqual(await refresh('{"token":"old"}'), {
+    code: 0,
+    out: '{"token":"old"} refreshed',
+    err: "",
+  });
+  assert.deepEqual(attached, [
+    {
+      path: "pods/dh-job-antigravity-refresh/attach",
+      query: { container: "job", stdin: "true", stdout: "true", stderr: "true" },
+      input: '{"token":"old"}',
+    },
+  ]);
+  assert.deepEqual(reached["oauth2.googleapis.com"], {
+    allowed: true,
+    private: false,
+    cache: false,
+    decrypt: false,
+    relay: false,
+  });
+  assert.equal(reached["daily-cloudcode-pa.googleapis.com"].allowed, true);
+  assert.equal(reached["daily-cloudcode-pa.googleapis.com"].relay, false);
+  // The agent is in its claim already: no install host.
+  for (const host of ["github.com", "play.googleapis.com", "example.com"]) {
+    assert.equal(reached[host].allowed, false, host);
+  }
+  // Gone with its pod.
+  assert.equal(await images.egressFor("10.244.2.9", "oauth2.googleapis.com"), null);
+
+  const pod = created.find((o) => o.metadata.name === "dh-job-antigravity-refresh");
+  assert.equal(pod.metadata.labels["deckhand.role"], "install");
+  const { spec } = pod;
+  assert.equal(spec.restartPolicy, "Never");
+  assert.equal(spec.automountServiceAccountToken, false);
+  assert.equal(spec.enableServiceLinks, false);
+  assert.equal(spec.initContainers, undefined);
+  assert.deepEqual(spec.securityContext, {
+    runAsNonRoot: true,
+    runAsUser: SANDBOX_USER.uid,
+    runAsGroup: SANDBOX_USER.gid,
+    fsGroup: SANDBOX_USER.gid,
+    fsGroupChangePolicy: "OnRootMismatch",
+    seccompProfile: { type: "RuntimeDefault" },
+  });
+  const [c] = spec.containers;
+  assert.deepEqual(c.command, ["deckhand-antigravity-refresh"]);
+  assert.equal(c.stdin, true);
+  assert.equal(c.stdinOnce, true);
+  assert.deepEqual(c.securityContext, {
+    allowPrivilegeEscalation: false,
+    capabilities: { drop: ["ALL"] },
+    runAsNonRoot: true,
+    seccompProfile: { type: "RuntimeDefault" },
+  });
+  // No Secret anywhere: neither envFrom nor a value from one, nor a volume of one; the login
+  // isn't in its spec.
+  assert.equal(c.envFrom, undefined);
+  assert.ok(c.env.every((e) => e.value !== undefined && !e.valueFrom));
+  assert.ok(!JSON.stringify(pod).includes("old"));
+  const env = Object.fromEntries(c.env.map((e) => [e.name, e.value]));
+  assert.equal(env.AGY_VERSION, "1.4.0");
+  assert.equal(env.HTTPS_PROXY, "http://egress:3128");
+  // The agent's claim read-only; the login's home an emptyDir, no claim of its own.
+  assert.deepEqual(c.volumeMounts, [
+    { name: "v0", mountPath: "/opt/antigravity", readOnly: true },
+    { name: "v1", mountPath: "/home/node/.gemini" },
+  ]);
+  assert.deepEqual(spec.volumes, [
+    { name: "v0", persistentVolumeClaim: { claimName: "dh-antigravity", readOnly: true } },
+    { name: "v1", emptyDir: {} },
+  ]);
+  assert.ok(!created.some((o) => o.kind === "Secret"));
+  assert.ok(!created.some((o) => o.metadata.name === "dh-antigravity-login"));
+  assert.ok(removed.includes("pods/dh-job-antigravity-refresh"));
+  assert.equal(objects.pods.size, 0);
+});
+
+test("Kubernetes: without an agent claim, the refresh pod installs the CLI in an init container", async (t) => {
+  let reached;
+  const { refresh, created, images } = refreshOn(t, {
+    attach: async () => {
+      reached = await images.egressFor("10.244.2.9", "github.com");
+      return { out: "{}", err: "" };
+    },
+  });
+  await refresh("{}");
+  const { spec } = created.find((o) => o.metadata.name === "dh-job-antigravity-refresh");
+  const [init] = spec.initContainers;
+  assert.deepEqual(init.command, ["deckhand-install-antigravity"]);
+  assert.equal(init.securityContext.runAsUser, INSTALL_USER.uid);
+  assert.deepEqual(init.volumeMounts, [{ name: "v0", mountPath: "/opt/antigravity" }]);
+  const env = Object.fromEntries(init.env.map((e) => [e.name, e.value]));
+  assert.equal(env.AGY_VERSION, "1.4.0");
+  assert.equal(env.AGY_SHA256, "x64:ab");
+  assert.deepEqual(spec.volumes[0], { name: "v0", emptyDir: {} });
+  // Its install's hosts too, for its init container.
+  assert.equal(reached.allowed, true);
+});
+
+test("Kubernetes: a refresh that fails or can't be attached to says so, and its pod goes all the same", async (t) => {
+  const failed = refreshOn(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    exitCode: 1,
+    attach: async () => ({ out: "", err: "token refresh failed: invalid_grant" }),
+  });
+  assert.deepEqual(await failed.refresh("{}"), {
+    code: 1,
+    out: "",
+    err: "token refresh failed: invalid_grant",
+  });
+  assert.ok(failed.removed.includes("pods/dh-job-antigravity-refresh"));
+
+  const cut = refreshOn(t, {
+    kubernetes: { agentStorageClass: "nfs" },
+    attach: async () => {
+      throw new Error("GET pods/dh-job-antigravity-refresh/attach: forbidden");
+    },
+  });
+  const result = await cut.refresh("{}");
+  assert.equal(result.code, -1);
+  assert.match(result.err, /attaching to the pod dh-job-antigravity-refresh: .*forbidden/);
+  assert.ok(cut.removed.includes("pods/dh-job-antigravity-refresh"));
+  assert.equal(cut.objects.pods.size, 0);
+});
+
+test("Kubernetes: a job that asks for root or a capability is refused, no pod made", async (t) => {
+  const { backend, created } = setup(t);
+  const job = { name: "x", image: BASE, network: "install", entrypoint: "true" };
+  await assert.rejects(backend.runJob({ ...job, user: { uid: 0 } }), /never root/);
+  await assert.rejects(
+    backend.runJob({ ...job, user: SANDBOX_USER, caps: ["CHOWN"] }),
+    /adds no capabilities/,
+  );
+  await assert.rejects(
+    backend.runJob({ ...job, user: SANDBOX_USER, network: "none" }),
+    /install network, not none/,
+  );
+  assert.ok(!created.some((o) => o.kind === "Pod"));
 });
