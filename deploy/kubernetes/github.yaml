@@ -27,7 +27,7 @@ spec:
       # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
       enableServiceLinks: false
       automountServiceAccountToken: false
-      # Its drain (DRAIN_SECONDS, 280 s: pushes, clones).
+      # The preStop pause (10 s), then its drain (DRAIN_SECONDS, 280 s: pushes, clones).
       terminationGracePeriodSeconds: 300
       securityContext:
         runAsNonRoot: true
@@ -70,6 +70,12 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 6
+          # The old copy keeps taking connections until the Service no longer sends it any
+          # (lifecycle.preStop: docs/services.md, Draining).
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
           # Its /tmp is a tmpfs (below), charged to this pod: its memory request covers it and
           # the process's own, so the scheduler keeps the room, and the limit bounds both by the
           # pod's own cgroup. Raise the three together (docs/kubernetes.md, Temporary files).

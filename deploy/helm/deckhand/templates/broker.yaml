@@ -24,7 +24,7 @@ spec:
       serviceAccountName: deckhand-broker
       enableServiceLinks: false
       automountServiceAccountToken: true
-      terminationGracePeriodSeconds: 35
+      terminationGracePeriodSeconds: 45
       {{- include "deckhand.podSecurityContext" false | nindent 6 }}
       {{- if not $redis }}
       {{- include "deckhand.sameNode" "deckhand-broker" | nindent 6 }}
@@ -43,6 +43,10 @@ spec:
             {{- include "deckhand.redisStore" "broker" | nindent 12 }}
             {{- end }}
           {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
           {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
           volumeMounts:
             - name: key

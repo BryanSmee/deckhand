@@ -9,13 +9,17 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { DRAIN_MS as BROKER_DRAIN_MS } from "../broker/server.mjs";
 import { appSecrets, keys } from "../deploy/kubernetes/secrets.mjs";
 import { convertManifest, KEPT } from "../github/app.mjs";
+import { DRAIN_MS as GITHUB_DRAIN_MS } from "../lib/drain.mjs";
 import { CALLS, SERVICES } from "../lib/services.mjs";
 import { keyId } from "../lib/tokens.mjs";
 import { parseYaml } from "../lib/yaml.mjs";
 import { builderIsolationProblem } from "../listener/runner/kube-images.mjs";
 import { isolationProblem, selects } from "../listener/runner/kubernetes.mjs";
+import { DRAIN_MS as MODELS_DRAIN_MS } from "../models/server.mjs";
+import { DRAIN_MS as POLICY_DRAIN_MS } from "../policy-service/service.mjs";
 
 const root = join(import.meta.dirname, "..", "deploy", "kubernetes");
 const SERVICES_NS = "deckhand";
@@ -461,15 +465,26 @@ test("deploy/kubernetes: no two services share a writable volume", () => {
 // What a copy's update takes (docs/services.md, Upgrades without downtime): its next copy is
 // ready before the old one stops, which drains within its grace period.
 const GRACE = {
-  edge: 30,
+  edge: 40,
   orchestrator: 300,
   runner: 300,
-  broker: 35,
+  broker: 45,
   github: 300,
   models: 630,
-  policy: 30,
+  policy: 40,
   proxy: 630,
 };
+// The defaults of the services whose drain the manifests leave to the code (ms); edge and the
+// proxy set DRAIN_SECONDS (edge's server starts as it is imported).
+const DRAIN_DEFAULTS = {
+  github: GITHUB_DRAIN_MS,
+  broker: BROKER_DRAIN_MS,
+  models: MODELS_DRAIN_MS,
+  policy: POLICY_DRAIN_MS,
+};
+// Each service that pauses before its SIGTERM → its drain (s): its DRAIN_SECONDS, or its default.
+const drain = (service) => Number(env(service).DRAIN_SECONDS ?? DRAIN_DEFAULTS[service] / 1000);
+const PAUSED = ["edge", "github", "broker", "models", "policy", "proxy"];
 // Readiness on /ready, but: edge has none (it stops taking connections as it drains); the
 // orchestrator's and the runner's answer on the acting copy alone, and the next copy only acts
 // once the old one has stopped, so a rolling update waiting for it would never end.
@@ -498,10 +513,21 @@ test("deploy/kubernetes: two copies of each service, one of the proxy, each upda
     );
     assert.equal(pod(service).terminationGracePeriodSeconds, GRACE[service], service);
   }
-  // The proxy drains as long as an agent's call lasts, after its preStop pause, within its
-  // grace period.
-  const pause = Number(container("proxy").lifecycle.preStop.exec.command[1]);
-  assert.ok(pause + Number(env("proxy").DRAIN_SECONDS) < GRACE.proxy);
+  // The services both copies answer for pause before their SIGTERM, until the Service no longer
+  // sends them connections (a pod leaves its endpoints as it starts terminating, kube-proxy and
+  // the ingress learn it a few seconds later), then drain within their grace period: a refused
+  // connection meanwhile fails the internet's callers and the dashboard's health probe (#560),
+  // which don't try it again. The proxy drains as long as an agent's call lasts.
+  // The pause is docs/services.md's 10 s.
+  for (const service of PAUSED) {
+    const pause = Number(container(service).lifecycle?.preStop?.exec?.command?.[1]);
+    assert.equal(pause, 10, `${service} pauses 10 s before its drain`);
+    assert.ok(drain(service) > 0, `${service}'s drain`);
+    assert.ok(
+      pause + drain(service) < GRACE[service],
+      `${service}: its pause and drain within its grace`,
+    );
+  }
 });
 
 test("deploy/kubernetes: every service as compose runs it: not root, no capability, a read-only root", () => {

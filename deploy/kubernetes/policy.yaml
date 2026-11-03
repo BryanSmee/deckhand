@@ -27,8 +27,8 @@ spec:
       # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
       enableServiceLinks: false
       automountServiceAccountToken: false
-      # Its drain (25 s, decisions of 2 s at most).
-      terminationGracePeriodSeconds: 30
+      # The preStop pause (10 s), then its drain (25 s, decisions of 2 s at most).
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -53,6 +53,12 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 6
+          # The old copy keeps taking connections until the Service no longer sends it any
+          # (lifecycle.preStop: docs/services.md, Draining).
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
