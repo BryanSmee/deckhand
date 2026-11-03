@@ -838,3 +838,20 @@ test("a run's tokens moved from the orchestrator's files: only those this broker
     tokens: [token],
   });
 });
+
+test("a token presented to a broker that lost the run's record: sealed with the rest, for the orchestrator's next copy (#617)", async (t) => {
+  const { copies, clock, store } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const { token } = await started(orchestrator);
+  // Lost (its store, say), then told again by the orchestrator, without the token's hash.
+  await store.delete("run:run-a");
+  await orchestrator("PUT", "/runs/run-a", { body: { repo: "org/a", sandbox: "net-a" } });
+  clock.now += 2 * 60_000;
+  const renewed = (await renewOn(proxy, token)).token;
+  assert.deepEqual((await orchestrator("POST", "/runs/run-a/secrets")).json.tokens, [
+    token,
+    renewed,
+  ]);
+});

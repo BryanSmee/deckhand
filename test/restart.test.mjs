@@ -13,7 +13,6 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore, values } from "../lib/store.mjs";
-import { redact } from "../lib/redact.mjs";
 import { logContext, withLogContext } from "../lib/log.mjs";
 import { assertMode, fileLogs, localBroker, mapStore, tempDir, until } from "./helpers.mjs";
 
@@ -646,14 +645,63 @@ test("a broker service that doesn't say a restored run's tokens: its output is f
   await saveRun(ctx.store, "r1", 1, { agent: "claude" });
   const restart = createRestart(ctx);
   const restored = await restart.restoreRuns();
-  const started = Date.now();
+  // Its tokens never known: followed once the (short) wait is over, with none to redact by
+  // value (their shape is, lib/redact.mjs).
   await restart.reattach(restored, { waitMs: 30 });
   assert.deepEqual(followed, ["r1"]);
-  assert.ok(Date.now() - started < 5000);
   assert.deepEqual(broker.secretsOf("r1"), []);
-  // A run token, unknown by value: its shape is redacted.
-  const token = await localBroker().issuer.issue("r1", { repo: "org/repo", sandbox: "net-1" });
-  assert.equal(redact(`I hold ${token.token}`, []), "I hold [redacted]");
+});
+
+test("a moved file's tokens a broker of the release before drops: the file stays until one has them (#617)", async (t) => {
+  const { dir, service, store, make } = takeover(t);
+  const first = make();
+  first.broker.register("org/repo", { id: "new", push: true, mode: "work" });
+  const { token, agentToken } = await first.broker.issue("new", "net-new");
+  writeFileSync(
+    join(dir, "new.live.json"),
+    JSON.stringify({
+      task: { repo: "org/repo", id: 1, kind: "issue" },
+      id: "new",
+      mode: "work",
+      light: false,
+      agentToken,
+      sandbox: "net-new",
+      runTokens: [token],
+      record: { id: "new", key: "org/repo#1", agent: "claude" },
+      handled: [],
+      unanswered: [],
+    }),
+  );
+  await service.runs.end("new");
+  // The release before's broker: its PUT takes no tokens, it has no /secrets (403).
+  const old = {
+    ...service.issuer,
+    put: (id, { tokens: _, ...fields }) => service.issuer.put(id, fields),
+    secrets: async () => {
+      throw Object.assign(new Error("refused: 403"), { status: 403 });
+    },
+  };
+  const next = make();
+  const broker = createBroker({ ...service, issuer: old, sandboxOf: async () => "net-new" });
+  next.ctx.broker = broker;
+  // Each try's outcome (broker-service.mjs persist() would try again later).
+  const tries = [];
+  next.ctx.brokerService = {
+    persist: (what, fn) => {
+      const tried = fn().then(
+        () => "ok",
+        (error) => error.message,
+      );
+      tries.push(tried);
+      return tried;
+    },
+  };
+  await createRestart(next.ctx).restoreRuns();
+  assert.deepEqual(await Promise.all(tries), ["refused: 403"]);
+  // The PUT answered, the tokens not taken: the file stays, the redaction has them from it.
+  assert.ok(readdirSync(dir).includes("new.live.json"));
+  assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
+  assert.equal((await service.runs.secrets("new")).agentToken, null);
 });
 
 test("a runner slow to say whether a restored run's inbox is open: the start goes on, the run takes comments once it says", async (t) => {
@@ -1151,8 +1199,10 @@ async function endWhileStoreDown(t) {
     },
   );
   const { set, delete: remove } = store;
-  const down = { on: true };
-  store.set = (...args) => (down.on ? Promise.reject(new Error("disk full")) : set(...args));
+  // `refused`: how many writes it refused.
+  const down = { on: true, refused: 0 };
+  store.set = (...args) =>
+    down.on ? (down.refused++, Promise.reject(new Error("disk full"))) : set(...args);
   store.delete = (...args) => (down.on ? Promise.reject(new Error("disk full")) : remove(...args));
   const task = newTask({ ...queued("1"), name: "deckhand-org-repo-1" });
   task.live = {
@@ -1176,8 +1226,10 @@ async function endWhileStoreDown(t) {
 
 test("a run's end the queue couldn't be written for: tried again until it lands, then its state goes, its task held meanwhile", async (t) => {
   const { store, ctx, down, task, ended } = await endWhileStoreDown(t);
-  // Its state stays, and its task is still taken: no other run starts for it.
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  // The queue's write tried again (queueRetryMs), and again: meanwhile its state stays, and its
+  // task is still taken: no other run starts for it.
+  const before = down.refused;
+  await until(() => down.refused >= before + 2, { what: "two more tries of the queue" });
   assert.ok(await savedRun(store, "r1"));
   assert.equal(task.running, true);
   assert.equal(ctx.running, 1);

@@ -306,7 +306,12 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
         run.sandbox ??= claims.sandbox;
         run.presented = presented;
         if (!run.issued.some((t) => t.hash === presented)) {
-          run.issued = [{ hash: presented, exp: claims.exp * 1000, at: 0 }, ...run.issued];
+          // Sealed too: a broker that lost the run's record has it in clear here alone, and the
+          // orchestrator's next copy redacts it by its value (secrets()).
+          run.issued = [
+            { hash: presented, exp: claims.exp * 1000, at: 0, sealed: seal.seal(token) },
+            ...run.issued,
+          ];
         }
         const last = run.issued.at(-1);
         const again = last.at && now() - last.at < RENEW_MIN_MS && last.exp > now();

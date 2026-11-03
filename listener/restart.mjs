@@ -586,7 +586,7 @@ export function createRestart(ctx) {
   }
 
   // The file a run's state was moved from (moveLive()), removed: its tokens are the broker
-  // service's, or name nothing any more.
+  // service's, or name nothing any more. One that held none has nothing to wait for.
   function forgetMoved(id) {
     const moved = movedTokens.get(id);
     if (moved) rmSync(moved.path, { force: true });
@@ -685,9 +685,12 @@ export function createRestart(ctx) {
       task,
       told(`run ${saved.id}`, async () => {
         await ctx.broker.restore(saved.id, shots, tokens);
-        // The broker service has them: the file they were in can go.
-        forgetMoved(saved.id);
-        await ctx.broker.recall?.(saved.id);
+        const found = await ctx.broker.recall?.(saved.id);
+        // The broker service has them (it answered them back): the file they were in can go. A
+        // broker of the release before takes the PUT but drops its tokens, and refuses
+        // /secrets: the file stays until one that has them answers, or the run is over.
+        const had = found ? [found.agentToken, ...found.tokens] : [];
+        if (tokens.every((token) => had.includes(token))) forgetMoved(saved.id);
       }),
     );
     if (ctx.runner.resync) told(`run ${saved.id}'s files`, () => ctx.runner.resync(saved.id));

@@ -323,20 +323,22 @@ export function createBroker({
   // once this listener took it over (secretsOf()), and again when one is renewed. In memory
   // only, never in the listener's store. The list is the broker's, after those this listener
   // knows that haven't expired: an expired one no longer in the broker's list goes (its shape
-  // still redacts it), so a run of days doesn't pile up hundreds. Throws when the broker service
-  // can't say.
+  // still redacts it), so a run of days doesn't pile up hundreds. → the broker service's answer
+  // ({ agentToken, tokens }), null for a run it doesn't have. Throws when it can't say.
   async function recall(handle) {
     const run = runOf(handle);
-    if (!run) return;
+    if (!run) return null;
     const found = await issuer.secrets(run.id);
-    if (!found || runOf(handle) !== run) return;
-    if (isToken(found.agentToken ?? "")) run.agentToken = found.agentToken;
+    if (!found || runOf(handle) !== run) return null;
+    const agentToken = isToken(found.agentToken ?? "") ? found.agentToken : null;
+    if (agentToken) run.agentToken = agentToken;
     const tokens = (Array.isArray(found.tokens) ? found.tokens : []).filter(isToken);
     const listed = new Set(tokens);
     const kept = run.issued.filter((t) => !listed.has(t.token) && t.exp > now());
     run.issued = [...kept, ...tokens.map((token) => ({ token, exp: expOf(token), at: 0 }))].slice(
       -ISSUED_MAX,
     );
+    return { agentToken, tokens };
   }
 
   // The run a call's run token names, once checked: { run, claims } or { status, message }.
