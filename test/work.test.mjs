@@ -13,7 +13,9 @@ import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
 import { MARKER, parseKey, workItem } from "../listener/events.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { tempDir, testConfig, fileMap } from "./helpers.mjs";
+import { openStore } from "../lib/store.mjs";
+import { storeMap } from "../lib/store-map.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
@@ -42,6 +44,8 @@ function setup({
   queue = [],
   pulls = {},
   reviews = {},
+  // The Map the waits are kept in, else one in a file.
+  waits = null,
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob",
@@ -164,7 +168,7 @@ function setup({
   };
   w.path = join(config.dataDir, "waits.json");
   w.waits = createWaits({
-    path: w.path,
+    waits: waits ?? fileMap(w.path),
     github,
     reply,
     received: (i) => w.eyes.push(i.comment.id),
@@ -213,12 +217,16 @@ function setup({
         ? { item: null, replies: false }
         : { item: item ?? null, replies: item === null };
     },
-    unqueue: (key, user) => {
+    // `until`: what the queue keeps them for (restart.mjs park()), in `w.until`; `w.queueIds`:
+    // the queueIds it took out.
+    unqueue: (key, user, until) => {
       w.unqueued.push([key, user]);
+      w.until = until;
       const item = w.queued[key];
       delete w.queued[key];
       // `w.dropped`: other authors' comments queued with it.
-      return item ? { item: { ...item }, dropped: w.dropped ?? 0 } : null;
+      const unqueued = w.queueIds ?? [];
+      return item ? { item: { ...item }, dropped: w.dropped ?? 0, unqueued } : null;
     },
     taskOf: (key) =>
       w.tasks[key] ??
@@ -1003,6 +1011,31 @@ test("queue: a task waiting for a slot leaves the queue and waits, its comment a
       "Moved from the dashboard by @alice: no longer queued, now waits for #7 in `brainstorm` mode. It starts when #7 is done (closed as completed, or merged).",
     ],
   ]);
+});
+
+test("queue: the comment leaves the queue's writes once its wait is in the store, its queueIds with the wait", async () => {
+  // A store holding back its writes until `land()`.
+  const memory = openStore("memory:");
+  let land;
+  const held = new Promise((resolve) => (land = resolve));
+  const store = { ...memory, set: async (k, v) => (await held, memory.set(k, v)) };
+  const w = setup({
+    issues: { 5: open("Five"), 7: open("Seven") },
+    queued: QUEUED,
+    waits: await storeMap(store, "waits"),
+  });
+  w.queueIds = ["q-1", "q-2"];
+  assert.equal((await post(w, { action: "queue", number: 5, after: 7 })).status, 200);
+  let saved = false;
+  w.until.then(() => (saved = true));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  // The wait not in the store yet: the queue still has the comment.
+  assert.equal(saved, false);
+  land();
+  await w.until;
+  const stored = await memory.get("waits/org/app#5");
+  assert.deepEqual([stored.blockers, stored.unqueued], [[7], ["q-1", "q-2"]]);
+  assert.deepEqual([...w.waits.unqueued()], ["q-1", "q-2"]);
 });
 
 test("queue: a task waiting for a slot takes the mode picked; stays queued after a done issue", async () => {

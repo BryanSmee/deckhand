@@ -18,7 +18,14 @@ import {
   reviewLoop,
   trustedFile,
 } from "../listener/reviews.mjs";
-import { localService, policyEngine, policyEngineOf, tempDir, testConfig } from "./helpers.mjs";
+import {
+  localService,
+  policyEngine,
+  policyEngineOf,
+  tempDir,
+  testConfig,
+  fileMap,
+} from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]", needsInputLabel: "needs-input" };
 
@@ -122,7 +129,7 @@ function setup(
   const gh = fakeGitHub(over);
   const read = parseRepoConfig(yaml, config);
   const reviews = createReviews({
-    path: path ?? join(tempDir(t), "reviews.json"),
+    reviewed: fileMap(path ?? join(tempDir(t), "reviews.json")),
     config,
     repoSettings: async () => read,
     accept: async (item) => accepted.push(item),

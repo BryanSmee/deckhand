@@ -1,41 +1,53 @@
-// Each issue's conversation state, kept across listener restarts: its brainstorm
-// (brainstorms.json) and the repo's own mode its session is in (the store's `modes`).
+// Each issue's conversation state, kept across restarts and handovers in the orchestrator's
+// store (lib/store-map.mjs): its brainstorm (`brainstorms`) and the repo's own mode its session is
+// in (`modes`).
 import { respellMap } from "./spelling.mjs";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
 export const REPLY_GRACE_MS = 2 * 60000;
 
-// key → { repo, number, status, deadline, timer }. "active" → "idle" once the deadline passes
-// with no comment. One container per reply means nothing is held open meanwhile: idle is what
-// the dashboard shows, and the next comment restores the session from its volume and says so
-// to Claude. `busy(key)`: a reply is still on its way, and posting it arms the timer again.
-export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
-  const brainstorms = load();
+// key → { repo, number, status, deadline }. "active" → "idle" once the deadline passes with no
+// comment: the deadline is data, its timer armed again from it by the copy that loads the map.
+// One container per reply means nothing is held open meanwhile: idle is what the dashboard
+// shows, and the next comment restores the session from its volume and says so to Claude.
+// `busy(key)`: a reply is still on its way, and posting it arms the timer again. `brainstorms`:
+// the Map they are kept in (storeMap()'s); `queueSaved()`: once the queue is in the store with what
+// was just queued (restart.mjs queueWritten()), which a brainstorm's end is written after.
+export function createBrainstorms({
+  brainstorms = new Map(),
+  queueSaved = () => Promise.resolve(),
+  idleMs,
+  busy,
+  log,
+  now = Date.now,
+}) {
+  // key → its idle timer, in memory alone.
+  const timers = new Map();
+  for (const [key, b] of brainstorms) if (b.status === "active") armIdle(key);
 
-  function load() {
-    const saved = readJson(path, {});
-    const map = new Map(Object.entries(saved).map(([key, b]) => [key, { ...b, timer: null }]));
-    for (const [key, b] of map) if (b.status === "active") armIdle(key, b);
-    return map;
-  }
+  // `b` changed: the store is told (a value changed in place isn't seen, lib/store-map.mjs).
+  const save = (key, b) => brainstorms.set(key, b);
 
-  function save() {
-    const plain = Object.fromEntries([...brainstorms].map(([key, { timer, ...b }]) => [key, b]));
-    writeJsonAtomic(path, plain);
-  }
-
-  function armIdle(key, b) {
-    clearTimeout(b.timer);
-    b.timer = setTimeout(
+  function armIdle(key) {
+    clearTimeout(timers.get(key));
+    const b = brainstorms.get(key);
+    const timer = setTimeout(
       () => {
-        if (busy(key) || b.status !== "active") return;
-        b.status = "idle";
-        save();
+        timers.delete(key);
+        const current = brainstorms.get(key);
+        if (busy(key) || current?.status !== "active") return;
+        save(key, { ...current, status: "idle" });
         log(`${key}: brainstorm idle`);
       },
       Math.max(0, b.deadline - now()),
     );
+    timer.unref?.();
+    timers.set(key, timer);
+  }
+
+  function disarm(key) {
+    clearTimeout(timers.get(key));
+    timers.delete(key);
   }
 
   // A comment that starts or continues the brainstorm. True when it was idle: the session
@@ -43,54 +55,47 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
   function activate(key, { repo, number }) {
     const b = brainstorms.get(key);
     const restored = b?.status === "idle";
-    const next = b ?? { repo, number, timer: null };
-    Object.assign(next, { status: "active", deadline: now() + idleMs });
-    brainstorms.set(key, next);
-    armIdle(key, next);
-    save();
+    save(key, { ...(b ?? { repo, number }), status: "active", deadline: now() + idleMs });
+    armIdle(key);
     return restored;
   }
 
   // "/stop": comments no longer reach it until a trigger line.
   function stop(key) {
-    const b = brainstorms.get(key);
-    clearTimeout(b.timer);
-    b.status = "stopped";
-    save();
+    disarm(key);
+    save(key, { ...brainstorms.get(key), status: "stopped" });
   }
 
-  // Work or another mode takes the session over: the brainstorm is over.
+  // Work or another mode takes the session over: the brainstorm is over. One pair: the comment
+  // that ends it queued first (tasks.mjs queue(), right after modeOf() returns), then the
+  // brainstorm deleted (`queueSaved()`), so an orchestrator killed in between finds the comment
+  // queued, the brainstorm still there: never neither.
   function end(key) {
-    const b = brainstorms.get(key);
-    if (!b) return;
-    clearTimeout(b.timer);
-    brainstorms.delete(key);
-    save();
+    if (!brainstorms.has(key)) return;
+    disarm(key);
+    brainstorms.delete(key, { after: queueSaved() });
   }
 
   // Claude replied: an answer may follow.
   function replied(key) {
     const b = brainstorms.get(key);
     if (b?.status !== "active") return;
-    b.deadline = Math.max(b.deadline, now() + REPLY_GRACE_MS);
-    armIdle(key, b);
-    save();
+    save(key, { ...b, deadline: Math.max(b.deadline, now() + REPLY_GRACE_MS) });
+    armIdle(key);
   }
 
   // For the dashboard.
   function list() {
-    return [...brainstorms].map(([key, { timer, ...b }]) => ({ key, ...b }));
+    return [...brainstorms].map(([key, b]) => ({ key, ...b }));
   }
 
   // One spelling per repo (spelling.mjs, at a restart): the timers armed for the old keys go.
   function respell(spelled) {
-    const fix = (b) => {
-      clearTimeout(b.timer);
-      return { ...b, repo: spelled(b.repo), timer: null };
-    };
+    const fix = (b) => ({ ...b, repo: spelled(b.repo) });
+    const before = [...brainstorms.keys()];
     if (!respellMap(brainstorms, spelled, fix)) return;
-    for (const [key, b] of brainstorms) if (b.status === "active" && !b.timer) armIdle(key, b);
-    save();
+    for (const key of before) if (!brainstorms.has(key)) disarm(key);
+    for (const [key, b] of brainstorms) if (b.status === "active" && !timers.has(key)) armIdle(key);
   }
 
   return {

@@ -747,7 +747,6 @@ test("an issue the start's listing missed, edited while it is looked up: the edi
   const setup = async (settings) => {
     let clock = 1;
     const inputs = createInputs({
-      path: join(tempDir(t), "inputs.json"),
       listLabelled: async () => [],
       now: () => clock,
     });

@@ -123,7 +123,7 @@ function questionsFor(t, last, input, aside) {
 // dismissed runs and those whose questions were set aside (dismissals.mjs list());
 // `pr(key)`, `decisions(key)`: its pull request (pulls.mjs) and policy decisions, newest first
 // (decisions.mjs), for when it last changed; `reviewed(repo, number)`: its pull request's entry
-// in reviews.json, for its `review`.
+// in the store's `reviews`, for its `review`.
 // A task waiting for input carries `questions`: { source, runId?, items, raw }, from the reply
 // of its last run when it stopped to ask, else from its issue's body (questions.mjs).
 export function board({

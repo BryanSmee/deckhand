@@ -253,6 +253,38 @@ test("storeMap: the lease lost, the writes still waiting are given up", async ()
   assert.equal(map.waiting(), 0);
 });
 
+test("storeMap: a write ordered after another waits for it, and so do the key's later writes", async () => {
+  const { store, calls } = recorded(openStore("memory:"));
+  const map = await storeMap(store, "waits");
+  map.set("org/repo#1", { blockers: [7] });
+  map.set("org/repo#2", { blockers: [8] });
+  await map.settled();
+  calls.length = 0;
+  let queued;
+  const after = new Promise((resolve) => (queued = resolve));
+  map.delete("org/repo#1", { after });
+  // Another key goes on; this one, its later write too, waits for the queue.
+  map.set("org/repo#2", { blockers: [9] });
+  await map.written("org/repo#2");
+  let written = false;
+  map.written("org/repo#1").then(() => (written = true));
+  await new Promise((resolve) => setImmediate(resolve));
+  map.set("org/repo#1", { blockers: [], answers: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(written, false);
+  assert.deepEqual(calls, [["set", "waits/org/repo#2", { blockers: [9] }]]);
+  assert.equal(map.waiting(), 1);
+  queued();
+  await map.written("org/repo#1");
+  assert.equal(written, true);
+  assert.deepEqual(calls.slice(1), [["set", "waits/org/repo#1", { blockers: [], answers: true }]]);
+  // A gate that fails is no reason to keep the write back.
+  map.delete("org/repo#2", { after: Promise.reject(new Error("the queue's write failed")) });
+  await map.settled();
+  assert.deepEqual(calls.at(-1), ["delete", "waits/org/repo#2"]);
+  await map.written("org/repo#404");
+});
+
 test("storeMaps: each map from its file in a folder, settled() and waiting() over all", async (t) => {
   const dir = tempDir(t);
   writeFileSync(join(dir, "titles.json"), JSON.stringify({ "o/r#1": "A" }));

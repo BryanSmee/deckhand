@@ -302,7 +302,7 @@ export function createTasks(ctx) {
   const lastRun = (key) => ctx.runs?.find((r) => taskId(r.key) === taskId(key)) ?? null;
 
   // The review loop's entry of pull request `number` (reviews.mjs entry()), under any spelling
-  // of `repo`: reviews.json's may be another's until a restart unifies them.
+  // of `repo`: the store's `reviews` may be another's until a restart unifies them.
   function reviewEntry(repo, number) {
     const found = ctx.reviews?.entry?.(repo, number);
     if (found || !ctx.reviews?.keys) return found ?? null;

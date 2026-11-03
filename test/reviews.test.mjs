@@ -9,6 +9,8 @@ import { createPolicies } from "../listener/policies.mjs";
 import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { openStore } from "../lib/store.mjs";
+import { storeMap } from "../lib/store-map.mjs";
 import {
   CI_NEXT,
   mergeInput,
@@ -39,6 +41,8 @@ import {
   tempDir,
   testConfig,
   hasOpa,
+  fileMap,
+  mapStore,
 } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
@@ -387,7 +391,7 @@ function setup(
   const accepted = [];
   const read = parseRepoConfig(yaml, config);
   const reviews = createReviews({
-    path,
+    reviewed: fileMap(path),
     config: settings,
     repoSettings: async () => later?.() ?? read,
     log,
@@ -1756,7 +1760,7 @@ test("review loop: in review while a ready pull request's review is decided, bef
   // The repo's settings, read from GitHub first: in review already.
   const read = s.read;
   s.reviews = createReviews({
-    path: s.path,
+    reviewed: fileMap(s.path),
     config,
     repoSettings: async () => {
       seen.push(reviewLoop(s.reviews.entry("org/repo", 5))?.loop);
@@ -1832,7 +1836,12 @@ const RED = {
 
 // The reviewer with the CI step: a fake GitHub whose `gh` answers can change (`pr`, `runs`,
 // `runsStatus`, `jobs`, `issueLabels`), replies and the queue kept, a fake clock.
-function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: over = {} } = {}) {
+// `reviewed`: the Map the loops are kept in, else one in `path`.
+function ciSetup(
+  t,
+  yaml = CI,
+  { path, reviewed, busy = () => false, policies = null, gh: over = {} } = {},
+) {
   let time = 1_800_000_000_000;
   const gh = {
     pr: { number: 5, state: "open", draft: false, labels: [], ...OWN, ...over.pr },
@@ -1873,7 +1882,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
   const scheduled = [];
   const read = parseRepoConfig(yaml, config);
   const reviews = createReviews({
-    path: path ?? join(tempDir(t), "reviews.json"),
+    reviewed: reviewed ?? fileMap(path ?? join(tempDir(t), "reviews.json")),
     config: { ...config, needsInputLabel: "needs-input" },
     repoSettings: async () => read,
     // The loop's state as each item is queued: an auto-picked task's follow-up keeps its
@@ -2019,6 +2028,19 @@ test("review.ci: no review while runs go; a completed run on the head decides, a
   assert.equal(next.accepted.length, 1);
 });
 
+test("review.ci: a review waiting for CI in the store, decided once by the copy after a handover", async (t) => {
+  const maps = mapStore();
+  const s = ciSetup(t, CI, { reviewed: await maps.map("reviews") });
+  assert.equal(await s.ready(), null);
+  const next = ciSetup(t, CI, { reviewed: await maps.again("reviews"), gh: { runs: [GREEN] } });
+  assert.equal(next.entry().ciWaiting.sha, "sha-1");
+  // Its tick and the run's delivery both decide: one review.
+  await Promise.all([next.reviews.tick(), next.runDone()]);
+  await next.reviews.tick();
+  assert.equal(next.of("review").length, 1);
+  assert.equal((await maps.again("reviews")).get("org/repo#pr-5").ciWaiting, undefined);
+});
+
 test("review.ci: passed or no run starts the review; no run waits a minute first", async (t) => {
   const passed = ciSetup(t, CI, { gh: { runs: [GREEN, { ...GREEN, conclusion: "skipped" }] } });
   assert.equal((await passed.ready()).reason, "review");
@@ -2136,6 +2158,48 @@ test("review.ci: a failure starts a CI fix run, not a review, with the runs and 
   assert.equal(s.of("ci-fix").length, 1);
   // Each queued while the CI step was decided: the loop went on.
   assert.deepEqual(s.loops, ["ci", "ci"]);
+});
+
+test("a fix run's round in the store before its run is queued; a comment queued meanwhile gives it back", async (t) => {
+  // A store holding back its writes until `land()`.
+  const holding = () => {
+    const memory = openStore("memory:");
+    const gate = {};
+    gate.held = new Promise((resolve) => (gate.land = resolve));
+    const store = { ...memory, set: async (k, v) => (await gate.held, memory.set(k, v)) };
+    return { memory, store, gate };
+  };
+  const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const one = holding();
+  const s = ciSetup(t, `${CI}  ci_fix: 2\n`, {
+    reviewed: await storeMap(one.store, "reviews"),
+    gh: { runs: [RED, GREEN] },
+  });
+  const ready = s.ready();
+  await wait();
+  // Counted, not in the store yet: nothing queued.
+  assert.equal(s.entry().ciFixes, 1);
+  assert.deepEqual(s.accepted, []);
+  one.gate.land();
+  assert.equal((await ready).reason, "ci-fix");
+  assert.equal((await one.memory.get("reviews/org/repo#pr-5")).ciFixes, 1);
+
+  // A comment queued on the task while the round's write waited: no CI fix run, the round
+  // given back, the CI wait kept for when the task is free.
+  const two = holding();
+  let busy = false;
+  const b = ciSetup(t, `${CI}  ci_fix: 2\n`, {
+    reviewed: await storeMap(two.store, "reviews"),
+    busy: () => busy,
+    gh: { runs: [RED, GREEN] },
+  });
+  const decided = b.ready();
+  await wait();
+  busy = true;
+  two.gate.land();
+  assert.equal(await decided, null);
+  assert.deepEqual(b.accepted, []);
+  assert.equal(b.entry()?.ciFixes, undefined);
 });
 
 test("review.ci: CI fix runs run out, said once, then the review anyway", async (t) => {

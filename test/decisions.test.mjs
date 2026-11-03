@@ -3,7 +3,7 @@
 import assert from "node:assert/strict";
 import { join } from "node:path";
 import { test } from "node:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import {
   createDecisions,
   keptInput,
@@ -21,11 +21,11 @@ const entry = (n, denied = false) => ({
   pr: 5,
 });
 
-test("decisions: newest first, capped, kept across a restart", (t) => {
-  const path = join(tempDir(t), "decisions.json");
+test("decisions: newest first, capped, kept across a restart", async () => {
+  const maps = mapStore();
   let time = 1_000;
   const now = () => (time += 1000);
-  const decisions = createDecisions({ path, now });
+  const decisions = createDecisions({ decisions: await maps.map("decisions"), now });
   assert.deepEqual(decisions.get("org/repo#12"), []);
   for (let n = 0; n < MAX_DECISIONS + 2; n++)
     decisions.record("org/repo#12", entry(n, n % 2 === 1));
@@ -33,14 +33,13 @@ test("decisions: newest first, capped, kept across a restart", (t) => {
   assert.equal(list.length, MAX_DECISIONS);
   assert.deepEqual(list[0], { at: list[0].at, ...entry(MAX_DECISIONS + 1, true) });
   assert.ok(list[0].at > list[1].at);
-  const again = createDecisions({ path, now });
+  const again = createDecisions({ decisions: await maps.again("decisions"), now });
   assert.deepEqual(again.get("org/repo#12"), list);
 });
 
-test("decisions: a task's under another spelling of its repo, merged at restart", (t) => {
-  const path = join(tempDir(t), "decisions.json");
+test("decisions: a task's under another spelling of its repo, merged at restart", () => {
   let time = 1_000;
-  const decisions = createDecisions({ path, now: () => (time += 1000) });
+  const decisions = createDecisions({ now: () => (time += 1000) });
   decisions.record("Org/Repo#12", entry(1));
   decisions.record("org/repo#12", entry(2, true));
   assert.equal(decisions.get("ORG/repo#12").length, 1);
@@ -52,20 +51,19 @@ test("decisions: a task's under another spelling of its repo, merged at restart"
   );
 });
 
-test("decisions: a task whose last decision is old is forgotten", (t) => {
+test("decisions: a task whose last decision is old is forgotten", () => {
   let time = 0;
-  const decisions = createDecisions({ path: join(tempDir(t), "d.json"), now: () => time });
+  const decisions = createDecisions({ now: () => time });
   decisions.record("org/repo#1", entry(1));
   time = 91 * 24 * 3600_000;
   decisions.record("org/repo#2", entry(2));
   assert.deepEqual(decisions.keys(), ["org/repo#2"]);
 });
 
-test("decisions: the input, redacted and capped, kept on the newest 3 only", (t) => {
-  const path = join(tempDir(t), "decisions.json");
+test("decisions: the input, redacted and capped, kept on the newest 3 only", () => {
   let time = 1_000;
   const secret = "s3cr3t-value-of-the-operator";
-  const decisions = createDecisions({ path, now: () => (time += 1000), secrets: () => [secret] });
+  const decisions = createDecisions({ now: () => (time += 1000), secrets: () => [secret] });
   const input = (n) => ({
     version: 1,
     decision: "merge",
@@ -126,7 +124,7 @@ test("keptInput: the changed files cut first, then the findings, with a truncate
   assert.deepEqual(keptInput({ a: 1 }, []), { input: { a: 1 } });
 });
 
-test("decisions: a decisions.json written before gates and inputs still loads", (t) => {
+test("decisions: a decisions.json written before gates and inputs, moved to the store, still loads", async (t) => {
   const path = join(tempDir(t), "decisions.json");
   const old = {
     decision: "merge",
@@ -137,19 +135,23 @@ test("decisions: a decisions.json written before gates and inputs still loads", 
     at: 10,
   };
   writeFileSync(path, JSON.stringify({ "org/repo#12": [old] }));
-  const decisions = createDecisions({ path, now: () => 20 });
+  const maps = mapStore();
+  const decisions = createDecisions({
+    decisions: await maps.map("decisions", { file: path }),
+    now: () => 20,
+  });
+  assert.equal(existsSync(path), false);
   assert.deepEqual(decisions.get("org/repo#12"), [old]);
   assert.equal(decisions.dryRun("org/repo#12"), null);
   decisions.record("org/repo#12", { ...entry(1), input: { a: 1 } });
   assert.deepEqual(decisions.get("org/repo#12")[1], old);
 });
 
-test("decisions: the last dry run, no decision, kept across a restart and a respelling", async (t) => {
-  const path = join(tempDir(t), "decisions.json");
+test("decisions: the last dry run, no decision, kept across a restart and a respelling", async () => {
   const maps = mapStore();
   let time = 1_000;
   const now = () => (time += 1000);
-  const decisions = createDecisions({ path, dryRuns: await maps.map("dry-runs"), now });
+  const decisions = createDecisions({ dryRuns: await maps.map("dry-runs"), now });
   const url = "https://github.com/org/repo/pull/5#issuecomment-1";
   decisions.recordDryRun("Org/Repo#12", { by: "alice", url, denials: 1 });
   decisions.recordDryRun("org/repo#12", { by: "bob", url, denials: 2 });
@@ -157,7 +159,7 @@ test("decisions: the last dry run, no decision, kept across a restart and a resp
   const last = decisions.dryRun("org/repo#12");
   assert.deepEqual(last, { dryRun: true, by: "bob", at: last.at, denials: 2, url });
   assert.ok(last.at > decisions.dryRun("Org/Repo#12").at);
-  const again = createDecisions({ path, dryRuns: await maps.again("dry-runs"), now });
+  const again = createDecisions({ dryRuns: await maps.again("dry-runs"), now });
   assert.equal(again.dryRun("ORG/repo#12").by, "alice");
   again.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/Repo" : repo));
   assert.equal(again.dryRun("Org/Repo#12").by, "bob");

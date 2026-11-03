@@ -1360,12 +1360,14 @@ The policy service reads your server folder as the `node` user (uid 1000): your 
 its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
 every policy decision is refused, and the orchestrator's log says why at start.
 
-### Upgrading: the orchestrator's state in its store (#615)
+### Upgrading: the orchestrator's state in its store (#615, #616)
 
-The orchestrator kept its state in JSON files in its data volume (`/data`). Those that hold data
-alone go to its [store](#the-store) now: `titles.json`, `closed.json`, `pulls.json`,
+The orchestrator kept its state in JSON files in its data volume (`/data`). They go to its
+[store](#the-store) now: those that hold data alone, `titles.json`, `closed.json`, `pulls.json`,
 `dismissed.json`, `order.json`, `onboarding.json`, `lanes.json`, `modes.json`, `conflicts.json`,
-`dry-runs.json` and `requested.json`. Nothing to do: at its first start after the update, the
+`dry-runs.json` and `requested.json` (#615); and those behind timers and comments,
+`waits.json` (the comments waiting for other issues, `/after`), `inputs.json`, `reviews.json`,
+`brainstorms.json`, `decisions.json` and `picks.json` (#616). Nothing to do: at its first start after the update, the
 orchestrator writes each file's items to the store (those it doesn't have yet), then removes the
 file, and its log says so (`titles: 120 item(s) moved to the store from /data/titles.json`). A
 crash midway moves them again at the next start, the same values. A file it can't read (another user's,
@@ -1378,8 +1380,12 @@ goes on from what it has in memory and tries its writes again every few seconds;
 says how many wait (`{"ok": true, "waiting": 3}`), and a copy that stops waits 10 seconds for
 them before it lets its lease go.
 
+The comments waiting in `waits.json` were the owner's only (`0600`); in the store, what keeps
+them is the store's own access (its folder, or Redis's user and network, above).
+
 Going back to an earlier release: it doesn't read the store's items, and starts from empty
-files (the titles are asked of GitHub again, the run order and the lanes' names are lost).
+files (the titles are asked of GitHub again, the run order and the lanes' names are lost; from
+before #616, the waits, the review loops' counts and the brainstorms too).
 
 ### Upgrading: the paths from before the services are gone (#567)
 
