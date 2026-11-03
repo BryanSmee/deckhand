@@ -1,8 +1,8 @@
 // Runs and their logs, for the dashboard: each run's log (its first line the listener's, then
 // the agent's raw output), kept by the runner service (#503, ../runner/logs.mjs), its summary
 // once it ended (`summaries/<run>` in the orchestrator's store, #618), the list rebuilt from the
-// summaries after a restart, and the entries the dashboard shows for each line. The agent's lines are read
-// through its normalize() (agents/), so a log keeps what the agent wrote.
+// summaries after a restart, and the entries the dashboard shows for each line. The agent's
+// lines are read through its normalize() (agents/), so a log keeps what the agent wrote.
 import {
   appendFileSync,
   closeSync,
@@ -149,6 +149,10 @@ export async function loadRuns(store, { log = console.error } = {}) {
   return runs.sort((a, b) => b.startedAt - a.startedAt);
 }
 
+// Where saveSummary() keeps a summary the store didn't take.
+const KEPT = ".summary.json";
+const NOT_SUMMARIES = [".live.json", ".queued.json", KEPT];
+
 // The summaries a release before #618 kept in logs/<run>.json (and those moveLogs() writes
 // there for the logs it finds): each written to the store, then removed. A key already there
 // wins: a start that stopped before removing the file wrote it, and the run may have changed
@@ -158,9 +162,6 @@ export async function loadRuns(store, { log = console.error } = {}) {
 // stays for the next start. The run states (.live.json) and queues (.queued.json) the release
 // before kept beside them, which restart.mjs moves to the store, aren't summaries. → how many
 // moved.
-// Where saveSummary() keeps a summary the store didn't take.
-const KEPT = ".summary.json";
-const NOT_SUMMARIES = [".live.json", ".queued.json", KEPT];
 export async function moveSummaries(logDir, store, { log = console.error, secrets = [] } = {}) {
   const all = readdirSync(logDir);
   const older = all.filter(

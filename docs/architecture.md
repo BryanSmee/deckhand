@@ -1390,7 +1390,8 @@ and both lose the runs `history.mjs` removes, at start and daily: those older th
 `LOG_RETENTION_DAYS`, but for a running run and the latest run of a task still queued, in a
 brainstorm, waiting or waiting for input. The orchestrator's state decides which those are, so
 the orchestrator decides, and has the runner remove their logs, then deletes their summaries'
-keys: a run whose log the runner didn't remove stays listed until the next day's try.
+keys: a run whose log the runner didn't remove, or whose summary's key the store didn't delete,
+stays listed until the next day's try.
 
 ### Missed deliveries
 

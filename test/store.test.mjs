@@ -169,6 +169,24 @@ test("file: keys under `apart` are a file each, out of state.json, seen by anoth
   assert.equal(await other.delete("summaries/a"), true);
   assert.equal(await one.get("summaries/a"), null);
   assert.deepEqual((await one.keys("summaries/")).keys, [long]);
+  // Listed from their files' names: a file's content isn't read but for a name cut and hashed.
+  writeFileSync(join(dir, "keys", "summaries%2Fb"), "not read");
+  assert.deepEqual((await other.keys("summaries/")).keys.sort(), [long, "summaries/b"].sort());
+  await other.delete("summaries/b");
+  // With a TTL: in state.json, out of its file, as long as it lasts.
+  await one.set("summaries/c", 1);
+  await one.set("summaries/c", 2, { ttlMs: 60_000 });
+  assert.equal(readdirSync(join(dir, "keys")).length, 1);
+  assert.deepEqual(await other.get("summaries/c"), 2);
+  assert.deepEqual((await other.keys("summaries/c")).keys, ["summaries/c"]);
+  await other.set("summaries/c", 3);
+  assert.equal(
+    "summaries/c" in JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).keys,
+    false,
+  );
+  assert.equal(await one.get("summaries/c"), 3);
+  await one.delete("summaries/c");
+  assert.equal(await other.get("summaries/c"), null);
   // A lease renewed: state.json only, the keys' files untouched.
   const before = readdirSync(join(dir, "keys")).map((f) =>
     readFileSync(join(dir, "keys", f), "utf8"),
