@@ -175,9 +175,19 @@ export function createMirrors({
   // `base` and an update's `bases` (its pull requests'). The reusable workflows a checked one
   // calls are checked too, changed or not. Deleted files aren't. `updates`: { ref, new, bases }
   // of the push (`new` a commit or a ref of the mirror), `file` the push from `start` (null: no
-  // pack), `dir` where the push's objects go. `token` reads the repo. Throws when the mirror
-  // can't be fetched or the pack read.
-  async function check({ repo, token, base, updates, file = null, start = null, dir }) {
+  // pack), `dir` where the push's objects go. `token` reads the repo. `secrets`: the repo is
+  // granted `workflow_secrets` (inspectWorkflow()'s `secretsOn`, `base`). Throws when the
+  // mirror can't be fetched or the pack read.
+  async function check({
+    repo,
+    token,
+    base,
+    updates,
+    file = null,
+    start = null,
+    dir,
+    secrets = false,
+  }) {
     const mirror = join(root, `${repo}.git`);
     return locked(repo, async () => {
       await fetch(repo, mirror, token);
@@ -216,7 +226,7 @@ export function createMirrors({
                   problems: [`not a plain UTF-8 file of at most ${MAX_WORKFLOW / 1024} KiB`],
                   calls: [],
                 }
-              : inspectWorkflow(text),
+              : inspectWorkflow(text, { secretsOn: secrets ? base : null }),
           );
         }
         return inspected.get(entry.oid);
@@ -370,7 +380,7 @@ export function createMirrors({
 
   // check() for a branch already on GitHub (`branch`), merged with `into`: before a pull
   // request is opened into it or marked ready, which run its workflows from a new merge.
-  async function checkBranch({ repo, token, base, branch, into }) {
+  async function checkBranch({ repo, token, base, branch, into, secrets = false }) {
     await swept;
     await mkdir(spoolRoot, { recursive: true });
     const dir = await mkdtemp(join(spoolRoot, "branch-"));
@@ -379,7 +389,7 @@ export function createMirrors({
       // Fetched first, then read only if GitHub has it: a branch it doesn't have runs nothing,
       // and GitHub refuses its pull request.
       const updates = [{ ref, new: ref, bases: [into], ifExists: true }];
-      return await check({ repo, token, base, updates, dir });
+      return await check({ repo, token, base, updates, dir, secrets });
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

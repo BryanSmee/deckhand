@@ -239,6 +239,43 @@ run's branch was checked at its tip. Not checked:
   changed, runs a merge nobody checked. Limit environments' deployment branches (below) so that
   such a merge still can't read their secrets.
 
+**The `workflow_secrets` grant** ([the grants](#the-grants), one repository at a time, #700)
+lets a run write the deploy, release and nightly workflows maintainers ask for, which need
+secrets. It does nothing without `workflows`, and is asked again on each push too. The rules
+above exist because GitHub runs a branch's own copy of a workflow; a workflow it only ever runs
+from the **default branch's copy** doesn't have that risk, since that copy only gets there
+through a merge a person reviewed. For such a workflow, the gateway lifts three rules: it may
+mention `secrets`, give a job an `environment:`, and ask for `write` scopes (still named one by
+one under a top-level `permissions:`; `write-all` stays refused). A workflow counts when its
+`on:` is a mapping of nothing but:
+
+- `schedule`, which GitHub only runs from the default branch;
+- `push` with a `branches:` that lists the repository's default branch alone, by its exact name
+  (no glob or other pattern character, no `branches-ignore`, `tags` or `tags-ignore`; `paths`
+  and `paths-ignore` are fine). An unfiltered `on: push` runs the branch's own copy, with its
+  secrets, as soon as the gateway forwards the push.
+
+Any other trigger keeps the strict rules, and the `[remote rejected]` line names it:
+`pull_request` and an unfiltered `push` run the branch's copy; `pull_request_target`,
+`workflow_run`, `issue_comment` and the like run the default branch's copy because an outsider
+did something (the "pwn request" pattern), out of scope here; `workflow_dispatch` runs the copy
+of whatever ref it is given, so anyone with write access could dispatch a run's branch
+(`gh workflow run --ref issue-…`), which is only checked at its tip: not allowed in this first
+version. A reusable workflow it calls (`uses: ./.github/workflows/x.yml`) has
+`on: workflow_call`, so it keeps the strict rules; pass it secrets with `secrets: inherit` from
+the caller rather than naming them in it. Everything else holds as above: the YAML subset,
+symlinks, workflows from elsewhere, non-ASCII expressions, the merges with the pull requests'
+bases (none of the lifted workflow's triggers runs such a merge).
+
+The default branch's name is the one the gateway reads for those merges at each push. A
+renamed default branch turns a lifted workflow's `push` into a filter on a branch that no longer
+exists: GitHub then runs it on nothing, and the next push changing it is checked against the new
+name. Such a workflow reaches the default branch only through a person's merge: a pull request
+changing a workflow file is never merged by `review.merge` ([Auto-merge](#auto-merge): any file
+under `.github/`, matched without case, waits for a human, and the comment says why). Keep
+environments' deployment branches limited to the default branch all the same: a second layer, in
+case a check is wrong.
+
 The mirrors take a copy of each granted repository in the github service's data volume
 (`github-data`); a mirror's first fetch clones the repository, and may take up to an hour. A
 push is saved in the github service's temporary directory while it is checked, one push per
@@ -1931,12 +1968,14 @@ allow_grant if {
 | `docker`               | a [container engine](#container-engine) next to its sandboxes (`docker`)                    |
 | `research`             | [research runs](#research-runs): any public host, without its code (`internet`)             |
 | `workflows`            | its pushes may change `.github/workflows/` ([above](#github-actions-on-deckhands-branches)) |
+| `workflow_secrets`     | with `workflows`, its workflows that only run from the default branch may use secrets       |
 | `auto_merge`           | UNSAFE: `review.merge` merges on a private repository ([Auto-merge](#auto-merge))           |
 | `auto_merge_public`    | the same on a public repository too                                                         |
 
 - **Nothing by default**: Deckhand's default policies have no `allow_grant` rule. No rule, no
   grant.
-- **One repository at a time**: `docker`, `workflows`, `auto_merge` and `auto_merge_public`
+- **One repository at a time**: `docker`, `workflows`, `workflow_secrets`, `auto_merge` and
+  `auto_merge_public`
   (an engine, workflow files run with
   the Actions secrets, merges nobody reviewed are too broad to grant every repository by
   accident). The orchestrator asks each of them again for two repositories nobody has: `*/*`, and
@@ -2628,9 +2667,10 @@ branch, the last check of everything above. With it on:
   and the git gateway never pushes the default branch. Only the orchestrator merges, after its
   own checks.
 - **Nothing that widens Deckhand is merged by itself**: a pull request that changes
-  `.deckhand.yaml`, `.deckhand/`, `.github/`, a `CODEOWNERS` or a file the config names (the
-  instructions, the Dockerfile) waits for a human, so
-  a run can't grant itself more through a merge.
+  `.deckhand.yaml`, `.deckhand/`, `.github/` (in any case), a `CODEOWNERS` or a file the config
+  names (the instructions, the Dockerfile) waits for a human, so a run can't grant itself more
+  through a merge, nor bring a workflow that reads secrets (`workflow_secrets`) to the default
+  branch.
 - **What was reviewed is what is merged**: the merge names the reviewed commit, so a push
   after the review fails it; the repository's visibility, `mergeable_state` and its GitHub
   Actions runs are read from GitHub at the merge, not taken from a webhook. A merge waiting

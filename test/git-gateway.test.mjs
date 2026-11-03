@@ -291,6 +291,7 @@ async function setup(
     // address → the ID of its network, which a run's token is bound to.
     sandboxOf = async (ip) => (ip === "127.0.0.1" ? "net-1" : null),
     allowWorkflows,
+    allowWorkflowSecrets,
     // () => github-forks.mjs createForkChecks()'s: whose pushes are read for a fork's objects.
     forks,
     // (extra) => the error minting a token with `extra` fails with, or nothing.
@@ -357,6 +358,7 @@ async function setup(
     log: (line) => logs.push(line),
     policies,
     allowWorkflows,
+    allowWorkflowSecrets,
     forks: forks?.(),
     mirrorDir,
     spoolDir,
@@ -1292,6 +1294,80 @@ test("the `workflows` grant: a caller the branch adds meets the default branch's
   );
   // A branch that isn't on GitHub runs nothing: no problem, GitHub refuses the pull request.
   assert.equal(await gateway.checkBranch("org/repo", "issue-1-gone", "main"), null);
+});
+
+// A deploy workflow that only runs from main's copy: a secret, an environment, a write scope.
+const DEPLOY = `name: Deploy
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main]
+permissions:
+  contents: write
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./deploy.sh
+        env: { TOKEN: "\${{ secrets.DEPLOY_TOKEN }}" }
+`;
+
+test("the `workflow_secrets` grant: a workflow only the default branch runs may use secrets, read on each push (#700)", async (t) => {
+  let secrets = true;
+  const { work, remote, commit, upstream, minted, gateway } = await setup(t, {
+    allowWorkflows: () => true,
+    allowWorkflowSecrets: async () => secrets,
+  });
+  commit({ ".github/workflows/deploy.yml": DEPLOY });
+  const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy");
+  assert.ok(res.ok, res.stderr);
+  assert.equal(upstream("refs/heads/issue-1-deploy"), "refs/heads/issue-1-deploy");
+  assert.equal(minted.at(-1).extra.workflows, undefined);
+  assert.ok(minted.some((m) => m.extra.workflows === "write"));
+  // Opening its pull request: the same rules.
+  assert.equal(await gateway.checkBranch("org/repo", "issue-1-deploy", "main"), null);
+  // Another trigger runs a branch's copy: refused, saying which.
+  commit({
+    ".github/workflows/deploy.yml": DEPLOY.replace("permissions:", "  pull_request:\npermissions:"),
+  });
+  const pr = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy");
+  assert.equal(pr.ok, false);
+  assert.match(pr.stderr, /mentions `secrets`/);
+  assert.match(pr.stderr, /`workflow_secrets` doesn't apply, as it runs on `pull_request`/);
+  // A callee with secrets (`on: workflow_call`) keeps the strict rules.
+  commit({
+    ".github/workflows/deploy.yml": DEPLOY.replace(
+      /    runs-on:[^]*$/,
+      "    uses: ./.github/workflows/release.yml\n    secrets: inherit\n",
+    ),
+    ".github/workflows/release.yml": DEPLOY.replace(/^on:\n(.*\n){4}/m, "on: workflow_call\n"),
+  });
+  const called = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy");
+  assert.equal(called.ok, false);
+  assert.match(called.stderr, /release\.yml: .*mentions `secrets`/);
+  assert.doesNotMatch(called.stderr, /deploy\.yml: /);
+  // The grant taken back: the next push keeps the strict rules.
+  commit({ ".github/workflows/deploy.yml": DEPLOY, ".github/workflows/release.yml": null });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy")).ok);
+  secrets = false;
+  commit({ ".github/workflows/deploy.yml": DEPLOY.replace("./deploy.sh", "./deploy.sh --all") });
+  const strict = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy");
+  assert.equal(strict.ok, false);
+  assert.match(strict.stderr, /`permissions\.contents` must be read or none/);
+  assert.doesNotMatch(strict.stderr, /doesn't apply/);
+});
+
+test("the `workflow_secrets` grant: nothing without `workflows`", async (t) => {
+  const { work, remote, commit, minted, mirrorDir } = await setup(t, {
+    allowWorkflowSecrets: () => true,
+  });
+  commit({ ".github/workflows/deploy.yml": DEPLOY });
+  // Streamed through, with a token GitHub refuses workflow files with.
+  await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy");
+  assert.ok(minted.every((m) => m.extra.workflows === undefined));
+  assert.equal(existsSync(mirrorDir), false);
 });
 
 test("saved pushes a stopped listener left are swept, never a check's in progress", async (t) => {

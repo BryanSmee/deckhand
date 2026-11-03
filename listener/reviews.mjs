@@ -780,7 +780,9 @@ export function trustedFile(settings, path) {
   return (
     path === CONFIG_FILE ||
     path.startsWith(".deckhand/") ||
-    path.startsWith(".github/") ||
+    // Without case, as the git gateway reads workflow folders (git-mirror.mjs): a workflow
+    // `workflow_secrets` let through must never be merged with nobody reading it (#700).
+    /^\.github\//i.test(path) ||
     /(^|\/)CODEOWNERS$/.test(path) ||
     named.has(path)
   );
@@ -889,7 +891,11 @@ export async function mergeRefusal(
   ];
   if (trusted.length) {
     const list = trusted.slice(0, 10).map((path) => `\`${path}\``);
-    return { why: `it changes files Deckhand trusts: ${list.join(", ")}` };
+    // A workflow's secrets would reach the default branch with no person reviewing it.
+    const workflows = trusted.some((path) => /^\.github\/workflows\//i.test(path))
+      ? " (a workflow on the default branch runs with the repository's secrets: a person reviews it first)"
+      : "";
+    return { why: `it changes files Deckhand trusts: ${list.join(", ")}${workflows}` };
   }
   // GitHub lists 3000 files at most, without saying so: a trusted one may be past the end.
   if (!(files.length >= pr.changed_files)) {

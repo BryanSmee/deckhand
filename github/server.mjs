@@ -95,6 +95,8 @@ const grants = {
   // Through grantOf(), as the listener reads every grant: its policies' and its files'.
   workflows: async (repo) =>
     (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflows === true,
+  workflowSecrets: async (repo) =>
+    (await grantOf(config, repo, { granted: grantsBy(policies) })).allowWorkflowSecrets === true,
 };
 
 const { server } = createGithubService({

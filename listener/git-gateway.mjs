@@ -15,8 +15,9 @@
 // gets one with `workflows: write` too. The grant is read on each push, so revoking it
 // applies to the next one. Such a push is read whole first, and its workflow files checked
 // against the repo's mirror (git-mirror.mjs, workflow-check.mjs): GitHub runs a branch's own
-// workflows, so one that writes or names a secret is refused. Other repos' pushes stream
-// through unread.
+// workflows, so one that writes or names a secret is refused, unless the repo is granted
+// `workflow_secrets` too and GitHub only runs the default branch's copy of it (#700). Other
+// repos' pushes stream through unread.
 //
 // A push GitHub took is the run's last (broker.mjs watchPushes()): when, and to which branch,
 // for the dashboard.
@@ -223,7 +224,7 @@ export function workflowRefusals(found) {
     [...byRef].map(([ref, files]) => [
       ref,
       oneLine(
-        `workflow files a sandbox pushes must cap their token at read and name no secret: ${files.join("; ")}`,
+        `workflow files a sandbox pushes must cap their token at read and name no secret, unless \`workflow_secrets\` covers them: ${files.join("; ")}`,
       ),
     ]),
   );
@@ -274,6 +275,9 @@ export function createGitGateway({
   policies = null,
   // (repo) → whether the operator's policies grant it `workflows` (grants.mjs), or a promise of it
   allowWorkflows = () => false,
+  // (repo) → whether they grant it `workflow_secrets` too, or a promise of it: its workflows
+  // that only run from the default branch may use secrets (workflow-check.mjs)
+  allowWorkflowSecrets = () => false,
   // github-forks.mjs createForkChecks(): whose pushes are checked for a fork's objects
   // (restricted()). None: nobody's.
   forks = null,
@@ -564,7 +568,8 @@ export function createGitGateway({
       const bases = /^0+$/.test(update.new) ? [] : await pullBases(github, pushed.repo, update.ref);
       updates.push({ ...update, bases });
     }
-    return workflowRefusals(await mirrors.check({ ...pushed, base, updates }));
+    const secrets = await secretsGranted(pushed.repo);
+    return workflowRefusals(await mirrors.check({ ...pushed, base, updates, secrets }));
   }
 
   // The bases of the open pull requests from `ref`, a branch: GitHub runs their workflows from
@@ -592,14 +597,19 @@ export function createGitGateway({
     if (!github) throw new Error("the GitHub App is not set up");
     const base = await defaultBranch(github, repo);
     const { token } = await github.repoToken(repo, { contents: "read" });
-    const found = await mirrors.checkBranch({ repo, token, base, branch, into });
+    const secrets = await secretsGranted(repo);
+    const found = await mirrors.checkBranch({ repo, token, base, branch, into, secrets });
     return workflowRefusals(found.map((f) => ({ ...f, ref: branch }))).get(branch) ?? null;
   }
 
   // Whether the repo is granted `workflows` now; not when that can't be decided.
-  async function workflowsGranted(repo) {
+  const workflowsGranted = (repo) => granted(allowWorkflows, repo);
+  // The same for `workflow_secrets`, read with each check: only with `workflows` granted.
+  const secretsGranted = (repo) => granted(allowWorkflowSecrets, repo);
+
+  async function granted(allow, repo) {
     try {
-      return (await allowWorkflows(repo)) === true;
+      return (await allow(repo)) === true;
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
       return false;

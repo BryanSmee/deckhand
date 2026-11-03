@@ -109,6 +109,7 @@ function grantRows(grant) {
     allowDocker: grant.allowDocker,
     allowResearch: grant.allowResearch,
     allowWorkflows: grant.allowWorkflows,
+    allowWorkflowSecrets: grant.allowWorkflowSecrets,
     allowAutoMerge: grant.allowAutoMerge,
     hosts: grant.hosts,
     cachedHosts: grant.cachedHosts,

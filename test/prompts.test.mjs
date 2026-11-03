@@ -147,7 +147,12 @@ test("prompts: onboarding lists what this Deckhand allows the repo", () => {
   assert.match(text, /`\.github\/workflows\/`: not granted: .* grant this repository `workflows`/);
   const workflows = { ...grant, allowWorkflows: true };
   const editable = promptFor(issue, { mode: "onboarding", settings, config, grant: workflows });
-  assert.match(editable, /`\.github\/workflows\/`: allowed: .* mentions `secrets`/);
+  assert.match(editable, /`\.github\/workflows\/`: allowed: .* mentions `secrets`\n/);
+  const secrets = { ...workflows, allowWorkflowSecrets: true };
+  assert.match(
+    promptFor(issue, { mode: "onboarding", settings, config, grant: secrets }),
+    /mentions `secrets`; with `workflow_secrets` granted too, one whose `on:` is only `schedule` and `push`/,
+  );
   assert.match(text, /Models: work `opus` \(high effort\), brainstorms `sonnet` \(low\)/);
   assert.match(text, /## Reference: `.deckhand.yaml`/);
 });
@@ -246,8 +251,15 @@ test("prompts: work runs are told whether their pushes may change workflow files
       promptFor(task, { ...extra, grant: granted }),
       /Pushes may add or change files under `\.github\/workflows\/`[^]*top-level `permissions:`[^]*mention `secrets`/,
     );
+    // With `workflow_secrets` too, what it lifts and for which triggers (#700).
+    assert.doesNotMatch(promptFor(task, { ...extra, grant: granted }), /workflow_secrets/);
+    const secrets = { ...granted, allowWorkflowSecrets: true };
+    assert.match(
+      promptFor(task, { ...extra, grant: secrets }),
+      /rebase on it\nfirst\.\nThe operator grants `workflow_secrets` too: [^]*`schedule` and `push` with `branches:` naming the default branch alone[^]*not `workflow_dispatch`[^]*never merged automatically\. Ask the maintainer/,
+    );
     // What a workflow needs beyond that is asked of the maintainer, not left in prose (#551).
-    for (const g of [grant, granted]) {
+    for (const g of [grant, granted, secrets]) {
       assert.match(
         promptFor(task, { ...extra, grant: g }),
         /[Aa]sk the maintainer for (what a workflow would need beyond that|them) when the task needs\s+(it|them)\s+\(see "Stopping to ask" in your instructions; say in the pull request what (it needs|they need) too\)/,

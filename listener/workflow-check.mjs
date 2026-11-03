@@ -1,7 +1,9 @@
 // The checks the git gateway runs on the workflow files a push of a repo granted
 // `workflows` changes (git-gateway.mjs): a workflow a sandbox wrote must cap its token
 // at read and name no secret, since GitHub runs a branch's own workflows on push and
-// pull_request.
+// pull_request. With `workflow_secrets` too, one GitHub only ever runs from the default
+// branch's copy (defaultBranchOnly()) may use secrets, environments and write scopes: that
+// copy only gets there through a merge a person reviewed.
 //
 // The listener has no dependencies, so it reads them with its own parser. Not lib/yaml.mjs's: a
 // config the default branch owns can be read loosely (JSON escapes, typed scalars, `...`
@@ -403,21 +405,60 @@ function field(map, name) {
 const short = (value) => (value.length > 40 ? `${value.slice(0, 40)}…` : value);
 
 // Why a `permissions:` value lets the token write, or does what a check can't read: read-all,
-// {} and read or none scopes only.
-function permissionProblems(value, where) {
+// {} and read or none scopes only; with `write`, write scopes too (still named one by one).
+function permissionProblems(value, where, write = false) {
   if (typeof value === "string") {
     return strip(value).toLowerCase() === "read-all"
       ? []
       : [`\`${where}: ${short(value)}\` is not allowed`];
   }
   if (!(value instanceof Map)) return [`\`${where}\` must be read-all or a mapping of scopes`];
+  const levels = write ? ["read", "write", "none"] : ["read", "none"];
   const problems = [];
   for (const [scope, level] of value) {
-    if (typeof level !== "string" || !["read", "none"].includes(strip(level).toLowerCase())) {
-      problems.push(`\`${where}.${scope}\` must be read or none`);
+    if (typeof level !== "string" || !levels.includes(strip(level).toLowerCase())) {
+      problems.push(`\`${where}.${scope}\` must be ${write ? "read, write" : "read"} or none`);
     }
   }
   return problems;
+}
+
+// The triggers that run only the default branch's copy of a workflow (defaultBranchOnly()):
+// `schedule`, and `push` filtered to that branch alone. Not `workflow_dispatch` (#700): anyone
+// with write access can dispatch a Deckhand branch's copy.
+const DEFAULT_BRANCH_TRIGGERS = new Set(["schedule", "push"]);
+// What a branch filter reads as a pattern (GitHub's filter cheat sheet), and an escape.
+const PATTERN = /[*?+[\]!\\]/;
+// The filters a `push` restricted to the default branch may have besides `branches`.
+const PUSH_FILTERS = new Set(["branches", "paths", "paths-ignore"]);
+
+// Why `doc`'s triggers may run another copy of it than the default branch's (`base`), or null
+// when they can't: an `on:` mapping of `schedule`, and of `push` whose `branches:` names `base`
+// alone, exactly (no pattern, no `branches-ignore`, `tags` or `tags-ignore`; `paths` filters
+// are fine). Anything else, a `pull_request`, `workflow_call`, `workflow_dispatch` or an
+// unfiltered `push`, runs a branch's copy, or the default branch's for an outsider (a "pwn
+// request"): the strict rules stay.
+export function notDefaultBranchOnly(doc, base) {
+  const on = doc instanceof Map ? field(doc, "on") : undefined;
+  if (!(on instanceof Map) || !on.size) return "its `on:` isn't a mapping of triggers";
+  for (const [trigger, value] of on) {
+    const name = fold(trigger);
+    if (!DEFAULT_BRANCH_TRIGGERS.has(name))
+      return `it runs on \`${trigger}\`, not only from ${base}`;
+    if (name !== "push") continue;
+    const only = `its \`push\` isn't filtered to \`branches: [${base}]\` alone`;
+    if (!(value instanceof Map)) return only;
+    for (const key of value.keys()) {
+      if (!PUSH_FILTERS.has(fold(key))) return `${only} (it has \`${key}\`)`;
+    }
+    const branches = field(value, "branches");
+    const names = typeof branches === "string" ? [branches] : branches;
+    if (!Array.isArray(names) || !names.length) return only;
+    for (const branch of names) {
+      if (typeof branch !== "string" || branch !== base || PATTERN.test(branch)) return only;
+    }
+  }
+  return null;
 }
 
 // Whether `value` spells `secrets`, also through letters that fold to it (`ſ`, full-width).
@@ -440,7 +481,14 @@ export function workflowProblems(text) {
 // `environment:` of theirs reads that environment's secrets without the caller naming one: the
 // gateway checks them too, changed or not (git-mirror.mjs). One from anywhere else is never
 // pushed through it, so it is refused.
-export function inspectWorkflow(text) {
+//
+// `secretsOn`: the repo's default branch when it is granted `workflow_secrets` (#700). A
+// workflow only that branch's copy of runs (notDefaultBranchOnly()) may then name secrets,
+// deploy to an environment and ask for write scopes; `relaxed` says it needed to. The rest
+// holds whatever its triggers: the YAML subset, a top-level `permissions:`, no workflow from
+// elsewhere, ASCII expressions. Its callees have `on: workflow_call`: the strict rules.
+// `strict`: why the strict rules applied, when they refused something it would have relaxed.
+export function inspectWorkflow(text, { secretsOn = null } = {}) {
   const calls = [];
   const secrets = new Set();
   const expressions = new Set();
@@ -460,19 +508,26 @@ export function inspectWorkflow(text) {
     throw error;
   }
   if (!(doc instanceof Map)) return { problems: ["not a workflow (a mapping of keys)"], calls };
+  // Each rule's problems twice: as they are, and with what `workflow_secrets` lifts lifted.
   const problems = [];
+  const relaxed = [];
+  const both = (...found) => (problems.push(...found), relaxed.push(...found));
+  const permissions = (value, where) => {
+    problems.push(...permissionProblems(value, where));
+    relaxed.push(...permissionProblems(value, where, true));
+  };
   const top = field(doc, "permissions");
   if (top === undefined) {
-    problems.push("no top-level `permissions:` (add `permissions: { contents: read }`)");
+    both("no top-level `permissions:` (add `permissions: { contents: read }`)");
   } else {
-    problems.push(...permissionProblems(top, "permissions"));
+    permissions(top, "permissions");
   }
   const jobs = field(doc, "jobs");
   if (jobs instanceof Map) {
     for (const [id, job] of jobs) {
       if (!(job instanceof Map)) continue;
       const own = field(job, "permissions");
-      if (own !== undefined) problems.push(...permissionProblems(own, `jobs.${id}.permissions`));
+      if (own !== undefined) permissions(own, `jobs.${id}.permissions`);
       // An environment's secrets are its jobs' (through `secrets`, refused here, or a callee's),
       // and a job deploying to one creates a deployment, which may start the `on: deployment`
       // workflows of the deployed commit: the maintainers' copies, with their secrets.
@@ -485,7 +540,7 @@ export function inspectWorkflow(text) {
         typeof uses === "string" && /^\.\/\.github\/workflows\/[^/]+$/i.test(strip(uses));
       if (local) calls.push(strip(uses).slice(2));
       else {
-        problems.push(
+        both(
           `\`jobs.${id}.uses\` calls a workflow from elsewhere: only this repository's \`./.github/workflows/…\` can be called`,
         );
       }
@@ -493,9 +548,12 @@ export function inspectWorkflow(text) {
   }
   if (secrets.size) problems.push(`mentions \`secrets\` (line ${[...secrets].join(", ")})`);
   if (expressions.size) {
-    problems.push(
-      `non-ASCII characters in a \`\${{ }}\` expression (line ${[...expressions].join(", ")})`,
-    );
+    both(`non-ASCII characters in a \`\${{ }}\` expression (line ${[...expressions].join(", ")})`);
   }
-  return { problems, calls };
+  if (relaxed.length === problems.length || secretsOn === null) return { problems, calls };
+  const strict = notDefaultBranchOnly(doc, secretsOn);
+  if (strict === null) return { problems: relaxed, calls, relaxed: true };
+  // Said last: why `workflow_secrets` lifts none of them.
+  problems.push(`\`workflow_secrets\` doesn't apply, as ${strict}`);
+  return { problems, calls, strict };
 }

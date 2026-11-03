@@ -290,3 +290,129 @@ test("a job deploying to an environment is refused", () => {
     );
   }
 });
+
+// A deploy workflow: secrets, an environment and write scopes, with `on` as `triggers` says.
+const deploy = (triggers) => `name: Deploy
+on:
+${triggers}
+permissions:
+  contents: write
+  id-token: write
+jobs:
+  deploy:
+    environment: production
+    runs-on: ubuntu-latest
+    steps:
+      - run: ./deploy.sh
+        env:
+          TOKEN: \${{ secrets.DEPLOY_TOKEN }}
+`;
+const SCHEDULE = "  schedule:\n    - cron: '0 3 * * *'";
+const ON_MAIN = "  push:\n    branches: [main]\n    paths: [src/**]";
+const relaxed = (text) => inspectWorkflow(text, { secretsOn: "main" });
+
+test("workflow_secrets: a workflow only the default branch's copy of runs may use secrets, environments and write scopes (#700)", () => {
+  for (const triggers of [
+    SCHEDULE,
+    ON_MAIN,
+    `${SCHEDULE}\n${ON_MAIN}`,
+    "  push:\n    branches: main",
+    "  push:\n    branches:\n      - main\n    paths-ignore: [docs/**]",
+  ]) {
+    assert.deepEqual(
+      relaxed(deploy(triggers)),
+      { problems: [], calls: [], relaxed: true },
+      triggers,
+    );
+  }
+  // Without the grant (no `secretsOn`), the same workflow keeps the strict rules.
+  assert.deepEqual(workflowProblems(deploy(SCHEDULE)), [
+    "`permissions.contents` must be read or none",
+    "`permissions.id-token` must be read or none",
+    "`jobs.deploy.environment`: deploying to an environment is not allowed",
+    "mentions `secrets` (line 15)",
+  ]);
+  // A workflow the strict rules pass needs nothing lifted.
+  assert.deepEqual(relaxed(WORKFLOW), { problems: [], calls: [] });
+});
+
+test("workflow_secrets: any other trigger, or a push not filtered to the default branch alone, keeps the strict rules", () => {
+  const cases = [
+    [`${SCHEDULE}\n  pull_request:`, /runs on `pull_request`, not only from main/],
+    [`${SCHEDULE}\n  pull_request_target:`, /runs on `pull_request_target`/],
+    [`${ON_MAIN}\n  workflow_call:`, /runs on `workflow_call`/],
+    [`${ON_MAIN}\n  workflow_run:\n    workflows: [CI]`, /runs on `workflow_run`/],
+    [`${ON_MAIN}\n  issue_comment:`, /runs on `issue_comment`/],
+    // Not in this first version: anyone with write access can dispatch a branch's copy.
+    [`${SCHEDULE}\n  workflow_dispatch:`, /runs on `workflow_dispatch`/],
+    ["  push:", /`push` isn't filtered to `branches: \[main\]` alone/],
+    ["  push:\n    paths: [src/**]", /`push` isn't filtered/],
+    ["  push:\n    branches: [main, release]", /`push` isn't filtered/],
+    ["  push:\n    branches: [Main]", /`push` isn't filtered/],
+    ["  push:\n    branches: ['main*']", /`push` isn't filtered/],
+    ["  push:\n    branches: ['**']", /`push` isn't filtered/],
+    ["  push:\n    branches: []", /`push` isn't filtered/],
+    ["  push:\n    branches: [main]\n    tags: [v*]", /`push` isn't filtered.*\(it has `tags`\)/],
+    ["  push:\n    branches: [main]\n    tags-ignore: [x]", /\(it has `tags-ignore`\)/],
+    ["  push:\n    branches-ignore: [dev]", /\(it has `branches-ignore`\)/],
+    ["  push:\n    branches: [main]\n    branches-ignore: [dev]", /\(it has `branches-ignore`\)/],
+  ];
+  for (const [triggers, why] of cases) {
+    const { problems, relaxed: lifted } = relaxed(deploy(triggers));
+    assert.equal(lifted, undefined, triggers);
+    assert.match(problems.join("\n"), /^mentions `secrets` \(line \d+\)$/m, triggers);
+    assert.ok(
+      problems.includes("`jobs.deploy.environment`: deploying to an environment is not allowed"),
+      triggers,
+    );
+    assert.match(problems.at(-1), /^`workflow_secrets` doesn't apply, as /, triggers);
+    assert.match(problems.at(-1), why, triggers);
+  }
+  // `on` as a string or a list: every event unfiltered.
+  for (const on of ["on: push", "on: [schedule, push]"]) {
+    const text = deploy(SCHEDULE).replace(/^on:\n.*\n.*\n/m, `${on}\n`);
+    assert.match(relaxed(text).problems.at(-1), /its `on:` isn't a mapping of triggers/, on);
+  }
+});
+
+test("workflow_secrets: what it never lifts, and a callee's own rules", () => {
+  // No top-level `permissions:`, `write-all`, a workflow from elsewhere, a look-alike letter
+  // in an expression: refused whatever the triggers.
+  const text = deploy(SCHEDULE);
+  assert.deepEqual(relaxed(text.replace(/^permissions:\n.*\n.*\n/m, "")).problems, [
+    "no top-level `permissions:` (add `permissions: { contents: read }`)",
+  ]);
+  assert.deepEqual(
+    relaxed(text.replace(/^permissions:\n.*\n.*\n/m, "permissions: write-all\n")).problems,
+    ["`permissions: write-all` is not allowed"],
+  );
+  assert.deepEqual(
+    relaxed(
+      text.replace(
+        "    runs-on: ubuntu-latest\n",
+        "    uses: evil/repo/.github/workflows/w.yml@main\n",
+      ),
+    ).problems,
+    [
+      "`jobs.deploy.uses` calls a workflow from elsewhere: only this repository's `./.github/workflows/…` can be called",
+    ],
+  );
+  assert.deepEqual(relaxed(text.replace("secrets.DEPLOY_TOKEN", "ſecrets.DEPLOY_TOKEN")).problems, [
+    "non-ASCII characters in a `${{ }}` expression (line 15)",
+  ]);
+  // A local callee is listed, and checked on its own: `on: workflow_call` keeps it strict.
+  const caller = text.replace(
+    "    runs-on: ubuntu-latest\n    steps:\n      - run: ./deploy.sh\n        env:\n          TOKEN: ${{ secrets.DEPLOY_TOKEN }}\n",
+    "    uses: ./.github/workflows/release.yml\n    secrets: inherit\n",
+  );
+  assert.deepEqual(relaxed(caller), {
+    problems: [],
+    calls: [".github/workflows/release.yml"],
+    relaxed: true,
+  });
+  const callee = deploy("  workflow_call:");
+  assert.match(
+    relaxed(callee).problems.join("\n"),
+    /mentions `secrets`[^]*runs on `workflow_call`/,
+  );
+});
