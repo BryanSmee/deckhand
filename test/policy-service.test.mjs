@@ -13,7 +13,12 @@ import { createPolicies, DEFAULTS_MS } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
 import { createEngine, opaErrors } from "../policy-service/engine.mjs";
 import { opaBinary, opaServer } from "../policy-service/opa.mjs";
-import { createPolicyService, grantsDirOf, ROUTES } from "../policy-service/service.mjs";
+import {
+  createPolicyService,
+  grantsDirOf,
+  ROUTES,
+  settingsOf,
+} from "../policy-service/service.mjs";
 import {
   assertHealth,
   evalResult,
@@ -554,6 +559,23 @@ test("grantsDirOf: the environment's, else config.yaml's grants_dir, else the de
   );
   // A file named on purpose has to be there, as for the listener.
   assert.throws(() => grantsDirOf({ CONFIG_FILE: "/c.yaml" }, files({})), /reading \/c\.yaml/);
+});
+
+test("settingsOf: the grants folder and the metrics port, from one read of config.yaml", () => {
+  const reads = [];
+  const read = (path) => {
+    reads.push(path);
+    return "allowed_users: [a]\ngrants_dir: /etc/deckhand/prod\nmetrics_port: 9464\n";
+  };
+  assert.deepEqual(settingsOf({}, read), { GRANTS_DIR: "/etc/deckhand/prod", METRICS_PORT: 9464 });
+  assert.deepEqual(reads, ["/etc/deckhand/config.yaml"]);
+  assert.deepEqual(settingsOf({ METRICS_PORT: "9500", GRANTS_DIR: "/g" }, read), {
+    GRANTS_DIR: "/g",
+    METRICS_PORT: 9500,
+  });
+  assert.throws(() => settingsOf({}, () => "grants_dir: [a, b]\n"), {
+    message: /grants_dir: expected a value/,
+  });
 });
 
 test("the listener refuses every decision when the policy service doesn't read its grants folder's policies", async (t) => {

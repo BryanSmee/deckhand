@@ -128,7 +128,8 @@ patches:
 `config.yaml`'s `allowed_users` is required, as with Compose: edge and the orchestrator don't
 start without it. `config.yaml` is read at start: the pods restart when it changes, as the
 ConfigMap's name carries a hash of it: so do the grants, which the services otherwise read
-again at each run.
+again at each run. Every service that mounts it restarts on an edit of either, the broker too
+(for `metrics_port` alone).
 
 **2. The API server's addresses**: the runner (the sandboxes' pods) and the broker (its callers'
 TokenReviews) reach the API server and nothing else, through the `deckhand-api-server`

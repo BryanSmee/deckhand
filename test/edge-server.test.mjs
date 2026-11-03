@@ -239,6 +239,30 @@ test("edge: GET /metrics on its own port, its build, process and lease; nothing 
   assert.doesNotMatch(web, /deckhand_build_info/);
 });
 
+test("edge refuses a METRICS_PORT on its INTERNAL_PORT, before it listens", async (t) => {
+  const child = spawn(process.execPath, ["edge/server.mjs"], {
+    cwd: join(import.meta.dirname, ".."),
+    env: {
+      PATH: process.env.PATH,
+      LOG_FORMAT: "text",
+      DATA_DIR: tempDir(t),
+      ALLOWED_USERS: "alice",
+      PORT: "0",
+      INTERNAL_PORT: "9464",
+      METRICS_PORT: "9464",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  t.after(() => child.kill("SIGKILL"));
+  let out = "";
+  child.stdout.on("data", (d) => (out += d));
+  child.stderr.on("data", (d) => (out += d));
+  const code = await new Promise((resolve) => child.on("close", resolve));
+  assert.equal(code, 1, out);
+  assert.match(out, /Edge: METRICS_PORT: not INTERNAL_PORT's/);
+  assert.doesNotMatch(out, /Listening on/);
+});
+
 test("unsigned or oversized deliveries are refused unread; one client gets only its share of places", async (t) => {
   const { port, until, output } = await startEdge(t);
   const signed = { "x-github-event": "issue_comment", "x-hub-signature-256": "sha256=00" };

@@ -240,19 +240,30 @@ test("a collected gauge is asked at each scrape, guarded, and left out when it f
   assert.equal(lines.filter((line) => /store away/.test(line)).length, 1);
 });
 
-test("a collect() that never answers is left out of the scrape, the rest sent at once", async () => {
-  const { registry, lines } = recorded({ collectMs: 50 });
+test("a collect() that never answers is left out of the scrape, the rest sent at once", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  // What's pending runs: the collectors' promises, the renders' awaits (setImmediate isn't mocked).
+  const settle = () => new Promise((resolve) => setImmediate(resolve));
+  const { registry, lines } = recorded({ collectMs: 2000 });
   registry.gauge("deckhand_build", "Build.").set(1);
   registry.gauge("deckhand_queue", "Never answers.", { collect: () => new Promise(() => {}) });
   let asked = 0;
-  registry.gauge("deckhand_slow", "Answers in a while.", {
-    collect: () => new Promise((resolve) => setTimeout(() => resolve(++asked), 30)),
+  registry.gauge("deckhand_slow", "Answers in a second.", {
+    collect: () => new Promise((resolve) => setTimeout(() => resolve(++asked), 1000)),
   });
   registry.gauge("deckhand_lease", "Answers at once.", { collect: () => 1 });
-  const started = Date.now();
-  const [first, second] = await Promise.all([registry.render(), registry.render()]);
-  // Asked together: one wait for both the slow one and the one that never answers.
-  assert.ok(Date.now() - started < 1000);
+  const done = [];
+  const renders = [registry.render(), registry.render()];
+  renders.forEach((render, i) => render.then((text) => (done[i] = text)));
+  await settle();
+  t.mock.timers.tick(1000);
+  await settle();
+  assert.deepEqual(done, [], "waiting for the one that doesn't answer");
+  // Asked together, not in turn: one collectMs from the start ends both scrapes, the slow one's
+  // second included.
+  t.mock.timers.tick(1000);
+  await settle();
+  const [first, second] = done;
   for (const text of [first, second]) {
     assert.deepEqual(
       samples(text).sort(),
@@ -261,7 +272,7 @@ test("a collect() that never answers is left out of the scrape, the rest sent at
     assert.match(text, /# TYPE deckhand_queue gauge\n# HELP deckhand_slow/);
   }
   assert.deepEqual(lines, [
-    "Metrics: deckhand_queue: collecting it failed, left out: no answer within 0.05 s",
+    "Metrics: deckhand_queue: collecting it failed, left out: no answer within 2 s",
   ]);
 });
 
@@ -406,6 +417,13 @@ test("metricsPortOf: the environment, else config.yaml's metrics_port, else none
   assert.throws(() => metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), {
     message: /^\/srv\/c\.yaml: metrics_port: expected a port/,
   });
+  // One of another type is refused, as the listener refuses it, not left out unsaid.
+  for (const value of ["[9464]", "true", "{ port: 9464 }"]) {
+    files["/srv/c.yaml"] = `metrics_port: ${value}\n`;
+    assert.throws(() => metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), {
+      message: /^\/srv\/c\.yaml: metrics_port: expected a value/,
+    });
+  }
   files["/srv/c.yaml"] = "grants_dir: /g\n";
   assert.equal(metricsPortOf({ CONFIG_FILE: "/srv/c.yaml" }, read), null);
   files["/srv/c.yaml"] = "a: [\n";

@@ -354,7 +354,8 @@ services:
       # Its public key (<kid>.pem), for the policy service and the runner to check service tokens with: nothing
       # secret, and a volume apart from its signing key's.
       - service-keys:/service-keys
-      # Your configuration, read only: config.yaml's metrics_port, nothing else of it.
+      # Your configuration, read only: the server folder, as the other services mount it, of
+      # which the broker reads config.yaml's metrics_port alone.
       - ${DECKHAND_SERVER_DIR:-./server}:/etc/deckhand:ro
     # Ready once its keys are made and published: the others wait for it.
     healthcheck:

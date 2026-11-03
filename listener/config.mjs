@@ -20,7 +20,7 @@ import {
 } from "./agents/credentials.mjs";
 import { MODEL_NAME } from "./events.mjs";
 import { ENGINES } from "./runner/engine.mjs";
-import { metricsPort } from "../lib/metrics.mjs";
+import { METRICS_PORT_SETTING } from "../lib/metrics.mjs";
 import { urlProblem } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { PRIVATE_RANGES, parseCidr, privateRange } from "../lib/subnets.mjs";
@@ -250,7 +250,7 @@ export const SETTINGS = {
   GITHUB_URL: { default: "https://github.com", parse: noSlash },
   GITHUB_API: { default: "https://api.github.com", parse: noSlash },
   // Each service's Prometheus metrics, on a port of its own (../lib/metrics.mjs). Empty: none.
-  METRICS_PORT: { default: null, parse: (text, { label }) => metricsPort(text, label) },
+  METRICS_PORT: METRICS_PORT_SETTING,
 };
 
 // What config.yaml may set, and the YAML it takes: each setting's environment variable, in
