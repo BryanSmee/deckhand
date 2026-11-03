@@ -196,7 +196,7 @@ test("METRICS_PORT: off by default, from the environment or config.yaml, its own
       error instanceof ConfigError &&
       /config\.yaml: metrics_port: expected a port/.test(error.message),
   );
-  assert.throws(() => loadConfig({ ...base, METRICS_PORT: "0" }), ConfigError);
+  assert.throws(() => loadConfig({ ...base, METRICS_PORT: "65536" }), ConfigError);
   assert.throws(() => loadConfig({ ...base, METRICS_PORT: "8080" }), /PORT and METRICS_PORT/);
 });
 

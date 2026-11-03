@@ -77,6 +77,8 @@ async function startEdge(t) {
       PORT: "0",
       // A port the OS picks, as for PORT: one probed free first may be another test's by then.
       INTERNAL_PORT: "0",
+      METRICS_PORT: "0",
+      DECKHAND_VERSION: "1.2.3",
       DATA_DIR: dir,
       ALLOWED_USERS: "alice",
       PUBLIC_URL: "https://hooks.example.com",
@@ -102,6 +104,7 @@ async function startEdge(t) {
     });
   const port = Number((await until(/Listening on :(\d+)\n/))[1]);
   const internalPort = Number((await until(/Internal port on :(\d+)\n/))[1]);
+  const metricsPort = Number((await until(/Metrics on :(\d+)\/metrics\n/))[1]);
   const asOrchestrator = `Bearer ${signServiceToken({ sub: "orchestrator", aud: "edge" }, key)}`;
   const internal = (path, init = {}) =>
     fetch(`http://127.0.0.1:${internalPort}${path}`, {
@@ -112,7 +115,17 @@ async function startEdge(t) {
         ...init.headers,
       },
     });
-  return { child, port, internal, asked, until, files, output: () => out };
+  return {
+    child,
+    port,
+    internalPort,
+    metricsPort,
+    internal,
+    asked,
+    until,
+    files,
+    output: () => out,
+  };
 }
 
 const signature = (body) => `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
@@ -208,6 +221,23 @@ function headersOnly(port, headers) {
     req.flushHeaders();
   });
 }
+
+test("edge: GET /metrics on its own port, its build, process and lease; nothing else there", async (t) => {
+  const { port, internalPort, metricsPort } = await startEdge(t);
+  assert.ok(![port, internalPort].includes(metricsPort));
+  const res = await fetch(`http://127.0.0.1:${metricsPort}/metrics`);
+  assert.equal(res.status, 200);
+  const text = await res.text();
+  assert.match(text, /^deckhand_build_info\{service="edge",version="1\.2\.3"\} 1$/m);
+  assert.match(text, /^deckhand_process_resident_memory_bytes \d+$/m);
+  assert.match(text, /^deckhand_lease_held\{lease="edge\/redeliveries"\} [01]$/m);
+  for (const path of ["/health", "/webhook", "/api/state"]) {
+    assert.equal((await fetch(`http://127.0.0.1:${metricsPort}${path}`)).status, 404, path);
+  }
+  // Nor is it on edge's public port.
+  const web = await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
+  assert.doesNotMatch(web, /deckhand_build_info/);
+});
 
 test("unsigned or oversized deliveries are refused unread; one client gets only its share of places", async (t) => {
   const { port, until, output } = await startEdge(t);

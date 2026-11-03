@@ -254,7 +254,8 @@ test("METRICS_PORT: empty is none, a port is one, anything else refused", () => 
   assert.equal(metricsPort(undefined), null);
   assert.equal(metricsPort(""), null);
   assert.equal(metricsPort(" 9464 "), 9464);
-  for (const bad of ["0", "65536", "abc", "94.6", "-1"]) {
+  assert.equal(metricsPort("0"), 0);
+  for (const bad of ["65536", "abc", "94.6", "-1"]) {
     assert.throws(() => metricsPort(bad), ConfigError, bad);
   }
   assert.throws(() => metricsPort("x", "config.yaml: metrics_port"), {
