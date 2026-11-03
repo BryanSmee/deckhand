@@ -54,6 +54,7 @@ function setup({
   policies = null,
   fixes = 0,
   reply = null,
+  metrics = null,
 } = {}) {
   let time = 1_800_000_000_000;
   const calls = [];
@@ -103,6 +104,7 @@ function setup({
     reply: reply ?? (async (repo, number, text) => replies.push({ repo, number, text })),
     log: (line) => logged.push(line),
     now: () => time,
+    metrics,
     ...(sleep ? { sleep } : {}),
   });
   return w;
@@ -163,6 +165,27 @@ test("clean, unstable, blocked, behind and not yet computed don't start a run", 
     await w.conflicts.tick();
     assert.deepEqual(w.accepted, [], JSON.stringify(fields));
   }
+});
+
+test("each pull request's check counted by its result (deckhand_conflict_checks_total)", async () => {
+  const results = [];
+  const w = setup({
+    open: [31, 41, 51, 61, 71].map((n) => [`org/repo#${n - 1}`, { number: n, state: "draft" }]),
+    prs: {
+      31: pull(31),
+      41: pull(41, { mergeable: true, mergeable_state: "clean" }),
+      51: pull(51, { mergeable: null, mergeable_state: "unknown" }),
+      61: pull(61),
+      71: () => {
+        throw new Error("GitHub is down");
+      },
+    },
+    busy: (key) => key === "org/repo#60",
+    metrics: { conflictCheck: (result) => results.push(result) },
+  });
+  const counts = await w.conflicts.tick();
+  assert.deepEqual(results, ["started", "clean", "pending", "skipped", "error"]);
+  assert.deepEqual([counts.started, counts.pending], [1, 1]);
 });
 
 test("mergeable: null is asked again at the next tick, not the next interval", async () => {

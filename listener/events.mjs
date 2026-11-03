@@ -246,9 +246,14 @@ function entry(author, url, body) {
   return `From @${author.login}${url ? ` (${url})` : ""}:\n\n${lines.join("\n")}`;
 }
 
+// What a skip() of the operator's checks passes as its second argument: the delivery is refused
+// (a repo out of ALLOWED_REPOS, an author out of ALLOWED_USERS, not from an installation), not
+// merely of no use (its metric, metrics.mjs deliveryResult()).
+export const REFUSED = "refused";
+
 // Returns { repo, id, kind, number, trigger, modeLine, text, replyTo, comment } or null to
 // ignore. `modeLine`: what a "/mode <name>" line asks for, checked against the repo's modes later.
-// `skip(reason)` logs why a delivery is ignored and returns null: deliveries that do nothing
+// `skip(reason, REFUSED?)` logs why a delivery is ignored and returns null: deliveries that do nothing
 // are the usual question.
 //
 // `config.inbox` is the repo's (repo-config.mjs): comments on its ideas or bugs issue are
@@ -266,16 +271,16 @@ export function workItem(config, event, p, skip = () => null) {
     return skip(`${event} ${p.action ?? ""} by ${p.sender?.login ?? "?"}`);
   }
   // Fail closed: only deliveries for one of the App's installations.
-  if (!p.installation?.id) return skip("not from an installation of the App");
+  if (!p.installation?.id) return skip("not from an installation of the App", REFUSED);
   // A pull request's state and CI's runs: reviews.mjs follows them, nothing runs Claude for them.
   if (event === "pull_request" || event === "workflow_run") return skip(`${event}: nothing to run`);
   if (!repo || !author) return skip("not a comment");
   if (!repoAllowed(config, repo)) {
-    return skip(`${repo} not in ALLOWED_REPOS`);
+    return skip(`${repo} not in ALLOWED_REPOS`, REFUSED);
   }
   if (author.type === "Bot") return skip("comment by a bot");
   if (!config.users.includes(author.login.toLowerCase())) {
-    return skip(`${author.login} not in ALLOWED_USERS`);
+    return skip(`${author.login} not in ALLOWED_USERS`, REFUSED);
   }
   if (body.includes(MARKER)) return skip("our own reply");
 
@@ -395,7 +400,7 @@ export function closedItem(config, event, p, skip = () => null) {
   const target = event === "issues" ? p.issue : p.pull_request;
   if (!p.installation?.id || !repo || !target) return skip("not from an installation of the App");
   if (!repoAllowed(config, repo)) {
-    return skip(`${repo} not in ALLOWED_REPOS`);
+    return skip(`${repo} not in ALLOWED_REPOS`, REFUSED);
   }
   const key = taskKey(repo, event === "issues" ? target.number : prId(target.number));
   if (p.action === "reopened") return { repo, number: target.number, key, state: "open" };
@@ -463,7 +468,7 @@ export function pullRequest(config, event, p, now, skip = () => null) {
   const pr = p.pull_request;
   if (!p.installation?.id || !repo || !pr) return skip("not from an installation of the App");
   if (!repoAllowed(config, repo)) {
-    return skip(`${repo} not in ALLOWED_REPOS`);
+    return skip(`${repo} not in ALLOWED_REPOS`, REFUSED);
   }
   const turnedReady =
     p.action === "ready_for_review" ||

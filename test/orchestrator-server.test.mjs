@@ -2959,10 +2959,19 @@ mounts:
       const ctx = await handingOver(t);
       const { dir, github } = ctx;
       // The next copy's metrics (lib/metrics.mjs): its lease not held while it waits, then held.
-      const leaseHeld = async (copy) => {
+      const scrape = async (copy) => {
         await copy.until(/Metrics on :\d+\/metrics/);
         const port = /Metrics on :(\d+)\/metrics/.exec(copy.own())[1];
-        const text = await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
+        return (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
+      };
+      const leaseHeld = async (copy) => {
+        const text = await scrape(copy);
+        // What only the acting copy knows (listener/metrics.mjs), the waiting one has no sample of.
+        if (!copy.own().includes("lease taken")) {
+          assert.doesNotMatch(text, /^deckhand_runs_running /m);
+          assert.doesNotMatch(text, /^deckhand_runs_queued\{/m);
+          assert.doesNotMatch(text, /^deckhand_auto_pickup_slots\{/m);
+        }
         return /^deckhand_lease_held\{lease="orchestrator"\} (\d)$/m.exec(text)?.[1];
       };
       const { output, epoch, next, took } = await ctx.handOver({
@@ -2990,6 +2999,20 @@ mounts:
       assert.equal(posted(github, 13).length, 1);
       const runs = ctx.listener.output().match(/org\/repo#13: done/g) ?? [];
       assert.equal(runs.length, 1, ctx.listener.output());
+      // Its metrics (listener/metrics.mjs): 13's run started here, 12's and 13's ended here; its
+      // calls to the github service counted.
+      const text = await scrape(ctx.listener);
+      const sum = (name) =>
+        [...text.matchAll(new RegExp(`^${name}\\{[^}]*\\} (\\d+)$`, "gm"))].reduce(
+          (n, m) => n + Number(m[1]),
+          0,
+        );
+      assert.equal(sum("deckhand_runs_started_total"), 1, text);
+      assert.equal(sum("deckhand_runs_finished_total"), 2, text);
+      assert.match(text, /^deckhand_runs_finished_total\{mode="work",outcome="ok"\} 2$/m);
+      assert.match(text, /^deckhand_runs_running 0$/m);
+      assert.ok(sum("deckhand_service_calls_total") > 0, text);
+      assert.match(text, /^deckhand_service_calls_total\{callee="github",status="200"\} \d+$/m);
       // The copy that stopped could no longer act, had it gone on.
       await staleEverywhere(ctx, epoch);
       // The dashboard's history, from the store alone (#618): the same after another handover.

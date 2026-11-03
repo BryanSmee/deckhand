@@ -385,6 +385,7 @@ function setup(
     // The repo's settings as read later on (its config changed since), when the test sets it.
     later = null,
     log = () => {},
+    metrics = null,
   } = {},
 ) {
   let time = 1_800_000_000_000;
@@ -400,6 +401,7 @@ function setup(
     busy,
     policies,
     reply,
+    metrics,
     now: () => time,
     sleep: async () => {},
   });
@@ -700,6 +702,32 @@ test("review.fix: once per pull request, across reviews and restarts", async (t)
   assert.equal(again.accepted[0].trigger, "review");
   assert.equal(await again.fix(), null);
   assert.equal(again.accepted.length, 1);
+});
+
+test("review.fix: each round counted by its result (deckhand_fix_rounds_total)", async (t) => {
+  const results = [];
+  let busy = false;
+  const { fix } = fixSetup(t, FIX, {
+    busy: () => busy,
+    metrics: { fixRound: (result) => results.push(result) },
+  });
+  busy = true;
+  await fix();
+  busy = false;
+  await fix();
+  await fix(posted(MESSAGE, { head: { sha: "sha-2", repo: { full_name: "org/repo" } } }));
+  // A review with nothing blocking isn't a round.
+  await fix(posted("Nothing to fix.\n\nRating: 9/10\nVerdict: approve"));
+  assert.deepEqual(results, ["skipped", "started", "exhausted"]);
+  // A round that fails is counted as an error, and still fails.
+  const broken = fixSetup(t, FIX, {
+    busy: () => {
+      throw new Error("the queue can't be read");
+    },
+    metrics: { fixRound: (result) => results.push(result) },
+  });
+  await assert.rejects(broken.fix(), /the queue can't be read/);
+  assert.equal(results.at(-1), "error");
 });
 
 test("review.fix: nothing without the key, an unreadable review or a blocking finding", async (t) => {
