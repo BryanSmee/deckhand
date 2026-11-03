@@ -304,8 +304,8 @@ function List({ health }: { health: Health | null }) {
   );
 }
 
-// What the services said of their setup at start (their blobs taking Redis's memory): one row
-// each, under its service's name. Nothing when none said anything.
+// What the services say of their setup (their blobs taking Redis's memory, log segments waiting
+// for blob storage): one row each, under its service's name. Nothing when none said anything.
 function Warnings({ health }: { health: Health | null }) {
   const said = (health?.services ?? []).flatMap((s) =>
     (s.warnings ?? []).map((text) => ({ name: s.name, text })),

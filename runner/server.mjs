@@ -73,7 +73,7 @@ const storeUrl = env.STORE_URL || `file://${join(config.dataDir, "store")}`;
 const store = openStore(storeUrl, { password: env.REDIS_PASSWORD, secrets });
 
 // Blob storage (BLOB_URL), checked before the runner takes a call: a setting that fails stops it.
-// Nothing is kept there yet: the runs' logs move there in a later part (#604).
+// The runs' logs' closed segments move there (logs.mjs); unset, they stay in the store.
 let blobs;
 let warnings;
 try {
@@ -164,7 +164,12 @@ service = createRunnerService({
   granted: grantsBy(policies),
   runner: backend.runner,
   images,
-  logs: createLogs({ store, segmentMax: config.logSegmentMax }),
+  logs: createLogs({
+    store,
+    blobs: blobs.kind === "store" ? null : blobs,
+    segmentMax: config.logSegmentMax,
+    log,
+  }),
   store,
   broker: {
     runTokens: async (run, sandbox) =>
