@@ -4,6 +4,7 @@
 // each scrape, from it alone: the waiting copy has no samples of those.
 import { performance } from "node:perf_hooks";
 import { AGENTS } from "./agents/index.mjs";
+import { repoAllowed } from "./config.mjs";
 import { APP_EVENTS } from "./github-app.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { pickedTask } from "./tasks.mjs";
@@ -29,7 +30,7 @@ export const DELIVERY_RESULTS = ["taken", "ignored", "refused"];
 export const CONFLICT_RESULTS = ["started", "clean", "pending", "refused", "skipped", "error"];
 
 // A review that requests changes, and its fix round (reviews.mjs queueFix()).
-export const FIX_RESULTS = ["started", "refused", "exhausted", "skipped"];
+export const FIX_RESULTS = ["started", "refused", "exhausted", "skipped", "error"];
 
 // The services the orchestrator calls, as their clients name them.
 export const CALLEES = ["broker", "runner", "github", "models", "policy"];
@@ -127,6 +128,17 @@ const FOLLOWED = new Set([
 // else it touched; `taken` when it got past them as a comment for a run (`item`), a state
 // the orchestrator follows, or CI's (`ci`, the dashboard's); `ignored` otherwise (a comment that
 // asks nothing, a bot's, a ping).
+// Whether the operator's checks refuse delivery `p` whatever its event: not from an installation
+// of the App, or about a repository out of ALLOWED_REPOS (fail closed, as every handler of it
+// is). A ping is the webhook's own, from no installation. Its author's check is the work item's
+// (events.mjs workItem(), REFUSED).
+export function operatorRefuses(config, event, p) {
+  if (event === "ping") return false;
+  if (!p?.installation?.id) return true;
+  const repo = p.repository?.full_name;
+  return !!repo && !repoAllowed(config, repo);
+}
+
 export function deliveryResult({ event, refused = false, item = false, ci = false }) {
   if (refused) return "refused";
   return item || ci || FOLLOWED.has(event) ? "taken" : "ignored";

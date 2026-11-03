@@ -19,7 +19,7 @@ import {
 } from "./events.mjs";
 import { fetchPull, getJson } from "./github.mjs";
 import { QUIET_EVENTS } from "./github-app.mjs";
-import { deliveryResult } from "./metrics.mjs";
+import { deliveryResult, operatorRefuses } from "./metrics.mjs";
 import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
@@ -71,9 +71,10 @@ export function createHttp(ctx) {
   const { config, log, tasks } = ctx;
 
   // The delivery being dispatched, for its metric (metrics.mjs deliveryResult()): whether the
-  // operator's checks refused it (their skip()'s REFUSED, events.mjs), whether it made a work
-  // item, whether CI changed. Only what is decided before deliver() returns: a redelivery's own
-  // dispatch comes later.
+  // operator's checks refused it (its installation and repository, operatorRefuses(); its
+  // author, their skip()'s REFUSED, events.mjs), whether it made a work item, whether CI
+  // changed. Set and cleared by deliver() in one synchronous turn, which the skip() below relies
+  // on: no `await` in between. A redelivery's own dispatch comes later, uncounted.
   let verdict = null;
   const skip = (reason, how) => {
     if (how === REFUSED && verdict) verdict.refused = true;
@@ -253,7 +254,7 @@ export function createHttp(ctx) {
   // unexpected throw is logged: it never takes the orchestrator down, nor the deliveries after it.
   function deliver({ event, payload, redelivered = false }) {
     const work = [];
-    verdict = { event, refused: false, item: false, ci: false };
+    verdict = { event, refused: operatorRefuses(config, event, payload), item: false, ci: false };
     try {
       if (event === "pull_request" && redelivered) replay(event, payload, work);
       else if (event === "issues" && ISSUE_REPLAYS.includes(payload?.action) && redelivered) {

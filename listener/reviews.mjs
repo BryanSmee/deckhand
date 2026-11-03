@@ -1956,7 +1956,10 @@ export function createReviews({
     }
     // A maintainer's Fix being started holds the pull request: a second click, or the
     // automatic path meanwhile, starts nothing.
-    if (granting.has(key)) return skip("a fix run asked from the dashboard is being started");
+    if (granting.has(key)) {
+      metrics?.fixRound("skipped");
+      return skip("a fix run asked from the dashboard is being started");
+    }
     if (!asked) return fixRound({ key, repo, number, base, settings, review, pr }, asked);
     granting.add(key);
     try {
@@ -1976,9 +1979,15 @@ export function createReviews({
   }
 
   // queueFix(), counted (deckhand_fix_rounds_total): a fix run queued, refused by the policies,
-  // its rounds used up, or none now (a run going, the maintainer's input awaited…).
+  // its rounds used up, none now (a run going, the maintainer's input awaited…), or an error.
   async function fixRound(fields, asked) {
-    const result = await queueFix(fields, asked);
+    let result;
+    try {
+      result = await queueFix(fields, asked);
+    } catch (error) {
+      metrics?.fixRound("error");
+      throw error;
+    }
     const { item, denied, out } = result;
     metrics?.fixRound(item ? "started" : denied ? "refused" : out ? "exhausted" : "skipped");
     return result;

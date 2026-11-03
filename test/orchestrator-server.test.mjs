@@ -2942,6 +2942,8 @@ mounts:
         // What only the acting copy knows (listener/metrics.mjs), the waiting one has no sample of.
         if (!copy.own().includes("lease taken")) {
           assert.doesNotMatch(text, /^deckhand_runs_running /m);
+          assert.doesNotMatch(text, /^deckhand_runs_queued\{/m);
+          assert.doesNotMatch(text, /^deckhand_auto_pickup_slots\{/m);
         }
         return /^deckhand_lease_held\{lease="orchestrator"\} (\d)$/m.exec(text)?.[1];
       };

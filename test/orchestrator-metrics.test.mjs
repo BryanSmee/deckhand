@@ -260,11 +260,34 @@ test("deliveries: refused by the operator's checks, taken as a work item, ignore
     payload: comment("deckhand[bot]", "org/repo", "Bot"),
   });
   await http.deliver({ event: "ping", payload: { zen: "Keep it simple." } });
+  // Whatever the event, a repository out of ALLOWED_REPOS, or no installation, is refused: its
+  // handlers return before any skip() says so.
+  const elsewhere = { installation: { id: 1 }, repository: { full_name: "org/elsewhere" } };
+  for (const [event, payload] of [
+    ["issues", { ...elsewhere, action: "labeled", issue: { number: 7 } }],
+    ["push", { ...elsewhere, ref: "refs/heads/main" }],
+    ["workflow_run", { ...elsewhere, action: "completed", workflow_run: { head_sha: "abc" } }],
+    ["pull_request", { ...elsewhere, action: "labeled", pull_request: { number: 8 } }],
+    ["issue_comment", { ...comment("alice"), installation: undefined }],
+  ]) {
+    await http.deliver({ event, payload });
+  }
+  await http.deliver({
+    event: "pull_request",
+    payload: { ...elsewhere, action: "closed", pull_request: { number: 8 } },
+    redelivered: true,
+  });
   assert.deepEqual(counted, [
     "issue_comment taken",
     "issue_comment refused",
     "issue_comment refused",
     "issue_comment ignored",
     "ping ignored",
+    "issues refused",
+    "push refused",
+    "workflow_run refused",
+    "pull_request refused",
+    "issue_comment refused",
+    "pull_request refused",
   ]);
 });
