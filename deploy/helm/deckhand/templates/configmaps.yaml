@@ -1,5 +1,6 @@
-# kustomization.yaml's configMapGenerator: config.yaml and the grants (deckhand-server), and the
-# settings the orchestrator, the runner and the models service share (deckhand-env). Their
+# kustomization.yaml's configMapGenerator: config.yaml and the grants (deckhand-server), the
+# settings the orchestrator, the runner and the models service share (deckhand-env), and
+# components/blobs's BLOB_URL, the runner's and the broker's alone (deckhand-blobs). Their
 # names carry a hash of their data, so the pods that read them restart when it changes. Kept
 # when an upgrade replaces them, as `kubectl apply -k` leaves kustomize's: a pod of the old
 # release rescheduled while the new one fails to roll out still finds its own.
@@ -26,3 +27,17 @@ metadata:
     helm.sh/resource-policy: keep
 data:
   {{- include "deckhand.envData" . | nindent 2 }}
+{{- if .Values.blobs.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "deckhand.blobsName" . }}
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/resource-policy: keep
+data:
+  {{- include "deckhand.blobsData" . | nindent 2 }}
+{{- end }}

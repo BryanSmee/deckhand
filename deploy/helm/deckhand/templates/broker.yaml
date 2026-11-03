@@ -42,6 +42,9 @@ spec:
             {{- if $redis }}
             {{- include "deckhand.redisStore" "broker" | nindent 12 }}
             {{- end }}
+            {{- if .Values.blobs.enabled }}
+            {{- include "deckhand.blobsEnv" . | nindent 12 }}
+            {{- end }}
           {{- include "deckhand.probes" (list "http" "/ready" "/health") | nindent 10 }}
           lifecycle:
             preStop:
@@ -54,6 +57,9 @@ spec:
               readOnly: true
             - name: store
               mountPath: /data
+            {{- if .Values.blobs.enabled }}
+            {{- include "deckhand.blobsMount" . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: key
           secret:
@@ -66,6 +72,9 @@ spec:
           persistentVolumeClaim:
             claimName: broker-store
           {{- end }}
+        {{- if .Values.blobs.enabled }}
+        {{- include "deckhand.blobsVolume" . | nindent 8 }}
+        {{- end }}
 {{- if not $redis }}
 ---
 {{ include "deckhand.claim" (list . "broker-store" "ReadWriteOnce") }}

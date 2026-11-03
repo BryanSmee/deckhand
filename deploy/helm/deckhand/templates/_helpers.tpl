@@ -39,6 +39,11 @@ SANDBOX_ENGINE: engine.enabled
 KUBERNETES_ENGINE_RUNTIME_CLASS: engine.runtimeClass
 ENGINE_IMAGE: engine.image
 STORE_URL: store
+BLOB_URL: blobs.url (the runner's and the broker's alone)
+BLOB_ACCESS_KEY_ID: blobs.secretName (the runner's and the broker's alone)
+BLOB_SECRET_ACCESS_KEY: blobs.secretName (the runner's and the broker's alone)
+BLOB_ACCESS_KEY_ID_FILE: blobs.secretName (the runner's and the broker's alone)
+BLOB_SECRET_ACCESS_KEY_FILE: blobs.secretName (the runner's and the broker's alone)
 {{- end }}
 
 {{/* deckhand-env's data: the base's literals, the components', then the values'. */}}
@@ -99,6 +104,41 @@ STORE_URL: store
 read them restart when it changes. */}}
 {{- define "deckhand.envName" -}}
 deckhand-env-{{ include "deckhand.envData" . | sha256sum | trunc 10 }}
+{{- end }}
+
+{{/* deckhand-blobs's data (components/blobs): BLOB_URL, the runner's and the broker's alone. */}}
+{{- define "deckhand.blobsData" -}}
+{{- toYaml (dict "BLOB_URL" .Values.blobs.url) }}
+{{- end }}
+
+{{- define "deckhand.blobsName" -}}
+deckhand-blobs-{{ include "deckhand.blobsData" . | sha256sum | trunc 10 }}
+{{- end }}
+
+{{/* Blob storage's settings, the runner's and the broker's (components/blobs). */}}
+{{- define "deckhand.blobsEnv" -}}
+- name: BLOB_URL
+  valueFrom:
+    configMapKeyRef:
+      name: {{ include "deckhand.blobsName" . }}
+      key: BLOB_URL
+- name: BLOB_ACCESS_KEY_ID_FILE
+  value: /var/run/secrets/deckhand-blobs/access-key-id
+- name: BLOB_SECRET_ACCESS_KEY_FILE
+  value: /var/run/secrets/deckhand-blobs/secret-access-key
+{{- end }}
+
+{{- define "deckhand.blobsMount" -}}
+- name: blobs
+  mountPath: /var/run/secrets/deckhand-blobs
+  readOnly: true
+{{- end }}
+
+{{- define "deckhand.blobsVolume" -}}
+- name: blobs
+  secret:
+    secretName: {{ .Values.blobs.secretName }}
+    defaultMode: 288 # 0440: its group, fsGroup, reads it
 {{- end }}
 
 {{- define "deckhand.serverName" -}}
@@ -244,5 +284,16 @@ spec:
 {{- end }}
 {{- if not .Values.apiServer.cidrs }}
 {{- fail "apiServer.cidrs: the API server's addresses, one at least" }}
+{{- end }}
+{{- if .Values.blobs.enabled }}
+{{- if not .Values.blobs.url }}
+{{- fail "blobs.url: BLOB_URL, required with blobs.enabled" }}
+{{- end }}
+{{- if not .Values.blobs.secretName }}
+{{- fail "blobs.secretName: the key pair's Secret, required with blobs.enabled" }}
+{{- end }}
+{{- if or (not .Values.blobs.to) (not .Values.blobs.ports) }}
+{{- fail "blobs.to, blobs.ports: blob storage's address and port, required with blobs.enabled" }}
+{{- end }}
 {{- end }}
 {{- end }}
