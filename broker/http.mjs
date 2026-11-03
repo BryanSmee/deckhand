@@ -33,6 +33,7 @@ import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { issueServiceTokens, serviceGuard } from "../lib/service-token.mjs";
 import { IMAGE_TYPES, SHOT_NAME } from "../lib/shots.mjs";
 import { FILES } from "./files.mjs";
+import { NO_METRICS } from "./metrics.mjs";
 import { runFields, STREAM } from "./runs.mjs";
 
 // The headers the proxy sets on a sandbox's call: whatever the sandbox sent in them was
@@ -101,7 +102,7 @@ function decoded(segment) {
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
 // `runs`, `files`: runs.mjs's and files.mjs's; `callers`: callers.mjs's; `signing`: the key, for
-// the services' tokens; `store`: for the stream.
+// the services' tokens; `store`: for the stream; `metrics`: metrics.mjs brokerMetrics()'s hooks.
 export function createBrokerHandler({
   runs,
   files,
@@ -114,6 +115,7 @@ export function createBrokerHandler({
   log = () => {},
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
+  metrics = NO_METRICS,
 }) {
   const guard = serviceGuard({
     service: "broker",
@@ -136,13 +138,22 @@ export function createBrokerHandler({
     if (req.method === "POST" && path === "/run/token") {
       const { token, sandbox } = sandboxOf(req);
       const renewed = await runs.renew(token, sandbox);
-      if (!renewed.token) return sendJson(res, { message: renewed.message }, renewed.status);
+      if (!renewed.token) {
+        metrics.renewal("refused");
+        metrics.refused(renewed.reason);
+        return sendJson(res, { message: renewed.message }, renewed.status);
+      }
+      metrics.renewal(renewed.renewed ? "renewed" : "again");
+      if (renewed.renewed) metrics.issued("run");
       res.writeHead(200, { "content-type": "text/plain", "cache-control": "no-store" });
       return res.end(`${renewed.token}\n`);
     }
     const { token, sandbox } = sandboxOf(req);
     const checked = await runs.check(token, sandbox);
-    if (!checked.record) return sendJson(res, { message: checked.message }, checked.status);
+    if (!checked.record) {
+      metrics.refused(checked.reason);
+      return sendJson(res, { message: checked.message }, checked.status);
+    }
     const { record } = checked;
     if (req.method === "GET" && path === "/run/inbox") {
       const from = Number(url.searchParams.get("from") ?? 0);
@@ -152,7 +163,8 @@ export function createBrokerHandler({
       // A sandbox that goes away stops waiting.
       const gone = new AbortController();
       res.on("close", () => gone.abort());
-      const lines = await files.pollInbox(record.id, from, { signal: gone.signal });
+      const done = metrics.polling();
+      const lines = await files.pollInbox(record.id, from, { signal: gone.signal }).finally(done);
       if (lines === null) return sendJson(res, { message: "no inbox" }, 404);
       if (!lines.length) return res.writeHead(204).end();
       return res.writeHead(200, { "content-type": "application/x-ndjson" }).end(lines);
@@ -228,6 +240,8 @@ export function createBrokerHandler({
       const body = await readJsonBody(req, BODY_MAX);
       const issued = await runs.issue(run, runFields(body));
       if (!issued.token) return sendJson(res, { message: issued.message }, issued.status);
+      metrics.issued("run");
+      metrics.issued("agent");
       return sendJson(res, issued);
     }
     if (req.method === "POST" && run && path === `/runs/${id}/secrets`) {
@@ -277,6 +291,16 @@ export function createBrokerHandler({
     sendJson(res, { message: "not found" }, 404);
   }
 
+  // `fn()`, a refusal of a token it throws counted by its reason (../lib/service-token.mjs).
+  function refusedWith(fn) {
+    try {
+      return fn();
+    } catch (error) {
+      if (error instanceof Refused) metrics.refused(error.reason);
+      throw error;
+    }
+  }
+
   async function handle(req, res) {
     const url = new URL(req.url, "http://broker");
     if (req.method === "GET" && url.pathname === "/health")
@@ -290,17 +314,15 @@ export function createBrokerHandler({
     if (req.method === "POST" && url.pathname === "/service-tokens") {
       const { audiences, service } = (await readJsonBody(req, BODY_MAX)) ?? {};
       const caller = await callers.callerOf(req, typeof service === "string" ? service : null);
-      const tokens = issueServiceTokens(
-        caller,
-        Array.isArray(audiences) ? audiences : [],
-        signing,
-        {
+      const tokens = refusedWith(() =>
+        issueServiceTokens(caller, Array.isArray(audiences) ? audiences : [], signing, {
           now: now(),
-        },
+        }),
       );
+      metrics.issued("service", Object.keys(tokens).length);
       return sendJson(res, { tokens });
     }
-    const caller = guard(req);
+    const caller = refusedWith(() => guard(req));
     if (url.pathname.startsWith("/run/")) return runCall(req, res, url);
     // What the orchestrator changes carries its fencing epoch (#506): a copy of it that lost its
     // lease can't end a run, nor have its tokens signed.

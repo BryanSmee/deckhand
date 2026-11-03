@@ -1191,3 +1191,14 @@ export function assertHealth(body, extra = {}) {
   assert.equal(typeof body.version, "string");
   for (const [name, value] of Object.entries(extra)) assert.deepEqual(body[name], value, name);
 }
+
+// A metric's samples in `registry`'s rendering (lib/metrics.mjs), by their labels' text:
+// { '{kind="run"}': 2 }, '' for one without labels. A histogram's are `<name>_bucket` and so on.
+export async function samplesOf(registry, name) {
+  const found = {};
+  for (const line of (await registry.render()).split("\n")) {
+    const match = new RegExp(`^${RegExp.escape(name)}(\\{[^}]*\\})? (\\S+)$`).exec(line);
+    if (match) found[match[1] ?? ""] = Number(match[2]);
+  }
+  return found;
+}

@@ -14,10 +14,12 @@ import { RECORD_TTL_MS, RENEW_GRACE_MS } from "../broker/runs.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { createSeal } from "../broker/seal.mjs";
 import { openBlobs } from "../lib/blobs.mjs";
+import { createRegistry } from "../lib/metrics.mjs";
 import { MAX_SHOT, MAX_SHOTS } from "../lib/shots.mjs";
 import { openStore } from "../lib/store.mjs";
+import { SERVICE_TOKEN_TTL_MS } from "../lib/service-token.mjs";
 import { TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
-import { assertHealth, resetsUnread, tempDir, testKey } from "./helpers.mjs";
+import { assertHealth, resetsUnread, samplesOf, tempDir, testKey } from "./helpers.mjs";
 
 // Each caller reaches the broker at an address of its own, as over a network of its own with
 // Docker: the broker's address a call arrives at tells it apart (SERVICE_NETWORKS).
@@ -39,7 +41,13 @@ const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 // `blobs(store)`: their blob storage (lib/blobs.mjs; the store's own blobs by default).
 async function brokers(
   t,
-  { copies = 1, clock = { now: 1_900_000_000_000 }, key = testKey(), blobs = () => undefined } = {},
+  {
+    copies = 1,
+    clock = { now: 1_900_000_000_000 },
+    key = testKey(),
+    blobs = () => undefined,
+    registry = null,
+  } = {},
 ) {
   const store = openStore("memory:", { now: () => clock.now });
   const callers = createCallers({ networks: NETWORKS });
@@ -52,6 +60,7 @@ async function brokers(
       callers,
       now: () => clock.now,
       sleep: (ms) => new Promise((resolve) => setTimeout(resolve, Math.min(ms, 20))),
+      registry,
     });
     await new Promise((resolve) => broker.server.listen(0, "0.0.0.0", resolve));
     broker.server.unref();
@@ -854,4 +863,88 @@ test("a token presented to a broker that lost the run's record: sealed with the 
     token,
     renewed,
   ]);
+});
+
+test("its metrics: the tokens signed, renewed and refused, the live runs, the inbox polls open", async (t) => {
+  const registry = createRegistry();
+  const { copies, clock } = await brokers(t, { registry });
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const { token } = await started(orchestrator);
+  // Asked again within a minute: the same token, signed once.
+  const again = await renewOn(proxy, token);
+  assert.equal(again.token, token);
+  clock.now += 2 * 60_000;
+  const renewed = await renewOn(proxy, token);
+  assert.notEqual(renewed.token, token);
+  // Refused: from another sandbox, not a token, a run that ended.
+  assert.equal((await renewOn(proxy, renewed.token, "net-b")).status, 403);
+  assert.equal((await renewOn(proxy, "a-secret")).status, 401);
+  const read = (from) =>
+    sandboxCall(proxy, "GET", `/run/inbox?from=${from}`, renewed.token, "net-a");
+  // A service token from no service, and none at all.
+  const stranger = await call(broker, "127.0.0.9", "POST", "/service-tokens", {
+    body: { audiences: ["broker"] },
+  });
+  assert.equal(stranger.status, 403);
+  assert.equal((await call(broker, "orchestrator", "GET", "/runs")).status, 401);
+  // An endpoint the caller may not call; a token from another service's network.
+  assert.equal((await proxy("GET", "/runs")).status, 403);
+  const proxyToken = await tokenOf(broker, "proxy");
+  const replayed = await call(broker, "orchestrator", "GET", "/runs", {
+    headers: { authorization: `Bearer ${proxyToken}` },
+  });
+  assert.equal(replayed.status, 403);
+
+  assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 1 });
+
+  // A long poll open while it waits for a line.
+  const runner = await client(broker, "runner");
+  await runner("POST", "/runs/run-a/inbox?offset=0", { body: Buffer.from("one\n") });
+  const waiting = read(4);
+  while ((await samplesOf(registry, "deckhand_inbox_polls_open"))[""] !== 1)
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  await runner("POST", "/runs/run-a/inbox?offset=4", { body: Buffer.from("two\n") });
+  assert.equal((await waiting).text, "two\n");
+  assert.deepEqual(await samplesOf(registry, "deckhand_inbox_polls_open"), { "": 0 });
+
+  await orchestrator("DELETE", "/runs/run-a");
+  assert.equal((await renewOn(proxy, renewed.token)).status, 401);
+  assert.equal((await read(0)).status, 401);
+  assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 0 });
+  // Past its renewal's grace: expired, before anything else is read of it.
+  clock.now += RENEW_GRACE_MS + 60 * 60_000;
+  assert.equal((await renewOn(proxy, renewed.token)).status, 401);
+  // A service token past its life.
+  const old = await tokenOf(broker, "orchestrator");
+  clock.now += SERVICE_TOKEN_TTL_MS + 1000;
+  const expired = await call(broker, "orchestrator", "GET", "/runs", {
+    headers: { authorization: `Bearer ${old}` },
+  });
+  assert.deepEqual([expired.status, expired.json.message], [401, "service token: expired"]);
+  // A run whose record expired, its end never said: no longer counted, listed or not.
+  await started(orchestrator, "run-b");
+  assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 1 });
+  clock.now += RECORD_TTL_MS + 1000;
+  assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 0 });
+
+  assert.deepEqual(await samplesOf(registry, "deckhand_token_renewals_total"), {
+    '{result="again"}': 1,
+    '{result="renewed"}': 1,
+    '{result="refused"}': 4,
+  });
+  const issued = await samplesOf(registry, "deckhand_tokens_issued_total");
+  // Three run tokens (two starts, one renewal) and two agent tokens; a service token per call.
+  assert.equal(issued['{kind="run"}'], 3);
+  assert.equal(issued['{kind="agent"}'], 2);
+  assert.ok(issued['{kind="service"}'] >= 5);
+  assert.deepEqual(await samplesOf(registry, "deckhand_tokens_refused_total"), {
+    '{reason="wrong_sandbox"}': 1,
+    '{reason="invalid"}': 2,
+    '{reason="unknown_caller"}': 2,
+    '{reason="not_allowed"}': 1,
+    '{reason="run_over"}': 2,
+    '{reason="expired"}': 2,
+  });
 });

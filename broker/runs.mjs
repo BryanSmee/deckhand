@@ -35,6 +35,7 @@ export { AGENT_TOKEN_TTL_MS, RENEW_GRACE_MS, TOKEN_TTL_MS };
 
 // What a run's token sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
+const notItsSandbox = { status: 403, message: NOT_ITS_SANDBOX, reason: "wrong_sandbox" };
 
 // How soon after a run token was signed a renewal gets that one again rather than a new one: a
 // process that asks in a loop can't pile up valid tokens, nor push the one the sandbox holds out
@@ -244,10 +245,11 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
 
   // The run a sandbox's token names, once checked: { record, claims } or { status, message }.
   // `sandbox`: the network (or pod) the call came from, as the proxy vouches for it.
-  // `graceMs`: how long past its expiry it is still taken (a renewal's).
+  // `graceMs`: how long past its expiry it is still taken (a renewal's). A refusal's `reason`
+  // says why in a word, for the metrics: invalid, expired, run_over, wrong_sandbox.
   async function check(token, sandbox, graceMs = 0) {
-    const unknown = { status: 401, message: "unknown or finished run" };
-    if (!isToken(token)) return unknown;
+    const unknown = { status: 401, message: "unknown or finished run", reason: "run_over" };
+    if (!isToken(token)) return { ...unknown, reason: "invalid" };
     let claims;
     try {
       claims = verifyToken(token, {
@@ -258,30 +260,32 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
       });
     } catch (error) {
       if (!(error instanceof TokenError)) throw error;
-      return { status: 401, message: `this run token is refused: ${error.message}` };
+      return {
+        status: 401,
+        message: `this run token is refused: ${error.message}`,
+        reason: error.code,
+      };
     }
     // A token outlives nothing: a run that ended has none that works.
     const record = await store.get(runKey(claims.jti));
     if (!record) return unknown;
-    if (!sandbox || !claims.sandbox || claims.sandbox !== sandbox) {
-      return { status: 403, message: NOT_ITS_SANDBOX };
-    }
+    if (!sandbox || !claims.sandbox || claims.sandbox !== sandbox) return notItsSandbox;
     // A record bound elsewhere (the run started again): the old sandbox's token is no longer
     // the run's.
-    if (record.sandbox && record.sandbox !== claims.sandbox) {
-      return { status: 403, message: NOT_ITS_SANDBOX };
-    }
+    if (record.sandbox && record.sandbox !== claims.sandbox) return notItsSandbox;
     return { record, claims };
   }
 
   // A new run token for the one the sandbox sends (POST /run/token), taken up to
-  // RENEW_GRACE_MS past its expiry: { token } or { status, message }. An ended run's is
+  // RENEW_GRACE_MS past its expiry: { token, renewed } (renewed: a new one signed, not the last
+  // one again) or { status, message, reason } (check()'s reasons). An ended run's is
   // refused. Past its expiry, only the token the sandbox holds renews: the newest signed for the
   // run, or the last one presented (one a broker that lost the run's record signed). An older one, left behind in a process's environment say, is dead once expired. A
   // run whose tokens the broker never knew can't tell: it takes it. Asked again within
   // RENEW_MIN_MS of the last one signed: that one.
   async function renew(token, sandbox) {
-    if (!isToken(token)) return { status: 401, message: "only a run token is renewed" };
+    if (!isToken(token))
+      return { status: 401, message: "only a run token is renewed", reason: "invalid" };
     const checked = await check(token, sandbox, RENEW_GRACE_MS);
     if (!checked.record) return checked;
     const { claims } = checked;
@@ -291,16 +295,22 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
       runKey(claims.jti),
       (run) => {
         // Ended meanwhile (another copy): nothing.
-        if (!run)
-          return ((answer = { status: 401, message: "unknown or finished run" }), undefined);
+        if (!run) {
+          answer = { status: 401, message: "unknown or finished run", reason: "run_over" };
+          return undefined;
+        }
         // Started again on another sandbox meanwhile (another copy): the old one's isn't its.
         if (run.sandbox && run.sandbox !== claims.sandbox) {
-          return ((answer = { status: 403, message: NOT_ITS_SANDBOX }), undefined);
+          return ((answer = notItsSandbox), undefined);
         }
         const newest = run.issued.at(-1)?.hash;
         const expired = claims.exp * 1000 <= now();
         if (expired && newest && presented !== newest && presented !== run.presented) {
-          answer = { status: 401, message: "this run token is refused: expired" };
+          answer = {
+            status: 401,
+            message: "this run token is refused: expired",
+            reason: "expired",
+          };
           return undefined;
         }
         run.sandbox ??= claims.sandbox;
@@ -317,7 +327,7 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
         const again = last.at && now() - last.at < RENEW_MIN_MS && last.exp > now();
         const kept = again && seal.open(run.last);
         if (kept) {
-          answer = { token: kept };
+          answer = { token: kept, renewed: false };
           return run;
         }
         const fresh = sign(run, RUN_AUDIENCE, TOKEN_TTL_MS);
@@ -334,7 +344,7 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
     );
     if (!answer.token) return answer;
     if (answer.renewed) await event("renewed", record.id);
-    return { token: answer.token };
+    return answer;
   }
 
   // The run is over (DELETE /runs/:id): its tokens are refused from now on, by every copy.
@@ -351,6 +361,15 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
   }
 
   const get = (id) => store.get(runKey(id));
+
+  // How many runs it holds: those of its index whose record is still there (one that expired stays
+  // in the index until the next list(), which the orchestrator may not call for long). What
+  // deckhand_runs_live reads at each scrape: one read per live run, as many as the runs' slots.
+  async function live() {
+    const ids = Object.keys((await store.get(INDEX)) ?? {});
+    const found = await Promise.all(ids.map((id) => get(id)));
+    return found.filter(Boolean).length;
+  }
 
   // The run's tokens still valid, in clear (POST /runs/:id/secrets): { agentToken, tokens }, the
   // newest run token last, or null for a run that isn't live. The orchestrator's alone, for its
@@ -401,6 +420,7 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
     get,
     secrets,
     list,
+    live,
     event,
     publicKeys,
     runKeys,
