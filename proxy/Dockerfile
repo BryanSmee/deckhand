@@ -7,7 +7,7 @@ FROM node:26-alpine
 RUN apk add --no-cache openssl
 WORKDIR /app
 COPY proxy/proxy.mjs proxy/addresses.mjs proxy/cached.mjs proxy/cache.mjs proxy/authority.mjs \
-  proxy/atomic.mjs proxy/wait.mjs proxy/
+  proxy/atomic.mjs proxy/metrics.mjs proxy/wait.mjs proxy/
 # Draining on SIGTERM, every service's, and the broker service's calls with the proxy's own
 # service token (lib/).
 COPY lib/ lib/

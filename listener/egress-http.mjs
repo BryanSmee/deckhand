@@ -60,6 +60,16 @@ export async function fromProxy(ctx, req) {
   return (await ctx.runner.proxyAddresses({ fresh: true })).includes(caller);
 }
 
+// Who asked, as every answer says for the proxy's metrics (proxy/metrics.mjs): "sandbox",
+// "engine", "build", "install", or "none" (no run at that address). A refusal says why too
+// (`reason`: "not_granted", "blocked", "no_run", "no_build", "not_forwarded"), never the host.
+function sourceOf(where, other) {
+  if (where) return where.engine ? "engine" : "sandbox";
+  // A runner from before #658 says none: a build's or an install's.
+  if (other) return other.source ?? "build";
+  return "none";
+}
+
 // `ctx` (server.mjs): the orchestrator's state and services, read at call time.
 export function createEgressHttp(ctx) {
   const { config, log } = ctx;
@@ -75,6 +85,12 @@ export function createEgressHttp(ctx) {
     const viaEngine = url.searchParams.get("engine") === "1";
     const where = await taskWhere(ctx, ip, { engine: viaEngine });
     const task = where?.task ?? null;
+    // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
+    // The engines' port is a run's engine's only. Asked before a service's name is answered
+    // too, for its `source` alone: a call to the runner only for an address no run has, which
+    // only a build or an install pod would ask about.
+    const other = task || viaEngine ? null : await ctx.images.egressFor?.(ip, host);
+    const source = sourceOf(where, other);
     // A service's name (#511): the proxy forwards its plain HTTP (`forward=1`) for the runs'
     // sandboxes and engines (and a pod's agent install), never a build's, and never tunnels it.
     if (matchHost(host, SERVICE_HOSTS) === "exact") {
@@ -90,14 +106,13 @@ export function createEgressHttp(ctx) {
         decrypt: false,
         relay: false,
         ...(sandbox && { sandbox }),
+        source,
+        ...(!allowed && { reason: task || other ? "not_forwarded" : "no_run" }),
       });
     }
-    // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
-    // The engines' port is a run's engine's only.
-    const other = task || viaEngine ? null : await ctx.images.egressFor?.(ip, host);
     if (other) {
       if (!other.allowed) log(`Egress: refused ${host} for ${ip} (a build or an install)`);
-      return sendJson(res, other);
+      return sendJson(res, { ...other, source });
     }
     const live = task?.live;
     // Its pod still installs its agent (an init container, runner/kubernetes.mjs): the
@@ -110,7 +125,10 @@ export function createEgressHttp(ctx) {
     if (installs || installs === null) {
       const hosts = agentFor(live.record?.agent).install(config).hosts ?? [];
       const answer = egressPolicy(host, hosts, [], [], [], { decrypt: false });
-      if (installs === null && matchHost(host, live.hosts) === null) answer.allowed = false;
+      if (installs === null && matchHost(host, live.hosts) === null) {
+        Object.assign(answer, { allowed: false, reason: "not_granted" });
+      }
+      answer.source = "install";
       if (!answer.allowed)
         log(`Egress: refused ${host} for ${taskKey(task.repo, task.id)}'s agent install`);
       return sendJson(res, answer);
@@ -136,7 +154,15 @@ export function createEgressHttp(ctx) {
           relayed: [...(github ? githubHosts(config) : []), ...files, ...(agent.relayed ?? [])],
           blocked: agent.blocked,
         })
-      : { allowed: false, private: false, cache: false, decrypt: false, relay: false };
+      : {
+          allowed: false,
+          private: false,
+          cache: false,
+          decrypt: false,
+          relay: false,
+          reason: "no_run",
+        };
+    answer.source = source;
     // An agent's relayed host (the Antigravity CLI's, with a plan's login): its calls go to the
     // models service (#504), which the proxy vouches the sandbox's network (or pod) to.
     if (answer.relay && matchHost(host, agent.relayed ?? []) === "exact" && live.sandbox) {
