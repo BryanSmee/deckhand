@@ -11,7 +11,7 @@ import {
   MAX_INPUT,
   MAX_INPUTS,
 } from "../listener/decisions.mjs";
-import { tempDir } from "./helpers.mjs";
+import { mapStore, tempDir } from "./helpers.mjs";
 
 const entry = (n, denied = false) => ({
   decision: "merge",
@@ -144,12 +144,12 @@ test("decisions: a decisions.json written before gates and inputs still loads", 
   assert.deepEqual(decisions.get("org/repo#12")[1], old);
 });
 
-test("decisions: the last dry run, no decision, kept across a restart and a respelling", (t) => {
-  const dir = tempDir(t);
-  const files = { path: join(dir, "decisions.json"), dryRunPath: join(dir, "dry-runs.json") };
+test("decisions: the last dry run, no decision, kept across a restart and a respelling", async (t) => {
+  const path = join(tempDir(t), "decisions.json");
+  const maps = mapStore();
   let time = 1_000;
   const now = () => (time += 1000);
-  const decisions = createDecisions({ ...files, now });
+  const decisions = createDecisions({ path, dryRuns: await maps.map("dry-runs"), now });
   const url = "https://github.com/org/repo/pull/5#issuecomment-1";
   decisions.recordDryRun("Org/Repo#12", { by: "alice", url, denials: 1 });
   decisions.recordDryRun("org/repo#12", { by: "bob", url, denials: 2 });
@@ -157,7 +157,7 @@ test("decisions: the last dry run, no decision, kept across a restart and a resp
   const last = decisions.dryRun("org/repo#12");
   assert.deepEqual(last, { dryRun: true, by: "bob", at: last.at, denials: 2, url });
   assert.ok(last.at > decisions.dryRun("Org/Repo#12").at);
-  const again = createDecisions({ ...files, now });
+  const again = createDecisions({ path, dryRuns: await maps.again("dry-runs"), now });
   assert.equal(again.dryRun("ORG/repo#12").by, "alice");
   again.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/Repo" : repo));
   assert.equal(again.dryRun("Org/Repo#12").by, "bob");

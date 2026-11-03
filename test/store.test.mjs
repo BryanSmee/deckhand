@@ -23,6 +23,23 @@ import { storeContract } from "./store-contract.mjs";
 storeContract("memory", (t, clock) => fileStore({ now: clock.now }));
 storeContract("file", (t, clock) => fileStore({ dir: tempDir(t), now: clock.now }));
 
+test("file: calls made together are written together, each on disk once it resolves", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore({ dir });
+  const other = fileStore({ dir });
+  // A burst, as a map's items moved at start (store-map.mjs): one batch, one write of the file.
+  const writes = Array.from({ length: 500 }, (_, i) => store.set(`k/${i}`, i));
+  // One call of the batch failing fails alone.
+  const bad = store.set("k/bad", undefined);
+  const read = store.get("k/1");
+  await Promise.all(writes);
+  await assert.rejects(bad, TypeError);
+  assert.equal(await read, 1);
+  // Another process reads them all once they resolved.
+  assert.equal(await other.get("k/499"), 499);
+  assert.equal((await other.keys("k/", { count: 1000 })).keys.length, 500);
+});
+
 test("file: keys, leases, streams, consumers and blobs outlive a restart", async (t) => {
   const dir = tempDir(t);
   let at = 1_000_000;

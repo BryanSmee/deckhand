@@ -589,7 +589,7 @@ export function createWorkApi({
   }
 
   // The issues a plan laid out are the parent's lane. What is on GitHub stays whatever happens
-  // to lanes.json: a failed write is logged, not the plan's answer.
+  // to the lanes' names: a failure is logged, not the plan's answer.
   function named(repo, number, laid) {
     try {
       lanes.planned(repo, number, laid);

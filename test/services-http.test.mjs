@@ -158,3 +158,22 @@ test("a copy waiting for the lease answers its probes, and 503 to every call", a
   assert.equal((await fetch(`${url}/ready`)).status, 200);
   assert.equal((await tokens()).status, 200);
 });
+
+test("/ready says how many items of the orchestrator's state wait for the store", async (t) => {
+  let waiting = 0;
+  const server = createServicesHttp({
+    keys,
+    bound: null,
+    pendingTokens: new Map(),
+    waiting: () => waiting,
+  });
+  const url = `http://127.0.0.1:${await listening(server)}`;
+  server.unref();
+  t.after(() => server.close());
+  assert.deepEqual(await (await fetch(`${url}/ready`)).json(), { ok: true, waiting: 0 });
+  // The store away: still the copy that acts, its writes waiting.
+  waiting = 3;
+  const ready = await fetch(`${url}/ready`);
+  assert.equal(ready.status, 200);
+  assert.deepEqual(await ready.json(), { ok: true, waiting: 3 });
+});

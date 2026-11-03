@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import { askedOn, closedTasks, createDismissals, setAsideClosed } from "../listener/dismissals.mjs";
-import { tempDir } from "./helpers.mjs";
+import { mapStore } from "./helpers.mjs";
 
-test("dismissals survive a restart; prune() drops those whose run is no longer the last", (t) => {
-  const path = join(tempDir(t), "dismissed.json");
-  const first = createDismissals({ path, now: () => 5 });
+test("dismissals survive a restart; prune() drops those whose run is no longer the last", async () => {
+  const maps = mapStore();
+  const first = createDismissals({ dismissed: await maps.map("dismissed"), now: () => 5 });
   first.dismiss("org/app#1", "run-1", "alice");
   first.dismiss("org/app#2", "run-2", "bob");
   first.dismiss("org/app#3", "run-3", "bob");
-  const again = createDismissals({ path });
+  const again = createDismissals({ dismissed: await maps.again("dismissed") });
   assert.deepEqual(again.list(), [
     { key: "org/app#1", runId: "run-1", by: "alice", at: 5 },
     { key: "org/app#2", runId: "run-2", by: "bob", at: 5 },
@@ -23,7 +22,7 @@ test("dismissals survive a restart; prune() drops those whose run is no longer t
     { id: "run-2", key: "org/app#2" },
   ]);
   assert.deepEqual(
-    createDismissals({ path })
+    createDismissals({ dismissed: await maps.again("dismissed") })
       .list()
       .map((d) => d.key),
     ["org/app#1"],

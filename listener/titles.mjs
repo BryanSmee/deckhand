@@ -1,10 +1,10 @@
 // The dashboard's titles of issues, pull requests and discussions, by task key
 // ("org/repo#12", "org/repo#pr-3", "org/repo#discussion-8"), and whether each issue or pull
 // request is closed, which the graph shows. Webhooks bring most of them; the rest are fetched
-// from GitHub and kept in titles.json and closed.json, so a restart doesn't ask again.
+// from GitHub and kept in the store (lib/store-map.mjs: `titles`, `closed`), so a restart doesn't
+// ask again.
 import { parseKey } from "./events.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // events.mjs issueOutcome() ("open", "done", "not-done") → the dashboard's closed state: null
 // (open), "completed" (a pull request: merged) or "not_planned".
@@ -14,45 +14,40 @@ export function closedAs(outcome) {
 }
 
 // `fetchTitle(repo, kind, number)`: { title, closed } on GitHub (`closed` as closedAs() has
-// it, undefined for discussions), or null. `closedPath`: where the closed states are kept.
-export function createTitles({ path, closedPath, fetchTitle, log = () => {} }) {
-  const titles = persistentMap(path);
-  // Key → closedAs(); null: open when last heard of.
-  const closed = persistentMap(closedPath);
+// it, undefined for discussions), or null. `titles` and `closed`: the Maps they are kept in
+// (storeMap()'s), key → title and key → closedAs() (null: open when last heard of).
+export function createTitles({
+  titles = new Map(),
+  closed = new Map(),
+  fetchTitle,
+  log = () => {},
+}) {
   // Fetched once per listener: a failure (a deleted issue, no access) isn't retried until
   // the next start, which also asks again about what was open (a close missed while down).
   const tried = new Set();
   let fetching = null;
 
-  const save = titles.save;
-
   function set(key, title) {
     if (!title || titles.get(key) === title) return;
     titles.set(key, title);
-    save();
   }
 
   // From an `issues` or `pull_request` delivery, or a fetch: `state` as closedAs() has it.
   function setClosed(key, state) {
-    if (!closedPath || closed.get(key) === state) return;
+    if (closed.get(key) === state) return;
     closed.set(key, state);
-    closed.save();
   }
 
-  // [key, title] pairs, newest first, for keys that have none yet: one write for all.
+  // [key, title] pairs, newest first, for keys that have none yet.
   function seed(pairs) {
-    let changed = false;
     for (const [key, title] of pairs) {
       if (!title || titles.has(key)) continue;
       titles.set(key, title);
-      changed = true;
     }
-    if (changed) save();
   }
 
   // Discussions have no closed state here; a closed issue rarely reopens, and its webhook says.
-  const known = (key, kind) =>
-    titles.has(key) && (kind === "discussion" || !closedPath || closed.get(key));
+  const known = (key, kind) => titles.has(key) && (kind === "discussion" || closed.get(key));
 
   // Fetches what `keys` lack, one at a time; calls during a fetch wait for the next.
   function fill(keys) {
@@ -86,8 +81,8 @@ export function createTitles({ path, closedPath, fetchTitle, log = () => {} }) {
     keys: () => [...new Set([...titles.keys(), ...closed.keys()])],
     // Rekeyed with spelled() (restart.mjs unifySpellings()), as the tasks they name are.
     respell(spelled) {
-      if (respellMap(titles, spelled)) save();
-      if (respellMap(closed, spelled) && closedPath) closed.save();
+      respellMap(titles, spelled);
+      respellMap(closed, spelled);
     },
   };
 }

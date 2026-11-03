@@ -2247,7 +2247,7 @@ Its Dismiss (`POST /api/repos/<owner>/<repo>/dismiss { runId }`) passes the repo
 of these checks (same origin, the user in `ALLOWED_USERS` and the repo's `users`, a config
 without errors), not the issue's: a closed or busy item may be dismissed, since nothing runs.
 It takes only the task's latest run, when it ended in `error`, `interrupted` or `cancelled`. It
-is the orchestrator's own state (`dismissed.json`: the run, who dismissed it and when), which only
+is the orchestrator's own state (its store's `dismissed`: the run, who dismissed it and when), which only
 the dashboard reads; nothing is posted on GitHub. Its Undo (`{ runId, undo: true }`) is open to
 any of the repo's users, whoever dismissed it, as the dismissal is.
 
@@ -2277,7 +2277,7 @@ run reads it as that user's entry, as it would read their own comment there.
 
 A lane's name (`POST /api/repos/<owner>/<repo>/lane`) passes the repository's half too, for
 keys of that repository's issues and pull requests only. It is the orchestrator's own state
-(`lanes.json`), never posted on GitHub nor read by a run: one line of at most 60 characters,
+(its store's `lanes`), never posted on GitHub nor read by a run: one line of at most 60 characters,
 shown as text.
 
 Sync (`POST /api/sync`) takes a signed-in session and this dashboard's `Origin`, at most once

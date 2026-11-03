@@ -1,10 +1,9 @@
 // The names of the board's lanes (lanes.mjs): a maintainer's over a plan's parent over an
 // inbox's, kept across a restart under any spelling of the repo, old closed ones forgotten.
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import { MAX_NAME, PARENT_MS, createLanes, fetchParent, laneName } from "../listener/lanes.mjs";
-import { tempDir } from "./helpers.mjs";
+import { mapStore } from "./helpers.mjs";
 
 const DAY = 24 * 3600_000;
 
@@ -41,12 +40,12 @@ test("lanes: a parent's title, a typed name over it, an inbox's title or its kin
   assert.equal(lanes.get("org/app#7"), null);
 });
 
-test("lanes: kept across a restart, under any spelling of the repo", (t) => {
-  const path = join(tempDir(t), "lanes.json");
-  const lanes = createLanes({ path });
+test("lanes: kept across a restart, under any spelling of the repo", async () => {
+  const maps = mapStore();
+  const lanes = createLanes({ lanes: await maps.map("lanes") });
   lanes.name(["Org/App#18", "org/app#pr-19"], "Webhooks");
   lanes.planned("Org/App", 30, [31]);
-  const again = createLanes({ path });
+  const again = createLanes({ lanes: await maps.again("lanes") });
   assert.deepEqual(again.labels(["org/app#18", "ORG/APP#pr-19", "org/app#31"]), {
     "org/app#18": { name: "Webhooks", source: "user", at: again.get("org/app#18").namedAt },
     // Its own time: the clock may tick between the two names.
@@ -142,16 +141,26 @@ test("fetchParent: the parent issue as GitHub has it, null without one", async (
   ]);
 });
 
-test("lanes: respelled at a restart, so that old closed ones are found and forgotten", (t) => {
-  const path = join(tempDir(t), "lanes.json");
+test("lanes: respelled at a restart, so that old closed ones are found and forgotten", async () => {
+  const maps = mapStore();
   let time = 0;
   const closed = new Set(["Org/App#1"]);
-  const lanes = createLanes({ path, closed: (key) => closed.has(key), now: () => time });
+  const lanes = createLanes({
+    lanes: await maps.map("lanes"),
+    closed: (key) => closed.has(key),
+    now: () => time,
+  });
   lanes.name(["org/app#1"], "Old");
   assert.deepEqual(lanes.keys(), ["org/app#1"]);
-  const again = createLanes({ path, closed: (key) => closed.has(key), now: () => time });
+  const again = createLanes({
+    lanes: await maps.again("lanes"),
+    closed: (key) => closed.has(key),
+    now: () => time,
+  });
   again.respell((repo) => (repo.toLowerCase() === "org/app" ? "Org/App" : repo));
   assert.deepEqual(again.keys(), ["Org/App#1"]);
+  // Respelled in the store too.
+  assert.deepEqual((await maps.again("lanes")).get("org/app#1").key, "Org/App#1");
   time = 91 * DAY;
   again.name(["org/app#2"], "New");
   assert.equal(again.get("org/app#1"), null);

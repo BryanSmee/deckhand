@@ -143,7 +143,7 @@ function setup({ env = {}, grants = {}, granted = null, fs, ...repos } = {}) {
     fetch: gh.fetch,
   });
   const config = testConfig(env);
-  const store = createOnboardingStore(join(tempDir(null, "deckhand-repos-"), "o.json"));
+  const store = createOnboardingStore();
   const list = createRepoList({
     app,
     config,
@@ -248,7 +248,7 @@ test("cached: a page load doesn't read every config again; deliveries refresh it
   await list.list();
   await list.list();
   assert.equal(gh.calls.length, listed);
-  // Onboarding shows at once: it comes from onboarding.json.
+  // Onboarding shows at once: it comes from the onboarded repos' map.
   store.record("org/lib", 9);
   assert.equal((await list.get("org/lib")).status, "onboarding");
   assert.equal(gh.calls.length, listed);

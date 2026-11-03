@@ -703,7 +703,7 @@ Deckhand requests them itself, with its own token (runs still can't use `gh pr c
   ends well while it is ready (a fix run, a CI fix run, a conflict rebase, a follow-up a
   maintainer asked for): what they reviewed changed. A run that pushed nothing, failed, was
   stopped or stopped to ask (its `WIP:` commit is unfinished work) asks nobody. Each head commit
-  is decided once, across redeliveries and restarts (`requested.json`): requested, refused by
+  is decided once, across redeliveries and restarts (in the orchestrator's store): requested, refused by
   a rule, or refused by GitHub (`422`). A failure (GitHub's `5xx`, a `policy error`) is asked
   again at the next delivery or run's end.
 - **Independent of the review**: it works with `review: { request: […] }` alone (which also
@@ -1739,7 +1739,7 @@ since), and it keeps its 100 newest. A reaction Deckhand added, on any comment o
 repository (whichever task it went to, a waiting `/after`, a held comment's 😕, a finished run's
 outcome), is never the run's, even where the run's came first: GitHub keeps one reaction per
 user and content, so Deckhand's `POST` answers with the run's. Deckhand notes each one
-before it asks GitHub, in `reactions.json` (its 5,000 newest), and drops its 👀 once it takes it
+before it asks GitHub, in the github service's store, and drops its 👀 once it takes it
 off. Any other removal is refused before any policy. One added over GraphQL is removed
 with `removeReaction` (REST's `DELETE` names a reaction by an id the gateway didn't keep for it).
 

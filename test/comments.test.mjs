@@ -191,7 +191,9 @@ test("the listener's reactions: claimed before GitHub is asked, on any comment, 
     if (method === "DELETE") return new Response(null, { status: 204 });
     return Response.json({ id: 40, content: "eyes" }, { status });
   };
-  const make = () => createComments({ config: { dataDir: dir }, github, log: () => {} });
+  // What the next listener reads: the github service's record, the tests' own map here.
+  const claims = new Map();
+  const make = () => createComments({ config: { dataDir: dir }, github, claims, log: () => {} });
   let comments = make();
   const item = { repo: "Org/Repo", comment: { id: 5 } };
   comments.received(item);
@@ -221,7 +223,7 @@ test("the listener's reactions: claimed before GitHub is asked, on any comment, 
 
 test("the listener's reactions with the github service: noted there before GitHub is asked, reactions.json handed over", async (t) => {
   const dir = tempDir(t);
-  const { writeFileSync, readFileSync } = await import("node:fs");
+  const { existsSync, writeFileSync } = await import("node:fs");
   const { join } = await import("node:path");
   // What a listener from before the github service saved.
   writeFileSync(
@@ -238,10 +240,10 @@ test("the listener's reactions with the github service: noted there before GitHu
     return Response.json({ id: 40, content: "eyes" }, { status: 201 });
   };
   const comments = createComments({ config: { dataDir: dir }, github, shared, log: () => {} });
-  // The old ones go to the service, then leave the file.
+  // The old ones go to the service, then the file goes.
   await new Promise((resolve) => setTimeout(resolve, 20));
   assert.deepEqual(order.shift(), ["claim", "org/repo", "issue_comment:3", "rocket", true]);
-  assert.deepEqual(JSON.parse(readFileSync(join(dir, "reactions.json"), "utf8")), {});
+  assert.equal(existsSync(join(dir, "reactions.json")), false);
   const item = { repo: "Org/Repo", comment: { id: 5 } };
   comments.received(item);
   await item.eyes;

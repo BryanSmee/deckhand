@@ -236,7 +236,7 @@ warnings to its reply. Merge it, and the next runs use the config. See
 
 Only installations by someone in `ALLOWED_USERS`, on repositories `ALLOWED_REPOS` lets
 through, open an issue; the others are skipped, with the reason in the orchestrator's logs. A
-repository gets one onboarding issue, ever (`/data/onboarding.json`), so reinstalling the App
+repository gets one onboarding issue, ever (kept in the orchestrator's [store](#the-store)), so reinstalling the App
 opens no second one. `ONBOARDING=off` turns the automatic issue off; a `/mode onboarding`
 comment on any issue starts the same conversation by hand, for repositories installed
 before, or skipped. The dashboard's **Repositories** page lists them and starts it with a
@@ -307,7 +307,7 @@ those waiting for you) and chips by state: running (queued and `/after` waits to
 its review-and-fix loop, `review.fix`), needs input (a brainstorm waiting for your
 comment too), ready for review (once that loop is over; a loop that left blocking findings says
 how many), done, error. Titles come with the webhooks; for tasks from before the dashboard
-had them, the orchestrator asks GitHub once and keeps them in `titles.json` in its data volume.
+had them, the orchestrator asks GitHub once and keeps them in its [store](#the-store).
 
 Each task also links to its pull request (the one that closes its issue, or the pull request
 itself), with a badge for its state: draft, ready for review, merged or closed, and an icon
@@ -315,7 +315,7 @@ for what CI says of its latest commit: running, failed (a red cross) or passed (
 over its GitHub Actions runs, other services' check runs and commit statuses. Its title lists
 them; in the task's header and the Overview's **Ready for review** rows it links to the failed
 run, else the pull request's Checks tab. The
-`pull_request` webhooks keep it current, in `pulls.json`, and so do the changes Deckhand
+`pull_request` webhooks keep it current, in the orchestrator's store, and so do the changes Deckhand
 lets through for runs (a run's `gh pr ready`); for tasks from before, the orchestrator looks through each
 repository's 100 most recently updated pull requests once per start, and asks again about the
 open ones at each start, so one that changed while it was down shows its current state. The
@@ -348,7 +348,7 @@ the canvas): a border when it needs looking at (running, needs you, ready for re
 dashed red arrows: what waits for an error keeps waiting), dimmed once done (implemented: the
 issue closed as completed, or its pull request merged). Whether an issue is closed comes with
 the `issues` and `pull_request` webhooks; the rest is asked of GitHub with its title, kept in
-`closed.json`, and what was open is asked again once per start. A node opens its task; one
+the orchestrator's store, and what was open is asked again once per start. A node opens its task; one
 Deckhand never worked on opens on GitHub. The toolbar zooms the graph and fits it to the
 screen. **Lanes** shows each chain as a row instead (top to bottom on a phone, where it is the
 default), named after its parent issue, its inbox, or the name you give it with its pencil
@@ -1360,6 +1360,26 @@ The policy service reads your server folder as the `node` user (uid 1000): your 
 its `policy/` must be readable by that user (the usual `0644` files and `0755` folders are), or
 every policy decision is refused, and the orchestrator's log says why at start.
 
+### Upgrading: the orchestrator's state in its store (#615)
+
+The orchestrator kept its state in JSON files in its data volume (`/data`). Those that hold data
+alone go to its [store](#the-store) now: `titles.json`, `closed.json`, `pulls.json`,
+`dismissed.json`, `order.json`, `onboarding.json`, `lanes.json`, `modes.json`, `conflicts.json`,
+`dry-runs.json` and `requested.json`. Nothing to do: at its first start after the update, the
+orchestrator writes each file's items to the store (those it doesn't have yet), then removes the
+file, and its log says so (`titles: 120 item(s) moved to the store from /data/titles.json`). A
+crash midway moves them again at the next start, the same values. `reactions.json`, which the
+github service took over before (#458), is removed once handed over.
+
+With Redis as the store, these items are Redis keys under the store's prefix
+(`deckhand:titles/…`): plan for a few thousand more. While the store is away, the orchestrator
+goes on from what it has in memory and tries its writes again every few seconds; its `/ready`
+says how many wait (`{"ok": true, "waiting": 3}`), and a copy that stops waits 10 seconds for
+them before it lets its lease go.
+
+Going back to an earlier release: it doesn't read the store's items, and starts from empty
+files (the titles are asked of GitHub again, the run order and the lanes' names are lost).
+
 ### Upgrading: the paths from before the services are gone (#567)
 
 The orchestrator no longer answers sandboxes: its broker port (8081) and the `listener` name are
@@ -1664,14 +1684,19 @@ manifests set up and why.
 Deckhand's services ([services.md](services.md)) keep their state in a store, which each one's
 `STORE_URL` names. The broker service keeps its live runs, their files and events there
 ([The broker service](#the-broker-service)); the runner the runs' logs and events and its lease;
-the orchestrator its queue, its lease and its fencing epoch (the rest of its state in `/data`);
+the orchestrator its queue, its lease and its fencing epoch, and the state that holds data alone
+(the titles, closed states and pull requests the dashboard shows, the dismissals, the run order,
+the onboarded repositories, the lanes' names, the issues' modes, the rebase attempts, the last
+dry runs, the reviewers requested), one key per item, so that a change writes only what changed
+(the rest of its state in `/data`, for now: #613);
 edge the deliveries it took, the sessions' epochs and the deliveries' stream the orchestrator
 reads.
 
 - **`file:///data/store`**, a folder in the service's volume: on Docker Compose, and on one
   node. Several processes on that node may share it (two copies of a service, or one starting
   while the last drains): each call holds the folder's lock (`state.lock`, taken over once 10 s
-  stale) and reads again what another process wrote.
+  stale) and reads again what another process wrote. Calls made at once (a burst of
+  writes) share one lock and one write of its `state.json`.
 - **`redis://[user:password@]host:6379[/db]`**, or **`rediss://`** over TLS: on several nodes
   (a k3s cluster with more than one), where two copies of a service run on different nodes and
   a ReadWriteOnce volume can't be on both. `?prefix=` changes what goes before every key

@@ -1342,7 +1342,7 @@ test("plan next to an issue done already: it starts, and the reply says so", asy
   );
 });
 
-test("plan: lanes.json failing to save is logged, the plan's answer is GitHub's", async () => {
+test("plan: the lane's name failing to save is logged, the plan's answer is GitHub's", async () => {
   const w = setup({ issues: epic() });
   w.lanes.planned = () => {
     throw new Error("EACCES: lanes.json");
