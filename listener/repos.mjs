@@ -1,7 +1,7 @@
 // The dashboard's repository list: every repo the App is installed on that ALLOWED_REPOS
 // lets through, with whether it is set up (a .deckhand.yaml on its default branch), set up
 // so that no run starts (errors, or what the operator's grants refuse), being onboarded (an
-// issue in onboarding.json) or neither, and the button that starts onboarding.
+// issue in the onboarded repos' map) or neither, and the button that starts onboarding.
 //
 //   GET  /api/repos                       the list; with ?backlog=1 (the Overview), each
 //                                         configured repo with its backlog count as last

@@ -3,7 +3,8 @@
 // and auto-merge (reviews.mjs), by task key ("org/repo#12", the issue a pull request closes,
 // else "org/repo#pr-3"). Only decisions a policy was asked for: none anywhere, nothing kept.
 // Kept in decisions.json, so a refused merge still shows after a restart. Its last `/mode
-// policy` dry run too (issue #324), in a file of its own: a dry run is no decision.
+// policy` dry run too (issue #324), kept apart, in the store (lib/store-map.mjs: `dry-runs`): a
+// dry run is no decision.
 import { redact } from "../lib/redact.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
 import { persistentMap } from "../lib/files.mjs";
@@ -18,10 +19,14 @@ export const MAX_INPUTS = 3;
 export const MAX_INPUT = 8 * 1024;
 
 // `now`: the clock, for forgetting old tasks; `secrets()`: what redaction hides of an input
-// (secrets.mjs); `dryRunPath`: where the last dry runs are kept.
-export function createDecisions({ path, dryRunPath, now = Date.now, secrets = () => [] } = {}) {
+// (secrets.mjs); `dryRuns`: the Map the last dry runs are kept in (storeMap()'s).
+export function createDecisions({
+  path,
+  dryRuns = new Map(),
+  now = Date.now,
+  secrets = () => [],
+} = {}) {
   const decisions = persistentMap(path);
-  const dryRuns = persistentMap(dryRunPath);
 
   // `entry`: { decision, rule, denied, messages, pr, gates, layers, input }, the newest first
   // (`layers`: what each policy layer said, policies.mjs evaluated()). Its input redacted and
@@ -40,7 +45,6 @@ export function createDecisions({ path, dryRunPath, now = Date.now, secrets = ()
   function recordDryRun(key, { by = null, url = null, denials = 0 }) {
     forgetOld();
     dryRuns.set(key, { dryRun: true, by, at: now(), denials, url });
-    dryRuns.save();
   }
 
   function forgetOld() {
@@ -68,7 +72,7 @@ export function createDecisions({ path, dryRunPath, now = Date.now, secrets = ()
     const merge = (a, b) => trim([...a, ...b].sort((x, y) => (y.at ?? 0) - (x.at ?? 0)));
     if (respellMap(decisions, spelled, undefined, merge)) decisions.save();
     const later = (a, b) => ((a.at ?? 0) >= (b.at ?? 0) ? a : b);
-    if (respellMap(dryRuns, spelled, undefined, later)) dryRuns.save();
+    respellMap(dryRuns, spelled, undefined, later);
   }
 
   return { record, recordDryRun, get, dryRun, keys: () => [...decisions.keys()], respell };

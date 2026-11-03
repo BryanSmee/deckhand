@@ -1,6 +1,6 @@
 // Which mode a queued comment runs in (tasks.mjs accept()): a trigger line, a "/mode" line, or
 // the issue's current mode, its brainstorm or its work session. Keeps the issue's brainstorm
-// (brainstorms.json) and repo mode (modes.json) up to date, and replies when a mode can't run.
+// (brainstorms.json) and repo mode (the store's `modes`) up to date, and replies when a mode can't run.
 import { researchRefusal } from "./access.mjs";
 import { grantsBy } from "./grants.mjs";
 import { AGENTS } from "./agents/index.mjs";
@@ -121,7 +121,7 @@ export function createTaskModes(ctx) {
     return null;
   }
 
-  // Like a brainstorm, kept in modes.json: comments go on in it until the trigger line.
+  // Like a brainstorm, kept in the issue modes: comments go on in it until the trigger line.
   async function startOnboarding(item, key) {
     if (!(await allowed(item, "onboarding", key))) return null;
     ctx.brainstorms.end(key);
@@ -134,7 +134,7 @@ export function createTaskModes(ctx) {
   }
 
   // Research (modes.mjs RESEARCH), only with the operator's grant: without it, a reply that names
-  // it and no run. Kept in modes.json like the repo's modes: comments go on in it.
+  // it and no run. Kept in the issue modes like the repo's modes: comments go on in it.
   async function startResearch(item, key) {
     const refused = await researchRefusal(ctx.config, item.repo, {
       granted: grantsBy(ctx.policies),

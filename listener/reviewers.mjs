@@ -4,7 +4,7 @@
 // pushed to it while it was ready is over (a fix run, a CI fix run, a rebase, a maintainer's
 // follow-up): a moved head is what the reviewers have to look at again. Only users the
 // operator allows (ALLOWED_USERS), never a team; each head commit once, across redeliveries
-// and restarts (requested.json). The policies' `deny_request_review` may refuse it, keyed on
+// and restarts (the store's `requested`). The policies' `deny_request_review` may refuse it, keyed on
 // the mode of the run whose pull request it is (Deckhand's default, ../policy/gh-reviewers.rego:
 // work runs only).
 import { repoAllowed } from "./config.mjs";
@@ -13,7 +13,6 @@ import { getJson, paginate } from "./github.mjs";
 import { BUILT_IN } from "./modes.mjs";
 import { isPolicyError, pullInput } from "./policies.mjs";
 import { sameTask } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // A requested head commit is forgotten after this: the pull request is long merged or closed.
 const KEEP_MS = 90 * 24 * 3600_000;
@@ -110,8 +109,9 @@ export function requestInput({
 // calls; `runOf(key, pr)`: the record of the run whose pull request `pr` is, on task `key`
 // (openerOf()), or null; `policies`: the policies' engine (policies.mjs), none without;
 // `decided(repo, pr, entry)`: a decision a policy was asked for, for the task's page.
+// `requested`: the Map the requests are kept in (storeMap()'s).
 export function createReviewers({
-  path,
+  requested = new Map(),
   config,
   repoSettings,
   github,
@@ -121,8 +121,8 @@ export function createReviewers({
   log = () => {},
   now = Date.now,
 }) {
-  // "org/repo#pr-5" → { head, at }: the head commit last asked about, requested or refused.
-  const requested = persistentMap(path);
+  // In `requested`, "org/repo#pr-5" → { head, at }: the head commit last asked about,
+  // requested or refused.
   // Pull request key → the request being decided: a delivery and a run's end at once ask once.
   const going = new Map();
 
@@ -260,7 +260,6 @@ export function createReviewers({
     const cutoff = now() - KEEP_MS;
     for (const [k, v] of requested) if (v.at < cutoff && k !== key) requested.delete(k);
     requested.set(key, { head, at: now() });
-    requested.save();
   }
 
   return { ready, pushed, request };

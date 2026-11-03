@@ -4,18 +4,14 @@
 // more ({ runId, by, at, questions: true }, setAside()): someone took the needs-input label off
 // since, or the issue or its pull request closed or merged. The task then no longer waits for
 // input (board.mjs). A new run shows it again with no cleanup here; the entries it leaves are
-// dropped on the next start (prune()). Kept in dismissed.json.
+// dropped on the next start (prune()). Kept in the store (lib/store-map.mjs: `dismissed`).
 import { parseKey } from "./events.mjs";
 import { respellMap, taskId } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
-export function createDismissals({ path, now = Date.now } = {}) {
-  const dismissed = persistentMap(path);
-  const save = dismissed.save;
-
+// `dismissed`: the Map they are kept in (storeMap()'s).
+export function createDismissals({ dismissed = new Map(), now = Date.now } = {}) {
   function dismiss(key, runId, by) {
     dismissed.set(key, { runId, by, at: now() });
-    save();
   }
 
   // The questions of run `runId`, the task's last, set aside (`by`: who took the label off, null
@@ -23,7 +19,6 @@ export function createDismissals({ path, now = Date.now } = {}) {
   function setAside(key, runId, by) {
     if (dismissed.get(key)?.runId === runId) return;
     dismissed.set(key, { runId, by, at: now(), questions: true });
-    save();
   }
 
   // The questions of task `key`'s last run set aside, if it stopped to ask (askedOn()) before
@@ -45,7 +40,6 @@ export function createDismissals({ path, now = Date.now } = {}) {
     if (!entry?.questions || entry.runId !== asked.runId) return null;
     if (at !== null && at < entry.at) return null;
     dismissed.delete(asked.key);
-    save();
     return asked.key;
   }
 
@@ -54,7 +48,6 @@ export function createDismissals({ path, now = Date.now } = {}) {
   function undo(key, runId) {
     if (dismissed.get(key)?.runId !== runId) return false;
     dismissed.delete(key);
-    save();
     return true;
   }
 
@@ -63,13 +56,9 @@ export function createDismissals({ path, now = Date.now } = {}) {
   function prune(runs) {
     const last = new Map();
     for (const r of runs) if (!last.has(taskId(r.key))) last.set(taskId(r.key), r.id);
-    let changed = false;
     for (const [key, { runId }] of [...dismissed]) {
-      if (last.get(taskId(key)) === runId) continue;
-      dismissed.delete(key);
-      changed = true;
+      if (last.get(taskId(key)) !== runId) dismissed.delete(key);
     }
-    if (changed) save();
   }
 
   return {
@@ -85,7 +74,7 @@ export function createDismissals({ path, now = Date.now } = {}) {
     // [{ key, runId, by, at }], as board() takes them.
     list: () => [...dismissed].map(([key, d]) => ({ key, ...d })),
     keys: () => [...dismissed.keys()],
-    respell: (spelled) => respellMap(dismissed, spelled) && save(),
+    respell: (spelled) => respellMap(dismissed, spelled),
   };
 }
 

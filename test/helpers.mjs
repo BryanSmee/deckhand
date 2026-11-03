@@ -25,6 +25,7 @@ import { createRuns, runFields } from "../broker/runs.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
+import { storeMap } from "../lib/store-map.mjs";
 import {
   AGENT_AUDIENCE,
   isToken,
@@ -265,6 +266,25 @@ export function tempDir(t, prefix = "deckhand-") {
   if (t) t.after(() => remove(dir));
   else leftover.add(dir);
   return dir;
+}
+
+// Maps kept in a store in memory, as the orchestrator keeps its state (lib/store-map.mjs):
+// map(name) loads one as a copy taking the lease does, again(name) the same once every write so
+// far is done, as the next copy (or one after a crash) reads it.
+export function mapStore(store = openStore("memory:")) {
+  const loaded = [];
+  const map = async (name, options) => {
+    const loading = await storeMap(store, name, options);
+    loaded.push(loading);
+    return loading;
+  };
+  const settled = () => Promise.all(loaded.map((m) => m.settled()));
+  return {
+    store,
+    map,
+    settled,
+    again: async (name, options) => (await settled(), map(name, options)),
+  };
 }
 
 // Whether the tests run as root, who writes anywhere: a test whose subject is "a user can't

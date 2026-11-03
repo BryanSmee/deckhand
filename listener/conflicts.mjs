@@ -5,7 +5,7 @@
 // doesn't fire when the base branch moves: hence polling, and a check soon after the
 // deliveries that say a default branch moved (a merge, a push) and Deckhand's own auto-merge.
 //
-// No loops: each attempt's (head, base) pair is kept in conflicts.json, and the same pair
+// No loops: each attempt's (head, base) pair is kept (the store's `conflicts`), and the same pair
 // never starts a second run, across restarts: a rebase that failed or stopped to ask waits
 // for a new push or a new base commit.
 //
@@ -19,7 +19,6 @@ import { getJson } from "./github.mjs";
 import { denyKept, passed } from "./policies.mjs";
 import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // How often the watcher wakes up; each repo is checked at its own interval.
 const TICK_MS = 60_000;
@@ -51,9 +50,10 @@ export function noRebaseText(why, base) {
 // `sleep(ms)`: soon()'s wait. `policies`: the policies' engine (policies.mjs), none without;
 // `decided(key, entry)`: a decision a policy was asked for, for the task's page (decisions.mjs);
 // `fixes(repo, number)`: the pull request's fix runs so far (reviews.mjs);
-// `reply(repo, number, text)`: a comment with the App's token.
+// `reply(repo, number, text)`: a comment with the App's token. `attempts`: the Map the last
+// attempts are kept in (storeMap()'s), "org/repo#12" → { pr, head, base, at }.
 export function createConflicts({
-  path,
+  attempts = new Map(),
   config,
   pulls,
   github,
@@ -68,8 +68,6 @@ export function createConflicts({
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()),
 }) {
-  // "org/repo#12" → { pr, head, base, at } of its last attempt.
-  const attempts = persistentMap(path);
   // repo (lowercase) → when it is next due. A restart checks every repo at once.
   const due = new Map();
   let ticking = null;
@@ -224,7 +222,6 @@ export function createConflicts({
     if (busy(key)) return null;
     const repeated = denied.length > 0 && JSON.stringify(said) === JSON.stringify(denied);
     attempts.set(key, { ...pair, at: now(), ...(repeated && { said }) });
-    attempts.save();
     if (denied.length) {
       const why = policyWhy("deny_fix", denied);
       log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, no rebase run, ${why}`);
@@ -232,7 +229,6 @@ export function createConflicts({
       try {
         await reply(repo, number, noRebaseText(why, pr.base.ref));
         attempts.set(key, { ...attempts.get(key), said: denied });
-        attempts.save();
       } catch (error) {
         log(`${key}: saying no rebase run: ${error.message ?? error}`);
       }
@@ -323,6 +319,6 @@ export function createConflicts({
     // Rekeyed with spelled() (restart.mjs unifySpellings()), so an attempt is found again
     // under the key pulls.mjs now has. Both spellings: the later attempt, or without times
     // (saved before they were), the old spelling's: the watcher ran under it, not the rest.
-    respell: (spelled) => respellMap(attempts, spelled, undefined, later) && attempts.save(),
+    respell: (spelled) => respellMap(attempts, spelled, undefined, later),
   };
 }

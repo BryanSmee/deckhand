@@ -40,13 +40,16 @@ const MAX_BODY = 64 * 1024;
 // (../runner/client.mjs start()); `edge()`: http.mjs handle(), or null while the orchestrator
 // isn't ready to answer it; `active()`: whether this copy holds the lease. A waiting copy
 // answers its probes (GET /health, and /ready: 503), and 503 to every call, which its callers
-// try again on the copy that acts (lib/service-client.mjs).
+// try again on the copy that acts (lib/service-client.mjs). `waiting()`: how many items of its
+// state wait to be written to the store (lib/store-map.mjs), which /ready says: the store away,
+// the copy acting still answers (no other could do better), and what it changes lands later.
 export function createServicesHttp({
   keys,
   bound,
   pendingTokens,
   edge = () => null,
   active = () => true,
+  waiting = () => 0,
   // Whether a login edge signed in is one of this orchestrator's ALLOWED_USERS too: the two
   // read the same setting, and one of them out of date lets nobody through that it refuses.
   allowed = () => true,
@@ -89,7 +92,7 @@ export function createServicesHttp({
     if (req.method === "GET" && url.pathname === "/health")
       return sendJson(res, healthAnswer(health));
     if (req.method === "GET" && url.pathname === "/ready") {
-      return sendJson(res, { ok: active() }, active() ? 200 : 503);
+      return sendJson(res, { ok: active(), waiting: waiting() }, active() ? 200 : 503);
     }
     if (!active()) throw new Refused(503, "this copy waits for the orchestrator's lease");
     if (url.pathname.startsWith("/edge/")) {

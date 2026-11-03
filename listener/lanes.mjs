@@ -7,12 +7,11 @@
 //   inbox   the repo's ideas or bugs inbox issue: its title
 // The dashboard picks one per lane (lanes.ts laneName()), else "#18 and 3 more". A name is
 // kept on every issue of the lane named, so it outlasts the issues that get done and stays
-// when the lane splits. Kept in lanes.json by lowercase task key: one entry whatever the
-// spelling of its repo (spelling.mjs).
+// when the lane splits. Kept in the store (lib/store-map.mjs: `lanes`) by lowercase task key: one
+// entry whatever the spelling of its repo (spelling.mjs).
 import { parseKey, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { respelled, taskId } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // The longest name, in characters: a lane's header is one line.
 export const MAX_NAME = 60;
@@ -37,18 +36,17 @@ export async function fetchParent(github, repo, number) {
 // closed, `known(key)`: whether the listener has heard of it (titles.mjs), for forgetting old
 // entries and not asking about closed issues again.
 export function createLanes({
-  path,
+  lanes = new Map(),
   fetchParent = async () => null,
   closed = () => false,
   known = () => true,
   now = Date.now,
   log = () => {},
 } = {}) {
-  // taskId(key) → { key, name?, namedAt?, plan?, parent?, parentAt?, at }: `key` as last
-  // spelled; `name` typed at `namedAt`; `plan`, the number of the issue a plan laid it out
-  // under (same repo); `parent`: { key, title } on GitHub, asked at `parentAt`; `at`, when
-  // anything was last set.
-  const lanes = persistentMap(path);
+  // `lanes` (storeMap()'s): taskId(key) → { key, name?, namedAt?, plan?, parent?, parentAt?,
+  // at }: `key` as last spelled; `name` typed at `namedAt`; `plan`, the number of the issue a
+  // plan laid it out under (same repo); `parent`: { key, title } on GitHub, asked at
+  // `parentAt`; `at`, when anything was last set.
   let fetching = null;
 
   function update(key, change) {
@@ -60,13 +58,12 @@ export function createLanes({
     else lanes.delete(id);
   }
 
-  // Closed or unknown issues set long ago go, on each write.
-  function save() {
+  // Closed or unknown issues set long ago go, after each change.
+  function prune() {
     const cutoff = now() - KEEP_MS;
     for (const [id, entry] of lanes) {
       if (entry.at < cutoff && (closed(entry.key) || !known(entry.key))) lanes.delete(id);
     }
-    lanes.save();
   }
 
   // The lane of issues `keys` is called `name` from now on ("": the name is taken off, the
@@ -76,13 +73,13 @@ export function createLanes({
       if (lanes.get(taskId(key))?.name === name) continue;
       update(key, { name, namedAt: name ? now() : null });
     }
-    save();
+    prune();
   }
 
   // A plan laid out issues `numbers` of `repo` under `parent`, which is part of the lane too.
   function planned(repo, parent, numbers) {
     for (const n of new Set([parent, ...numbers])) update(taskKey(repo, n), { plan: parent });
-    save();
+    prune();
   }
 
   // Asks GitHub for the parent of each open issue of `keys` not asked within PARENT_MS (a
@@ -103,7 +100,7 @@ export function createLanes({
           log(`Parent of ${key}: ${error.message ?? error}`);
         }
       }
-      save();
+      prune();
     })().finally(() => (fetching = null));
     return fetching;
   }
@@ -148,16 +145,16 @@ export function createLanes({
   // titles.mjs's keys are, and the pruning asks it with them.
   const keys = () => [...lanes.values()].map((entry) => entry.key);
   function respell(spelled) {
-    let changed = false;
-    for (const entry of lanes.values()) {
+    for (const [id, entry] of lanes) {
       const key = respelled(entry.key, spelled);
       const parent = entry.parent && respelled(entry.parent.key, spelled);
       if (key === entry.key && parent === entry.parent?.key) continue;
-      entry.key = key;
-      if (entry.parent) entry.parent = { ...entry.parent, key: parent };
-      changed = true;
+      lanes.set(id, {
+        ...entry,
+        key,
+        ...(entry.parent && { parent: { ...entry.parent, key: parent } }),
+      });
     }
-    if (changed) lanes.save();
   }
 
   return {

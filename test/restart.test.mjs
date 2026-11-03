@@ -14,7 +14,7 @@ import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore } from "../lib/store.mjs";
 import { logContext, withLogContext } from "../lib/log.mjs";
-import { assertMode, fileLogs, localBroker, tempDir, until } from "./helpers.mjs";
+import { assertMode, fileLogs, localBroker, mapStore, tempDir, until } from "./helpers.mjs";
 
 // A run's saved state, as saveLive() writes it. → its id, the broker's handle once restored.
 function saveRun(dir, id, issue, record, more = {}) {
@@ -344,11 +344,15 @@ test("pulls.json under an old spelling loads under GitHub's: one entry, one task
       "storywake/storywake#2": { number: 7, state: "draft", readyAt: null },
     }),
   );
-  const pulls = createPulls({ path, listPulls: async () => [] });
+  const maps = mapStore();
+  const pulls = createPulls({
+    pulls: await maps.map("pulls", { file: path }),
+    listPulls: async () => [],
+  });
   const nameOf = async () => "Storywake/storywake";
   const spelled = await restarted(ctx, { nameOf, keys: pulls.keys() });
   pulls.respell(spelled);
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+  assert.deepEqual(Object.fromEntries(await maps.again("pulls")), {
     "Storywake/storywake#5": { number: 6, state: "ready", readyAt: 100 },
     "Storywake/storywake#2": { number: 7, state: "draft", readyAt: null },
   });

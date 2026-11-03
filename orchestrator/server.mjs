@@ -49,6 +49,7 @@ import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
 import { openStore } from "../lib/store.mjs";
+import { storeMaps } from "../lib/store-map.mjs";
 import { readJson } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
 import { createEdgeClient } from "../edge/client.mjs";
@@ -106,7 +107,7 @@ import { createSync } from "../listener/sync.mjs";
 import { busyTask, createTasks } from "../listener/tasks.mjs";
 import { createAutoPickup } from "../listener/auto-pickup.mjs";
 import { createLanes, fetchParent } from "../listener/lanes.mjs";
-import { createOrder } from "../listener/order.mjs";
+import { createOrder, ranked } from "../listener/order.mjs";
 import { createTitles } from "../listener/titles.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createWorkApi } from "../listener/work.mjs";
@@ -117,6 +118,9 @@ const POLICY_DRAIN_MS = 5000;
 
 // How long a listener that stops waits for the 👀 still on their way, for the queue it leaves.
 const EYES_WAIT_MS = 10_000;
+
+// How long a copy that stops waits for its maps' writes, should the store be away.
+const MAPS_WAIT_MS = 10_000;
 
 // How often the listener and the egress proxy are joined again to the running sandboxes'
 // networks, should either have been recreated (restart.mjs relink()).
@@ -254,6 +258,8 @@ async function listenWhenFree(server, port, host) {
 // The runner's calls, before anything waits on it: a run's first tokens; and edge's, once the
 // state is back (`edgeReady`): the dashboard's API (services-http.mjs).
 let edgeReady = null;
+// The orchestrator's maps in the store, once read (below).
+let maps = null;
 // Whether this copy acts: from the lease's taking until SIGTERM.
 let acting = false;
 // The version the images were built from, its repository and when this orchestrator started:
@@ -268,6 +274,8 @@ const services = createServicesHttp({
   pendingTokens,
   edge: () => edgeReady,
   active: () => acting,
+  // The maps' items not written to the store yet (lib/store-map.mjs), once they are loaded.
+  waiting: () => maps?.waiting() ?? 0,
   allowed: (login) => config.users.includes(login),
   log,
 });
@@ -312,6 +320,8 @@ const lease = await new Promise((resolve) => {
 });
 epoch = lease.epoch;
 acting = true;
+// Until it is lost, or released on SIGTERM: the maps' writes stop trying then (lib/store-map.mjs).
+let leaseHeld = true;
 // Stopped before it is up: its lease given back, for the other copy to take at once.
 sigterm = () => {
   leaseLost = () => {};
@@ -319,6 +329,7 @@ sigterm = () => {
 };
 await servicesListening;
 leaseLost = () => {
+  leaseHeld = false;
   log.error("The orchestrator's lease is lost: another copy acts now. Exiting.");
   process.exit(1);
 };
@@ -580,10 +591,40 @@ ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
 ctx.runs = loadRuns(logDir, { log });
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 
+// The orchestrator's maps that hold data alone (#615), in the store one key per item
+// (lib/store-map.mjs), read back now that this copy holds the lease, before anything is
+// restored: what a release before kept in the data volume (`<name>.json`) is moved there
+// first. Each change writes its own key, tried again while the store is away (/ready says how
+// many wait), until written or the lease is lost.
+maps = await persist("Reading the orchestrator's maps from the store", () =>
+  storeMaps(
+    store,
+    {
+      titles: {},
+      closed: {},
+      pulls: {},
+      dismissed: {},
+      order: { moved: ranked },
+      onboarding: {},
+      lanes: {},
+      modes: {},
+      conflicts: {},
+      "dry-runs": {},
+      requested: {},
+    },
+    {
+      dir: config.dataDir,
+      secrets: () => operatorSecrets(ctx),
+      held: () => leaseHeld,
+      log,
+    },
+  ),
+);
+
 // The dashboard's titles and closed states: from webhooks, else fetched (titles.mjs).
 const titles = createTitles({
-  path: join(config.dataDir, "titles.json"),
-  closedPath: join(config.dataDir, "closed.json"),
+  titles: maps.maps.titles,
+  closed: maps.maps.closed,
   log,
   fetchTitle: (repo, kind, number) => fetchTitle(github, repo, kind, number),
 });
@@ -592,7 +633,7 @@ titles.seed(ctx.runs.map((r) => [r.key, r.title]));
 
 // Each task's pull request: from webhooks, else looked up once (pulls.mjs).
 const pulls = createPulls({
-  path: join(config.dataDir, "pulls.json"),
+  pulls: maps.maps.pulls,
   log,
   listPulls: (repo) => listPulls(github, repo),
   getPull: (repo, number) => fetchPull(github, repo, number),
@@ -601,7 +642,7 @@ const pulls = createPulls({
 
 // Failed runs dismissed from the dashboard, and runs whose questions were set aside (their
 // needs-input label taken off), while each is its task's last (dismissals.mjs).
-const dismissals = createDismissals({ path: join(config.dataDir, "dismissed.json") });
+const dismissals = createDismissals({ dismissed: maps.maps.dismissed });
 
 // Auto-picked work that is over: its issue closed, its pull request merged or closed, or the
 // sweep gave its slot to the next issue (picks.mjs, tasks.mjs releasePicks()).
@@ -639,14 +680,14 @@ const inputs = createInputs({
 });
 
 // The run order the maintainer set on the dashboard: which queued task starts next (order.mjs).
-const order = createOrder({ path: join(config.dataDir, "order.json") });
+const order = createOrder({ order: maps.maps.order });
 
 // --- Per-repo settings and images ----------------------------------------------------------
 
 const repoFile = (repo, path, ref) => readRepoFile(github, repo, path, ref);
 
-// The repos onboarded so far (onboarding.json) and their onboarding issues (onboarding.mjs).
-const onboarded = createOnboardingStore(join(config.dataDir, "onboarding.json"));
+// The repos onboarded so far and their onboarding issues (onboarding.mjs).
+const onboarded = createOnboardingStore(maps.maps.onboarding);
 
 // The dashboard's repository list (repos.mjs), refreshed by the deliveries that change it.
 const repoList = createRepoList({
@@ -696,7 +737,7 @@ policies.checkOperator().then(({ errors, warnings }) => {
 
 // The names of the board's lanes: one a maintainer typed, or a parent's title (lanes.mjs).
 const lanes = createLanes({
-  path: join(config.dataDir, "lanes.json"),
+  lanes: maps.maps.lanes,
   fetchParent: (repo, number) => fetchParent(github, repo, number),
   closed: (key) => titles.closed(key) !== null,
   known: (key) => titles.get(key) !== null || titles.closed(key) !== null,
@@ -767,12 +808,12 @@ Object.assign(ctx, {
     log,
   }),
   // The issues whose session is in one of their repo's own modes.
-  issueModes: createIssueModes(join(config.dataDir, "modes.json")),
+  issueModes: createIssueModes(maps.maps.modes),
 });
 Object.assign(ctx, createStatus(ctx), createTasks(ctx), createRuns(ctx), createRestart(ctx));
 // Open pull requests of opted-in repos that conflict with their base get a rebase run.
 ctx.conflicts = createConflicts({
-  path: join(config.dataDir, "conflicts.json"),
+  attempts: maps.maps.conflicts,
   config,
   pulls,
   github,
@@ -792,7 +833,7 @@ ctx.conflicts = createConflicts({
 // Each task's last policy decisions and dry run, for its page (decisions.mjs).
 ctx.decisions = createDecisions({
   path: join(config.dataDir, "decisions.json"),
-  dryRunPath: join(config.dataDir, "dry-runs.json"),
+  dryRuns: maps.maps["dry-runs"],
   secrets: () => operatorSecrets(ctx),
 });
 // A work run's branch, created and linked to its issue before its sandbox starts
@@ -839,7 +880,7 @@ ctx.reviews = createReviews({
 // Deckhand's ready pull requests get the reviewers their repo's `review.request` names, again
 // after a run pushed to them (reviewers.mjs).
 ctx.reviewers = createReviewers({
-  path: join(config.dataDir, "requested.json"),
+  requested: maps.maps.requested,
   config,
   repoSettings,
   github,
@@ -1038,7 +1079,7 @@ await ctx.loadQueue();
 // A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
 ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // The keys of comments dropped as the queue came back (their author no longer allowed) stay in
-// order.json otherwise, and would rank a new comment there as placed.
+// the run order otherwise, and would rank a new comment there as placed.
 order.keep(ctx.queueOrder().map((t) => taskKey(t.repo, t.id)));
 
 // The dashboard's API and the deliveries, both edge's to pass on: answered from here on.
@@ -1243,7 +1284,15 @@ sigterm = () => {
   const released = Promise.allSettled([...ctx.ending, ...http.admitting, delivered, posted])
     .then(() => ctx.eyesSaved(EYES_WAIT_MS))
     .then(ctx.saveQueue)
+    // The maps' writes still waiting (the store away): for a while, the rest is lost.
+    .then(() =>
+      Promise.race([
+        maps.settled(),
+        new Promise((resolve) => setTimeout(resolve, MAPS_WAIT_MS).unref()),
+      ]),
+    )
     .then(() => {
+      if (maps.waiting()) log(`Stopping: ${maps.waiting()} map item(s) not written to the store`);
       const queued = [...ctx.tasks.values()].filter((t) => t.pending.length).length;
       log(`Stopping: ${queued} task(s) with queued comments left to the next copy`);
     })
@@ -1252,6 +1301,7 @@ sigterm = () => {
     // Everything is in the store: the lease goes to the next copy now, rather than in 15 s.
     .then(() => {
       leaseLost = () => {};
+      leaseHeld = false;
       return lease.control.stop();
     })
     .catch((error) => log(`Releasing the lease: ${error.stack ?? error}`));

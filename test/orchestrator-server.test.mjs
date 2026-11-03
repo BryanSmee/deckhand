@@ -54,7 +54,8 @@ import { loginSeal } from "../models/logins.mjs";
 import { createModels, credentialNames, runnerOf } from "../models/server.mjs";
 import { APP_EVENTS, APP_PERMISSIONS } from "../listener/github-app.mjs";
 import { gitBlob } from "../listener/images.mjs";
-import { openStore } from "../lib/store.mjs";
+import { openStore, values } from "../lib/store.mjs";
+import { pathToFileURL } from "node:url";
 import {
   evalResult,
   fakeOpa,
@@ -438,6 +439,24 @@ async function onlyLog(dir) {
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
   return [...runLogs(dir).values()][0];
+}
+
+// Data folder → a wait for the orchestrator acting on it to have written to its store every map
+// item it changed so far (its /ready's `waiting`), registered by listen().
+const writesLanded = new Map();
+
+// Map `name` as the orchestrator keeps it in its store (lib/store-map.mjs): { key: value }, read
+// as another process on the store's folder would, once what the orchestrator changed so far
+// landed there (its writes are in the background).
+async function storedMap(dir, name) {
+  await writesLanded.get(dir)?.();
+  const store = openStore(pathToFileURL(join(dir, "store")).href);
+  const found = {};
+  for await (const [key, value] of values(store, `${name}/`)) {
+    found[key.slice(name.length + 1)] = value;
+  }
+  await store.close();
+  return found;
 }
 
 // What the tests' egress proxies serve as their CA's certificate.
@@ -833,6 +852,17 @@ describe("listener", options, () => {
     );
     const edgeInternalPort = await forwarder(t, () => portOf(edge, /Internal port on :(\d+)\n/g));
     const servicesPort = await forwarder(t, () => portOf(listener, /Services on :(\d+)\n/g));
+    writesLanded.set(dir, () =>
+      waitUntil(
+        async () => {
+          const res = await fetch(`http://127.0.0.1:${servicesPort}/ready`).catch(() => null);
+          const body = res && (await res.json());
+          return body?.ok && body.waiting === 0;
+        },
+        { ms: 10_000, what: "the orchestrator's map writes" },
+      ),
+    );
+    t.after(() => writesLanded.delete(dir));
     const policyPort = await forwarder(t, () => portOf(listener, /Egress policy on :(\d+)\n/g));
     policyPortNow = policyPort;
     const settings = {
@@ -2055,10 +2085,10 @@ mounts:
     assert.deepEqual(readdirSync(join(dir, "nets")), []);
   });
 
-  // Polls until `check()` is truthy.
+  // Polls until `check()` is truthy (or resolves to it).
   async function until(check, what) {
     for (let i = 0; i < 400; i++) {
-      const value = check();
+      const value = await check();
       if (value) return value;
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
@@ -3043,7 +3073,7 @@ mounts:
     await listener.until("Delivery: issues opened");
     release();
     await listener.until("org/repo#30: CI of #31 failed");
-    const kept = JSON.parse(readFileSync(join(dir, "pulls.json"), "utf8"))["org/repo#30"];
+    const kept = (await storedMap(dir, "pulls"))["org/repo#30"];
     assert.deepEqual(kept.ci, {
       sha: "abc",
       state: "failed",
@@ -4124,7 +4154,7 @@ allow_capabilities contains "read:pulls"
     assert.equal(JSON.parse(mints.at(-1).body).permissions.issues, "read");
     assert.equal(JSON.parse(mints.at(-1).body).permissions.pull_requests, "read");
     assert.equal(JSON.parse(mints.at(-1).body).permissions.contents, "read");
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {});
+    assert.deepEqual(await storedMap(dir, "modes"), {});
   });
 
   test("/mode research: the grant, any public host, no clone or token, the thread in, the reply out", async (t) => {
@@ -4611,10 +4641,7 @@ mounts:
     const mints = () => github.requests.filter((r) => r.body.includes("repositories"));
     assert.equal(JSON.parse(mints().at(-1).body).permissions.contents, "read");
     assert.equal(JSON.parse(mints().at(-1).body).permissions.issues, "read");
-    assert.deepEqual(
-      JSON.parse(readFileSync(join(dir, "onboarding.json"), "utf8"))["org/repo"].issue,
-      30,
-    );
+    assert.deepEqual((await storedMap(dir, "onboarding"))["org/repo"].issue, 30);
     await listener.until("done (ok)");
 
     // A comment without a trigger line: the same conversation, nothing pushed.
@@ -4656,11 +4683,8 @@ mounts:
     await until(() => replies(github).length === 1, "the proposal");
     assert.equal(lastRun(dir), "onboarding 1");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_PROMPT=Onboard org\/repo/m);
-    assert.equal(
-      JSON.parse(readFileSync(join(dir, "onboarding.json"), "utf8"))["org/repo"].issue,
-      12,
-    );
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "modes.json"), "utf8")), {
+    assert.equal((await storedMap(dir, "onboarding"))["org/repo"].issue, 12);
+    assert.deepEqual(await storedMap(dir, "modes"), {
       "org/repo#12": "onboarding",
     });
   });
@@ -4960,11 +4984,11 @@ mounts:
     assert.equal(now["org/repo#11"].name, "Budgets");
     assert.equal(now["org/repo#11"].source, "user");
     // GitHub's parents are asked for the board's issues too; the plan's wins.
-    const read = () => JSON.parse(readFileSync(join(dir, "lanes.json"), "utf8"));
-    let kept = read();
+    const read = () => storedMap(dir, "lanes");
+    let kept = await read();
     for (let i = 0; i < 200 && !kept["org/repo#12"]?.parentAt; i++) {
       await new Promise((resolve) => setTimeout(resolve, 25));
-      kept = read();
+      kept = await read();
     }
     assert.deepEqual(kept["org/repo#10"].parent, { key: "org/repo#3", title: "Roadmap" });
     assert.equal(kept["org/repo#12"].parent, undefined);
@@ -5067,7 +5091,7 @@ mounts:
     await listener.until("done (ok)");
   });
 
-  test("Dismiss: a failed run stops asking, in dismissed.json and on the dashboard", async (t) => {
+  test("Dismiss: a failed run stops asking, in the store and on the dashboard", async (t) => {
     const { dir, port } = await listen(t, {}, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       writeFileSync(
@@ -5116,7 +5140,7 @@ mounts:
     const { dismissed, state: ended } = await task();
     assert.equal(ended, "error");
     assert.equal(dismissed.by, "alice");
-    const kept = JSON.parse(readFileSync(join(dir, "dismissed.json"), "utf8"));
+    const kept = await storedMap(dir, "dismissed");
     assert.equal(kept["org/repo#5"].runId, "org-repo-5-1000");
   });
 
@@ -5295,7 +5319,7 @@ mounts:
     const handled = await listener.until(/Delivery: pull_request \w+ from bob/);
     assert.match(handled, /Delivery: pull_request edited from bob/);
     assert.doesNotMatch(listener.output(), /label removed, its last run's questions set aside/);
-    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /pr-7/);
+    assert.doesNotMatch(JSON.stringify(await storedMap(dir, "dismissed")), /pr-7/);
   });
 
   test("an issue's unlabeled delivery redelivered after the label was put back sets nothing aside", async (t) => {
@@ -5347,7 +5371,7 @@ mounts:
     assert.match(handled, /Delivery issues unlabeled: redelivered, as org\/repo#5 is now/);
     assert.match(handled, /Delivery: issues edited from bob/);
     assert.doesNotMatch(listener.output(), /label removed, its last run's questions set aside/);
-    assert.doesNotMatch(exists(join(dir, "dismissed.json")) ?? "", /#5/);
+    assert.doesNotMatch(JSON.stringify(await storedMap(dir, "dismissed")), /#5/);
   });
 
   test("an issue's closed or unlabeled delivery redelivered while the issue can't be looked up records the close, leaves the questions", async (t) => {
@@ -5418,7 +5442,7 @@ mounts:
     const handled = await listener.until(/Delivery: issues \w+ from bob/);
     assert.match(handled, /Delivery issues closed: redelivered, org\/repo#5 not looked up/);
     assert.match(handled, /Delivery: issues closed from bob/);
-    await until(() => /"org\/repo#5"/.test(exists(join(dir, "closed.json")) ?? ""), "the close");
+    await until(async () => "org/repo#5" in (await storedMap(dir, "closed")), "the close");
     // #6's label taken off, by its time after the run asked: as sent, it would set them aside.
     const unlabelled = { number: 6, title: "Six", state: "open", labels: [], updated_at: later };
     const label = { name: "needs-input" };
@@ -5431,7 +5455,7 @@ mounts:
     // But the questions left as they are: either delivery may be older than what GitHub has now
     // (the label put back, a run that asked since).
     assert.doesNotMatch(listener.output(), /questions set aside/);
-    assert.equal(exists(join(dir, "dismissed.json")), null);
+    assert.deepEqual(await storedMap(dir, "dismissed"), {});
     const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
     assert.deepEqual(Object.keys(inputs).sort(), ["org/repo#5", "org/repo#6"]);
   });
@@ -5656,7 +5680,7 @@ mounts:
     assert.deepEqual([queued.state, queued.review.loop], ["queued", "checks"]);
   });
 
-  test("Run order: a queued task moved first has position 1, in order.json", async (t) => {
+  test("Run order: a queued task moved first has position 1, in the store", async (t) => {
     const { dir, port, send, listener } = await listen(t, {}, (dir, github) => {
       // A key with no comment queued (dropped as the queue came back, say): dropped at start.
       writeFileSync(
@@ -5665,7 +5689,8 @@ mounts:
       );
       return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
     });
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "order.json"), "utf8")), {});
+    assert.deepEqual(await storedMap(dir, "order"), {});
+    assert.equal(existsSync(join(dir, "order.json")), false);
     for (const [number, id] of [
       [5, 105],
       [6, 106],
@@ -5702,8 +5727,147 @@ mounts:
     assert.equal(res.status, 200, await res.clone().text());
     assert.equal((await res.json()).message, "#6 moved first in line.");
     assert.deepEqual(await positions(), { "org/repo#6": 1, "org/repo#5": 2 });
-    const kept = JSON.parse(readFileSync(join(dir, "order.json"), "utf8"));
-    assert.deepEqual(Object.keys(kept), ["org/repo#6", "org/repo#5"]);
+    const kept = Object.entries(await storedMap(dir, "order")).sort(
+      ([, a], [, b]) => a.rank - b.rank,
+    );
+    assert.deepEqual(
+      kept.map(([id]) => id),
+      ["org/repo#6", "org/repo#5"],
+    );
+  });
+
+  test("the orchestrator's maps (#615): a release before's files moved to the store, read back the same after a handover", async (t) => {
+    const url = "https://github.com/org/repo/pull/50";
+    const dryRun = { dryRun: true, by: "someone", at: 950, denials: 1, url: "https://x/1" };
+    // What a release before kept in its data volume, a file per map.
+    const legacy = {
+      titles: { "org/repo#5": "Five", "org/repo#6": "Six", "org/repo#9": "Nine" },
+      closed: { "org/repo#5": "completed", "org/repo#6": "completed", "org/repo#9": "completed" },
+      // #9's failed run, its last (logged below), dismissed: kept at start.
+      dismissed: { "org/repo#9": { runId: "org-repo-9-1000", by: "alice", at: 1 } },
+      // Merged: not asked about again at start, as an open one is.
+      pulls: { "org/repo#5": { number: 50, url, state: "merged", readyAt: 1, additions: 1 } },
+      lanes: { "org/repo#5": { key: "org/repo#5", name: "Budgets", namedAt: 1, at: Date.now() } },
+      "dry-runs": { "org/repo#5": dryRun },
+      modes: { "org/repo#7": "review" },
+      onboarding: { "org/other": { issue: 3, at: 1 } },
+      conflicts: { "org/repo#8": { pr: 9, head: "h", base: "b", at: 1 } },
+      requested: { "org/repo#pr-9": { head: "h", at: Date.now() } },
+    };
+    const ctx = await listen(t, {}, (dir, github) => {
+      for (const [name, value] of Object.entries(legacy)) {
+        writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
+      }
+      mkdirSync(join(dir, "logs"));
+      writeFileSync(
+        join(dir, "logs", "org-repo-9-1000.log"),
+        [
+          {
+            type: "listener",
+            key: "org/repo#9",
+            repo: "org/repo",
+            taskMode: "work",
+            startedAt: 1000,
+          },
+          { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join("\n") + "\n",
+      );
+      return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
+    });
+    const { dir, port, send } = ctx;
+    for (const name of Object.keys(legacy)) {
+      assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
+      assert.deepEqual(await storedMap(dir, name), legacy[name], name);
+    }
+    for (const [number, id] of [
+      [5, 105],
+      [6, 106],
+    ]) {
+      const c = comment("alice");
+      await send({ ...c, issue: { number }, comment: { ...c.comment, id } });
+      await ctx.listener.until(`org/repo#${number}: queued (work`);
+    }
+    const base = `http://127.0.0.1:${port}`;
+    const get = (path, cookie) =>
+      fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+    const login = await get("/auth/login");
+    const to = new URL(login.headers.get("location"));
+    const state = login.headers.getSetCookie()[0].split(";")[0];
+    const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+    const session = back.headers
+      .getSetCookie()
+      .find((c) => c.startsWith("deckhand_session="))
+      .split(";")[0];
+    const moved = await fetch(`${base}/api/repos/org/repo/order`, {
+      method: "POST",
+      headers: {
+        cookie: session,
+        origin: "https://hooks.example.com",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({ key: "org/repo#6", first: true }),
+    });
+    assert.equal(moved.status, 200, await moved.clone().text());
+    // What the dashboard shows of the maps: titles, closed states, pull requests, lanes, the
+    // run order, dry runs.
+    const shown = async () => {
+      const body = await (await get("/api/state", session)).json();
+      return {
+        tasks: body.tasks
+          .map(({ key, title, closed, pr, position, dryRun, dismissed }) => ({
+            key,
+            title,
+            closed,
+            pr: pr && { number: pr.number, state: pr.state },
+            ...(position && { position }),
+            ...(dryRun && { dryRun }),
+            ...(dismissed && { dismissed: { by: dismissed.by, at: dismissed.at } }),
+          }))
+          .sort((a, b) => a.key.localeCompare(b.key)),
+        lane: body.lanes["org/repo#5"]?.name,
+      };
+    };
+    const before = await shown();
+    assert.deepEqual(before, {
+      tasks: [
+        {
+          key: "org/repo#5",
+          title: "Five",
+          closed: "completed",
+          pr: { number: 50, state: "merged" },
+          position: 2,
+          dryRun,
+        },
+        { key: "org/repo#6", title: "Six", closed: "completed", pr: null, position: 1 },
+        {
+          key: "org/repo#9",
+          title: "Nine",
+          closed: "completed",
+          pr: null,
+          dismissed: { by: "alice", at: 1 },
+        },
+      ],
+      lane: "Budgets",
+    });
+    // Those the dashboard doesn't show (the others it fills as it is read: a lane's parent).
+    const stored = {};
+    for (const name of ["modes", "onboarding", "conflicts", "requested", "order", "dismissed"]) {
+      stored[name] = await storedMap(dir, name);
+    }
+
+    await ctx.handOver();
+    await ctx.listener.until("org/repo#5: 1 comment(s) queued before the restart");
+    await ctx.listener.until("org/repo#6: 1 comment(s) queued before the restart");
+    assert.deepEqual(await shown(), before);
+    for (const [name, value] of Object.entries(stored)) {
+      assert.deepEqual(await storedMap(dir, name), value, name);
+    }
+    // Nothing written back to the data volume.
+    for (const name of Object.keys(legacy)) {
+      assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
+    }
   });
 
   test("the dashboard and its logs are for allowed users signed in with GitHub", async (t) => {

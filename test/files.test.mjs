@@ -2,12 +2,9 @@ import assert from "node:assert/strict";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createBrainstorms, createIssueModes } from "../listener/brainstorms.mjs";
+import { createBrainstorms } from "../listener/brainstorms.mjs";
 import { loadCredentials, saveCredentials } from "../listener/github-app.mjs";
-import { createOnboardingStore } from "../listener/onboarding.mjs";
-import { createPulls } from "../listener/pulls.mjs";
 import { persistentMap, readJson, writeJsonAtomic } from "../lib/files.mjs";
-import { createTitles } from "../listener/titles.mjs";
 import { assertMode, needsModes, tempDir } from "./helpers.mjs";
 
 const temp = (t) => tempDir(t, "deckhand-store-");
@@ -92,26 +89,8 @@ test("every state file is written through lib/files.mjs: no temporary file left 
   });
   brainstorms.activate("o/r#1", { repo: "o/r", number: 1 });
   brainstorms.end("o/r#1");
-  createIssueModes(join(dir, "modes.json")).set("o/r#1", "review");
-  createTitles({ path: join(dir, "titles.json"), fetchTitle: async () => null }).set("o/r#1", "A");
-  createPulls({ path: join(dir, "pulls.json"), listPulls: async () => [] }).record("o/r#1", {
-    number: 2,
-    url: "https://github.com/o/r/pull/2",
-    state: "draft",
-    readyAt: null,
-  });
-  createOnboardingStore(join(dir, "onboarding.json")).record("o/r", 3);
   saveCredentials(dir, { id: 1, pem: "…" });
 
-  assert.deepEqual(readdirSync(dir).sort(), [
-    "app.json",
-    "brainstorms.json",
-    "modes.json",
-    "onboarding.json",
-    "pulls.json",
-    "titles.json",
-  ]);
-  assert.deepEqual(readJson(join(dir, "modes.json")), { "o/r#1": "review" });
-  assert.equal(readJson(join(dir, "onboarding.json"))["o/r"].issue, 3);
+  assert.deepEqual(readdirSync(dir).sort(), ["app.json", "brainstorms.json"]);
   assert.deepEqual(loadCredentials(dir), { id: 1, pem: "…" });
 });

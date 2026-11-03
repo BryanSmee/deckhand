@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { ciDelivery, pullRequest, replayedPull } from "../listener/events.mjs";
 import { commitCi } from "../listener/ci.mjs";
 import { createPulls } from "../listener/pulls.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { mapStore, tempDir, testConfig } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_REPOS: "org/repo" });
 const NOW = 1_800_000_000_000;
@@ -97,7 +97,9 @@ test("pull_request deliveries outside the allowlist, the App or the actions are 
   assert.equal(pullRequest(config, "issue_comment", delivery("opened"), NOW), null);
 });
 
+// Where a release before kept them: the store's map takes what it finds there.
 const tempPath = (t) => join(tempDir(t), "pulls.json");
+const saved = async (maps) => Object.fromEntries(await maps.again("pulls"));
 const pr = (number, state, readyAt = null) => ({
   number,
   url: `https://github.com/org/repo/pull/${number}`,
@@ -105,9 +107,13 @@ const pr = (number, state, readyAt = null) => ({
   readyAt,
 });
 
-test("pulls: recorded per task, and kept across a restart", (t) => {
+test("pulls: recorded per task, and kept across a restart", async (t) => {
   const path = tempPath(t);
-  const pulls = createPulls({ path, listPulls: async () => [] });
+  const maps = mapStore();
+  const pulls = createPulls({
+    pulls: await maps.map("pulls", { file: path }),
+    listPulls: async () => [],
+  });
   pulls.record("org/repo#30", pr(31, "draft"));
   pulls.record("org/repo#30", pr(31, "ready", NOW));
   assert.deepEqual(pulls.get("org/repo#30"), pr(31, "ready", NOW));
@@ -116,13 +122,13 @@ test("pulls: recorded per task, and kept across a restart", (t) => {
   assert.deepEqual(pulls.get("org/repo#30"), pr(31, "merged", NOW));
   assert.equal(pulls.get("org/repo#29"), null);
 
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8"))["org/repo#30"], pr(31, "merged", NOW));
-  const next = createPulls({ path, listPulls: async () => [] });
+  assert.deepEqual((await saved(maps))["org/repo#30"], pr(31, "merged", NOW));
+  const next = createPulls({ pulls: await maps.again("pulls"), listPulls: async () => [] });
   assert.deepEqual(next.get("org/repo#30"), pr(31, "merged", NOW));
 });
 
 test("pulls: an edited link moves the pull request; a closed one doesn't hide an open one", (t) => {
-  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  const pulls = createPulls({ listPulls: async () => [] });
   pulls.record("org/repo#pr-31", pr(31, "ready", NOW));
   // "Closes #30" added to its description.
   pulls.record("org/repo#30", pr(31, "ready"));
@@ -140,7 +146,7 @@ test("pulls: an edited link moves the pull request; a closed one doesn't hide an
 });
 
 test("pulls: the same pull request under another spelling of the repo leaves it", (t) => {
-  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  const pulls = createPulls({ listPulls: async () => [] });
   // From a dashboard address before #287, then a webhook under GitHub's spelling.
   pulls.record("storywake/storywake#5", pr(6, "ready", NOW));
   pulls.record("Storywake/storywake#5", pr(6, "ready"));
@@ -165,15 +171,16 @@ test("pulls: fill() doesn't look up a task that has its pull request under anoth
       },
     ];
   };
-  const pulls = createPulls({ path: tempPath(t), listPulls });
+  const pulls = createPulls({ listPulls });
   pulls.record("storywake/storywake#5", pr(6, "draft"));
   await pulls.fill(["Storywake/storywake#5"]);
   assert.deepEqual(asked, []);
   assert.deepEqual(pulls.keys(), ["storywake/storywake#5"]);
 });
 
-test("pulls: respelled, both spellings of one pull request merged, the open one of two kept", (t) => {
+test("pulls: respelled, both spellings of one pull request merged, the open one of two kept", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   writeFileSync(
     path,
     JSON.stringify({
@@ -184,9 +191,12 @@ test("pulls: respelled, both spellings of one pull request merged, the open one 
       "org/repo#50": pr(51, "draft"),
     }),
   );
-  const pulls = createPulls({ path, listPulls: async () => [] });
+  const pulls = createPulls({
+    pulls: await maps.map("pulls", { file: path }),
+    listPulls: async () => [],
+  });
   pulls.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+  assert.deepEqual(await saved(maps), {
     "Org/repo#30": { ...pr(31, "merged", NOW), autoMerged: true },
     "Org/repo#40": pr(41, "draft"),
     "Org/repo#50": pr(51, "draft"),
@@ -226,7 +236,7 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
       { number: 7, html_url: "u7", body: "", state: "closed", merged_at: null, head: { ref: "y" } },
     ];
   };
-  const pulls = createPulls({ path: tempPath(t), listPulls });
+  const pulls = createPulls({ listPulls });
   pulls.record("org/repo#1", pr(2, "draft"));
   const keys = [
     "org/repo#1",
@@ -256,6 +266,7 @@ test("pulls: older tasks looked up once per repo, by branch, link or number", as
 
 test("pulls: fill() asks once for the size of one found in a listing, merged or closed too", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   const listPulls = async () => [
     {
       number: 9,
@@ -279,7 +290,7 @@ test("pulls: fill() asks once for the size of one found in a listing, merged or 
       commits: 3,
     };
   };
-  const pulls = createPulls({ path, listPulls, getPull });
+  const pulls = createPulls({ pulls: await maps.map("pulls", { file: path }), listPulls, getPull });
   // Recorded before sizes were, and gone from GitHub since.
   pulls.record("org/repo#2", pr(3, "closed"));
   await pulls.fill(["org/repo#4", "org/repo#2"]);
@@ -298,11 +309,14 @@ test("pulls: fill() asks once for the size of one found in a listing, merged or 
   // Not asked again on the next poll, even for the one GitHub couldn't size; kept on disk.
   assert.equal(await pulls.fill(["org/repo#4", "org/repo#2"]), null);
   assert.equal(fetched.length, 2);
-  assert.equal(createPulls({ path, listPulls, getPull }).get("org/repo#4").commits, 3);
+  assert.equal(
+    createPulls({ pulls: await maps.again("pulls"), listPulls, getPull }).get("org/repo#4").commits,
+    3,
+  );
 });
 
 test("pulls: the open ones, for the conflict watcher", (t) => {
-  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  const pulls = createPulls({ listPulls: async () => [] });
   pulls.record("org/repo#30", pr(31, "draft"));
   pulls.record("org/repo#32", pr(33, "ready", NOW));
   pulls.record("org/repo#34", pr(35, "merged"));
@@ -315,6 +329,7 @@ test("pulls: the open ones, for the conflict watcher", (t) => {
 
 test("pulls: resync asks GitHub about the open ones again, so a lost delivery is caught up", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   const listed = [];
   const fetched = [];
   const listPulls = async (repo) => {
@@ -330,7 +345,7 @@ test("pulls: resync asks GitHub about the open ones again, so a lost delivery is
     fetched.push(`${repo}#${number}`);
     return { number, html_url: `u${number}`, state: "closed", merged: false };
   };
-  const pulls = createPulls({ path, listPulls, getPull });
+  const pulls = createPulls({ pulls: await maps.map("pulls", { file: path }), listPulls, getPull });
   // Their size known: the listing is enough for those it has.
   const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
   pulls.record("org/repo#30", sized(pr(31, "draft")));
@@ -347,13 +362,14 @@ test("pulls: resync asks GitHub about the open ones again, so a lost delivery is
   assert.equal(pulls.get("org/repo#34").state, "closed");
   assert.equal(pulls.get("org/broken#1").state, "closed");
   // Kept, and nothing more to change.
-  const next = createPulls({ path, listPulls, getPull });
+  const next = createPulls({ pulls: await maps.again("pulls"), listPulls, getPull });
   assert.equal(next.get("org/repo#30").state, "ready");
   assert.equal(await next.resync(), 0);
 });
 
 test("pulls: resync asks for an open one whose size isn't known yet, once; the count is of states", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   const fetched = [];
   const listPulls = async () => [{ number: 31, html_url: "u31", state: "open", draft: true }];
   const getPull = async (repo, number) => {
@@ -369,7 +385,7 @@ test("pulls: resync asks for an open one whose size isn't known yet, once; the c
       commits: 3,
     };
   };
-  const pulls = createPulls({ path, listPulls, getPull });
+  const pulls = createPulls({ pulls: await maps.map("pulls", { file: path }), listPulls, getPull });
   // From a listing (fill()) or a listener from before sizes: none.
   pulls.record("org/repo#30", pr(31, "draft"));
   assert.equal(await pulls.resync(), 0);
@@ -377,19 +393,19 @@ test("pulls: resync asks for an open one whose size isn't known yet, once; the c
   const sized = { additions: 86, deletions: 19, changedFiles: 4, commits: 3 };
   assert.deepEqual(pulls.get("org/repo#30"), { ...pr(31, "draft"), url: "u31", ...sized });
   // Saved, and not asked again.
-  const next = createPulls({ path, listPulls, getPull });
+  const next = createPulls({ pulls: await maps.again("pulls"), listPulls, getPull });
   assert.deepEqual(next.get("org/repo#30"), pulls.get("org/repo#30"));
   await next.resync();
   assert.deepEqual(fetched, [31]);
   // GitHub can't say: the listing's state still counts.
-  const gone = createPulls({ path: tempPath(t), listPulls, getPull: async () => null });
+  const gone = createPulls({ listPulls, getPull: async () => null });
   gone.record("org/repo#30", pr(31, "ready"));
   assert.equal(await gone.resync(), 1);
   assert.equal(gone.get("org/repo#30").state, "draft");
 });
 
 test("pulls: a pull request recorded without its size keeps the one known", (t) => {
-  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  const pulls = createPulls({ listPulls: async () => [] });
   const sized = { additions: 86, deletions: 19, changedFiles: 4, commits: 3 };
   pulls.record("org/repo#30", { ...pr(31, "draft"), ...sized });
   // The listener's own record (github-pulls.mjs), its object without them.
@@ -405,6 +421,7 @@ test("pulls: a pull request recorded without its size keeps the one known", (t) 
 
 test("pulls: the head commit, kept across a restart, from deliveries, listings and resync (#535)", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   let head = "bbb222";
   const listPulls = async () => [
     { number: 31, html_url: "u31", state: "open", draft: false, head: { sha: head } },
@@ -429,7 +446,7 @@ test("pulls: the head commit, kept across a restart, from deliveries, listings a
     changed_files: 1,
     commits: 1,
   });
-  const pulls = createPulls({ path, listPulls, getPull });
+  const pulls = createPulls({ pulls: await maps.map("pulls", { file: path }), listPulls, getPull });
   pulls.record("org/repo#30", { ...pr(31, "ready", NOW), head: "aaa111", ...sized });
   // The listener's own record, its object without a head: the one known stays.
   pulls.record("org/repo#30", pr(31, "ready", NOW));
@@ -440,7 +457,7 @@ test("pulls: the head commit, kept across a restart, from deliveries, listings a
   // A push whose delivery was lost: resync catches it up, not counted as a state change.
   assert.equal(await pulls.resync(), 0);
   assert.equal(pulls.get("org/repo#30").head, "bbb222");
-  const next = createPulls({ path, listPulls, getPull });
+  const next = createPulls({ pulls: await maps.again("pulls"), listPulls, getPull });
   assert.equal(next.get("org/repo#30").head, "bbb222");
   assert.equal(next.get("org/repo#40").head, "ccc333");
 });
@@ -448,7 +465,7 @@ test("pulls: the head commit, kept across a restart, from deliveries, listings a
 test("pulls: resync lets fill() look up the tasks without one again", async (t) => {
   let asked = 0;
   const listPulls = async () => (asked++, []);
-  const pulls = createPulls({ path: tempPath(t), listPulls });
+  const pulls = createPulls({ listPulls });
   await pulls.fill(["org/repo#4"]);
   await pulls.fill(["org/repo#4"]);
   assert.equal(asked, 1);
@@ -458,7 +475,7 @@ test("pulls: resync lets fill() look up the tasks without one again", async (t) 
 });
 
 test("pulls: a ready pull request recorded ready again keeps when it turned ready", (t) => {
-  const pulls = createPulls({ path: tempPath(t), listPulls: async () => [] });
+  const pulls = createPulls({ listPulls: async () => [] });
   // github-pulls.mjs, then its ready_for_review delivery: one readyAt, one notification.
   pulls.record("org/repo#30", pr(31, "ready", NOW));
   pulls.record("org/repo#30", pr(31, "ready", NOW + 5000));
@@ -515,7 +532,6 @@ test("pull_request deliveries: the head commit, whose CI the dashboard shows", (
 function ciPulls(t, answers = {}) {
   const read = [];
   const pulls = createPulls({
-    path: tempPath(t),
     listPulls: async () => [],
     readCi: async (repo, sha) => {
       read.push(`${repo}@${sha}`);
@@ -629,6 +645,7 @@ test("pulls: CI read for one head isn't kept once the pull request moved to anot
 
 test("pulls: resync reads, after it resolves, the CI of the open ones not settled for their head", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   const read = [];
   let reading = false;
   const readCi = async (repo, sha) => {
@@ -645,7 +662,12 @@ test("pulls: resync reads, after it resolves, the CI of the open ones not settle
   ];
   const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
   const logs = [];
-  const pulls = createPulls({ path, listPulls, readCi, log: (line) => logs.push(line) });
+  const pulls = createPulls({
+    pulls: await maps.map("pulls", { file: path }),
+    listPulls,
+    readCi,
+    log: (line) => logs.push(line),
+  });
   // Recorded while GitHub answers nothing of their CI.
   pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
   pulls.record("org/repo#32", sized({ ...pr(33, "ready"), head: "b2" }));
@@ -665,7 +687,7 @@ test("pulls: resync reads, after it resolves, the CI of the open ones not settle
     logs.join("\n"),
   );
   // Settled: not read again, after a restart either; the one that failed is.
-  const next = createPulls({ path, listPulls, readCi });
+  const next = createPulls({ pulls: await maps.again("pulls"), listPulls, readCi });
   assert.deepEqual(next.get("org/repo#30").ci, ci("a1", "passed"));
   read.length = 0;
   await next.resync();
@@ -695,7 +717,6 @@ test("pulls: a CI read that ends while resync waits on GitHub: its state still a
   const listPulls = () => listing;
   let answer = null;
   const pulls = createPulls({
-    path: tempPath(t),
     listPulls,
     readCi: async (repo, sha) => answer && ci(sha, answer),
   });
@@ -755,7 +776,6 @@ test("pulls: a rate-limited CI read (a 403) leaves the CI known as it was", asyn
     return new Response(JSON.stringify({ statuses: [failed] }));
   };
   const pulls = createPulls({
-    path: tempPath(t),
     listPulls: async () => [],
     readCi: (repo, sha) => commitCi(github, repo, sha),
   });
@@ -789,7 +809,6 @@ test("pulls: an older delivery handled late doesn't move the head back", async (
 test("pulls: an open pull request fill() finds for an older task gets its CI read; a closed one doesn't", async (t) => {
   const read = [];
   const pulls = createPulls({
-    path: tempPath(t),
     listPulls: async () => [
       {
         number: 31,
@@ -821,6 +840,7 @@ test("pulls: an open pull request fill() finds for an older task gets its CI rea
 
 test("pulls: a failed CI read on a settled head is read again at the next resync, kept across a restart", async (t) => {
   const path = tempPath(t);
+  const maps = mapStore();
   let fail = false;
   const read = [];
   const readCi = async (repo, sha) => {
@@ -830,7 +850,7 @@ test("pulls: a failed CI read on a settled head is read again at the next resync
   };
   const listPulls = async () => [];
   const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
-  const pulls = createPulls({ path, listPulls, readCi });
+  const pulls = createPulls({ pulls: await maps.map("pulls", { file: path }), listPulls, readCi });
   pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1" }));
   await settled();
   assert.equal(pulls.get("org/repo#30").ci.state, "passed");
@@ -844,7 +864,7 @@ test("pulls: a failed CI read on a settled head is read again at the next resync
   assert.equal(pulls.get("org/repo#30").ciFailed, true);
   assert.equal(pulls.get("org/repo#30").ci.state, "passed");
   fail = false;
-  const next = createPulls({ path, listPulls, readCi });
+  const next = createPulls({ pulls: await maps.again("pulls"), listPulls, readCi });
   await next.resync();
   await next.caughtUp();
   assert.equal(next.get("org/repo#30").ci.state, "failed");
@@ -855,7 +875,6 @@ test("pulls: resync({ allCi }) reads the CI of every open pull request, settled 
   const read = [];
   const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
   const passed = createPulls({
-    path: tempPath(t),
     listPulls: async () => [],
     readCi: async (repo, sha) => (read.push(sha), ci(sha, "passed")),
   });
@@ -882,7 +901,7 @@ test("pulls: the head resync found keeps GitHub's time: an older synchronize han
       updated_at: "2026-11-02T10:00:00Z",
     },
   ];
-  const pulls = createPulls({ path: tempPath(t), listPulls, readCi: async () => null });
+  const pulls = createPulls({ listPulls, readCi: async () => null });
   const sized = (p) => ({ ...p, additions: 1, deletions: 0, changedFiles: 1, commits: 1 });
   pulls.record("org/repo#30", sized({ ...pr(31, "ready"), head: "a1", updatedAt: 1000 }));
   await pulls.resync();

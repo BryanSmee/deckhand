@@ -1,7 +1,7 @@
 // Each issue's conversation state, kept across listener restarts: its brainstorm
-// (brainstorms.json) and the repo's own mode its session is in (modes.json).
+// (brainstorms.json) and the repo's own mode its session is in (the store's `modes`).
 import { respellMap } from "./spelling.mjs";
-import { persistentMap, readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 // Claude's reply keeps a brainstorm active at least this long, so an answer can follow it.
 export const REPLY_GRACE_MS = 2 * 60000;
@@ -106,14 +106,13 @@ export function createBrainstorms({ path, idleMs, busy, log, now = Date.now }) {
 }
 
 // key → mode name: a comment without a trigger or "/mode" line goes on in that mode
-// (modeOf()). Fresh modes don't change it; work, a brainstorm or another "/mode" do.
-export function createIssueModes(path) {
-  const modes = persistentMap(path);
+// (modeOf()). Fresh modes don't change it; work, a brainstorm or another "/mode" do. `modes`: the
+// Map they are kept in (storeMap()'s).
+export function createIssueModes(modes = new Map()) {
   function set(key, mode) {
     if ((modes.get(key) ?? null) === mode) return;
     if (mode) modes.set(key, mode);
     else modes.delete(key);
-    modes.save();
   }
   return {
     get: (key) => modes.get(key),
@@ -121,6 +120,6 @@ export function createIssueModes(path) {
     set,
     keys: () => [...modes.keys()],
     // One spelling per repo (spelling.mjs, at a restart).
-    respell: (spelled) => respellMap(modes, spelled) && modes.save(),
+    respell: (spelled) => respellMap(modes, spelled),
   };
 }

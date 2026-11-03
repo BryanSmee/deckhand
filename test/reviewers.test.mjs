@@ -2,7 +2,6 @@
 // requested, once per head commit, and what the policies' `deny_request_review` sees and
 // refuses, Deckhand's default file with the real opa.
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createPolicies } from "../listener/policies.mjs";
 import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
@@ -17,14 +16,7 @@ import {
   openerOf,
   runFields,
 } from "../listener/reviewers.mjs";
-import {
-  localService,
-  policyEngine,
-  policyEngineOf,
-  tempDir,
-  testConfig,
-  hasOpa,
-} from "./helpers.mjs";
+import { localService, policyEngine, policyEngineOf, testConfig, hasOpa } from "./helpers.mjs";
 
 const config = { ...testConfig({ ALLOWED_USERS: "alice,bob" }), bot: "deckhand-app[bot]" };
 
@@ -122,7 +114,6 @@ function setup(t, { yaml = "review:\n  request: [alice, bob]\n", run, ...over } 
   const logs = [];
   const read = parseRepoConfig(yaml, config);
   const reviewers = createReviewers({
-    path: join(tempDir(t), "requested.json"),
     config,
     repoSettings: async () => read,
     github: gh.github,
