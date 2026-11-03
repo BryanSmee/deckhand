@@ -74,11 +74,13 @@ Promise.all(tries).then((lines) => console.log(lines.join("\n")));
 '
 
 # Whether pod $1 listens on port $2, asked from inside it (its loopback, which no policy sees):
-# "yes", "no", or "unknown" when its image has neither node nor nc.
+# "yes", "no", or "unknown" when its image has neither node nor nc. Its stdin is /dev/null: the
+# loop below reads its targets from stdin, which a kubectl that forwards it (a `docker exec -i`
+# wrapper, as deploy/kubernetes-e2e's) would take, leaving the rest unchecked.
 listens() {
-  if kubectl -n "$services" exec "$1" -- node -e "$TRY" "127.0.0.1:$2" 2>/dev/null >/tmp/deckhand-listens.$$; then
+  if kubectl -n "$services" exec "$1" -- node -e "$TRY" "127.0.0.1:$2" </dev/null 2>/dev/null >/tmp/deckhand-listens.$$; then
     case "$(cat /tmp/deckhand-listens.$$)" in *reached) echo yes ;; *) echo no ;; esac
-  elif kubectl -n "$services" exec "$1" -- nc -z -w 3 127.0.0.1 "$2" >/dev/null 2>&1; then
+  elif kubectl -n "$services" exec "$1" -- nc -z -w 3 127.0.0.1 "$2" </dev/null >/dev/null 2>&1; then
     echo yes
   else
     echo unknown

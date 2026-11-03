@@ -1438,9 +1438,9 @@ With Compose, a `compose.override.yaml` beside `compose.yaml` (read by `docker c
 flag needed) puts each service on a network of its own with your scraper: one network for all of
 them would let each reach the others, which their networks keep apart
 ([security.md](security.md#the-services-networks)). Each is internal, with no way out, and nothing
-is published. On them, the scraper reaches the services' other ports too, which answer their
-callers alone (by their service tokens, or the egress proxy by its address). With Prometheus, in
-the same project:
+is published. On them, the scraper reaches the services' other ports too: their `/health`, and
+calls they refuse without a caller's service token (or, on the orchestrator's egress policy
+port, the proxy's address). With Prometheus, in the same project:
 
 ```yaml
 # compose.override.yaml: each service's metrics on a network shared with the scraper alone.
