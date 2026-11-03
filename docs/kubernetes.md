@@ -190,9 +190,8 @@ sh deploy/kubernetes/check-isolation.sh
 
 It starts a pod labelled as a sandbox in `deckhand-sandboxes`, tries every port of every service's
 pod from there (their [metrics](#metrics) port too) and the egress proxy's, and expects the
-proxy's alone to answer: 3128, and 3129
-too when its Service publishes it (the `engine` component). A plugin that
-doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
+proxy's alone to answer: 3128, and 3129 too when its Service publishes it (the `engine`
+component). A plugin that doesn't enforce NetworkPolicies fails it. The runner makes a check of its own as it starts
 ([The network probe](#the-network-probe)): its log says what it found. Then mention Deckhand on an issue
 ([setup.md, Use it](setup.md#3-use-it)): its first run starts a sandbox pod.
 

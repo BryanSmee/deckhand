@@ -158,7 +158,11 @@ test("setup.md: the metrics override puts each service on a network of its own w
   }
   // Its scrape config names each service at METRICS_PORT.
   const config = parseYaml(override.configs.prometheus.content);
-  const targets = config.scrape_configs[0].static_configs.flatMap((c) => c.targets);
+  const [job] = config.scrape_configs;
+  const targets = [
+    ...job.static_configs.flatMap((c) => c.targets),
+    ...job.dns_sd_configs.flatMap((c) => c.names.map((name) => `${name}:${c.port}`)),
+  ];
   assert.deepEqual(targets.sort(), ours.map((name) => `${name}:9464`).sort());
 });
 

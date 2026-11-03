@@ -1463,7 +1463,7 @@ services:
   egress:
     networks: [metrics-egress]
   prometheus:
-    image: prom/prometheus
+    image: prom/prometheus:v3.15.1
     restart: unless-stopped
     ports: ["127.0.0.1:9090:9090"]
     configs:
@@ -1502,8 +1502,14 @@ configs:
       scrape_configs:
         - job_name: deckhand
           static_configs:
-            - targets: [edge:9464, orchestrator:9464, runner:9464, broker:9464]
-            - targets: [github:9464, models:9464, policy:9464, egress:9464]
+            - targets: [edge:9464, runner:9464, broker:9464, github:9464]
+            - targets: [models:9464, policy:9464, egress:9464]
+          # Each copy of the orchestrator, `--scale orchestrator=2` too: its name resolves to
+          # every one (deckhand_lease_held says which acts).
+          dns_sd_configs:
+            - names: [orchestrator]
+              type: A
+              port: 9464
 ```
 
 `METRICS_PORT=9464` (and `EGRESS_METRICS_PORT=9464` for the proxy's) in `.env`, then

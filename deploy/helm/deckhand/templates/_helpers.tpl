@@ -289,6 +289,9 @@ spec:
 {{- if eq .Values.metrics.namespace .Values.namespaces.sandboxes .Values.namespaces.services }}
 {{- fail "metrics.namespace: your monitoring namespace, never the sandboxes' or the services'" }}
 {{- end }}
+{{- if has (int .Values.metrics.port) (list 3128 3129 8080 8081 8082 8083 8181) }}
+{{- fail (printf "metrics.port: %v is a service's own port (3128, 3129, 8080-8083, 8181): a port of its own" .Values.metrics.port) }}
+{{- end }}
 {{- if not (has .Values.metrics.serviceMonitor.kind (list "ServiceMonitor" "VMServiceScrape")) }}
 {{- fail (printf "metrics.serviceMonitor.kind: %q, where ServiceMonitor or VMServiceScrape is expected" .Values.metrics.serviceMonitor.kind) }}
 {{- end }}

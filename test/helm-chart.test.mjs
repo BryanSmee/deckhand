@@ -484,6 +484,13 @@ test(
         endpoints: [{ port: "metrics", path: "/metrics", honorLabels: true, interval: "30s" }],
       });
     }
+    // Never a service's own port, which deckhand-metrics would open to the monitoring namespace.
+    for (const port of [3128, 3129, 8080, 8081, 8082, 8083, 8181]) {
+      assert.match(
+        helmFails(t, { metrics: { port } }),
+        /metrics\.port: \d+ is a service's own port/,
+      );
+    }
     // Never the sandboxes' namespace, nor the services' (every pod of it, BuildKit's too).
     for (const namespace of ["deckhand-sandboxes", "deckhand", ""]) {
       assert.match(helmFails(t, { metrics: { namespace } }), /metrics\.namespace/);
