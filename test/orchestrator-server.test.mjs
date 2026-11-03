@@ -1578,7 +1578,14 @@ describe("listener", options, () => {
   });
 
   test("a webhook from the App runs a sandbox whose GitHub calls get its repo's token at the gateway", async (t) => {
-    const { dir, github, listener, port, proxyPort } = await listen(t);
+    // A screenshot an orchestrator of the release before kept in its shots/ (#609).
+    const kept = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("kept")]);
+    const before = "00000000000000000000beef";
+    const { dir, github, listener, port, proxyPort } = await listen(t, undefined, (dir) => {
+      mkdirSync(join(dir, "shots", before), { recursive: true });
+      writeFileSync(join(dir, "shots", before, "old.png"), kept);
+      return {};
+    });
     const payload = JSON.stringify(comment("alice"));
     const deliver = (signature) =>
       fetch(`http://127.0.0.1:${port}/webhook`, {
@@ -1658,7 +1665,7 @@ describe("listener", options, () => {
     // Uploaded through the broker, served under SCREENSHOT_URL as before.
     assert.equal(readFileSync(join(dir, "shot-answer"), "utf8"), "204");
     const token = runEnv.match(/^SCREENSHOT_URL=.*\/shots\/(\w+)$/m)[1];
-    // The listener copies it from the broker's stream a moment after its upload.
+    // The broker keeps it, and edge serves it from there (#609).
     let served;
     for (let i = 0; i < 100; i++) {
       served = await fetch(`http://127.0.0.1:${port}/shots/${token}/page.png`);
@@ -1667,6 +1674,10 @@ describe("listener", options, () => {
     }
     assert.equal(served.status, 200);
     assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
+    // The one kept before, moved to the broker at start, its folder removed: its link still works.
+    await until(() => readdirSync(join(dir, "shots")).length === 0, "the screenshots moved");
+    const old = await fetch(`http://127.0.0.1:${port}/shots/${before}/old.png`);
+    assert.deepEqual(Buffer.from(await old.arrayBuffer()), kept);
     // Out through the egress proxy only, the broker directly.
     assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+$/m);
     assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:\d+$/m);

@@ -1,9 +1,19 @@
 // The calls to the broker service (listener/broker-service.mjs, #505), the orchestrator's and the
 // runner's: the runs' inboxes copied from the runner's files, a lost answer or a broker away
-// caught up with; the stream's screenshots copied into the shots folder; the runs that ended
-// while the orchestrator was down ended there too.
+// caught up with; the stream's screenshots left at the broker, and those an older orchestrator
+// kept moved there and removed with their run; the runs that ended while the orchestrator was down
+// ended there too.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createCallers } from "../broker/callers.mjs";
@@ -15,7 +25,7 @@ import { createInbox } from "../listener/runner/inbox.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { signToken, TOKEN_VERSION } from "../lib/tokens.mjs";
-import { listenToRestart, tempDir, testKey } from "./helpers.mjs";
+import { listenToRestart, needsBash, tempDir, testKey } from "./helpers.mjs";
 
 const FOLDER = "0123456789abcdef01234567";
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
@@ -94,32 +104,111 @@ test("an inbox: the runner's file copied from the offset the broker has, a broke
   assert.equal(await blob(), "one\ntwo\nthree\n");
 });
 
-test("the stream: a screenshot copied into the shots folder, deleted at the broker, acknowledged", async (t) => {
+test("the stream: a screenshot said, left at the broker, acknowledged", async (t) => {
   const broker = await service(t);
   const listener = remote(t, broker);
-  const shotsDir = tempDir(t);
   const { token } = await listener.issuer.issue("run-a", {
     repo: "org/a",
     sandbox: "net-a",
     shots: FOLDER,
   });
   const seen = [];
-  listener.consume({ shotsDir, handlers: { started: async (e) => seen.push(e.type) } });
+  listener.consume({ handlers: { started: async (e) => seen.push(e.type) } });
   const record = await broker.runs.get("run-a");
-  const req = Object.assign(
+  const image = Buffer.concat([PNG, Buffer.from("x")]);
+  assert.equal((await broker.files.putShot(upload(image), record, "page.png")).status, 204);
+  await until(async () => (await broker.store.read("runs", "orchestrator")).length === 0);
+  assert.deepEqual(seen, ["started"]);
+  // The broker keeps it (#609): the orchestrator copies nothing.
+  assert.deepEqual(await broker.files.getShot(FOLDER, "page.png"), image);
+  assert.ok(token);
+});
+
+test("the stream: a screenshot the broker of the release before kept is adopted, its name kept for good", async (t) => {
+  const broker = await service(t);
+  const listener = remote(t, broker);
+  // As that broker left it: in its store, its name in a record that expires, its event unread.
+  const legacy = Buffer.concat([PNG, Buffer.from("old")]);
+  await broker.store.putBlob(`shot:${FOLDER}/before.png`, legacy);
+  await broker.store.set(`shots:${FOLDER}`, { "before.png": legacy.length }, { ttlMs: 60_000 });
+  await broker.runs.event("shot", "run-a", { folder: FOLDER, name: "before.png", size: 11 });
+  const seen = [];
+  listener.consume({ handlers: { shot: async (e) => seen.push(e.name) } });
+  await until(async () => (await broker.store.read("runs", "orchestrator")).length === 0);
+  assert.deepEqual(seen, ["before.png"]);
+  assert.equal(await broker.store.readBlob(`shot:${FOLDER}/before.png`), null);
+  assert.deepEqual(await broker.files.getShot(FOLDER, "before.png"), legacy);
+  // Retention finds it, whenever it comes.
+  assert.deepEqual(await broker.store.get(`shots:${FOLDER}`), { "before.png": legacy.length });
+  await listener.removeShots(FOLDER);
+  assert.equal(await broker.files.getShot(FOLDER, "before.png"), null);
+});
+
+// An upload's request, as files.putShot() reads it: its body, then its headers.
+const upload = (body) =>
+  Object.assign(
     (async function* () {
-      yield Buffer.concat([PNG, Buffer.from("x")]);
+      yield body;
     })(),
     { headers: {} },
   );
-  assert.equal((await broker.files.putShot(req, record, "page.png")).status, 204);
-  const copied = join(shotsDir, FOLDER, "page.png");
-  await until(() => existsSync(copied));
-  assert.deepEqual(readFileSync(copied), Buffer.concat([PNG, Buffer.from("x")]));
-  await until(async () => (await broker.store.readBlob(`shot:${FOLDER}/page.png`)) === null);
-  await until(async () => (await broker.store.read("runs", "orchestrator")).length === 0);
-  assert.deepEqual(seen, ["started"]);
-  assert.ok(token);
+
+test("the screenshots an older orchestrator kept: moved to the broker, regular files only, then removed with their run", async (t) => {
+  let broker = await service(t);
+  const logged = [];
+  const listener = remote(t, broker, { logged });
+  const dataDir = tempDir(t);
+  const shotsDir = join(dataDir, "shots");
+  const dir = join(shotsDir, FOLDER);
+  mkdirSync(dir, { recursive: true });
+  const image = Buffer.concat([PNG, Buffer.from("page")]);
+  writeFileSync(join(dir, "page.png"), image);
+  // Not an image (a sandbox of an older release wrote these folders): dropped.
+  writeFileSync(join(dir, "fake.png"), "GIF89a");
+  // Links, wherever they point, and a file linked twice: never read (the orchestrator's App,
+  // here a PNG's first bytes to pass the broker's check).
+  writeFileSync(join(dataDir, "app.json"), Buffer.concat([PNG, Buffer.from("secret")]));
+  symlinkSync(join(dataDir, "app.json"), join(dir, "absolute.png"));
+  symlinkSync("../../app.json", join(dir, "relative.png"));
+  symlinkSync("page.png", join(dir, "sibling.png"));
+  symlinkSync(dataDir, join(dir, "dir.png"));
+  // A folder that is a link (listed first): nothing follows it either.
+  symlinkSync(dir, join(shotsDir, "0000000000000000000000aa"));
+  linkSync(join(dataDir, "app.json"), join(dir, "hard.png"));
+  // A FIFO would block a plain open until something writes it (a regression hangs here).
+  if (!needsBash) execFileSync("mkfifo", [join(dir, "fifo.png")]);
+  // A folder retention would have removed, and what isn't a run's folder.
+  const forgotten = "f".repeat(24);
+  mkdirSync(join(shotsDir, forgotten));
+  writeFileSync(join(shotsDir, forgotten, "old.png"), image);
+  mkdirSync(join(shotsDir, "not-a-run"));
+  // The broker away: the folders stay, for the next try.
+  const { port, store, key } = broker;
+  await broker.stop();
+  const drop = (folder) => folder === forgotten;
+  const noted = [];
+  const moved = async (folder, at) => noted.push([folder, typeof at]);
+  await assert.rejects(listener.moveShots(shotsDir, { drop, moved }));
+  assert.ok(existsSync(join(dir, "page.png")));
+  assert.deepEqual(noted, []);
+  broker = await service(t, { store, key, port });
+  assert.equal(await listener.moveShots(shotsDir, { drop, moved }), 1);
+  // Each folder moved is said, for retention to note those no run names.
+  assert.deepEqual(noted, [[FOLDER, "number"]]);
+  assert.deepEqual(await broker.files.getShot(FOLDER, "page.png"), image);
+  for (const name of ["fake.png", "absolute.png", "relative.png", "sibling.png", "hard.png"]) {
+    assert.equal(await broker.files.getShot(FOLDER, name), null, name);
+  }
+  assert.equal(await broker.files.getShot("0000000000000000000000aa", "page.png"), null);
+  assert.equal(await broker.files.getShot(forgotten, "old.png"), null);
+  assert.ok(logged.some((line) => /fake\.png refused by the broker \(415\), dropped/.test(line)));
+  // Every run's folder is gone; the rest isn't the orchestrator's to remove.
+  assert.deepEqual(readdirSync(shotsDir), ["not-a-run"]);
+  assert.equal(await listener.moveShots(shotsDir), 0);
+  assert.equal(await listener.moveShots(join(dataDir, "none")), 0);
+  // Retention: the run's screenshots go at the broker.
+  await listener.removeShots(FOLDER);
+  assert.equal(await broker.files.getShot(FOLDER, "page.png"), null);
 });
 
 test("the runs the broker still has that ended while the listener was down end there; an end not heard is told again", async (t) => {

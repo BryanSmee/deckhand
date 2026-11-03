@@ -3,28 +3,27 @@
 // memory follows the disk. What a task still needs stays: a running run, and the latest run of
 // a task that is queued, brainstorming, waiting or waiting for input (the next run reads it:
 // its agent, its summary, the dashboard's Rerun). That's the orchestrator's to tell, so it
-// decides here; the log is the runner's (#503), which removes it when asked: a run whose log
-// the runner didn't remove stays listed, for the next day's try.
-import { readdirSync, rmSync, statSync } from "node:fs";
-import { join } from "node:path";
+// decides here; the log is the runner's (#503) and the screenshots the broker's (#609), which
+// remove them when asked: a run whose log or screenshots weren't removed stays listed, for the
+// next day's try.
+import { rmSync } from "node:fs";
+import { SHOT_FOLDER } from "../lib/shots.mjs";
 import { summaryPath } from "./runlog.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 
-// Screenshot folders are random hex (runs.mjs shotsFolder()): nothing else is removed.
-const SHOTS = /^[0-9a-f]{24}$/;
-
 // `runs`: newest first, changed in place, with `byId` its index. `needed(key)`: whether that
-// task still needs its latest run; `removeLog(id)`: the runner's. Resolves to the runs removed.
+// task still needs its latest run; `removeLog(id)`: the runner's; `removeShots(folder)`: the
+// broker's. Resolves to the runs removed.
 export async function pruneRuns({
   runs,
   byId,
   logDir,
-  shotsDir,
   days,
   now,
   needed,
   removeLog,
+  removeShots,
   log = () => {},
 }) {
   if (!days) return [];
@@ -52,10 +51,14 @@ export async function pruneRuns({
       continue;
     }
     try {
+      if (SHOT_FOLDER.test(run.shots ?? "")) await removeShots(run.shots);
+    } catch (error) {
+      log(`${run.key}: removing the screenshots of ${run.id}: ${error.message}`);
+      kept.push(run);
+      continue;
+    }
+    try {
       rmSync(summaryPath(logDir, run.id), { force: true });
-      if (SHOTS.test(run.shots ?? "")) {
-        rmSync(join(shotsDir, run.shots), { recursive: true, force: true });
-      }
     } catch (error) {
       log(`${run.key}: removing the summary of ${run.id}: ${error.message}`);
     }
@@ -65,29 +68,61 @@ export async function pruneRuns({
   // In their order, with those added meanwhile (the removals took a while).
   const out = new Set(removed);
   runs.splice(0, runs.length, ...runs.filter((run) => !out.has(run)));
-  pruneShots(shotsDir, runs, cutoff, log);
   if (removed.length) log(`Run history: ${removed.length} run(s) older than ${days} days removed`);
   return removed;
 }
 
-// Folders of runs from before records named theirs, or whose run is gone: by their age.
-function pruneShots(shotsDir, runs, cutoff, log) {
-  const used = new Set(runs.map((r) => r.shots).filter(Boolean));
-  let folders;
-  try {
-    folders = readdirSync(shotsDir);
-  } catch {
-    return;
+// Whether a screenshots' folder an older release kept in the orchestrator's shots/ is one retention
+// would have removed (broker-service.mjs moveShots(), #609): no run of `runs` names it, and it is
+// older than `days` (0: forever). → (folder, mtimeMs) → boolean.
+export function forgottenShots(runs, days, now) {
+  const named = new Set(runs.map((run) => run.shots).filter(Boolean));
+  return (folder, at) => !!days && !named.has(folder) && at < now - days * DAY;
+}
+
+// The folders an older release kept that no run names, moved to the broker all the same (younger
+// than the days: their links may be in replies): folder → its date, in the orchestrator's store,
+// for retention to remove them at the broker once they are past the days, as it removed them
+// from shots/ before (#609).
+export const UNNAMED_SHOTS = "history/unnamed-shots";
+
+// `fn(folders)` → the new record (undefined: unchanged), written only if no other copy changed it
+// meanwhile.
+async function updateUnnamed(store, fn) {
+  for (;;) {
+    const before = await store.get(UNNAMED_SHOTS);
+    const after = fn({ ...before });
+    if (after === undefined) return;
+    if (await store.compareAndSet(UNNAMED_SHOTS, before, after)) return;
   }
-  for (const name of folders) {
-    if (!SHOTS.test(name) || used.has(name)) continue;
-    const path = join(shotsDir, name);
+}
+
+// One moved (broker-service.mjs moveShots() `moved`), with its folder's date.
+export const noteUnnamedShots = (store, folder, at) =>
+  updateUnnamed(store, (folders) => ({ ...folders, [folder]: at }));
+
+// Those past `cutoff`, removed at the broker (`removeShots(folder)`), then from the record; one
+// the broker didn't remove stays, for the next day's try. → how many were removed.
+export async function pruneUnnamedShots({ store, cutoff, removeShots, log = () => {} }) {
+  const old = Object.entries((await store.get(UNNAMED_SHOTS)) ?? {})
+    .filter(([, at]) => at < cutoff)
+    .map(([folder]) => folder);
+  const removed = [];
+  for (const folder of old) {
     try {
-      if (statSync(path).mtimeMs < cutoff) rmSync(path, { recursive: true, force: true });
+      await removeShots(folder);
+      removed.push(folder);
     } catch (error) {
-      log(`Removing the screenshots in ${name}: ${error.message}`);
+      log(`Run history: removing the screenshots in ${folder}: ${error.message}`);
     }
   }
+  if (removed.length) {
+    await updateUnnamed(store, (folders) => {
+      for (const folder of removed) delete folders[folder];
+      return folders;
+    });
+  }
+  return removed.length;
 }
 
 // `ctx` (server.mjs) at call time; `now` and the timers injectable for tests.
@@ -108,15 +143,24 @@ export function createHistory(
 
   async function prune() {
     try {
+      const days = ctx.config.logRetentionDays;
+      if (days && ctx.store) {
+        await pruneUnnamedShots({
+          store: ctx.store,
+          cutoff: now() - days * DAY,
+          removeShots: (folder) => ctx.removeShots(folder),
+          log: ctx.log,
+        });
+      }
       return await pruneRuns({
         runs: ctx.runs,
         byId: ctx.runsById,
         logDir: ctx.logDir,
-        shotsDir: ctx.shotsDir,
         days: ctx.config.logRetentionDays,
         now: now(),
         needed,
         removeLog: (id) => ctx.runLogs.remove(id),
+        removeShots: (folder) => ctx.removeShots(folder),
         log: ctx.log,
       });
     } catch (error) {

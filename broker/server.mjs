@@ -8,7 +8,8 @@
 //   PORT              8081
 //   STORE_URL         its store (lib/store.mjs): file:///data/store, or Redis for two copies on
 //                     several nodes (REDIS_PASSWORD)
-//   BLOB_URL          its blob storage (lib/blobs.mjs): s3://…, file:///…, or none (the store);
+//   BLOB_URL          its blob storage (lib/blobs.mjs), for the runs' screenshots: s3://…,
+//                     file:///…, or none (the store);
 //                     BLOB_ACCESS_KEY_ID and BLOB_SECRET_ACCESS_KEY (or _FILE) for S3
 //   KEY_DIR           its signing key's folder (run-token.key, made on first start): /keys,
 //                     its own volume or Secret, never the store
@@ -29,7 +30,7 @@ import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createCallers, inClusterReview } from "./callers.mjs";
 import { createFiles } from "./files.mjs";
 import { createBrokerServer } from "./http.mjs";
-import { createRuns, RECORD_TTL_MS } from "./runs.mjs";
+import { createRuns } from "./runs.mjs";
 
 export const DRAIN_MS = 30_000;
 
@@ -51,9 +52,11 @@ export function storeSecrets(key) {
 }
 
 // The broker's parts on `store`, with `key`: what the tests start too. → { server, runs, files }.
-// `keysDir`: where its public key is published, for the services that check its tokens offline.
+// `keysDir`: where its public key is published, for the services that check its tokens offline;
+// `blobs`: where the screenshots go (lib/blobs.mjs: the store's own blobs by default).
 export function createBroker({
   store,
+  blobs,
   key,
   callers,
   keysDir = null,
@@ -68,7 +71,7 @@ export function createBroker({
     publishKey(keysDir, key);
   }
   const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
-  const files = createFiles({ store, runs, now, sleep, ttlMs: RECORD_TTL_MS });
+  const files = createFiles({ store, blobs, runs, now, sleep });
   let draining = false;
   const server = createBrokerServer({
     runs,
@@ -111,9 +114,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       password: env.REDIS_PASSWORD,
       secrets: () => secrets,
     });
-    // Blob storage (BLOB_URL), checked before it takes a call.
-    // Nothing is kept there yet: the runs' files move there in a later part (#604).
-    const { warnings } = await startBlobs(env, {
+    // Blob storage (BLOB_URL), checked before it takes a call: the runs' screenshots (#609).
+    const { blobs, warnings } = await startBlobs(env, {
       store,
       storeUrl,
       credentials,
@@ -124,7 +126,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     const graceMs = drainMs(env.DRAIN_SECONDS);
     const keysDir = env.SERVICE_KEYS_DIR || null;
     const health = { ...healthInfo(), warnings };
-    started = { ...createBroker({ store, key, callers, keysDir, log, health }), graceMs, key };
+    started = {
+      ...createBroker({ store, blobs, key, callers, keysDir, log, health }),
+      graceMs,
+      key,
+    };
   } catch (error) {
     log.error(`Broker: ${error.message}`);
     process.exit(1);
