@@ -331,10 +331,11 @@ deploy/kubernetes-e2e/run.sh           # on the cluster kubectl points at (image
 
 **Use it on a cluster you can throw away**, never on one with Deckhand installed. It installs
 Deckhand, with settings and Secrets of its own, in the namespaces `deckhand`,
-`deckhand-sandboxes` and `deckhand-e2e`, and deletes them when it ends, whatever the outcome.
-It labels them `deckhand.e2e=true`, and refuses to start when one of them exists without that
-label: a real install's would be overwritten, then deleted. `KEEP=1` leaves them for a look,
-and the next run deletes them before it starts.
+`deckhand-sandboxes` and `deckhand-e2e`, with the base's ClusterRoleBinding
+`deckhand-broker-auth-delegator`, and deletes them when it ends, whatever the outcome. It labels
+them `deckhand.e2e=true`, and refuses to start when one of them exists without that label (a
+real install's would be overwritten, then deleted), or when the cluster can't say whether it
+does. `KEEP=1` leaves them for a look, and the next run deletes them before it starts.
 
 It takes about five minutes on k3s, mostly building the images. It needs `docker`, `node` and
 `openssl` where it runs, and `kubectl` without `K3S`. With `K3S` (or `PREINSTALL_AGENT=1`) it

@@ -36,11 +36,17 @@ configMapGenerator:
       - server/default.yaml
 
 patches:
-  # Every namespace this check's, which run.sh asks before it touches one: never a real install's.
+  # Every namespace this check's, and the broker's ClusterRoleBinding, which run.sh asks before it
+  # touches one, and deletes at the end: never a real install's.
   - target: { kind: Namespace }
     patch: |
       apiVersion: v1
       kind: Namespace
+      metadata: { name: any, labels: { deckhand.e2e: "true" } }
+  - target: { kind: ClusterRoleBinding }
+    patch: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
       metadata: { name: any, labels: { deckhand.e2e: "true" } }
   # Edge and the github service take GitHub's addresses from their own environment.
   - target: { kind: Deployment, namespace: deckhand, name: edge|github }

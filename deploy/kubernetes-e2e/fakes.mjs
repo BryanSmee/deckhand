@@ -42,15 +42,18 @@ function handle(req, res) {
   req.on("data", (c) => chunks.push(c));
   req.on("end", () => {
     const body = Buffer.concat(chunks);
-    if (req.url === "/__requests") {
+    // run.sh's endpoints, on the control port alone: a service that reaches the fake can't
+    // release the model or read what it saw.
+    const control = req.socket.localPort === CONTROL_PORT;
+    if (control && req.url === "/__requests") {
       res.setHeader("content-type", "application/json");
       return res.end(JSON.stringify(requests));
     }
-    if (req.url === "/__problems") {
+    if (control && req.url === "/__problems") {
       res.setHeader("content-type", "application/json");
       return res.end(JSON.stringify({ problems, turns: answered.size }));
     }
-    if (req.url === "/__release" && req.method === "POST") {
+    if (control && req.url === "/__release" && req.method === "POST") {
       released = true;
       return res.end("released\n");
     }

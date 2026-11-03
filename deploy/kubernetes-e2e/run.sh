@@ -18,9 +18,10 @@
 #   K3S=k3s deploy/kubernetes-e2e/run.sh    # in a k3s container on Docker, started if missing
 #   deploy/kubernetes-e2e/run.sh            # on the cluster kubectl points at: one to throw away
 #
-# It installs Deckhand in the namespaces deckhand, deckhand-sandboxes and deckhand-e2e, labelled
-# deckhand.e2e=true, and refuses to start when one of them exists without that label: a real
-# install's would be overwritten (its settings, its Secrets used) and then deleted. They are
+# It installs Deckhand in the namespaces deckhand, deckhand-sandboxes and deckhand-e2e, with the
+# base's ClusterRoleBinding deckhand-broker-auth-delegator, all labelled deckhand.e2e=true, and
+# refuses to start when one of them exists without that label (a real install's would be
+# overwritten, its Secrets used, and then deleted) or the cluster can't say whether it does. They are
 # deleted when it ends, whatever its outcome, and left for a look with KEEP=1; a later run deletes
 # what an earlier one left before it starts.
 #
@@ -38,6 +39,8 @@ K3S_IMAGE=${K3S_IMAGE:-rancher/k3s:v1.33.5-k3s1}
 MARKER="MIDRUN-$RANDOM$RANDOM"
 SECRET=e2e-webhook-secret
 NAMESPACES=(deckhand deckhand-sandboxes deckhand-e2e)
+# The base's one cluster-scoped object (rbac.yaml): the broker's TokenReview binding.
+BINDING=deckhand-broker-auth-delegator
 work=$(mktemp -d)
 ours= # set once the namespaces are this check's: the only ones the end deletes
 # This check's namespaces deleted, their pods at once: a draining copy's grace period (660 s for
@@ -50,6 +53,7 @@ delete_namespaces() {
     kubectl -n "$ns" delete pods --all --force --grace-period=0 >/dev/null 2>&1 || true
   done
   kubectl delete namespace "${NAMESPACES[@]}" --ignore-not-found --wait=false >/dev/null 2>&1 || true
+  kubectl delete clusterrolebinding -l deckhand.e2e=true --ignore-not-found >/dev/null 2>&1 || true
 }
 finish() {
   if [ -n "$ours" ] && [ -z "${KEEP:-}" ]; then delete_namespaces; fi
@@ -97,11 +101,14 @@ if [ -n "$K3S" ] && ! docker inspect "$K3S" >/dev/null 2>&1; then
 fi
 
 step "Checking that the namespaces are this check's"
-for ns in "${NAMESPACES[@]}"; do
-  label=$(kubectl get namespace "$ns" -o jsonpath='{.metadata.labels.deckhand\.e2e}' 2>/dev/null) ||
-    continue
-  [ "$label" = true ] ||
-    fail "the namespace $ns exists without the label deckhand.e2e=true: not a cluster for this check (kubectl config current-context: $(kubectl config current-context 2>/dev/null))"
+# Only what isn't there passes, or carries the label: an error asking (a timeout, Forbidden) fails
+# the check rather than reading as absent, and nothing is deleted.
+for object in "${NAMESPACES[@]/#/namespace/}" "clusterrolebinding/$BINDING"; do
+  found=$(kubectl get "$object" --ignore-not-found \
+    -o jsonpath='{.metadata.name}={.metadata.labels.deckhand\.e2e}') ||
+    fail "couldn't ask the cluster for $object: nothing touched"
+  [ -z "$found" ] || [ "$found" = "${object#*/}=true" ] ||
+    fail "$object exists without the label deckhand.e2e=true: not a cluster for this check (kubectl config current-context: $(kubectl config current-context 2>/dev/null))"
 done
 ours=1
 # What an earlier run left (KEEP=1, or still Terminating): its fakes' and stores' state would
@@ -341,8 +348,9 @@ turns=$(node -e 'console.log(JSON.parse(process.argv[1]).turns)' "$seen")
 # The run's log, in the runner's store (the file backend, on its claim; no BLOB_URL, so no
 # segment moved out): Claude Code's retries
 # (api_retry), and what git, curl or Node say of a call that failed.
-run_log=$(kubectl -n deckhand exec deploy/runner -- sh -c 'cat /data/store/blobs/logs*')
-[ -n "$run_log" ] || fail "no run log in the runner's store"
+run_log=$(kubectl -n deckhand exec deploy/runner -- sh -c 'cat /data/store/blobs/logs*') ||
+  fail "no run log in the runner's store"
+[ -n "$run_log" ] || fail "an empty run log in the runner's store"
 errors=$(grep -E '"subtype":"api_retry"|fatal:|ECONNRESET|ECONNREFUSED|socket hang up|returned error|couldn.t be renewed|curl: \([0-9]+\)|HTTP 5[0-9]{2}' <<<"$run_log" | cut -c1-300 || true)
 [ -z "$errors" ] || fail "the run's log has errors: $errors"
 echo "No failed or repeated call; $turns turns called GitHub 10 times each, through the update"
