@@ -22,6 +22,10 @@ import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mj
 // What a run's token sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
 
+// The most run tokens a run's list keeps (secretsOf()): the broker service's own cap
+// (../broker/runs.mjs ISSUED_MAX). An expired one dropped is still redacted by its shape.
+const ISSUED_MAX = 200;
+
 // A token's `exp` (ms), unchecked: for the list of a run's tokens to redact, never to trust one.
 function expOf(token) {
   try {
@@ -317,7 +321,10 @@ export function createBroker({
 
   // The run's tokens still valid, from the broker service (#617): what its output is redacted of
   // once this listener took it over (secretsOf()), and again when one is renewed. In memory
-  // only, never in the listener's store. Throws when the broker service can't say.
+  // only, never in the listener's store. The list is the broker's, after those this listener
+  // knows that haven't expired: an expired one no longer in the broker's list goes (its shape
+  // still redacts it), so a run of days doesn't pile up hundreds. Throws when the broker service
+  // can't say.
   async function recall(handle) {
     const run = runOf(handle);
     if (!run) return;
@@ -325,13 +332,11 @@ export function createBroker({
     if (!found || runOf(handle) !== run) return;
     if (isToken(found.agentToken ?? "")) run.agentToken = found.agentToken;
     const tokens = (Array.isArray(found.tokens) ? found.tokens : []).filter(isToken);
-    const known = new Set(run.issued.map((t) => t.token));
-    run.issued = [
-      ...run.issued,
-      ...tokens
-        .filter((token) => !known.has(token))
-        .map((token) => ({ token, exp: expOf(token), at: 0 })),
-    ];
+    const listed = new Set(tokens);
+    const kept = run.issued.filter((t) => !listed.has(t.token) && t.exp > now());
+    run.issued = [...kept, ...tokens.map((token) => ({ token, exp: expOf(token), at: 0 }))].slice(
+      -ISSUED_MAX,
+    );
   }
 
   // The run a call's run token names, once checked: { run, claims } or { status, message }.

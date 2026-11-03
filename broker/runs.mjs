@@ -182,6 +182,9 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
 
   // Of `tokens`, those this broker signed for run `id`, by audience: { run: [{ token, exp }],
   // agent }. Up to RENEW_GRACE_MS past their expiry: one a sandbox may still renew, or print.
+  // Their `sandbox` claim isn't checked, on purpose: one bound to an earlier start's sandbox
+  // only adds a hash at the head of the list (only the newest renews), and is redacted all the
+  // same.
   function ownTokens(id, tokens) {
     const own = { run: [], agent: null };
     for (const token of (Array.isArray(tokens) ? tokens : []).slice(0, ISSUED_MAX)) {

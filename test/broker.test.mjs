@@ -194,7 +194,11 @@ test("a restarted listener redacts the run's tokens the broker service answers, 
   broker.register("org/a", { id: "run-a", mode: "work", push: true });
   broker.allow("run-a", ["issue-1-*"]);
   const { token, agentToken } = await broker.issue("run-a", "net-a");
-  const restarted = createBroker({ ...service, sandboxOf: async () => "net-a" });
+  const restarted = createBroker({
+    ...service,
+    sandboxOf: async () => "net-a",
+    now: () => clock.now,
+  });
   restarted.register("org/a", { id: "run-a", mode: "work", push: true, sandbox: "net-a" });
   restarted.allow("run-a", ["issue-1-*"]);
   // Nothing of them in its saved state (restart.mjs): asked of the broker service (#617).
@@ -207,6 +211,12 @@ test("a restarted listener redacts the run's tokens the broker service answers, 
   const renewed = (await service.runs.renew(token, "net-a")).token;
   await restarted.recall("run-a");
   assert.deepEqual(restarted.secretsOf("run-a"), [agentToken, token, renewed]);
+  // Half an hour on, renewed again: the broker's list drops the expired ones, and so does this
+  // listener's (their shape still redacts them), rather than keep every one for days.
+  clock.now += 30 * 60_000;
+  const next = (await service.runs.renew(renewed, "net-a")).token;
+  await restarted.recall("run-a");
+  assert.deepEqual(restarted.secretsOf("run-a"), [agentToken, renewed, next]);
   const record = await service.runs.get("run-a");
   assert.equal(record.sandbox, "net-a");
   assert.deepEqual(record.branches, ["issue-1-*"]);

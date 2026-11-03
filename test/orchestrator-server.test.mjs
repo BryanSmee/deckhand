@@ -788,8 +788,12 @@ describe("listener", options, () => {
     // the orchestrator, edge and models) and the runner call it from loopback, each asking as
     // itself. Its public key goes in keys/.
     const brokerKey = testKey();
+    // Its store and clock, which a test reads and moves on (`brokerClock.skewMs`).
+    const brokerStore = openStore("memory:");
+    const brokerClock = { skewMs: 0 };
     const brokerService = createBrokerService({
-      store: openStore("memory:"),
+      store: brokerStore,
+      now: () => Date.now() + brokerClock.skewMs,
       key: brokerKey,
       callers: createCallers({ networks: "edge+orchestrator+models+runner+proxy=127.0.0.0/8" }),
       keysDir: join(dir, "keys"),
@@ -1033,6 +1037,8 @@ describe("listener", options, () => {
       port,
       // The egress proxy the test plays (sandboxProxy()).
       proxyPort: standIn.port,
+      brokerStore,
+      brokerClock,
       policyPort,
       send,
       restart,
@@ -2620,6 +2626,39 @@ mounts:
     const [push, opened] = await pushAndOpen(ctx);
     assert.match(push, /^403 [^]*only a running sandbox reaches the github service/);
     assert.match(opened, /^403 /);
+  });
+
+  test("a run token renewed after a takeover: the broker's event has the next copy redact it by value (#617)", async (t) => {
+    const ctx = await holding(t);
+    await ctx.handOver();
+    await ctx.listener.until("picked up deckhand-org-repo-12-0e9572aae2 again");
+    // A minute on at the broker: the sandbox's renewal gets a token of its own, not the last one.
+    ctx.brokerClock.skewMs = 61_000;
+    const secret = readFileSync(join(ctx.dir, "run-token"), "utf8").trim();
+    const res = await fetch(`http://127.0.0.1:${ctx.proxyPort}/run/token`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${secret}` },
+    });
+    assert.equal(res.status, 200);
+    const renewed = (await res.text()).trim();
+    assert.notEqual(renewed, secret);
+    // The orchestrator handled the broker's `renewed` event (acknowledged it).
+    const pending = async () =>
+      (await ctx.brokerStore.read("runs", "orchestrator")).some(
+        ({ event }) => event.type === "renewed",
+      );
+    for (let i = 0; await pending(); i++) {
+      if (i > 400) throw new Error("timed out waiting for the renewed event's handling");
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    // Its signature alone, which no token shape matches: only its value redacts it.
+    const signature = renewed.split(".")[2];
+    writeFileSync(join(ctx.dir, "leak"), signature);
+    writeFileSync(join(ctx.dir, "go"), "");
+    const reply = await ctx.github.waitFor((r) => r.path === "/repos/org/repo/issues/12/comments");
+    const body = JSON.parse(reply.body).body;
+    assert.match(body, /^Leaked \[redacted\] and \[redacted\]\./);
+    assert.ok(!body.includes(signature));
   });
 
   test("a work run still pushes and opens its pull request, before and after a restart", async (t) => {

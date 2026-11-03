@@ -13,6 +13,7 @@ import { loadRuns, openLog } from "../listener/runlog.mjs";
 import { createRuns } from "../listener/runs.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { openStore, values } from "../lib/store.mjs";
+import { redact } from "../lib/redact.mjs";
 import { logContext, withLogContext } from "../lib/log.mjs";
 import { assertMode, fileLogs, localBroker, mapStore, tempDir, until } from "./helpers.mjs";
 
@@ -535,7 +536,8 @@ test("a run's state a listener of the release before kept in its files: moved to
   await restart.restoreRuns();
   // The token the sandbox holds is redacted at once, before it is renewed.
   assert.deepEqual(broker.secretsOf("new"), [agentToken, token]);
-  // Moved: in the store without its tokens, the file gone.
+  // Moved: in the store without its tokens, the file gone once the broker service has them.
+  await until(() => !readdirSync(dir).includes("new.live.json"), { what: "the file's removal" });
   assert.deepEqual(readdirSync(dir).sort(), ["other.live.json"]);
   const saved = await savedRun(store, "new");
   assert.equal(saved.sandbox, "net-new");
@@ -559,6 +561,99 @@ test("a run's state a listener of the release before kept in its files: moved to
   await next.restart.restoreRuns();
   await until(() => next.broker.secretsOf("new").length === 3, { what: "the run's tokens" });
   assert.deepEqual(next.broker.secretsOf("new"), [agentToken, token, renewed.token]);
+});
+
+test("a run's state the store refuses to take from its file: the start fails, the file kept (#617)", async (t) => {
+  const dir = tempDir(t);
+  const ctx = runContext(dir);
+  const set = ctx.store.set;
+  ctx.store.set = (key, ...rest) =>
+    key.startsWith(LIVE_PREFIX)
+      ? Promise.reject(new Error("the store is down"))
+      : set(key, ...rest);
+  writeFileSync(
+    join(dir, "r1.live.json"),
+    JSON.stringify({
+      task: { repo: "org/repo", id: "1", kind: "issue" },
+      id: "r1",
+      record: { id: "r1", key: "org/repo#1" },
+      handled: [],
+      unanswered: [],
+    }),
+  );
+  await assert.rejects(createRestart(ctx).restoreRuns(), /the store is down/);
+  assert.ok(JSON.parse(readFileSync(join(dir, "r1.live.json"), "utf8")).record);
+});
+
+test("a copy that stops before the broker service has a moved file's tokens: the next reads them from the file, the store's state kept (#617)", async (t) => {
+  const { dir, service, store, make } = takeover(t);
+  const first = make();
+  first.broker.register("org/repo", { id: "new", push: true, mode: "work" });
+  const { token, agentToken } = await first.broker.issue("new", "net-new");
+  const saved = {
+    task: { repo: "org/repo", id: 1, kind: "issue" },
+    id: "new",
+    mode: "work",
+    light: false,
+    agentToken,
+    sandbox: "net-new",
+    runTokens: [token],
+    record: { id: "new", key: "org/repo#1", agent: "claude" },
+    handled: [],
+    unanswered: [],
+  };
+  writeFileSync(join(dir, "new.live.json"), JSON.stringify(saved));
+  await service.runs.end("new");
+  // The first copy of this release: the broker service never answers it.
+  const stuck = make();
+  stuck.broker.restore = () => new Promise(() => {});
+  await stuck.restart.restoreRuns();
+  assert.ok(await savedRun(store, "new"));
+  assert.ok(readdirSync(dir).includes("new.live.json"));
+  // It saved the run's state again (its output read on) before it died.
+  await store.set(`${LIVE_PREFIX}new`, { ...(await savedRun(store, "new")), lines: { out: 7 } });
+  const next = make();
+  await next.restart.restoreRuns();
+  assert.deepEqual(next.broker.secretsOf("new").slice(0, 2), [agentToken, token]);
+  assert.deepEqual((await savedRun(store, "new")).lines, { out: 7 });
+  await until(() => !readdirSync(dir).includes("new.live.json"), { what: "the file's removal" });
+  assert.deepEqual(await service.runs.secrets("new"), { agentToken, tokens: [token] });
+});
+
+test("a broker service that doesn't say a restored run's tokens: its output is followed after the wait all the same, their shape redacted (#617)", async (t) => {
+  const dir = tempDir(t);
+  const broker = createBroker({
+    issuer: {
+      issue: async () => {
+        throw new Error("no");
+      },
+      put: async () => {},
+      secrets: () => new Promise(() => {}),
+      end: async () => {},
+    },
+  });
+  const followed = [];
+  const ctx = runContext(dir, {
+    broker,
+    runner: {
+      closed: async () => false,
+      relink: async () => {},
+      list: async () => [{ name: "deckhand-org-repo-1", run: "r1", running: true }],
+      remove: async () => {},
+    },
+    follow: (task) => followed.push(task.live.id),
+  });
+  await saveRun(ctx.store, "r1", 1, { agent: "claude" });
+  const restart = createRestart(ctx);
+  const restored = await restart.restoreRuns();
+  const started = Date.now();
+  await restart.reattach(restored, { waitMs: 30 });
+  assert.deepEqual(followed, ["r1"]);
+  assert.ok(Date.now() - started < 5000);
+  assert.deepEqual(broker.secretsOf("r1"), []);
+  // A run token, unknown by value: its shape is redacted.
+  const token = await localBroker().issuer.issue("r1", { repo: "org/repo", sandbox: "net-1" });
+  assert.equal(redact(`I hold ${token.token}`, []), "I hold [redacted]");
 });
 
 test("a runner slow to say whether a restored run's inbox is open: the start goes on, the run takes comments once it says", async (t) => {

@@ -126,13 +126,16 @@ export function createRestart(ctx) {
     return found;
   }
 
-  // The tokens the moved files held, by run: { agentToken, runTokens }, in memory only. The
-  // broker service is told them once (restoreRun()), and keeps them for the next copies.
+  // The tokens the moved files held, by run: { agentToken, runTokens, path }, in memory only.
+  // The broker service is told them (restoreRun()), and keeps them for the next copies: the file
+  // is removed once it has them, or once the run is over (removeLive()), whichever comes first.
   const movedTokens = new Map();
 
-  // Each logs/<run>.live.json written to the store without its tokens, then removed. A store that
-  // refuses the write fails the start, the file kept: the queue can't be read either then. One
-  // that isn't a run's state is left where it is, logged.
+  // Each logs/<run>.live.json written to the store without its tokens. A store that refuses the
+  // write fails the start, the file kept: the queue can't be read either then. One whose run the
+  // store has already (a copy that stopped before the broker service had its tokens) leaves the
+  // store's, newer, as it is: only its tokens are read. One that isn't a run's state is left
+  // where it is, logged.
   async function moveLive() {
     const files = readdirSync(ctx.logDir).filter((f) => f.endsWith(".live.json"));
     for (const file of files) {
@@ -145,10 +148,10 @@ export function createRestart(ctx) {
       const { agentToken: agent, runTokens: issued, ...state } = saved;
       const agentToken = typeof agent === "string" ? agent : null;
       const runTokens = Array.isArray(issued) ? issued.filter((t) => typeof t === "string") : [];
-      movedTokens.set(saved.id, { agentToken, runTokens });
+      movedTokens.set(saved.id, { agentToken, runTokens, path });
+      if (await ctx.store.get(liveKey(saved.id))) continue;
       const secrets = [...(ctx.storeSecrets?.() ?? []), agentToken, ...runTokens];
       await ctx.store.set(liveKey(saved.id), storable(state, secrets.filter(Boolean)));
-      rmSync(path, { force: true });
       log(`${saved.record.key ?? saved.id}: its state moved from ${file} to the store`);
     }
   }
@@ -512,6 +515,9 @@ export function createRestart(ctx) {
     for (;;) {
       try {
         await ctx.store.delete(liveKey(live.id));
+        // A file of the release before it was moved from, whose tokens the broker service may
+        // not have had yet: the run is over, they name nothing.
+        forgetMoved(live.id);
         return true;
       } catch (error) {
         log(`${live.key}: removing its state: ${error.stack ?? error}`);
@@ -577,6 +583,13 @@ export function createRestart(ctx) {
     await Promise.race([asked, late]).finally(() => clearTimeout(timer));
     started = false;
     return restored;
+  }
+
+  // The file a run's state was moved from (moveLive()), removed: its tokens are the broker
+  // service's, or name nothing any more.
+  function forgetMoved(id) {
+    const moved = movedTokens.get(id);
+    if (moved) rmSync(moved.path, { force: true });
   }
 
   // Restored task → once the broker service told its run's tokens (restoreRun()).
@@ -661,7 +674,10 @@ export function createRestart(ctx) {
     watchPushes(task);
     // The broker service hears it still goes, and gets its inbox and files again (#505): its
     // tokens renew there, its sandbox reads them there. Then it says which tokens the run holds,
-    // which its output is redacted of (#617): reattach() waits for that a little.
+    // which its output is redacted of (#617): reattach() waits for that a little. One retry for
+    // both, on purpose: while a broker of the release before refuses the second (403), the
+    // first goes again with the tokens a moved file held, which a broker updated since then
+    // takes. It's idempotent.
     const told = ctx.brokerService?.persist ?? ((what, fn) => fn().catch(() => {}));
     const moved = movedTokens.get(saved.id);
     const tokens = moved ? [moved.agentToken, ...moved.runTokens].filter(Boolean) : [];
@@ -669,6 +685,8 @@ export function createRestart(ctx) {
       task,
       told(`run ${saved.id}`, async () => {
         await ctx.broker.restore(saved.id, shots, tokens);
+        // The broker service has them: the file they were in can go.
+        forgetMoved(saved.id);
         await ctx.broker.recall?.(saved.id);
       }),
     );
