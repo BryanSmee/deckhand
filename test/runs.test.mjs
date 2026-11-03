@@ -260,6 +260,8 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
       modeLine: "review",
     },
     dropped: 0,
+    // Their queueIds, which go with the wait (waits.mjs hold()).
+    unqueued: ["q", "q"],
   });
   assert.deepEqual(task.pending, []);
   assert.deepEqual(settled, ["cancelled"]);

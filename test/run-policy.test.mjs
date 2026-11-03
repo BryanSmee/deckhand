@@ -667,7 +667,6 @@ test("waits.mjs reserve(): a blocker done while a new comment is decided starts 
   const resumed = [];
   const replies = [];
   const waits = createWaits({
-    path: join(tempDir(t), "waits.json"),
     github: async () => new Response("{}", { status: 404 }),
     reply: async (repo, number, text) => replies.push(text),
     received: () => {},
@@ -707,7 +706,6 @@ test("waits.mjs reserve(): a blocker done while a new comment is decided starts 
 test("tasks.mjs: a refused comment whose /after issues are all done keeps the issue's earlier wait", async (t) => {
   const { ctx, admit } = refusingTasks(["not today"]);
   ctx.waits = createWaits({
-    path: join(tempDir(t), "waits.json"),
     // #7 is done; anything else is open.
     github: async (repo, method, path) =>
       Response.json(

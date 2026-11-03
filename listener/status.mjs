@@ -112,7 +112,7 @@ export function createStatus(ctx) {
 
   // Queued comments don't count: they are saved as they come (saveQueue()), running sandboxes go on without
   // the listener (restoreRuns()), and brainstorms between replies are restored from
-  // brainstorms.json and their volume. Nothing needs to drain before a restart. `sees(repo)`:
+  // the store's `brainstorms` and their volume. Nothing needs to drain before a restart. `sees(repo)`:
   // which repos' runs and queues are listed (a signed-in user's, http.mjs); `idle` is
   // the whole listener's either way.
   function status(sees = () => true) {

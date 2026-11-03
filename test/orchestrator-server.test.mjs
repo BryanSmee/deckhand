@@ -2660,7 +2660,7 @@ mounts:
       repositoryId: "R_1",
     });
     // Deckhand's gh-linked-branch.rego was asked: the task's page keeps its decision.
-    const decisions = JSON.parse(readFileSync(join(dir, "decisions.json"), "utf8"));
+    const decisions = await storedMap(dir, "decisions");
     assert.deepEqual(
       decisions["org/repo#12"].map((d) => [d.rule, d.denied]),
       [["deny_link_branch", false]],
@@ -3222,10 +3222,7 @@ mounts:
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(exists(join(dir, "run-args")), null);
-    assert.equal(
-      JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"].answers,
-      true,
-    );
+    assert.equal((await storedMap(dir, "waits"))["org/repo#12"].answers, true);
     // The label comes off: it starts.
     files["issue:12"] = asking(false);
     const off = {
@@ -3296,10 +3293,9 @@ mounts:
         },
         "issues",
       );
-      await until(() => existsSync(join(dir, "inputs.json")), "the entry");
+      await until(async () => "org/repo#12" in (await storedMap(dir, "inputs")), "the entry");
       await until(
-        () =>
-          JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"))["org/repo#12"]?.ignoredTicks,
+        async () => (await storedMap(dir, "inputs"))["org/repo#12"]?.ignoredTicks,
         "the bot's ticks kept",
       );
       const payload = onAsking(99, "Deckhand");
@@ -3738,11 +3734,8 @@ allow_capabilities contains "read:pulls"
     assert.equal(event, "COMMENT");
     assert.match(body, /## Follow-ups \(1\)/);
     // Its round recorded (the run's end, after the review is posted), with its follow-up.
-    const round = () => {
-      const kept = JSON.parse(readFileSync(join(dir, "reviews.json"), "utf8"));
-      return kept["org/repo#pr-13"]?.rounds?.at(-1);
-    };
-    await waitUntil(() => existsSync(join(dir, "reviews.json")) && round()?.followUps === 1, {
+    const round = async () => (await storedMap(dir, "reviews"))["org/repo#pr-13"]?.rounds?.at(-1);
+    await waitUntil(async () => (await round())?.followUps === 1, {
       what: "the review's round",
     });
     // GitHub has it now; the pull request is merged.
@@ -3885,7 +3878,7 @@ allow_capabilities contains "read:pulls"
     assert.match(message, /^The automated review of pull request #13 requested changes\./);
     assert.match(message, /`a\.mjs:3`: no test\./);
     // Counted before it was queued.
-    const reviews = JSON.parse(readFileSync(join(dir, "reviews.json"), "utf8"));
+    const reviews = await storedMap(dir, "reviews");
     assert.equal(reviews["org/repo#pr-13"].fixes, 1);
   });
 
@@ -4252,8 +4245,7 @@ allow_capabilities contains "read:pulls"
     return `${/^TASK_MODE=(.*)$/m.exec(env)[1]} ${/^SANDBOX_LIGHT=(.*)$/m.exec(env)[1] || "full"}`;
   }
 
-  const brainstormOf = (dir) =>
-    JSON.parse(readFileSync(join(dir, "brainstorms.json"), "utf8"))["org/repo#12"];
+  const brainstormOf = async (dir) => (await storedMap(dir, "brainstorms"))["org/repo#12"];
 
   test("Deckhand /mode brainstorm discusses; /stop wraps up; Deckhand then works", async (t) => {
     const { dir, github, listener, send } = await listen(t);
@@ -4262,7 +4254,7 @@ allow_capabilities contains "read:pulls"
     assert.equal(lastRun(dir), "brainstorm 1");
     const env = readFileSync(join(dir, "run-env"), "utf8");
     assert.match(env, /^TASK_MESSAGE=What about dark mode\?$/m);
-    assert.equal(brainstormOf(dir).status, "active");
+    assert.equal((await brainstormOf(dir)).status, "active");
     await listener.until("done (ok)");
     // A comment without the trigger goes on in the brainstorm.
     await send(followUp(100, "And the contrast?"));
@@ -4271,13 +4263,13 @@ allow_capabilities contains "read:pulls"
     await send(followUp(101, "/stop"));
     await until(() => replies(github).length === 3, "the wrap-up");
     assert.equal(lastRun(dir), "brainstorm 1");
-    assert.equal(brainstormOf(dir).status, "stopped");
+    assert.equal((await brainstormOf(dir)).status, "stopped");
     // The trigger alone implements, in a session of its own (the brainstorm's is light).
     await send(followUp(102, "Deckhand\nGo with the second option."));
     await until(() => replies(github).length === 4, "the work reply");
     assert.equal(lastRun(dir), "work full");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_SESSION=$/m);
-    assert.equal(brainstormOf(dir), undefined);
+    assert.equal(await brainstormOf(dir), undefined);
   });
 
   test("a run the policies refuse (deny_run): a reply quoting them, nothing runs, the decision kept", async (t) => {
@@ -4305,7 +4297,7 @@ allow_capabilities contains "read:pulls"
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(exists(join(dir, "run-args")), null);
-    const [kept] = JSON.parse(readFileSync(join(dir, "decisions.json"), "utf8"))["org/repo#12"];
+    const [kept] = (await storedMap(dir, "decisions"))["org/repo#12"];
     assert.deepEqual(
       [kept.decision, kept.rule, kept.denied, kept.messages, kept.input.mode, kept.input.sender],
       ["run", "deny_run", true, ["not today"], "work", "alice"],
@@ -4329,10 +4321,7 @@ allow_capabilities contains "read:pulls"
     );
     await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(exists(join(dir, "run-args")), null);
-    assert.deepEqual(
-      JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"].blockers,
-      [77],
-    );
+    assert.deepEqual((await storedMap(dir, "waits"))["org/repo#12"].blockers, [77]);
 
     // #77 is merged while the listener is down: the next one asks GitHub when it starts.
     files["issue:77"] = JSON.stringify({ state: "closed", pull_request: { merged_at: "2026" } });
@@ -4343,7 +4332,7 @@ allow_capabilities contains "read:pulls"
     assert.match(env, /^SANDBOX_EFFORT=high$/m);
     await until(() => replies(github).length === 3, "the starting reply and the run's");
     assert.match(JSON.parse(replies(github)[1].body).body, /^#77 is done: starting\./);
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "waits.json"), "utf8")), {});
+    assert.deepEqual(await storedMap(dir, "waits"), {});
   });
 
   test("/after: an issues webhook starts the run; closed as not planned drops the wait", async (t) => {
@@ -4402,7 +4391,7 @@ allow_capabilities contains "read:pulls"
     await until(() => exists(join(dir, "run-args")), "the run");
     assert.match(readFileSync(join(dir, "run-env"), "utf8"), /^TASK_MESSAGE=On top of it\.$/m);
     assert.match(JSON.parse(replies(github)[1].body).body, /^#77 is done: starting\./);
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "waits.json"), "utf8")), {});
+    assert.deepEqual(await storedMap(dir, "waits"), {});
     await listener.until("done (ok)");
   });
 
@@ -4475,9 +4464,9 @@ allow_capabilities contains "read:pulls"
     const [on77, on80] = [asked(77), asked(80)];
     writeFileSync(join(dir, "go"), "");
     await listener.until("done (ok)");
-    const waiting = () => JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"))["org/repo#12"];
-    await until(() => waiting().blockers.length === 1, "#77 done");
-    assert.deepEqual(waiting().blockers, [80]);
+    const waiting = async () => (await storedMap(dir, "waits"))["org/repo#12"];
+    await until(async () => (await waiting()).blockers.length === 1, "#77 done");
+    assert.deepEqual((await waiting()).blockers, [80]);
     assert.equal(asked(77), on77 + 1);
     assert.equal(asked(80), on80);
   });
@@ -4557,7 +4546,7 @@ mounts:
     await send(followUp(100, "/mode work\nBuild it."));
     await until(() => replies(github).length === 2, "the work reply");
     assert.equal(lastRun(dir), "work full");
-    assert.equal(brainstormOf(dir), undefined);
+    assert.equal(await brainstormOf(dir), undefined);
   });
 
   test("a mode whose instructions file is missing: the reply says so", async (t) => {
@@ -4950,7 +4939,7 @@ mounts:
       (await res.json()).message,
       "#10 laid out: #12 starts; #10 waits for #11 and #12; #11 waits for #12.",
     );
-    const waits = JSON.parse(readFileSync(join(dir, "waits.json"), "utf8"));
+    const waits = await storedMap(dir, "waits");
     assert.deepEqual(waits["org/repo#10"].blockers, [11, 12]);
     assert.deepEqual(waits["org/repo#11"].blockers, [12]);
     const posted = github.requests.filter(
@@ -5221,7 +5210,7 @@ mounts:
       "pull_request",
     );
     await listener.until("org/repo#9: closed, its last run's questions set aside");
-    assert.deepEqual(JSON.parse(readFileSync(join(dir, "picks.json"), "utf8")), {
+    assert.deepEqual(await storedMap(dir, "picks"), {
       "org/repo#5": "org-repo-5-1000",
       "org/repo#9": "org-repo-9-1000",
     });
@@ -5456,7 +5445,7 @@ mounts:
     // (the label put back, a run that asked since).
     assert.doesNotMatch(listener.output(), /questions set aside/);
     assert.deepEqual(await storedMap(dir, "dismissed"), {});
-    const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
+    const inputs = await storedMap(dir, "inputs");
     assert.deepEqual(Object.keys(inputs).sort(), ["org/repo#5", "org/repo#6"]);
   });
 
@@ -5570,7 +5559,7 @@ mounts:
     });
     // #14 and #16 still wait for input, since when they did, with their questions as their
     // bodies have them.
-    const inputs = JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"));
+    const inputs = await storedMap(dir, "inputs");
     assert.deepEqual(
       Object.entries(inputs).map(([key, i]) => [key, i.since, i.questions?.items?.length]),
       [
@@ -5593,7 +5582,7 @@ mounts:
       "issues",
     );
     const relabelled = await until(
-      () => JSON.parse(readFileSync(join(dir, "inputs.json"), "utf8"))["org/repo#11"],
+      async () => (await storedMap(dir, "inputs"))["org/repo#11"],
       "#11 listed again",
     );
     assert.ok(relabelled.since >= before);
@@ -5866,6 +5855,79 @@ mounts:
     }
     // Nothing written back to the data volume.
     for (const name of Object.keys(legacy)) {
+      assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
+    }
+  });
+
+  test("the maps behind timers and comments (#616): moved to the store, a wait across a handover started once, a deadline fired once", async (t) => {
+    const files = { "issue:77": JSON.stringify({ state: "open" }) };
+    // What a release before kept in its data volume, a file per map.
+    const legacy = {
+      brainstorms: {
+        // Its deadline passed while no copy acted: idle at the first start, and only then.
+        "org/repo#20": { repo: "org/repo", number: 20, status: "active", deadline: 1 },
+      },
+      decisions: {
+        "org/repo#pr-3": [{ decision: "merge", rule: "deny_merge", denied: true, pr: 3, at: 9 }],
+      },
+      reviews: { "org/repo#pr-3": { head: "abc", at: Date.now(), fixes: 1 } },
+      picks: { "org/repo#9": "org-repo-9-1000" },
+    };
+    const ctx = await listen(t, files, (dir, github) => {
+      for (const [name, value] of Object.entries(legacy)) {
+        writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
+      }
+      return { GITHUB_URL: github.url };
+    });
+    const { dir, github, send } = ctx;
+    for (const name of Object.keys(legacy)) {
+      assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
+    }
+    await ctx.listener.until("org/repo#20: brainstorm idle");
+    assert.equal((await storedMap(dir, "brainstorms"))["org/repo#20"].status, "idle");
+    assert.deepEqual(await storedMap(dir, "decisions"), legacy.decisions);
+    assert.deepEqual(await storedMap(dir, "reviews"), legacy.reviews);
+    // A comment that waits, its text in the store without the token pasted in it by mistake.
+    const token = `ghp_${"b".repeat(36)}`;
+    await send(comment("alice", `Deckhand /after #77\nDo it, ${token}.`));
+    await until(() => replies(github).length === 1, "the waiting reply");
+    const wait = (await storedMap(dir, "waits"))["org/repo#12"];
+    assert.deepEqual(wait.blockers, [77]);
+    assert.equal(wait.item.text, "Do it, [redacted].");
+    const stored = {};
+    for (const name of ["waits", "inputs", "reviews", "brainstorms", "decisions", "picks"]) {
+      stored[name] = await storedMap(dir, name);
+    }
+
+    const { output } = await ctx.handOver();
+    for (const [name, value] of Object.entries(stored)) {
+      assert.deepEqual(await storedMap(dir, name), value, name);
+    }
+    // #77 done: the next copy starts the comment, once, and the wait goes.
+    files["issue:77"] = JSON.stringify({ state: "closed", state_reason: "completed" });
+    await send(
+      {
+        action: "closed",
+        installation: { id: 7 },
+        repository: { full_name: "org/repo", default_branch: "trunk" },
+        issue: { number: 77, state: "closed", state_reason: "completed" },
+        sender: { login: "alice" },
+      },
+      "issues",
+    );
+    await until(() => exists(join(dir, "run-args")), "the run");
+    assert.match(
+      readFileSync(join(dir, "run-env"), "utf8"),
+      /^TASK_MESSAGE=Do it, \[redacted\]\.$/m,
+    );
+    await ctx.listener.until("done (ok)");
+    const starting = replies(github).filter((r) => /#77 is done: starting/.test(r.body));
+    assert.equal(starting.length, 1);
+    assert.deepEqual(await storedMap(dir, "waits"), {});
+    const idle = (out) => out.split("\n").filter((l) => l.includes("org/repo#20: brainstorm idle"));
+    assert.equal(idle(output).length + idle(ctx.listener.output()).length, 1);
+    // Nothing written back to the data volume.
+    for (const name of [...Object.keys(legacy), "waits", "inputs"]) {
       assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
     }
   });

@@ -1,9 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 import { createInputs } from "../listener/inputs.mjs";
-import { tempDir } from "./helpers.mjs";
+import { mapStore } from "./helpers.mjs";
 
 const issue = (number, extra = {}) => ({
   number,
@@ -12,10 +10,14 @@ const issue = (number, extra = {}) => ({
   ...extra,
 });
 
-test("issues waiting for input: from webhooks, kept across a restart", (t) => {
-  const path = join(tempDir(t), "inputs.json");
+test("issues waiting for input: from webhooks, kept across a restart", async () => {
+  const maps = mapStore();
   let clock = 1000;
-  const inputs = createInputs({ path, listLabelled: async () => [], now: () => clock });
+  const inputs = createInputs({
+    inputs: await maps.map("inputs"),
+    listLabelled: async () => [],
+    now: () => clock,
+  });
   inputs.set("org/repo#1", true);
   clock = 2000;
   // Labelled again: still since the first time.
@@ -26,7 +28,7 @@ test("issues waiting for input: from webhooks, kept across a restart", (t) => {
   assert.deepEqual(inputs.list(), [
     { key: "org/repo#1", repo: "org/repo", since: 1000, questions: null },
   ]);
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+  assert.deepEqual(Object.fromEntries(await maps.again("inputs")), {
     "org/repo#1": { since: 1000, questions: null },
   });
   // Its questions, then an edit to them; an issue not listed isn't added by one.
@@ -40,13 +42,13 @@ test("issues waiting for input: from webhooks, kept across a restart", (t) => {
   inputs.update("org/repo#1", null);
   assert.equal(inputs.list()[0].questions, null);
   inputs.update("org/repo#1", asked);
-  const again = createInputs({ path, listLabelled: async () => [] });
+  const again = createInputs({ inputs: await maps.again("inputs"), listLabelled: async () => [] });
   assert.equal(again.has("org/repo#1"), true);
   assert.deepEqual(again.list()[0].questions, asked);
 });
 
-test("the startup lookup adds labels added meanwhile and drops those removed", async (t) => {
-  const path = join(tempDir(t), "inputs.json");
+test("the startup lookup adds labels added meanwhile and drops those removed", async () => {
+  const maps = mapStore();
   const lists = {
     "org/repo": [
       issue(2, { body: "## Open questions\n\n1. Which one?" }),
@@ -62,7 +64,7 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
   const logs = [];
   const dropped = [];
   const inputs = createInputs({
-    path,
+    inputs: await maps.map("inputs"),
     listLabelled,
     dropped: (repo, number) => dropped.push([repo, number]),
     now: () => 5,
@@ -93,13 +95,20 @@ test("the startup lookup adds labels added meanwhile and drops those removed", a
     raw: "1. Which one?",
   });
   assert.equal(questions["org/repo#4"], null);
-  assert.equal(createInputs({ path, listLabelled }).has("org/repo#2"), true);
+  assert.equal(
+    createInputs({ inputs: await maps.again("inputs"), listLabelled }).has("org/repo#2"),
+    true,
+  );
 });
 
-test("keep: an entry the listing missed comes back as it was, unless a delivery set it since", async (t) => {
-  const path = join(tempDir(t), "inputs.json");
+test("keep: an entry the listing missed comes back as it was, unless a delivery set it since", async () => {
+  const maps = mapStore();
   let clock = 1;
-  const inputs = createInputs({ path, listLabelled: async () => [], now: () => clock });
+  const inputs = createInputs({
+    inputs: await maps.map("inputs"),
+    listLabelled: async () => [],
+    now: () => clock,
+  });
   const old = { items: null, raw: "Which one, before?" };
   for (const n of [1, 2, 3, 4, 5, 6]) inputs.set(`org/repo#${n}`, true, old);
   inputs.set("org/repo#1", true, undefined, true);
@@ -120,7 +129,7 @@ test("keep: an entry the listing missed comes back as it was, unless a delivery 
   assert.equal(inputs.keep("org/repo#5", asked), true);
   // Never dropped by sync(): nothing to keep.
   assert.equal(inputs.keep("org/repo#7", asked), false);
-  assert.deepEqual(JSON.parse(readFileSync(path, "utf8")), {
+  assert.deepEqual(Object.fromEntries(await maps.again("inputs")), {
     "org/repo#1": { since: 1, questions: asked, ignoredTicks: true },
     "org/repo#2": { since: 1, questions: null },
     // The ticks kept, the questions the lookup's: those ticks changed no question.
@@ -132,10 +141,14 @@ test("keep: an entry the listing missed comes back as it was, unless a delivery 
   assert.equal(inputs.has("org/repo#1"), false);
 });
 
-test("release: a dropped entry whose lookup didn't keep it is forgotten; the label put back starts afresh", async (t) => {
-  const path = join(tempDir(t), "inputs.json");
+test("release: a dropped entry whose lookup didn't keep it is forgotten; the label put back starts afresh", async () => {
+  const maps = mapStore();
   let clock = 1;
-  const inputs = createInputs({ path, listLabelled: async () => [], now: () => clock });
+  const inputs = createInputs({
+    inputs: await maps.map("inputs"),
+    listLabelled: async () => [],
+    now: () => clock,
+  });
   inputs.set("org/repo#4", true, null, true);
   await inputs.sync(["org/repo"]);
   // Its lookup: the label is off.
@@ -151,27 +164,39 @@ test("release: a dropped entry whose lookup didn't keep it is forgotten; the lab
   assert.equal(inputs.ticksIgnored("org/repo#4"), false);
 });
 
-test("respell: an issue waiting for input under another spelling moves to the one given", (t) => {
-  const path = join(tempDir(t), "inputs.json");
-  const inputs = createInputs({ path, listLabelled: async () => [], now: () => 5 });
+test("respell: an issue waiting for input under another spelling moves to the one given", async () => {
+  const maps = mapStore();
+  const inputs = createInputs({
+    inputs: await maps.map("inputs"),
+    listLabelled: async () => [],
+    now: () => 5,
+  });
   inputs.set("org/repo#4", true, null);
   inputs.respell((repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo));
   assert.deepEqual(inputs.keys(), ["Org/repo#4"]);
   assert.equal(inputs.list()[0].repo, "Org/repo");
-  assert.equal(createInputs({ path, listLabelled: async () => [] }).has("Org/repo#4"), true);
+  assert.equal(
+    createInputs({ inputs: await maps.again("inputs"), listLabelled: async () => [] }).has(
+      "Org/repo#4",
+    ),
+    true,
+  );
 });
 
-test("the bot's ticks: kept with the entry across a restart and the startup lookup, a person's edit clears them", async (t) => {
-  const path = join(tempDir(t), "inputs.json");
+test("the bot's ticks: kept with the entry across a restart and the startup lookup, a person's edit clears them", async () => {
+  const maps = mapStore();
   const listed = [{ number: 1, body: "## Open questions\n\n1. A?", updated_at: "x" }];
-  const inputs = createInputs({ path, listLabelled: async () => listed });
+  const inputs = createInputs({
+    inputs: await maps.map("inputs"),
+    listLabelled: async () => listed,
+  });
   inputs.set("org/repo#1", true, null, true);
   assert.equal(inputs.ticksIgnored("org/repo#1"), true);
   // An edit that doesn't say: as it was.
   inputs.update("org/repo#1", null);
   assert.equal(inputs.ticksIgnored("org/repo#1"), true);
   await inputs.sync(["org/repo"]);
-  const again = createInputs({ path, listLabelled: async () => [] });
+  const again = createInputs({ inputs: await maps.again("inputs"), listLabelled: async () => [] });
   assert.equal(again.ticksIgnored("org/repo#1"), true);
   // A person's edit.
   again.update("org/repo#1", null, false);

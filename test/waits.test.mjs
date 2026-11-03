@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createWaits, issueList, waitsFor } from "../listener/waits.mjs";
-import { assertMode, tempDir } from "./helpers.mjs";
+import { storeMap } from "../lib/store-map.mjs";
+import { fileMap, mapStore, tempDir } from "./helpers.mjs";
 
 // `t` null: removed when the file's tests end.
 const tempPath = (t = null) => join(tempDir(t), "waits.json");
@@ -38,8 +39,15 @@ function item(after, fields = {}) {
 
 // Waits with a fake GitHub (`issues`: number → issue, missing ones 404), a fake clock and
 // fake comments. `allowed`: what resume() answers ("answers": the issue's questions are open),
-// changed later through `w.allowed`.
-function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = true } = {}) {
+// changed later through `w.allowed`. `waits`: the Map they are kept in, else one in `path`;
+// `queueSaved()`: the queue's write a release waits for.
+function setup({
+  issues = { 77: open, 80: open },
+  path = tempPath(),
+  waits = fileMap(path),
+  allowed = true,
+  queueSaved,
+} = {}) {
   const w = {
     issues,
     replies: [],
@@ -52,7 +60,8 @@ function setup({ issues = { 77: open, 80: open }, path = tempPath(), allowed = t
     allowed,
   };
   w.waits = createWaits({
-    path,
+    waits,
+    queueSaved,
     github: async (repo, method, url) => {
       w.calls.push(url);
       const n = /\/issues\/(\d+)$/.exec(url)?.[1];
@@ -95,7 +104,6 @@ test("a comment waits for open issues, says so, and keeps its 👀", async () =>
   assert.equal(saved.item.eyes, 4242);
   assert.equal(saved.item.text, "Do it.");
   assert.equal(saved.item.author, "alice");
-  assertMode(w.path, 0o600);
   // Read again when it starts; not kept.
   assert.equal(saved.item.settings, undefined);
   assert.equal(saved.item.after, undefined);
@@ -363,4 +371,76 @@ test("respell: a wait saved under another spelling of its repo moves to the one 
   assert.equal(wait.repo, "Org/repo");
   assert.equal(wait.item.repo, "Org/repo");
   assert.deepEqual(Object.keys(JSON.parse(readFileSync(w.path, "utf8"))), ["Org/repo#78"]);
+});
+
+test("waits in the store: read back by the next copy, which starts each one once, the comment without a token", async () => {
+  const secret = "s3cr3t-value-of-the-operator";
+  const token = `ghp_${"a".repeat(36)}`;
+  const maps = mapStore();
+  const options = { secrets: () => [secret] };
+  const first = setup({ waits: await maps.map("waits", options) });
+  await first.waits.request(item({ numbers: [77, 80] }, { text: `Do it. ${token} ${secret}` }));
+  // The lease handed over (or the copy killed): the next one has the wait, as it was.
+  const next = setup({ waits: await maps.again("waits", options) });
+  const wait = next.waits.get("org/repo#78");
+  assert.deepEqual(wait.blockers, [77, 80]);
+  assert.equal(wait.item.text, "Do it. [redacted] [redacted]");
+  assert.equal(wait.item.eyes, 4242);
+  assert.ok(wait.item.queueId);
+  // Its check, then a delivery, then the next check: started once.
+  next.issues[77] = completed;
+  await next.waits.check();
+  assert.deepEqual(next.waits.get("org/repo#78").blockers, [80]);
+  next.issues[80] = completed;
+  await Promise.all([next.waits.closed("org/repo", 80, "done"), next.waits.check()]);
+  await next.waits.check();
+  assert.equal(next.resumed.length, 1);
+  assert.equal(next.resumed[0].queueId, wait.item.queueId);
+  assert.equal(next.replies.filter(([, text]) => /: starting\.$/.test(text)).length, 1);
+  assert.equal((await maps.again("waits")).size, 0);
+});
+
+test("a wait released into the queue: deleted from the store after the queue, a copy killed between finds it once", async () => {
+  const maps = mapStore();
+  let queueWritten;
+  const queueSaved = () => new Promise((resolve) => (queueWritten = resolve));
+  const w = setup({ waits: await maps.map("waits"), queueSaved });
+  await w.waits.request(item({ numbers: [77] }));
+  await maps.settled();
+  await w.waits.closed("org/repo", 77, "done");
+  assert.equal(w.resumed.length, 1);
+  assert.equal(w.waits.get("org/repo#78"), undefined);
+  // Killed before the queue was written: the wait is still in the store, and the comment is
+  // there only (not in neither).
+  await new Promise((resolve) => setImmediate(resolve));
+  // What the store has now, the writes still waiting left out: what a copy killed now leaves.
+  const killed = setup({ waits: await storeMap(maps.store, "waits") });
+  assert.deepEqual(killed.waits.keys(), ["org/repo#78"]);
+  // Killed once the queue had it: in both, and the next copy keeps the queue's.
+  const queued = new Set([w.resumed[0].queueId]);
+  killed.waits.dedupe(queued);
+  assert.deepEqual(killed.waits.keys(), []);
+  assert.deepEqual(killed.settled, []);
+  assert.deepEqual(killed.replies, []);
+  // Not killed: the queue written, the wait goes from the store.
+  queueWritten();
+  assert.equal((await maps.again("waits")).size, 0);
+  // Not started (refused since): nothing to wait for, gone at once.
+  const refused = setup({ waits: await maps.map("waits"), allowed: false, queueSaved });
+  await refused.waits.request(item({ numbers: [80] }));
+  await refused.waits.closed("org/repo", 80, "done");
+  assert.equal((await maps.again("waits")).size, 0);
+});
+
+test("a queued comment moved to a wait: its queueIds kept with it, for the next copy to leave to the wait", async () => {
+  const w = setup({ waits: await mapStore().map("waits") });
+  const { after: _, ...moved } = item(null);
+  await w.waits.hold(moved, [77], { eyes: true, unqueued: ["q-1", "q-2"] });
+  assert.deepEqual([...w.waits.unqueued()], ["q-1", "q-2"]);
+  // Its own queueId is a new one: released, it is queued under it.
+  const { queueId } = w.waits.get("org/repo#78").item;
+  assert.ok(queueId && !["q-1", "q-2"].includes(queueId));
+  // A comment queued under another id isn't its release.
+  w.waits.dedupe(new Set(["q-1"]));
+  assert.deepEqual(w.waits.keys(), ["org/repo#78"]);
 });

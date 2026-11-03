@@ -3,27 +3,26 @@
 // `ignoredTicks`: its section is fully ticked by ticks that answer nothing, the bot's or those
 // of someone not allowed). `issues` webhooks keep it current (questions.mjs); labels added or
 // removed, or bodies edited, while the listener was down are caught by one lookup per repo when
-// it starts (sync()). Kept in inputs.json, so a restart doesn't forget them meanwhile.
+// it starts (sync()). Kept in the orchestrator's store (`inputs`, lib/store-map.mjs), so a
+// restart or a handover doesn't forget them meanwhile.
 import { hasLabel } from "./comments.mjs";
 import { parseKey, sameRepo, taskKey } from "./events.mjs";
 import { paginate } from "./github.mjs";
 import { allTicked, parseQuestions, questionsSection } from "./questions.mjs";
 import { respellMap, taskId } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // `listLabelled(repo)`: the repo's open issues with the label, as GET /repos/{repo}/issues
 // has them. `dropped(repo, number)`: an issue sync() found no longer labelled (or no longer
 // open), as an `unlabeled` delivery would have said (questions.mjs applyInput()); keep() puts
-// its entry back if the listing only missed the issue.
+// its entry back if the listing only missed the issue. `inputs`: the Map they are kept in
+// (storeMap()'s).
 export function createInputs({
-  path,
+  inputs = new Map(),
   listLabelled,
   dropped = () => {},
   now = Date.now,
   log = () => {},
 }) {
-  const inputs = persistentMap(path);
-  const save = inputs.save;
   // The entries sync() dropped while their issue is looked up, by taskId(), until keep() or
   // release() says how the lookup ended. A delivery meanwhile that lists the issue again
   // starts from the entry (set()), so its `since` and ticks hold; one that drops it leaves
@@ -37,7 +36,7 @@ export function createInputs({
     dropping.delete(taskId(key));
     const stored = inputs.get(key);
     if (!on) {
-      if (inputs.delete(key)) save();
+      inputs.delete(key);
       return;
     }
     const was = stored ?? held?.entry;
@@ -48,7 +47,6 @@ export function createInputs({
     };
     if (stored && JSON.stringify(stored) === JSON.stringify(next)) return;
     inputs.set(key, next);
-    save();
   }
 
   // An edit to the questions or ticks of an issue already listed. One dropped by sync() and
@@ -71,7 +69,6 @@ export function createInputs({
     dropping.delete(taskId(key));
     if (!held || inputs.has(key)) return false;
     inputs.set(key, { ...held.entry, questions });
-    save();
     return true;
   }
 
@@ -83,7 +80,6 @@ export function createInputs({
   // listed keeps what it had. Resolves to [key, title] pairs, for the dashboard's titles.
   async function sync(repos) {
     const titles = [];
-    let changed = false;
     for (const repo of repos) {
       let list;
       try {
@@ -108,7 +104,6 @@ export function createInputs({
         const entry = inputs.get(key);
         inputs.delete(key);
         dropping.set(taskId(key), { entry });
-        changed = true;
         dropped(repo, parseKey(key).number);
       }
       // Bodies edited meanwhile: their questions as they are now.
@@ -121,10 +116,8 @@ export function createInputs({
         };
         if (was && JSON.stringify(was) === JSON.stringify(next)) continue;
         inputs.set(key, next);
-        changed = true;
       }
     }
-    if (changed) save();
     return titles;
   }
 
@@ -149,7 +142,7 @@ export function createInputs({
     ticksIgnored: (key) => !!inputs.get(key)?.ignoredTicks,
     keys: () => [...inputs.keys()],
     // One spelling per repo (spelling.mjs, at a restart).
-    respell: (spelled) => respellMap(inputs, spelled) && save(),
+    respell: (spelled) => respellMap(inputs, spelled),
   };
 }
 

@@ -1,16 +1,15 @@
 // Comments that wait for other issues ("Deckhand /after #77"): the run they ask for starts
 // once the last of those is done (closed as completed, or its pull request merged), as if the
-// comment had just been posted. One wait per task, kept in waits.json so a restart forgets
-// none. Anything about an issue waited for (a delivery, a run on it ending) asks GitHub about
+// comment had just been posted. One wait per task, kept in the orchestrator's store (`waits`,
+// lib/store-map.mjs) so a restart or a handover forgets none. Anything about an issue waited for (a delivery, a run on it ending) asks GitHub about
 // that issue again; and every wait is checked at start and every few minutes, so a webhook
 // missed while the listener was down, or never subscribed to, still starts the work. Once
 // they are done, an issue whose open questions aren't answered yet (the repo's
 // `wait_for_answers`) waits for its answers too: `blockers` empty, `answers` true.
 import { issueOutcome, parseKey, sameRepo, taskKey } from "./events.mjs";
 import { getJson } from "./github.mjs";
-import { plain, revive } from "./restart.mjs";
+import { plain, queueId, revive } from "./restart.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // How often GitHub is asked about what the waits wait for (the operator's WAITS_CHECK_MINUTES).
 const CHECK_MS = 5 * 60_000;
@@ -33,9 +32,12 @@ export function issueList(numbers) {
 // `github(repo, method, path, body, expected)`: the App's calls. `reply(repo, number, text)`,
 // `received(item)` (👀) and `settle(item, status)`: comments.mjs's. `resume(item)`: checks the
 // comment again and queues it (tasks.mjs), resolving to false when it may no longer run, and
-// to "answers" when it waits for the issue's open questions to be answered.
+// to "answers" when it waits for the issue's open questions to be answered. `waits`: the Map
+// they are kept in (storeMap()'s); `queueSaved()`: once the queue is in the store with what was just
+// queued (restart.mjs queueWritten()), which a wait's release is written after.
 export function createWaits({
-  path,
+  waits = new Map(),
+  queueSaved = () => Promise.resolve(),
   github,
   reply,
   received,
@@ -46,9 +48,10 @@ export function createWaits({
   checkMs = CHECK_MS,
   later = (fn, ms) => setTimeout(fn, ms).unref?.(),
 }) {
-  // Task key ("org/repo#78") → { repo, blockers: [77, …], item, since }; `item`: the comment
-  // as restart.mjs saves it.
-  const waits = persistentMap(path, { mode: 0o600 });
+  // `waits`: task key ("org/repo#78") → { repo, blockers: [77, …], item, since, unqueued? };
+  // `item`: the comment as restart.mjs saves it, its queueId the one it is queued with once
+  // released; `unqueued`: the queueIds of the comments the dashboard took out of the queue for
+  // it (hold()). People's text: the store holds it without a secret (storeMap()'s storable()).
   let timer = null;
   let checking = null;
   // Task key → { held, missed }: the wait held while a new comment was being decided
@@ -58,9 +61,6 @@ export function createWaits({
   // "org/repo#77" → recheck() not started yet, and the last one started or queued.
   const queued = new Map();
   const latest = new Map();
-
-  // The comments' text and authors, as in the queue: the owner's only (its file's mode).
-  const save = waits.save;
 
   const keyOf = (item) => taskKey(item.repo, item.id);
   const answer = (item, text) =>
@@ -77,7 +77,6 @@ export function createWaits({
     const wait = waits.get(key);
     if (!wait) return null;
     waits.delete(key);
-    save();
     settle(revive(wait.item), "stopped").catch(() => {});
     return wait;
   }
@@ -140,15 +139,41 @@ export function createWaits({
   // Makes the task of `item` wait for `blockers` (open issues of its repo), replacing its wait,
   // without a reply: request()'s, or the dashboard's own comment (work.mjs). `eyes`: the
   // comment has its 👀 already (a queued one, work.mjs requeue()): nothing to wait for before
-  // the wait is saved.
-  async function hold(item, blockers, { eyes = false } = {}) {
+  // the wait is saved. `unqueued`: the queueIds of the comments taken out of the queue for it
+  // (work.mjs requeue()), which a start drops from the queue should both have them (dedupe());
+  // the queue is written without them once the wait is in the store (written()).
+  async function hold(item, blockers, { eyes = false, unqueued = [] } = {}) {
     const key = keyOf(item);
     if (drop(key)) log(`${key}: its wait is replaced`);
     if (!eyes) received(item);
     const { settings, after: _, ...rest } = item;
-    waits.set(key, { repo: item.repo, blockers, item: await plain(rest), since: now() });
-    save();
+    // Its queueId now: queued once released, the same, which tells a start it was (dedupe()).
+    const saved = { ...(await plain(rest)), queueId: rest.queueId ?? queueId() };
+    waits.set(key, {
+      repo: item.repo,
+      blockers,
+      item: saved,
+      since: now(),
+      ...(unqueued.length && { unqueued }),
+    });
     log(`${key}: waits for ${issueList(blockers)}`);
+  }
+
+  // A wait released into the queue: out of memory now, out of the store once `started()`
+  // resolves (to whether it was queued; a promise of it). One pair: the queue written first,
+  // then the wait deleted (`queueSaved()`), so a copy killed in between finds the comment in both,
+  // and keeps the queue's (dedupe()), never in neither. Resolves to what `started()` did.
+  async function releasing(key, started) {
+    let done;
+    waits.delete(key, { after: new Promise((resolve) => (done = resolve)) });
+    try {
+      const result = await started();
+      done(result === true ? queueSaved() : undefined);
+      return result;
+    } catch (error) {
+      done();
+      throw error;
+    }
   }
 
   // A trigger comment's run is being decided (tasks.mjs, work.mjs: the policies may refuse it):
@@ -207,16 +232,16 @@ export function createWaits({
         await answer(item, `#${number} ${why}: I won't start. Comment again to start anyway.`);
         continue;
       }
+      // In place: a close of its other issues meanwhile still finds it (above). Set again, for
+      // the store.
       wait.blockers = wait.blockers.filter((n) => n !== number);
       if (wait.blockers.length) {
-        save();
+        waits.set(key, wait);
         log(`${key}: #${number} done, still waits for ${issueList(wait.blockers)}`);
         continue;
       }
-      waits.delete(key);
-      save();
       log(`${key}: #${number} done, starting`);
-      const started = await resume(item);
+      const started = await releasing(key, () => resume(item));
       if (started === "answers") {
         await keep(key, wait);
         await answer(
@@ -233,7 +258,6 @@ export function createWaits({
   async function keep(key, wait) {
     if (waits.has(key)) return;
     waits.set(key, { ...wait, blockers: [], answers: true, since: now() });
-    save();
     log(`${key}: waits for the answers to its open questions`);
   }
 
@@ -247,9 +271,7 @@ export function createWaits({
     if (!wait?.answers) return;
     if (reserved.has(key)) return void reserved.get(key).missed.push(() => answered(repo, number));
     const item = revive(wait.item);
-    waits.delete(key);
-    save();
-    const started = await resume(item);
+    const started = await releasing(key, () => resume(item));
     if (started === "answers") return keep(key, wait);
     log(`${key}: ${started ? "answered, starting" : "answered, not started"}`);
     if (started) await answer(item, "The open questions are answered: starting.");
@@ -360,12 +382,30 @@ export function createWaits({
       repo: spelled(w.repo),
       item: { ...w.item, repo: spelled(w.item.repo) },
     });
-    if (respellMap(waits, spelled, fix)) save();
+    respellMap(waits, spelled, fix);
   }
+
+  // At a start, once the queue and the runs going are back: a wait whose comment is queued or
+  // running (`queuedIds`, their queueIds) was released by a copy killed before it deleted it
+  // (releasing()): dropped, without a word, as the comment goes on.
+  function dedupe(queuedIds) {
+    for (const [key, wait] of [...waits]) {
+      if (!queuedIds.has(wait.item?.queueId)) continue;
+      waits.delete(key);
+      log(`${key}: its wait was released already, its comment queued`);
+    }
+  }
+
+  // The queueIds of the comments the dashboard took out of the queue for a wait (hold()): a copy
+  // killed before the queue was written without them finds them there too (restart.mjs
+  // loadQueue() leaves them to the wait).
+  const unqueued = () => new Set([...waits.values()].flatMap((w) => w.unqueued ?? []));
 
   return {
     keys,
     respell,
+    dedupe,
+    unqueued,
     request,
     hold,
     cancel,
@@ -381,5 +421,7 @@ export function createWaits({
     list,
     stateOf,
     get: (key) => waits.get(key),
+    // Once the task's wait, as it is now, is in the store (storeMap()'s written()).
+    written: (key) => waits.written?.(key) ?? Promise.resolve(),
   };
 }

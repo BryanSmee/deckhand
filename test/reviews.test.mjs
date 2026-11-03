@@ -39,6 +39,8 @@ import {
   tempDir,
   testConfig,
   hasOpa,
+  fileMap,
+  mapStore,
 } from "./helpers.mjs";
 
 const config = { ...testConfig(), bot: "deckhand-app[bot]" };
@@ -387,7 +389,7 @@ function setup(
   const accepted = [];
   const read = parseRepoConfig(yaml, config);
   const reviews = createReviews({
-    path,
+    reviewed: fileMap(path),
     config: settings,
     repoSettings: async () => later?.() ?? read,
     log,
@@ -1756,7 +1758,7 @@ test("review loop: in review while a ready pull request's review is decided, bef
   // The repo's settings, read from GitHub first: in review already.
   const read = s.read;
   s.reviews = createReviews({
-    path: s.path,
+    reviewed: fileMap(s.path),
     config,
     repoSettings: async () => {
       seen.push(reviewLoop(s.reviews.entry("org/repo", 5))?.loop);
@@ -1832,7 +1834,12 @@ const RED = {
 
 // The reviewer with the CI step: a fake GitHub whose `gh` answers can change (`pr`, `runs`,
 // `runsStatus`, `jobs`, `issueLabels`), replies and the queue kept, a fake clock.
-function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: over = {} } = {}) {
+// `reviewed`: the Map the loops are kept in, else one in `path`.
+function ciSetup(
+  t,
+  yaml = CI,
+  { path, reviewed, busy = () => false, policies = null, gh: over = {} } = {},
+) {
   let time = 1_800_000_000_000;
   const gh = {
     pr: { number: 5, state: "open", draft: false, labels: [], ...OWN, ...over.pr },
@@ -1873,7 +1880,7 @@ function ciSetup(t, yaml = CI, { path, busy = () => false, policies = null, gh: 
   const scheduled = [];
   const read = parseRepoConfig(yaml, config);
   const reviews = createReviews({
-    path: path ?? join(tempDir(t), "reviews.json"),
+    reviewed: reviewed ?? fileMap(path ?? join(tempDir(t), "reviews.json")),
     config: { ...config, needsInputLabel: "needs-input" },
     repoSettings: async () => read,
     // The loop's state as each item is queued: an auto-picked task's follow-up keeps its
@@ -2017,6 +2024,19 @@ test("review.ci: no review while runs go; a completed run on the head decides, a
   await next.runDone();
   await next.reviews.tick();
   assert.equal(next.accepted.length, 1);
+});
+
+test("review.ci: a review waiting for CI in the store, decided once by the copy after a handover", async (t) => {
+  const maps = mapStore();
+  const s = ciSetup(t, CI, { reviewed: await maps.map("reviews") });
+  assert.equal(await s.ready(), null);
+  const next = ciSetup(t, CI, { reviewed: await maps.again("reviews"), gh: { runs: [GREEN] } });
+  assert.equal(next.entry().ciWaiting.sha, "sha-1");
+  // Its tick and the run's delivery both decide: one review.
+  await Promise.all([next.reviews.tick(), next.runDone()]);
+  await next.reviews.tick();
+  assert.equal(next.of("review").length, 1);
+  assert.equal((await maps.again("reviews")).get("org/repo#pr-5").ciWaiting, undefined);
 });
 
 test("review.ci: passed or no run starts the review; no run waits a minute first", async (t) => {

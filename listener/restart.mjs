@@ -75,6 +75,9 @@ function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
   return { repo, id, kind, number, name, base, discussionId, settings };
 }
 
+// How often queueWritten() tries the queue's write again while the store is away.
+export const QUEUE_RETRY_MS = 5000;
+
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
 export const RESTORE_WAIT_MS = 10_000;
 
@@ -280,6 +283,33 @@ export function createRestart(ctx) {
     else moving.delete(live);
   }
 
+  // Comments taken out of the queue for a wait (work.mjs requeue(), runs.mjs unqueue()): task →
+  // [items], still written with the queue until `until` resolves (the wait is in the store),
+  // then written without them. One pair: the wait first, then the queue, so a listener killed in
+  // between leaves them in both, which loadQueue() leaves to the wait, never in neither.
+  const parked = new Map();
+  function park(task, items, until) {
+    parked.set(task, [...(parked.get(task) ?? []), ...items]);
+    const done = () => {
+      const left = (parked.get(task) ?? []).filter((item) => !items.includes(item));
+      if (left.length) parked.set(task, left);
+      else parked.delete(task);
+      saveQueue();
+    };
+    Promise.resolve(until).then(done, done);
+  }
+
+  // Once the queue is in the store with what is queued by now, the comment queue() pushes after
+  // the await this turn ends included (tasks.mjs): what a change written after the queue waits
+  // for (a wait released, a brainstorm ended: waits.mjs, brainstorms.mjs). Tried again every
+  // QUEUE_RETRY_MS while the store is away, until written or the lease is lost (`ctx.held()`).
+  function queueWritten() {
+    const sleep = ctx.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    return new Promise((resolve) => setImmediate(resolve)).then(async () => {
+      while (!(await saveQueue()) && (ctx.held?.() ?? true)) await sleep(QUEUE_RETRY_MS);
+    });
+  }
+
   function takenBy(live) {
     if (!live) return [];
     if (live.over) moving.delete(live);
@@ -290,7 +320,7 @@ export function createRestart(ctx) {
     const saved = {};
     for (const [key, t] of tasks) {
       // Once each: one a run put back in `pending` may still be moving.
-      const all = [...new Set([...takenBy(t.live), ...t.pending])];
+      const all = [...new Set([...takenBy(t.live), ...(parked.get(t) ?? []), ...t.pending])];
       if (!all.length && !Object.keys(t.next).length) continue;
       const pending = all.map((item) => plainWith(item, eyesOf(item)));
       // The comments' text and authors: the store is the listener's own (its files the
@@ -305,8 +335,9 @@ export function createRestart(ctx) {
   async function loadQueue() {
     const saved = await readQueue();
     const spell = spelled ?? respellRuns(spellings(await records()));
-    // A comment a run took as the listener stopped is that run's (restoreRuns()).
-    const taken = new Set();
+    // A comment a run took as the listener stopped is that run's (restoreRuns()), one the
+    // dashboard moved to a wait the wait's (park()).
+    const taken = new Set(ctx.waits?.unqueued?.() ?? []);
     for (const task of tasks.values()) {
       for (const item of task.live?.handled ?? []) if (item.queueId) taken.add(item.queueId);
     }
@@ -654,6 +685,8 @@ export function createRestart(ctx) {
     saveQueue,
     loadQueue,
     take,
+    park,
+    queueWritten,
     eyesSaved,
     removeOnceSaved,
     keepQueued,

@@ -13,7 +13,7 @@ import { createAnalysis } from "../listener/analysis.mjs";
 import { MAX_TEXT } from "../listener/answers.mjs";
 import { board as boardOf } from "../listener/board.mjs";
 import { MARKER, parseKey, workItem } from "../listener/events.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { tempDir, testConfig, fileMap } from "./helpers.mjs";
 
 const ORIGIN = "https://deckhand.example.com";
 
@@ -164,7 +164,7 @@ function setup({
   };
   w.path = join(config.dataDir, "waits.json");
   w.waits = createWaits({
-    path: w.path,
+    waits: fileMap(w.path),
     github,
     reply,
     received: (i) => w.eyes.push(i.comment.id),

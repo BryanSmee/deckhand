@@ -5,13 +5,14 @@
 // without what users outside the allowlist wrote: with `review.fix`, its findings become the
 // message of a run that can push (docs/security.md, Review fix runs).
 //
-// No loops: each pull request's reviewed head commit is kept in reviews.json, so a redelivered
+// No loops: each pull request's reviewed head commit is kept in the orchestrator's store
+// (`reviews`, lib/store-map.mjs), so a redelivered
 // webhook, a restart or the same commit again never pays for a second review. The App's own
 // review is a bot's `pull_request_review`, which workItem() ignores: a "request changes"
 // starts nothing by itself. With `review.fix`, a review that requests changes starts a work
 // run that addresses it, and the listener reviews what it pushed (fixed()): review, fix,
 // review, as many fix runs as `review.fix` says (`true`: one; at most the operator's
-// MAX_FIX_ROUNDS), each counted in reviews.json (`fixes`) before it is queued. Its push is a
+// MAX_FIX_ROUNDS), each counted in its entry (`fixes`) before it is queued. Its push is a
 // `synchronize`, which starts no review by itself. The loop stops at a review with nothing
 // above `review.max_allowed_severity`, when the rounds run out (roundsOut()), or at a fix that
 // ended badly, a policy's refusal, a busy task or one waiting for input: at most N fix runs
@@ -61,7 +62,6 @@ import { readOf, runInput } from "./run-policy.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
 import { ownReady, requestInput, reviewersFor, runFields } from "./reviewers.mjs";
 import { respellMap } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // The repo's `severity: *` labels' names, most severe first.
 export const SEVERITIES = ["critical", "high", "medium", "low"];
@@ -1176,7 +1176,7 @@ const afterFixes = (n) => (n > 1 ? `after ${n} fix runs` : "after the fix run");
 const severities = (findings) =>
   SEVERITIES.filter((s) => findings.some((f) => f.severity === s)).join(", ");
 
-// How many fix runs a pull request's entry in reviews.json counts: `fixes`, or 1 in an entry
+// How many fix runs a pull request's entry (`reviews`) counts: `fixes`, or 1 in an entry
 // from before the rounds (fixedAt); and how many of them had their review queued (fixed()),
 // the round of an old entry with rereviewAt over.
 const fixesOf = (entry) => entry?.fixes ?? (entry?.fixedAt ? 1 : 0);
@@ -1189,7 +1189,7 @@ const reviewedFixesOf = (entry) => entry?.reviewedFixes ?? (entry?.rereviewAt ? 
 const ROUNDS_KEPT = 20;
 
 // Where the fix loop of a pull request is, for the dashboard (board.mjs), from its entry in
-// reviews.json and `step`, the reason of its task's run going or queued ("review",
+// `reviews` and `step`, the reason of its task's run going or queued ("review",
 // "review-fix", "ci-fix"; null for none, or a maintainer's comment) → { loop, round, rounds,
 // history, manual? } or null when Deckhand never reviewed it. `loop`:
 //   reviewing, fixing  a review or fix run of the loop is queued or running
@@ -1620,9 +1620,9 @@ export function openedBy(config, pr) {
 // `merged(repo, pr)`: a pull request it merged, for the dashboard; `sleep(ms)`: the wait
 // between asks of `mergeable_state`; `policies`: the policies' engine (policies.mjs), none
 // without; `decided(repo, pr, entry)`: a decision a policy was asked for, for the task's page
-// (decisions.mjs).
+// (decisions.mjs). `reviewed`: the Map each pull request's loop is kept in (storeMap()'s).
 export function createReviews({
-  path,
+  reviewed = new Map(),
   config,
   repoSettings,
   accept,
@@ -1658,7 +1658,6 @@ export function createReviews({
   // one asked for there, whose push is always reviewed (startFix()).
   // Entries from before the rounds have fixedAt and rereviewAt (fixesOf()); from before the
   // dashboard's, no `rounds`.
-  const reviewed = persistentMap(path);
   // Pull request key → { step } while the listener decides about its loop's step, in memory
   // (deciding()): a webhook's review until it is queued, a run's end until what follows it is.
   const decisions = new Map();
@@ -1684,14 +1683,11 @@ export function createReviews({
   // still have a review or fix run running or queued. A listener stopped while it decided what
   // follows a run never will: the run it settles was over, and nothing settles it now.
   function forgetSteps(going) {
-    let changed = false;
     for (const [k, v] of reviewed) {
       const at = parseKey(k);
       if (!v.next || (at && going(at.repo, at.number))) continue;
       reviewed.set(k, { ...v, next: undefined, nextAt: undefined });
-      changed = true;
     }
-    if (changed) reviewed.save();
   }
 
   // A `pull_request` delivery: a review run, if the repo's `review.on` asks for one and this
@@ -1756,7 +1752,6 @@ export function createReviews({
   function keep(key, fields) {
     const entry = reviewed.get(key);
     reviewed.set(key, { ...entry, at: entry?.at ?? now(), ...fields });
-    reviewed.save();
   }
 
   // A review the policies failed to decide (decideReview()), asked again with the pull request
@@ -1901,7 +1896,6 @@ export function createReviews({
     // Not the one it updates: what it counted so far still holds.
     for (const [k, v] of reviewed) if (v.at < cutoff && k !== key) reviewed.delete(k);
     reviewed.set(key, { ...reviewed.get(key), head, at: now(), ...fields });
-    reviewed.save();
   }
 
   // A review was posted on pull request `number` (`posted`: postReview()'s result, with the
@@ -2308,7 +2302,7 @@ export function createReviews({
 
   // The gates and the merge, or the refusal, for the pull request `key` as `waiting` has it
   // ({ sha, since, base, review, fixes, allowed, pr }). Only Actions runs still going
-  // (mergeRefusal()'s `pending`): kept waiting in reviews.json instead, mergeAt cleared,
+  // (mergeRefusal()'s `pending`): kept waiting in its entry instead, mergeAt cleared,
   // decided again when a run completes (checksDone()) or by tick(), until `review.merge_wait`
   // minutes after `since`. `again`: a decision after waiting (recheck()), with `waiting` still
   // saved until it decides, so a listener stopped meanwhile asks again: a pull request closed
@@ -2814,7 +2808,7 @@ export function createReviews({
 
   // The CI step (`review.ci: wait`) before an automatic review of `pr`: without it, the review
   // is queued at once. With it, the pull request waits for its head commit's Actions runs
-  // (`ciWaiting`, kept in reviews.json: a restart goes on waiting), decided now, then again by
+  // (`ciWaiting`, kept in its entry: a restart goes on waiting), decided now, then again by
   // checksDone(), pushed() and tick() (ciDecide()). → the review queued, a CI fix run's item,
   // or null (waiting, or stopped).
   // `afterCiFix`: `pr`'s head is what a CI fix run pushed ("pushed"), or the same commit whose
@@ -3210,7 +3204,7 @@ export function createReviews({
         ...(pickups.length && { pickups }),
       };
     };
-    if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();
+    respellMap(reviewed, spelled, undefined, merge);
   }
 
   // `/mode policy` on pull request `number` (task-modes.mjs): every rule evaluated on its input

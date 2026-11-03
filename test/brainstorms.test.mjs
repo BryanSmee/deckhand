@@ -1,23 +1,19 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { mock, test } from "node:test";
 import { createBrainstorms, createIssueModes, REPLY_GRACE_MS } from "../listener/brainstorms.mjs";
-import { mapStore, tempDir } from "./helpers.mjs";
+import { mapStore } from "./helpers.mjs";
 
-const saved = (path) => JSON.parse(readFileSync(path, "utf8"));
-
-test("brainstorms: active, idle once the deadline passes, restored, stopped, ended", (t) => {
+test("brainstorms: active, idle once the deadline passes, restored, stopped, ended", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
-  const path = join(tempDir(t), "brainstorms.json");
+  const maps = mapStore();
   let busy = false;
-  const make = () =>
-    createBrainstorms({ path, idleMs: 60000, busy: () => busy, log: () => {}, now: Date.now });
-  const brainstorms = make();
+  const options = { idleMs: 60000, busy: () => busy, log: () => {}, now: Date.now };
+  const brainstorms = createBrainstorms({ brainstorms: await maps.map("brainstorms"), ...options });
+  const stored = async () => Object.fromEntries(await maps.again("brainstorms"));
   const key = "org/repo#12";
   assert.equal(brainstorms.activate(key, { repo: "org/repo", number: 12 }), false);
   assert.equal(brainstorms.get(key).status, "active");
-  assert.deepEqual(saved(path)[key], {
+  assert.deepEqual((await stored())[key], {
     repo: "org/repo",
     number: 12,
     status: "active",
@@ -33,32 +29,78 @@ test("brainstorms: active, idle once the deadline passes, restored, stopped, end
   assert.equal(brainstorms.get(key).deadline, 60000 + REPLY_GRACE_MS);
   t.mock.timers.tick(REPLY_GRACE_MS);
   assert.equal(brainstorms.get(key).status, "idle");
-  assert.equal(saved(path)[key].status, "idle");
+  assert.equal((await stored())[key].status, "idle");
 
-  // The next comment restores the session; a new listener reads the state back.
+  // The next comment restores the session; the next copy reads the state back.
   assert.equal(brainstorms.activate(key, { repo: "org/repo", number: 12 }), true);
   brainstorms.stop(key);
-  assert.deepEqual(make().list(), [
+  const again = createBrainstorms({ brainstorms: await maps.again("brainstorms"), ...options });
+  assert.deepEqual(again.list(), [
     { key, repo: "org/repo", number: 12, status: "stopped", deadline: 240000 },
   ]);
   brainstorms.end(key);
   assert.equal(brainstorms.get(key), undefined);
-  assert.deepEqual(saved(path), {});
+  assert.deepEqual(await stored(), {});
   brainstorms.end(key); // nothing to end
 });
 
-test("brainstorms: a restarted listener arms the idle timer of active ones", (t) => {
+test("brainstorms: the next copy arms the idle timer of active ones, which fires once", async () => {
   mock.timers.enable({ apis: ["setTimeout", "Date"] });
   try {
-    const path = join(tempDir(t), "brainstorms.json");
-    const options = { path, idleMs: 1000, busy: () => false, log: () => {}, now: Date.now };
-    createBrainstorms(options).activate("org/repo#1", { repo: "org/repo", number: 1 });
-    const again = createBrainstorms(options);
-    mock.timers.tick(1000);
-    assert.equal(again.get("org/repo#1").status, "idle");
+    const maps = mapStore();
+    const copy = async (logged = []) => ({
+      logged,
+      brainstorms: createBrainstorms({
+        brainstorms: await maps.again("brainstorms"),
+        idleMs: 1000,
+        busy: () => false,
+        log: (line) => logged.push(line),
+        now: Date.now,
+      }),
+    });
+    (await copy()).brainstorms.activate("org/repo#1", { repo: "org/repo", number: 1 });
+    // A deadline that passed while no copy acted.
+    await maps.store.set("brainstorms/org/repo#2", {
+      repo: "org/repo",
+      number: 2,
+      status: "active",
+      deadline: Date.now() - 1,
+    });
+    // The lease handed over: the next copy arms the timers from the deadlines.
+    const { brainstorms, logged } = await copy();
+    mock.timers.tick(0);
+    assert.equal(brainstorms.get("org/repo#2").status, "idle");
+    mock.timers.tick(400);
+    assert.equal(brainstorms.get("org/repo#1").status, "active");
+    mock.timers.tick(5000);
+    assert.equal(brainstorms.get("org/repo#1").status, "idle");
+    assert.deepEqual(logged, ["org/repo#2: brainstorm idle", "org/repo#1: brainstorm idle"]);
+    assert.equal((await maps.again("brainstorms")).get("org/repo#1").status, "idle");
   } finally {
     mock.timers.reset();
   }
+});
+
+test("brainstorms: ended by a comment, deleted from the store once the queue has that comment", async () => {
+  const maps = mapStore();
+  const options = { idleMs: 60000, busy: () => false, log: () => {} };
+  let written;
+  const queueSaved = () => new Promise((resolve) => (written = resolve));
+  const brainstorms = createBrainstorms({
+    brainstorms: await maps.map("brainstorms"),
+    queueSaved,
+    ...options,
+  });
+  brainstorms.activate("org/repo#4", { repo: "org/repo", number: 4 });
+  brainstorms.end("org/repo#4");
+  assert.equal(brainstorms.get("org/repo#4"), undefined);
+  // Killed before the queue was written: the brainstorm is still in the store, as is the
+  // comment that ended it in the queue (or not yet: it came again then).
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(await maps.store.get("brainstorms/org/repo#4").then((b) => b?.status), "active");
+  written();
+  await maps.settled();
+  assert.equal(await maps.store.get("brainstorms/org/repo#4"), null);
 });
 
 test("issue modes: kept across a restart, removed with null", async () => {
@@ -73,10 +115,10 @@ test("issue modes: kept across a restart, removed with null", async () => {
 
 test("respell: brainstorms and modes saved under another spelling move, timers and all", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
-  const dir = tempDir(t);
+  const maps = mapStore();
   const spelled = (repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo);
   const brainstorms = createBrainstorms({
-    path: join(dir, "brainstorms.json"),
+    brainstorms: await maps.map("brainstorms"),
     idleMs: 60000,
     busy: () => false,
     log: () => {},
@@ -88,9 +130,8 @@ test("respell: brainstorms and modes saved under another spelling move, timers a
   assert.equal(brainstorms.get("Org/repo#12").repo, "Org/repo");
   t.mock.timers.tick(60000);
   assert.equal(brainstorms.get("Org/repo#12").status, "idle");
-  assert.deepEqual(Object.keys(saved(join(dir, "brainstorms.json"))), ["Org/repo#12"]);
+  assert.deepEqual([...(await maps.again("brainstorms")).keys()], ["Org/repo#12"]);
 
-  const maps = mapStore();
   const modes = createIssueModes(await maps.map("modes"));
   modes.set("org/repo#3", "audit");
   modes.respell(spelled);

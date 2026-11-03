@@ -1274,3 +1274,62 @@ test("a run's lines carry its repository, issue and run, from its start and once
   const picked = lines.find((l) => /picked up/.test(l.line));
   assert.equal(picked.run, id);
 });
+
+test("a queued comment moved to a wait: in every write of the queue until the wait is written, then out; a start leaves it to the wait", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const ctx = queueContext(t, dir, store);
+  const task = newTask({ repo: "org/repo", id: "7", kind: "issue", number: 7, base: "main" });
+  ctx.tasks.set("org/repo#7", task);
+  const item = queued("7", { queueId: "q-1", eyes: Promise.resolve(41) });
+  task.pending.push(item);
+  await ctx.saveQueue();
+  const ids = async () =>
+    ((await store.get(QUEUE_KEY))["org/repo#7"]?.pending ?? []).map((i) => i.queueId);
+  let waitWritten;
+  ctx.park(task, [item], new Promise((resolve) => (waitWritten = resolve)));
+  task.pending.splice(0);
+  await ctx.saveQueue();
+  assert.deepEqual(await ids(), ["q-1"]);
+  // Killed now: in both. The next copy leaves it to the wait (waits.mjs unqueued()).
+  const next = queueContext(t, dir, store);
+  next.waits = { unqueued: () => new Set(["q-1"]) };
+  await next.loadQueue();
+  assert.equal(next.tasks.get("org/repo#7")?.pending.length ?? 0, 0);
+  // Not killed: the wait written, the queue goes on without it.
+  waitWritten();
+  await new Promise((resolve) => setImmediate(resolve));
+  await ctx.saveQueue();
+  assert.deepEqual(await ids(), []);
+});
+
+test("queueWritten(): once the queue is written with what this turn queued, tried again while the store is away", async (t) => {
+  const dir = tempDir(t);
+  const store = fileStore();
+  const set = store.set;
+  let down = true;
+  store.set = async (...args) => {
+    if (down) throw new Error("the store is away");
+    return set(...args);
+  };
+  const ctx = queueContext(t, dir, store);
+  const sleeps = [];
+  ctx.sleep = () => new Promise((resolve) => sleeps.push(resolve));
+  const task = newTask({ repo: "org/repo", id: "7", kind: "issue", number: 7, base: "main" });
+  ctx.tasks.set("org/repo#7", task);
+  let written = false;
+  ctx.queueWritten().then(() => (written = true));
+  // Queued after the call, in the same turn (tasks.mjs queue() after modeOf()).
+  await Promise.resolve();
+  task.pending.push(queued("7", { queueId: "q-1" }));
+  while (!sleeps.length) await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(written, false);
+  down = false;
+  sleeps.shift()();
+  while (!written) await new Promise((resolve) => setImmediate(resolve));
+  const saved = await store.get(QUEUE_KEY);
+  assert.deepEqual(
+    saved["org/repo#7"].pending.map((i) => i.queueId),
+    ["q-1"],
+  );
+});
