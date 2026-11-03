@@ -1390,6 +1390,30 @@ those (`deckhand_lease_held` 0), and its counters stay at 0 until it takes over.
 copy picks up after a handover counts as started on the copy that started it, and as finished on
 the one that saw it end: sum them over both.
 
+### The broker's
+
+The tokens it signs, renews and refuses (`broker/metrics.mjs`). Each copy counts what it
+answered: add the copies up, but for `deckhand_runs_live`, their shared store's (take the max).
+
+| Metric                          | Labels   | What                                                                                                                                                                                                                                                                                                                                                                  |
+| ------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deckhand_tokens_issued_total`  | `kind`   | tokens signed: `run` (a run's first, and each renewal that signs a new one), `agent` (a run's agent token, at its start), `service` (one per service a service's token is for)                                                                                                                                                                                        |
+| `deckhand_token_renewals_total` | `result` | sandboxes' renewals: `renewed` (a new token), `again` (the one signed less than a minute before), `refused`                                                                                                                                                                                                                                                           |
+| `deckhand_tokens_refused_total` | `reason` | tokens refused, a run's or a service's: `expired`, `invalid` (none, not one, another key's or another service's), `run_over` (its run ended, or isn't held), `wrong_sandbox` (a run token from another sandbox), `unknown_caller` (a service token from another service's network, or asked from none's), `not_allowed` (an endpoint, a token a service may not have) |
+| `deckhand_runs_live`            |          | the live runs the broker holds (a run whose record expired, its end never said, no longer counts)                                                                                                                                                                                                                                                                     |
+| `deckhand_inbox_polls_open`     |          | the sandboxes' inbox long polls this copy holds open                                                                                                                                                                                                                                                                                                                  |
+
+### The policy service's
+
+Its decisions and the operator's policies (`policy-service/metrics.mjs`). Each copy counts what
+it answered: add the copies up.
+
+| Metric                             | Labels             | What                                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deckhand_policy_decisions_total`  | `policy`, `result` | decisions evaluated. `policy`: the decision (`run`, `merge`, `review`, `fix`, `link_branch`, `request_review`, `github`, `push`, `grant`), or `capabilities` (what a run gets as it starts). `result`: `allow`, `deny`, or `error` (the policies don't compile, took over 2 s, gave a rule the wrong type), which the caller refuses; the capabilities' `allow` is "evaluated"   |
+| `deckhand_policy_decision_seconds` | `policy`           | how long opa took on a decision, once its set was loaded: cut at 2 s, so the top buckets are the ones to watch                                                                                                                                                                                                                                                                   |
+| `deckhand_policy_reloads_total`    | `result`           | loads of the operator's policies (the first a decision reads, then each change to `policy/` in the grants folder): `ok`, or `error` (they can't be read or don't compile), checked with an `opa check` of their own when `METRICS_PORT` is set. There is no last good set to fall back on: until they are fixed, every decision is refused, as [security.md](security.md) has it |
+
 ## Health checks
 
 Every service in `compose.yaml` has a health check, which calls its own `/ready` (or `/health`)

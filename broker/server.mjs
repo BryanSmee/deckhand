@@ -33,6 +33,7 @@ import { publishKey, signingKey } from "../lib/tokens.mjs";
 import { createCallers, inClusterReview } from "./callers.mjs";
 import { createFiles } from "./files.mjs";
 import { createBrokerServer } from "./http.mjs";
+import { brokerMetrics } from "./metrics.mjs";
 import { createRuns } from "./runs.mjs";
 
 export const DRAIN_MS = 30_000;
@@ -56,7 +57,8 @@ export function storeSecrets(key) {
 
 // The broker's parts on `store`, with `key`: what the tests start too. → { server, runs, files }.
 // `keysDir`: where its public key is published, for the services that check its tokens offline;
-// `blobs`: where the screenshots go (lib/blobs.mjs: the store's own blobs by default).
+// `blobs`: where the screenshots go (lib/blobs.mjs: the store's own blobs by default);
+// `registry`: where its metrics are declared (../lib/metrics.mjs), none by default.
 export function createBroker({
   store,
   blobs,
@@ -68,6 +70,7 @@ export function createBroker({
   log = () => {},
   // What GET /health says (../lib/health.mjs): its start, version and warnings.
   health,
+  registry = null,
 }) {
   if (keysDir) {
     mkdirSync(keysDir, { recursive: true });
@@ -75,6 +78,7 @@ export function createBroker({
   }
   const runs = createRuns({ store, key, now, expired: (id) => files.remove(id) });
   const files = createFiles({ store, blobs, runs, now, sleep });
+  const metrics = registry ? brokerMetrics(registry, { runs }) : undefined;
   let draining = false;
   const server = createBrokerServer({
     runs,
@@ -86,6 +90,7 @@ export function createBroker({
     now,
     sleep,
     log,
+    metrics,
     ...(health && { health }),
   });
   server.startDraining = () => (draining = true);
@@ -127,11 +132,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       log,
     });
     const graceMs = drainMs(env.DRAIN_SECONDS);
-    startMetrics({ service: "broker", port: metricsPortOf(env), log });
+    const { registry } = startMetrics({ service: "broker", port: metricsPortOf(env), log });
     const keysDir = env.SERVICE_KEYS_DIR || null;
     const health = { ...healthInfo(), warnings };
     started = {
-      ...createBroker({ store, blobs, key, callers, keysDir, log, health }),
+      ...createBroker({ store, blobs, key, callers, keysDir, log, health, registry }),
       graceMs,
       key,
     };

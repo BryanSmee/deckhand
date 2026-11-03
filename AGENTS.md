@@ -103,7 +103,8 @@ runner/       the runner service (#503): the only one with the Docker socket or 
               (what the orchestrator calls it with), logs.mjs, events.mjs, spec-check.mjs,
               builds.mjs; it runs listener/runner/'s backends and images.mjs
 policy-service/ the policy service (#501): long-lived `opa` servers evaluating the operator's and
-              the repos' policies for the orchestrator; its own image, no network but its callers'
+              the repos' policies for the orchestrator; its own image, no network but its callers';
+              metrics.mjs (its decisions, their time, the operator's policies' loads)
 policy/       Deckhand's default policies (*.rego), copied into the policy service's image
 dashboard/    the dashboard: Preact + Vite + TypeScript, built to dist/ in edge's image
 sandbox/      base image: Dockerfile, entrypoint.sh, draft-pr.sh, pre-push, git credential
@@ -114,7 +115,8 @@ prompts/      sandbox.md (generic rules), idea.md, bug.md, discussion.md, brains
               image)
 proxy/        egress proxy for sandboxes
 broker/       the broker service: the tokens' signing key, the live runs and their files, the
-              endpoints sandboxes call about their own run (docs/services.md)
+              endpoints sandboxes call about their own run (docs/services.md); metrics.mjs (the
+              tokens signed, renewed and refused, the live runs, the inbox polls)
 models/       the models service (#504): the only one holding the agents' credentials; the
               agents' API endpoints (upstream.mjs, anthropic.mjs, openai.mjs, google.mjs), the
               plans' logins (chatgpt.mjs, antigravity-login.mjs, logins.mjs: sealed in its
