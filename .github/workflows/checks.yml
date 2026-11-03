@@ -123,6 +123,7 @@ jobs:
           node --check policy-service/service.mjs sandbox/deckhand-inbox sandbox/deckhand-files sandbox/deckhand-tagged
           # deploy/kubernetes's one script, by a glob: the workflow gate refuses its name.
           for f in deploy/kubernetes/*.mjs; do node --check "$f"; done
+          node --check deploy/kubernetes-e2e/fakes.mjs
       - name: sh -n
         run: sh -n deploy/kubernetes/check-isolation.sh
       - name: bash -n
@@ -132,7 +133,7 @@ jobs:
             sandbox/agents/antigravity/refresh sandbox/agents/npm-install \
             sandbox/agents/release-install sandbox/deckhand-token sandbox/gh \
             sandbox/git-credential-deckhand sandbox/pre-push engine/entrypoint.sh \
-            test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh; do
+            test/fixtures/fake-docker.sh test/fixtures/fake-opa.sh deploy/kubernetes-e2e/run.sh; do
             bash -n "$f" || exit 1
           done
 

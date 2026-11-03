@@ -67,7 +67,16 @@ async function fakeGitHub(t, answer = () => null) {
 async function service(
   t,
   github,
-  { store, key, bound = null, gatewayOptions, app = true, env = {}, lateKeys = false } = {},
+  {
+    store,
+    key,
+    bound = null,
+    gatewayOptions,
+    app = true,
+    env = {},
+    lateKeys = false,
+    brokerReady,
+  } = {},
 ) {
   const dir = tempDir(t);
   if (app) {
@@ -88,7 +97,7 @@ async function service(
     config,
     store,
     app: createAppHolder({ dir, api: `${github.url}/api/v3` }),
-    broker: { keys: () => keys, serviceKeys: () => keys, unknownKey },
+    broker: { keys: () => keys, serviceKeys: () => keys, unknownKey, ready: brokerReady },
     bound,
     policies: allowingPolicies,
     mirrorDir: join(dir, "mirrors"),
@@ -781,4 +790,21 @@ test("an installation token a run's call used: its fingerprint to the orchestrat
     (e) => e.event.type === "token",
   );
   assert.equal(again.length, 1);
+});
+
+test("/ready: out of rotation until the broker answered the copy, and once it drains (#391)", async (t) => {
+  const github = await fakeGitHub(t);
+  let answered = false;
+  const copy = await service(t, github, {
+    store: openStore("memory:"),
+    key: testKey(),
+    brokerReady: () => answered,
+  });
+  const ready = async () => (await fetch(`${copy.url}/ready`)).status;
+  // A new pod whose calls don't get out yet (k3s's NetworkPolicies, a moment after its start).
+  assert.equal(await ready(), 503);
+  answered = true;
+  assert.equal(await ready(), 200);
+  copy.server.startDraining();
+  assert.equal(await ready(), 503);
 });

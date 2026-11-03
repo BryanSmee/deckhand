@@ -256,6 +256,7 @@ export function createModels({
     keys,
     bound,
     draining: () => draining,
+    waiting: () => !(broker.ready?.() ?? true),
     now,
     log,
   });

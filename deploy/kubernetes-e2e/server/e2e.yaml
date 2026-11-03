@@ -1,0 +1,10 @@
+# The end-to-end check's settings (run.sh): alice starts runs on org/repo, nothing else runs on
+# its own (no onboarding, no conflict checks), and the fake model answers any model's name.
+allowed_users: [alice]
+allowed_repos: [org/repo]
+trigger: Deckhand
+sandbox_agent: claude
+sandbox_model: sonnet
+max_parallel: 2
+onboarding: false
+conflict_check_minutes: 0

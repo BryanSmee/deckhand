@@ -543,7 +543,8 @@ services:
       - github-runner
       - broker-github
       - policy-github
-    # 503 once it drains, as the broker's, the models service's and the policy service's.
+    # 503 once it drains, as the broker's, the models service's and the policy service's, and
+    # until the broker answered it (its keys, its service tokens), as the models service's.
     healthcheck:
       test: node -e "fetch('http://127.0.0.1:8080/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
       interval: 30s
@@ -734,7 +735,8 @@ services:
       # CA with which the proxy decrypts their HTTPS: its key never leaves this volume
       # (docs/security.md#the-egress-cache). EGRESS_CACHE_MAX in environment sizes it.
       - egress-cache:/cache
-    # Its /ready, a plain HTTP request to itself: 503 once it drains.
+    # Its /ready, a plain HTTP request to itself: 503 once it drains, and until the broker
+    # answered it (its service tokens).
     healthcheck:
       test: node -e "fetch('http://127.0.0.1:3128/ready').then(r=>process.exit(+!r.ok),()=>process.exit(1))"
       interval: 30s
