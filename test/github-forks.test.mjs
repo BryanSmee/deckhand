@@ -1094,12 +1094,20 @@ test(
       "3",
     );
     assert.equal((await sh("git -C whole fetch -q origin refs/pull/8/head")).code, 0);
-    // A clone and a fetch, whatever number of pack requests they took; an up-to-date fetch and an
-    // ls-remote are git commands too.
+    // The clone, once whatever number of pack requests it took; a fetch of what the clone has
+    // already, an up-to-date fetch and an ls-remote bring no pack: not counted.
     assert.ok(packs > 2, String(packs));
     assert.equal((await sh("git -C whole fetch -q origin")).code, 0);
     assert.equal((await sh(`git ls-remote ${via} >/dev/null`)).code, 0);
-    assert.deepEqual(ops, ["fetch ok", "fetch ok", "fetch ok", "fetch ok"]);
+    assert.deepEqual(ops, ["fetch ok"]);
+    // A fetch of a new commit: one more.
+    const pushed = await sh(
+      `cd src && echo 4 > f && git commit -qam 4 && git push -q ${repo} main`,
+    );
+    assert.equal(pushed.code, 0, pushed.out);
+    assert.equal((await sh("git -C whole fetch -q origin")).code, 0);
+    assert.deepEqual(ops, ["fetch ok", "fetch ok"]);
+    ops.length = 0;
     for (const what of ["refs/pull/7/head", forkSha]) {
       const fetched = await sh(`git -C whole fetch -q origin ${what}`);
       assert.notEqual(fetched.code, 0, what);
@@ -1108,12 +1116,17 @@ test(
         /remote error: Deckhand: pull request #7 is from a fork \(evil\/repo\)/,
       );
     }
+    // Refused at their pack request: refused, not ok.
+    assert.deepEqual(ops, ["fetch refused", "fetch refused"]);
+    ops.length = 0;
     const blobless = await sh(`git clone -q --filter=blob:none ${via} blobless`);
     assert.match(
       blobless.out,
       /remote error: Deckhand: \w+ isn't a commit on org\/repo's default branch/,
     );
     assert.match(blobless.out, /checkout failed/);
+    // Its commits and trees came; the checkout's lone blobs were refused.
+    assert.deepEqual(ops, ["fetch ok", "fetch refused"]);
 
     as(true);
     assert.equal(

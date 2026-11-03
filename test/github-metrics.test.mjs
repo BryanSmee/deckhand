@@ -1,12 +1,12 @@
 // The github service's metrics (../github/metrics.mjs): its API calls by caller and status, the
 // lowest rate limit GitHub's answers said, git operations, pushes refused, the mirrors' size.
 import assert from "node:assert/strict";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { githubMetrics } from "../github/metrics.mjs";
 import { createRegistry } from "../lib/metrics.mjs";
-import { tempDir } from "./helpers.mjs";
+import { isWindows, tempDir } from "./helpers.mjs";
 
 // A sample's value in `text`, or undefined when it has none.
 function sample(text, line) {
@@ -143,3 +143,23 @@ test("the mirrors' size: their files' bytes, read again a minute later; none yet
   clock += 60_000;
   assert.equal(sample(await render(), "deckhand_mirror_bytes"), 1015);
 });
+
+test(
+  "the mirrors' size follows no symlink, to a file or a folder",
+  { skip: isWindows && "symlinks need a privilege on Windows" },
+  async (t) => {
+    const dir = tempDir(t);
+    const outside = join(dir, "outside");
+    mkdirSync(outside);
+    writeFileSync(join(outside, "big"), "x".repeat(4096));
+    const mirrors = join(dir, "git-mirrors");
+    mkdirSync(mirrors);
+    writeFileSync(join(mirrors, "HEAD"), "abc");
+    symlinkSync(outside, join(mirrors, "folder"), "dir");
+    symlinkSync(join(outside, "big"), join(mirrors, "file"));
+    const { render } = setup({ mirrorDir: mirrors });
+    // The links' own few bytes at most, never what they point at.
+    const bytes = sample(await render(), "deckhand_mirror_bytes");
+    assert.ok(bytes >= 3 && bytes < 4096, String(bytes));
+  },
+);

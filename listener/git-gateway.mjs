@@ -407,11 +407,13 @@ export function createGitGateway({
       push: Array.isArray(claims.branches) && claims.branches.length > 0,
       fork: claims.fork === true,
     };
-    if (may.repo !== repo || !may.push) {
+    if (may.repo !== repo) {
       counted("run");
-      return may.push
-        ? fail(res, 403, `Deckhand: this run can only push to ${may.repo}`)
-        : fail(res, 403, "Deckhand: this run can't push");
+      return fail(res, 403, `Deckhand: this run can only push to ${may.repo}`);
+    }
+    if (!may.push) {
+      counted("run");
+      return fail(res, 403, "Deckhand: this run can't push");
     }
 
     if (service === "info/refs") {

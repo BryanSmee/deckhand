@@ -1728,6 +1728,17 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
     respond: (req, res) => {
       // Never answered: the sandbox gives up first.
       if (req.url.endsWith("/slow")) return true;
+      // Git: a round of negotiation, then the pack (protocol v2's packfile section); a repository
+      // GitHub fails.
+      if (req.url.startsWith("/down.git/")) return (void res.writeHead(503).end(), true);
+      if (req.url.endsWith("/git-upload-pack")) {
+        const last = req.headers["x-test-round"] === "last";
+        res.writeHead(200, { "content-type": "application/x-git-upload-pack-result" });
+        res.end(
+          last ? "0013acknowledgments\n0008NAK\n0001000dpackfile\n0009\x01PACK" : "0008NAK\n0000",
+        );
+        return true;
+      }
       if (!req.url.startsWith("/api/v3/repos/org/repo/issues")) return false;
       res.writeHead(req.url.endsWith("missing") ? 404 : 200, {
         "content-type": "application/json",
@@ -1743,12 +1754,16 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
   await (await gw.call("/api/v3/repos/org/repo/issues", { secret })).arrayBuffer();
   await (await gw.call("/api/v3/repos/org/repo/issues/missing", { secret })).arrayBuffer();
   await (await gw.call("/org/repo.git/info/refs?service=git-upload-pack", { secret })).text();
-  const pack = await gw.call("/org/repo.git/git-upload-pack", {
-    secret,
-    method: "POST",
-    body: "0000",
-  });
-  await pack.arrayBuffer();
+  for (const round of ["first", "last"]) {
+    const pack = await gw.call("/org/repo.git/git-upload-pack", {
+      secret,
+      method: "POST",
+      body: "0000",
+      headers: { "x-test-round": round },
+    });
+    await pack.arrayBuffer();
+  }
+  await (await gw.call("/down.git/info/refs?service=git-upload-pack", { secret })).text();
   assert.deepEqual(
     observed.map((o) => [o.caller, o.status, o.headers["x-ratelimit-remaining"], o.authorization]),
     [
@@ -1757,9 +1772,9 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
     ],
   );
   assert.ok(observed.every((o) => o.seconds >= 0));
-  // A git command reads the advertisement once: that is the fetch, not its pack requests
-  // (github-forks.test.mjs counts a real client's).
-  assert.deepEqual(ops, ["fetch ok"]);
+  // A fetch is the pack request whose answer carries the pack, not its advertisement nor a
+  // round of negotiation (github-forks.test.mjs counts a real client's); one GitHub fails, failed.
+  assert.deepEqual(ops, ["fetch ok", "fetch failed"]);
 
   // A call the sandbox gave up on before GitHub answered: counted, without a status.
   const aborted = new AbortController();
