@@ -5860,9 +5860,36 @@ mounts:
   });
 
   test("the maps behind timers and comments (#616): moved to the store, a wait across a handover started once, a deadline fired once", async (t) => {
-    const files = { "issue:77": JSON.stringify({ state: "open" }) };
+    const files = {
+      "issue:77": JSON.stringify({ state: "open" }),
+      "issue:80": JSON.stringify({ state: "open" }),
+    };
     // What a release before kept in its data volume, a file per map.
     const legacy = {
+      // A comment waiting for #80 (still open), saved before queueIds: it gets one.
+      waits: {
+        "org/repo#13": {
+          repo: "org/repo",
+          blockers: [80],
+          item: {
+            repo: "org/repo",
+            id: "13",
+            kind: "issue",
+            number: 13,
+            trigger: "work",
+            modeLine: null,
+            text: "After #80.",
+            replyTo: 13,
+            comment: { id: 130 },
+            author: "alice",
+            base: "trunk",
+            eyes: null,
+          },
+          since: 1,
+        },
+      },
+      // An issue waiting for input: asked about again at start (inputs.mjs sync()).
+      inputs: { "org/repo#21": { since: 1, questions: null } },
       brainstorms: {
         // Its deadline passed while no copy acted: idle at the first start, and only then.
         "org/repo#20": { repo: "org/repo", number: 20, status: "active", deadline: 1 },
@@ -5887,6 +5914,9 @@ mounts:
     assert.equal((await storedMap(dir, "brainstorms"))["org/repo#20"].status, "idle");
     assert.deepEqual(await storedMap(dir, "decisions"), legacy.decisions);
     assert.deepEqual(await storedMap(dir, "reviews"), legacy.reviews);
+    const moved = (await storedMap(dir, "waits"))["org/repo#13"];
+    assert.deepEqual([moved.blockers, moved.item.text], [[80], "After #80."]);
+    assert.ok(moved.item.queueId);
     // A comment that waits, its text in the store without the token pasted in it by mistake.
     const token = `ghp_${"b".repeat(36)}`;
     await send(comment("alice", `Deckhand /after #77\nDo it, ${token}.`));
@@ -5923,11 +5953,11 @@ mounts:
     await ctx.listener.until("done (ok)");
     const starting = replies(github).filter((r) => /#77 is done: starting/.test(r.body));
     assert.equal(starting.length, 1);
-    assert.deepEqual(await storedMap(dir, "waits"), {});
+    assert.deepEqual(Object.keys(await storedMap(dir, "waits")), ["org/repo#13"]);
     const idle = (out) => out.split("\n").filter((l) => l.includes("org/repo#20: brainstorm idle"));
     assert.equal(idle(output).length + idle(ctx.listener.output()).length, 1);
     // Nothing written back to the data volume.
-    for (const name of [...Object.keys(legacy), "waits", "inputs"]) {
+    for (const name of Object.keys(legacy)) {
       assert.equal(existsSync(join(dir, `${name}.json`)), false, name);
     }
   });

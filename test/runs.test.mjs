@@ -316,6 +316,19 @@ test("unqueue: a queued task's latest comment leaves the queue for a wait, the o
   assert.equal(mixed.item.author, "alice");
   assert.equal(mixed.item.text, "from alice\n\n---\n\nalice again");
   assert.deepEqual(settled.slice(2), ["cancelled", "cancelled"]);
+  // Moved to a wait (`until`: once the wait is in the store): its comments are parked in the
+  // queue's writes (restart.mjs park()) before the write that drops them, their queueIds out.
+  const order = [];
+  ctx.park = (task, items, until) => order.push(["park", task.id, items.map((i) => i.text), until]);
+  ctx.saveQueue = () => order.push(["save"]);
+  queued("21", [
+    item("one", { queueId: "q-21" }),
+    item("two", { trigger: null, author: "bob", queueId: "q-22" }),
+  ]);
+  const until = Promise.resolve();
+  const parked = runs.unqueue("org/repo#21", "alice", until);
+  assert.deepEqual(parked.unqueued, ["q-21", "q-22"]);
+  assert.deepEqual(order, [["park", "21", ["one", "two"], until], ["save"]]);
   // Cancelled, the one behind a run says so: it isn't back in the backlog.
   assert.equal(runs.cancel("org/repo#14", "alice"), "following");
   assert.equal(runs.cancel("org/repo#15", "alice"), "queued");

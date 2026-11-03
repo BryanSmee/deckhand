@@ -509,7 +509,7 @@ token only reads, and Deckhand posts the review.
   reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
   (the orchestrator's store, `reviews`), from its reviews and from those GitHub refused, posted as plain
-  comments (only the comments Deckhand posted them as, recorded in the orchestrator's store (`reviews`)). Only a
+  comments (only the comments Deckhand posted them as, recorded in the orchestrator's store, `reviews`). Only a
   bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
   `- No follow-ups.` or `- **None found**` files nothing. An item under the wrong heading is
   never filed, but posted under Comments: a blocking comment there (`- **blocking** …`, in

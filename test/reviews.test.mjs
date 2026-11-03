@@ -9,6 +9,8 @@ import { createPolicies } from "../listener/policies.mjs";
 import { allowOnly, builtInPolicies } from "../policy-service/engine.mjs";
 import { opaBinary } from "../policy-service/opa.mjs";
 import { parseRepoConfig } from "../listener/repo-config.mjs";
+import { openStore } from "../lib/store.mjs";
+import { storeMap } from "../lib/store-map.mjs";
 import {
   CI_NEXT,
   mergeInput,
@@ -2156,6 +2158,48 @@ test("review.ci: a failure starts a CI fix run, not a review, with the runs and 
   assert.equal(s.of("ci-fix").length, 1);
   // Each queued while the CI step was decided: the loop went on.
   assert.deepEqual(s.loops, ["ci", "ci"]);
+});
+
+test("a fix run's round in the store before its run is queued; a comment queued meanwhile gives it back", async (t) => {
+  // A store holding back its writes until `land()`.
+  const holding = () => {
+    const memory = openStore("memory:");
+    const gate = {};
+    gate.held = new Promise((resolve) => (gate.land = resolve));
+    const store = { ...memory, set: async (k, v) => (await gate.held, memory.set(k, v)) };
+    return { memory, store, gate };
+  };
+  const wait = () => new Promise((resolve) => setTimeout(resolve, 20));
+  const one = holding();
+  const s = ciSetup(t, `${CI}  ci_fix: 2\n`, {
+    reviewed: await storeMap(one.store, "reviews"),
+    gh: { runs: [RED, GREEN] },
+  });
+  const ready = s.ready();
+  await wait();
+  // Counted, not in the store yet: nothing queued.
+  assert.equal(s.entry().ciFixes, 1);
+  assert.deepEqual(s.accepted, []);
+  one.gate.land();
+  assert.equal((await ready).reason, "ci-fix");
+  assert.equal((await one.memory.get("reviews/org/repo#pr-5")).ciFixes, 1);
+
+  // A comment queued on the task while the round's write waited: no CI fix run, the round
+  // given back, the CI wait kept for when the task is free.
+  const two = holding();
+  let busy = false;
+  const b = ciSetup(t, `${CI}  ci_fix: 2\n`, {
+    reviewed: await storeMap(two.store, "reviews"),
+    busy: () => busy,
+    gh: { runs: [RED, GREEN] },
+  });
+  const decided = b.ready();
+  await wait();
+  busy = true;
+  two.gate.land();
+  assert.equal(await decided, null);
+  assert.deepEqual(b.accepted, []);
+  assert.equal(b.entry()?.ciFixes, undefined);
 });
 
 test("review.ci: CI fix runs run out, said once, then the review anyway", async (t) => {

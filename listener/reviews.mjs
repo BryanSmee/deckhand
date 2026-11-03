@@ -1891,6 +1891,22 @@ export function createReviews({
     });
   }
 
+  // A fix run's round, just counted in pull request `key`'s entry (`before`: the entry until
+  // then), in the store before its run is queued: a copy killed after the queue's write but
+  // before this one's would run that round again. → whether the run may be queued: a comment
+  // queued on `task` while the write waited (the store away) would join it, and the round is
+  // given back then, unless the entry changed again meanwhile.
+  async function counted(key, before, task) {
+    const counting = reviewed.get(key);
+    await reviewed.written?.(key);
+    if (!busy(task)) return true;
+    if (reviewed.get(key) === counting) {
+      if (before) reviewed.set(key, before);
+      else reviewed.delete(key);
+    }
+    return false;
+  }
+
   function remember(key, head, fields = {}) {
     const cutoff = now() - KEEP_MS;
     // Not the one it updates: what it counted so far still holds.
@@ -2034,7 +2050,9 @@ export function createReviews({
     if (asked && busy(task)) return skip(`#${issue} has a run going or queued`);
     if (asked && fixesOf(reviewed.get(key)) !== fixes) return skip("another fix run was queued");
     if (asked && moved(key, entry)) return skip("its review loop started again meanwhile");
-    // Before queuing: whatever happens next, never this round twice.
+    // Before queuing: whatever happens next, never this round twice (in the store first,
+    // counted()).
+    const before = reviewed.get(key);
     remember(key, reviewed.get(key)?.head ?? null, {
       fixes: round,
       fixedAt: now(),
@@ -2053,6 +2071,7 @@ export function createReviews({
         roundsOutAt: undefined,
       }),
     });
+    if (!(await counted(key, before, task))) return skip(`#${issue} has a run going or queued`);
     const of = rounds > 1 ? ` (${round} of ${rounds})` : "";
     log(
       asked
@@ -3042,8 +3061,13 @@ export function createReviews({
     const withJobs = await failedJobs(repo, failed);
     // Checked again: a comment may have come during the calls above.
     if (busy(task)) return waitForTask(`#${issue} has a run going or queued`);
-    // Before queuing: whatever happens next, never this round twice.
+    // Before queuing: whatever happens next, never this round twice (in the store first,
+    // counted()).
+    const before = reviewed.get(key);
     decided({ ciFixes: round, ciFixedAt: now(), next: "ci-fix", nextAt: now() });
+    if (!(await counted(key, before, task))) {
+      return waitForTask(`#${issue} has a run going or queued`);
+    }
     log(`${key}: CI failed on ${short(sha)}, starting a CI fix run (${round} of ${rounds})`);
     const item = {
       repo,

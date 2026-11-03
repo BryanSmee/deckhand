@@ -444,3 +444,21 @@ test("a queued comment moved to a wait: its queueIds kept with it, for the next 
   w.waits.dedupe(new Set(["q-1"]));
   assert.deepEqual(w.waits.keys(), ["org/repo#78"]);
 });
+
+test("a wait from before queueIds gets one, kept for the next copy", async () => {
+  const maps = mapStore();
+  const { after: _, ...old } = item(null);
+  await maps.store.set("waits/org/repo#78", {
+    repo: "org/repo",
+    blockers: [77],
+    item: old,
+    since: 1,
+  });
+  setup({ waits: await maps.map("waits") });
+  const { queueId } = (await maps.again("waits")).get("org/repo#78").item;
+  assert.ok(queueId);
+  const next = setup({ waits: await maps.again("waits") });
+  assert.equal(next.waits.get("org/repo#78").item.queueId, queueId);
+  next.waits.dedupe(new Set([queueId]));
+  assert.deepEqual(next.waits.keys(), []);
+});

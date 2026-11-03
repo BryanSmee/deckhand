@@ -52,6 +52,13 @@ export function createWaits({
   // `item`: the comment as restart.mjs saves it, its queueId the one it is queued with once
   // released; `unqueued`: the queueIds of the comments the dashboard took out of the queue for
   // it (hold()). People's text: the store holds it without a secret (storeMap()'s storable()).
+  // A wait from before queueIds (a waits.json moved to the store): one now, kept, so that its
+  // release is known by it (dedupe()).
+  for (const [key, wait] of [...waits]) {
+    if (wait.item && !wait.item.queueId) {
+      waits.set(key, { ...wait, item: { ...wait.item, queueId: queueId() } });
+    }
+  }
   let timer = null;
   let checking = null;
   // Task key → { held, missed }: the wait held while a new comment was being decided
