@@ -25,6 +25,10 @@ import { storeContract } from "./store-contract.mjs";
 
 storeContract("memory", (t, clock) => fileStore({ now: clock.now }));
 storeContract("file", (t, clock) => fileStore({ dir: tempDir(t), now: clock.now }));
+// Every key a file of its own (keys/), as the orchestrator keeps its runs' summaries (#618).
+storeContract("file, keys apart", (t, clock) =>
+  fileStore({ dir: tempDir(t), now: clock.now, apart: [""] }),
+);
 
 test("file: calls made together are written together, each on disk once it resolves", async (t) => {
   const dir = tempDir(t);
@@ -142,6 +146,58 @@ test(
     assert.deepEqual(await fileStore({ dir }).get("queue"), ["kept"]);
   },
 );
+
+// #618: a map of thousands of items stays out of state.json, which each lease renewal writes.
+test("file: keys under `apart` are a file each, out of state.json, seen by another process", async (t) => {
+  const dir = tempDir(t);
+  const open = () => fileStore({ dir, apart: ["summaries/"] });
+  const one = open();
+  const other = open();
+  t.after(() => Promise.all([one.close(), other.close()]));
+  const long = `summaries/${"x".repeat(400)}`;
+  await one.set("summaries/a", { id: "a" });
+  await one.set(long, { id: "long" });
+  await one.set("queue", [1]);
+  const state = JSON.parse(readFileSync(join(dir, "state.json"), "utf8"));
+  assert.deepEqual(Object.keys(state.keys), ["queue"]);
+  assert.equal(readdirSync(join(dir, "keys")).length, 2);
+  // Another copy on the folder: what this one wrote, at once.
+  assert.deepEqual(await other.get("summaries/a"), { id: "a" });
+  assert.deepEqual((await other.keys("summaries/")).keys.sort(), [long, "summaries/a"].sort());
+  assert.deepEqual((await other.keys("")).keys.sort(), [long, "queue", "summaries/a"].sort());
+  assert.deepEqual((await other.keys("summaries/b")).keys, []);
+  assert.equal(await other.delete("summaries/a"), true);
+  assert.equal(await one.get("summaries/a"), null);
+  assert.deepEqual((await one.keys("summaries/")).keys, [long]);
+  // Listed from their files' names: a file's content isn't read but for a name cut and hashed.
+  writeFileSync(join(dir, "keys", "summaries%2Fb"), "not read");
+  assert.deepEqual((await other.keys("summaries/")).keys.sort(), [long, "summaries/b"].sort());
+  await other.delete("summaries/b");
+  // With a TTL: in state.json, out of its file, as long as it lasts.
+  await one.set("summaries/c", 1);
+  await one.set("summaries/c", 2, { ttlMs: 60_000 });
+  assert.equal(readdirSync(join(dir, "keys")).length, 1);
+  assert.deepEqual(await other.get("summaries/c"), 2);
+  assert.deepEqual((await other.keys("summaries/c")).keys, ["summaries/c"]);
+  await other.set("summaries/c", 3);
+  assert.equal(
+    "summaries/c" in JSON.parse(readFileSync(join(dir, "state.json"), "utf8")).keys,
+    false,
+  );
+  assert.equal(await one.get("summaries/c"), 3);
+  await one.delete("summaries/c");
+  assert.equal(await other.get("summaries/c"), null);
+  // A lease renewed: state.json only, the keys' files untouched.
+  const before = readdirSync(join(dir, "keys")).map((f) =>
+    readFileSync(join(dir, "keys", f), "utf8"),
+  );
+  const lease = await one.acquire("orchestrator", "me", { ttlMs: 5000 });
+  await one.renew("orchestrator", "me", lease.epoch, { ttlMs: 5000 });
+  assert.deepEqual(
+    readdirSync(join(dir, "keys")).map((f) => readFileSync(join(dir, "keys", f), "utf8")),
+    before,
+  );
+});
 
 test("file: a state file taken back to an older one still gives a new, higher epoch", async (t) => {
   const dir = tempDir(t);

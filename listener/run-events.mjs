@@ -8,7 +8,8 @@ import { writeEvent } from "./runlog.mjs";
 export function createRunEvents({
   events, // ../runner/client.mjs's: read(), ack(ids)
   // run id → { record, logFile, save() }: the run, live or over (its end is said as its
-  // sandbox is removed, by then its summary may be written: save() writes it again), or null
+  // sandbox is removed, by then its summary may be written: save() writes it again, its event
+  // acknowledged once that is done), or null
   runOf,
   log = () => {},
   everyMs = 5000,
@@ -18,7 +19,7 @@ export function createRunEvents({
   let timer = null;
   let stopped = false;
 
-  function handle({ event }) {
+  async function handle({ event }) {
     if (event?.type !== "ended") return;
     const run = runOf(event.run);
     if (!run || run.record.exitCode != null) return;
@@ -31,7 +32,7 @@ export function createRunEvents({
       // the segment this note opened closes after it (../runner/logs.mjs).
       if (run.record.finishedAt) run.logFile.close?.();
     }
-    run.save();
+    await run.save();
   }
 
   async function poll() {
@@ -40,7 +41,7 @@ export function createRunEvents({
       const found = await events.read();
       for (const entry of found) {
         try {
-          handle(entry);
+          await handle(entry);
         } catch (error) {
           log(`Run events: ${error.stack ?? error}`);
         }
