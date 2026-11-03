@@ -58,10 +58,6 @@ export const QUEUE_KEY = "queue";
 export const LIVE_PREFIX = "runs/";
 const liveKey = (id) => `${LIVE_PREFIX}${id}`;
 
-// How long a run's end waits between two tries of the queue's write, or of its state's removal,
-// that failed (removeLive()).
-export const QUEUE_RETRY_MS = 5000;
-
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
 // both in the queue and in a run's saved state (a listener killed between the two writes) is the
 // run's alone.
@@ -84,7 +80,8 @@ function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
   return { repo, id, kind, number, name, base, discussionId, settings };
 }
 
-// How often queueWritten() tries the queue's write again while the store is away.
+// How often queueWritten() tries the queue's write again while the store is away, and a run's
+// end its queue's write or its state's removal (removeLive()).
 export const QUEUE_RETRY_MS = 5000;
 
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
@@ -494,13 +491,13 @@ export function createRestart(ctx) {
   // comments in both (the run's win, loadQueue()), never in neither. A write of the queue that
   // fails keeps it in memory and is tried again every QUEUE_RETRY_MS until it lands, the run
   // holding its task meanwhile (no other run starts for it); its state's removal too. A copy
-  // that stops meanwhile (one that lost its lease exits) leaves the state: the next copy finds
+  // that stops or loses its lease meanwhile (`ctx.held()`) leaves the state: the next copy finds
   // the comments there, its sandbox gone. → whether the state is gone.
   async function removeLive(task) {
     const { live } = task;
     const retryMs = ctx.queueRetryMs ?? QUEUE_RETRY_MS;
     const again = (what) => {
-      if (ctx.stopping) {
+      if (ctx.stopping || !(ctx.held?.() ?? true)) {
         log(`${live.key}: ${what} failed as this copy stops: its state stays for the next one`);
         return false;
       }
