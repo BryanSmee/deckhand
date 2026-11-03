@@ -18,6 +18,7 @@ import {
   repoPath,
   RESERVED,
   RESERVED_MODES,
+  KEYS,
   reviewText,
   sandboxName,
   startable,
@@ -938,4 +939,42 @@ test("the errors whose message doesn't say how to fix them come with a fix", () 
   );
   // A message that says what is expected needs none of its own.
   assert.equal(fixOf("effort: loud\n", "effort:"), undefined);
+});
+
+test("review.follow_ups_auto_pickup: a boolean, warned without auto_pickup or the operator's slots", () => {
+  const slots = testConfig({ MAX_PARALLEL: "3", AUTO_PICKUP_SLOTS: "1" });
+  const on = "review:\n  follow_ups_auto_pickup: true\n";
+  let read = parseRepoConfig(`auto_pickup: true\n${on}`, slots);
+  assert.deepEqual([read.errors, read.warnings], [[], []]);
+  assert.equal(read.settings.review.followUpsAutoPickup, true);
+  assert.equal(parseRepoConfig("review: true", slots).settings.review.followUpsAutoPickup, false);
+  // Whatever the keys' order.
+  read = parseRepoConfig(`${on}auto_pickup: false\n`, slots);
+  assert.deepEqual(read.warnings, [
+    "review.follow_ups_auto_pickup: needs `auto_pickup: true`, ignored",
+  ]);
+  read = parseRepoConfig(on, testConfig());
+  assert.ok(
+    read.warnings.includes(
+      "review.follow_ups_auto_pickup: the operator reserves no slots for it (AUTO_PICKUP_SLOTS), ignored",
+    ),
+  );
+  // Shown on the dashboard only when it takes effect.
+  const shown = (yaml, operator = slots) => {
+    const { settings } = parseRepoConfig(yaml, operator);
+    return KEYS.review.display({
+      value: settings.review,
+      settings,
+      config: operator,
+      grant: {},
+      known: true,
+      row: (text) => text,
+    });
+  };
+  assert.equal(shown(`auto_pickup: true\n${on}`), '"/mode review" only · follow-ups auto-picked');
+  assert.equal(shown(on), '"/mode review" only');
+  assert.equal(shown(`auto_pickup: true\n${on}`, testConfig()), '"/mode review" only');
+  assert.equal(reviewText(parseRepoConfig(on, slots).settings.review), '"/mode review" only');
+  read = parseRepoConfig("review:\n  follow_ups_auto_pickup: yes please\n", slots);
+  assert.deepEqual(read.errors, ["review.follow_ups_auto_pickup: expected true or false"]);
 });

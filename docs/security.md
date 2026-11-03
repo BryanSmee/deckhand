@@ -2027,7 +2027,8 @@ it couldn't see of a label:
   the App counts only when it matches one, the same issue within two seconds
   (`followUpPick()`, `listener/reviews.mjs`). The run is then the merger's, checked against
   `ALLOWED_USERS` and `users` at the pick as any labeller, and the edit check above starts
-  from the label's time. A merge by Deckhand itself (`review.merge`), a bot or anyone not
+  from the label's time (the original GitHub lists for an edited description, the App's at
+  the issue's creation, isn't an edit since; any later edit of the App's is). A merge by Deckhand itself (`review.merge`), a bot or anyone not
   allowed labels nothing. A run can't forge a record: it would have to file the issue
   through the orchestrator's own merge handling, not a write of its own.
 

@@ -43,6 +43,7 @@ import {
   sameRepo,
   taskKey,
 } from "./events.mjs";
+import { allowed, isBot } from "./auto-pickup.mjs";
 import { autoMergeProblems } from "./grants.mjs";
 import { pushInput } from "./git-gateway.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
@@ -2676,10 +2677,9 @@ export function createReviews({
     if (name === config.bot?.toLowerCase()) {
       return refused("Deckhand merged it (`review.merge`), not a person");
     }
-    if (merger.type === "Bot" || name.endsWith("[bot]")) {
-      return refused(`it was merged by a bot (\`${login}\`)`);
-    }
-    if (!config.users.includes(name) || !settings.users.includes(name)) {
+    if (isBot(merger)) return refused(`it was merged by a bot (\`${login}\`)`);
+    // As auto-pickup decides it at the pick, which checks it again then.
+    if (!allowed(merger, config, settings.users)) {
       return refused(`it was merged by \`${login}\`, who isn't an allowed user`);
     }
     return { by: login, label };
@@ -3193,7 +3193,9 @@ export function createReviews({
         ...new Set([...(a.reviewComments ?? []), ...(b.reviewComments ?? [])]),
       ];
       // The follow-ups either labelled for auto-pickup.
-      const pickups = [...(a.pickups ?? []), ...(b.pickups ?? [])];
+      const pickups = [...(a.pickups ?? []), ...(b.pickups ?? [])].filter(
+        (p, i, all) => all.findIndex((q) => q.issue === p.issue && q.at === p.at) === i,
+      );
       // The last fix run's time goes with the count.
       const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
       return {

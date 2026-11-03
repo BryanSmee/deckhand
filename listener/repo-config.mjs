@@ -520,7 +520,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
   if (ok) settings.review = review;
 }
 
-export function reviewText(review) {
+// `autoPicked`: whether `follow_ups_auto_pickup` takes effect (`auto_pickup` and the operator's
+// slots), else it is ignored and not shown.
+export function reviewText(review, autoPicked = false) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
   const fix =
@@ -542,7 +544,7 @@ export function reviewText(review) {
   const followUps =
     review.followUps === false
       ? "follow-ups not filed"
-      : review.followUpsAutoPickup && "follow-ups auto-picked";
+      : review.followUpsAutoPickup && autoPicked && "follow-ups auto-picked";
   return [when, ci, fix, merge, medium, request, followUps, review.instructions]
     .filter(Boolean)
     .join(" · ");
@@ -775,7 +777,7 @@ export const KEYS = {
     field: "review",
     default: null,
     parse: parseReview,
-    display: ({ value, settings, grant, known, row }) => {
+    display: ({ value, settings, config, grant, known, row }) => {
       const mode = value && customMode(settings, "review");
       // Not refused: the reviews run, only the merge waits for a human (grants.mjs).
       const merge =
@@ -783,7 +785,8 @@ export const KEYS = {
           ? "nothing is merged: the operator's policies don't grant auto_merge"
           : null;
       const model = mode ? `${mode.model}/${mode.effort}` : null;
-      return row(reviewText(value), [model, merge].filter(Boolean).join("; ") || null);
+      const autoPicked = !!settings.autoPickup && !!config.autoPickupSlots;
+      return row(reviewText(value, autoPicked), [model, merge].filter(Boolean).join("; ") || null);
     },
   },
   // Not refused when ungranted: runs go on, only the board isn't moved (projects.mjs).

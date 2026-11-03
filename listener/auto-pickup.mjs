@@ -45,11 +45,17 @@ export function labeller(events, label) {
   return { login: last.actor.login, bot: isBot(last.actor), at: Date.parse(last.created_at) || 0 };
 }
 
-const isBot = (actor) => actor?.type === "Bot" || lower(actor?.login).endsWith("[bot]");
+export const isBot = (actor) => actor?.type === "Bot" || lower(actor?.login).endsWith("[bot]");
+
+// Whether `actor` is the App's bot: REST's login has `[bot]`, GraphQL's doesn't.
+const isApp = (actor, config) =>
+  !!config.bot &&
+  !!actor?.login &&
+  [lower(actor.login), `${lower(actor.login)}[bot]`].includes(lower(config.bot));
 
 // Whether `login` (with `actor`'s type, when known) is an allowed user here: in ALLOWED_USERS
 // and the repo's `users`, not a bot.
-const allowed = (actor, config, users) =>
+export const allowed = (actor, config, users) =>
   !!actor?.login &&
   !isBot(actor) &&
   config.users.includes(lower(actor.login)) &&
@@ -62,28 +68,38 @@ const allowed = (actor, config, users) =>
 // counts, not the last one: an allowed user's typo fix after an outsider's rewrite doesn't
 // vouch for it. On a public repo, an outsider's issue edited after it was labelled would
 // otherwise run as the labeller's.
-export function editedSince(events, history, since, config, users) {
+// `created`: the issue's creation time, for a follow-up the App filed with the label (#677):
+// GitHub lists an edited description's original as an edit by its author at its creation, the
+// label's second too. That one edit by the App is no edit since; any later one of its is.
+export function editedSince(events, history, since, config, users, created = null) {
   const after = (at) => Date.parse(at ?? "") >= since;
+  const second = (at) => Math.floor(Date.parse(at ?? "") / 1000);
+  const original =
+    created &&
+    history.edits.find((e) => second(e.at) === second(created) && isApp(e.editor, config));
   const renamed = events.find(
     (e) => e.event === "renamed" && after(e.created_at) && !allowed(e.actor, config, users),
   );
   if (renamed) {
     return `its title was changed by ${renamed.actor?.login ?? "someone"} after the label was added`;
   }
-  const edited = history.edits.find((e) => after(e.at) && !allowed(e.editor, config, users));
+  const edited = history.edits.find(
+    (e) => e !== original && after(e.at) && !allowed(e.editor, config, users),
+  );
   if (edited) {
     return `its description was edited by ${edited.editor?.login ?? "someone"} after the label was added`;
   }
   // The newest edit, as the issue itself says, whatever end of its history was read.
   const last = history.last;
-  if (last && after(last.at) && !allowed(last.editor, config, users)) {
+  const lastIsOriginal =
+    original && second(last?.at) === second(original.at) && isApp(last.editor, config);
+  if (last && !lastIsOriginal && after(last.at) && !allowed(last.editor, config, users)) {
     return `its description was edited by ${last.editor?.login ?? "someone"} after the label was added`;
   }
   // Not all of it read: GitHub doesn't say in which order it lists them, so the edits not read
   // may be the newest (the page doesn't reach the issue's last edit) or the oldest (every one
   // read is since the label). Either way some may be since the label: not knowing holds it.
   if (!history.complete) {
-    const second = (at) => Math.floor(Date.parse(at ?? "") / 1000);
     const reachesLast = !last || history.edits.some((e) => second(e.at) >= second(last.at));
     if ((!reachesLast && after(last.at)) || history.edits.every((e) => after(e.at))) {
       return "its description has more edits since the label than can be checked";
@@ -358,6 +374,7 @@ export function createAutoPickup({
         by.at,
         config,
         settings.users,
+        by.pr ? issue.created_at : null,
       );
       if (edited) why = edited;
     }

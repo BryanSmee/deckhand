@@ -1171,24 +1171,39 @@ test("vouchedLabeller(): only the App's labelling, only with a record", () => {
   assert.equal(vouchedLabeller(app, {}, pick, "org/a", 1), app);
 });
 
-test("review.follow_ups_auto_pickup: a boolean, warned without auto_pickup or the operator's slots", () => {
-  const slots = testConfig({ MAX_PARALLEL: "3", AUTO_PICKUP_SLOTS: "1" });
-  const on = "review:\n  follow_ups_auto_pickup: true\n";
-  let read = parseRepoConfig(`auto_pickup: true\n${on}`, slots);
-  assert.deepEqual([read.errors, read.warnings], [[], []]);
-  assert.equal(read.settings.review.followUpsAutoPickup, true);
-  assert.equal(parseRepoConfig("review: true", slots).settings.review.followUpsAutoPickup, false);
-  // Whatever the keys' order.
-  read = parseRepoConfig(`${on}auto_pickup: false\n`, slots);
-  assert.deepEqual(read.warnings, [
-    "review.follow_ups_auto_pickup: needs `auto_pickup: true`, ignored",
-  ]);
-  read = parseRepoConfig(on, testConfig());
-  assert.ok(
-    read.warnings.includes(
-      "review.follow_ups_auto_pickup: the operator reserves no slots for it (AUTO_PICKUP_SLOTS), ignored",
-    ),
+test("a follow-up the App filed, edited by an allowed user: the original GitHub lists at its creation is no edit since", async () => {
+  const at = "2026-02-01T00:00:00Z";
+  const filed = (n) => issue(n, n, { created_at: at });
+  const { pickup, p } = setup({
+    env: { MAX_PARALLEL: "5", AUTO_PICKUP_SLOTS: "4" },
+    repos: { "org/a": { issues: [filed(1), filed(2), filed(3)] } },
+    events: {
+      "org/a#1": [labelled(BOT, "Bot", at)],
+      "org/a#2": [labelled(BOT, "Bot", at)],
+      "org/a#3": [labelled("alice", "User", at)],
+    },
+    // GraphQL names the App's bot without `[bot]`.
+    edits: {
+      "org/a#1": [
+        [at, "deckhand", "Bot"],
+        ["2026-02-02T00:00:00Z", "carol"],
+      ],
+      // A later edit of the App's (a run's write) still holds it.
+      "org/a#2": [
+        [at, "deckhand", "Bot"],
+        ["2026-02-02T00:00:00Z", "deckhand", "Bot"],
+      ],
+      // Not a follow-up: an edit by the App in the label's second holds it, as before.
+      "org/a#3": [[at, "deckhand", "Bot"]],
+    },
+    followUpPick: (repo, number) => (number < 3 ? { by: "alice", pr: 9 } : null),
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+  assert.deepEqual(
+    p.logs.filter((l) => l.includes("skipped")),
+    [
+      "Auto-pickup: org/a#2: skipped, its description was edited by deckhand after the label was added",
+      "Auto-pickup: org/a#3: skipped, its description was edited by deckhand after the label was added",
+    ],
   );
-  read = parseRepoConfig("review:\n  follow_ups_auto_pickup: yes please\n", slots);
-  assert.deepEqual(read.errors, ["review.follow_ups_auto_pickup: expected true or false"]);
 });
