@@ -1732,6 +1732,13 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
       // GitHub fails.
       if (req.url.startsWith("/down.git/")) return (void res.writeHead(503).end(), true);
       if (req.url.endsWith("/git-upload-pack")) {
+        // A pack begun, then GitHub's connection lost.
+        if (req.headers["x-test-round"] === "cut") {
+          res.writeHead(200, { "content-type": "application/x-git-upload-pack-result" });
+          res.write("0008NAK\n0001000dpackfile\n0009\x01PACK");
+          setImmediate(() => res.destroy());
+          return true;
+        }
         const last = req.headers["x-test-round"] === "last";
         res.writeHead(200, { "content-type": "application/x-git-upload-pack-result" });
         res.end(
@@ -1754,14 +1761,14 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
   await (await gw.call("/api/v3/repos/org/repo/issues", { secret })).arrayBuffer();
   await (await gw.call("/api/v3/repos/org/repo/issues/missing", { secret })).arrayBuffer();
   await (await gw.call("/org/repo.git/info/refs?service=git-upload-pack", { secret })).text();
-  for (const round of ["first", "last"]) {
+  for (const round of ["first", "last", "cut"]) {
     const pack = await gw.call("/org/repo.git/git-upload-pack", {
       secret,
       method: "POST",
       body: "0000",
       headers: { "x-test-round": round },
     });
-    await pack.arrayBuffer();
+    await pack.arrayBuffer().catch(() => {});
   }
   await (await gw.call("/down.git/info/refs?service=git-upload-pack", { secret })).text();
   assert.deepEqual(
@@ -1774,7 +1781,8 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
   assert.ok(observed.every((o) => o.seconds >= 0));
   // A fetch is the pack request whose answer carries the pack, not its advertisement nor a
   // round of negotiation (github-forks.test.mjs counts a real client's); one GitHub fails, failed.
-  assert.deepEqual(ops, ["fetch ok", "fetch failed"]);
+  // A pack cut short isn't one come: failed.
+  assert.deepEqual(ops, ["fetch ok", "fetch failed", "fetch failed"]);
 
   // A call the sandbox gave up on before GitHub answered: counted, without a status.
   const aborted = new AbortController();
@@ -1784,4 +1792,18 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
   await assert.rejects(slow);
   while (observed.length < 3) await new Promise(setImmediate);
   assert.deepEqual([observed[2].caller, observed[2].status], ["proxy", null]);
+});
+
+test("a fetch Deckhand refuses itself, too many calls at once say, is counted as refused", async (t) => {
+  const ops = [];
+  const gw = await gateway(t, {
+    maxInFlight: 0,
+    onGit: (op, result) => ops.push(`${op} ${result}`),
+  });
+  const { secret } = gw.register();
+  const res = await gw.call("/org/repo.git/info/refs?service=git-upload-pack", { secret });
+  assert.equal(res.status, 429);
+  // An API call refused the same way is no git operation.
+  assert.equal((await gw.call("/api/v3/repos/org/repo", { secret })).status, 429);
+  assert.deepEqual(ops, ["fetch refused"]);
 });

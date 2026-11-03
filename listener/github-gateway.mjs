@@ -530,7 +530,10 @@ export function createGithubGateway({
     // Git's fetch, as git sends it: its advertisement a GET, its pack request a POST. Any other
     // method there would be a write, streamed past the fetch's checks.
     const fetching = where.api || where.file ? null : GIT_FETCH.exec(where.path);
+    // Deckhand's own refusals of a fetch's request, beside refuseFork()'s: the command ends there.
+    const refusedFetch = () => fetching && onGit("fetch", "refused");
     if (fetching && req.method !== (/info\/refs$/i.test(fetching[2]) ? "GET" : "POST")) {
+      refusedFetch();
       req.resume();
       return fail(res, 405, `git's ${fetching[2]} takes no ${req.method}`);
     }
@@ -539,6 +542,7 @@ export function createGithubGateway({
     // never send one, so it is refused rather than read.
     const sized = (req.headers["content-length"] ?? "0").trim() !== "0";
     if (!write && (sized || req.headers["transfer-encoding"] !== undefined)) {
+      refusedFetch();
       req.resume();
       return fail(res, 400, `a ${req.method} with a body`);
     }
@@ -562,12 +566,16 @@ export function createGithubGateway({
       }
     }
     const github = app();
-    if (!github) return fail(res, 503, "the GitHub App is not set up");
+    if (!github) {
+      if (fetching) onGit("fetch", "failed");
+      return fail(res, 503, "the GitHub App is not set up");
+    }
     // A file host's call holds no token, and was a plain host's before: not counted, so a setup
     // that downloads many files at once isn't cut off part-way.
     const counted = !where.file;
     const inFlightSlot = counted ? await inFlight.take(run, maxInFlight) : null;
     if (counted && !inFlightSlot) {
+      refusedFetch();
       return fail(res, 429, `more than ${maxInFlight} calls at once`);
     }
     // A rerun's slot (github-writes.mjs reserve()): free again once the call is over, unless
@@ -600,7 +608,10 @@ export function createGithubGateway({
       if (fork?.fetch && req.method === "POST") {
         // Read whole, to check what it wants: git compresses a long negotiation.
         body = await readBody(req, maxWrite, idleMs, clock);
-        if (body === null) return fail(res, 413, `a fetch over ${maxWrite} bytes`);
+        if (body === null) {
+          refusedFetch();
+          return fail(res, 413, `a fetch over ${maxWrite} bytes`);
+        }
         let request;
         try {
           inflated = req.headers["content-encoding"] !== undefined;
@@ -968,6 +979,20 @@ export function createGithubGateway({
     writing,
     { advertised = null, inflated = false, lacks = null, ownIssue = false } = {},
   ) {
+    // GitHub's answer, counted once: an API call's status, rate limit and time to its headers.
+    // A git fetch (or clone) is counted once whatever number of requests it takes (protocol v2:
+    // the advertisement, ls-refs, a fetch per negotiation round): `failed` at the request GitHub
+    // fails, or whose answer is cut short, `ok` at the one whose answer carries the whole pack
+    // (packIn()), `refused` at the one Deckhand refuses (refuseFork(), handle()). A command that wants nothing (ls-remote, a fetch with
+    // nothing new) brings no pack: not counted.
+    const advertising =
+      !api &&
+      req.method === "GET" &&
+      /\/info\/refs$/i.test(path) &&
+      target.searchParams.get("service") === "git-upload-pack";
+    const packing = !api && req.method === "POST" && /\/git-upload-pack$/i.test(path);
+    const packed = packing ? packIn() : null;
+    let gitStatus = 0;
     let token;
     // What its capabilities read, and its own issue for a call that reads only that.
     let reads = { ...readsOf(run.caps), ...(ownIssue && { issues: "read" }) };
@@ -988,6 +1013,7 @@ export function createGithubGateway({
       ({ token } = await github.repoToken(run.repo, permissions));
     } catch (error) {
       log(`GitHub gateway: token for ${run.repo}: ${error.message ?? error}`);
+      if (advertising || packing) onGit("fetch", "failed");
       return fail(res, 502, "GitHub refused the token");
     }
     run.tokens.add(token);
@@ -1006,20 +1032,6 @@ export function createGithubGateway({
     let status = 0;
     let answer = [];
     let size = 0;
-    // GitHub's answer, counted once: an API call's status, rate limit and time to its headers.
-    // A git fetch (or clone) is counted once whatever number of requests it takes (protocol v2:
-    // the advertisement, ls-refs, a fetch per negotiation round): `failed` at the request GitHub
-    // fails, `ok` at the one whose answer carries the pack (packIn()), `refused` at the one
-    // Deckhand refuses (refuseFork()). A command that wants nothing (ls-remote, a fetch with
-    // nothing new) brings no pack: not counted.
-    const advertising =
-      !api &&
-      req.method === "GET" &&
-      /\/info\/refs$/i.test(path) &&
-      target.searchParams.get("service") === "git-upload-pack";
-    const packing = !api && req.method === "POST" && /\/git-upload-pack$/i.test(path);
-    const packed = packing ? packIn() : null;
-    let gitStatus = 0;
     // A pack request's answer too, for packIn() to read: a pack is compressed already.
     if (watched || advertised || lacks || packing) headers["accept-encoding"] = "identity";
     // An advertisement is read as it streams, only its refs kept (github-forks.mjs).
@@ -1082,7 +1094,7 @@ export function createGithubGateway({
       const plain = forwarded(req.headers, ["authorization", "cookie", ...ROUTING_HEADERS]);
       return { target: next, headers: plain };
     };
-    await forward(req, res, {
+    const how = await forward(req, res, {
       target,
       headers,
       body,
@@ -1118,10 +1130,12 @@ export function createGithubGateway({
     });
     // The sandbox gone before GitHub answered: a call without an answer.
     count(0, null, true);
-    if (packing) {
-      if (!(gitStatus > 0 && gitStatus < 400)) onGit("fetch", "failed");
-      else if (packed.found()) onGit("fetch", "ok");
-    }
+    // An answer cut short (GitHub's connection lost or idle, the sandbox gone) ends the command
+    // there: a pack begun isn't a pack come. An advertisement's bad status was counted already.
+    const answeredWell = gitStatus > 0 && gitStatus < 400;
+    if (packing && !(answeredWell && how === "done")) onGit("fetch", "failed");
+    else if (packing && packed.found()) onGit("fetch", "ok");
+    else if (advertising && answeredWell && how !== "done") onGit("fetch", "failed");
     await after();
   }
 

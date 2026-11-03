@@ -31,9 +31,9 @@ export const RESOURCES = ["core", "graphql", "search"];
 //   clone          a mirror's first fetch, the whole repository (git-mirror.mjs)
 //   mirror_update  a mirror fetched again before a push is checked against it
 //   fetch          a sandbox's git fetch or clone relayed to GitHub, once whatever its requests:
-//                  ok once its pack came (an ls-remote, or a fetch with nothing new, brings
-//                  none: not counted), refused or failed at the request that was
-//                  (github-gateway.mjs)
+//                  ok once its whole pack came (an ls-remote, or a fetch with nothing new,
+//                  brings none: not counted), refused or failed at the request that was, a
+//                  4xx of GitHub's or an answer cut short failed (github-gateway.mjs)
 //   push           a sandbox's push, through the git gateway (git-gateway.mjs)
 export const GIT_OPS = ["clone", "mirror_update", "fetch", "push"];
 //   ok        done

@@ -407,12 +407,17 @@ export function createGitGateway({
       push: Array.isArray(claims.branches) && claims.branches.length > 0,
       fork: claims.fork === true,
     };
+    // Only a push's requests count as a push refused: its probe, or its pack.
+    const pushing =
+      service === "git-receive-pack"
+        ? req.method === "POST"
+        : req.method === "GET" && url.searchParams.get("service") === "git-receive-pack";
     if (may.repo !== repo) {
-      counted("run");
+      if (pushing) counted("run");
       return fail(res, 403, `Deckhand: this run can only push to ${may.repo}`);
     }
     if (!may.push) {
-      counted("run");
+      if (pushing) counted("run");
       return fail(res, 403, "Deckhand: this run can't push");
     }
 

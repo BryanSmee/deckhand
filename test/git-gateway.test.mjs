@@ -661,12 +661,21 @@ test("a pull request's run pushes its head branch only", async (t) => {
 });
 
 test("a run with no branch can't push any", async (t) => {
-  const { work, remote, seen, refusals } = await setup(t, { register: (b) => issueRun(b, []) });
+  const { work, remote, seen, refusals, port, secret } = await setup(t, {
+    register: (b) => issueRun(b, []),
+  });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
   assert.equal(res.ok, false);
   assert.match(res.stderr, /this run can't push/);
   assert.deepEqual(seen, []);
   // Refused at git's probe, which it doesn't go past: one push refused.
+  assert.deepEqual(refusals, ["run"]);
+  // A fetch's probe sent here is no push: refused, not counted as one.
+  const probe = await fetch(
+    `http://127.0.0.1:${port}/git/org/repo.git/info/refs?service=git-upload-pack`,
+    { headers: { authorization: `Basic ${Buffer.from(`deckhand:${secret}`).toString("base64")}` } },
+  );
+  assert.equal(probe.status, 403);
   assert.deepEqual(refusals, ["run"]);
 });
 
