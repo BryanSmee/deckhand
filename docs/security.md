@@ -1036,8 +1036,8 @@ to GitHub: the proxy never tunnels those hosts for it, and its plain HTTP to the
     assigning anyone and a rerun past a first. A brainstorm (`mode-brainstorm.rego`) edits and
     reacts on its own issue, files issues and labels, orders and files its follow-ups (a
     "blocked by" link, a project, a milestone), and never comments: the orchestrator posts its
-    reply. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label
-    and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,
+    reply. Inbox entries (`mode-idea.rego`, `mode-bug.rego`) file issues carrying their label,
+    edit those and link the ones they split; discussions (`mode-discussion.rego`) file issues. Onboarding,
     analyses, reviews and research write nothing. No default rule
     allows closing, merging, locking or a label's settings.
 
