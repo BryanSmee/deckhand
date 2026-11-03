@@ -228,8 +228,30 @@ which GitHub runs a pull request's workflows from, checked again when the pull r
 opened, edited, marked ready or turned back into a draft: a workflow that doesn't merge cleanly
 refuses the push until the branch is rebased on the default branch. Workflows the default
 branch already has, and deleted ones, aren't checked. A workflow that needs more (a deploy, a
-secret) is the maintainers' to write. See [GitHub Actions on Deckhand's
-branches](security.md#github-actions-on-deckhands-branches).
+secret) is the maintainers' to write, unless the operator grants `workflow_secrets` too.
+
+With `workflow_secrets` as well, a workflow GitHub only runs from the default branch's copy may
+mention `secrets`, deploy to an `environment:` and ask for `write` scopes (the other rules
+above still hold, a top-level `permissions:` included). Its `on:` has nothing but `schedule` and
+`push` with a `branches:` naming the default branch alone, exactly:
+
+```yaml
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main] # the default branch's exact name; `paths` filters are fine
+permissions:
+  contents: write
+```
+
+Any other trigger (`pull_request`, `workflow_dispatch`, `workflow_call`, `workflow_run`…), an
+unfiltered `push`, a pattern or another branch in `branches:`, or `branches-ignore`, `tags`
+or `tags-ignore` keeps the rules above, and the refusal names it. A workflow it calls keeps them
+too (its `on:` is `workflow_call`), so it can't use secrets in this version: use them in the
+lifted workflow's own jobs. Names are compared exactly (`push`, not `Push`). A pull request that
+changes a workflow is never merged automatically (`review.merge`). See [GitHub Actions on
+Deckhand's branches](security.md#github-actions-on-deckhands-branches).
 
 ## Images
 
@@ -827,8 +849,8 @@ Follow-ups and notes never block a merge.
   its issue has no run going or queued;
 - its head is still the commit the review read;
 - the repository is private, or the grant is `auto_merge_public`, as GitHub says at that moment;
-- it changes none of the files Deckhand trusts: `.deckhand.yaml`, `.deckhand/`, `.github/`,
-  any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`,
+- it changes none of the files Deckhand trusts: `.deckhand.yaml`, `.deckhand/`, `.github/`
+  (in any case: a workflow there may use secrets with `workflow_secrets`), any `CODEOWNERS`, and the files the config names (`instructions`, `dockerfile`,
   `review.instructions`, the modes' instructions),
   renames included. Merging those by itself would let a run widen its own config: such a
   pull request always waits for a human. GitHub lists 3000 changed files at most: a pull

@@ -202,6 +202,8 @@ modes:
     ".deckhand.yaml",
     ".deckhand/Dockerfile",
     ".github/workflows/ci.yml",
+    // Any case: the git gateway reads workflow folders without it (#700).
+    ".GitHub/Workflows/deploy.yml",
     "CODEOWNERS",
     "docs/CODEOWNERS",
     "docs/agents.md",
@@ -347,6 +349,11 @@ test("auto-merge: each gate refuses with a comment", async (t) => {
     ],
     [{ files: [{ filename: ".deckhand/review.md" }] }, /`\.deckhand\/review\.md`/],
     [{ files: [{ filename: ".github/workflows/ci.yml" }] }, /`\.github\/workflows\/ci\.yml`/],
+    // A workflow `workflow_secrets` let through (#700): its secrets wait for a person's review.
+    [
+      { files: [{ filename: ".github/workflows/deploy.yml" }] },
+      /`\.github\/workflows\/deploy\.yml` \(a workflow on the default branch runs with the repository's secrets: a person reviews it first\)/,
+    ],
     [{ files: [{ filename: "x.md", previous_filename: "CODEOWNERS" }] }, /`CODEOWNERS`/],
     [
       {

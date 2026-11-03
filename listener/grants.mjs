@@ -70,6 +70,9 @@ export const GRANTS = {
   research: "allowResearch",
   // Its pushes may change .github/workflows/ (git-gateway.mjs).
   workflows: "allowWorkflows",
+  // With `workflows`, its workflows only the default branch's copy of runs (a schedule, a push
+  // to it) may use secrets, environments and write scopes (workflow-check.mjs, #700).
+  workflow_secrets: "allowWorkflowSecrets",
   // Its `review.merge` merges Deckhand's pull requests on a private repository (reviews.mjs).
   auto_merge: "allowAutoMerge",
   // On a public one too: the field then says "public".
@@ -85,7 +88,13 @@ export const GRANTS = {
 // (to every repository, or to all of an owner's: `startswith`, `glob.match`) gives it nowhere
 // (policies.mjs grants()). Best effort: a wide rule that misses both names (a `regex.match`, an
 // `endswith`) isn't caught. A rule listing names one by one passes.
-export const REPO_ONLY = new Set(["docker", "workflows", "auto_merge", "auto_merge_public"]);
+export const REPO_ONLY = new Set([
+  "docker",
+  "workflows",
+  "workflow_secrets",
+  "auto_merge",
+  "auto_merge_public",
+]);
 
 // A repository's name no repository has: what a rule that gives a grant to every repository
 // gives it to too.

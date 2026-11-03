@@ -643,6 +643,8 @@ export interface Grant {
   allowResearch: boolean;
   // Pushes that change .github/workflows/ (the git gateway's token gets `workflows: write`).
   allowWorkflows: boolean;
+  // With it, workflows that only run from the default branch may use secrets (`workflow_secrets`).
+  allowWorkflowSecrets: boolean;
   // `review.merge` may merge Deckhand's pull requests (`auto_merge`); "public": on a public
   // repository too (`auto_merge_public`).
   allowAutoMerge: boolean | "public";

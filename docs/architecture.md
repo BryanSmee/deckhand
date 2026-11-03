@@ -591,8 +591,9 @@ than at a run's end.
   `http://github:8080`, which the proxy sends there), which only lets through the run's own branches,
   each then asked of the policies' `allow_push` and `deny_push` (`pushInput()`; Deckhand's
   default allows work runs'), and, for a repository granted `workflows`, workflow files
-  that only read and name no secret, checked against a mirror of the repository in the github
-  service's volume; `gh pr create`, `gh pr edit` and `gh pr ready [--undo]` are GraphQL writes like any
+  that only read and name no secret (with `workflow_secrets` too, but those only the default
+  branch's copy of runs), checked against a mirror of the repository in the github service's
+  volume; `gh pr create`, `gh pr edit` and `gh pr ready [--undo]` are GraphQL writes like any
   other, which Deckhand's default policies allow to work runs for their own pull requests only:
   before them, `github-pulls.mjs` checks the pull request's head is one of the run's branches, its workflow
   files (for a repository granted `workflows`, as a push's) and its conflicts before
