@@ -1329,6 +1329,27 @@ VictoriaMetrics to scrape. Off by default: set the port and each service listens
   `deckhand_process_open_handles`. Where two copies share a lease (the orchestrator, the runner,
   edge's redeliveries' poller), `deckhand_lease_held{lease}` is 1 on the copy holding it, 0 on
   the one waiting: both answer, and what only the acting copy knows comes from it alone.
+- **The models service's**: the agents' API calls that go through it with your credentials.
+  - `deckhand_model_calls_total{provider, agent, status}`: `provider` anthropic, openrouter,
+    openai or google; `agent` claude, codex or antigravity; `status` the answer's class (`2xx`,
+    `4xx`, `5xx`…), with `429` (a rate or plan limit) and `529` (Anthropic overloaded) apart,
+    `unreachable` (no answer) or `credential` (not sent: a plan's login that can't be used or
+    refreshed). `deckhand_model_call_duration_seconds{provider}` is a call's length, its answer
+    streamed whole; `deckhand_model_streams_interrupted_total{provider}` counts the answers the
+    provider cut short (its connection lost, or no byte for 10 minutes), not those the agent gave
+    up on.
+  - `deckhand_model_tokens_total{provider, direction}`: the tokens a successful answer says it
+    used, `direction` `input` (not read from the cache), `output`, `cache_read` and
+    `cache_write` (Anthropic's alone). An answer, or one line of a stream, over 4 MB isn't read.
+  - `deckhand_plan_usage_ratio{provider, window}`: how much of each plan's window the runs used
+    (0 to 1), what the dashboard's bars show: `5h`, `7d`… for Claude and ChatGPT, a model's for
+    the Antigravity CLI; 0 once a window's reset has passed.
+  - `deckhand_plan_login_refreshes_total{provider, result}`: the ChatGPT (`openai`) and Google AI
+    (`google`) plans' logins it refreshed, `ok`, `refused` (sign in again) or `failed`, counted
+    by the copy that refreshed.
+  - `deckhand_model_fallbacks_total{from, to}` comes from the orchestrator, which decides them:
+    a run whose provider failed, put back for the next entry of `FALLBACKS`
+    (`agent@provider[:credential]`).
 - **Bounded labels**: never a run, issue, request or delivery ID, which stay fields of the
   [log lines](#logs). A label value outside those its metric declares, or a series past 200 of
   one metric, is counted as `other`, and the service logs it once.

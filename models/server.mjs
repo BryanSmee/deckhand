@@ -51,6 +51,7 @@ import { CLOUDCODE_HOST, createGoogleRelay } from "./google.mjs";
 import { createModelsServer } from "./http.mjs";
 import { fingerprintSalt, loginKey, loginSeal } from "./logins.mjs";
 import { createOpenAiProxy } from "./openai.mjs";
+import { modelMetrics } from "./metrics.mjs";
 import { createRuns } from "./runs.mjs";
 import { antigravityPoll, claudePoll, codexPoll, createUsage } from "./usage.mjs";
 
@@ -126,7 +127,8 @@ export const credentialNames = (env) => AGENT_SECRETS.filter((name) => env[name]
 // (logins.mjs); `keys`: the broker's public keys ({ get(kid) }), for service tokens; `broker`:
 // the broker service as listener/broker-service.mjs calls it (its run keys) with `caller`, its
 // lib/broker-client.mjs caller; `refresh`: the runner's login refresh (runner/client.mjs
-// refreshLogin()), null without one. → { server, runs, endpoints, ready() }.
+// refreshLogin()), null without one; `registry`: its metrics' (lib/metrics.mjs), none in most
+// tests. → { server, runs, endpoints, ready() }.
 export function createModels({
   env,
   config,
@@ -143,8 +145,11 @@ export function createModels({
   now = Date.now,
   // The plans' usage calls' (usage.mjs), Anthropic's, ChatGPT's and Google's.
   fetch = globalThis.fetch,
+  registry = null,
   log = () => {},
 }) {
+  // Its calls, tokens, plans' usage and logins' refreshes (metrics.mjs).
+  const metrics = modelMetrics(registry, { readUsage: () => usage.read(), now });
   const runs = createRuns({
     keys: { get: (kid) => broker.keys().get(kid) },
     unknownKey: broker.unknownKey,
@@ -164,7 +169,15 @@ export function createModels({
   // The plans' logins, which their endpoints and the usage calls share.
   const chatgptLogin =
     config.openaiCredential === "CODEX_AUTH_FILE"
-      ? createChatgptLogin({ file: env.CODEX_AUTH_FILE, store, seal, holder, now, log })
+      ? createChatgptLogin({
+          file: env.CODEX_AUTH_FILE,
+          store,
+          seal,
+          holder,
+          now,
+          refreshed: metrics.refreshed("codex"),
+          log,
+        })
       : null;
   // Refreshed with `agy` itself, in a container the runner starts (runner/service.mjs
   // loginRefresh()).
@@ -178,6 +191,7 @@ export function createModels({
           seal,
           holder,
           now,
+          refreshed: metrics.refreshed("antigravity"),
           log,
         })
       : null;
@@ -215,6 +229,7 @@ export function createModels({
     ),
     upstream: config.anthropicUrl,
     usage,
+    metrics,
     // claude@openrouter, for runs that fall back to it (FALLBACKS).
     providers: {
       openrouter: {
@@ -232,6 +247,7 @@ export function createModels({
     login: chatgptLogin,
     upstream: config.openaiUrl,
     usage,
+    metrics,
     log,
   });
   // Their Antigravity CLI's: a Gemini API key, or a Google AI plan's login (relayed by the
@@ -241,6 +257,7 @@ export function createModels({
     credential: config.agyCredential === "GEMINI_API_KEY" ? env.GEMINI_API_KEY : null,
     login: agyLogin,
     upstream: config.geminiUrl,
+    metrics,
     log,
   });
 
@@ -313,6 +330,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       secrets: () => credentialValues(env),
     });
     const runner = runnerOf({ urls: config.runnerUrl, caller, log });
+    // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
+    const { registry } = startMetrics({ service: "models", port: config.metricsPort, log });
     const models = createModels({
       env,
       config,
@@ -325,6 +344,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       refresh: runner.refreshLogin,
       bound,
       holder: `${hostname()}-${process.pid}`,
+      registry,
       log,
     });
     started = { ...models, config, broker, caller, store, graceMs: drainMs(env.DRAIN_SECONDS) };
@@ -339,8 +359,6 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   const { server, config, broker, caller, store, graceMs, ready, endpoints } = started;
   logins = () => [...endpoints.openai.secrets(), ...endpoints.google.secrets()];
-  // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
-  startMetrics({ service: "models", port: config.metricsPort, log });
   const port = Number(env.PORT ?? 8080);
   server.listen(port, () => log(`Models on :${server.address().port}`));
   for (const name of [config.claudeCredential, config.openaiCredential, config.agyCredential]) {

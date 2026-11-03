@@ -49,6 +49,8 @@ export function createChatgptLogin({
   now = Date.now,
   sleep,
   tokenUrl = TOKEN_URL,
+  // (error) → counts a refresh this copy did, an error when it failed (metrics.mjs refreshed()).
+  refreshed,
   log = () => {},
 }) {
   // Not JSON.parse()'s own error: it quotes part of the file (#242).
@@ -117,6 +119,7 @@ export function createChatgptLogin({
     now,
     ...(holder && { holder }),
     ...(sleep && { sleep }),
+    ...(refreshed && { refreshed }),
     due,
     refresh,
     headersOf: (json) => {

@@ -37,6 +37,8 @@ export function createOpenAiProxy({
   chatgptUrl = CHATGPT_URL,
   // usage.mjs's: the plan's answers' rate limit headers, for the dashboard's bars.
   usage = null,
+  // metrics.mjs modelMetrics()'s: what counts the calls.
+  metrics = null,
   log = () => {},
 }) {
   const plan = !credential && login;
@@ -44,6 +46,8 @@ export function createOpenAiProxy({
 
   const { handle } = createApiProxy({
     runs,
+    agent: "codex",
+    metrics,
     pathRe: API_PATH,
     routes: ROUTES,
     errorShape: ERRORS,
