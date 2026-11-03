@@ -9,7 +9,7 @@ import { createComments } from "../listener/comments.mjs";
 import { RunError } from "../listener/access.mjs";
 import { createRuns, reopenedMode } from "../listener/runs.mjs";
 import { openLog } from "../listener/runlog.mjs";
-import { recordingFetch, tempDir, testConfig } from "./helpers.mjs";
+import { recordingFetch, tempDir, testConfig, until } from "./helpers.mjs";
 
 const result = (text) => JSON.stringify({ type: "result", result: text, duration_ms: 60000 });
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -76,8 +76,8 @@ function setup(
     },
     onboarded: { isIssue: () => false },
     brainstorms: { replied: () => {} },
-    livePath: (id) => join(dir, `${id}.live.json`),
     saveLive: async () => {},
+    removeLive: async () => true,
     // An inbox entry's run takes no more comments.
     deliver: () => false,
     answer: answer ?? (async (_, text) => answers.push(text)),
@@ -721,29 +721,23 @@ test("an agent's line past RUN_LOG_MAX_MB starts no phase: the line isn't kept",
   assert.doesNotMatch(readFileSync(logPath, "utf8"), /"event":"phase"/);
 });
 
-test("a run's end whose queue couldn't be saved: its state goes, unless its task's queue can't be kept either", async (t) => {
-  const { ctx, runs, task, logs } = setup(t);
-  const path = ctx.livePath("run");
-  writeFileSync(path, "{}");
-  ctx.saveQueue = async () => false;
-  const later = [];
-  ctx.removeOnceSaved = (file) => later.push(file);
-  // Its task's queue in a file of its own (restart.mjs keepQueued()): the run is over.
-  ctx.keepQueued = () => true;
-  const live = task.live;
-  await runs.teardown(task);
-  assert.throws(() => readFileSync(path), { code: "ENOENT" });
-  assert.deepEqual(later, []);
-  // That file can't be written either: its state is kept, removed after the next write of the
-  // queue that succeeds.
-  writeFileSync(path, "{}");
-  Object.assign(task, { live: { ...live, over: false, saving: null }, running: true });
-  ctx.running = 1;
-  ctx.keepQueued = () => false;
-  await runs.teardown(task);
-  assert.equal(readFileSync(path, "utf8"), "{}");
-  assert.ok(logs.some((line) => /its state is kept/.test(line)));
-  assert.deepEqual(later, [path]);
+test("a run's end holds its task until its state is gone, after the queue's write (restart.mjs removeLive())", async (t) => {
+  const { ctx, runs, task } = setup(t);
+  let removed;
+  const removing = [];
+  ctx.removeLive = (ending) => {
+    removing.push(ending.live.over);
+    return new Promise((resolve) => (removed = resolve));
+  };
+  const ended = runs.teardown(task);
+  await until(() => removing.length === 1);
+  // Its last write done first; its task still taken meanwhile: no other run starts for it.
+  assert.deepEqual(removing, [true]);
+  assert.equal(task.running, true);
+  removed(true);
+  await ended;
+  assert.equal(task.live, null);
+  assert.equal(task.running, false);
 });
 
 test("a restored run's grace: a line read before the follow caught up keeps its whole grace", async (t) => {

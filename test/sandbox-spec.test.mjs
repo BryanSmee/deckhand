@@ -211,8 +211,8 @@ test("tokens: the run's tokens, bound to its sandbox, the agent's in place of a 
   assert.equal(env.DECKHAND_RUN_TOKEN, "run-deckhand-org-app-12-1@net-1");
   assert.equal(env.CLAUDE_CODE_OAUTH_TOKEN, "agent-deckhand-org-app-12-1@net-1");
   assert.equal(env.ANTHROPIC_BASE_URL, "http://models:8080/anthropic");
-  // Kept on the live run, for its output's redaction after a restart.
-  assert.equal(run.task.live.agentToken, "agent-deckhand-org-app-12-1@net-1");
+  // Not on the live run: its saved state (restart.mjs) holds no token (#617).
+  assert.equal(run.task.live.agentToken, undefined);
   const codex = sandboxSpec(runOf({ agent: AGENTS.codex }), "p", "m", {
     ...parts,
     caches: [],

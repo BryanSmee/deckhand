@@ -773,3 +773,85 @@ test("the orchestrator's fencing epoch: none or a stale one changes nothing, on 
   assert.deepEqual(listed.json.runs, ["run-a"]);
   assert.deepEqual((await current("DELETE", "/runs/run-a")).json, { ended: true });
 });
+
+test("a live run's tokens: to the orchestrator alone, renewed ones included, on either copy, sealed in the store (#617)", async (t) => {
+  const { copies, clock, store } = await brokers(t, { copies: 2 });
+  const [one, two] = copies;
+  const orchestrator = await client(one, "orchestrator", { epoch: clock.now });
+  const proxy = await client(one, "proxy");
+  const { token, agentToken } = await started(orchestrator);
+  clock.now += 5 * 60_000;
+  const renewed = (await renewOn(proxy, token)).token;
+  // The next copy of the orchestrator, through the other copy of the broker: both, the newest last.
+  const next = await client(two, "orchestrator", { epoch: clock.now });
+  const answer = await next("POST", "/runs/run-a/secrets");
+  assert.equal(answer.status, 200, answer.text);
+  assert.deepEqual(answer.json, { agentToken, tokens: [token, renewed] });
+  assert.equal(answer.headers["cache-control"], "no-store");
+  // Nobody else's: not the runner's, the proxy's, edge's, nor a copy that lost its lease.
+  const runner = await call(two, "shared", "POST", "/service-tokens", {
+    body: { audiences: ["broker"], service: "runner" },
+  });
+  const asRunner = await call(two, "shared", "POST", "/runs/run-a/secrets", {
+    headers: { authorization: `Bearer ${runner.json.tokens.broker}` },
+  });
+  assert.equal(asRunner.status, 403);
+  assert.equal((await proxy("POST", "/runs/run-a/secrets")).status, 403);
+  assert.equal((await (await client(two, "edge"))("POST", "/runs/run-a/secrets")).status, 403);
+  assert.equal((await orchestrator("POST", "/runs/run-a/secrets")).status, 409);
+  // None of them in the clear in the store: each key read.
+  const page = await store.keys("");
+  const values = await Promise.all(page.keys.map((k) => store.get(k)));
+  const text = JSON.stringify(values);
+  for (const secret of [token, renewed, agentToken]) assert.ok(!text.includes(secret));
+  // An ended run has none.
+  await next("DELETE", "/runs/run-a");
+  assert.equal((await next("POST", "/runs/run-a/secrets")).status, 404);
+});
+
+test("a run's tokens moved from the orchestrator's files: only those this broker signed for that run kept (#617)", async (t) => {
+  const { copies, store } = await brokers(t);
+  const other = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const { token, agentToken } = await started(orchestrator, "run-a");
+  const { token: elsewhere } = await started(orchestrator, "run-b", { sandbox: "net-b" });
+  const forged = (await started(await client(other.copies[0], "orchestrator"), "run-a")).token;
+  // A record of the release before: its last token sealed, no agent token, nothing else sealed.
+  const record = await store.get("run:run-a");
+  await store.set("run:run-a", {
+    ...record,
+    agent: undefined,
+    issued: record.issued.map(({ sealed: _, ...t }) => t),
+  });
+  assert.deepEqual((await orchestrator("POST", "/runs/run-a/secrets")).json, {
+    agentToken: null,
+    tokens: [token],
+  });
+  // The orchestrator moves what its file kept: the run's own tokens only.
+  const put = await orchestrator("PUT", "/runs/run-a", {
+    body: { repo: "org/a", tokens: [agentToken, token, elsewhere, forged, "not-a-token"] },
+  });
+  assert.equal(put.status, 204, put.text);
+  assert.deepEqual((await orchestrator("POST", "/runs/run-a/secrets")).json, {
+    agentToken,
+    tokens: [token],
+  });
+});
+
+test("a token presented to a broker that lost the run's record: sealed with the rest, for the orchestrator's next copy (#617)", async (t) => {
+  const { copies, clock, store } = await brokers(t);
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator");
+  const proxy = await client(broker, "proxy");
+  const { token } = await started(orchestrator);
+  // Lost (its store, say), then told again by the orchestrator, without the token's hash.
+  await store.delete("run:run-a");
+  await orchestrator("PUT", "/runs/run-a", { body: { repo: "org/a", sandbox: "net-a" } });
+  clock.now += 2 * 60_000;
+  const renewed = (await renewOn(proxy, token)).token;
+  assert.deepEqual((await orchestrator("POST", "/runs/run-a/secrets")).json.tokens, [
+    token,
+    renewed,
+  ]);
+});

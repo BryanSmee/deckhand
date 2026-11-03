@@ -133,9 +133,10 @@ export const minutes = (ms) => Math.round(ms / 6000) / 10;
 
 // Rebuilds the list after a restart, so the dashboard survives it: from the runs' summaries
 // (logs/<run>.json, the orchestrator's), as the logs are the runner's (#503). A run still live
-// (its .live.json, restart.mjs) has none yet: restoreRuns() lists it, and it gets one when it
-// ends. Newest first. A summary that can't be read is left out, logged: none stops the start.
-// The run state (.live.json) and queues (.queued.json) restart.mjs keeps here aren't summaries.
+// (its state in the store, restart.mjs) has none yet: restoreRuns() lists it, and it gets one
+// when it ends. Newest first. A summary that can't be read is left out, logged: none stops the
+// start. The run states (.live.json) and queues (.queued.json) the release before kept here,
+// which restart.mjs moves to the store, aren't summaries.
 const NOT_SUMMARIES = [".live.json", ".queued.json"];
 export function loadRuns(logDir, { log = console.error } = {}) {
   return readdirSync(logDir)
@@ -158,7 +159,8 @@ export function loadRuns(logDir, { log = console.error } = {}) {
 // doesn't keep it from starting. A log whose summary can't be written stays here, as does one
 // the runner doesn't take, and is sent at the next start.
 //
-// A live run's log (its .live.json) is written on at the runner once its move is over
+// A live run's log (its state in the store, `live`: their ids, or a .live.json of the release
+// before) is written on at the runner once its move is over
 // (restart.mjs): those go first, on a chain of their own, so that a live run waits for its own
 // log, never the history's. A live run's move that fails is tried again until it is done: its
 // writer would otherwise go on after a part of it, and the rest, sent at the next start, land
@@ -168,7 +170,13 @@ export function loadRuns(logDir, { log = console.error } = {}) {
 export function moveLogs(
   logDir,
   logs,
-  { max = READ_MAX, log = console.error, sleep = unrefSleep, retryMs = 5000 } = {},
+  {
+    max = READ_MAX,
+    log = console.error,
+    sleep = unrefSleep,
+    retryMs = 5000,
+    live: liveIds = new Set(),
+  } = {},
 ) {
   const all = readdirSync(logDir);
   // The copies a start that stopped midway left (redactedCopy()): an hour old, no other copy
@@ -192,7 +200,7 @@ export function moveLogs(
   for (const file of files) {
     const id = file.slice(0, -4);
     try {
-      const isLive = existsSync(join(logDir, `${id}.live.json`));
+      const isLive = liveIds.has(id) || existsSync(join(logDir, `${id}.live.json`));
       if (!isLive && readJson(summaryPath(logDir, id))?.id !== id) {
         // Not saveSummary(), which logs a failure and goes on: without its summary, a log
         // sent and removed would leave its run listed nowhere.

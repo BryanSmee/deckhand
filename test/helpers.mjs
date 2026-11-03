@@ -195,7 +195,8 @@ export function localBroker({ now = Date.now, key = testKey() } = {}) {
       if (!issued.token) throw new Error(issued.message);
       return issued;
     },
-    put: (id, { issued, ...fields }) => runs.put(id, runFields(fields), issued),
+    put: (id, { issued, tokens, ...fields }) => runs.put(id, runFields(fields), issued, tokens),
+    secrets: (id) => runs.secrets(id),
     end: (id) => runs.end(id),
   };
   return { issuer, keys: () => new Map([[key.kid, key.publicKey]]), runs, store, key };

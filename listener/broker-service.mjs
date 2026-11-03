@@ -146,6 +146,13 @@ export function createBrokerService({
     async put(id, fields) {
       await ok(await caller.call("PUT", `/runs/${enc(id)}`, { body: fields }), `run ${id}`);
     },
+    // A live run's tokens still valid, { agentToken, tokens }, for its output's redaction once
+    // this copy took it over (#617): kept in memory only. Null for a run the broker doesn't have.
+    async secrets(id) {
+      const res = await caller.call("POST", `/runs/${enc(id)}/secrets`);
+      if (res.status === 404) return null;
+      return (await ok(res, `the tokens of ${id}`)).json();
+    },
     end,
   };
 

@@ -22,6 +22,10 @@ import { isToken, RUN_AUDIENCE, TokenError, verifyToken } from "../lib/tokens.mj
 // What a run's token sent from elsewhere than its sandbox gets.
 export const NOT_ITS_SANDBOX = "this run's token only works from its own sandbox";
 
+// The most run tokens a run's list keeps (secretsOf()): the broker service's own cap
+// (../broker/runs.mjs ISSUED_MAX). An expired one dropped is still redacted by its shape.
+const ISSUED_MAX = 200;
+
 // A token's `exp` (ms), unchecked: for the list of a run's tokens to redact, never to trust one.
 function expOf(token) {
   try {
@@ -45,6 +49,7 @@ export const NO_ISSUER = {
     throw new Error("no broker service to sign the run's tokens");
   },
   put: async () => {},
+  secrets: async () => null,
   end: async () => {},
 };
 
@@ -75,7 +80,8 @@ export function createBroker({
   clientOf = async (req) => addressOf(req),
   sandboxOf = async () => null,
   // The broker service (broker-service.mjs createBrokerService()): { issue(id, fields) →
-  // { token, agentToken }, put(id, fields), end(id) }.
+  // { token, agentToken }, put(id, fields), secrets(id) → { agentToken, tokens } or null,
+  // end(id) }.
   issuer = NO_ISSUER,
   // The github service (../github/client.mjs runs), which serves the runs' GitHub and git
   // calls: { put(id, fields), end(id) }, told each run with what its gateways check, once its
@@ -116,8 +122,8 @@ export function createBroker({
   // ({ run_id, sha, at }). `reason`: why the listener started it itself ("review-fix",
   // "ci-fix", "conflict"), null for a comment's: the policies read it (github-writes.mjs).
   // `id`: the run's (runs.mjs), its tokens' `jti`; a restarted listener passes the same one, so
-  // they still name it, with its agent token (`agentToken`) and run tokens (`issued`), for
-  // redaction, and the network or
+  // they still name it, with the agent token (`agentToken`) and run tokens (`issued`) a state
+  // of the release before kept, for redaction (the others: recall()), and the network or
   // pod they are bound to (`sandbox`), which its renewed ones carry; without an `id`, a new one
   // (the tests' runs). → the handle the other calls take: the run's id.
   function register(
@@ -185,8 +191,8 @@ export function createBroker({
   }
 
   // `changed()`: called when the run created an issue, posted a comment, added or removed a
-  // reaction, or reran a workflow run (github-writes.mjs answered()), or got a new run token
-  // (keep()), so its saved state keeps it.
+  // reaction, or reran a workflow run (github-writes.mjs answered()), so its saved state keeps
+  // it.
   function watchChanges(handle, changed) {
     const run = runOf(handle);
     if (run) run.changed = changed;
@@ -266,12 +272,11 @@ export function createBroker({
     };
   }
 
-  // A run token the sandbox was handed, in the run's list (secretsOf()), saved with the run's
-  // state (changed()), so a restart still redacts it. The ones it renews come from the broker
-  // service alone: redact() knows their shape.
+  // A run token the sandbox was handed, in the run's list (secretsOf()). The ones it renews come
+  // from the broker service alone: recall() asks for them, and redact() knows their shape. A
+  // restarted listener asks the broker service for them all (#617).
   function keep(run, token, at) {
     run.issued = [...run.issued.filter((t) => t.token !== token), { token, exp: expOf(token), at }];
-    run.changed?.();
   }
 
   // The run's first tokens, from the broker service, once its sandbox's network (or pod) is
@@ -300,8 +305,10 @@ export function createBroker({
   }
 
   // A run a restarted listener picked up: the broker service is told it still goes, with what
-  // its tokens claim, so they still renew there.
-  async function restore(handle, shots = null) {
+  // its tokens claim, so they still renew there. `tokens`: those a listener of the release before
+  // kept in its files (restart.mjs), sent once so that the broker keeps them (sealed) for the
+  // next copies (#617); its renewal rule takes their hashes.
+  async function restore(handle, shots = null, tokens = []) {
     const run = runOf(handle);
     if (!run) return;
     await gateway.put(run.id, gatewayFields(run));
@@ -309,7 +316,29 @@ export function createBroker({
     // The hashes of the tokens it handed the sandbox, for the broker's rule past their expiry
     // (only the newest renews), should it not have the run yet.
     const issued = run.issued.map((t) => ({ hash: hash(t.token), exp: t.exp }));
-    await issuer.put(run.id, { ...fieldsOf(run), issued });
+    await issuer.put(run.id, { ...fieldsOf(run), issued, ...(tokens.length && { tokens }) });
+  }
+
+  // The run's tokens still valid, from the broker service (#617): what its output is redacted of
+  // once this listener took it over (secretsOf()), and again when one is renewed. In memory
+  // only, never in the listener's store. The list is the broker's, after those this listener
+  // knows that haven't expired: an expired one no longer in the broker's list goes (its shape
+  // still redacts it), so a run of days doesn't pile up hundreds. → the broker service's answer
+  // ({ agentToken, tokens }), null for a run it doesn't have. Throws when it can't say.
+  async function recall(handle) {
+    const run = runOf(handle);
+    if (!run) return null;
+    const found = await issuer.secrets(run.id);
+    if (!found || runOf(handle) !== run) return null;
+    const agentToken = isToken(found.agentToken ?? "") ? found.agentToken : null;
+    if (agentToken) run.agentToken = agentToken;
+    const tokens = (Array.isArray(found.tokens) ? found.tokens : []).filter(isToken);
+    const listed = new Set(tokens);
+    const kept = run.issued.filter((t) => !listed.has(t.token) && t.exp > now());
+    run.issued = [...kept, ...tokens.map((token) => ({ token, exp: expOf(token), at: 0 }))].slice(
+      -ISSUED_MAX,
+    );
+    return { agentToken, tokens };
   }
 
   // The run a call's run token names, once checked: { run, claims } or { status, message }.
@@ -352,12 +381,6 @@ export function createBroker({
     return run ? [run.agentToken, ...run.issued.map((t) => t.token)].filter(Boolean) : [];
   }
 
-  // Its run tokens alone, for its saved state (restart.mjs): after a restart, the one the sandbox
-  // holds is redacted before it is next renewed.
-  function issuedOf(handle) {
-    return (runOf(handle)?.issued ?? []).map((t) => t.token);
-  }
-
   // The run is over: its tokens name nothing here from now on, and the broker service is told
   // (`issuer.end()`, which tries again until it hears), so they renew nowhere.
   function revoke(handle) {
@@ -377,9 +400,9 @@ export function createBroker({
     watchChanges,
     issue,
     restore,
+    recall,
     check,
     secretsOf,
-    issuedOf,
     revoke,
     runOf,
     gatewayFields: (handle) => (runOf(handle) ? gatewayFields(runOf(handle)) : null),

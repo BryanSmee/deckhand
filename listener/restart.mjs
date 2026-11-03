@@ -1,7 +1,8 @@
 // Restarts: the queue and the runs a listener leaves to the next one, saved as they change, so
 // that one killed without SIGTERM (a crash, an OOM kill) leaves the same as one that stopped.
 // The comments waiting for a run are in the store (`queue`, with each task's deadline: the end
-// of its pause); each run's state is in logs/<run>.live.json. The next listener reads both,
+// of its pause); each run's state too (`runs/<id>`), without its tokens: the next copy asks the
+// broker service for those (#617). The next listener reads both,
 // re-arms the deadlines, finds the sandboxes by their labels (through the runner service,
 // which outlives it), follows their output from where
 // the previous one stopped, and posts each reply once.
@@ -14,9 +15,9 @@ import { RESEARCH } from "./modes.mjs";
 import { addRun, writeEvent } from "./runlog.mjs";
 import { runLogContext } from "./runs.mjs";
 import { ambiguous, githubNames, respelled, spellings } from "./spelling.mjs";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
+import { readJson } from "../lib/files.mjs";
 import { newLogContext } from "../lib/log.mjs";
-import { storable } from "../lib/store.mjs";
+import { storable, values } from "../lib/store.mjs";
 import { newTask, noLongerAllowed } from "./tasks.mjs";
 
 // A result saved by a listener from before the agent seam is Claude Code's raw stream-json
@@ -53,6 +54,10 @@ const LIVE_SAVE_MS = 1000;
 // store lists no keys, and the next listener needs them all.
 export const QUEUE_KEY = "queue";
 
+// Where each live run's state is in the store: `runs/<id>` (saveLive()), listed at the takeover.
+export const LIVE_PREFIX = "runs/";
+const liveKey = (id) => `${LIVE_PREFIX}${id}`;
+
 // What tells a queued comment apart, given when it is accepted (tasks.mjs accept()): a comment
 // both in the queue and in a run's saved state (a listener killed between the two writes) is the
 // run's alone.
@@ -75,7 +80,8 @@ function pick({ repo, id, kind, number, name, base, discussionId, settings }) {
   return { repo, id, kind, number, name, base, discussionId, settings };
 }
 
-// How often queueWritten() tries the queue's write again while the store is away.
+// How often queueWritten() tries the queue's write again while the store is away, and a run's
+// end its queue's write or its state's removal (removeLive()).
 export const QUEUE_RETRY_MS = 5000;
 
 // How long a start waits for the runner to say whether the restored runs' inboxes are open.
@@ -103,16 +109,55 @@ export function createRestart(ctx) {
   // spelled(repo) (spelling.mjs): set by unifySpellings(), or by restoreRuns() without GitHub's names.
   let spelled = null;
 
-  const readLive = () =>
-    readdirSync(ctx.logDir)
-      .filter((f) => f.endsWith(".live.json"))
-      .map((file) => readJson(join(ctx.logDir, file)))
-      .filter(Boolean);
+  // The runs' states a previous copy left, read once (by unifySpellings() or restoreRuns(),
+  // whichever comes first): those a listener of the release before kept in
+  // logs/<run>.live.json moved to the store first.
+  let leftLive = null;
+  const readLive = () => (leftLive ??= moveLive().then(listLive));
+
+  async function listLive() {
+    const found = [];
+    for await (const [, saved] of values(ctx.store, LIVE_PREFIX)) {
+      if (saved?.id && saved.task && saved.record) found.push(saved);
+    }
+    return found;
+  }
+
+  // The tokens the moved files held, by run: { agentToken, runTokens, path }, in memory only.
+  // The broker service is told them (restoreRun()), and keeps them for the next copies: the file
+  // is removed once it has them, or once the run is over (removeLive()), whichever comes first.
+  const movedTokens = new Map();
+
+  // Each logs/<run>.live.json written to the store without its tokens. A store that refuses the
+  // write fails the start, the file kept: the queue can't be read either then. One whose run the
+  // store has already (a copy that stopped before the broker service had its tokens) leaves the
+  // store's, newer, as it is: only its tokens are read. One that isn't a run's state is left
+  // where it is, logged.
+  async function moveLive() {
+    const files = readdirSync(ctx.logDir).filter((f) => f.endsWith(".live.json"));
+    for (const file of files) {
+      const path = join(ctx.logDir, file);
+      const saved = readJson(path);
+      if (!saved?.id || !saved.task || !saved.record) {
+        log(`${file}: not a run's state, left there`);
+        continue;
+      }
+      const { agentToken: agent, runTokens: issued, ...state } = saved;
+      const agentToken = typeof agent === "string" ? agent : null;
+      const runTokens = Array.isArray(issued) ? issued.filter((t) => typeof t === "string") : [];
+      movedTokens.set(saved.id, { agentToken, runTokens, path });
+      if (await ctx.store.get(liveKey(saved.id))) continue;
+      const secrets = [...(ctx.storeSecrets?.() ?? []), agentToken, ...runTokens];
+      await ctx.store.set(liveKey(saved.id), storable(state, secrets.filter(Boolean)));
+      log(`${saved.record.key ?? saved.id}: its state moved from ${file} to the store`);
+    }
+  }
 
   // The queue a previous listener left: the store's, and queue.json's from before it. Read once,
   // by unifySpellings() or loadQueue(), whichever comes first.
   let leftQueue = null;
-  // And the files keepQueued() left, a run's end the queue couldn't be written for.
+  // And the files a listener of the release before left, a run's end the queue couldn't be
+  // written for (logs/<run>.queued.json): read with it, removed once it is written.
   const keptFiles = () =>
     readdirSync(ctx.logDir)
       .filter((f) => f.endsWith(".queued.json"))
@@ -129,33 +174,13 @@ export function createRestart(ctx) {
     return leftQueue;
   }
 
-  // A run's end whose queue write failed (runs.mjs teardown()): its task's queue in
-  // logs/<run>.queued.json, read with the queue at the next start, and removed after the next
-  // write of the queue that succeeds. False when it can't be written either.
-  function keepQueued(task, live) {
-    if (!task.pending.length) return true;
-    const path = join(ctx.logDir, `${live.id}.queued.json`);
-    const pending = task.pending.map((item) => plainWith(item, eyesOf(item)));
-    try {
-      const saved = storable([{ ...pick(task), pending, next: task.next }], ctx.storeSecrets?.());
-      // The comments' text and authors: the owner's only.
-      writeJsonAtomic(path, saved, { mode: 0o600 });
-    } catch (error) {
-      log(`${live.key}: keeping its queue: ${error.stack ?? error}`);
-      return false;
-    }
-    log(`${live.key}: its task's queue kept in ${path} until the queue is saved`);
-    removeOnceSaved(path);
-    return true;
-  }
-
   // Every repo the runs, the runs going, the queue and `keys` (other state's task keys) have,
   // for spellings().
-  const records = async (keys = []) => recordsWith(await readQueue(), keys);
-  function recordsWith(queued, keys = []) {
+  const records = async (keys = []) => recordsWith(await readQueue(), await readLive(), keys);
+  function recordsWith(queued, live, keys = []) {
     return [
       ...ctx.runs,
-      ...readLive().map((saved) => ({
+      ...live.map((saved) => ({
         repo: saved.task?.repo,
         startedAt: saved.record?.startedAt,
         live: true,
@@ -223,8 +248,8 @@ export function createRestart(ctx) {
   }
 
   // Files whose comments are only safe once the queue is written with them (a queue.json from
-  // before the store, a run's state kept when the queue couldn't be written at its end,
-  // runs.mjs teardown()): removed after the next write that succeeds, whichever it is.
+  // before the store, a .queued.json of the release before): removed after the next write that
+  // succeeds, whichever it is.
   const removeOnSave = new Set();
   function removeOnceSaved(path) {
     removeOnSave.add(path);
@@ -385,12 +410,12 @@ export function createRestart(ctx) {
     await saveQueue();
   }
 
-  // What a listener needs to carry on with a run started by a previous one: written when it
-  // starts and whenever a comment reaches it, Claude answers or the reply is posted, and within
-  // a second of the output it reads (saveLiveSoon()); removed once it is over (runs.mjs
-  // teardown(), which sets `over`: a write still due then writes nothing). In order, each after
-  // the comments' 👀 are known.
-  const livePath = (id) => join(ctx.logDir, `${id}.live.json`);
+  // What a listener needs to carry on with a run started by a previous one, in the store
+  // (`runs/<id>`): written when it starts and whenever a comment reaches it, Claude answers or
+  // the reply is posted, and within a second of the output it reads (saveLiveSoon()); removed
+  // once it is over (removeLive(), after runs.mjs teardown() set `over`: a write still due then
+  // writes nothing). In order, each after the comments' 👀 are known. Never its tokens: the
+  // next copy asks the broker service for them (#617).
 
   function saveLive(task) {
     const live = task.live;
@@ -415,7 +440,6 @@ export function createRestart(ctx) {
             "mode",
             "talk",
             "light",
-            "agentToken",
             "sandbox",
             "asked",
             "replyTo",
@@ -431,15 +455,15 @@ export function createRestart(ctx) {
             .concat(["reviewFrom"])
             .map((k) => [k, live[k]]),
         ),
-        // Its run tokens still valid, for its output's redaction after a restart (broker.mjs).
-        runTokens: ctx.broker.issuedOf?.(live.id) ?? [],
         record,
         handled: await Promise.all(live.handled.map(plain)),
         // Delivered comments are among the handled ones.
         unanswered: live.unanswered.map((i) => live.handled.indexOf(i)),
       };
-      // The run's tokens are in it: the owner's only.
-      writeJsonAtomic(livePath(live.id), state, { mode: 0o600 });
+      // Its comments' text and authors, without the operator's secrets nor the run's tokens,
+      // should one of them hold one.
+      const secrets = [...(ctx.storeSecrets?.() ?? []), ...ctx.broker.secretsOf(live.id)];
+      await ctx.store.set(liveKey(live.id), storable(state, secrets));
       moved(live, handled);
       return true;
     };
@@ -460,6 +484,43 @@ export function createRestart(ctx) {
       if (task.live === live) saveLive(task);
     }, delayMs);
     live.soon.unref?.();
+  }
+
+  // A run's end (runs.mjs teardown(), once its last write is done): the queue written with what
+  // it put back, then its state removed, so that a copy killed between the two finds its
+  // comments in both (the run's win, loadQueue()), never in neither. A write of the queue that
+  // fails keeps it in memory and is tried again every QUEUE_RETRY_MS until it lands, the run
+  // holding its task meanwhile (no other run starts for it); its state's removal too. A copy
+  // that stops or loses its lease meanwhile (`ctx.held()`) leaves the state: the next copy finds
+  // the comments there, its sandbox gone. → whether the state is gone.
+  async function removeLive(task) {
+    const { live } = task;
+    const retryMs = ctx.queueRetryMs ?? QUEUE_RETRY_MS;
+    const again = (what) => {
+      if (ctx.stopping || !(ctx.held?.() ?? true)) {
+        log(`${live.key}: ${what} failed as this copy stops: its state stays for the next one`);
+        return false;
+      }
+      return new Promise((resolve) => setTimeout(() => resolve(true), retryMs).unref?.());
+    };
+    let said = false;
+    while (!(await saveQueue())) {
+      if (!said) log(`${live.key}: its state stays until the queue is saved with what it put back`);
+      said = true;
+      if (!(await again("saving the queue"))) return false;
+    }
+    for (;;) {
+      try {
+        await ctx.store.delete(liveKey(live.id));
+        // A file of the release before it was moved from, whose tokens the broker service may
+        // not have had yet: the run is over, they name nothing.
+        forgetMoved(live.id);
+        return true;
+      } catch (error) {
+        log(`${live.key}: removing its state: ${error.stack ?? error}`);
+        if (!(await again("removing its state"))) return false;
+      }
+    }
   }
 
   // The pushes of the run's GitHub took (git-gateway.mjs), on its record: when it last pushed,
@@ -485,8 +546,8 @@ export function createRestart(ctx) {
   // a runner away longer doesn't keep the listener down, and a run whose answer comes later
   // takes its comments then.
   async function restoreRuns({ waitMs = RESTORE_WAIT_MS } = {}) {
-    if (!spelled) respellRuns(spellings(recordsWith([])));
-    const live = readLive();
+    const live = await readLive();
+    if (!spelled) respellRuns(spellings(recordsWith([], live)));
     for (const saved of live) {
       saved.task.repo = spelled(saved.task.repo);
       saved.record.repo = spelled(saved.record.repo);
@@ -520,6 +581,16 @@ export function createRestart(ctx) {
     started = false;
     return restored;
   }
+
+  // The file a run's state was moved from (moveLive()), removed: its tokens are the broker
+  // service's, or name nothing any more. One that held none has nothing to wait for.
+  function forgetMoved(id) {
+    const moved = movedTokens.get(id);
+    if (moved) rmSync(moved.path, { force: true });
+  }
+
+  // Restored task → once the broker service told its run's tokens (restoreRun()).
+  const recalls = new WeakMap();
 
   function restoreRun(saved) {
     const key = taskKey(saved.task.repo, saved.task.id);
@@ -576,11 +647,12 @@ export function createRestart(ctx) {
       created: task.live.created,
       reruns: task.live.reruns,
       reason: record.reason ?? null,
-      // Its id, so its tokens still name it.
+      // Its id, so its tokens still name it; those a file of the release before kept, at once
+      // (the broker service has the rest: recall(), below).
       id: saved.id,
-      agentToken: saved.agentToken ?? null,
+      agentToken: movedTokens.get(saved.id)?.agentToken ?? null,
       sandbox: saved.sandbox ?? null,
-      issued: saved.runTokens ?? [],
+      issued: movedTokens.get(saved.id)?.runTokens ?? [],
       // Its tokens' `caps`, which its token reads with (and no token without `pull`).
       caps: savedCapabilities(saved),
     });
@@ -598,9 +670,26 @@ export function createRestart(ctx) {
     );
     watchPushes(task);
     // The broker service hears it still goes, and gets its inbox and files again (#505): its
-    // tokens renew there, its sandbox reads them there.
+    // tokens renew there, its sandbox reads them there. Then it says which tokens the run holds,
+    // which its output is redacted of (#617): reattach() waits for that a little. One retry for
+    // both, on purpose: while a broker of the release before refuses the second (403), the
+    // first goes again with the tokens a moved file held, which a broker updated since then
+    // takes. It's idempotent.
     const told = ctx.brokerService?.persist ?? ((what, fn) => fn().catch(() => {}));
-    told(`run ${saved.id}`, () => ctx.broker.restore(saved.id, shots));
+    const moved = movedTokens.get(saved.id);
+    const tokens = moved ? [moved.agentToken, ...moved.runTokens].filter(Boolean) : [];
+    recalls.set(
+      task,
+      told(`run ${saved.id}`, async () => {
+        await ctx.broker.restore(saved.id, shots, tokens);
+        const found = await ctx.broker.recall?.(saved.id);
+        // The broker service has them (it answered them back): the file they were in can go. A
+        // broker of the release before takes the PUT but drops its tokens, and refuses
+        // /secrets: the file stays until one that has them answers, or the run is over.
+        const had = found ? [found.agentToken, ...found.tokens] : [];
+        if (tokens.every((token) => had.includes(token))) forgetMoved(saved.id);
+      }),
+    );
     if (ctx.runner.resync) told(`run ${saved.id}'s files`, () => ctx.runner.resync(saved.id));
     return task;
   }
@@ -611,9 +700,15 @@ export function createRestart(ctx) {
   // stopped again if it runs. Sandboxes nobody knows about any more are told to finish (their
   // next run waits for them). First, this listener joins the running sandboxes' networks: a
   // new container isn't on them.
-  async function reattach(restored) {
+  async function reattach(restored, { waitMs = RESTORE_WAIT_MS } = {}) {
     await relink();
     const sandboxes = await listSandboxes();
+    // Its output is followed once its tokens are known, or `waitMs` on (a broker service away
+    // longer doesn't hold the runs up: their tokens' shape is redacted anyway, lib/redact.mjs).
+    let timer;
+    const late = new Promise((resolve) => (timer = setTimeout(resolve, waitMs)));
+    const told = Promise.allSettled(restored.map((task) => recalls.get(task)));
+    await Promise.race([told, late]).finally(() => clearTimeout(timer));
     for (const task of restored) {
       const live = task.live;
       const sandbox = sandboxes.find((s) => s.run === live.id);
@@ -688,11 +783,9 @@ export function createRestart(ctx) {
     park,
     queueWritten,
     eyesSaved,
-    removeOnceSaved,
-    keepQueued,
-    livePath,
     saveLive,
     saveLiveSoon,
+    removeLive,
     watchPushes,
     restoreRuns,
     reattach,

@@ -366,8 +366,11 @@ away for longer than a token's life doesn't end the run (below). After a restart
 renewed is bound where the one presented was, and the one presented is redacted too. A
 renewal asked within a minute of the last token signed gets that one back: a process asking in
 a loop can't pile up valid tokens. The broker's store holds no token in the clear: the hashes
-of the run's tokens still valid, and that last one sealed (AES-256-GCM, under a key derived
-from the signing key, `broker/seal.mjs`), so that any copy of the broker can hand it back.
+of the run's tokens still valid, each sealed beside its hash with the run's agent token (AES-256-GCM, under a key derived
+from the signing key, `broker/seal.mjs`), so that any copy of the broker can hand the last one
+back, and the orchestrator's next copy can redact them all (`POST /runs/:id/secrets`, its
+service token alone, with its fencing epoch: a copy that lost its lease gets `409`). That copy
+keeps them in memory only: the orchestrator's store has none (#617).
 `deckhand-token`
 prints the file, so the gh wrapper, git's credential helper, `deckhand-files` and
 `deckhand-inbox` read it again for each call: the agent is told never to keep it
@@ -715,16 +718,18 @@ and the `service-keys` volume it alone writes), and none can sign one. Its store
 runs (their claims, the network or pod their tokens are bound to), their inbox, CA, digest,
 the screenshots' names (the screenshots themselves are in blob storage, `BLOB_URL`, or in the
 store without it: [Run files](architecture.md#run-files)), and the `runs` stream the orchestrator
-reads; the tokens it renewed only sealed, with a key derived from its signing key
-(`broker/seal.mjs`).
+reads; the tokens it signed only sealed, with a key derived from its signing key
+(`broker/seal.mjs`), which it answers the orchestrator alone, for redaction (`POST
+/runs/:id/secrets`).
 
 **What each caller may do** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
 the stream, the screenshots it moves there from an older release's folder and those retention
 removes; a run's first tokens, which it asks for when the runner
-asks it (their claims are the orchestrator's, never the runner's); the runner the runs' inboxes
+asks it (their claims are the orchestrator's, never the runner's), and a live run's tokens, to
+redact its output once it took it over (`POST /runs/:id/secrets`, #617); the runner the runs' inboxes
 and files it copies there; the proxy the sandboxes' calls about their own run. Each
 orchestrator call but a `GET` carries its fencing epoch, refused when stale (`409`, #506): a copy
-that lost its lease ends no run and gets no token signed. The models service asks it whether
+that lost its lease ends no run and gets no token signed, nor read. The models service asks it whether
 a run still goes, and its agent's provider (`GET /runs/:id`). Edge, on `broker-edge`, reads a
 screenshot (`GET /shots/<folder>/<file>`, which it serves to anyone, #609), nothing else. The
 other services get their own service tokens there and nothing else.
@@ -2138,14 +2143,13 @@ service's). The files holding secrets are the owner's only (`0600`):
 | `session.key` | signs dashboard sessions                                                                                                                                                                                                           |
 | `store/`      | its store: the delivery ids taken, each login's session epoch, MCP clients' registrations and their tokens' hashes, the redeliveries' state and their poller's lease, the `deliveries` stream (what people wrote, without secrets) |
 
-**The orchestrator's volume** (`data`) holds nothing that signs deliveries or sessions; whoever reads it reads the queue and what the runs did, and a running run's
-agent token. The files holding one are the owner's only (`0600`):
+**The orchestrator's volume** (`data`) holds nothing that signs deliveries or sessions, nor any
+run's token (the broker answers those, #617); whoever reads it reads the queue and what the runs
+did. The files holding what people wrote are the owner's only (`0600`):
 
-| File                     | What                                                                                                                                                            |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over)                                                                                               |
-| `store/state.json`       | the store's keys: the queued comments and those waiting for other issues (`/after`), with their authors; its lease and fencing epoch; the deliveries it handled |
-| `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes                                                                                                   |
+| File               | What                                                                                                                                                                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `store/state.json` | the store's keys: the queued comments and those waiting for other issues (`/after`), with their authors; each running run's state (`runs/<id>`, gone once it's over); its lease and fencing epoch; the deliveries it handled |
 
 **The store** (`STORE_URL`: a folder by default, Redis #509) never holds a secret. Each
 service's refuses a value or an event holding one it knows, a GitHub token or a private key
