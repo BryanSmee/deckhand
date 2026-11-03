@@ -290,7 +290,8 @@ releases it on SIGTERM and the new one takes it at once. Running sandboxes go on
 
 Every service has a liveness probe on `/health`: a process that stops answering is restarted
 after a minute. The github and models services and the egress proxy answer `/ready` only once
-the broker has answered them (its keys, their service tokens): a new pod may not get out for a
+the broker has answered them (the github and models services its keys and their service tokens,
+the proxy its service tokens): a new pod may not get out for a
 few seconds after it starts (k3s's kube-router applies its NetworkPolicies then), and the calls
 it took meanwhile would fail. The orchestrator's and the
 runner's readiness is `/health` too, not `/ready`, as Compose's health checks
@@ -325,7 +326,7 @@ then checks one run from start to end:
 6. no sandbox pod is left.
 
 ```sh
-K3S=k3s deploy/kubernetes-e2e/run.sh   # in a k3s container on Docker, started if missing
+K3S=k3s deploy/kubernetes-e2e/run.sh   # in a k3s container on Docker, started if missing, then kept
 deploy/kubernetes-e2e/run.sh           # on the cluster kubectl points at (images loaded on its nodes)
 ```
 
@@ -341,7 +342,7 @@ It takes about five minutes on k3s, mostly building the images. It needs `docker
 `openssl` where it runs, and `kubectl` without `K3S`. With `K3S` (or `PREINSTALL_AGENT=1`) it
 puts Claude Code in the agent's claim beforehand ([Agents on Kubernetes](#agents-on-kubernetes)),
 so the cluster's pods need no way to npm's registry; otherwise the run installs it through the
-egress proxy. No CI job runs it: k3s needs a privileged container.
+egress proxy. No CI job runs it: k3s needs a privileged container. With `K3S`, the k3s container (privileged) stays for the next run, its images loaded: `docker rm -f k3s` removes it.
 
 ## Several nodes
 

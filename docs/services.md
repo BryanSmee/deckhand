@@ -109,7 +109,7 @@ answer needs no token. Edge answers it on its internal port (its public `/health
 `ok`), the egress proxy beside `/ready`, the policy service in JSON now (its status unchanged).
 `/ready` is the readiness probe's: `503` once a service drains, or on a copy waiting for its lease,
 and on the github and models services and the egress proxy until the broker has answered them
-(its keys, their service tokens): a new pod's calls may not get out for a few seconds after it
+(the github and models services its keys and their service tokens, the proxy its service tokens): a new pod's calls may not get out for a few seconds after it
 starts (k3s's kube-router applies its NetworkPolicies then), and the calls it took meanwhile would
 fail (#391).
 

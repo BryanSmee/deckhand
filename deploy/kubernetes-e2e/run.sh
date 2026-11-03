@@ -16,6 +16,7 @@
 #   6. no sandbox pod is left.
 #
 #   K3S=k3s deploy/kubernetes-e2e/run.sh    # in a k3s container on Docker, started if missing
+#                                           # and left for the next run (docker rm -f k3s)
 #   deploy/kubernetes-e2e/run.sh            # on the cluster kubectl points at: one to throw away
 #
 # It installs Deckhand in the namespaces deckhand, deckhand-sandboxes and deckhand-e2e, with the
@@ -97,7 +98,8 @@ if [ -n "$K3S" ] && ! docker inspect "$K3S" >/dev/null 2>&1; then
   docker run -d --name "$K3S" --privileged --cgroupns=host \
     -e NO_PROXY="$no_proxy" -e no_proxy="$no_proxy" -e IPTABLES_MODE=legacy \
     "$K3S_IMAGE" server --disable traefik --disable metrics-server --prefer-bundled-bin >/dev/null
-  until kubectl get nodes 2>/dev/null | grep -q ' Ready'; do sleep 2; done
+  ready_node() { kubectl get nodes 2>/dev/null | grep -q ' Ready'; }
+  wait_for 300 ready_node || fail "k3s in $K3S has no node Ready (docker logs $K3S)"
 fi
 
 step "Checking that the namespaces are this check's"
@@ -347,11 +349,12 @@ turns=$(node -e 'console.log(JSON.parse(process.argv[1]).turns)' "$seen")
 [ "$turns" -ge 1 ] || fail "no turn's calls to GitHub all answered"
 # The run's log, in the runner's store (the file backend, on its claim; no BLOB_URL, so no
 # segment moved out): Claude Code's retries
-# (api_retry), and what git, curl or Node say of a call that failed.
+# (api_retry), deckhand-inbox's and deckhand-token's (`asking again`, said only when the broker
+# refused or didn't answer), and what git, curl or Node say of a call that failed.
 run_log=$(kubectl -n deckhand exec deploy/runner -- sh -c 'cat /data/store/blobs/logs*') ||
   fail "no run log in the runner's store"
 [ -n "$run_log" ] || fail "an empty run log in the runner's store"
-errors=$(grep -E '"subtype":"api_retry"|fatal:|ECONNRESET|ECONNREFUSED|socket hang up|returned error|couldn.t be renewed|curl: \([0-9]+\)|HTTP 5[0-9]{2}' <<<"$run_log" | cut -c1-300 || true)
+errors=$(grep -E '"subtype":"api_retry"|asking again|fatal:|ECONNRESET|ECONNREFUSED|socket hang up|returned error|couldn.t be renewed|curl: \([0-9]+\)|HTTP 5[0-9]{2}' <<<"$run_log" | cut -c1-300 || true)
 [ -z "$errors" ] || fail "the run's log has errors: $errors"
 echo "No failed or repeated call; $turns turns called GitHub 10 times each, through the update"
 wait_for 300 gone || fail "a sandbox pod was left: $(sandbox_pods)"
