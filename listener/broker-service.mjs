@@ -1,12 +1,22 @@
 // The orchestrator's calls to the broker service (../broker/, #505), which alone holds the tokens'
 // signing key: the runs' first tokens and their end (broker.mjs `issuer`), the public keys the
-// listener checks tokens with, each run's inbox and files (runner/inbox.mjs `mirror`), and the
-// broker's `runs` stream, read and acknowledged (consume()). The orchestrator's (#506), with its fencing
+// listener checks tokens with, each run's inbox and files (runner/inbox.mjs `mirror`), the
+// broker's `runs` stream, read and acknowledged (consume()), and the runs' screenshots, which the
+// broker keeps (#609): removed with their run, and moved there from an older release's folder. The orchestrator's (#506), with its fencing
 // epoch; edge and the github service take its keys from it too.
-import { createPublicKey, randomBytes } from "node:crypto";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
+import { createPublicKey } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { join } from "node:path";
-import { SHOT_FOLDER, SHOT_NAME } from "../lib/shots.mjs";
+import { MAX_SHOT, SHOT_FOLDER, SHOT_NAME } from "../lib/shots.mjs";
 import { EPOCH_HEADER } from "../lib/service-client.mjs";
 
 // How often the public keys are read again (a key rotated), and how soon after a failure.
@@ -18,6 +28,21 @@ const KEYS_AGAIN_MS = 30_000;
 export const INBOX_CHUNK = 1024 * 1024;
 
 const enc = encodeURIComponent;
+
+// A regular file's bytes, or null for anything else (a link, a FIFO, a file linked twice, gone,
+// over `max` bytes). O_NONBLOCK: a FIFO would otherwise block the open until something writes it.
+function regularFile(path, max) {
+  let fd = null;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const stat = fstatSync(fd);
+    return stat.isFile() && stat.nlink === 1 && stat.size <= max ? readFileSync(fd) : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) closeSync(fd);
+  }
+}
 
 // `caller`: lib/broker-client.mjs createBrokerCaller()'s.
 // `epoch()`: the orchestrator's fencing epoch, on each of its calls but a GET (#506); null for
@@ -193,36 +218,15 @@ export function createBrokerService({
 
   // --- The broker's stream ---------------------------------------------------------------
 
-  // The screenshot an event names, copied into the folder GET /shots/ serves, then deleted at
-  // the broker. Written whole, then renamed into place: GET /shots never serves half of one.
-  async function copyShot(shotsDir, { folder, name }) {
-    if (!SHOT_FOLDER.test(folder ?? "") || !SHOT_NAME.test(name ?? "")) return;
-    const path = `/shots/${enc(folder)}/${enc(name)}`;
-    const res = await caller.call("GET", path);
-    // Copied already (an event read again after its ack was lost).
-    if (res.status === 404) return;
-    await ok(res, `screenshot ${folder}/${name}`);
-    const dir = join(shotsDir, folder);
-    mkdirSync(dir, { recursive: true });
-    const part = join(dir, `.${randomBytes(6).toString("hex")}.part`);
-    try {
-      writeFileSync(part, res.body, { mode: 0o644 });
-      renameSync(part, join(dir, name));
-    } finally {
-      rmSync(part, { force: true });
-    }
-    await ok(await caller.call("DELETE", path), `screenshot ${folder}/${name}`);
-  }
-
-  // The `runs` stream, read and acknowledged event by event: started, renewed, ended, shot.
-  // `handlers`: type → (event) → a promise, done once it is handled; `shotsDir`: where the
-  // screenshots go. An event whose handling fails is read again (not acknowledged).
+  // The `runs` stream, read and acknowledged event by event: started, renewed, ended, shot (the
+  // broker keeps the screenshot, #609; one the broker of the release before kept is adopted). `handlers`: type → (event) → a promise, done once it is
+  // handled. An event whose handling fails is read again (not acknowledged).
   let consuming = null;
-  function consume({ shotsDir, handlers = {} }) {
+  function consume({ handlers = {} } = {}) {
     const handle = {
       ...handlers,
       shot: async (event) => {
-        await copyShot(shotsDir, event);
+        await adoptShot(event);
         await handlers.shot?.(event);
       },
     };
@@ -255,6 +259,73 @@ export function createBrokerService({
       }
     })();
     return consuming;
+  }
+
+  // --- The screenshots (#609) ----------------------------------------------------------
+
+  // A screenshot a `shot` event names, which the broker of the release before kept in its store
+  // under a name that expires (#609): kept for good there, so that retention deletes it. One the
+  // broker of this release took is kept already: nothing to do. For one update.
+  async function adoptShot({ folder, name }) {
+    if (!SHOT_FOLDER.test(folder ?? "") || !SHOT_NAME.test(name ?? "")) return;
+    const path = `/shots/${enc(folder)}/${enc(name)}`;
+    await ok(await caller.call("POST", path), `screenshot ${folder}/${name}`);
+  }
+
+  // A run's screenshots, as retention removes it (history.mjs).
+  async function removeShots(folder) {
+    await ok(await caller.call("DELETE", `/shots/${enc(folder)}`), `the screenshots of ${folder}`);
+  }
+
+  // The screenshots an orchestrator kept itself before the broker did (`shotsDir`, its shots/
+  // folder): each folder's sent to the broker, file by file, then removed. A file the broker
+  // refuses (not an image, too big) goes with its folder; a failure of the broker's throws, the folder
+  // kept, for persist() to try again. Only regular files, opened without following a link: the
+  // sandboxes of older releases wrote these folders (a link there could name any file of the
+  // orchestrator's). `drop(folder, mtimeMs)`: a folder removed without sending it (one retention
+  // would have removed); `moved(folder, mtimeMs)`: one sent, before it is removed here (a throw
+  // keeps it, for the next try). → how many folders were moved.
+  async function moveShots(shotsDir, { drop = () => false, moved: sent = async () => {} } = {}) {
+    let folders;
+    try {
+      folders = readdirSync(shotsDir).filter((folder) => SHOT_FOLDER.test(folder));
+    } catch {
+      return 0;
+    }
+    if (!folders.length) return 0;
+    log(`Screenshots: ${folders.length} folder(s) kept here, sent to the broker`);
+    let moved = 0;
+    for (const folder of folders) {
+      const dir = join(shotsDir, folder);
+      let names = [];
+      let at = 0;
+      try {
+        const found = lstatSync(dir);
+        at = found.mtimeMs;
+        if (found.isDirectory() && !drop(folder, at)) {
+          names = readdirSync(dir).filter((n) => SHOT_NAME.test(n));
+        }
+      } catch {
+        // Gone meanwhile.
+      }
+      for (const name of names) {
+        const data = regularFile(join(dir, name), MAX_SHOT);
+        if (data === null) continue;
+        const res = await caller.call("PUT", `/shots/${folder}/${enc(name)}`, { body: data });
+        // Only what the broker says of the file itself: a broker of the release before, which
+        // has no such route (403, 404), keeps the folder here.
+        if ([400, 413, 415].includes(res.status)) {
+          log(`Screenshots: ${folder}/${name} refused by the broker (${res.status}), dropped`);
+        } else await ok(res, `screenshot ${folder}/${name}`);
+      }
+      if (names.length) {
+        await sent(folder, at);
+        moved++;
+      }
+      rmSync(dir, { recursive: true, force: true });
+    }
+    log(`Screenshots: ${moved} folder(s) moved to the broker, the rest removed`);
+    return moved;
   }
 
   // A pause, cut short by stop(): what waits on one then sees `stopped` and ends.
@@ -298,6 +369,8 @@ export function createBrokerService({
     persist,
     mirror: { files, sync, forget },
     consume,
+    removeShots,
+    moveShots,
     readKeys,
   };
 }

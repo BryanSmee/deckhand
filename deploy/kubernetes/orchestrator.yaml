@@ -95,8 +95,8 @@ spec:
               mountPath: /var/run/secrets/deckhand
               readOnly: true
       volumes:
-        # Its state (the runs' summaries and logs, its store), and the screenshots, served under
-        # /shots/ through edge.
+        # Its state (the runs' summaries and logs, its store), and the screenshots it kept before
+        # the broker did (#609), moved there at its start.
         - name: data
           persistentVolumeClaim:
             claimName: orchestrator-data

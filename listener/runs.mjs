@@ -1,8 +1,7 @@
 // Runs: one sandbox per run, started, followed and removed through the runner
 // (runner/docker.mjs). They run detached, so they outlive a listener restart: the next
 // listener picks them up (restart.mjs). Each run's reply, reactions and label once it is over.
-import { existsSync, readdirSync, rmdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
@@ -722,7 +721,6 @@ export function createRuns(ctx) {
     const live = task.live;
     const { key, record } = live;
     const { by } = live.cancelled;
-    removeEmptyShots(live);
     if (!live.replied) {
       // How long it ran, setup included: it may have no result to say.
       const ran = { durationMs: live.cancelled.at - record.startedAt };
@@ -747,7 +745,6 @@ export function createRuns(ctx) {
   async function endOverflowed(task) {
     const live = task.live;
     const { key, record } = live;
-    removeEmptyShots(live);
     if (live.unanswered.length) task.pending.unshift(...live.unanswered);
     const why = overflowMessage(live);
     if (!live.replied) {
@@ -766,11 +763,6 @@ export function createRuns(ctx) {
     record.status = "error";
     record.summary = `Stopped as failed: ${why}`;
     record.questions = null;
-  }
-
-  function removeEmptyShots(live) {
-    const shots = live.shots && join(ctx.shotsDir, live.shots);
-    if (shots && existsSync(shots) && !readdirSync(shots).length) rmdirSync(shots);
   }
 
   // The comment answered last decides where the reply goes (a discussion's thread).
@@ -820,7 +812,6 @@ export function createRuns(ctx) {
       if (live.overflow) return await endOverflowed(task);
       // The agent exited before answering a delivered comment (a crash): the next run gets it.
       if (live.unanswered.length) task.pending.unshift(...live.unanswered);
-      removeEmptyShots(live);
       const status = outcome(live.result);
       // What its agent's calls last got, from the models service (#504), for an error's
       // fallback and reply.

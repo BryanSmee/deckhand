@@ -510,7 +510,7 @@ filesystem, without capabilities.
   the github service, edge's alone) runs on one copy, the holder of the store's lease
   `edge/redeliveries`.
 - **What it passes on** (`edge/forward.mjs`): the dashboard's API (`/api/*`, the live logs
-  included), `/status` and the screenshots (`/shots/…`), to the orchestrator's services port
+  included) and `/status`, to the orchestrator's services port
   under `/edge/…`, with edge's service token and the signed-in user's login in `x-deckhand-user`
   (or `x-deckhand-local: 1` for a `/status` call from inside edge's container). Edge builds
   those headers itself: of the browser's request, only `content-type`, `accept` and
@@ -712,24 +712,27 @@ The broker (`broker/`, #505) is the only service holding the **signing key** of 
 own volume (`broker-keys`, owner-only, made on first start), never in its store nor another
 service's. Every other service checks those tokens offline with its public keys (`GET /keys`,
 and the `service-keys` volume it alone writes), and none can sign one. Its store holds the live
-runs (their claims, the network or pod their tokens are bound to), their inbox, CA, digest and
-screenshots ([Run files](architecture.md#run-files)), and the `runs` stream the orchestrator
+runs (their claims, the network or pod their tokens are bound to), their inbox, CA, digest,
+the screenshots' names (the screenshots themselves are in blob storage, `BLOB_URL`, or in the
+store without it: [Run files](architecture.md#run-files)), and the `runs` stream the orchestrator
 reads; the tokens it renewed only sealed, with a key derived from its signing key
 (`broker/seal.mjs`).
 
 **What each caller may do** (`broker/http.mjs` `ROUTES`): the orchestrator the live runs, their end,
-the stream and the screenshots it copies; a run's first tokens, which it asks for when the runner
+the stream, the screenshots it moves there from an older release's folder and those retention
+removes; a run's first tokens, which it asks for when the runner
 asks it (their claims are the orchestrator's, never the runner's); the runner the runs' inboxes
 and files it copies there; the proxy the sandboxes' calls about their own run. Each
 orchestrator call but a `GET` carries its fencing epoch, refused when stale (`409`, #506): a copy
 that lost its lease ends no run and gets no token signed. The models service asks it whether
-a run still goes, and its agent's provider (`GET /runs/:id`). Edge, on `broker-edge`, and the other
-services get their own service tokens there and nothing else.
+a run still goes, and its agent's provider (`GET /runs/:id`). Edge, on `broker-edge`, reads a
+screenshot (`GET /shots/<folder>/<file>`, which it serves to anyone, #609), nothing else. The
+other services get their own service tokens there and nothing else.
 
 A hole in the broker has every live run's inbox and digest: the inbox is the agent's input
 (`sandbox/entrypoint.sh` feeds `deckhand-inbox` to it), so it can write messages into every
 running agent, and it can forge the `runs` stream the orchestrator reads (run ends,
-screenshots). And it signs any token: the services check that a run token names a live run
+screenshots), and the screenshots edge serves. And it signs any token: the services check that a run token names a live run
 and the sandbox the call came from, but take what it may do from its claims (the git gateway
 its `repo` and `branches`, the models service its `agent`). So a token it signs for a live run,
 with other claims, and hands that run's sandbox at its next renewal (`POST /run/token`) pushes
@@ -1641,11 +1644,12 @@ from its own sandbox only ([Run tokens](#run-tokens)), and only for its own run'
   24 random hex digits, which it can't list. The broker takes each file after
   checking it: a name `GET /shots` serves (`[\w.-]+` with `.png`, `.jpg`, `.jpeg` or `.webp`),
   content starting the way that type does (so no HTML is served as an image), at most 10 MB a
-  file and 100 MB a run. The orchestrator copies it into its `shots/` and renames it into place, so `/shots`
-  (served through edge) never serves half a file. A
-  research run has no folder: refused. `/shots` still serves only regular files (no
-  symbolic or hard link, nothing resolving elsewhere): folders from before #393 were written
-  by sandboxes.
+  file and 100 MB a run. It writes it once into blob storage (one PUT, or one blob of its
+  store), so `/shots` (edge's, from the broker) never serves half a file. A research run has no
+  folder: refused. The folders an orchestrator of a release before #609 kept are moved to the
+  broker at its start, regular files only (no symbolic or hard link, nothing resolving
+  elsewhere, each checked again as an upload is): folders from before #393 were written by
+  sandboxes.
 
 Each agent's install volume (Claude Code's, Codex's, the Antigravity CLI's) is shared by
 every repository, so it is read-only in sandboxes: a run that could replace `claude` there
@@ -2124,8 +2128,9 @@ Run logs, which the runner keeps in its own volume ([The runner's data](#the-run
 have the operator's credentials, the run's tokens and its GitHub tokens redacted (see
 [The Claude credential](#the-claude-credential)): the orchestrator redacts each line before it
 sends it. Their summaries (`logs/<run>.json`, the orchestrator's) hold what the log's first line
-does, the run's comments included, and its screenshots' folder. Both, and the screenshots, go
-after `LOG_RETENTION_DAYS` (90 by default).
+does, the run's comments included, and its screenshots' folder. Both, and the screenshots (at
+the broker, which removes them when the orchestrator asks), go after `LOG_RETENTION_DAYS` (90
+by default).
 
 ### The runner's data
 

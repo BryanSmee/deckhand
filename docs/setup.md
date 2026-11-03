@@ -604,7 +604,7 @@ What every sandbox may reach and its limits aren't settings: they go in
 | `DOCKER_SOCKET`                                                                                   | none: compose's                                                                                   | `/var/run/docker.sock`                                                       | the host's Docker socket, which compose mounts into the runner                                                                                                                                                                                     |
 | `DECKHAND_VERSION`                                                                                | none: compose's                                                                                   | `latest`                                                                     | the release compose runs (`1.2.3`, `1.2`), or `edge` to follow `main`: see [Updating](#updating)                                                                                                                                                   |
 | `DECKHAND_REGISTRY`                                                                               | none: compose's                                                                                   | `ghcr.io/bryansmee`                                                          | where compose pulls the images from                                                                                                                                                                                                                |
-| `SHOTS_VOLUME`                                                                                    | none: compose's                                                                                   | `deckhand-screenshots`                                                       | name of the screenshots volume compose creates and mounts into the orchestrator only (sandboxes upload theirs to the broker, which the orchestrator copies them from)                                                                              |
+| `SHOTS_VOLUME`                                                                                    | none: compose's                                                                                   | `deckhand-screenshots`                                                       | name of the screenshots volume compose creates and mounts into the orchestrator only: what it kept before the broker did (#609), moved to the broker at its start                                                                                  |
 
 Each running sandbox has a Docker network of its own (see
 [Security model](security.md#network)). By default Docker takes their subnets from its default
@@ -629,9 +629,10 @@ Docker's own pools, so list those first and add yours after them, for example
 
 Each run leaves its log in `logs/<run>.log` on the data volume (the agent's whole output, often
 a few MB), a summary beside it (`logs/<run>.json`, what the dashboard lists after a restart,
-so the orchestrator doesn't read the logs to start) and its screenshots in `shots/`. At start and
-then daily, the orchestrator removes those of runs older than `LOG_RETENTION_DAYS` (90 days by
-default), and they leave the dashboard. It keeps a run still going, and the latest run of a
+so the orchestrator doesn't read the logs to start), and the broker keeps its screenshots (in blob
+storage, or its store without it: [Blob storage](#blob-storage)). At start and then daily, the
+orchestrator removes those of runs older than `LOG_RETENTION_DAYS` (90 days by default), the
+screenshots through the broker, and they leave the dashboard. It keeps a run still going, and the latest run of a
 task that is queued, in a brainstorm, waiting (`/after`) or waiting for input, whatever its
 age. Screenshots linked from older pull requests and comments stop showing once their run is
 removed: set a longer retention, or `0`, to keep them.
@@ -1589,7 +1590,8 @@ host disk (`tmpfs` in `compose.yaml`, commented out).
 
 The broker (`broker/`, its own image) is the only service holding the key that signs the runs'
 tokens and the services' own: edge, the orchestrator, the runner and the egress proxy check them
-with its public keys alone. It also keeps the live runs, their inbox, CA, digest and screenshots, in its store
+with its public keys alone. It also keeps the live runs, their inbox, CA and digest in its store,
+and their screenshots in blob storage (`BLOB_URL`, else its store too), which edge serves from it
 (the `broker-store` volume), and serves what a sandbox calls about its own run, through the
 egress proxy: its token's renewal, its inbox, its files. Its key is in the `broker-keys`
 volume, which no other service mounts: back it up with the orchestrator's `data` volume.
@@ -1741,8 +1743,9 @@ its run, at `LOG_SEGMENT_MB` and at its end), while the run goes on: the store k
 segment still being written and each log's index. Logs written before `BLOB_URL` was set stay in
 the store until retention removes them, and so do logs from before segments. Retention
 (`LOG_RETENTION_DAYS`) deletes the segments in blob storage too. Don't unset `BLOB_URL` once
-segments are there: their logs no longer read. The broker's files and screenshots move there in
-the next releases ([#604](https://github.com/BryanSmee/deckhand/issues/604)).
+segments are there: their logs no longer read. The broker keeps the runs' screenshots there
+([#609](https://github.com/BryanSmee/deckhand/issues/609)), written once as they come; retention
+deletes them with their run. Its other files (a run's inbox, CA, digest) stay in its store.
 
 When blob storage fails (down, or refusing the key), or the store does, closed segments wait in the store and are
 tried again after 30 s, then a delay that doubles each time, up to 30 minutes; the runner's log

@@ -323,7 +323,7 @@ kubectl -n deckhand create secret generic deckhand-redis $(for s in edge orchest
 ```
 
 Then edge, the broker, the github and models services keep nothing on disk, and their copies go
-to any node. The orchestrator's state and screenshots and the runner's inboxes are still files
+to any node. The orchestrator's state (and the screenshots it kept before #609) and the runner's inboxes are still files
 (until #613 moves them to the store): their claims become `ReadWriteMany`, which your default
 storage class has to provide (or a patch giving them a `storageClassName`), so a copy taking over
 on another node finds them. The proxy's copies stay on one node (their CA). Redis's own update is

@@ -6,9 +6,8 @@
 //                                       service signs): only for a run being started
 //                                       (`pendingTokens`), with the claims the orchestrator
 //                                       decided, never the runner's
-//   * /edge/*                           edge's: the dashboard's API, /status and the runs'
-//                                       screenshots, as edge passes them on with the user it
-//                                       signed in (../edge/forward.mjs), answered by http.mjs
+//   * /edge/*                           edge's: the dashboard's API and /status, as edge
+//                                       passes them on with the user it signed in (../edge/forward.mjs), answered by http.mjs
 //
 // The repos' tarballs and blobs are the github service's (../github/service.mjs, #502).
 //

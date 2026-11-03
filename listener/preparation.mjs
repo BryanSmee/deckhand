@@ -4,8 +4,6 @@
 // egress cache, and an analysis's digest or a research run's thread. What fails stops the run
 // with a reply (RunError).
 import { randomBytes } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { join } from "node:path";
 import {
   bareAccess,
   cantRun,
@@ -352,13 +350,10 @@ export function createPreparation(ctx) {
     if (leftover) await ctx.runner.remove(task.name);
   }
 
-  // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub.
+  // A fresh, unguessable folder per run: its screenshots are public once linked on GitHub. The
+  // broker keeps them (#609): nothing is made here.
   function shotsFolder() {
-    const shots = randomBytes(12).toString("hex");
-    // The listener writes it, from the sandbox's uploads to the broker (broker-service.mjs
-    // copyShot()).
-    mkdirSync(join(ctx.shotsDir, shots), { recursive: true });
-    return shots;
+    return randomBytes(12).toString("hex");
   }
 
   // The instructions file of the repo's mode, from its default branch like the config.

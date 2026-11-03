@@ -1,5 +1,5 @@
 // Edge's process (edge/server.mjs, #506) end to end, alone: the broker service in this process
-// (its service tokens), a fake github service and a fake orchestrator. The deliveries' way to a
+// (its service tokens, the screenshots), a fake github service and a fake orchestrator. The deliveries' way to a
 // run and back to a reply goes through the orchestrator too: orchestrator-server.test.mjs.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -44,12 +44,12 @@ async function startEdge(t) {
   );
   writeFileSync(join(dir, "session.key"), KEY);
   const key = testKey();
-  const broker = createBroker({
+  const { server: broker, files } = createBroker({
     store: openStore("memory:"),
     key,
     callers: createCallers({ networks: "edge=127.0.0.0/8" }),
     keysDir: join(dir, "keys"),
-  }).server;
+  });
   const brokerPort = await listening(broker);
   broker.unref();
   t.after(() => (broker.closeAllConnections(), broker.close()));
@@ -112,7 +112,7 @@ async function startEdge(t) {
         ...init.headers,
       },
     });
-  return { child, port, internal, asked, until, output: () => out };
+  return { child, port, internal, asked, until, files, output: () => out };
 }
 
 const signature = (body) => `sha256=${createHmac("sha256", SECRET).update(body).digest("hex")}`;
@@ -169,14 +169,21 @@ test("edge: a delivery taken once, read and acknowledged by the orchestrator; th
     (await fetch(`${base}/status`, { headers: { "x-forwarded-for": "1.2.3.4" } })).status,
     401,
   );
-  await fetch(`${base}/shots/0123456789abcdef01234567/page.png`);
+  // A screenshot: from the broker, never the orchestrator (#609).
+  const folder = "0123456789abcdef01234567";
+  const png = Buffer.concat([Buffer.from("89504e470d0a1a0a", "hex"), Buffer.from("png")]);
+  const moved = Object.assign([png], { headers: {} });
+  assert.equal((await edge.files.moveShot(moved, folder, "page.png")).status, 204);
+  const shot = await fetch(`${base}/shots/${folder}/page.png`);
+  assert.deepEqual([shot.status, shot.headers.get("content-type")], [200, "image/png"]);
+  assert.deepEqual(Buffer.from(await shot.arrayBuffer()), png);
+  assert.equal((await fetch(`${base}/shots/${folder}/none.png`)).status, 404);
   assert.deepEqual(
     edge.asked.map(({ method, url, user, local, service }) => [method, url, user, local, service]),
     [
       ["GET", "/edge/api/state", "alice", false, true],
       ["GET", "/edge/api/state", null, false, true],
       ["GET", "/edge/status", null, true, true],
-      ["GET", "/edge/shots/0123456789abcdef01234567/page.png", null, false, true],
     ],
   );
   // Its poller scans at start, holding the lease.

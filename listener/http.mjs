@@ -1,11 +1,8 @@
 // The orchestrator's HTTP (#506): what edge passes on to it (edge/forward.mjs), on its services
-// port under /edge/: the dashboard's API, /status and the runs' screenshots, each with the user
+// port under /edge/: the dashboard's API and /status, each with the user
 // edge signed in; and the verified deliveries edge puts on its stream (deliver()). The public
 // server (webhooks, /setup, sign-in, the dashboard's files) is edge's (../edge/http.mjs); the
 // egress policy, which the egress proxy asks, is egress-http.mjs.
-import { closeSync, constants, createReadStream, fstatSync, openSync, realpathSync } from "node:fs";
-import { join } from "node:path";
-import { pipeline } from "node:stream";
 import { board, isLive, runPlaces, STATES } from "./board.mjs";
 import {
   ciDelivery,
@@ -34,17 +31,6 @@ import { endPicks } from "./picks.mjs";
 import { closedAs } from "./titles.mjs";
 import { send, sendJson } from "../lib/http.mjs";
 import { apiRoute } from "./web.mjs";
-import { SHOT_NAME } from "../lib/shots.mjs";
-
-// /shots/<folder>/<file>: the names the sandboxes may upload (../lib/shots.mjs), nothing else.
-const SHOT_PATH = new RegExp(`^/shots/([0-9a-f]{24})/(${SHOT_NAME.source.slice(1, -1)})$`);
-
-const imageTypes = {
-  png: "image/png",
-  jpg: "image/jpeg",
-  jpeg: "image/jpeg",
-  webp: "image/webp",
-};
 
 // The dashboard's Sync asks GitHub at most this often: each one lists the App's deliveries.
 const SYNC_MS = 30_000;
@@ -247,42 +233,6 @@ export function createHttp(ctx) {
       });
     res.statusCode = 404;
     res.end();
-  }
-
-  // Public, like any image in a GitHub comment; the folder token is the only protection.
-  function serveShot(req, res) {
-    const match = SHOT_PATH.exec(req.url);
-    const fd = match && openShot(match[1], match[2]);
-    if (fd === null) {
-      res.statusCode = 404;
-      return res.end();
-    }
-    res.writeHead(200, {
-      "content-type": imageTypes[match[3]],
-      "cache-control": "public, max-age=31536000, immutable",
-    });
-    // pipeline(), not pipe(): a client that goes away closes the file too.
-    pipeline(createReadStream(null, { fd }), res, () => {});
-  }
-
-  // The sandbox writes its folder and the orchestrator runs as root: a link there would serve
-  // any file of the orchestrator's (app.json, its private key). Only a regular file, opened
-  // without following a link (O_NOFOLLOW, so swapping one in after the check doesn't help),
-  // whose real path is in the run's own folder. O_NONBLOCK: a FIFO would otherwise block the
-  // open, and the whole orchestrator with it, until something writes it; the type check refuses it.
-  function openShot(folder, name) {
-    let fd = null;
-    try {
-      const path = join(ctx.shotsDir, folder, name);
-      if (realpathSync(path) !== join(realpathSync(ctx.shotsDir), folder, name)) return null;
-      fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-      const stat = fstatSync(fd);
-      if (stat.isFile() && stat.nlink === 1) return fd;
-    } catch {
-      // Missing, a link, or unreadable: all a 404.
-    }
-    if (fd !== null) closeSync(fd);
-    return null;
   }
 
   // A verified delivery edge passed on ({ id, event, payload, redelivered }, ../edge/http.mjs):
@@ -509,7 +459,6 @@ export function createHttp(ctx) {
   }
 
   function route(req, res, user, local) {
-    if (req.method === "GET" && req.url.startsWith("/shots/")) return serveShot(req, res);
     if (req.url === "/status") {
       if (!local && !user) return res.writeHead(401).end();
       // A signed-in user's: only the repos they may see, as in api/state.

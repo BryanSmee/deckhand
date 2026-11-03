@@ -72,7 +72,7 @@ import {
   loadGrants,
 } from "../listener/grants.mjs";
 import { createHttp } from "../listener/http.mjs";
-import { createHistory } from "../listener/history.mjs";
+import { createHistory, forgottenShots, noteUnnamedShots } from "../listener/history.mjs";
 import { createInputs } from "../listener/inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "../listener/onboarding.mjs";
 import { createLinkedBranches } from "../listener/linked-branch.mjs";
@@ -207,8 +207,9 @@ if (unwritable.length) {
   process.exit(1);
 }
 const logDir = join(config.dataDir, "logs");
+mkdirSync(logDir, { recursive: true });
+// The screenshots a release before #609 kept here: moved to the broker (below), never written.
 const shotsDir = join(config.dataDir, "shots");
-for (const dir of [logDir, shotsDir]) mkdirSync(dir, { recursive: true });
 
 // The orchestrator's state through the store's interface (lib/store.mjs), in the data volume:
 // the queue (restart.mjs), its lease, the deliveries it handled, the rest as the services take
@@ -397,7 +398,6 @@ const ctx = {
   log,
   skip,
   logDir,
-  shotsDir,
   // Null until /setup has stored an App: webhooks are refused meanwhile.
   app: null,
   // What GET /app said at start, { name, slug, owner, ownerType }: the dashboard's App links.
@@ -734,6 +734,8 @@ Object.assign(ctx, {
   // Built and run by the runner service, from tarballs it gets through the listener.
   images: runnerClient.images,
   runLogs: runnerClient.logs,
+  // The runs' screenshots, the broker's (#609): removed with their run (history.mjs).
+  removeShots: (folder) => brokerService.removeShots(folder),
   // Runs' tokens, signed by the broker service, and what each run may do, which the services
   // its sandbox calls check them against: the orchestrator checks none itself.
   brokerService,
@@ -1089,8 +1091,19 @@ function reconcileRuns() {
 }
 const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
-// Its stream: the screenshots the runs uploaded, copied where GET /shots serves them.
-brokerService.consume({ shotsDir });
+// Its stream: the runs' events (the broker keeps their screenshots, #609).
+brokerService.consume();
+// The screenshots this orchestrator kept before the broker did go to it, while it goes on: asked
+// until the broker takes them (a reply posted before links to them still). A folder no run
+// names, past the run history's days, is removed instead, as retention removed those; a younger
+// one is moved, and noted for retention to remove later.
+const forgotten = forgottenShots(ctx.runs, config.logRetentionDays, Date.now());
+const named = new Set(ctx.runs.map((run) => run.shots).filter(Boolean));
+const unnamed = (folder, at) =>
+  named.has(folder) ? undefined : noteUnnamedShots(store, folder, at);
+const shotsMoved = brokerService.persist("the screenshots kept here", () =>
+  brokerService.moveShots(shotsDir, { drop: forgotten, moved: unnamed }),
+);
 // The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
 // writes by without holding them: the models service's sets, as it gave them (lib/redact.mjs,
 // #504), and lib/fingerprints.mjs's of any still in the listener's environment. Sent at start,
@@ -1140,9 +1153,9 @@ ctx.reviews.start();
 ctx.autoPickup.start();
 // After restoreRuns() and loadQueue(): what they bring back is kept.
 const history = createHistory(ctx);
-// Once the logs kept here are at the runner: one removed before it arrives would arrive after
-// its summary went, and stay there for good.
-moved.done.then(() => ctx.stopping || history.start());
+// Once the logs and screenshots kept here are at the runner and the broker: one removed before it
+// arrives would arrive after its summary went, and stay there for good.
+Promise.all([moved.done, shotsMoved]).then(() => ctx.stopping || history.start());
 // How the runner's sandboxes ended (runner/events.mjs).
 const runEvents = createRunEvents({
   events: runnerClient.events,
