@@ -391,6 +391,22 @@ test("a Stop after the answer posts it with the Stopped by line", async (t) => {
   assert.ok(logs.some((l) => /done \(cancelled\)/.test(l)));
 });
 
+test("a run's end counted with its outcome (deckhand_runs_finished_total)", async (t) => {
+  for (const [stop, outcome] of [
+    [false, "ok"],
+    [true, "cancelled"],
+  ]) {
+    // Silent after its answer, it is stopped once its grace ends (60 ms): an ok run.
+    const { ctx, runs, runner, following } = setup(t, { graceMs: stop ? 5000 : 60 });
+    const ended = [];
+    ctx.metrics = { runFinished: (live) => ended.push([live.mode, live.record.status]) };
+    runner.out(result("Done."));
+    if (stop) runs.cancel("org/repo#12", "bryansmee");
+    await following;
+    assert.deepEqual(ended, [["idea", outcome]]);
+  }
+});
+
 test("a Stop before any answer: the short reply", async (t) => {
   const { ctx, runs, answers, following } = setup(t, { graceMs: 5000 });
   ctx.deliver = () => true;

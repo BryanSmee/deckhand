@@ -47,6 +47,7 @@ function setup({
   waits = fileMap(path),
   allowed = true,
   queueSaved,
+  checked,
 } = {}) {
   const w = {
     issues,
@@ -80,9 +81,22 @@ function setup({
     resume: async (i) => (w.resumed.push(i), w.allowed),
     now: () => 1000,
     later: (fn, ms) => w.timers.push([fn, ms]),
+    checked,
   });
   return w;
 }
+
+test("each issue asked of GitHub is counted (deckhand_waits_checked_total)", async () => {
+  let checks = 0;
+  const w = setup({ checked: () => checks++ });
+  await w.waits.request(item({ numbers: [77, 80] }));
+  const asked = () => w.calls.filter((url) => /\/issues\/\d+$/.test(url)).length;
+  const before = asked();
+  assert.equal(checks, before);
+  await w.waits.check();
+  assert.equal(asked(), before + 2);
+  assert.equal(checks, asked());
+});
 
 test("issueList", () => {
   assert.equal(issueList([7]), "#7");
