@@ -2019,7 +2019,18 @@ it couldn't see of a label:
 - the label comes off before the run is queued, so a run that fails or is refused isn't
   started again and again: a person adds it back. The App never adds it itself: its own
   `labeled` event would make it the labeller, which nothing starts for. An issue held by its
-  labelling keeps the label, and the App's comment says why, once per labelling.
+  labelling keeps the label, and the App's comment says why, once per labelling;
+- one exception, opt-in (`review.follow_ups_auto_pickup`, #677): the follow-ups Deckhand
+  files once a pull request is merged by an allowed user carry the label from their creation.
+  The App's `labeled` event vouches for nothing by itself: the reviews' store keeps a record
+  of each such issue (its number, the merger, the issue's creation time), and a labelling by
+  the App counts only when it matches one, the same issue within two seconds
+  (`followUpPick()`, `listener/reviews.mjs`). The run is then the merger's, checked against
+  `ALLOWED_USERS` and `users` at the pick as any labeller, and the edit check above starts
+  from the label's time (the original GitHub lists for an edited description, the App's at
+  the issue's creation, isn't an edit since; any later edit of the App's is). A merge by Deckhand itself (`review.merge`), a bot or anyone not
+  allowed labels nothing. A run can't forge a record: it would have to file the issue
+  through the orchestrator's own merge handling, not a write of its own.
 
 ## The dashboard
 

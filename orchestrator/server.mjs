@@ -950,6 +950,8 @@ ctx.autoPickup = createAutoPickup({
   taken: () => ctx.pickedCount(),
   release: () => ctx.releasePicks(),
   load: (repo) => ctx.repoLoad(repo),
+  // The follow-ups the reviews filed with the label, for whoever merged their pull request.
+  followUpPick: (repo, number, at) => ctx.reviews.followUpPick(repo, number, at),
   log,
 });
 
