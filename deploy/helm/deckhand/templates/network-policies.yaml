@@ -523,3 +523,30 @@ spec:
           protocol: TCP
         - port: 6443
           protocol: TCP
+{{- if .Values.blobs.enabled }}
+---
+# components/blobs/blobs.yaml: the runner's and the broker's way to blob storage, and nothing
+# else's: blobs.to and blobs.ports. The placeholder (192.0.2.2) reaches nothing.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deckhand-blobs
+  namespace: {{ include "deckhand.ns" . }}
+  labels:
+    {{- include "deckhand.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [deckhand-runner, deckhand-broker]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        {{- toYaml .Values.blobs.to | nindent 8 }}
+      ports:
+        {{- range .Values.blobs.ports }}
+        - port: {{ . }}
+          protocol: TCP
+        {{- end }}
+{{- end }}

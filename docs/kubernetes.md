@@ -1,24 +1,25 @@
 # Deckhand on Kubernetes
 
 `deploy/kubernetes/` runs Deckhand on a cluster: a kustomize base with every service, the
-sandboxes in a namespace of their own, and two optional components, `redis` (the stores, for
-copies on several nodes) and `buildkit` (repositories' own images). `deploy/helm/deckhand/` is
+sandboxes in a namespace of their own, and optional components: `redis` (the stores, for
+copies on several nodes), `blobs` (blob storage for the logs and screenshots), `buildkit`
+(repositories' own images) and `engine` (a container engine for runs). `deploy/helm/deckhand/` is
 the same as a Helm chart, with values instead of patches ([Install with Helm](#install-with-helm)).
 Each run's sandbox is a pod
 (`RUNNER=kubernetes`): runs spread over the cluster's nodes, and `MAX_PARALLEL` still caps how
 many run at once. [setup.md](setup.md) has the rest (the GitHub App's permissions, the settings,
 the agents): this page is what differs on a cluster.
 
-| Service      | Copies                           | Readiness | Grace (s) | Volumes                                         | Secrets                                          |
-| ------------ | -------------------------------- | --------- | --------- | ----------------------------------------------- | ------------------------------------------------ |
-| edge         | 2, both active                   | `/health` | 40        | `edge-data` (its store)                         | `deckhand-edge`                                  |
-| orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data`, `orchestrator-screenshots` | none                                             |
-| runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)    | none (its ServiceAccount's API token)            |
-| broker       | 2, both active                   | `/ready`  | 45        | `broker-store`                                  | `deckhand-broker-key`                            |
-| github       | 2, both active                   | `/ready`  | 300       | `github-data` (its store, the git mirrors)      | `deckhand-github`                                |
-| models       | 2, both active                   | `/ready`  | 630       | `models-store`                                  | `deckhand-models`, `-models-key`, `-credentials` |
-| policy       | 2, both active                   | `/ready`  | 40        | none                                            | none                                             |
-| egress proxy | 1, and a second during an update | `/ready`  | 630       | `egress-cache` (its cache, its CA)              | none                                             |
+| Service      | Copies                           | Readiness | Grace (s) | Volumes                                         | Secrets                                                              |
+| ------------ | -------------------------------- | --------- | --------- | ----------------------------------------------- | -------------------------------------------------------------------- |
+| edge         | 2, both active                   | `/health` | 40        | `edge-data` (its store)                         | `deckhand-edge`                                                      |
+| orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data`, `orchestrator-screenshots` | none                                                                 |
+| runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)    | none (its ServiceAccount's API token); `deckhand-blobs` with `blobs` |
+| broker       | 2, both active                   | `/ready`  | 45        | `broker-store`                                  | `deckhand-broker-key`; `deckhand-blobs` with `blobs`                 |
+| github       | 2, both active                   | `/ready`  | 300       | `github-data` (its store, the git mirrors)      | `deckhand-github`                                                    |
+| models       | 2, both active                   | `/ready`  | 630       | `models-store`                                  | `deckhand-models`, `-models-key`, `-credentials`                     |
+| policy       | 2, both active                   | `/ready`  | 40        | none                                            | none                                                                 |
+| egress proxy | 1, and a second during an update | `/ready`  | 630       | `egress-cache` (its cache, its CA)              | none                                                                 |
 
 ## Requirements
 
@@ -254,6 +255,7 @@ first install.
 | `persistence.storageClass`, `.sizes`        | the cluster's default        | the services' claims; with `redis`, `persistence.sharedStorageClass` for the `ReadWriteMany` ones                                                                                                                 |
 | `sandboxes.storageClass`, …                 | unset                        | `KUBERNETES_STORAGE_CLASS`, `KUBERNETES_CACHE_STORAGE_CLASS` and `KUBERNETES_AGENT_STORAGE_CLASS` ([Agents](#agents-on-kubernetes), [Caches](#caches-on-kubernetes))                                              |
 | `buildkit.enabled`, `registry`              | off                          | the `buildkit` component ([Repo images](#repo-images)): `registry.url` is `KUBERNETES_REGISTRY` (refused without BuildKit), `registry.secretName` its pull Secret                                                 |
+| `blobs.enabled`, `.url`, `.to`, `.ports`    | off                          | the `blobs` component ([Blob storage](#blob-storage)): `BLOB_URL` and the `blobs.secretName` Secret (`deckhand-blobs`) for the runner and the broker alone, their way to its address (placeholders until set)     |
 | `engine.enabled`, `.image`, `.runtimeClass` | off                          | the `engine` component ([Container engine](#container-engine-on-kubernetes)): `SANDBOX_ENGINE=sysbox`, `ENGINE_IMAGE` (`<repository>-engine:<tag>` when empty), `KUBERNETES_ENGINE_RUNTIME_CLASS` (`sysbox-runc`) |
 | `ingress`                                   | off                          | an Ingress to edge's port 8080 for `ingress.host`, with `className`, `annotations` (cert-manager's, say) and `tlsSecretName`                                                                                      |
 
@@ -328,6 +330,75 @@ to any node. The orchestrator's state (and the screenshots it kept before #609) 
 storage class has to provide (or a patch giving them a `storageClassName`), so a copy taking over
 on another node finds them. The proxy's copies stay on one node (their CA). Redis's own update is
 a restart of a few seconds, which the services wait through.
+
+## Blob storage
+
+With the `redis` component, the runs' logs and screenshots take Redis's memory: the runner and the
+broker say so at start, and on the dashboard's status page. Blob storage (setup.md,
+[Blob storage](setup.md#blob-storage)) takes them out of it; the `blobs` component gives it to
+the runner and the broker, and to no other service:
+
+```yaml
+components:
+  - https://github.com/BryanSmee/deckhand//deploy/kubernetes/components/redis?ref=v1.2.3
+  - https://github.com/BryanSmee/deckhand//deploy/kubernetes/components/blobs?ref=v1.2.3
+patches:
+  # BLOB_URL, in a ConfigMap of the runner's and the broker's alone (not deckhand-env, which
+  # the orchestrator and the models service read too). A patch, not a generator's merge: the
+  # component's ConfigMap isn't there yet when your generators run.
+  - target:
+      kind: ConfigMap
+      name: deckhand-blobs
+    patch: |
+      - op: replace
+        path: /data/BLOB_URL
+        value: s3://deckhand?endpoint=https://s3.eu-west-1.amazonaws.com&region=eu-west-1
+  # Their way to it: its addresses and port (blobs.yaml), in place of the placeholder.
+  - target:
+      kind: NetworkPolicy
+      name: deckhand-blobs
+    patch: |
+      - op: replace
+        path: /spec/egress/0/to
+        value:
+          - ipBlock:
+              cidr: 0.0.0.0/0
+```
+
+with its key pair in a Secret `deckhand-blobs` in `deckhand`, which their pods alone mount, read
+only (`BLOB_ACCESS_KEY_ID_FILE` and `BLOB_SECRET_ACCESS_KEY_FILE` name its files):
+
+```sh
+kubectl -n deckhand create secret generic deckhand-blobs \
+  --from-file=access-key-id=./access-key-id --from-file=secret-access-key=./secret-access-key
+```
+
+The placeholders (`BLOB_URL`'s `blobs.invalid`, the policy's `192.0.2.2`) reach nothing: the
+two services stop at start, saying what failed, until both are yours. The NetworkPolicy's way out
+is the one place to narrow: a hosted service's addresses when it publishes them (Amazon S3's
+ranges, `ip-ranges.json`), else `0.0.0.0/0` on 443 as above, which is a way to any HTTPS host
+for those two pods. Blob storage in the cluster (Garage's pods, setup.md's
+[Garage on its own](setup.md#garage-on-its-own)) is a `podSelector` instead, with a
+`namespaceSelector` when it runs in another namespace, and its port (Garage's S3 is on 3900):
+
+```yaml
+- op: replace
+  path: /spec/egress/0
+  value:
+    to:
+      - namespaceSelector:
+          matchLabels:
+            kubernetes.io/metadata.name: garage
+        podSelector:
+          matchLabels:
+            app: garage
+    ports:
+      - port: 3900
+        protocol: TCP
+```
+
+That namespace's own policies have to let them in. With Helm, `blobs.enabled`, `blobs.url`,
+`blobs.secretName`, `blobs.to` (the peers above) and `blobs.ports`.
 
 ## Repo images
 

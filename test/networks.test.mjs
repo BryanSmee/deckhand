@@ -31,6 +31,10 @@ const RUNS = {
   egress: ["proxy"],
 };
 
+// Blob storage compose.yaml can run (a profile of its own, to try it: docs/setup.md, Blob
+// storage) → the services that call it, the runner and the broker, each over a network of its own.
+const BLOB_STORAGE = { garage: ["runner", "broker"] };
+
 // Those reaching the internet: edge (webhooks and browsers, a published port), github, models
 // (the agents' APIs), the runner (registries) and the proxy (the hosts granted to runs).
 const INTERNET = ["edge", "github", "models", "runner", "proxy"];
@@ -57,7 +61,10 @@ function networksOf(service) {
 const UNTOKENED = [["proxy", "orchestrator"]];
 const untokened = (x, y) =>
   UNTOKENED.some(([a, b]) => (a === x && b === y) || (a === y && b === x));
+const blobCaller = (store, caller) => BLOB_STORAGE[store]?.some((s) => RUNS[caller]?.includes(s));
 const between = (a, b) =>
+  blobCaller(a, b) ||
+  blobCaller(b, a) ||
   (RUNS[a] ?? []).some((x) =>
     (RUNS[b] ?? []).some((y) => calls(x, y) || calls(y, x) || untokened(x, y)),
   );
@@ -69,7 +76,7 @@ function problems(compose) {
   const declared = compose.networks ?? {};
   const members = new Map(); // network → compose services on it
   for (const [name, service] of Object.entries(services)) {
-    if (!RUNS[name] && service.network_mode !== "none") {
+    if (!RUNS[name] && !BLOB_STORAGE[name] && service.network_mode !== "none") {
       found.push(`${name}: not in RUNS, and on a network`);
     }
     for (const net of networksOf(service)) {
@@ -155,8 +162,10 @@ for (const callee of ["broker", "runner", "models", "github", "edge", "orchestra
       assert.equal(compose.networks[net].internal, true, `${net}: no way out`);
     }
     // Every internal network of the service's is a caller's or a callee's: the broker's are its
-    // callers' alone.
-    if (callee === "broker") assert.equal(used.size, own.length);
+    // callers' alone, and blob storage's.
+    const blobs = (net) =>
+      Object.keys(BLOB_STORAGE).some((name) => networksOf(compose.services[name]).includes(net));
+    if (callee === "broker") assert.equal(used.size, own.filter((net) => !blobs(net)).length);
     // And a caller shares no other network with it: Docker's DNS answers the service's name
     // with its address on a network that isn't internal first (`default`), where SERVICE_NETWORKS
     // names no caller, and every call would be refused.
@@ -235,7 +244,49 @@ test("compose.yaml: only the runner and the broker get blob storage's settings",
     if (service === "runner" || service === "broker") continue;
     const named = Object.keys(environment).filter((name) => name.startsWith("BLOB_"));
     assert.deepEqual(named, [], `${service}'s settings`);
+    // The key pair, by any name: Garage's alone, which makes it (the blob storage itself).
+    const values = Object.values(environment).filter((value) => /\$\{BLOB_/.test(String(value)));
+    if (service === "garage") {
+      assert.deepEqual(values, ["${BLOB_ACCESS_KEY_ID:-}", "${BLOB_SECRET_ACCESS_KEY:-}"]);
+    } else assert.deepEqual(values, [], `${service}'s settings`);
   }
+});
+
+// Garage, to try blob storage (docs/setup.md, Blob storage): with its profile alone, reached by
+// the runner and the broker over a network each, internal (no way out for either), which they
+// wait for only when it runs.
+test("compose.yaml: Garage with the garage profile alone, on the runner's and the broker's internal networks", () => {
+  const compose = readCompose(readFileSync(join(root, "compose.yaml"), "utf8"));
+  const { garage } = compose.services;
+  assert.deepEqual(garage.profiles, ["garage"]);
+  assert.match(garage.image, /^dxflrs\/garage:v\d+\.\d+\.\d+$/, "pinned");
+  assert.ok(!garage.ports, "no published port");
+  assert.equal(garage.logging, "alias-logging");
+  assert.ok(garage.healthcheck?.test && garage.healthcheck.start_interval);
+  assert.deepEqual(garage.cap_drop, ["ALL"]);
+  assert.deepEqual(garage.security_opt, ["no-new-privileges:true"]);
+  for (const net of networksOf(garage)) {
+    assert.equal(compose.networks[net].internal, true, `${net}: no way out`);
+    const on = Object.entries(compose.services)
+      .filter(([name, s]) => name !== "garage" && networksOf(s).includes(net))
+      .map(([name]) => name);
+    assert.equal(on.length, 1, `${net}: ${on.join(", ")}`);
+  }
+  for (const caller of BLOB_STORAGE.garage) {
+    const shared = networksOf(compose.services[caller]).filter((n) =>
+      networksOf(garage).includes(n),
+    );
+    assert.equal(shared.length, 1, `${caller} and Garage share one network`);
+    assert.deepEqual(compose.services[caller].depends_on.garage, {
+      condition: "service_healthy",
+      required: false,
+    });
+  }
+  // Its S3 on 3900, the region BLOB_URL names; its RPC on its loopback alone.
+  const toml = compose.configs.garage.content;
+  assert.match(toml, /^api_bind_addr = "\[::\]:3900"$/m);
+  assert.match(toml, /^s3_region = "garage"$/m);
+  assert.match(toml, /^rpc_bind_addr = "127\.0\.0\.1:3901"$/m);
 });
 
 // The Docker socket is root on the host: only the runner holds it (#503), and the runner holds
@@ -491,7 +542,9 @@ test("compose.yaml: every long-running service has a health check on its own por
   const { options } = compose["x-logging"];
   assert.equal(compose["x-logging"].driver, "json-file");
   assert.ok(options["max-size"] && options["max-file"], "the logs rotate");
-  const running = Object.entries(compose.services).filter(([, s]) => s.restart !== "no");
+  const running = Object.entries(compose.services).filter(
+    ([name, s]) => s.restart !== "no" && !BLOB_STORAGE[name],
+  );
   assert.deepEqual(running.map(([name]) => name).sort(), Object.keys(RUNS).sort());
   for (const [name, service] of running) {
     assert.equal(service.logging, "alias-logging", `${name}: the logging anchor`);

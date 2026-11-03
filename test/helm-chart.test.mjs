@@ -67,7 +67,10 @@ function helmFails(t, values) {
 const BY_NAME = new Set(["env", "volumes", "volumeMounts"]);
 const KEEP = "helm.sh/resource-policy";
 function normalized(object) {
-  const text = JSON.stringify(object).replace(/"(deckhand-(?:server|env))-[0-9a-z]{10}"/g, '"$1"');
+  const text = JSON.stringify(object).replace(
+    /"(deckhand-(?:server|env|blobs))-[0-9a-z]{10}"/g,
+    '"$1"',
+  );
   const copy = JSON.parse(text, (key, value) =>
     BY_NAME.has(key) && Array.isArray(value)
       ? value.toSorted((a, b) => a.name.localeCompare(b.name))
@@ -93,8 +96,16 @@ const COMPONENTS = {
   redis: { store: "redis" },
   buildkit: { buildkit: { enabled: true } },
   engine: { engine: { enabled: true } },
+  blobs: { blobs: { enabled: true } },
 };
-const COMBINATIONS = [[], ["redis"], ["buildkit"], ["engine"], ["redis", "buildkit", "engine"]];
+const COMBINATIONS = [
+  [],
+  ["redis"],
+  ["buildkit"],
+  ["engine"],
+  ["blobs"],
+  ["redis", "buildkit", "engine", "blobs"],
+];
 
 test("helm: every component of the base has its values in the chart", () => {
   const dirs = readdirSync(join(base, "components"), { withFileTypes: true })
@@ -379,6 +390,48 @@ test(
   },
 );
 
+test(
+  "helm: blob storage's URL, Secret and address reach the runner and the broker alone",
+  { skip },
+  (t) => {
+    const blobs = {
+      enabled: true,
+      url: "s3://deckhand?endpoint=http://garage.blobs:3900&region=garage",
+      secretName: "garage-key",
+      to: [{ namespaceSelector: { matchLabels: { "kubernetes.io/metadata.name": "blobs" } } }],
+      ports: [3900],
+    };
+    const objects = helm(t, { blobs });
+    const map = objects.find(
+      (o) => o.kind === "ConfigMap" && o.metadata.name.startsWith("deckhand-blobs-"),
+    );
+    assert.deepEqual(map.data, { BLOB_URL: blobs.url });
+    for (const d of deployments(objects)) {
+      const spec = d.spec.template.spec;
+      const text = JSON.stringify(spec);
+      if (!["runner", "broker"].includes(d.metadata.name)) {
+        assert.ok(!/BLOB_|garage-key|deckhand-blobs/.test(text), d.metadata.name);
+        continue;
+      }
+      const env = spec.containers[0].env;
+      assert.equal(
+        env.find((e) => e.name === "BLOB_URL").valueFrom.configMapKeyRef.name,
+        map.metadata.name,
+      );
+      assert.equal(spec.volumes.find((v) => v.name === "blobs").secret.secretName, "garage-key");
+    }
+    assert.ok(!("BLOB_URL" in envOf(objects)));
+    const policy = named(objects, "NetworkPolicy", "deckhand-blobs");
+    assert.deepEqual(policy.spec.egress, [
+      { to: blobs.to, ports: [{ port: 3900, protocol: "TCP" }] },
+    ]);
+    // Off: none of it.
+    const off = helm(t);
+    assert.equal(named(off, "NetworkPolicy", "deckhand-blobs"), undefined);
+    assert.ok(!JSON.stringify(off).includes("BLOB_"));
+  },
+);
+
 test("helm: values that can't work are refused", { skip }, (t) => {
   assert.match(helmFails(t, { store: "postgres" }), /store/);
   assert.match(
@@ -391,6 +444,8 @@ test("helm: values that can't work are refused", { skip }, (t) => {
     helmFails(t, { engine: { enabled: true, runtimeClass: "" } }),
     /engine\.runtimeClass/,
   );
+  assert.match(helmFails(t, { blobs: { enabled: true, url: "" } }), /blobs\.url/);
+  assert.match(helmFails(t, { blobs: { enabled: true, to: [] } }), /blobs\.to/);
   // What the chart sets in deckhand-env itself, which its Roles and policies agree with.
   for (const [name, value] of [
     ["KUBERNETES_NAMESPACE", "namespaces.sandboxes"],
@@ -399,6 +454,9 @@ test("helm: values that can't work are refused", { skip }, (t) => {
     ["RUNNER", "the chart itself"],
     ["SANDBOX_ENGINE", "engine.enabled"],
     ["ENGINE_IMAGE", "engine.image"],
+    // Blob storage's, which deckhand-env would give the orchestrator and the models service.
+    ["BLOB_URL", "blobs.url"],
+    ["BLOB_SECRET_ACCESS_KEY", "blobs.secretName"],
   ]) {
     assert.match(helmFails(t, { env: { [name]: "x" } }), new RegExp(`env\\.${name}: .*${value}`));
   }

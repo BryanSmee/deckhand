@@ -122,7 +122,7 @@ models/       the models service (#504): the only one holding the agents' creden
 engine/       container engine sidecar images (dockerd for Sysbox, podman/ for Podman)
 compose.yaml  what an operator runs (publishes a port; no reverse-proxy labels)
 deploy/       kubernetes/: the manifests for a cluster (#396), a kustomize base and its components
-              (redis, buildkit), secrets.mjs (the Secrets the base doesn't hold) and
+              (redis, buildkit, engine, blobs), secrets.mjs (the Secrets the base doesn't hold) and
               check-isolation.sh; test/kubernetes-manifests.test.mjs holds them to CALLS (docs/kubernetes.md);
               helm/deckhand/: the same as a Helm chart (#570), whose default values render the
               base's objects (test/helm-chart.test.mjs)

@@ -37,7 +37,8 @@ const resources = (dir = "") => kustomization(dir).resources.flatMap((f) => docs
 const base = resources();
 const buildkit = resources("components/buildkit");
 const redis = resources("components/redis");
-const all = [...base, ...buildkit, ...redis];
+const blobs = resources("components/blobs");
+const all = [...base, ...buildkit, ...redis, ...blobs];
 const of = (kind, list = all) => list.filter((r) => r.kind === kind);
 const named = (kind, name, list = all) => of(kind, list).find((r) => r.metadata.name === name);
 
@@ -113,6 +114,7 @@ test("kustomization.yaml: every manifest of the folder is a resource of the base
       p.path ? [`components/redis/${p.path}`] : [],
     ),
     ...kustomization("components/buildkit").resources.map((f) => `components/buildkit/${f}`),
+    ...kustomization("components/blobs").resources.map((f) => `components/blobs/${f}`),
   ]);
   const files = readdirSync(root, { recursive: true })
     .map((f) => f.replaceAll("\\", "/"))
@@ -124,7 +126,7 @@ test("kustomization.yaml: every manifest of the folder is a resource of the base
 // A generator's file missing (or git-ignored, as config.yaml is) fails every build of the base,
 // remote ones included.
 test("kustomization.yaml: every file a generator reads is in the folder", () => {
-  for (const dir of ["", "components/redis", "components/buildkit"]) {
+  for (const dir of ["", "components/redis", "components/buildkit", "components/blobs"]) {
     for (const generator of kustomization(dir).configMapGenerator ?? []) {
       for (const entry of generator.files ?? []) {
         const file = join(root, dir, entry.split("=").at(-1));
@@ -662,24 +664,26 @@ test("secrets.mjs: the keys and the App's credentials, each in its own service's
 });
 
 // A component's patches (JSON Patch `add` alone, as they are written) applied to copies of
-// `list`'s documents they target.
+// `list`'s documents they target (a target's name is a regular expression, as kustomize's).
 function patched(dir, list) {
   const out = structuredClone(list);
   for (const { target, patch } of kustomization(dir).patches ?? []) {
-    const doc = out.find(
+    const docs = out.filter(
       (r) =>
         r.kind === target.kind &&
-        r.metadata.name === target.name &&
+        new RegExp(`^(?:${target.name})$`).test(r.metadata.name) &&
         (!target.namespace || r.metadata.namespace === target.namespace),
     );
-    assert.ok(doc, `${dir}: no ${target.kind} ${target.name}`);
-    for (const op of parseYaml(patch)) {
-      assert.equal(op.op, "add");
-      const keys = op.path.split("/").slice(1);
-      const last = keys.pop();
-      const at = keys.reduce((node, k) => node[k], doc);
-      if (last === "-") at.push(op.value);
-      else at[last] = op.value;
+    assert.ok(docs.length, `${dir}: no ${target.kind} ${target.name}`);
+    for (const doc of docs) {
+      for (const op of parseYaml(patch)) {
+        assert.equal(op.op, "add");
+        const keys = op.path.split("/").slice(1);
+        const last = keys.pop();
+        const at = keys.reduce((node, k) => node[k], doc);
+        if (last === "-") at.push(structuredClone(op.value));
+        else at[last] = structuredClone(op.value);
+      }
     }
   }
   return out;
@@ -723,5 +727,66 @@ test("components/engine: the engines' port published, and the sandboxes' policy 
     "ENGINE_IMAGE",
     "KUBERNETES_ENGINE_RUNTIME_CLASS",
     "SANDBOX_ENGINE",
+  ]);
+});
+
+// Blob storage's settings and key pair (#606, #610) are the runner's and the broker's alone, as in
+// compose.yaml (test/networks.test.mjs): the Secret mounted read only where BLOB_*_FILE says, the
+// URL from a ConfigMap no other service reads, and their way out to its address alone, a
+// placeholder that reaches nothing until the overlay sets it.
+test("components/blobs: the runner and the broker alone get BLOB_URL and the deckhand-blobs Secret, and reach its address alone", () => {
+  const withBlobs = [...patched("components/blobs", base), ...blobs];
+  const spec = (service) => named("Deployment", APP[service], withBlobs).spec.template.spec;
+  const BLOB_SETTINGS = ["BLOB_URL", "BLOB_ACCESS_KEY_ID_FILE", "BLOB_SECRET_ACCESS_KEY_FILE"];
+  for (const service of SERVICES) {
+    const { containers, volumes = [] } = spec(service);
+    const [main] = containers;
+    const settings = (main.env ?? []).filter((e) => e.name.startsWith("BLOB_"));
+    const secret = volumes.find((v) => v.secret?.secretName === "deckhand-blobs");
+    const config = JSON.stringify(spec(service)).includes('"deckhand-blobs"');
+    if (!API.includes(service)) {
+      assert.deepEqual(settings, [], `${service}: blob storage's settings`);
+      assert.ok(!config && !secret, `${service}: blob storage's ConfigMap or Secret`);
+      continue;
+    }
+    assert.deepEqual(
+      settings.map((e) => e.name),
+      BLOB_SETTINGS,
+      service,
+    );
+    assert.deepEqual(settings[0].valueFrom.configMapKeyRef, {
+      name: "deckhand-blobs",
+      key: "BLOB_URL",
+    });
+    assert.equal(secret.secret.defaultMode, 0o440, service);
+    const mount = main.volumeMounts.find((m) => m.name === secret.name);
+    assert.equal(mount.readOnly, true, service);
+    const files = Object.fromEntries(settings.slice(1).map((e) => [e.name, e.value]));
+    assert.deepEqual(files, {
+      BLOB_ACCESS_KEY_ID_FILE: `${mount.mountPath}/access-key-id`,
+      BLOB_SECRET_ACCESS_KEY_FILE: `${mount.mountPath}/secret-access-key`,
+    });
+  }
+  // Not deckhand-env, which the orchestrator and the models service read too.
+  const env = kustomization("components/blobs").configMapGenerator;
+  assert.deepEqual(
+    env.map((g) => g.name),
+    ["deckhand-blobs"],
+  );
+  assert.deepEqual(env[0].literals, ["BLOB_URL=s3://deckhand?endpoint=https://blobs.invalid"]);
+  // Its policy: the runner and the broker, out to the placeholder alone.
+  const policies = of("NetworkPolicy", blobs);
+  assert.deepEqual(
+    policies.map((p) => p.metadata.name),
+    ["deckhand-blobs"],
+  );
+  const [policy] = policies;
+  assert.deepEqual(policy.spec.policyTypes, ["Egress"]);
+  for (const service of SERVICES) {
+    const labels = deployment(service).spec.template.metadata.labels;
+    assert.equal(selects(policy.spec.podSelector, labels), API.includes(service), service);
+  }
+  assert.deepEqual(policy.spec.egress, [
+    { to: [{ ipBlock: { cidr: "192.0.2.2/32" } }], ports: [{ port: 443, protocol: "TCP" }] },
   ]);
 });
