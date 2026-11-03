@@ -2,13 +2,13 @@
 // writes its key alone, a JSON file from before is moved once, and the writes wait out a store
 // that is away.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { openStore, values } from "../lib/store.mjs";
 import { storeMap, storeMaps } from "../lib/store-map.mjs";
-import { tempDir } from "./helpers.mjs";
+import { isRoot, needsModes, tempDir } from "./helpers.mjs";
 
 // `store` with its calls recorded, and failing while `down.is`.
 function recorded(store) {
@@ -143,6 +143,51 @@ test("storeMap: a file from the release before is moved, then removed; moved twi
   assert.equal((await storeMap(store, "order", { file, moved })).size, 2);
   assert.deepEqual(calls, []);
 });
+
+test("storeMap: a file's null items aren't moved; a file that can't be read is left, and said", async (t) => {
+  const dir = tempDir(t);
+  const store = openStore("memory:");
+  // closed.json from before: an issue seen open is null there.
+  const file = join(dir, "closed.json");
+  writeFileSync(file, JSON.stringify({ "o/r#1": null, "o/r#2": "completed" }));
+  const closed = await storeMap(store, "closed", { file });
+  assert.deepEqual([...closed], [["o/r#2", "completed"]]);
+  assert.deepEqual((await store.keys("closed/")).keys, ["closed/o/r#2"]);
+  assert.equal(existsSync(file), false);
+
+  // Cut short by a crash: its items stay where they are, for the operator.
+  const half = join(dir, "titles.json");
+  writeFileSync(half, '{"o/r#1": "A');
+  const logs = [];
+  const titles = await storeMap(store, "titles", { file: half, log: (line) => logs.push(line) });
+  assert.equal(titles.size, 0);
+  assert.equal(readFileSync(half, "utf8"), '{"o/r#1": "A');
+  assert.match(logs.join("\n"), /titles\.json: not moved to the store, left as it is/);
+  // Nor one that isn't a map.
+  writeFileSync(half, "[1]");
+  await storeMap(store, "titles", { file: half, log: (line) => logs.push(line) });
+  assert.equal(existsSync(half), true);
+  assert.match(logs.at(-1), /not a map/);
+});
+
+test(
+  "storeMap: a file it may not read is left, and said",
+  { skip: (isRoot && "root reads anything") || needsModes },
+  async (t) => {
+    const dir = tempDir(t);
+    const file = join(dir, "pulls.json");
+    writeFileSync(file, JSON.stringify({ "o/r#1": { number: 2 } }));
+    chmodSync(file, 0o000);
+    const logs = [];
+    const map = await storeMap(openStore("memory:"), "pulls", {
+      file,
+      log: (line) => logs.push(line),
+    });
+    assert.equal(map.size, 0);
+    assert.equal(existsSync(file), true);
+    assert.match(logs[0], /pulls\.json: not moved to the store, left as it is: EACCES/);
+  },
+);
 
 test("storeMap: with the store away, the writes wait and land in order once it is back", async () => {
   const { store, calls, down } = recorded(openStore("memory:"));

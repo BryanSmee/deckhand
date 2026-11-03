@@ -1368,7 +1368,8 @@ alone go to its [store](#the-store) now: `titles.json`, `closed.json`, `pulls.js
 `dry-runs.json` and `requested.json`. Nothing to do: at its first start after the update, the
 orchestrator writes each file's items to the store (those it doesn't have yet), then removes the
 file, and its log says so (`titles: 120 item(s) moved to the store from /data/titles.json`). A
-crash midway moves them again at the next start, the same values. `reactions.json`, which the
+crash midway moves them again at the next start, the same values. A file it can't read (another user's,
+or cut short) is left where it is, and its log says why: fix its owner, or remove it. `reactions.json`, which the
 github service took over before (#458), is removed once handed over.
 
 With Redis as the store, these items are Redis keys under the store's prefix

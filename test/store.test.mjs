@@ -5,9 +5,11 @@ import {
   appendFileSync,
   chmodSync,
   linkSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
@@ -64,6 +66,28 @@ test("file: calls made together are written together, each on disk once it resol
   // Nothing of theirs on disk: another process reads what was written last.
   assert.equal(await other.get("k/1"), 1);
   assert.equal(await other.get("k/2"), 2);
+});
+
+test("file: a lock that can't be given back fails its batch's calls, and the next ones go on", async (t) => {
+  const dir = tempDir(t);
+  const lockPath = join(dir, "state.lock");
+  // During the write, the lock turns into a folder: unlock() can't read it.
+  let swap = false;
+  const writeJson = (...args) => {
+    writeJsonAtomic(...args);
+    if (!swap) return;
+    swap = false;
+    rmSync(lockPath, { force: true });
+    mkdirSync(lockPath);
+  };
+  const store = fileStore({ dir, writeJson });
+  await store.set("k/0", 0);
+  swap = true;
+  const calls = [store.set("k/1", 1), store.get("k/0")];
+  for (const call of calls) await assert.rejects(call, { code: "EISDIR" });
+  rmSync(lockPath, { recursive: true });
+  await store.set("k/2", 2);
+  assert.equal(await store.get("k/2"), 2);
 });
 
 test("file: keys, leases, streams, consumers and blobs outlive a restart", async (t) => {
