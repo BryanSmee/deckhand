@@ -1434,7 +1434,7 @@ doesn't restart an unhealthy container by itself: its logs say why.
 ## Updating
 
 Each release is a git tag (`v1.2.3`) that publishes the images, tagged `1.2.3`, `1.2`
-and `latest`. Each push to `main` publishes them too, tagged `edge`. There is no built-in updater: update the way you update other compose
+and `latest`. Each commit of `main` whose checks pass publishes them too, tagged `edge`. There is no built-in updater: update the way you update other compose
 services.
 
 ```sh
@@ -1448,9 +1448,10 @@ docker compose up -d
   hand, or with Renovate's docker-compose or regex manager), then the same two commands.
 - **`edge`**: set `DECKHAND_VERSION=edge` in `.env` to follow `main`, unreleased and for
   amd64 only (the tag has nothing to do with the edge service).
-  It is built as soon as a push lands (a newer push cancels the build in
-  progress, so a burst of merges builds once), and the dashboard shows the commit it runs as
-  `edge-<short sha>`. The same two
+  It is built once the repository's checks pass on `main`'s newest commit: a commit whose checks
+  fail gets no image, and `edge` stays on the last one that passed (a newer commit cancels the
+  build in progress, so a burst of merges builds once). The dashboard shows the commit it runs
+  as `edge-<short sha>`. The same two
   commands (or Watchtower) update it.
 
 To check which version runs and that a restart happened, open the dashboard's Repositories
