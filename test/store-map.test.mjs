@@ -73,6 +73,14 @@ test("storeMap: the value as it was set, though its caller changes it after", as
   assert.deepEqual(await all(store, "lanes/"), {});
 });
 
+test("storeMap: no null or undefined, which the store wouldn't read back or keep", async () => {
+  const map = await storeMap(openStore("memory:"), "closed");
+  assert.throws(() => map.set("org/repo#1", null), TypeError);
+  assert.throws(() => map.set("org/repo#1", undefined), TypeError);
+  assert.equal(map.has("org/repo#1"), false);
+  assert.equal(map.waiting(), 0);
+});
+
 test("storeMap: after a crash, a new process reads what was written (the file store)", async (t) => {
   const url = pathToFileURL(join(tempDir(t), "store")).href;
   const first = openStore(url);

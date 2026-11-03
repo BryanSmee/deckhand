@@ -441,9 +441,15 @@ async function onlyLog(dir) {
   return [...runLogs(dir).values()][0];
 }
 
+// Data folder → a wait for the orchestrator acting on it to have written to its store every map
+// item it changed so far (its /ready's `waiting`), registered by listen().
+const writesLanded = new Map();
+
 // Map `name` as the orchestrator keeps it in its store (lib/store-map.mjs): { key: value }, read
-// as another process on the store's folder would.
+// as another process on the store's folder would, once what the orchestrator changed so far
+// landed there (its writes are in the background).
 async function storedMap(dir, name) {
+  await writesLanded.get(dir)?.();
   const store = openStore(pathToFileURL(join(dir, "store")).href);
   const found = {};
   for await (const [key, value] of values(store, `${name}/`)) {
@@ -846,6 +852,17 @@ describe("listener", options, () => {
     );
     const edgeInternalPort = await forwarder(t, () => portOf(edge, /Internal port on :(\d+)\n/g));
     const servicesPort = await forwarder(t, () => portOf(listener, /Services on :(\d+)\n/g));
+    writesLanded.set(dir, () =>
+      waitUntil(
+        async () => {
+          const res = await fetch(`http://127.0.0.1:${servicesPort}/ready`).catch(() => null);
+          const body = res && (await res.json());
+          return body?.ok && body.waiting === 0;
+        },
+        { ms: 10_000, what: "the orchestrator's map writes" },
+      ),
+    );
+    t.after(() => writesLanded.delete(dir));
     const policyPort = await forwarder(t, () => portOf(listener, /Egress policy on :(\d+)\n/g));
     policyPortNow = policyPort;
     const settings = {
@@ -5724,8 +5741,10 @@ mounts:
     const dryRun = { dryRun: true, by: "someone", at: 950, denials: 1, url: "https://x/1" };
     // What a release before kept in its data volume, a file per map.
     const legacy = {
-      titles: { "org/repo#5": "Five", "org/repo#6": "Six" },
-      closed: { "org/repo#5": "completed", "org/repo#6": "completed" },
+      titles: { "org/repo#5": "Five", "org/repo#6": "Six", "org/repo#9": "Nine" },
+      closed: { "org/repo#5": "completed", "org/repo#6": "completed", "org/repo#9": "completed" },
+      // #9's failed run, its last (logged below), dismissed: kept at start.
+      dismissed: { "org/repo#9": { runId: "org-repo-9-1000", by: "alice", at: 1 } },
       // Merged: not asked about again at start, as an open one is.
       pulls: { "org/repo#5": { number: 50, url, state: "merged", readyAt: 1, additions: 1 } },
       lanes: { "org/repo#5": { key: "org/repo#5", name: "Budgets", namedAt: 1, at: Date.now() } },
@@ -5739,6 +5758,22 @@ mounts:
       for (const [name, value] of Object.entries(legacy)) {
         writeFileSync(join(dir, `${name}.json`), JSON.stringify(value));
       }
+      mkdirSync(join(dir, "logs"));
+      writeFileSync(
+        join(dir, "logs", "org-repo-9-1000.log"),
+        [
+          {
+            type: "listener",
+            key: "org/repo#9",
+            repo: "org/repo",
+            taskMode: "work",
+            startedAt: 1000,
+          },
+          { type: "result", is_error: true, result: "It failed.", duration_ms: 6000 },
+        ]
+          .map((l) => JSON.stringify(l))
+          .join("\n") + "\n",
+      );
       return { DEBOUNCE_MS: "60000", GITHUB_URL: github.url };
     });
     const { dir, port, send } = ctx;
@@ -5781,13 +5816,14 @@ mounts:
       const body = await (await get("/api/state", session)).json();
       return {
         tasks: body.tasks
-          .map(({ key, title, closed, pr, position, dryRun }) => ({
+          .map(({ key, title, closed, pr, position, dryRun, dismissed }) => ({
             key,
             title,
             closed,
             pr: pr && { number: pr.number, state: pr.state },
-            position,
+            ...(position && { position }),
             ...(dryRun && { dryRun }),
+            ...(dismissed && { dismissed: { by: dismissed.by, at: dismissed.at } }),
           }))
           .sort((a, b) => a.key.localeCompare(b.key)),
         lane: body.lanes["org/repo#5"]?.name,
@@ -5805,12 +5841,19 @@ mounts:
           dryRun,
         },
         { key: "org/repo#6", title: "Six", closed: "completed", pr: null, position: 1 },
+        {
+          key: "org/repo#9",
+          title: "Nine",
+          closed: "completed",
+          pr: null,
+          dismissed: { by: "alice", at: 1 },
+        },
       ],
       lane: "Budgets",
     });
     // Those the dashboard doesn't show (the others it fills as it is read: a lane's parent).
     const stored = {};
-    for (const name of ["modes", "onboarding", "conflicts", "requested", "order"]) {
+    for (const name of ["modes", "onboarding", "conflicts", "requested", "order", "dismissed"]) {
       stored[name] = await storedMap(dir, name);
     }
 

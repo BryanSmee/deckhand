@@ -33,9 +33,10 @@ export function createTitles({
   }
 
   // From an `issues` or `pull_request` delivery, or a fetch: `state` as closedAs() has it.
+  // Open: no entry (the store keeps no null, store-map.mjs), which closed() reads as null too.
   function setClosed(key, state) {
-    if (closed.get(key) === state) return;
-    closed.set(key, state);
+    if (state === null) closed.delete(key);
+    else if (closed.get(key) !== state) closed.set(key, state);
   }
 
   // [key, title] pairs, newest first, for keys that have none yet.

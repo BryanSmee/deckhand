@@ -64,6 +64,10 @@ test("closed states: from webhooks and the lookup; what was open is asked again 
   titles.setClosed("org/repo#2", "completed");
   assert.equal(titles.closed("org/repo#2"), "completed");
   titles.setClosed("org/repo#2", null);
+  // Open: no entry, as the next copy would read it back.
+  assert.equal(titles.closed("org/repo#2"), null);
+  await maps.settled();
+  assert.deepEqual((await maps.store.keys("closed/org/repo#2")).keys, []);
   await titles.fill(keys);
   assert.deepEqual(asked, [1, 2, 3, 4]);
 

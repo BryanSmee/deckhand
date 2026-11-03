@@ -70,7 +70,7 @@ test("move: a task moved writes its own rank alone, between its neighbours'", as
   const now = order.keys();
   assert.equal(now.length, 20);
   assert.deepEqual(now.slice(0, 4), ["org/app#2", "org/app#3", "org/app#4", "org/app#5"]);
-  assert.deepEqual((await createOrder({ order: await maps.again("order") })).keys(), now);
+  assert.deepEqual(createOrder({ order: await maps.again("order") }).keys(), now);
 });
 
 test("order.json from the release before: moved to the store in its order", async (t) => {

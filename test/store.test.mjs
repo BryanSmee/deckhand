@@ -17,6 +17,7 @@ import { randomBytes } from "node:crypto";
 import { sealWith } from "../lib/seal.mjs";
 import { nextEpoch, openStore, storable, values } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
+import { writeJsonAtomic } from "../lib/files.mjs";
 import { isRoot, needsModes, needsPosixRename, tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
 
@@ -25,19 +26,44 @@ storeContract("file", (t, clock) => fileStore({ dir: tempDir(t), now: clock.now 
 
 test("file: calls made together are written together, each on disk once it resolves", async (t) => {
   const dir = tempDir(t);
-  const store = fileStore({ dir });
+  // state.json's writes, counted; failing while `fail` says.
+  let writes = 0;
+  let fail = false;
+  const writeJson = (...args) => {
+    if (fail) throw new Error("disk full");
+    writes++;
+    return writeJsonAtomic(...args);
+  };
+  const store = fileStore({ dir, writeJson });
   const other = fileStore({ dir });
-  // A burst, as a map's items moved at start (store-map.mjs): one batch, one write of the file.
-  const writes = Array.from({ length: 500 }, (_, i) => store.set(`k/${i}`, i));
+  await store.set("k/first", 0);
+  writes = 0;
+  // A burst, as a map's items moved at start (store-map.mjs): made while the call before it
+  // runs, they go together, and the file is written once for them all.
+  const before = store.get("k/first");
+  const burst = Array.from({ length: 500 }, (_, i) => store.set(`k/${i}`, i));
   // One call of the batch failing fails alone.
   const bad = store.set("k/bad", undefined);
   const read = store.get("k/1");
-  await Promise.all(writes);
+  assert.equal(await before, 0);
+  await Promise.all(burst);
   await assert.rejects(bad, TypeError);
   assert.equal(await read, 1);
+  assert.equal(writes, 1);
   // Another process reads them all once they resolved.
   assert.equal(await other.get("k/499"), 499);
-  assert.equal((await other.keys("k/", { count: 1000 })).keys.length, 500);
+  assert.equal((await other.keys("k/", { count: 1000 })).keys.length, 501);
+
+  // The file can't be written: the calls that wrote reject, those that only read resolve.
+  fail = true;
+  const lost = [store.set("k/1", "lost"), store.delete("k/2")];
+  const reads = [store.get("k/3"), store.keys("k/", { count: 1000 })];
+  for (const call of lost) await assert.rejects(call, /disk full/);
+  assert.equal(await reads[0], 3);
+  assert.ok((await reads[1]).keys.length >= 500);
+  // Nothing of theirs on disk: another process reads what was written last.
+  assert.equal(await other.get("k/1"), 1);
+  assert.equal(await other.get("k/2"), 2);
 });
 
 test("file: keys, leases, streams, consumers and blobs outlive a restart", async (t) => {
