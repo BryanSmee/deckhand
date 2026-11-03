@@ -282,9 +282,10 @@ test("the orchestrator's policy: its answer, or refused when it can't answer", a
     const decrypt = req.url.includes("decrypt");
     // A service's name, forwarded: with the network of the sandbox the proxy vouches for.
     const sandbox = req.url.includes("forward=1") ? "net-a" : undefined;
-    res.end(
-      JSON.stringify({ allowed: req.url.includes("good"), private: true, cache, decrypt, sandbox }),
-    );
+    const allowed = req.url.includes("good");
+    // Who asked, and why a refusal, for the proxy's metrics.
+    const why = { source: "sandbox", ...(!allowed && { reason: "not_granted" }) };
+    res.end(JSON.stringify({ allowed, private: true, cache, decrypt, sandbox, ...why }));
   });
   const policy = egressPolicy(`${url}/egress`);
   assert.deepEqual(await policy("10.0.0.5", "good.com"), {
@@ -296,6 +297,7 @@ test("the orchestrator's policy: its answer, or refused when it can't answer", a
     models: false,
     sandbox: null,
     service: null,
+    source: "sandbox",
   });
   assert.equal((await policy("10.0.0.5", "good.broker", { forward: true })).sandbox, "net-a");
   assert.equal(asked.at(-1), "/egress?ip=10.0.0.5&host=good.broker&forward=1");
@@ -306,10 +308,12 @@ test("the orchestrator's policy: its answer, or refused when it can't answer", a
   assert.equal((await policy("10.0.0.5", "good.cached.com")).decrypt, false);
   assert.equal((await policy("10.0.0.5", "good.cached.decrypt.com")).decrypt, true);
   assert.equal((await policy("10.0.0.5", "bad.com")).allowed, false);
+  assert.equal((await policy("10.0.0.5", "bad.com")).reason, "not_granted");
   assert.equal((await policy("10.0.0.5", "broken.com")).allowed, false);
+  assert.equal((await policy("10.0.0.5", "broken.com")).reason, "policy_error");
   assert.equal(asked[0], "/egress?ip=10.0.0.5&host=good.com");
   const down = egressPolicy("http://127.0.0.1:1/egress", 500);
-  assert.equal((await down("10.0.0.5", "good.com")).allowed, false);
+  assert.deepEqual(await down("10.0.0.5", "good.com"), { allowed: false, reason: "policy_error" });
 });
 
 test("a push to the github service's name goes there, with the network the policy vouches for; nothing else does", async (t) => {

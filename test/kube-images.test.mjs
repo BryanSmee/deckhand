@@ -532,6 +532,8 @@ test("the builder reaches the building repo's hosts only, tunnelled, and nothing
     cache: false,
     decrypt: false,
     relay: false,
+    reason: "no_build",
+    source: "build",
   });
   const built = images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile", access });
   await new Promise((resolve) => setImmediate(resolve));
@@ -543,8 +545,9 @@ test("the builder reaches the building repo's hosts only, tunnelled, and nothing
     cache: false,
     decrypt: false,
     relay: false,
+    source: "build",
   });
-  assert.equal((await images.egressFor(ip, "evil.example")).allowed, false);
+  assert.equal((await images.egressFor(ip, "evil.example")).reason, "not_granted");
   // The registries it pulls from and pushes to.
   assert.equal((await images.egressFor(ip, REGISTRY)).allowed, true);
   assert.equal((await images.egressFor(ip, "ghcr.io")).allowed, true);
@@ -664,6 +667,7 @@ test("an install pod reaches its agent's install hosts only, through the proxy",
     cache: false,
     decrypt: false,
     relay: false,
+    source: "install",
   });
   assert.equal((await images.egressFor("10.244.2.9", "registry.npmjs.org")).allowed, false);
   finish();
@@ -1370,6 +1374,7 @@ test("Kubernetes: the login's refresh is a pod of its own, its input on stdin, n
     cache: false,
     decrypt: false,
     relay: false,
+    source: "install",
   });
   assert.equal(reached["daily-cloudcode-pa.googleapis.com"].allowed, true);
   assert.equal(reached["daily-cloudcode-pa.googleapis.com"].relay, false);

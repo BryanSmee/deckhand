@@ -162,6 +162,8 @@ test("egress: the runner's builder and installs answered by the images, an insta
   // The builder: the images' answer.
   assert.equal((await ask("10.9.9.9", "pypi.org")).allowed, true);
   assert.equal((await ask("10.9.9.9", "evil.example")).allowed, false);
+  // Said a build's, by a runner that doesn't say (one from before #658).
+  assert.equal((await ask("10.9.9.9", "pypi.org")).source, "build");
   // A sandbox whose init container installs its agent: npm's registry, tunnelled, and
   // nothing of the run's own hosts until the sandbox starts.
   assert.deepEqual(await ask("10.1.0.2", "registry.npmjs.org"), {
@@ -170,6 +172,7 @@ test("egress: the runner's builder and installs answered by the images, an insta
     cache: false,
     decrypt: false,
     relay: false,
+    source: "install",
   });
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, false);
   // The API can't tell: neither the run's own hosts for an installer, nor install hosts for
@@ -185,6 +188,7 @@ test("egress: the runner's builder and installs answered by the images, an insta
     cache: false,
     decrypt: false,
     relay: false,
+    source: "install",
   });
   live.hosts.pop();
   installing = true;
@@ -197,8 +201,9 @@ test("egress: the runner's builder and installs answered by the images, an insta
   installing = true;
   assert.equal((await ask("10.1.0.2", "pypi.org")).allowed, true);
   assert.equal(asked, before);
-  // Anyone else: refused.
-  assert.equal((await ask("10.7.7.7", "pypi.org")).allowed, false);
+  // Anyone else: refused, and said why.
+  const nobody = await ask("10.7.7.7", "pypi.org");
+  assert.deepEqual([nobody.allowed, nobody.source, nobody.reason], [false, "none", "no_run"]);
 });
 
 test("egress: the services' names only for a run's sandbox or engine the proxy forwards, never a build nor a tunnel", async (t) => {
@@ -251,12 +256,19 @@ test("egress: the services' names only for a run's sandbox or engine the proxy f
         decrypt: false,
         relay: false,
         sandbox: "net-a",
+        source: ip === "10.1.0.2" ? "sandbox" : "engine",
       });
     }
-    assert.equal((await ask("10.9.9.9", host, "&forward=1")).allowed, false);
-    assert.equal((await ask("10.7.7.7", host, "&forward=1")).allowed, false);
+    const build = await ask("10.9.9.9", host, "&forward=1");
+    assert.deepEqual(
+      [build.allowed, build.source, build.reason],
+      [false, "build", "not_forwarded"],
+    );
+    const nobody = await ask("10.7.7.7", host, "&forward=1");
+    assert.deepEqual([nobody.allowed, nobody.source, nobody.reason], [false, "none", "no_run"]);
     // Asked as any other host (a CONNECT): refused, and said.
-    assert.equal((await ask("10.1.0.2", host)).allowed, false);
+    const tunnel = await ask("10.1.0.2", host);
+    assert.deepEqual([tunnel.allowed, tunnel.reason], [false, "not_forwarded"]);
   }
   assert.ok(logged.includes("Egress: refused broker for 10.1.0.2"));
 });

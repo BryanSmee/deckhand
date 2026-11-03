@@ -42,6 +42,7 @@ import { blockedAddress, inSubnets, ownSubnets } from "./addresses.mjs";
 import { certifiable, createAuthority } from "./authority.mjs";
 import { createCache, DEFAULT_ENTRY_MAX, DEFAULT_MAX, parseSize, requestUse } from "./cache.mjs";
 import { createCachedPath } from "./cached.mjs";
+import { egressMetrics } from "./metrics.mjs";
 import {
   AGENT_TOKEN_HEADERS,
   agentTokenOf,
@@ -92,12 +93,13 @@ export function target(authority) {
   return { host: (match[1] ?? match[2]).toLowerCase().replace(/\.$/, ""), port };
 }
 
-// Asks the orchestrator: { allowed, private, cache, decrypt, relay }. Fails closed: no
-// `decrypt`, a tunnel. An orchestrator restarting is waited for (wait.mjs; `wait`: its clock, in
-// the tests), unless the client left (`gone()`). `forward`: the host is a service's name, whose
-// plain HTTP the proxy forwards (SANDBOX_URLS): the policy allows it for the runs' sandboxes
-// and engines only. `engine`: it came in on the engines' port (ENGINE_PROXY_PORT), so it is the
-// engine's of the run at that address.
+// Asks the orchestrator: { allowed, private, cache, decrypt, relay, source, reason }. Fails
+// closed: no `decrypt`, a tunnel; no answer, refused (`reason` "policy_error"). An orchestrator
+// restarting is waited for (wait.mjs; `wait`: its clock, in the tests), unless the client left
+// (`gone()`). `forward`: the host is a service's name, whose plain HTTP the proxy forwards
+// (SANDBOX_URLS): the policy allows it for the runs' sandboxes and engines only. `engine`: it
+// came in on the engines' port (ENGINE_PROXY_PORT), so it is the engine's of the run at that
+// address.
 export function egressPolicy(url, timeoutMs = 5000, wait = {}) {
   return async (ip, host, { gone, forward, engine } = {}) => {
     try {
@@ -111,7 +113,7 @@ export function egressPolicy(url, timeoutMs = 5000, wait = {}) {
         () => fetch(`${url}?${query}`, { signal: AbortSignal.timeout(timeoutMs) }),
         { ...wait, ...(gone && { gone }) },
       );
-      if (!res.ok) return { allowed: false };
+      if (!res.ok) return { allowed: false, reason: "policy_error" };
       const answer = await res.json();
       return {
         allowed: answer.allowed === true,
@@ -126,9 +128,13 @@ export function egressPolicy(url, timeoutMs = 5000, wait = {}) {
         sandbox: typeof answer.sandbox === "string" && answer.sandbox ? answer.sandbox : null,
         // A relayed host whose calls go to the github service (#502).
         service: answer.service === "github" ? "github" : null,
+        // Who asked, and why it was refused, for the metrics (metrics.mjs): strings, which the
+        // metrics' declared values bound.
+        ...(typeof answer.source === "string" && { source: answer.source }),
+        ...(typeof answer.reason === "string" && { reason: answer.reason }),
       };
     } catch {
-      return { allowed: false };
+      return { allowed: false, reason: "policy_error" };
     }
   };
 }
@@ -232,13 +238,31 @@ export function createProxy({
   engine = false,
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
+  // Its metrics (metrics.mjs egressMetrics()), the same for both ports'.
+  metrics = egressMetrics(),
 }) {
   const asEngine = engine ? { engine: true } : {};
+  // The policy's answer about `socket`'s connection to `host`, timed. Its `source` said always:
+  // the engines' port's are an engine's.
+  async function ask(socket, host, options) {
+    const ip = (socket.remoteAddress ?? "").replace(/^::ffff:/, "");
+    const done = metrics.policyTimer();
+    const answer = await policy(ip, host, { ...options, ...asEngine });
+    done();
+    return { source: engine ? "engine" : "unknown", ...answer, ip };
+  }
+
+  // A connection decided, counted (`reason` when refused).
+  const counted = (socket, answer, allowed, reason) =>
+    metrics.connection(socket, { source: answer.source, allowed, reason });
+
   // { address to connect to, whether its answers may be cached, and its HTTPS decrypted to do
-  // so, or relayed }, or a Refused saying why not.
-  async function decide(client, host, gone) {
-    const ip = client.replace(/^::ffff:/, "");
+  // so, or relayed, and who asked (`source`) }, or a Refused saying why not. Its refusals are
+  // counted, not what it allows: the caller counts it once it goes on (tunnel(), forward()).
+  async function decide(socket, host, gone) {
+    const answer = await ask(socket, host, { gone });
     const {
+      ip,
       allowed,
       private: privateOk,
       cache: cacheOk,
@@ -247,9 +271,11 @@ export function createProxy({
       service,
       models,
       sandbox,
-    } = await policy(ip, host, { gone, ...asEngine });
+      source,
+    } = answer;
     if (!allowed) {
       log(`refused ${host} for ${ip}`);
+      counted(socket, answer, false, answer.reason ?? "not_granted");
       throw new Refused(
         `Deckhand's egress proxy refused ${host}: it is not among the hosts this sandbox may reach. ` +
           "The operator adds it to `hosts` in their grants folder: grants/<owner>/<repo>.yaml for one repository, grants/default.yaml for all.",
@@ -266,12 +292,14 @@ export function createProxy({
         service,
         models: models === true,
         sandbox: sandbox ?? null,
+        source,
       };
     }
     let addresses;
     try {
       addresses = isIP(host) ? [{ address: host }] : await lookup(host);
     } catch {
+      counted(socket, answer, false, "unresolved");
       throw new Refused(`Deckhand's egress proxy could not resolve ${host}`, { cause: 502 });
     }
     const own = privateOk ? [] : subnets();
@@ -280,6 +308,7 @@ export function createProxy({
     );
     if (!usable) {
       log(`refused ${host} for ${ip}: private address`);
+      counted(socket, answer, false, "private_address");
       throw new Refused(
         `Deckhand's egress proxy refused ${host}: it resolves to a private address`,
       );
@@ -289,6 +318,7 @@ export function createProxy({
       cache: cacheOk === true,
       decrypt: decrypt === true,
       relay: relay === true,
+      source,
     };
   }
 
@@ -322,7 +352,7 @@ export function createProxy({
     const gone = () => client.readableEnded || client.destroyed;
     let decision;
     try {
-      decision = await decide(req.socket.remoteAddress, to.host, gone);
+      decision = await decide(client, to.host, gone);
     } catch (error) {
       return refuse(client, error);
     } finally {
@@ -337,9 +367,11 @@ export function createProxy({
     if (decision.relay) {
       const service = decision.service === "github" ? githubService : null;
       if ((service || (decision.models && modelsService)) && authority && certifiable(to.host)) {
+        counted(client, decision, true);
         return intercept(client, head, to, decision.address, decision);
       }
       log(`refused ${to.host}: no CA, or no service to relay it to`);
+      counted(client, decision, false, "no_relay");
       return refuse(
         client,
         new Refused(
@@ -348,8 +380,10 @@ export function createProxy({
       );
     }
     if (decision.cache && decision.decrypt && cache?.enabled && authority && certifiable(to.host)) {
+      counted(client, decision, true);
       return intercept(client, head, to, decision.address);
     }
+    counted(client, decision, true);
     pipe(client, head, to, decision.address, false);
   }
 
@@ -472,9 +506,7 @@ export function createProxy({
           : `Deckhand's egress proxy has no service to relay ${host} to\n`,
       );
     }
-    const sent = github
-      ? toService(req, res, githubService, url, sandbox, "the github service")
-      : toModels(req, res, url, sandbox);
+    const sent = github ? toGithub(req, res, url, sandbox) : toModels(req, res, url, sandbox);
     return sent.catch(() => res.destroy());
   }
 
@@ -535,18 +567,20 @@ export function createProxy({
     const gone = () => (!https && req.socket.readableEnded) || req.socket.destroyed;
     let decision;
     try {
-      decision = await decide(req.socket.remoteAddress, host, gone);
+      decision = await decide(req.socket, host, gone);
     } catch (error) {
       res.writeHead(error.cause === 502 ? 502 : 403, { "content-type": "text/plain" });
       return res.end(`${error instanceof Refused ? error.message : "refused"}\n`);
     }
     // A relayed host has no address to go to: its calls are a service's, over HTTPS only.
     if (decision.relay && https) {
+      counted(req.socket, decision, true);
       const { service, models, sandbox } = decision;
       const to = { github: service === "github", models, sandbox };
       return toRelayed(req, res, host, url.pathname + url.search, to);
     }
     if (decision.relay) {
+      counted(req.socket, decision, false, "no_relay");
       res.writeHead(403, { "content-type": "text/plain" });
       return res.end(`Deckhand's egress proxy relays ${host} over HTTPS only\n`);
     }
@@ -554,6 +588,7 @@ export function createProxy({
     // agent provider's (certifiable(), authority.mjs EXCLUDED) nor with no CA.
     const cacheOk =
       decision.cache && (!https || (decision.decrypt && !!authority && certifiable(host)));
+    counted(req.socket, decision, true);
     relay(req, res, { address: decision.address, url, host }, cacheOk);
   }
 
@@ -567,31 +602,32 @@ export function createProxy({
       res.end(`Deckhand's egress proxy: ${why}\n`);
     };
     if (!paths.test(url.pathname)) return forbid(404, `not a path of the ${name} service's`);
-    const { allowed, sandbox } = await policy(
-      req.socket.remoteAddress.replace(/^::ffff:/, ""),
-      url.hostname,
-      { gone: () => req.socket.readableEnded || req.socket.destroyed, forward: true, ...asEngine },
-    );
+    const answer = await ask(req.socket, url.hostname, {
+      gone: () => req.socket.readableEnded || req.socket.destroyed,
+      forward: true,
+    });
+    const { allowed, sandbox } = answer;
     if (req.socket.destroyed) return;
+    counted(req.socket, answer, allowed, answer.reason ?? "not_forwarded");
     if (!allowed) return forbid(403, `only a running sandbox reaches the ${name} service`);
     const service = { broker: brokerService, github: githubService, models: modelsService }[name];
-    if (!service) return unreachable(res, `the ${name} service`);
+    if (!service) return unavailable(res, name);
     // Its path and query set on a copy of the service's URL, never parsed again: "//host/x"
     // would read as another host's URL. No credentials in the URL become a header either.
     const to = new URL(service.url);
     to.pathname = url.pathname;
     to.search = url.search;
     if (name === "models") return toModels(req, res, to, sandbox);
-    if (name === "github") return toService(req, res, service, to, sandbox, "the github service");
+    if (name === "github") return toGithub(req, res, to, sandbox);
     // A run token's calls about its own run: to the broker service, the token apart.
     const token = /^Bearer (\S+)$/.exec(req.headers.authorization ?? "")?.[1] ?? "";
     let authorization;
     try {
       authorization = await serviceHeader(req, service);
     } catch {
-      return unreachable(res, "the broker");
+      return unavailable(res, "broker");
     }
-    return onward(req, res, to, "the broker", {
+    return onward(req, res, to, "broker", {
       authorization,
       [RUN_TOKEN_HEADER]: token,
       [SANDBOX_HEADER]: sandbox ?? "",
@@ -607,14 +643,14 @@ export function createProxy({
   // A sandbox's call on to the github service at `url` (a relayed GitHub host's request as
   // /relay/<host><path>, or a push): its Authorization moved to RUN_AUTH_HEADER, for the
   // service's gateway, the proxy's own in its place, the network (or pod) vouched for.
-  async function toService(req, res, service, url, sandbox, what) {
+  async function toGithub(req, res, url, sandbox) {
     let authorization;
     try {
-      authorization = await serviceHeader(req, service);
+      authorization = await serviceHeader(req, githubService);
     } catch {
-      return unreachable(res, what);
+      return unavailable(res, "github");
     }
-    return onward(req, res, url, what, {
+    return onward(req, res, url, "github", {
       authorization,
       [RUN_AUTH_HEADER]: req.headers.authorization ?? "",
       [SANDBOX_HEADER]: sandbox ?? "",
@@ -629,13 +665,13 @@ export function createProxy({
     try {
       authorization = await serviceHeader(req, modelsService);
     } catch {
-      return unreachable(res, "the models service");
+      return unavailable(res, "models");
     }
     return onward(
       req,
       res,
       url,
-      "the models service",
+      "models",
       {
         authorization,
         [RUN_TOKEN_HEADER]: agentTokenOf(req.headers),
@@ -645,10 +681,17 @@ export function createProxy({
     );
   }
 
-  // A request on to a service at `url` (`what`, in its errors), with `extra` headers over its
-  // own, without those of `drop`. A service restarting is waited for: the request is sent once a
-  // connection is made, and never again (wait.mjs).
-  async function onward(req, res, url, what, extra = {}, drop = []) {
+  // A service (`target`: "broker", "github", "models") that didn't answer: counted, and said.
+  const serviceName = (target) => (target === "broker" ? "the broker" : `the ${target} service`);
+  function unavailable(res, target) {
+    metrics.gateway(target, "unreachable");
+    unreachable(res, serviceName(target));
+  }
+
+  // A request on to the `target` service at `url`, with `extra` headers over its own, without
+  // those of `drop`. A service restarting is waited for: the request is sent once a connection
+  // is made, and never again (wait.mjs). Counted with its answer's status.
+  async function onward(req, res, url, target, extra = {}, drop = []) {
     const headers = { ...req.headers, host: url.host };
     for (const name of Object.keys(headers)) {
       if (name.startsWith("proxy-") || VOUCHED.includes(name) || drop.includes(name)) {
@@ -669,7 +712,7 @@ export function createProxy({
     try {
       socket = await untilReached(() => dial(url, upstreamCa), { ...wait, gone: () => gone });
     } catch {
-      return unreachable(res, what);
+      return unavailable(res, target);
     }
     if (gone) return socket.destroy();
     const send = url.protocol === "https:" ? httpsRequest : httpRequest;
@@ -677,13 +720,18 @@ export function createProxy({
       url,
       { method: req.method, headers, createConnection: () => socket },
       (answer) => {
+        metrics.gateway(target, String(answer.statusCode));
         // That connection's, not the client's, which stays open for its next request.
         const { connection, "keep-alive": keepAlive, ...rest } = answer.headers;
         res.writeHead(answer.statusCode, rest);
         answer.pipe(res);
       },
     );
-    upstream.on("error", () => unreachable(res, what));
+    upstream.on("error", () => {
+      // Once answered, its status is counted already: the answer was cut.
+      if (res.headersSent) return unreachable(res, serviceName(target));
+      unavailable(res, target);
+    });
     req.pipe(upstream);
   }
 
@@ -700,6 +748,7 @@ export function createProxy({
     const to = { address, url, host, headers };
     const use = cache?.enabled && cacheOk ? requestUse(req) : "skip";
     if (use !== "skip") return cached(req, res, to, use);
+    if (cache?.enabled && cacheOk) metrics.cache("bypassed");
     const upstream = send(to, req.method, headers, (answer) => {
       res.writeHead(answer.statusCode, answer.headers);
       answer.pipe(res);
@@ -736,7 +785,9 @@ export function createProxy({
     );
   }
 
-  const cached = cache ? createCachedPath({ cache, send, unreachable, now }) : null;
+  const cached = cache
+    ? createCachedPath({ cache, send, unreachable, now, count: metrics.cache })
+    : null;
 
   function unreachable(res, host, error) {
     const why = error?.code?.startsWith("ERR_TLS") || /CERT|SIGNATURE/.test(error?.code ?? "");
@@ -773,11 +824,16 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const url = process.env.POLICY_URL || "http://orchestrator:8082/egress";
   const port = Number(process.env.PORT ?? 3128);
   const log = createLogger({ service: "egress" });
-  // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set: from its
-  // environment alone (compose.yaml's EGRESS_METRICS_PORT), never config.yaml's, as every sandbox
-  // reaches the proxy, and so that port (docs/security.md).
+  // Its metrics (../lib/metrics.mjs, metrics.mjs), on their own port when METRICS_PORT is set:
+  // from its environment alone (compose.yaml's EGRESS_METRICS_PORT), never config.yaml's, as
+  // every sandbox reaches the proxy, and so that port (docs/security.md).
+  let registry;
   try {
-    startMetrics({ service: "egress", port: metricsPort(process.env.METRICS_PORT), log });
+    ({ registry } = startMetrics({
+      service: "egress",
+      port: metricsPort(process.env.METRICS_PORT),
+      log,
+    }));
   } catch (error) {
     log.error(`Egress proxy: ${error.message}`);
     process.exit(1);
@@ -789,6 +845,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     entryMax: parseSize(process.env.EGRESS_CACHE_ENTRY_MAX, DEFAULT_ENTRY_MAX),
     log,
   });
+  const metrics = egressMetrics(registry, { cache });
   // The CA lives next to the cache, in the proxy's volume, cache on or off: relayed hosts need
   // it too.
   let authority = createAuthority({ dir: join(dir, "ca"), log });
@@ -838,6 +895,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     githubService,
     modelsService,
     log,
+    metrics,
   };
   const proxy = createProxy(options);
   proxy.listen(port, () =>
