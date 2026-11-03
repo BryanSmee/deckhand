@@ -994,9 +994,18 @@ export function createGithubGateway({
     };
     const at = Date.now();
     const started = performance.now();
-    // GitHub's answer, counted: an API call's status and rate limit, a git fetch's result.
-    const fetching = !api && req.method === "POST" && /\/git-upload-pack$/i.test(path);
+    // GitHub's answer, counted once: an API call's status, rate limit and time to its headers;
+    // a git fetch's result. A git command reads the advertisement once (fetch, clone, ls-remote),
+    // whatever number of pack requests its negotiation then takes: that GET is the operation.
+    const fetching =
+      !api &&
+      req.method === "GET" &&
+      /\/info\/refs$/i.test(path) &&
+      target.searchParams.get("service") === "git-upload-pack";
+    let counted = false;
     const count = (code, answerHeaders, lost) => {
+      if (counted) return;
+      counted = true;
       if (api) {
         const seconds = (performance.now() - started) / 1000;
         const { authorization } = headers;
@@ -1049,6 +1058,7 @@ export function createGithubGateway({
       clock,
       // No answer (`lost`): 0, the write may have gone out all the same (github-writes.mjs
       // answered() counts a rerun then).
+      heard: (code, answerHeaders) => count(code, answerHeaders, false),
       answered: (code, answerHeaders, lost) => {
         count(code, answerHeaders, lost);
         if (watched || advertised) status = lost ? 0 : code;
@@ -1070,6 +1080,8 @@ export function createGithubGateway({
         maxTransform: MAX_ANSWER,
       }),
     });
+    // The sandbox gone before GitHub answered: a call without an answer.
+    count(0, null, true);
     await after();
   }
 

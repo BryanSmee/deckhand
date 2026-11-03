@@ -735,11 +735,14 @@ export function createGitGateway({
     if (admitted.service === "info/refs") return forward(req, res, url, admitted);
     const push = await checkPush(req, res, admitted);
     if (!push) return;
+    // `failed` unless GitHub's answer came whole: the client gone mid-answer counts too.
+    let result = "failed";
     try {
       const answer = await forward(req, res, url, admitted, push.body, push.token);
-      onGit("push", pushResult(push.parsed, answer));
+      result = pushResult(push.parsed, answer);
       pushed(admitted.run, admitted.repo, push.parsed, answer);
     } finally {
+      onGit("push", result);
       await push.done?.();
     }
   }

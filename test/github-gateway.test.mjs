@@ -102,10 +102,14 @@ async function gateway(
     return { secret: broker.token(id), notes, run: broker.runOf(id) };
   };
   // A call as the proxy relays it: /relay/<host><path>.
-  const call = (path, { secret, auth, method = "GET", body, headers = {}, redirect } = {}) =>
+  const call = (
+    path,
+    { secret, auth, method = "GET", body, headers = {}, redirect, signal } = {},
+  ) =>
     fetch(`${url}/relay/127.0.0.1${path}`, {
       method,
       body,
+      signal,
       ...(redirect && { redirect }),
       headers: {
         ...headers,
@@ -1722,6 +1726,8 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
     observe: (call) => observed.push(call),
     onGit: (op, result) => ops.push(`${op} ${result}`),
     respond: (req, res) => {
+      // Never answered: the sandbox gives up first.
+      if (req.url.endsWith("/slow")) return true;
       if (!req.url.startsWith("/api/v3/repos/org/repo/issues")) return false;
       res.writeHead(req.url.endsWith("missing") ? 404 : 200, {
         "content-type": "application/json",
@@ -1751,6 +1757,16 @@ test("each call relayed is counted: the API's as the proxy's with its rate limit
     ],
   );
   assert.ok(observed.every((o) => o.seconds >= 0));
-  // The advertisement isn't an operation of its own: the pack request is the fetch.
+  // A git command reads the advertisement once: that is the fetch, not its pack requests
+  // (github-forks.test.mjs counts a real client's).
   assert.deepEqual(ops, ["fetch ok"]);
+
+  // A call the sandbox gave up on before GitHub answered: counted, without a status.
+  const aborted = new AbortController();
+  const slow = gw.call("/api/v3/repos/org/repo/slow", { secret, signal: aborted.signal });
+  while (!gw.calls.some((c) => c.url.endsWith("/slow"))) await new Promise(setImmediate);
+  aborted.abort();
+  await assert.rejects(slow);
+  while (observed.length < 3) await new Promise(setImmediate);
+  assert.deepEqual([observed[2].caller, observed[2].status], ["proxy", null]);
 });

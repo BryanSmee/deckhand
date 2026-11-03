@@ -661,11 +661,13 @@ test("a pull request's run pushes its head branch only", async (t) => {
 });
 
 test("a run with no branch can't push any", async (t) => {
-  const { work, remote, seen } = await setup(t, { register: (b) => issueRun(b, []) });
+  const { work, remote, seen, refusals } = await setup(t, { register: (b) => issueRun(b, []) });
   const res = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x");
   assert.equal(res.ok, false);
   assert.match(res.stderr, /this run can't push/);
   assert.deepEqual(seen, []);
+  // Refused at git's probe, which it doesn't go past: one push refused.
+  assert.deepEqual(refusals, ["run"]);
 });
 
 test("deleting the default branch is refused too", async (t) => {
@@ -981,8 +983,8 @@ test("the `workflows` grant: a workflow that only reads goes through, the same p
 });
 
 test("the `workflows` grant: a workflow that writes, names a secret or hides from the parser is refused", async (t) => {
-  const { work, remote, commit, upstream, received } = await granted(t);
-  for (const [content, why] of [
+  const { work, remote, commit, upstream, received, refusals } = await granted(t);
+  const cases = [
     [SAFE.replace("permissions:\n  contents: read\n", ""), /ci\.yml: no top-level `permissions:`/],
     [
       SAFE.replace("contents: read", "contents: write"),
@@ -1004,7 +1006,8 @@ test("the `workflows` grant: a workflow that writes, names a secret or hides fro
     [`${SAFE}      - run: "echo \${{ \\x73ecrets.TOKEN }}"\n`, /mentions `secrets`/],
     [SAFE.replace("name: CI", "name: &n CI"), /line 1: unsupported YAML/],
     [`${SAFE}---\nname: again\n`, /line 11: several documents/],
-  ]) {
+  ];
+  for (const [content, why] of cases) {
     commit({ ".github/workflows/ci.yml": content });
     const res = await git(work, "push", "--force", remote(), "HEAD:refs/heads/issue-1-ci");
     assert.equal(res.ok, false, content);
@@ -1016,6 +1019,10 @@ test("the `workflows` grant: a workflow that writes, names a secret or hides fro
   }
   assert.equal(upstream("refs/"), "");
   assert.deepEqual(received, []);
+  assert.deepEqual(
+    refusals,
+    cases.map(() => "workflows"),
+  );
 });
 
 test("the `workflows` grant: a thin pack, its deltas against GitHub's objects, is read", async (t) => {
@@ -1162,7 +1169,7 @@ test("the `workflows` grant: a .github/workflows that is a symlink is refused", 
 });
 
 test("the `workflows` grant: one push of a run's at a time; one too large is refused", async (t) => {
-  const { work, remote, port, commit, received, spoolDir } = await granted(t);
+  const { work, remote, port, commit, received, spoolDir, refusals } = await granted(t);
   // A push whose pack never ends: saved, waiting for the rest.
   const secret = new URL(remote()).password;
   const first = request({
@@ -1197,6 +1204,9 @@ test("the `workflows` grant: one push of a run's at a time; one too large is ref
   assert.match(big.stderr, /413|too large/);
   assert.deepEqual(readdirSync(small.spoolDir), []);
   assert.deepEqual([received, small.received], [[], []]);
+  // The busy one, and the first dropped mid-push: neither could be checked.
+  assert.deepEqual(refusals, ["error", "error"]);
+  assert.deepEqual(small.refusals, ["error"]);
 });
 
 test("the `workflows` grant: the workflows a changed one calls are checked too, changed or not", async (t) => {
@@ -1475,6 +1485,7 @@ test("a work run that isn't a fork's can't point its branch at a fork's objects 
   );
   assert.equal(upstream("refs/heads/issue-1-x"), "");
   assert.equal(upstream("refs/heads/issue-1-y"), "");
+  assert.deepEqual(run.refusals, ["fork", "fork"]);
   // The same commit, its tree and the fork's file carried: the push's own, as any.
   const carried = execFileSync("git", ["pack-objects", "--stdout", "--revs"], {
     cwd: work,

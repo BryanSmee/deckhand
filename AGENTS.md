@@ -97,8 +97,8 @@ listener/     the modules edge and the orchestrator run (no entry point of its o
 github/       the github service (#502): the only one with the GitHub App's key; server.mjs
               (wiring), service.mjs (its API, who may call what), runs.mjs (the runs' state in its
               store), app.mjs (the App's credentials), client.mjs (what the orchestrator and
-              edge call it with), metrics.mjs (its API calls, rate limit, git operations); it runs listener/'s GitHub and git gateways (github-*.mjs,
-              git-gateway.mjs)
+              edge call it with), metrics.mjs (its API calls, rate limit, git operations); it
+              runs listener/'s GitHub and git gateways (github-*.mjs, git-gateway.mjs)
 runner/       the runner service (#503): the only one with the Docker socket or the Kubernetes
               API; server.mjs (wiring), service.mjs (its API, who may call what), client.mjs
               (what the orchestrator calls it with), logs.mjs, events.mjs, spec-check.mjs,

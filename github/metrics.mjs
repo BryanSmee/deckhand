@@ -30,7 +30,8 @@ export const RESOURCES = ["core", "graphql", "search"];
 // What the service does with git:
 //   clone          a mirror's first fetch, the whole repository (git-mirror.mjs)
 //   mirror_update  a mirror fetched again before a push is checked against it
-//   fetch          a sandbox's fetch (or clone) relayed to GitHub (github-gateway.mjs)
+//   fetch          a sandbox's git fetch, clone or ls-remote relayed to GitHub: its advertisement,
+//                  read once per command whatever its pack requests (github-gateway.mjs)
 //   push           a sandbox's push, through the git gateway (git-gateway.mjs)
 export const GIT_OPS = ["clone", "mirror_update", "fetch", "push"];
 //   ok        done
@@ -162,11 +163,13 @@ export function githubMetrics(
     "Pushes the git gateway refused, by why.",
     { labels: ["reason"], values: { reason: PUSH_REASONS } },
   );
-  let mirrors = { at: -Infinity, bytes: 0 };
+  // The last walk, its promise kept: a scrape while one is still going waits for it rather than
+  // start another.
+  let mirrors = { at: -Infinity, bytes: Promise.resolve(0) };
   registry.gauge("deckhand_mirror_bytes", "The size of the git mirrors on its volume, in bytes.", {
-    collect: async () => {
+    collect: () => {
       if (!mirrorDir) return 0;
-      if (now() - mirrors.at >= MIRROR_MS) mirrors = { at: now(), bytes: await sizeOf(mirrorDir) };
+      if (now() - mirrors.at >= MIRROR_MS) mirrors = { at: now(), bytes: sizeOf(mirrorDir) };
       return mirrors.bytes;
     },
   });
