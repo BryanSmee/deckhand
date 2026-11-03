@@ -226,7 +226,7 @@ test("GET /health: the log segments waiting for blob storage; the copy acting mo
   const warnings = async () => (await (await fetch(`${url}/health`)).json()).warnings;
   await until(async () => (await warnings())?.length);
   assert.deepEqual(await warnings(), [
-    "2 closed log segments (0.0 MB) wait in the store: blob storage fails, tried again with a growing delay (the runner's log says why)",
+    "2 closed log segments (0.0 MB) wait in the store: they can't be moved to blob storage now, tried again with a growing delay (the runner's log says why)",
   ]);
   down = false;
   await logs.moves.pass();
@@ -234,6 +234,25 @@ test("GET /health: the log segments waiting for blob storage; the copy acting mo
   assert.equal(await store.blobSize("logs/dh-o-a-1-1/0"), null);
   assert.equal((await files.read("logs/dh-o-a-1-1/1")).toString(), "world");
   assert.equal((await logs.read("dh-o-a-1-1")).data.toString(), "hello");
+});
+
+// A probe's second: /health never waits on the store, Redis stalling or not.
+test("GET /health answers while the store's reads hang", async (t) => {
+  const shared = fileStore();
+  const files = openBlobs(pathToFileURL(join(tempDir(t), "blobs")).href);
+  const hanging = {
+    ...shared,
+    get: async (key) => (key.startsWith("log-moves/") ? new Promise(() => {}) : shared.get(key)),
+  };
+  const logs = createLogs({ store: hanging, blobs: files, log: () => {} });
+  logs.moves.stop(); // as a copy that isn't acting: it reads the store for /health
+  const { url } = await copy(t, { store: shared, backend: host(), logs });
+  logs.moves.stop();
+  for (let i = 0; i < 3; i++) {
+    const res = await fetch(`${url}/health`, { signal: AbortSignal.timeout(1000) });
+    assert.equal(res.status, 200);
+    assert.equal((await res.json()).warnings, undefined);
+  }
 });
 
 test("each caller gets its own endpoints only, from its own network, with a valid token", async (t) => {

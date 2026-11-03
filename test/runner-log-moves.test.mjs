@@ -13,6 +13,7 @@ import {
   PASS_MS,
   RETRY_MS,
   waitingWarning,
+  WAITING_READ_MS,
 } from "../runner/logs.mjs";
 import { fakeS3, until } from "./helpers.mjs";
 
@@ -211,7 +212,7 @@ test("with the S3 server failing, segments stay in the store, /health says so, a
   assert.deepEqual(await logs.moves.waiting(), { segments: 2, bytes: 10 });
   assert.equal(
     waitingWarning(await logs.moves.waiting()),
-    "2 closed log segments (0.0 MB) wait in the store: blob storage fails, tried again with a growing delay (the runner's log says why)",
+    "2 closed log segments (0.0 MB) wait in the store: they can't be moved to blob storage now, tried again with a growing delay (the runner's log says why)",
   );
   assert.match(logged.at(-1), /503 SlowDown.*2 wait in the store, tried again in 30 s/);
   assert.equal(timers.set.at(-1).ms, RETRY_MS);
@@ -438,25 +439,61 @@ test("a segment whose copy measures otherwise is left in the store, and doesn't 
 });
 
 // Two copies: the one acting fails and its lease goes; either one's /health says what waits
-// until the next one moves them, then neither does.
+// until the next one moves them, then neither does. Each answers from memory at once, the one
+// not acting reading the store again once what it knows is WAITING_READ_MS old.
 test("through a handover, both copies say what waits, and neither once it moved", async (t) => {
   const { s3, blobs } = await s3Blobs(t);
   const store = fileStore();
   await noted(store, blobs);
-  const a = createLogs({ store, blobs, timers: manualTimers(), log: () => {} });
-  const b = createLogs({ store, blobs, timers: manualTimers(), log: () => {} });
+  let clock = 0;
+  const now = () => clock;
+  const a = createLogs({ store, blobs, now, timers: manualTimers(), log: () => {} });
+  const b = createLogs({ store, blobs, now, timers: manualTimers(), log: () => {} });
+  // b reads the store at its first answer (nothing waits yet), then not before WAITING_READ_MS.
+  assert.equal(b.moves.waiting(), null);
+  await b.moves.refresh();
   s3.fail({ status: 503, code: "SlowDown" });
   a.moves.start();
   await a.moves.pass();
-  assert.deepEqual(await a.moves.waiting(), { segments: 2, bytes: 6 });
-  assert.deepEqual(await b.moves.waiting(), { segments: 2, bytes: 6 });
+  assert.deepEqual(a.moves.waiting(), { segments: 2, bytes: 6 });
+  clock += WAITING_READ_MS - 1;
+  assert.equal(b.moves.waiting(), null);
+  clock += 1;
+  b.moves.waiting(); // reads the store again, in the background
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(b.moves.waiting(), { segments: 2, bytes: 6 });
+
   a.moves.stop();
   b.moves.start();
   await b.moves.pass();
   b.moves.stop();
-  assert.equal(await a.moves.waiting(), null);
-  assert.equal(await b.moves.waiting(), null);
+  assert.equal(b.moves.waiting(), null);
+  clock += WAITING_READ_MS;
+  a.moves.waiting();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(a.moves.waiting(), null);
   assert.equal(await storeSegments(store), 0);
+});
+
+// A pass in flight as the lease goes, which then fails: what waits is the next holder's to say,
+// never written back over what it found.
+test("a pass that fails after its lease went says nothing of what waits", async (t) => {
+  const { blobs } = await s3Blobs(t);
+  const store = fileStore();
+  await noted(store, blobs);
+  let logs;
+  const losing = {
+    ...blobs,
+    put: async () => {
+      logs.moves.stop();
+      throw new Error("cut");
+    },
+  };
+  logs = createLogs({ store, blobs: losing, timers: manualTimers(), log: () => {} });
+  logs.moves.start();
+  await logs.moves.pass();
+  assert.equal(await store.get("log-moves/waiting"), null);
+  assert.equal(logs.moves.waiting(), null);
 });
 
 test("a pass of the lease's stops with it; one started by hand goes on", async (t) => {

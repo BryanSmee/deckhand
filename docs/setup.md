@@ -1744,7 +1744,7 @@ the store until retention removes them, and so do logs from before segments. Ret
 segments are there: their logs no longer read. The broker's files and screenshots move there in
 the next releases ([#604](https://github.com/BryanSmee/deckhand/issues/604)).
 
-When blob storage fails (down, or refusing the key), closed segments wait in the store and are
+When blob storage fails (down, or refusing the key), or the store does, closed segments wait in the store and are
 tried again after 30 s, then a delay that doubles each time, up to 30 minutes; the runner's log
 says why, and the dashboard's status page counts them and their size, so that you see Redis
 fill up before it is full. They move once it answers again.

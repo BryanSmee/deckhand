@@ -474,7 +474,9 @@ done: a move cut short after any step is done again from the start, which does n
 blob storage fails, the notes stay, tried again after a delay that doubles from 30 s to 30
 minutes, and the runner's `/health` counts them and their bytes (a warning on the dashboard's
 status page; the count is kept in its store, so either copy says it, and a segment noted twice
-counts once). A copy losing the lease stops its pass at the next note. A segment whose copy
+counts once). `/health` answers it from memory, never waiting on the store: the copy acting
+knows it from its passes, the other reads it again in the background every 10 s at most. A pass
+that fails after its copy lost the lease says nothing of it: that is the next holder's. A copy losing the lease stops its pass at the next note. A segment whose copy
 measures otherwise in blob storage (trying again would send the same bytes) is logged and left
 in the store, and the notes after it go on. Retention deletes a log's segments in blob storage first, then its index: one that
 fails stays for the next day's pass.

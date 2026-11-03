@@ -60,6 +60,8 @@ const COUNTED = 100_000;
 // What a pass that failed counted ({ segments, bytes }), for either copy's /health: the one acting
 // writes it, the next pass that moves them all deletes it.
 const WAITING = "log-moves/waiting";
+// How old what /health says of it may be on a copy that isn't acting (moves.waiting()).
+export const WAITING_READ_MS = 10_000;
 
 // What the runner's /health says while closed segments wait for blob storage (moves.waiting()):
 // how many and how big, so that an operator sees Redis fill up before it is full. Null when none.
@@ -67,7 +69,7 @@ export function waitingWarning(waiting) {
   if (!waiting) return null;
   const { segments, bytes } = waiting;
   const mb = (bytes / (1024 * 1024)).toFixed(1);
-  return `${segments} closed log segment${segments === 1 ? "" : "s"} (${mb} MB) wait in the store: blob storage fails, tried again with a growing delay (the runner's log says why)`;
+  return `${segments} closed log segment${segments === 1 ? "" : "s"} (${mb} MB) wait in the store: they can't be moved to blob storage now, tried again with a growing delay (the runner's log says why)`;
 }
 
 // `blobs`: lib/blobs.mjs openBlobs()'s, where closed segments go; null, they stay in the store.
@@ -76,6 +78,7 @@ export function createLogs({
   blobs = null,
   segmentMax = 8 * 1024 * 1024,
   timers = globalThis,
+  now = Date.now,
   log = () => {},
 }) {
   const checked = (id) => {
@@ -360,7 +363,7 @@ export function createLogs({
     });
   }
 
-  const moves = createMoves({ store, enabled: Boolean(blobs), moveOne, timers, log });
+  const moves = createMoves({ store, enabled: Boolean(blobs), moveOne, timers, now, log });
 
   return { append, read, remove, size: sizeOf, moves };
 }
@@ -370,12 +373,30 @@ export function createLogs({
 // (one started by hand, pass(), goes on). A pass reads the notes, moves each one's segment in
 // order and acknowledges it, and stops at the first failure: blob storage is away, tried again
 // after a growing delay. kick(): a segment just closed, a pass soon.
-function createMoves({ store, enabled, moveOne, timers, log }) {
+function createMoves({ store, enabled, moveOne, timers, now, log }) {
   let active = false;
   let timer = null;
   let running = null;
   let again = false;
   let failures = 0;
+  // What waits ({ segments, bytes } or null), as this copy last knew it, and when: /health
+  // answers from it without waiting on the store (a probe's second, Redis stalling).
+  let known = null;
+  let knownAt = -Infinity;
+  let reading = null;
+  const know = (value) => {
+    known = value;
+    knownAt = now();
+  };
+
+  // The store's, for a copy that isn't acting: the one acting knows it from its passes.
+  function refresh() {
+    reading ??= store
+      .get(WAITING)
+      .then(know, () => {})
+      .finally(() => (reading = null));
+    return reading;
+  }
 
   const retryDelay = () => Math.min(RETRY_MS * 2 ** (failures - 1), MAX_RETRY_MS);
   const schedule = (ms) => {
@@ -423,13 +444,22 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
     running = (async () => {
       try {
         if (!(await once(leased))) return;
-        if (failures) log("Log segments: blob storage answers again, the waiting ones moved");
+        if (failures) log("Log segments: they move again, the waiting ones moved");
         failures = 0;
         await store.delete(WAITING);
+        know(null);
       } catch (error) {
+        // Its lease gone meanwhile: what waits is the next holder's to say.
+        if (leased && !active) {
+          log(`Log segments: a move cut short as the lease went (${error.message})`);
+          return;
+        }
         failures++;
         const waiting = await count().catch(() => null);
-        if (waiting) await store.set(WAITING, waiting).catch(() => {});
+        if (waiting) {
+          know(waiting);
+          await store.set(WAITING, waiting).catch(() => {});
+        }
         (log.warn ?? log)(
           `Log segments: can't move them to blob storage (${error.message}); ${waiting?.segments ?? "some"} wait in the store, tried again in ${Math.round(retryDelay() / 1000)} s`,
         );
@@ -469,8 +499,14 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
       else schedule(0);
     },
     pass,
-    // { segments, bytes } while blob storage fails, null otherwise: what the copy acting found,
-    // so that either copy's /health says it.
-    waiting: async () => (enabled ? store.get(WAITING) : null),
+    // { segments, bytes } while they can't be moved, null otherwise: what the copy acting found,
+    // so that either copy's /health says it. At once, from what this copy knows: one not acting
+    // reads the store again in the background once that is WAITING_READ_MS old.
+    waiting() {
+      if (!enabled) return null;
+      if (!active && now() - knownAt >= WAITING_READ_MS) void refresh();
+      return known;
+    },
+    refresh: () => (enabled ? refresh() : Promise.resolve()),
   };
 }
