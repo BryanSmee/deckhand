@@ -25,6 +25,7 @@ import {
   MAX_COMMANDS,
   pushedBranch,
   pushInput,
+  pushResult,
   refusal,
   rejection,
 } from "../listener/git-gateway.mjs";
@@ -351,7 +352,12 @@ async function setup(
   const logs = [];
   const mirrorDir = join(dir, "mirrors");
   const spoolDir = join(dir, "pushes");
+  // What it counted (the github service's metrics): "op result", and why pushes were refused.
+  const ops = [];
+  const refusals = [];
   const gateway = createGitGateway({
+    onGit: (op, result) => ops.push(`${op} ${result}`),
+    onRefused: (reason) => refusals.push(reason),
     broker,
     app: () => (app ? github : null),
     githubUrl,
@@ -443,6 +449,8 @@ async function setup(
     gateway,
     secret,
     broker,
+    ops,
+    refusals,
   };
 }
 
@@ -1592,4 +1600,57 @@ test("a token's fork claim: a fork's run points its branch at a fork's commit, a
   const refused = await git(work.work, "push", work.remote(), `${theirs}:refs/heads/issue-1-x`);
   assert.equal(refused.ok, false);
   assert.match(refused.stderr, /which it doesn't carry and org\/repo doesn't have/);
+});
+
+test("what pushes became is counted: taken, rejected by GitHub, refused and why", async (t) => {
+  const { work, remote, bare, ops, refusals } = await setup(t, {
+    policies: {
+      deny: async (_, __, ___, input) =>
+        input().branch === "issue-1-denied" ? ["not this one"] : [],
+    },
+  });
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  // GitHub refuses it, after the gateway let it through.
+  const hook = join(bare, "hooks", "pre-receive");
+  writeFileSync(hook, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "two"], { cwd: work, env: gitEnv });
+  assert.equal((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok, false);
+  rmSync(hook);
+  assert.equal((await git(work, "push", remote(), "HEAD:refs/heads/main")).ok, false);
+  assert.equal((await git(work, "push", remote(), "HEAD:refs/heads/other")).ok, false);
+  assert.equal((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-denied")).ok, false);
+  assert.deepEqual(ops, [
+    "push ok",
+    "push rejected",
+    "push refused",
+    "push refused",
+    "push refused",
+  ]);
+  assert.deepEqual(refusals, ["default_branch", "branch", "policies"]);
+});
+
+test("the mirrors' fetches are counted: a clone first, then updates", async (t) => {
+  const { work, remote, ops, seed } = await setup(t, { allowWorkflows: () => true });
+  // A repository with a branch: an empty one leaves its mirror empty, cloned again.
+  seed("main");
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-x")).ok);
+  assert.ok((await git(work, "push", remote(), "HEAD:refs/heads/issue-1-y")).ok);
+  assert.deepEqual(ops, ["clone ok", "push ok", "mirror_update ok", "push ok"]);
+});
+
+test("a push's result: failed without GitHub's answer, rejected when its report leaves a ref out", () => {
+  const parsed = { refs: ["refs/heads/a", "refs/heads/b"], caps: ["report-status"] };
+  const report = (...lines) => Buffer.from(lines.map(pkt).join("") + "0000");
+  assert.equal(pushResult(parsed, null), "failed");
+  assert.equal(pushResult(parsed, undefined), "failed");
+  assert.equal(
+    pushResult(parsed, report("unpack ok\n", "ok refs/heads/a\n", "ok refs/heads/b\n")),
+    "ok",
+  );
+  assert.equal(
+    pushResult(parsed, report("unpack ok\n", "ok refs/heads/a\n", "ng refs/heads/b hook\n")),
+    "rejected",
+  );
+  // No report asked for: GitHub's success is all there is to go by.
+  assert.equal(pushResult({ ...parsed, caps: [] }, Buffer.alloc(0)), "ok");
 });

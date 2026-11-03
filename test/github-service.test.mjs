@@ -13,7 +13,9 @@ import { RUN_AUTH_HEADER, SANDBOX_HEADER } from "../lib/broker-client.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createAppHolder } from "../github/app.mjs";
 import { createGithubClient } from "../github/client.mjs";
+import { githubMetrics } from "../github/metrics.mjs";
 import { createRuns, SLOT_MS, STREAM } from "../github/runs.mjs";
+import { createRegistry } from "../lib/metrics.mjs";
 import { createGithubService, GITHUB_STATUS, mutates } from "../github/service.mjs";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { fingerprints } from "../lib/redact.mjs";
@@ -76,6 +78,8 @@ async function service(
     env = {},
     lateKeys = false,
     brokerReady,
+    // ../github/metrics.mjs githubMetrics()'s hooks: its App's calls counted too.
+    metrics,
   } = {},
 ) {
   const dir = tempDir(t);
@@ -96,12 +100,17 @@ async function service(
   const made = createGithubService({
     config,
     store,
-    app: createAppHolder({ dir, api: `${github.url}/api/v3` }),
+    app: createAppHolder({
+      dir,
+      api: `${github.url}/api/v3`,
+      ...(metrics && { fetch: metrics.fetch }),
+    }),
     broker: { keys: () => keys, serviceKeys: () => keys, unknownKey, ready: brokerReady },
     bound,
     policies: allowingPolicies,
     mirrorDir: join(dir, "mirrors"),
     gatewayOptions,
+    ...(metrics && { metrics }),
   });
   made.server.listen(0, "127.0.0.1");
   await new Promise((resolve) => made.server.once("listening", resolve));
@@ -110,11 +119,11 @@ async function service(
 }
 
 // Two copies of the service on one store, the broker's key, and a fake GitHub.
-async function setup(t, { answer, gatewayOptions, bound, env } = {}) {
+async function setup(t, { answer, gatewayOptions, bound, env, metrics } = {}) {
   const github = await fakeGitHub(t, answer);
   const store = openStore("memory:");
   const key = testKey();
-  const a = await service(t, github, { store, key, gatewayOptions, bound, env });
+  const a = await service(t, github, { store, key, gatewayOptions, bound, env, metrics });
   const b = await service(t, github, { store, key, gatewayOptions, bound, env });
   const as = (sub) => `Bearer ${signServiceToken({ sub, aud: "github" }, key)}`;
   // A call to a copy as `sub`, with the orchestrator's epoch on its writes.
@@ -807,4 +816,35 @@ test("/ready: out of rotation until the broker answered the copy, and once it dr
   assert.equal(await ready(), 200);
   copy.server.startDraining();
   assert.equal(await ready(), 503);
+});
+
+test("its GitHub calls are counted as their caller's, a run's as the proxy's, by GitHub's status", async (t) => {
+  const registry = createRegistry();
+  const metrics = githubMetrics(registry);
+  const { a, call, run, relayed } = await setup(t, {
+    metrics,
+    answer: (req) => (req.url.endsWith("/missing") ? [404, { message: "Not Found" }] : null),
+  });
+  assert.equal((await call(a, "edge", "GET", "/as/org/repo/repos/org/repo")).status, 200);
+  await call(a, "edge", "GET", "/as/org/repo/repos/org/repo/missing");
+  await call(a, "orchestrator", "POST", "/as/org/repo/repos/org/repo/issues/1/comments", {
+    body: { body: "hi" },
+  });
+  const sandbox = await run("run-1");
+  assert.equal((await relayed(a, sandbox, "GET", "/repos/org/repo/issues/12")).status, 200);
+  const text = await registry.render();
+  const count = (labels) =>
+    Number(
+      new RegExp(`^deckhand_github_api_calls_total\\{${labels}\\} (\\d+)$`, "m").exec(text)?.[1] ??
+        0,
+    );
+  // Edge's two, and the installation's lookup and token its first one needed (the fake answers
+  // 200 to all three).
+  assert.equal(count('caller="edge",status="200"'), 3);
+  assert.equal(count('caller="edge",status="404"'), 1);
+  // The orchestrator's write, with the installation's token edge's call minted.
+  assert.equal(count('caller="orchestrator",status="200"'), 1);
+  // The run's call, relayed, and the token minted for its repo.
+  assert.equal(count('caller="proxy",status="200"'), 2);
+  assert.match(text, /^deckhand_github_api_call_duration_seconds_count\{caller="edge"\} 4$/m);
 });

@@ -207,6 +207,19 @@ export async function packStart(file, end, caps) {
   }
 }
 
+// What became of a push GitHub was sent (`answer`: forward()'s, null or none when it failed):
+// `rejected` when its report says some ref wasn't taken (a branch protection, a ruleset).
+export function pushResult({ refs, caps }, answer) {
+  if (!answer) return "failed";
+  let accepted;
+  try {
+    accepted = acceptedRefs(answer, caps);
+  } catch {
+    return "ok";
+  }
+  return accepted && refs.some((ref) => !accepted.includes(ref)) ? "rejected" : "ok";
+}
+
 // What git shows for a refused ref: one line, not too long.
 function oneLine(text, max = 1000) {
   const line = text.replace(/[\0-\x1f\x7f]+/g, " ");
@@ -289,12 +302,23 @@ export function createGitGateway({
   spoolDir,
   maxPush,
   fetch = globalThis.fetch,
+  // (op, result) → nothing: each push (`ok`, `refused`, `rejected` by GitHub, `failed`) and each
+  // mirror's clone or update (the github service's metrics, ../github/metrics.mjs).
+  onGit = () => {},
+  // (reason) → nothing: each push refused, why (metrics.mjs PUSH_REASONS).
+  onRefused = () => {},
   log = () => {},
   now = Date.now,
   headMs = HEAD_MS,
   drainMs = DRAIN_MS,
 }) {
-  const mirrors = createMirrors({ root: mirrorDir, spoolRoot: spoolDir, githubUrl, maxPush });
+  const mirrors = createMirrors({
+    root: mirrorDir,
+    spoolRoot: spoolDir,
+    githubUrl,
+    maxPush,
+    onFetch: onGit,
+  });
   // The runs with a push being saved and checked.
   const saving = new Set();
 
@@ -383,8 +407,12 @@ export function createGitGateway({
       push: Array.isArray(claims.branches) && claims.branches.length > 0,
       fork: claims.fork === true,
     };
-    if (may.repo !== repo) return fail(res, 403, `Deckhand: this run can only push to ${may.repo}`);
-    if (!may.push) return fail(res, 403, "Deckhand: this run can't push");
+    if (may.repo !== repo || !may.push) {
+      counted("run");
+      return may.push
+        ? fail(res, 403, `Deckhand: this run can only push to ${may.repo}`)
+        : fail(res, 403, "Deckhand: this run can't push");
+    }
 
     if (service === "info/refs") {
       if (req.method !== "GET" || url.searchParams.get("service") !== "git-receive-pack") {
@@ -404,9 +432,16 @@ export function createGitGateway({
     return { repo, service, run, may, github };
   }
 
-  // The push's refs refused with `reasons` (ref → why): what's left of the pack is read and
-  // dropped, and git's own rejection report sent when the client reads one.
-  async function refuse(req, res, repo, parsed, reasons) {
+  // A push refused, counted: why (`reason`, metrics.mjs PUSH_REASONS).
+  function counted(reason) {
+    onRefused(reason);
+    onGit("push", "refused");
+  }
+
+  // The push's refs refused with `reasons` (ref → why) for `reason` (counted()): what's left of
+  // the pack is read and dropped, and git's own rejection report sent when the client reads one.
+  async function refuse(req, res, repo, parsed, reasons, reason) {
+    counted(reason);
     log(`Git gateway: refused a push to ${repo}: ${[...reasons.values()].join("; ")}`);
     // The pack is not forwarded: let the client finish sending it.
     await drain(req, parsed.body);
@@ -429,6 +464,7 @@ export function createGitGateway({
     try {
       parsed = await commands(req);
     } catch (error) {
+      counted("error");
       return fail(res, 400, `Deckhand: ${error.message}`);
     }
     // Looked up on each push: a renamed default branch is protected at once. No answer, no
@@ -438,21 +474,26 @@ export function createGitGateway({
       base = await defaultBranch(github, repo);
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message}`);
+      onGit("push", "failed");
       return fail(res, 502, "Deckhand: couldn't check the default branch; try again");
     }
     const reasons = new Map();
+    let toBase = false;
     for (const ref of parsed.refs) {
       const why = refusal(ref, base, may.branches);
       if (why) reasons.set(ref, why);
+      toBase ||= ref.toLowerCase() === `refs/heads/${base.toLowerCase()}`;
     }
-    if (reasons.size) return refuse(req, res, repo, parsed, reasons);
+    if (reasons.size) {
+      return refuse(req, res, repo, parsed, reasons, toBase ? "default_branch" : "branch");
+    }
     // Then the policies, on each branch: one refused refuses the push, as GitHub would take the
     // rest without it.
     for (const update of parsed.updates) {
       const why = await policyRefusal(run, repo, update, base);
       if (why) reasons.set(update.ref, why);
     }
-    if (reasons.size) return refuse(req, res, repo, parsed, reasons);
+    if (reasons.size) return refuse(req, res, repo, parsed, reasons, "policies");
     // A work run that isn't a fork's: its push is read whole, and its branches may only reach
     // what it carries or the repository has (mirrors.connect()): GitHub keeps a fork network's
     // objects together, so a branch pointed at a fork's commit, or a new commit over a fork's
@@ -473,7 +514,7 @@ export function createGitGateway({
         error.status === 422
           ? "`workflows` is granted but the App doesn't have the Workflows permission: add Workflows: read and write in its settings and accept it on the installation (docs/setup.md)"
           : "couldn't get a token for this push; try again";
-      return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])));
+      return refuse(req, res, repo, parsed, new Map(parsed.refs.map((ref) => [ref, why])), "error");
     }
     return checkSpooled(req, res, { repo, run, github }, parsed, base, token, strict);
   }
@@ -501,6 +542,7 @@ export function createGitGateway({
         repo,
         parsed,
         all("another push of this run is being checked; try again"),
+        "error",
       );
     }
     saving.add(run);
@@ -512,6 +554,7 @@ export function createGitGateway({
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
       // The request was dropped with the body: no report the client would still read.
       const tooLarge = error.message === "push too large";
+      counted("error");
       return fail(
         res,
         tooLarge ? 413 : 400,
@@ -526,14 +569,19 @@ export function createGitGateway({
       await mirrors.remove(spooled.dir);
     };
     let reasons;
+    let reason = "fork";
     try {
       const start = await packStart(spooled.file, parsed.end, parsed.caps);
       const read = await github.repoToken(repo, { contents: "read" });
       const pushed = { repo, token: read.token, file: spooled.file, start, dir: spooled.dir };
       reasons = strict ? await unconnected(pushed, parsed) : new Map();
-      if (!reasons.size && token) reasons = await workflowReasons(github, pushed, parsed, base);
+      if (!reasons.size && token) {
+        reason = "workflows";
+        reasons = await workflowReasons(github, pushed, parsed, base);
+      }
     } catch (error) {
       log(`Git gateway: ${repo}: ${error.message ?? error}`);
+      reason = "error";
       reasons = all(
         token
           ? "couldn't check the workflow files of this push; try again"
@@ -542,7 +590,7 @@ export function createGitGateway({
     }
     if (reasons.size) {
       await done();
-      return refuse(req, res, repo, parsed, reasons);
+      return refuse(req, res, repo, parsed, reasons, reason);
     }
     return { body: createReadStream(spooled.file), token, done, parsed };
   }
@@ -689,6 +737,7 @@ export function createGitGateway({
     if (!push) return;
     try {
       const answer = await forward(req, res, url, admitted, push.body, push.token);
+      onGit("push", pushResult(push.parsed, answer));
       pushed(admitted.run, admitted.repo, push.parsed, answer);
     } finally {
       await push.done?.();

@@ -50,6 +50,9 @@ export function createMirrors({
   maxPush = MAX_PUSH,
   timeoutMs = GIT_MS,
   cloneMs = CLONE_MS,
+  // (op, result) → nothing: each fetch from GitHub, `clone` (the first) or `mirror_update`, `ok`
+  // or `failed` (the github service's metrics).
+  onFetch = () => {},
 }) {
   // What a listener that stopped mid-check left: older than any check lasts.
   const swept = sweep(spoolRoot, cloneMs + 2 * timeoutMs);
@@ -307,6 +310,7 @@ export function createMirrors({
     const empty = !(await git(["-C", mirror, "for-each-ref", "--count=1"])).length;
     const auth = Buffer.from(`x-access-token:${token}`).toString("base64");
     // The token in the environment, never in a command line or the mirror's config.
+    const op = empty ? "clone" : "mirror_update";
     await git(
       [
         "-C",
@@ -327,6 +331,12 @@ export function createMirrors({
           GIT_CONFIG_VALUE_0: `Authorization: Basic ${auth}`,
         },
         timeout: empty ? cloneMs : timeoutMs,
+      },
+    ).then(
+      () => onFetch(op, "ok"),
+      (error) => {
+        onFetch(op, "failed");
+        throw error;
       },
     );
   }

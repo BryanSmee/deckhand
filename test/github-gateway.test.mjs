@@ -48,6 +48,8 @@ async function gateway(
     readsProjects,
     checkRead,
     repoId,
+    observe,
+    onGit,
   } = {},
 ) {
   const calls = [];
@@ -87,6 +89,8 @@ async function gateway(
     ...(readsProjects && { readsProjects }),
     ...(checkRead && { checkRead }),
     ...(repoId && { repoId }),
+    ...(observe && { observe }),
+    ...(onGit && { onGit }),
   });
   const { url } = await serve(t, (req, res) => gw.handle(req, res));
   // A run, its log's notes beside it: by default with the reads a work run's token had
@@ -1709,4 +1713,44 @@ test("without read:issues: a mutation whose answer reads other issues is refused
   );
   assert.equal(ok.status, 200);
   assert.equal(gw.minted.at(-1)[1].issues, "write");
+});
+
+test("each call relayed is counted: the API's as the proxy's with its rate limit, git's fetches", async (t) => {
+  const observed = [];
+  const ops = [];
+  const gw = await gateway(t, {
+    observe: (call) => observed.push(call),
+    onGit: (op, result) => ops.push(`${op} ${result}`),
+    respond: (req, res) => {
+      if (!req.url.startsWith("/api/v3/repos/org/repo/issues")) return false;
+      res.writeHead(req.url.endsWith("missing") ? 404 : 200, {
+        "content-type": "application/json",
+        "x-ratelimit-resource": "core",
+        "x-ratelimit-remaining": "4321",
+        "x-ratelimit-reset": "1900000000",
+      });
+      res.end("{}");
+      return true;
+    },
+  });
+  const { secret } = gw.register();
+  await (await gw.call("/api/v3/repos/org/repo/issues", { secret })).arrayBuffer();
+  await (await gw.call("/api/v3/repos/org/repo/issues/missing", { secret })).arrayBuffer();
+  await (await gw.call("/org/repo.git/info/refs?service=git-upload-pack", { secret })).text();
+  const pack = await gw.call("/org/repo.git/git-upload-pack", {
+    secret,
+    method: "POST",
+    body: "0000",
+  });
+  await pack.arrayBuffer();
+  assert.deepEqual(
+    observed.map((o) => [o.caller, o.status, o.headers["x-ratelimit-remaining"], o.authorization]),
+    [
+      ["proxy", 200, "4321", `token ${TOKEN}`],
+      ["proxy", 404, "4321", `token ${TOKEN}`],
+    ],
+  );
+  assert.ok(observed.every((o) => o.seconds >= 0));
+  // The advertisement isn't an operation of its own: the pack request is the fetch.
+  assert.deepEqual(ops, ["fetch ok"]);
 });

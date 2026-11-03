@@ -1453,6 +1453,21 @@ before the signature is checked, so what the internet writes there never makes a
 Its sandboxes and the probe's verdict are the acting copy's alone: the waiting one has no samples
 of those. Its lease is `deckhand_lease_held{lease="runner"}`.
 
+### The github service's
+
+Where GitHub's limits show: the one service holding the App's key (`github/metrics.mjs`). Each
+copy counts its own calls: add the copies up, but for the rate limit (take the min).
+
+| Metric                                      | Labels             | What                                                                                                                                                                                                                                               |
+| ------------------------------------------- | ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deckhand_github_api_calls_total`           | `caller`, `status` | calls to GitHub's API. `caller`: the service the call was made for (`orchestrator`, `edge`, `runner`, `proxy` for the runs' gateway), with the installation lookups and tokens it needed; `github`, its own. `status`: GitHub's, `error` for none  |
+| `deckhand_github_api_call_duration_seconds` | `caller`           | how long GitHub took to answer, to its headers                                                                                                                                                                                                     |
+| `deckhand_github_rate_limit_remaining`      | `resource`         | calls left in the rate limit (`core`, `graphql`, `search`), the lowest of the installations' (and the App's own) as GitHub's latest answers said: the earliest warning that runs are about to stall. None until an answer said, nor past its reset |
+| `deckhand_github_rate_limit_reset_seconds`  | `resource`         | seconds until that lowest limit starts again                                                                                                                                                                                                       |
+| `deckhand_git_operations_total`             | `op`, `result`     | `op`: `clone` (a mirror's first fetch), `mirror_update`, `fetch` (a sandbox's fetch or clone, relayed), `push`. `result`: `ok`, `refused` (by Deckhand), `rejected` (by GitHub: a branch protection, a ruleset), `failed`                          |
+| `deckhand_pushes_refused_total`             | `reason`           | `default_branch`, `branch` (not the run's, or not a branch), `run` (one that can't push, or not there), `policies` (`deny_push`), `workflows` (a workflow file that writes or names a secret), `fork` (a fork's objects), `error` (not checked)    |
+| `deckhand_mirror_bytes`                     |                    | the git mirrors on its volume (the repos granted `workflows`, and work runs' pushes checked for a fork's objects), read at most once a minute                                                                                                      |
+
 ## Health checks
 
 Every service in `compose.yaml` has a health check, which calls its own `/ready` (or `/health`)

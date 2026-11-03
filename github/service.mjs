@@ -47,6 +47,7 @@ import { createReadChecks, createWriteChecks } from "../listener/github-writes.m
 import { createGitHub, getJson } from "../listener/github.mjs";
 import { repoPath } from "../listener/repo-config.mjs";
 import { parse } from "../listener/vendor/graphql.mjs";
+import { NO_METRICS } from "./metrics.mjs";
 import { createRuns, STREAM } from "./runs.mjs";
 
 // GitHub's status, the orchestrator's key for a write it may ask again (#506), the statuses a
@@ -203,6 +204,8 @@ export function createGithubService({
   gatewayOptions = {},
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
+  // Its metrics' hooks (metrics.mjs githubMetrics()): none counted without.
+  metrics = NO_METRICS,
 }) {
   const guard = serviceGuard({
     service: "github",
@@ -315,6 +318,8 @@ export function createGithubService({
     readsProjects,
     repoId: async (repo) => (await lookup(repo, `/repos/${repo}`))?.id ?? null,
     inFlight: runs.inFlight,
+    observe: metrics.api,
+    onGit: metrics.git,
     log,
     ...gatewayOptions,
   });
@@ -328,6 +333,8 @@ export function createGithubService({
     githubUrl: config.githubUrl,
     mirrorDir,
     fetch,
+    onGit: metrics.git,
+    onRefused: metrics.refused,
     log,
   });
 
@@ -552,6 +559,11 @@ export function createGithubService({
       return sendJson(res, { ok: ready, app: !!app.get() }, ready ? 200 : 503);
     }
     const caller = await guarded(req);
+    // What it asks GitHub from here on is that caller's (metrics.mjs).
+    return metrics.as(caller, () => routed(req, res, url, path, caller));
+  }
+
+  async function routed(req, res, url, path, caller) {
     if (path.startsWith("/relay/") || path.startsWith("/git/")) return sandboxCall(req, res, path);
     // What the orchestrator changes carries its epoch: a copy that lost its lease changes nothing.
     if (caller === "orchestrator" && req.method !== "GET") await fence(req);

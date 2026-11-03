@@ -39,6 +39,7 @@
 //   (ACTIONS_LOGS).
 //
 // Served by the github service (../github/), which sandboxes reach through the egress proxy alone.
+import { performance } from "node:perf_hooks";
 import { addressOf } from "./broker.mjs";
 import { githubContent } from "./egress.mjs";
 import { PROJECT_READ, READ_PERMISSIONS, readsGitHub, readsOf } from "./github-app.mjs";
@@ -391,6 +392,11 @@ export function createGithubGateway({
   // (`repositories/<id>/…`), for a run's own issue's next page (ownIssueId()). None: such a
   // path is refused to a run without `read:issues`.
   repoId = async () => null,
+  // ({ caller, status, seconds, headers, authorization }) → nothing: each call relayed to GitHub's
+  // API once answered, `status` null when it wasn't (the github service's metrics).
+  observe = () => {},
+  // (op, result) → nothing: each git fetch relayed, `ok` or `failed` (its metrics too).
+  onGit = () => {},
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
   // { take(run, max) → a slot when the run had fewer than `max` calls in flight, else null;
@@ -987,6 +993,22 @@ export function createGithubGateway({
       else answer = null;
     };
     const at = Date.now();
+    const started = performance.now();
+    // GitHub's answer, counted: an API call's status and rate limit, a git fetch's result.
+    const fetching = !api && req.method === "POST" && /\/git-upload-pack$/i.test(path);
+    const count = (code, answerHeaders, lost) => {
+      if (api) {
+        const seconds = (performance.now() - started) / 1000;
+        const { authorization } = headers;
+        observe({
+          caller: "proxy",
+          status: lost ? null : code,
+          seconds,
+          headers: answerHeaders,
+          authorization,
+        });
+      } else if (fetching) onGit("fetch", !lost && code < 400 ? "ok" : "failed");
+    };
     // What the answer changed, kept before its end reaches the run (`settle`, forward()), so that
     // its next call sees it whichever copy of the github service takes it; after a call GitHub
     // never answered, once forward() is over. Once either way.
@@ -1027,11 +1049,11 @@ export function createGithubGateway({
       clock,
       // No answer (`lost`): 0, the write may have gone out all the same (github-writes.mjs
       // answered() counts a rerun then).
-      ...((watched || advertised) && {
-        tap,
-        answered: (code, _, lost) => (status = lost ? 0 : code),
-        settle: after,
-      }),
+      answered: (code, answerHeaders, lost) => {
+        count(code, answerHeaders, lost);
+        if (watched || advertised) status = lost ? 0 : code;
+      },
+      ...((watched || advertised) && { tap, settle: after }),
       ...(logs && { follow }),
       ...(lacks && {
         transform: (code, _, answer) => {
