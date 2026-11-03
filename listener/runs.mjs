@@ -357,6 +357,7 @@ export function createRuns(ctx) {
       `${key}: running ${task.name} (${mode}, ${record.mode}, ${agent.name}${on} ${record.model}/${record.effort}${fast}), log ${record.id}`,
     );
     logFile.write(JSON.stringify({ type: "listener", ...record, message: text }) + "\n");
+    ctx.metrics?.runStarted(task.live);
     const note = (message) => writeEvent(logFile, "note", { message });
     if (foreign) note(`${foreign}: ${agent.displayName} runs its best model instead`);
     if (record.speedNote) note(record.speedNote);
@@ -843,6 +844,8 @@ export function createRuns(ctx) {
         await ctx.answer(target(task, live.asked), error.message).catch((e) => log(`${key}: ${e}`));
       }
     } finally {
+      // Its outcome as its `done (…)` line says, or "error" for a run that failed before it.
+      ctx.metrics?.runFinished(live);
       await cleanUp(task);
     }
   }

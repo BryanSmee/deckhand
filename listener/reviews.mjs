@@ -41,6 +41,7 @@ import {
   MARKER,
   parseKey,
   prId,
+  REFUSED,
   sameRepo,
   taskKey,
 } from "./events.mjs";
@@ -1596,8 +1597,8 @@ export function reviewCandidate(config, event, p, skip = () => null) {
   const ready = p.action === "ready_for_review" || (p.action === "opened" && pr && !pr.draft);
   if (!ready) return null;
   const repo = p.repository?.full_name;
-  if (!p.installation?.id || !repo) return skip("not from an installation of the App");
-  if (!repoAllowed(config, repo)) return skip(`${repo} not in ALLOWED_REPOS`);
+  if (!p.installation?.id || !repo) return skip("not from an installation of the App", REFUSED);
+  if (!repoAllowed(config, repo)) return skip(`${repo} not in ALLOWED_REPOS`, REFUSED);
   if (pr.state && pr.state !== "open") return skip(`review: #${pr.number} isn't open`);
   if (!headInRepo(pr, repo)) return skip(`review: #${pr.number} is from a fork`);
   const by = openedBy(config, pr);
@@ -1642,6 +1643,8 @@ export function createReviews({
   // The run that opened a pull request, for `/mode policy`'s deny_request_review (reviewers.mjs
   // openerOf()): `runOf(taskKey, pr)`, or null.
   runOf = () => null,
+  // The orchestrator's metrics (metrics.mjs): its fix rounds, counted.
+  metrics = null,
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
@@ -1954,10 +1957,10 @@ export function createReviews({
     // A maintainer's Fix being started holds the pull request: a second click, or the
     // automatic path meanwhile, starts nothing.
     if (granting.has(key)) return skip("a fix run asked from the dashboard is being started");
-    if (!asked) return queueFix({ key, repo, number, base, settings, review, pr }, asked);
+    if (!asked) return fixRound({ key, repo, number, base, settings, review, pr }, asked);
     granting.add(key);
     try {
-      return await queueFix({ key, repo, number, base, settings, review, pr }, asked);
+      return await fixRound({ key, repo, number, base, settings, review, pr }, asked);
     } finally {
       granting.delete(key);
     }
@@ -1970,6 +1973,15 @@ export function createReviews({
     const entry = reviewed.get(key) ?? {};
     if (decisions.has(key) || entry.waiting || entry.ciWaiting) return true;
     return (entry.head ?? null) !== (before.head ?? null);
+  }
+
+  // queueFix(), counted (deckhand_fix_rounds_total): a fix run queued, refused by the policies,
+  // its rounds used up, or none now (a run going, the maintainer's input awaited…).
+  async function fixRound(fields, asked) {
+    const result = await queueFix(fields, asked);
+    const { item, denied, out } = result;
+    metrics?.fixRound(item ? "started" : denied ? "refused" : out ? "exhausted" : "skipped");
+    return result;
   }
 
   // startFix()'s work, the review read and requesting changes.
@@ -1998,9 +2010,9 @@ export function createReviews({
     const grant = !!asked && fixes >= limitOf(settings, entry);
     const rounds = grant ? fixes + 1 : limitOf(settings, entry);
     if (fixes >= rounds) {
-      return skip(
-        rounds > 1 ? `it had its ${rounds} fix runs already` : "it had its fix run already",
-      );
+      const why =
+        rounds > 1 ? `it had its ${rounds} fix runs already` : "it had its fix run already";
+      return { ...skip(why), out: true };
     }
     const round = fixes + 1;
     // Deckhand's own pull request, on a branch of the repo and linked to the issue it worked

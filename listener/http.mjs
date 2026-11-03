@@ -10,6 +10,7 @@ import {
   parseKey,
   prId,
   pullRequest,
+  REFUSED,
   replayedIssue,
   replayedPull,
   taskKey,
@@ -18,6 +19,7 @@ import {
 } from "./events.mjs";
 import { fetchPull, getJson } from "./github.mjs";
 import { QUIET_EVENTS } from "./github-app.mjs";
+import { deliveryResult } from "./metrics.mjs";
 import { isApart, kindOf } from "./modes.mjs";
 import { onboardingTargets } from "./onboarding.mjs";
 import { LOOP_STEPS } from "./reviews.mjs";
@@ -66,7 +68,17 @@ const ISSUE_REPLAYS = ["labeled", "unlabeled", "closed", "reopened"];
 
 // `ctx` (../orchestrator/server.mjs): the orchestrator's state and services, read at call time.
 export function createHttp(ctx) {
-  const { config, log, skip, tasks } = ctx;
+  const { config, log, tasks } = ctx;
+
+  // The delivery being dispatched, for its metric (metrics.mjs deliveryResult()): whether the
+  // operator's checks refused it (their skip()'s REFUSED, events.mjs), whether it made a work
+  // item, whether CI changed. Only what is decided before deliver() returns: a redelivery's own
+  // dispatch comes later.
+  let verdict = null;
+  const skip = (reason, how) => {
+    if (how === REFUSED && verdict) verdict.refused = true;
+    return ctx.skip(reason);
+  };
 
   // Comments on their way to the queue: an orchestrator that stops saves them too.
   const admitting = new Set();
@@ -241,6 +253,7 @@ export function createHttp(ctx) {
   // unexpected throw is logged: it never takes the orchestrator down, nor the deliveries after it.
   function deliver({ event, payload, redelivered = false }) {
     const work = [];
+    verdict = { event, refused: false, item: false, ci: false };
     try {
       if (event === "pull_request" && redelivered) replay(event, payload, work);
       else if (event === "issues" && ISSUE_REPLAYS.includes(payload?.action) && redelivered) {
@@ -251,6 +264,9 @@ export function createHttp(ctx) {
         `Delivery ${event} ${payload?.action ?? ""} failed: ${error.stack ?? error}`,
       );
     }
+    const result = deliveryResult(verdict);
+    verdict = null;
+    ctx.metrics?.delivery(event, result);
     return Promise.all(work);
   }
 
@@ -329,6 +345,7 @@ export function createHttp(ctx) {
     // burst of statuses before a comment); one lost is read again at the next Sync.
     const ci = ciDelivery(config, event, payload);
     if (ci) {
+      if (verdict) verdict.ci = true;
       ctx.pulls.ciChanged(ci.repo, ci.sha).catch((error) => log(`CI: ${error.stack ?? error}`));
     }
     // Nothing else to do for them, nor a line each (github-app.mjs QUIET_EVENTS).
@@ -408,6 +425,7 @@ export function createHttp(ctx) {
     // The operator's checks first, so only comments that may run cost a config read.
     const item = workItem(config, event, payload, skip);
     if (item) {
+      if (verdict) verdict.item = true;
       item.base = payload.repository?.default_branch;
       admitted(ctx.admit(item, event, payload));
     }

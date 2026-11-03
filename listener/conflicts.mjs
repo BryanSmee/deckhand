@@ -20,6 +20,9 @@ import { denyKept, passed } from "./policies.mjs";
 import { fixInput, policyWhy, readPullInput } from "./reviews.mjs";
 import { respellMap } from "./spelling.mjs";
 
+// The results of checkPull() a pass counts: the dashboard's Sync says them.
+const COUNTED = ["started", "pending"];
+
 // How often the watcher wakes up; each repo is checked at its own interval.
 const TICK_MS = 60_000;
 
@@ -64,6 +67,8 @@ export function createConflicts({
   decided = () => {},
   fixes = () => 0,
   reply = async () => {},
+  // The orchestrator's metrics (metrics.mjs): each pull request's check, counted.
+  metrics = null,
   log = () => {},
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.()),
@@ -182,57 +187,65 @@ export function createConflicts({
     due.set(id, now() + settings.conflicts.checkMinutes * 60_000);
     let pending = false;
     for (const { key, pr } of tasks) {
-      const result = await checkPull(repo, key, pr.number, { base, settings });
+      let result;
+      try {
+        result = await checkPull(repo, key, pr.number, { base, settings });
+      } catch (error) {
+        metrics?.conflictCheck("error");
+        throw error;
+      }
+      metrics?.conflictCheck(result);
       if (result === "pending") pending = true;
-      if (result) counts[result] += 1;
+      if (COUNTED.includes(result)) counts[result] += 1;
     }
     // GitHub computes mergeability on the first request: its answer is there next time.
     if (pending) due.set(id, 0);
   }
 
-  // Starts a rebase run for the pull request if it conflicts; "pending" when GitHub doesn't
-  // know yet.
+  // Starts a rebase run for the pull request if it conflicts. → "started"; "pending" when GitHub
+  // doesn't know yet; "clean" when it merges; "refused" by the policies; "skipped" for the rest
+  // (a run going, closed, its input awaited, this head and base tried already).
   async function checkPull(repo, key, number, { base, settings }) {
-    if (busy(key)) return null;
+    if (busy(key)) return "skipped";
     const pr = await json(repo, `/repos/${repo}/pulls/${number}`, [404]);
-    if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return null;
+    if (!pr || pr.state !== "open" || !headInRepo(pr, repo)) return "skipped";
     if (pr.mergeable === null || pr.mergeable === undefined || pr.mergeable_state === "unknown") {
       return "pending";
     }
     // Conflicts only: a pull request merely behind its base merges as it is.
-    if (pr.mergeable !== false && pr.mergeable_state !== "dirty") return null;
+    if (pr.mergeable !== false && pr.mergeable_state !== "dirty") return "clean";
     const target = parseKey(key);
     const issue = target.kind === "issue" ? target.number : null;
-    if (await waitsForInput(github, config, repo, pr, issue)) return null;
+    if (await waitsForInput(github, config, repo, pr, issue)) return "skipped";
     const baseSha = await baseHead(repo, pr.base.ref);
-    if (!baseSha) return null;
+    if (!baseSha) return "skipped";
     const pair = { pr: number, head: pr.head.sha, base: baseSha };
     const last = attempts.get(key);
     // The refusal last said on the pull request (`said`, kept once its comment was posted): the
     // same refusal again isn't said again.
     const said = last?.pr === number ? last.said : undefined;
     if (last && last.pr === pair.pr && last.head === pair.head && last.base === pair.base) {
-      return null;
+      return "skipped";
     }
     const { messages: denied, unread } = await deny(repo, key, pr, issue, base);
     // Refused because GitHub couldn't be read (the policies, the pull request's files): nothing
     // starts, and the pair isn't kept, so the next check asks again, as for any GitHub error.
     if (unread) throw new Error(`#${number}: ${policyWhy("deny_fix", denied)}`);
     // Checked again: a comment may have come during the calls above.
-    if (busy(key)) return null;
+    if (busy(key)) return "skipped";
     const repeated = denied.length > 0 && JSON.stringify(said) === JSON.stringify(denied);
     attempts.set(key, { ...pair, at: now(), ...(repeated && { said }) });
     if (denied.length) {
       const why = policyWhy("deny_fix", denied);
       log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, no rebase run, ${why}`);
-      if (repeated) return null;
+      if (repeated) return "refused";
       try {
         await reply(repo, number, noRebaseText(why, pr.base.ref));
         attempts.set(key, { ...attempts.get(key), said: denied });
       } catch (error) {
         log(`${key}: saying no rebase run: ${error.message ?? error}`);
       }
-      return null;
+      return "refused";
     }
     log(`${key}: pull request #${number} conflicts with ${pr.base.ref}, starting a rebase run`);
     await accept({

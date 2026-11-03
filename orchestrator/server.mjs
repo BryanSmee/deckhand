@@ -52,7 +52,7 @@ import { openStore, values } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
 import { readJson } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
-import { leaseMetric, startMetrics } from "../lib/metrics.mjs";
+import { createRegistry, leaseMetric, startMetrics } from "../lib/metrics.mjs";
 import { createEdgeClient } from "../edge/client.mjs";
 import { checkAppSettings, loadCredentials, saveCredentials } from "../listener/github-app.mjs";
 import { hasLabel, pullEntry, taskKey } from "../listener/events.mjs";
@@ -112,6 +112,7 @@ import { createOrder, ranked } from "../listener/order.mjs";
 import { createTitles } from "../listener/titles.mjs";
 import { createWaits } from "../listener/waits.mjs";
 import { createWorkApi } from "../listener/work.mjs";
+import { orchestratorMetrics, serviceCallMetrics } from "../listener/metrics.mjs";
 import { createHealth } from "../listener/health.mjs";
 
 // How long the egress policy's answers in flight get once the rest is saved: they are quick.
@@ -143,6 +144,12 @@ const env = process.env;
 // Its lines redact the operator's secrets too, once known (storeSecrets, below).
 const log = createLogger({ service: "orchestrator", secrets: () => storeSecrets() });
 
+// Its metrics' registry (../lib/metrics.mjs), before its settings are read: its calls to the
+// other services are counted from the first (listener/metrics.mjs), served once METRICS_PORT is
+// known (below).
+const registry = createRegistry({ log });
+const calls = serviceCallMetrics(registry);
+
 // The broker service (../broker/, #505): the runs' tokens, which it alone signs, their files and
 // its stream of their events. Its calls carry the orchestrator's service tokens: for the broker, the policy service, the
 // runner, the models service, the github service and edge.
@@ -154,6 +161,7 @@ try {
     service: "orchestrator",
     audiences: ["broker", "policy", "runner", "models", "github", "edge"],
     podTokenFile: env.SERVICE_ACCOUNT_TOKEN_FILE || null,
+    observe: calls.observer("broker"),
     log,
   });
   // The models service (../models/, #504), the only one holding the agents' credentials: the
@@ -162,6 +170,7 @@ try {
   models = createModelsService({
     urls: modelsServiceUrl(env),
     token: () => brokerCaller.header("models"),
+    fetch: calls.fetch("models"),
     log,
   });
 } catch (error) {
@@ -270,8 +279,12 @@ let acting = false;
 const server = serverInfo(env);
 // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set: the waiting copy
 // answers too, its lease not held.
-const metrics = startMetrics({ service: "orchestrator", port: config.metricsPort, log });
-leaseMetric(metrics.registry, { orchestrator: () => acting });
+startMetrics({ service: "orchestrator", port: config.metricsPort, log, registry });
+leaseMetric(registry, { orchestrator: () => acting });
+// The runs, the queue and the rest: what only the acting copy knows from its state (`shared`,
+// the modules' `ctx` below), the waiting one has no samples of.
+let shared = null;
+const counted = orchestratorMetrics(registry, { ctx: () => (acting ? shared : null) });
 const services = createServicesHttp({
   health: server,
   // The broker service's keys.
@@ -357,6 +370,7 @@ const runnerClient = createRunnerClient({
   token: () => brokerCaller.header("runner"),
   epoch: () => epoch,
   pendingTokens,
+  fetch: calls.fetch("runner"),
   log,
 });
 
@@ -366,6 +380,7 @@ const githubService = createGithubClient({
   urls: config.githubServiceUrl,
   token: () => brokerCaller.header("github"),
   epoch: () => epoch,
+  fetch: calls.fetch("github"),
   log,
 });
 
@@ -440,8 +455,11 @@ const ctx = {
   // The models service: the agents' credentials' fingerprints, a run's API state at its end.
   models,
   storeSecrets: () => operatorSecrets(ctx),
+  // Its metrics (listener/metrics.mjs): the runs', the deliveries', the checks'.
+  metrics: counted,
 };
 storeSecrets = () => operatorSecrets(ctx);
+shared = ctx;
 
 // --- GitHub ----------------------------------------------------------------------------
 
@@ -748,6 +766,7 @@ const policies = createPolicies({
     // Its service token for the policy service, from the broker service, which publishes the
     // key the policy service checks it with (SERVICE_KEYS_DIR there).
     header: () => brokerCaller.header("policy"),
+    fetch: calls.fetch("policy"),
   }),
   secrets: () => operatorSecrets(ctx),
   log,
@@ -853,6 +872,7 @@ ctx.conflicts = createConflicts({
   decided: (key, entry) => ctx.decisions.record(key, entry),
   fixes: (repo, number) => ctx.reviews.fixes(repo, number),
   reply: ctx.reply,
+  metrics: counted,
   log,
 });
 // Pull requests that turn ready in opted-in repos get a review run (`review.on`), a review
@@ -886,6 +906,7 @@ ctx.reviews = createReviews({
   decided: (repo, pr, entry) => ctx.decisions.record(pullEntry(repo, pr).key, entry),
   // `/mode policy`'s deny_request_review, about the run that opened the pull request.
   runOf: (key, pr) => openerOf(ctx.runs, key, pr),
+  metrics: counted,
   grantOf: async (repo) => {
     try {
       return await grantOf(config, repo, { granted: grantsBy(policies) });
@@ -945,6 +966,7 @@ ctx.waits = createWaits({
   settle: ctx.settle,
   resume: (item) => ctx.resume(item),
   checkMs: config.waitsCheckMinutes * 60_000,
+  checked: counted.waitChecked,
   log,
 });
 ctx.repoApi = createRepoApi({

@@ -47,6 +47,8 @@ export function createWaits({
   now = Date.now,
   checkMs = CHECK_MS,
   later = (fn, ms) => setTimeout(fn, ms).unref?.(),
+  // Each issue asked of GitHub, for the orchestrator's metrics (deckhand_waits_checked_total).
+  checked = () => {},
 }) {
   // `waits`: task key ("org/repo#78") → { repo, blockers: [77, …], item, since, unqueued? };
   // `item`: the comment as restart.mjs saves it, its queueId the one it is queued with once
@@ -75,6 +77,7 @@ export function createWaits({
 
   // "open", "done", "not-done" or "missing" (deleted, transferred, or never there).
   async function stateOf(repo, number) {
+    checked();
     const issue = await getJson(github, repo, `/repos/${repo}/issues/${number}`, [404, 410]);
     return issue ? issueOutcome(issue) : "missing";
   }
