@@ -7,7 +7,7 @@ import { parseKey } from "./events.mjs";
 import { GrantsError, grantErrors, loadGrants } from "./grants.mjs";
 
 // Which Deckhand runs and since when, for api/state and /status. DECKHAND_VERSION: the release
-// (a git tag), edge-<short sha> for a push to main, "dev" from source. DECKHAND_SOURCE: the
+// (a git tag), edge-<short sha> for a commit of main that passed its checks, "dev" from source. DECKHAND_SOURCE: the
 // repository the image was built from, where the dashboard links the version ("" without
 // one: a fork's images link to the fork). `now`: injected by the tests.
 export function serverInfo(env, now = Date.now) {
