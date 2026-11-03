@@ -1747,8 +1747,10 @@ models services never do. The secret key is one of their secrets: their store re
 value and redacts it from a blob, and their logs and blob storage itself redact it too.
 
 The runner moves each closed segment of a run's log there (a log closes one at each step of
-its run, at `LOG_SEGMENT_MB` and at its end), while the run goes on: the store keeps only the
-segment still being written and each log's index. Logs written before `BLOB_URL` was set stay in
+its run, at `LOG_SEGMENT_MB` and at its end), while the run goes on: once they have
+moved, the store keeps only the segment still being written and each log's index. Nothing slows
+a run's log down while its segments move: closed segments wait in the store for as long as blob
+storage takes them slower than the log is written, as when it fails (below). Logs written before `BLOB_URL` was set stay in
 the store until retention removes them, and so do logs from before segments. Retention
 (`LOG_RETENTION_DAYS`) deletes the segments in blob storage too. Don't unset `BLOB_URL` once
 segments are there: their logs no longer read. The broker keeps the runs' screenshots there
@@ -1789,7 +1791,9 @@ broker share it (logs under `logs/`, screenshots under `shots/`, the start's che
 your network; plain HTTP is fine on a network of your own (Compose's Garage, below).
 
 Checked against Garage (one node and three, `test/blob-server.test.mjs`, which runs against any
-server when `TEST_BLOB_URL`, `TEST_BLOB_ACCESS_KEY_ID` and `TEST_BLOB_SECRET_ACCESS_KEY` name it).
+server when `TEST_BLOB_URL`, `TEST_BLOB_ACCESS_KEY_ID` and `TEST_BLOB_SECRET_ACCESS_KEY` name it),
+and with Redis as the store (`test/blob-acceptance.test.mjs`, with `TEST_REDIS_URL` too): a
+500 MB log keeps one segment in Redis once its moves caught up, and reads back whole.
 
 ### Garage with Docker Compose
 
