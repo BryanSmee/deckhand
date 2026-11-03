@@ -356,6 +356,13 @@ test("a run's questions in another language: translated headings, title and pick
   // Only the marker on a line of its own: one quoted in a sentence before it isn't the start.
   const quoted = `Je réponds avec \`<!-- needs-input -->\` en tête.\n${reply}`;
   assert.deepEqual(replyQuestions(quoted), replyQuestions(reply));
+  // Under translated headings after an intro, free-text questions alone are the questions too.
+  assert.deepEqual(
+    replyQuestions(
+      "<!-- needs-input -->\n## Besoin de votre avis\n\nUne question.\n\n## Questions\n\n1. **Nom** : quel nom ?",
+    ).items,
+    [free("quel nom ?", "Nom")],
+  );
   // Questions without options right under the first heading are still the questions.
   assert.deepEqual(
     replyQuestions("<!-- needs-input -->\n## Avis\n1. A ?\n## Vérifié\n2. B ?").items,
@@ -395,6 +402,8 @@ test("a pick in other languages: each form of recommended", () => {
       .options;
     assert.deepEqual([a.label, a.recommended, b.recommended], ["A (why)", true, false], pick);
   }
+  const decomposed = parseQuestions("1. Which?\n   - [ ] A (recommande\u0301)").items[0].options[0];
+  assert.equal(decomposed.recommended, true);
 });
 
 test("issue bodies: open questions and None in English and a few other languages", () => {
@@ -411,6 +420,7 @@ test("issue bodies: open questions and None in English and a few other languages
     "Preguntas pendientes",
     "Perguntas abertas",
     "Questões em aberto",
+    "Questo\u0303es em aberto",
   ]) {
     assert.equal(hasOpenQuestions(asked(heading)), true, heading);
     assert.equal(parseQuestions(questionsSection(asked(heading))).items[0].title, "Titre");
@@ -440,6 +450,12 @@ test("issue bodies: open questions and None in English and a few other languages
     "Nessuna domanda",
     "Ninguna pregunta.",
     "Nenhuma questão",
+    // A list after it that asks nothing: notes under a heading, what was settled, code.
+    "None\n\n### Notes\n\n1. something done",
+    "None. Settled on the issue:\n\n1. Use X (decided)",
+    "None\n\n```\n1. code\n   - [ ] x\n```",
+    // Written decomposed (e and its accent), as some editors do.
+    "ne\u0301ant",
   ]) {
     assert.equal(hasOpenQuestions(none("Open questions", text)), false, text);
   }

@@ -176,8 +176,8 @@ posted: <status>". An orchestrator restarting before then posts it again (`live.
 false).
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
-`prompts/sandbox.md`, or has it on a line of its own before its first question: a run that put
-a translated heading first, `asksInput()`) shows as `needs-input` on the dashboard and labels
+`prompts/sandbox.md`, or has it on a line of its own before its first numbered line: a run that
+put a translated heading first, `asksInput()`) shows as `needs-input` on the dashboard and labels
 the issue or pull request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run
 starts. A run asks too when its work is done but a step only the maintainer can take still
 blocks the merge (a write Deckhand refused, a file it may not edit, a secret to add; issue #551):

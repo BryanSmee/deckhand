@@ -100,6 +100,8 @@ test("outcome: ok, needs-input or error", () => {
     "Done.\n1. Fixed it.\n<!-- needs-input -->",
     "Done.\n\n<!-- needs-input --> is what a run starts with to ask.",
     "Done.\r\n1. Fixed\r\n<!-- needs-input -->",
+    // After a numbered line, even a summary: a reply explaining the marker lists too.
+    "## Besoin de votre avis\n\nJ'ai fait :\n1. tests\n\n<!-- needs-input -->\n\n1. **A** : ?",
     "Done. The format:\n\n    <!-- needs-input -->\n    ## Needs your input",
   ]) {
     assert.equal(outcome({ ok: true, text }), "ok", text);

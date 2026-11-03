@@ -24,9 +24,8 @@ const FENCE = /^ {0,3}(```|~~~)/;
 // German, Portuguese and Italian.
 const OPEN_QUESTIONS =
   /^(?:open questions|questions ouvertes|questions en suspens|preguntas abiertas|preguntas pendientes|offene fragen|perguntas abertas|perguntas em aberto|quest[õo]es em aberto|domande aperte)\s*:?$/iu;
-// "None" first in the section, and no numbered question after it: it asks nothing. Many
-// sentences start with the word too ("Keine der beiden Varianten passt: welche?"), which the
-// questions follow.
+// "None" first in the section: it asks nothing, unless questions follow (asks()). Many
+// sentences start with the word too ("Keine der beiden Varianten passt: welche?").
 const NONE =
   /^(?:none|n\/a|no (?:open )?questions|aucune?|néant|pas de questions?|ningun[oa]|ningún|sin preguntas|keine|nenhuma?|sem perguntas|nessun[oa])(?![\p{L}\p{N}])/u;
 // The pick of an option.
@@ -44,7 +43,10 @@ export function questionsSection(body) {
     if (lines) {
       if (heading && heading[1].length <= level) break;
       lines.push(line);
-    } else if (heading && OPEN_QUESTIONS.test(heading[2].replace(/[*_]/g, "").trim())) {
+    } else if (
+      heading &&
+      OPEN_QUESTIONS.test(heading[2].replace(/[*_]/g, "").trim().normalize("NFC"))
+    ) {
       level = heading[1].length;
       lines = [];
     }
@@ -67,7 +69,17 @@ function asks(text) {
     .replace(/[*_`>]/g, "")
     .trim()
     .toLowerCase();
-  return !NONE.test(first) || section.split(/\r?\n/).some((line) => ITEM.test(line));
+  if (!NONE.test(first.normalize("NFC"))) return true;
+  // The word only started a sentence when questions with options follow it, before a heading
+  // and outside code: a list of what was settled, or notes under a heading, ask nothing.
+  const after = [];
+  let fenced = false;
+  for (const line of section.split(/\r?\n/).slice(1)) {
+    if (FENCE.test(line)) fenced = !fenced;
+    else if (!fenced && HEADING.test(line)) break;
+    else if (!fenced) after.push(line);
+  }
+  return !!parseQuestions(after.join("\n"))?.items?.some((q) => q.options.length);
 }
 
 // At most one space before it: deeper, it is nested under a question.
@@ -121,8 +133,10 @@ export function parseQuestions(markdown) {
       const option = OPTION.exec(line);
       const bullet = !item.options.length && BULLET.exec(line);
       if (option) {
-        const pick = RECOMMENDED.exec(option[2]);
-        const label = option[2].replace(RECOMMENDED, "").trim();
+        // NFC: an editor may write "é" as "e" and its accent, which the translations miss.
+        const text = option[2].normalize("NFC");
+        const pick = RECOMMENDED.exec(text);
+        const label = text.replace(RECOMMENDED, "").trim();
         if (!label) return other;
         loose = false;
         item.options.push({
@@ -175,8 +189,9 @@ function question(line) {
 }
 
 // Whether a run's reply stopped to ask: NEEDS_INPUT starts it, or is a line of its own before
-// its first question (a run that put a translated heading or a sentence first, issue #705).
-// Not in a code block, nor in a sentence: a reply that explains the marker asks nothing.
+// its first numbered line (a run that put a translated heading or a sentence first, issue
+// #705). Not in a code block, nor in a sentence, nor after a list: a reply that explains the
+// marker asks nothing.
 export function asksInput(text) {
   return markerEnd(text) >= 0;
 }
@@ -204,7 +219,7 @@ function markerEnd(text) {
 // has one (under "Needs your input", as the prompt's wording invites), else what follows its
 // "Needs your input" heading, up to the next heading. When that is no list of questions (an
 // intro under translated headings), the first part between headings whose questions have
-// options. Null when it asks nothing.
+// options, else the first with questions. Null when it asks nothing.
 export function replyQuestions(text) {
   const reply = text ?? "";
   const at = markerEnd(reply);
@@ -229,7 +244,8 @@ export function replyQuestions(text) {
   if (!asks(texts.join("\n\n"))) return null;
   const [first, ...rest] = texts.map(parseQuestions);
   if (first?.items) return first;
-  return rest.find((q) => q?.items?.some((i) => i.options.length)) ?? first ?? null;
+  const options = rest.find((q) => q?.items?.some((i) => i.options.length));
+  return options ?? rest.find((q) => q?.items) ?? first ?? null;
 }
 
 // An `issues`, `issue_comment` or `pull_request` delivery → what it changes for the label, or
