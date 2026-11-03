@@ -473,7 +473,10 @@ it gets the lease, at each closing, and every five minutes, acknowledging a note
 done: a move cut short after any step is done again from the start, which does no harm. While
 blob storage fails, the notes stay, tried again after a delay that doubles from 30 s to 30
 minutes, and the runner's `/health` counts them and their bytes (a warning on the dashboard's
-status page). Retention deletes a log's segments in blob storage first, then its index: one that
+status page; the count is kept in its store, so either copy says it, and a segment noted twice
+counts once). A copy losing the lease stops its pass at the next note. A segment whose copy
+measures otherwise in blob storage (trying again would send the same bytes) is logged and left
+in the store, and the notes after it go on. Retention deletes a log's segments in blob storage first, then its index: one that
 fails stays for the next day's pass.
 
 The run's record keeps its phase too, for the dashboard's task state (`board.mjs`

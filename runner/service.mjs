@@ -557,7 +557,7 @@ export function createRunnerService({
     const url = new URL(req.url, "http://runner");
     if (url.pathname === "/health") {
       // Closed log segments waiting for blob storage, while it fails: Redis filling up.
-      const waiting = waitingWarning(logs.moves?.waiting());
+      const waiting = waitingWarning(await logs.moves?.waiting().catch(() => null));
       const warnings = [...(health.warnings ?? []), ...(waiting ? [waiting] : [])];
       return sendJson(res, healthAnswer({ ...health, warnings }, { active: lease.active() }));
     }

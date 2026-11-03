@@ -57,6 +57,9 @@ export const MAX_RETRY_MS = 30 * 60_000;
 // The notes read at a time, and the most counted for /health.
 const BATCH = 100;
 const COUNTED = 100_000;
+// What a pass that failed counted ({ segments, bytes }), for either copy's /health: the one acting
+// writes it, the next pass that moves them all deletes it.
+const WAITING = "log-moves/waiting";
 
 // What the runner's /health says while closed segments wait for blob storage (moves.waiting()):
 // how many and how big, so that an operator sees Redis fill up before it is full. Null when none.
@@ -332,9 +335,14 @@ export function createLogs({
         await blobs.put(key, data);
         const size = await blobs.size(key);
         if (size !== segment.size) {
-          throw new Error(
-            `${key}: ${size ?? "nothing"} bytes in blob storage, ${segment.size} sent`,
+          // Trying again sends the same bytes (blob storage's redaction of the whole segment
+          // finding a secret its appends split, say): its copy goes, the segment stays in the
+          // store, and the notes after it go on.
+          await blobs.delete(key);
+          (log.warn ?? log)(
+            `Log segments: ${key} is ${size ?? "nothing"} bytes in blob storage, ${segment.size} sent: left in the store`,
           );
+          return;
         }
         for (;;) {
           const current = await store.get(indexKey(id));
@@ -358,16 +366,16 @@ export function createLogs({
 }
 
 // What moves the closed segments (createLogs()'s `moves`), on the copy holding the runner's
-// lease alone: start() when it gets it, stop() when it goes. A pass reads the notes, moves each
-// one's segment in order and acknowledges it, and stops at the first failure: blob storage is
-// away, tried again after a growing delay. kick(): a segment just closed, a pass soon.
+// lease alone: start() when it gets it, stop() when it goes, and a pass it started stops with it
+// (one started by hand, pass(), goes on). A pass reads the notes, moves each one's segment in
+// order and acknowledges it, and stops at the first failure: blob storage is away, tried again
+// after a growing delay. kick(): a segment just closed, a pass soon.
 function createMoves({ store, enabled, moveOne, timers, log }) {
   let active = false;
   let timer = null;
   let running = null;
   let again = false;
   let failures = 0;
-  let waiting = null; // { segments, bytes } while blob storage fails
 
   const retryDelay = () => Math.min(RETRY_MS * 2 ** (failures - 1), MAX_RETRY_MS);
   const schedule = (ms) => {
@@ -379,12 +387,14 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
     timer.unref?.();
   };
 
-  // → whether every note was done.
-  async function once() {
+  // → whether every note was done: false when the lease went meanwhile (`leased`: a pass of the
+  // lease's, not one by hand).
+  async function once(leased) {
     for (;;) {
       const notes = await store.read(MOVES, MOVER, { count: BATCH });
-      if (!notes.length) return;
+      if (!notes.length) return true;
       for (const { id: note, event } of notes) {
+        if (leased && !active) return false;
         // Not one of ours (a store shared wrongly): dropped rather than kept for ever.
         if (validLogId(event?.id) && Number.isSafeInteger(event.n) && event.n >= 0) {
           await moveOne(event.id, event.n);
@@ -394,11 +404,13 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
     }
   }
 
-  // Every note left, and the segments they say, counted for /health.
+  // Every note left, and the segments they say, counted for /health: a segment once, however
+  // many notes it has (each copy finishing its closing writes one).
   async function count() {
     const notes = await store.read(MOVES, MOVER, { count: COUNTED });
-    const bytes = notes.reduce((sum, { event }) => sum + (Number(event?.size) || 0), 0);
-    return { segments: notes.length, bytes };
+    const sizes = new Map(notes.map(({ event }) => [`${event?.id}/${event?.n}`, event?.size]));
+    const bytes = [...sizes.values()].reduce((sum, size) => sum + (Number(size) || 0), 0);
+    return { segments: sizes.size, bytes };
   }
 
   function pass() {
@@ -407,15 +419,17 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
       again = true;
       return running;
     }
+    const leased = active;
     running = (async () => {
       try {
-        await once();
+        if (!(await once(leased))) return;
         if (failures) log("Log segments: blob storage answers again, the waiting ones moved");
         failures = 0;
-        waiting = null;
+        await store.delete(WAITING);
       } catch (error) {
         failures++;
-        waiting = await count().catch(() => waiting);
+        const waiting = await count().catch(() => null);
+        if (waiting) await store.set(WAITING, waiting).catch(() => {});
         (log.warn ?? log)(
           `Log segments: can't move them to blob storage (${error.message}); ${waiting?.segments ?? "some"} wait in the store, tried again in ${Math.round(retryDelay() / 1000)} s`,
         );
@@ -440,9 +454,11 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
       active = true;
       schedule(0);
     },
-    // Its lease gone: no pass after the one in flight, which the next holder does again.
+    // Its lease gone: the pass in flight stops at its next note, which the next holder takes up.
     stop() {
       active = false;
+      failures = 0;
+      again = false;
       timers.clearTimeout(timer);
       timer = null;
     },
@@ -453,7 +469,8 @@ function createMoves({ store, enabled, moveOne, timers, log }) {
       else schedule(0);
     },
     pass,
-    // { segments, bytes } while blob storage fails, null otherwise.
-    waiting: () => waiting,
+    // { segments, bytes } while blob storage fails, null otherwise: what the copy acting found,
+    // so that either copy's /health says it.
+    waiting: async () => (enabled ? store.get(WAITING) : null),
   };
 }

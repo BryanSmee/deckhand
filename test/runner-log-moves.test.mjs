@@ -208,9 +208,9 @@ test("with the S3 server failing, segments stay in the store, /health says so, a
 
   // Each failing pass: the segments wait, counted; the next try later each time.
   await timers.fire();
-  assert.deepEqual(logs.moves.waiting(), { segments: 2, bytes: 10 });
+  assert.deepEqual(await logs.moves.waiting(), { segments: 2, bytes: 10 });
   assert.equal(
-    waitingWarning(logs.moves.waiting()),
+    waitingWarning(await logs.moves.waiting()),
     "2 closed log segments (0.0 MB) wait in the store: blob storage fails, tried again with a growing delay (the runner's log says why)",
   );
   assert.match(logged.at(-1), /503 SlowDown.*2 wait in the store, tried again in 30 s/);
@@ -225,11 +225,11 @@ test("with the S3 server failing, segments stay in the store, /health says so, a
   assert.equal(timers.set.at(-1).ms, RETRY_MS * 2);
   await timers.fire();
   assert.equal(timers.set.at(-1).ms, RETRY_MS * 4);
-  assert.deepEqual(logs.moves.waiting(), { segments: 3, bytes: 11 });
+  assert.deepEqual(await logs.moves.waiting(), { segments: 3, bytes: 11 });
 
   // It answers again: every one moves, and the passes go back to their pace.
   await timers.fire();
-  assert.equal(logs.moves.waiting(), null);
+  assert.equal(await logs.moves.waiting(), null);
   assert.equal(waitingWarning(null), null);
   assert.equal(timers.set.at(-1).ms, PASS_MS);
   assert.equal(await storeSegments(store), 0);
@@ -281,7 +281,7 @@ test("without blob storage, nothing moves nor is noted", async () => {
   assert.deepEqual(await store.read(MOVES, "runner"), []);
   assert.ok((await index(store)).segments.every((s) => s.where === "store"));
   assert.equal(await readAll(logs), whole);
-  assert.equal(logs.moves.waiting(), null);
+  assert.equal(await logs.moves.waiting(), null);
 });
 
 test("a segment in blob storage with BLOB_URL unset since: reads and retention say so", async (t) => {
@@ -294,4 +294,202 @@ test("a segment in blob storage with BLOB_URL unset since: reads and retention s
   await assert.rejects(after.read(ID), /in blob storage, and BLOB_URL is unset/);
   await assert.rejects(after.remove(ID), /BLOB_URL is unset/);
   assert.ok(await index(store));
+});
+
+// `store` whose first call of `method` on a key matching `pattern` runs `between` before its own.
+function between(store, method, pattern, run) {
+  let armed = true;
+  return {
+    ...store,
+    [method]: async (key, ...rest) => {
+      if (armed && pattern.test(key)) {
+        armed = false;
+        await run();
+      }
+      return store[method](key, ...rest);
+    },
+  };
+}
+
+// A log of two closed segments, in `store`, noted to move: → its text.
+async function noted(store, blobs) {
+  return writeLog(createLogs({ store, blobs, segmentMax: 8 }), ["abc", "def"]);
+}
+
+test("a read that finds the store's blob moved meanwhile reads the index again, and blob storage", async (t) => {
+  const { blobs } = await s3Blobs(t);
+  const shared = fileStore();
+  const whole = await noted(shared, blobs);
+  const mover = createLogs({ store: shared, blobs });
+  // The read took the index (segment 0 in the store), then the move ran whole before its read.
+  const store = between(shared, "readBlob", /\/0$/, () => mover.moves.pass());
+  const logs = createLogs({ store, blobs });
+  assert.deepEqual(await logs.read(ID), { size: whole.length, data: Buffer.from("abc") });
+  assert.equal(await shared.blobSize(`logs/${ID}/0`), null);
+  assert.equal((await index(shared)).segments[0].where, "blobs");
+});
+
+test("a move that finds another copy pointed the index meanwhile only deletes the store's blob", async (t) => {
+  const { s3, blobs } = await s3Blobs(t);
+  const shared = fileStore();
+  const whole = await noted(shared, blobs);
+  const other = createLogs({ store: shared, blobs });
+  // Once its copy is measured, before its compare-and-set: the other copy moves them all.
+  let stalled = false;
+  const stalling = {
+    ...blobs,
+    size: async (key) => {
+      if (!stalled) {
+        stalled = true;
+        await other.moves.pass();
+      }
+      return blobs.size(key);
+    },
+  };
+  const cas = [];
+  const counting = {
+    ...shared,
+    compareAndSet: async (...a) => (cas.push(a[0]), shared.compareAndSet(...a)),
+  };
+  const logs = createLogs({ store: counting, blobs: stalling });
+  await logs.moves.pass();
+  assert.deepEqual(cas, []);
+  assert.equal(await storeSegments(shared), 0);
+  assert.equal(s3.objects.size, 2);
+  assert.equal(await readAll(logs), whole);
+
+  // And one that finds it so before its copy (the other copy's delete cut short): the delete alone.
+  const again = fileStore();
+  await noted(again, blobs);
+  await createLogs({ store: { ...again, deleteBlob: async () => false }, blobs }).moves.pass();
+  await again.append(MOVES, { id: ID, n: 0, size: 3 });
+  await again.append(MOVES, { id: ID, n: 1, size: 3 });
+  const puts = s3.requests.filter((r) => r.method === "PUT").length;
+  await createLogs({ store: again, blobs }).moves.pass();
+  assert.equal(s3.requests.filter((r) => r.method === "PUT").length, puts);
+  assert.equal(await storeSegments(again), 0);
+});
+
+test("a move whose log is removed between its copy and its compare-and-set deletes its copy", async (t) => {
+  const { s3, blobs } = await s3Blobs(t);
+  const shared = fileStore();
+  await noted(shared, blobs);
+  // Retention on another copy, without blob storage to delete: only this move's copy is there.
+  const retention = createLogs({ store: shared });
+  let removed = false;
+  const stalling = {
+    ...blobs,
+    size: async (key) => {
+      if (!removed) {
+        removed = true;
+        assert.equal(await retention.remove(ID), true);
+      }
+      return blobs.size(key);
+    },
+  };
+  await createLogs({ store: shared, blobs: stalling }).moves.pass();
+  assert.equal(await index(shared), null);
+  assert.equal(s3.objects.size, 0);
+  assert.deepEqual(await shared.read(MOVES, "runner"), []);
+});
+
+test("a segment that isn't in the store as its index says is logged and left, and the others move", async (t) => {
+  const { s3, blobs } = await s3Blobs(t);
+  const store = fileStore();
+  await noted(store, blobs);
+  await store.putBlob(`logs/${ID}/0`, "ab");
+  const logged = [];
+  await createLogs({ store, blobs, log: (l) => logged.push(l) }).moves.pass();
+  assert.match(
+    logged.join("\n"),
+    /logs\/dh-o-a-1-1\/0 isn't in the store as its index says \(2 of 3 bytes\): left there/,
+  );
+  assert.deepEqual(
+    (await index(store)).segments.map((s) => s.where),
+    ["store", "blobs"],
+  );
+  assert.deepEqual([...s3.objects.keys()], [`deckhand/logs/${ID}/1`]);
+  assert.deepEqual(await store.read(MOVES, "runner"), []);
+});
+
+// A size blob storage gives back that differs from what was sent (its redaction of the whole
+// segment finding a secret that two appends split): trying again changes nothing, so the
+// segment stays in the store, its copy goes, and the notes after it don't wait for it.
+test("a segment whose copy measures otherwise is left in the store, and doesn't block the others", async (t) => {
+  const { s3, blobs } = await s3Blobs(t);
+  const store = fileStore();
+  const whole = await noted(store, blobs);
+  const redacting = {
+    ...blobs,
+    size: async (key) => (key.endsWith("/0") ? 2 : blobs.size(key)),
+  };
+  const logged = [];
+  const logs = createLogs({ store, blobs: redacting, log: (l) => logged.push(l) });
+  await logs.moves.pass();
+  assert.match(logged.join("\n"), /\/0 is 2 bytes in blob storage, 3 sent: left in the store/);
+  assert.deepEqual(
+    (await index(store)).segments.map((s) => s.where),
+    ["store", "blobs"],
+  );
+  assert.deepEqual([...s3.objects.keys()], [`deckhand/logs/${ID}/1`]);
+  assert.deepEqual(await store.read(MOVES, "runner"), []);
+  assert.equal(await logs.moves.waiting(), null);
+  assert.equal(await readAll(logs), whole);
+});
+
+// Two copies: the one acting fails and its lease goes; either one's /health says what waits
+// until the next one moves them, then neither does.
+test("through a handover, both copies say what waits, and neither once it moved", async (t) => {
+  const { s3, blobs } = await s3Blobs(t);
+  const store = fileStore();
+  await noted(store, blobs);
+  const a = createLogs({ store, blobs, timers: manualTimers(), log: () => {} });
+  const b = createLogs({ store, blobs, timers: manualTimers(), log: () => {} });
+  s3.fail({ status: 503, code: "SlowDown" });
+  a.moves.start();
+  await a.moves.pass();
+  assert.deepEqual(await a.moves.waiting(), { segments: 2, bytes: 6 });
+  assert.deepEqual(await b.moves.waiting(), { segments: 2, bytes: 6 });
+  a.moves.stop();
+  b.moves.start();
+  await b.moves.pass();
+  b.moves.stop();
+  assert.equal(await a.moves.waiting(), null);
+  assert.equal(await b.moves.waiting(), null);
+  assert.equal(await storeSegments(store), 0);
+});
+
+test("a pass of the lease's stops with it; one started by hand goes on", async (t) => {
+  const { blobs } = await s3Blobs(t);
+  const store = fileStore();
+  await noted(store, blobs);
+  let logs;
+  const losing = {
+    ...blobs,
+    put: async (...args) => {
+      logs.moves.stop(); // the lease lost during the first copy
+      return blobs.put(...args);
+    },
+  };
+  logs = createLogs({ store, blobs: losing, timers: manualTimers() });
+  logs.moves.start();
+  await logs.moves.pass();
+  // The move in flight finished; the next note waits for the next holder.
+  assert.deepEqual(
+    (await index(store)).segments.map((s) => s.where),
+    ["blobs", "store"],
+  );
+  assert.equal((await store.read(MOVES, "runner")).length, 1);
+  await logs.moves.pass();
+  assert.equal(await storeSegments(store), 0);
+});
+
+test("a segment noted twice (two copies finished its closing) is counted once", async (t) => {
+  const store = fileStore();
+  const down = { put: async () => Promise.reject(new Error("down")) };
+  const logs = createLogs({ store, blobs: down, segmentMax: 8, log: () => {} });
+  await writeLog(logs, ["abc", "def"]);
+  await store.append(MOVES, { id: ID, n: 0, size: 3 });
+  await logs.moves.pass();
+  assert.deepEqual(await logs.moves.waiting(), { segments: 2, bytes: 6 });
 });
