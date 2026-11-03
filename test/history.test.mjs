@@ -2,7 +2,14 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createHistory, forgottenShots, pruneRuns } from "../listener/history.mjs";
+import {
+  createHistory,
+  forgottenShots,
+  noteUnnamedShots,
+  pruneRuns,
+  UNNAMED_SHOTS,
+} from "../listener/history.mjs";
+import { openStore } from "../lib/store.mjs";
 import { saveSummary } from "../listener/runlog.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -199,4 +206,35 @@ test("retention: at start, then daily, with what the listener's state still need
   assert.equal(ctx.runsById.has(later.id), false);
   history.stop();
   assert.deepEqual(timers, []);
+});
+
+test("retention: the folders an older release kept that no run names go at the broker once past the days", async () => {
+  const store = openStore("memory:");
+  const [old, young, stuck] = ["a", "b", "c"].map((c) => c.repeat(24));
+  await noteUnnamedShots(store, old, NOW - 100 * DAY);
+  await noteUnnamedShots(store, young, NOW - 10 * DAY);
+  await noteUnnamedShots(store, stuck, NOW - 200 * DAY);
+  const removed = [];
+  const ctx = {
+    config: { logRetentionDays: 90 },
+    log: () => {},
+    store,
+    runs: [],
+    runsById: new Map(),
+    tasks: new Map(),
+    runLogs: { remove: async () => {} },
+    removeShots: async (folder) => {
+      if (folder === stuck) throw new Error("the broker service didn't answer");
+      removed.push(folder);
+    },
+  };
+  const history = createHistory(ctx, { now: () => NOW, setTimer: () => null });
+  await history.prune();
+  assert.deepEqual(removed, [old]);
+  // One the broker didn't remove stays, for the next day's try; a young one, till its time.
+  assert.deepEqual(Object.keys(await store.get(UNNAMED_SHOTS)).sort(), [young, stuck]);
+  // 0: forever, nothing asked.
+  ctx.config.logRetentionDays = 0;
+  await history.prune();
+  assert.deepEqual(removed, [old]);
 });

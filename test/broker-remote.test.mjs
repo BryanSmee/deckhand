@@ -124,6 +124,26 @@ test("the stream: a screenshot said, left at the broker, acknowledged", async (t
   assert.ok(token);
 });
 
+test("the stream: a screenshot the broker of the release before kept is adopted, its name kept for good", async (t) => {
+  const broker = await service(t);
+  const listener = remote(t, broker);
+  // As that broker left it: in its store, its name in a record that expires, its event unread.
+  const legacy = Buffer.concat([PNG, Buffer.from("old")]);
+  await broker.store.putBlob(`shot:${FOLDER}/before.png`, legacy);
+  await broker.store.set(`shots:${FOLDER}`, { "before.png": legacy.length }, { ttlMs: 60_000 });
+  await broker.runs.event("shot", "run-a", { folder: FOLDER, name: "before.png", size: 11 });
+  const seen = [];
+  listener.consume({ handlers: { shot: async (e) => seen.push(e.name) } });
+  await until(async () => (await broker.store.read("runs", "orchestrator")).length === 0);
+  assert.deepEqual(seen, ["before.png"]);
+  assert.equal(await broker.store.readBlob(`shot:${FOLDER}/before.png`), null);
+  assert.deepEqual(await broker.files.getShot(FOLDER, "before.png"), legacy);
+  // Retention finds it, whenever it comes.
+  assert.deepEqual(await broker.store.get(`shots:${FOLDER}`), { "before.png": legacy.length });
+  await listener.removeShots(FOLDER);
+  assert.equal(await broker.files.getShot(FOLDER, "before.png"), null);
+});
+
 // An upload's request, as files.putShot() reads it: its body, then its headers.
 const upload = (body) =>
   Object.assign(
@@ -166,10 +186,15 @@ test("the screenshots an older orchestrator kept: moved to the broker, regular f
   const { port, store, key } = broker;
   await broker.stop();
   const drop = (folder) => folder === forgotten;
-  await assert.rejects(listener.moveShots(shotsDir, { drop }));
+  const noted = [];
+  const moved = async (folder, at) => noted.push([folder, typeof at]);
+  await assert.rejects(listener.moveShots(shotsDir, { drop, moved }));
   assert.ok(existsSync(join(dir, "page.png")));
+  assert.deepEqual(noted, []);
   broker = await service(t, { store, key, port });
-  assert.equal(await listener.moveShots(shotsDir, { drop }), 1);
+  assert.equal(await listener.moveShots(shotsDir, { drop, moved }), 1);
+  // Each folder moved is said, for retention to note those no run names.
+  assert.deepEqual(noted, [[FOLDER, "number"]]);
   assert.deepEqual(await broker.files.getShot(FOLDER, "page.png"), image);
   for (const name of ["fake.png", "absolute.png", "relative.png", "sibling.png", "hard.png"]) {
     assert.equal(await broker.files.getShot(FOLDER, name), null, name);

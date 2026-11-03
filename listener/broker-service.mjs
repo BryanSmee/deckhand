@@ -219,11 +219,17 @@ export function createBrokerService({
   // --- The broker's stream ---------------------------------------------------------------
 
   // The `runs` stream, read and acknowledged event by event: started, renewed, ended, shot (the
-  // broker keeps the screenshot, #609). `handlers`: type → (event) → a promise, done once it is
+  // broker keeps the screenshot, #609; one the broker of the release before kept is adopted). `handlers`: type → (event) → a promise, done once it is
   // handled. An event whose handling fails is read again (not acknowledged).
   let consuming = null;
   function consume({ handlers = {} } = {}) {
-    const handle = handlers;
+    const handle = {
+      ...handlers,
+      shot: async (event) => {
+        await adoptShot(event);
+        await handlers.shot?.(event);
+      },
+    };
     consuming ??= (async () => {
       while (!stopped) {
         try {
@@ -257,6 +263,15 @@ export function createBrokerService({
 
   // --- The screenshots (#609) ----------------------------------------------------------
 
+  // A screenshot a `shot` event names, which the broker of the release before kept in its store
+  // under a name that expires (#609): kept for good there, so that retention deletes it. One the
+  // broker of this release took is kept already: nothing to do. For one update.
+  async function adoptShot({ folder, name }) {
+    if (!SHOT_FOLDER.test(folder ?? "") || !SHOT_NAME.test(name ?? "")) return;
+    const path = `/shots/${enc(folder)}/${enc(name)}`;
+    await ok(await caller.call("POST", path), `screenshot ${folder}/${name}`);
+  }
+
   // A run's screenshots, as retention removes it (history.mjs).
   async function removeShots(folder) {
     await ok(await caller.call("DELETE", `/shots/${enc(folder)}`), `the screenshots of ${folder}`);
@@ -268,8 +283,9 @@ export function createBrokerService({
   // kept, for persist() to try again. Only regular files, opened without following a link: the
   // sandboxes of older releases wrote these folders (a link there could name any file of the
   // orchestrator's). `drop(folder, mtimeMs)`: a folder removed without sending it (one retention
-  // would have removed). → how many folders were moved.
-  async function moveShots(shotsDir, { drop = () => false } = {}) {
+  // would have removed); `moved(folder, mtimeMs)`: one sent, before it is removed here (a throw
+  // keeps it, for the next try). → how many folders were moved.
+  async function moveShots(shotsDir, { drop = () => false, moved: sent = async () => {} } = {}) {
     let folders;
     try {
       folders = readdirSync(shotsDir).filter((folder) => SHOT_FOLDER.test(folder));
@@ -282,9 +298,11 @@ export function createBrokerService({
     for (const folder of folders) {
       const dir = join(shotsDir, folder);
       let names = [];
+      let at = 0;
       try {
         const found = lstatSync(dir);
-        if (found.isDirectory() && !drop(folder, found.mtimeMs)) {
+        at = found.mtimeMs;
+        if (found.isDirectory() && !drop(folder, at)) {
           names = readdirSync(dir).filter((n) => SHOT_NAME.test(n));
         }
       } catch {
@@ -300,7 +318,10 @@ export function createBrokerService({
           log(`Screenshots: ${folder}/${name} refused by the broker (${res.status}), dropped`);
         } else await ok(res, `screenshot ${folder}/${name}`);
       }
-      if (names.length) moved++;
+      if (names.length) {
+        await sent(folder, at);
+        moved++;
+      }
       rmSync(dir, { recursive: true, force: true });
     }
     log(`Screenshots: ${moved} folder(s) moved to the broker, the rest removed`);

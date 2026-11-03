@@ -1675,9 +1675,9 @@ describe("listener", options, () => {
     assert.equal(served.status, 200);
     assert.deepEqual(Buffer.from(await served.arrayBuffer()), png);
     // The one kept before, moved to the broker at start, its folder removed: its link still works.
+    await until(() => readdirSync(join(dir, "shots")).length === 0, "the screenshots moved");
     const old = await fetch(`http://127.0.0.1:${port}/shots/${before}/old.png`);
     assert.deepEqual(Buffer.from(await old.arrayBuffer()), kept);
-    assert.deepEqual(readdirSync(join(dir, "shots")), []);
     // Out through the egress proxy only, the broker directly.
     assert.match(runEnv, /^HTTPS_PROXY=http:\/\/127\.0\.0\.1:\d+$/m);
     assert.match(runEnv, /^https_proxy=http:\/\/127\.0\.0\.1:\d+$/m);

@@ -9,7 +9,8 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { accountCallers, createCallers } from "../broker/callers.mjs";
 import { createFiles, wholeLines } from "../broker/files.mjs";
-import { RENEW_GRACE_MS } from "../broker/runs.mjs";
+import { SHOT_PART } from "../broker/http.mjs";
+import { RECORD_TTL_MS, RENEW_GRACE_MS } from "../broker/runs.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { createSeal } from "../broker/seal.mjs";
 import { openBlobs } from "../lib/blobs.mjs";
@@ -430,9 +431,13 @@ test("screenshots: into the run's folder, images only, capped, said on the strea
   assert.equal(refused.status, 403);
 });
 
-test("screenshots: in blob storage, with the store's left from the release before; removed with their run", async (t) => {
+test("screenshots: in blob storage, sent in parts, those of the release before adopted; removed with their run", async (t) => {
   const dir = tempDir(t);
-  const { copies, store } = await brokers(t, { blobs: () => openBlobs(pathToFileURL(dir).href) });
+  const clock = { now: 1_900_000_000_000 };
+  const { copies, store } = await brokers(t, {
+    clock,
+    blobs: () => openBlobs(pathToFileURL(dir).href),
+  });
   const [broker] = copies;
   const orchestrator = await client(broker, "orchestrator", { epoch: 2 });
   const proxy = await client(broker, "proxy");
@@ -447,13 +452,9 @@ test("screenshots: in blob storage, with the store's left from the release befor
   const blobs = openBlobs(pathToFileURL(dir).href);
   assert.deepEqual(await blobs.read(`shots/${FOLDER}/page.png`), image);
   assert.equal(await store.readBlob(`shots/${FOLDER}/page.png`), null);
-  // One uploaded to the release before, which the orchestrator hadn't copied yet: still served.
-  const legacy = Buffer.concat([PNG, Buffer.from("old")]);
-  await store.putBlob(`shot:${FOLDER}/before.png`, legacy);
-  const sizes = await store.get(`shots:${FOLDER}`);
-  await store.set(`shots:${FOLDER}`, { ...sizes, "before.png": legacy.length });
   // Moved here by the orchestrator, which kept one itself (moveShots()): checked as an upload.
-  const moved = Buffer.concat([PNG, Buffer.from("kept")]);
+  // Longer than a part: sent in parts.
+  const moved = Buffer.concat([PNG, Buffer.alloc(SHOT_PART * 2 + 5, 7)]);
   const move = (name, body) => orchestrator("PUT", `/shots/${FOLDER}/${name}`, { body });
   assert.equal((await move("kept.png", moved)).status, 204);
   assert.equal((await move("kept.txt", moved)).status, 400);
@@ -464,22 +465,41 @@ test("screenshots: in blob storage, with the store's left from the release befor
   assert.equal((await stale("PUT", `/shots/${FOLDER}/other.png`, { body: moved })).status, 409);
   for (const [name, body] of [
     ["page.png", image],
-    ["before.png", legacy],
     ["kept.png", moved],
   ]) {
     const served = await edge("GET", `/shots/${FOLDER}/${name}`);
     assert.deepEqual([served.status, served.headers["content-type"]], [200, "image/png"], name);
+    assert.equal(Number(served.headers["content-length"]), body.length, name);
     assert.deepEqual(served.body, body, name);
   }
-  // Retention: every one of the folder goes, wherever it was.
-  assert.deepEqual((await orchestrator("DELETE", `/shots/${FOLDER}`)).json, { deleted: 3 });
-  for (const name of ["page.png", "before.png", "kept.png"]) {
+  // Retention: every one of the folder goes.
+  assert.deepEqual((await orchestrator("DELETE", `/shots/${FOLDER}`)).json, { deleted: 2 });
+  for (const name of ["page.png", "kept.png"]) {
     assert.equal((await edge("GET", `/shots/${FOLDER}/${name}`)).status, 404, name);
   }
   assert.equal(await blobs.read(`shots/${FOLDER}/page.png`), null);
-  assert.equal(await store.readBlob(`shot:${FOLDER}/before.png`), null);
   assert.equal(await store.get(`shots:${FOLDER}`), null);
   assert.deepEqual((await orchestrator("DELETE", `/shots/${FOLDER}`)).json, { deleted: 0 });
+
+  // One uploaded to the broker of the release before, which its orchestrator hadn't copied yet:
+  // in the store, its name in a record that expires, as that broker wrote them. Still served.
+  const before = "abcdef0123456789abcdef01";
+  const legacy = Buffer.concat([PNG, Buffer.from("old")]);
+  await store.putBlob(`shot:${before}/before.png`, legacy);
+  await store.set(`shots:${before}`, { "before.png": legacy.length }, { ttlMs: RECORD_TTL_MS });
+  assert.deepEqual((await edge("GET", `/shots/${before}/before.png`)).body, legacy);
+  // Its `shot` event, which the orchestrator reads: adopted, into blob storage, kept for good.
+  const adopt = () => orchestrator("POST", `/shots/${before}/before.png`);
+  assert.deepEqual((await adopt()).json, { adopted: true });
+  assert.deepEqual((await adopt()).json, { adopted: false });
+  assert.equal((await edge("POST", `/shots/${before}/before.png`)).status, 403);
+  assert.deepEqual(await blobs.read(`shots/${before}/before.png`), legacy);
+  assert.equal(await store.readBlob(`shot:${before}/before.png`), null);
+  // Past the record's day, retention still finds it.
+  clock.now += RECORD_TTL_MS + 1;
+  assert.deepEqual((await edge("GET", `/shots/${before}/before.png`)).body, legacy);
+  assert.deepEqual((await orchestrator("DELETE", `/shots/${before}`)).json, { deleted: 1 });
+  assert.equal(await blobs.read(`shots/${before}/before.png`), null);
 });
 
 test("screenshots: one over the cap is refused unread", { skip: resetsUnread }, async (t) => {

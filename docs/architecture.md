@@ -1277,15 +1277,19 @@ A screenshot is written once into blob storage (`shots/<token>/<file>`), its nam
 broker's store (`shots:<token>`: the run's cap, and what retention deletes, as blob storage lists
 nothing), and goes on the broker's `runs` stream, which the orchestrator reads and acknowledges
 (`GET /events`, `consume()`) without copying anything. Edge serves it to anyone
-(`GET /shots/<token>/<file>`, `edge/shots.mjs`), from the broker, with its service token; the
-orchestrator stays out of it. It stays past the run's end, for the links to it, until retention
+(`GET /shots/<token>/<file>`, `edge/shots.mjs`), from the broker, with its service token, streamed
+through as the broker reads it in parts (256 KiB at a time), so neither holds a whole file for a
+reader; the orchestrator stays out of it. It stays past the run's end, for the links to it, until retention
 removes its run (`history.mjs`: `DELETE /shots/<token>` at the broker, as the runner removes the
 log). An orchestrator of a release before #609 kept them in its `shots/` folder: at its start, the
 orchestrator sends each folder there to the broker, file by file (`PUT /shots/<token>/<file>`,
 regular files only, never through a link), then removes it (`moveShots()`), so the links of
 replies posted before still work; a folder no run names, older than `LOG_RETENTION_DAYS`, is
-removed instead, as retention removed those. One uploaded to a broker of the release before and
-not copied yet is still served from its store. The sandbox keeps `SCREENSHOT_DIR` (`/tmp/screenshots`) in its own
+removed instead, as retention removed those, and a younger one is noted in the orchestrator's
+store (`history/unnamed-shots`), for retention to remove at the broker once it is past the days.
+One uploaded to a broker of the release before and not copied yet is still served from its store,
+and adopted when the orchestrator reads its `shot` event (`POST /shots/<token>/<file>`: moved
+into blob storage, its name kept for good, where that broker's record of it expired in a day). The sandbox keeps `SCREENSHOT_DIR` (`/tmp/screenshots`) in its own
 filesystem. The agent's CLI replaces the entrypoint, which has no step after it: the agents'
 Stop hook (`sandbox-draft-pr hook`, after each turn, before its result line) is the last
 upload, and the 3 s watcher covers what saves files outside a turn. A refusal for the file

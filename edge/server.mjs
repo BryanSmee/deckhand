@@ -30,6 +30,7 @@ import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
 import { createLogger } from "../lib/log.mjs";
+import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createGithubClient } from "../github/client.mjs";
@@ -151,7 +152,15 @@ const orchestrator = createForwarder({
 });
 
 // The screenshots, from the broker (#609).
-const shots = createShots({ caller: brokerCaller, log });
+const shots = createShots({
+  client: serviceClient({
+    service: "broker",
+    urls: config.brokerServiceUrl,
+    token: () => brokerCaller.header("broker"),
+    log,
+  }),
+  log,
+});
 
 let stopping = false;
 const http = createEdgeHttp({

@@ -10,7 +10,8 @@
 //     once at its start;
 //   - its screenshots (PUT /run/shots/<file>), written once into blob storage (#609,
 //     ../lib/blobs.mjs: the store's own blobs without BLOB_URL), served from there (GET
-//     /shots/<folder>/<file>, which edge passes on), and each one said on the `runs` stream. A
+//     /shots/<folder>/<file>, which edge passes on, in parts), and each one said on the `runs`
+//     stream. A
 //     folder's names and sizes stay in the store (shotsKey()): the run's cap, and what retention
 //     deletes once the orchestrator asks (DELETE /shots/<folder>), as blob storage lists nothing.
 import { storeBlobs } from "../lib/blobs.mjs";
@@ -149,12 +150,39 @@ export function createFiles({
     return { status: 204 };
   }
 
-  async function getShot(folder, name) {
+  // A screenshot to read in parts (GET /shots/<folder>/<file>, served as it is read): → { size,
+  // read(offset, length) }, or null when there is none.
+  async function openShot(folder, name) {
     if (!shotOk(folder, name)) return null;
-    return (
-      (await blobs.read(shotKey(folder, name))) ??
-      (await store.readBlob(legacyShotKey(folder, name)))
-    );
+    const key = shotKey(folder, name);
+    const size = await blobs.size(key);
+    if (size !== null)
+      return { size, read: (offset, length) => blobs.read(key, { offset, length }) };
+    const legacy = legacyShotKey(folder, name);
+    const kept = await store.blobSize(legacy);
+    if (kept === null) return null;
+    return { size: kept, read: (offset, length) => store.readBlob(legacy, { offset, length }) };
+  }
+
+  // The whole of one: the tests'.
+  async function getShot(folder, name) {
+    const shot = await openShot(folder, name);
+    return shot && ((await shot.read(0, shot.size)) ?? null);
+  }
+
+  // One uploaded to the broker of the release before, whose `shot` event the orchestrator reads
+  // now (POST /shots/<folder>/<file>, for one update): that broker kept it in its store, and its
+  // name in a record that expires a day on, which the orchestrator copying it away made fine.
+  // Moved into blob storage, its name kept for good, so that retention deletes it. → whether
+  // there was one to adopt.
+  async function adoptShot(folder, name) {
+    if (!shotOk(folder, name)) return false;
+    const legacy = legacyShotKey(folder, name);
+    const body = await store.readBlob(legacy);
+    if (body === null) return false;
+    await keep(folder, name, body);
+    await store.deleteBlob(legacy);
+    return true;
   }
 
   // A run's screenshots, once retention removes it (DELETE /shots/<folder>). → how many.
@@ -182,7 +210,9 @@ export function createFiles({
     getFile,
     putShot,
     moveShot,
+    openShot,
     getShot,
+    adoptShot,
     removeShots,
     remove,
   };

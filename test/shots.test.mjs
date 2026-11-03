@@ -1,5 +1,5 @@
 // GET /shots/<folder>/<file>, as edge serves it (edge/shots.mjs, #609): passed on to the broker,
-// which keeps the screenshots, for the names a sandbox may upload only, as images.
+// which keeps the screenshots, for the names a sandbox may upload only, as images, streamed.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createShots } from "../edge/shots.mjs";
@@ -7,26 +7,28 @@ import { serve } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
 
-// Edge's screenshots over a fake broker: `answer(path)` → { status, body } or a throw.
+// Edge's screenshots over a fake broker: `answer(path)` → a fetch() Response, or a throw.
 async function edge(t, answer) {
   const asked = [];
   const logged = [];
-  const caller = {
-    call: async (method, path) => {
+  const client = {
+    request: async (method, path) => {
       asked.push(`${method} ${path}`);
       return answer(path);
     },
   };
-  const shots = createShots({ caller, log: (line) => logged.push(line) });
+  const shots = createShots({ client, log: (line) => logged.push(line) });
   const { url } = await serve(t, (req, res) => shots.serve(req, res));
   return { get: (path) => fetch(`${url}/shots/${path}`), asked, logged };
 }
 
 test("a screenshot from the broker, as an image of its type, cached for good", async (t) => {
-  const { get, asked } = await edge(t, () => ({ status: 200, body: Buffer.from("PNG") }));
+  const png = () => new Response("PNG", { headers: { "content-length": "3" } });
+  const { get, asked } = await edge(t, png);
   const res = await get(`${folder}/page.png`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("content-type"), "image/png");
+  assert.equal(res.headers.get("content-length"), "3");
   assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
   assert.equal(await res.text(), "PNG");
   assert.equal((await get(`${folder}/photo.jpg?v=2`)).headers.get("content-type"), "image/jpeg");
@@ -34,7 +36,7 @@ test("a screenshot from the broker, as an image of its type, cached for good", a
 });
 
 test("other names are a 404 that never reaches the broker", async (t) => {
-  const { get, asked } = await edge(t, () => ({ status: 200, body: Buffer.from("PNG") }));
+  const { get, asked } = await edge(t, () => new Response("PNG"));
   for (const path of [`${folder}/page.txt`, "nothex/page.png", `${folder}/a/page.png`, folder]) {
     assert.equal((await get(path)).status, 404, path);
   }
@@ -43,8 +45,8 @@ test("other names are a 404 that never reaches the broker", async (t) => {
 
 test("one the broker hasn't is a 404; a broker that fails or is away, not the image", async (t) => {
   const answers = {
-    [`/shots/${folder}/none.png`]: () => ({ status: 404, body: Buffer.from("{}") }),
-    [`/shots/${folder}/failed.png`]: () => ({ status: 500, body: Buffer.from("secret") }),
+    [`/shots/${folder}/none.png`]: () => new Response("{}", { status: 404 }),
+    [`/shots/${folder}/failed.png`]: () => new Response("secret", { status: 500 }),
     [`/shots/${folder}/away.png`]: () => {
       throw new Error("connect ECONNREFUSED");
     },
@@ -60,4 +62,16 @@ test("one the broker hasn't is a 404; a broker that fails or is away, not the im
     "The broker: a screenshot, 500",
     "The broker: a screenshot (connect ECONNREFUSED)",
   ]);
+});
+
+test("a screenshot cut short at the broker is cut short here, never a whole-looking file", async (t) => {
+  const body = new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode("PN"));
+      controller.error(new Error("the broker went away"));
+    },
+  });
+  const { get } = await edge(t, () => new Response(body, { headers: { "content-length": "9" } }));
+  // The connection closes before its end: the fetch, or the read of its body, fails.
+  await assert.rejects(async () => (await get(`${folder}/page.png`)).arrayBuffer());
 });

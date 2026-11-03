@@ -80,6 +80,51 @@ export function forgottenShots(runs, days, now) {
   return (folder, at) => !!days && !named.has(folder) && at < now - days * DAY;
 }
 
+// The folders an older release kept that no run names, moved to the broker all the same (younger
+// than the days: their links may be in replies): folder → its date, in the orchestrator's store,
+// for retention to remove them at the broker once they are past the days, as it removed them
+// from shots/ before (#609).
+export const UNNAMED_SHOTS = "history/unnamed-shots";
+
+// `fn(folders)` → the new record (undefined: unchanged), written only if no other copy changed it
+// meanwhile.
+async function updateUnnamed(store, fn) {
+  for (;;) {
+    const before = await store.get(UNNAMED_SHOTS);
+    const after = fn({ ...before });
+    if (after === undefined) return;
+    if (await store.compareAndSet(UNNAMED_SHOTS, before, after)) return;
+  }
+}
+
+// One moved (broker-service.mjs moveShots() `moved`), with its folder's date.
+export const noteUnnamedShots = (store, folder, at) =>
+  updateUnnamed(store, (folders) => ({ ...folders, [folder]: at }));
+
+// Those past `cutoff`, removed at the broker (`removeShots(folder)`), then from the record; one
+// the broker didn't remove stays, for the next day's try. → how many were removed.
+export async function pruneUnnamedShots({ store, cutoff, removeShots, log = () => {} }) {
+  const old = Object.entries((await store.get(UNNAMED_SHOTS)) ?? {})
+    .filter(([, at]) => at < cutoff)
+    .map(([folder]) => folder);
+  const removed = [];
+  for (const folder of old) {
+    try {
+      await removeShots(folder);
+      removed.push(folder);
+    } catch (error) {
+      log(`Run history: removing the screenshots in ${folder}: ${error.message}`);
+    }
+  }
+  if (removed.length) {
+    await updateUnnamed(store, (folders) => {
+      for (const folder of removed) delete folders[folder];
+      return folders;
+    });
+  }
+  return removed.length;
+}
+
 // `ctx` (server.mjs) at call time; `now` and the timers injectable for tests.
 export function createHistory(
   ctx,
@@ -98,6 +143,15 @@ export function createHistory(
 
   async function prune() {
     try {
+      const days = ctx.config.logRetentionDays;
+      if (days && ctx.store) {
+        await pruneUnnamedShots({
+          store: ctx.store,
+          cutoff: now() - days * DAY,
+          removeShots: (folder) => ctx.removeShots(folder),
+          log: ctx.log,
+        });
+      }
       return await pruneRuns({
         runs: ctx.runs,
         byId: ctx.runsById,

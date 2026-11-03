@@ -72,7 +72,7 @@ import {
   loadGrants,
 } from "../listener/grants.mjs";
 import { createHttp } from "../listener/http.mjs";
-import { createHistory, forgottenShots } from "../listener/history.mjs";
+import { createHistory, forgottenShots, noteUnnamedShots } from "../listener/history.mjs";
 import { createInputs } from "../listener/inputs.mjs";
 import { createOnboarding, createOnboardingStore } from "../listener/onboarding.mjs";
 import { createLinkedBranches } from "../listener/linked-branch.mjs";
@@ -1095,10 +1095,14 @@ reconciling.unref();
 brokerService.consume();
 // The screenshots this orchestrator kept before the broker did go to it, while it goes on: asked
 // until the broker takes them (a reply posted before links to them still). A folder no run
-// names, past the run history's days, is removed instead, as retention removed those.
+// names, past the run history's days, is removed instead, as retention removed those; a younger
+// one is moved, and noted for retention to remove later.
 const forgotten = forgottenShots(ctx.runs, config.logRetentionDays, Date.now());
+const named = new Set(ctx.runs.map((run) => run.shots).filter(Boolean));
+const unnamed = (folder, at) =>
+  named.has(folder) ? undefined : noteUnnamedShots(store, folder, at);
 const shotsMoved = brokerService.persist("the screenshots kept here", () =>
-  brokerService.moveShots(shotsDir, { drop: forgotten }),
+  brokerService.moveShots(shotsDir, { drop: forgotten, moved: unnamed }),
 );
 // The operator's credentials' fingerprints, which the github service redacts the runs' GitHub
 // writes by without holding them: the models service's sets, as it gave them (lib/redact.mjs,
