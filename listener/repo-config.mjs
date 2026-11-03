@@ -60,6 +60,7 @@ const REVIEW_KEYS = [
   "ci_fix",
   "request",
   "follow_ups",
+  "follow_ups_auto_pickup",
 ];
 // When a review starts by itself (reviews.mjs): `ready`, a pull request marked ready for review
 // or opened as ready; `manual`, only with a "/mode review" line.
@@ -130,6 +131,10 @@ export function parseRepoConfig(text, config) {
     if (value === null) continue; // "key:" with nothing: the default
     if (!Object.hasOwn(KEYS, key)) warn(`${key}: unknown, ignored`);
     else KEYS[key].parse(value, { key, field: KEYS[key].field, settings, config, fail, warn });
+  }
+  // Across two keys, whatever their order in the file.
+  if (settings.review?.followUpsAutoPickup && !settings.autoPickup) {
+    warn("review.follow_ups_auto_pickup: needs `auto_pickup: true`, ignored");
   }
   return { settings, errors, warnings, fixes };
 }
@@ -413,6 +418,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     // Deckhand files the reviews' follow-ups as issues once a pull request is merged
     // (reviews.mjs fileFollowUps()), unless `follow_ups: false`.
     followUps: true,
+    // The follow-ups filed after a merge by an allowed user also get AUTO_PICKUP_LABEL, picked
+    // as that user's (auto-pickup.mjs), with `follow_ups_auto_pickup: true` (#677).
+    followUpsAutoPickup: false,
   };
   if (value === true) {
     settings.review = review;
@@ -467,6 +475,9 @@ function parseReview(value, { key, settings, config, fail, warn }) {
     } else if (k === "follow_ups") {
       if (typeof v === "boolean") review.followUps = v;
       else bad(k, "expected true or false");
+    } else if (k === "follow_ups_auto_pickup") {
+      if (typeof v === "boolean") review.followUpsAutoPickup = v;
+      else bad(k, "expected true or false");
     } else if (k === "request") {
       // Reviewers requested on Deckhand's ready pull requests (reviewers.mjs): only narrows
       // ALLOWED_USERS, like `users`; never a team (GitHub's "org/team").
@@ -501,10 +512,17 @@ function parseReview(value, { key, settings, config, fail, warn }) {
   if (ok && value.ci_fix && !review.fix) {
     warn("review.ci_fix: needs `review.fix`, no CI fix run starts");
   }
+  if (ok && review.followUpsAutoPickup && !config.autoPickupSlots) {
+    warn(
+      "review.follow_ups_auto_pickup: the operator reserves no slots for it (AUTO_PICKUP_SLOTS), ignored",
+    );
+  }
   if (ok) settings.review = review;
 }
 
-export function reviewText(review) {
+// `autoPicked`: whether `follow_ups_auto_pickup` takes effect (`auto_pickup` and the operator's
+// slots), else it is ignored and not shown.
+export function reviewText(review, autoPicked = false) {
   if (!review) return "off";
   const when = review.on === "ready" ? "when a pull request is ready" : '"/mode review" only';
   const fix =
@@ -523,7 +541,10 @@ export function reviewText(review) {
     review.maxAllowedSeverity === "medium" &&
     "medium findings allowed";
   const request = review.request?.length && `reviewers: ${review.request.join(", ")}`;
-  const followUps = review.followUps === false && "follow-ups not filed";
+  const followUps =
+    review.followUps === false
+      ? "follow-ups not filed"
+      : review.followUpsAutoPickup && autoPicked && "follow-ups auto-picked";
   return [when, ci, fix, merge, medium, request, followUps, review.instructions]
     .filter(Boolean)
     .join(" · ");
@@ -756,7 +777,7 @@ export const KEYS = {
     field: "review",
     default: null,
     parse: parseReview,
-    display: ({ value, settings, grant, known, row }) => {
+    display: ({ value, settings, config, grant, known, row }) => {
       const mode = value && customMode(settings, "review");
       // Not refused: the reviews run, only the merge waits for a human (grants.mjs).
       const merge =
@@ -764,7 +785,8 @@ export const KEYS = {
           ? "nothing is merged: the operator's policies don't grant auto_merge"
           : null;
       const model = mode ? `${mode.model}/${mode.effort}` : null;
-      return row(reviewText(value), [model, merge].filter(Boolean).join("; ") || null);
+      const autoPicked = !!settings.autoPickup && !!config.autoPickupSlots;
+      return row(reviewText(value, autoPicked), [model, merge].filter(Boolean).join("; ") || null);
     },
   },
   // Not refused when ungranted: runs go on, only the board isn't moved (projects.mjs).

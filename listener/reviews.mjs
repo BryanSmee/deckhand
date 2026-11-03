@@ -43,6 +43,7 @@ import {
   sameRepo,
   taskKey,
 } from "./events.mjs";
+import { allowed, isBot } from "./auto-pickup.mjs";
 import { autoMergeProblems } from "./grants.mjs";
 import { pushInput } from "./git-gateway.mjs";
 import { RERUN_CONCLUSIONS, RERUN_EVENTS } from "./github-writes.mjs";
@@ -1549,10 +1550,16 @@ export function followUpBody(f, { number, issue = null, site = null }) {
 // a steered diff could fill with dozens.
 export const FOLLOW_UPS_MAX = 10;
 
+// How far the `labeled` event of a follow-up filed with the auto-pickup label may be from its
+// issue's creation, as GitHub gives both to the second (followUpPick()).
+export const PICK_SKEW_MS = 2000;
+
 // The comment listing the follow-ups filed (`filed`), those an issue already had (`linked`),
 // and the titles left past FOLLOW_UPS_MAX (`left`), quoted as code: a model wrote them, and
 // they mustn't mention anyone or format the comment.
-export function followUpsText(filed, linked = [], left = []) {
+// `pickup`: who the filed ones are auto-picked for ({ by }), or why not ({ why }), when the
+// repo asks for it (`review.follow_ups_auto_pickup`).
+export function followUpsText(filed, linked = [], left = [], pickup = null) {
   const list = (ns) => ns.map((n) => `#${n}`).join(", ");
   const parts = [];
   if (filed.length) parts.push(`filed ${list(filed)}`);
@@ -1563,7 +1570,12 @@ export function followUpsText(filed, linked = [], left = []) {
     );
   }
   const n = filed.length + linked.length + left.length;
-  return `**Follow-ups** (\`${FOLLOW_UP_LABEL}\`): the reviews of this pull request listed ${n > 1 ? "these" : "this one"} for other issues: ${parts.join("; ")}.`;
+  const text = `**Follow-ups** (\`${FOLLOW_UP_LABEL}\`): the reviews of this pull request listed ${n > 1 ? "these" : "this one"} for other issues: ${parts.join("; ")}.`;
+  if (!filed.length || !pickup) return text;
+  const many = filed.length > 1;
+  return pickup.by
+    ? `${text} Labelled \`${pickup.label}\` too: ${many ? "they are" : "it is"} queued for auto-pickup, as the work of @${pickup.by}, who merged this pull request.`
+    : `${text} Not labelled \`${pickup.label}\`: ${pickup.why}. A maintainer adding the label picks ${many ? "them" : "it"}.`;
 }
 
 // A `pull_request` delivery that may start a review by itself → { repo, base, pr, author, own,
@@ -2588,6 +2600,8 @@ export function createReviews({
     const issue = linkedIssue(pr, repo, config.bot);
     const filed = [];
     const linked = [];
+    // Who the issues filed now are auto-picked for (pickupFor()), asked before the first one.
+    let pickup;
     // Past FOLLOW_UPS_MAX filed for the pull request, its earlier merges' or reviews' included,
     // the titles only, listed for the maintainer.
     const before = reviewed.get(key)?.followUpsFiled ?? 0;
@@ -2602,10 +2616,11 @@ export function createReviews({
         continue;
       }
       const body = followUpBody(f, { number: pr.number, issue, site });
+      if (pickup === undefined) pickup = await pickupFor(repo, pr, settings);
       const res = await github(repo, "POST", `/repos/${repo}/issues`, {
         title: f.title,
         body,
-        labels: [FOLLOW_UP_LABEL],
+        labels: pickup?.by ? [FOLLOW_UP_LABEL, config.autoPickupLabel] : [FOLLOW_UP_LABEL],
       });
       if (!res.ok) {
         log(`${key}: GitHub refused the follow-up issue "${f.title}" (${res.status})`);
@@ -2614,6 +2629,13 @@ export function createReviews({
       const made = await res.json();
       known.set(id, made.number);
       filed.push(made.number);
+      // What vouches for the App's labelling (followUpPick()): the merger, and the label's
+      // time, the issue's creation's. Kept at once: a sweep may read the issue any time now.
+      if (pickup?.by) {
+        const pickups = reviewed.get(key)?.pickups ?? [];
+        const at = made.created_at ?? new Date(now()).toISOString();
+        keep(key, { pickups: [...pickups, { issue: made.number, by: pickup.by, at }] });
+      }
     }
     log(`${key}: merged, ${filed.length} follow-up issue(s) filed, ${left.length} left`);
     // The titles left past the cap and listed already (`followUpsLeft`): never said twice.
@@ -2626,8 +2648,56 @@ export function createReviews({
     // After a late review, only what is new: the merge's comment listed the rest.
     if (late && !filed.length && !unsaid.length) return filed;
     if (!filed.length && !linked.length && !unsaid.length) return filed;
-    await reply(repo, pr.number, followUpsText(filed, late ? [] : linked, unsaid));
+    await reply(repo, pr.number, followUpsText(filed, late ? [] : linked, unsaid, pickup));
     return filed;
+  }
+
+  // Who the follow-ups of merged pull request `pr` filed now are auto-picked for (#677):
+  // { by }, the person who merged it, an allowed user, who reviewed the follow-ups there;
+  // { why } when it isn't one (Deckhand's auto-merge, a bot, someone else), said in the
+  // comment; null when the repo doesn't ask for it, or nothing would pick them.
+  async function pickupFor(repo, pr, settings) {
+    if (!settings.review.followUpsAutoPickup || !settings.autoPickup) return null;
+    const label = config.autoPickupLabel;
+    if (!config.autoPickupSlots || !label) return null;
+    const refused = (why) => ({ why, label });
+    let merger = pr.merged_by;
+    // A late review's pull request may not say: GitHub's, read once more.
+    if (!merger?.login) {
+      try {
+        merger = (await getJson(github, repo, `/repos/${repo}/pulls/${pr.number}`, [404]))
+          ?.merged_by;
+      } catch (error) {
+        log(`${repo}#${pr.number}: who merged it: ${error.message ?? error}`);
+      }
+    }
+    const login = merger?.login;
+    if (!login) return refused("who merged the pull request couldn't be read");
+    const name = login.toLowerCase();
+    if (name === config.bot?.toLowerCase()) {
+      return refused("Deckhand merged it (`review.merge`), not a person");
+    }
+    if (isBot(merger)) return refused(`it was merged by a bot (\`${login}\`)`);
+    // As auto-pickup decides it at the pick, which checks it again then.
+    if (!allowed(merger, config, settings.users)) {
+      return refused(`it was merged by \`${login}\`, who isn't an allowed user`);
+    }
+    return { by: login, label };
+  }
+
+  // The follow-up `number` of `repo` that fileFollowUps() labelled for auto-pickup at `at`
+  // (ms, the `labeled` event's), within a second or two → { by, pr }: who the run is for, and
+  // the pull request it follows up. Null for any other labelling by the App (a run's).
+  function followUpPick(repo, number, at) {
+    for (const [k, v] of reviewed) {
+      const parsed = parseKey(k);
+      if (!v.pickups || !sameRepo(parsed?.repo, repo)) continue;
+      const found = v.pickups.find(
+        (p) => p.issue === number && Math.abs(Date.parse(p.at) - at) <= PICK_SKEW_MS,
+      );
+      if (found) return { by: found.by, pr: parsed.number };
+    }
+    return null;
   }
 
   // A run of `repo` is over (runs.mjs cleanUp()): its pull requests waiting for CI are decided
@@ -3122,6 +3192,10 @@ export function createReviews({
       const reviewComments = [
         ...new Set([...(a.reviewComments ?? []), ...(b.reviewComments ?? [])]),
       ];
+      // The follow-ups either labelled for auto-pickup.
+      const pickups = [...(a.pickups ?? []), ...(b.pickups ?? [])].filter(
+        (p, i, all) => all.findIndex((q) => q.issue === p.issue && q.at === p.at) === i,
+      );
       // The last fix run's time goes with the count.
       const fixedAt = Math.max(a.fixedAt ?? 0, b.fixedAt ?? 0);
       return {
@@ -3133,6 +3207,7 @@ export function createReviews({
         ...(grantedTo && { grantedTo }),
         ...(hasFollowUps && { hasFollowUps }),
         ...(reviewComments.length && { reviewComments }),
+        ...(pickups.length && { pickups }),
       };
     };
     if (respellMap(reviewed, spelled, undefined, merge)) reviewed.save();
@@ -3305,5 +3380,6 @@ export function createReviews({
     },
     respell,
     forgetSteps,
+    followUpPick,
   };
 }

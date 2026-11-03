@@ -2656,6 +2656,11 @@ function followUpSetup(
     failReads = 0,
     later = null,
     label = 422,
+    // The repo's config, the operator's, and the pull request as GET /pulls/5 reads it (none:
+    // a 404).
+    yaml = "review:\n  on: manual\n",
+    settings = config,
+    pull = null,
   } = {},
 ) {
   let fails = failReads;
@@ -2697,11 +2702,13 @@ function followUpSetup(
       if (refuse.includes(body.title)) return new Response("{}", { status: 410 });
       // Listed with the label from then on, as GitHub would.
       existing.push({ number: next, title: body.title });
-      return Response.json({ number: next++ }, { status: 201 });
+      return Response.json({ number: next++, created_at: "2026-11-02T10:00:01Z" }, { status: 201 });
     }
+    if (method === "GET" && path === "/repos/org/repo/pulls/5" && pull) return Response.json(pull);
     return new Response("{}", { status: 404 });
   };
-  const s = setup(t, "review:\n  on: manual\n", {
+  const s = setup(t, yaml, {
+    settings,
     later,
     log: (line) => logged.push(line),
     github,
@@ -3607,4 +3614,133 @@ test("an unclear comment is decided once: posted, read back and told to the fix 
   const askedBack = parsePostedReview(reviewBody(asked, "", "f"));
   assert.deepEqual([mergeBlockers(asked).length, mergeBlockers(askedBack).length], [2, 2]);
   assert.match(fixMessage(askedBack, 5), /Treat an \*\*unclear\*\* comment as blocking/);
+});
+
+// #677: the repo's follow-ups auto-picked, with the operator's slots, alice among its users.
+const PICKUP_YAML = "auto_pickup: true\nreview:\n  on: manual\n  follow_ups_auto_pickup: true\n";
+const pickupConfig = {
+  ...testConfig({ ALLOWED_USERS: "alice,bob", MAX_PARALLEL: "3", AUTO_PICKUP_SLOTS: "1" }),
+  bot: "deckhand-app[bot]",
+};
+const mergedBy = (login, type = "User") => ({ merged_by: { login, type } });
+
+test("follow-ups auto-picked: filed with both labels after an allowed user's merge, recorded for them", async (t) => {
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    existing: [{ number: 7, title: "Docs: the cache's limits" }],
+    yaml: PICKUP_YAML,
+    settings: pickupConfig,
+  });
+  await s.record(SECTIONS);
+  assert.deepEqual(await s.merged(mergedBy("Alice")), [40]);
+  assert.deepEqual(
+    s.filed().map((c) => c.body.labels),
+    [[FOLLOW_UP_LABEL, "auto-pickup"]],
+  );
+  assert.match(
+    s.replies[0][1],
+    /filed #40; already filed in #7\. Labelled `auto-pickup` too: it is queued for auto-pickup, as the work of @Alice, who merged this pull request\.$/,
+  );
+  // The record vouches for that labelling only: the issue filed, at its creation's second.
+  const at = Date.parse("2026-11-02T10:00:01Z");
+  assert.deepEqual(s.reviews.followUpPick("org/repo", 40, at), { by: "Alice", pr: 5 });
+  assert.deepEqual(s.reviews.followUpPick("ORG/Repo", 40, at + 1000), { by: "Alice", pr: 5 });
+  assert.equal(s.reviews.followUpPick("org/repo", 40, at + 60_000), null);
+  // An issue linked rather than filed got no label, and has no record.
+  assert.equal(s.reviews.followUpPick("org/repo", 7, at), null);
+  assert.equal(s.reviews.followUpPick("org/other", 40, at), null);
+  // Who merged it, from the delivery: the pull request isn't read again.
+  assert.equal(s.calls.filter((c) => c.path === "/repos/org/repo/pulls/5").length, 0);
+});
+
+test("follow-ups auto-picked: off by default, without auto_pickup or the operator's slots", async (t) => {
+  for (const [yaml, settings] of [
+    ["review:\n  on: manual\n", pickupConfig],
+    ["review:\n  on: manual\n  follow_ups_auto_pickup: true\n", pickupConfig],
+    [PICKUP_YAML, { ...pickupConfig, autoPickupSlots: 0 }],
+  ]) {
+    const s = followUpSetup(t, { posted: [postedBody(SECTIONS)], yaml, settings });
+    await s.record(SECTIONS);
+    assert.deepEqual(await s.merged(mergedBy("alice")), [40, 41], yaml);
+    assert.deepEqual(
+      s.filed().map((c) => c.body.labels),
+      [[FOLLOW_UP_LABEL], [FOLLOW_UP_LABEL]],
+      yaml,
+    );
+    assert.equal(
+      s.replies[0][1],
+      "**Follow-ups** (`follow-up`): the reviews of this pull request listed these for other issues: filed #40, #41.",
+    );
+    assert.equal(s.reviews.entry("org/repo", 5).pickups, undefined);
+  }
+});
+
+test("follow-ups auto-picked: not after Deckhand's auto-merge, a bot's or an outsider's merge, said why", async (t) => {
+  for (const [by, why] of [
+    [
+      mergedBy("deckhand-app[bot]", "Bot"),
+      "Deckhand merged it \\(`review\\.merge`\\), not a person",
+    ],
+    [mergedBy("renovate[bot]", "Bot"), "it was merged by a bot \\(`renovate\\[bot\\]`\\)"],
+    [mergedBy("mallory"), "it was merged by `mallory`, who isn't an allowed user"],
+    [{ merged_by: null }, "who merged the pull request couldn't be read"],
+  ]) {
+    const s = followUpSetup(t, {
+      posted: [postedBody(SECTIONS)],
+      yaml: PICKUP_YAML,
+      settings: pickupConfig,
+    });
+    await s.record(SECTIONS);
+    assert.deepEqual(await s.merged(by), [40, 41]);
+    assert.deepEqual(
+      s.filed().map((c) => c.body.labels),
+      [[FOLLOW_UP_LABEL], [FOLLOW_UP_LABEL]],
+    );
+    assert.match(
+      s.replies[0][1],
+      new RegExp(
+        `filed #40, #41\\. Not labelled \`auto-pickup\`: ${why}\\. A maintainer adding the label picks them\\.$`,
+      ),
+    );
+    assert.equal(s.reviews.entry("org/repo", 5).pickups, undefined);
+  }
+  // In ALLOWED_USERS but not the repo's users: not an allowed user here.
+  const narrowed = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    yaml: `users: [alice]\n${PICKUP_YAML}`,
+    settings: pickupConfig,
+  });
+  await narrowed.record(SECTIONS);
+  await narrowed.merged(mergedBy("bob"));
+  assert.match(narrowed.replies[0][1], /merged by `bob`, who isn't an allowed user/);
+});
+
+test("follow-ups auto-picked: a late review's pull request without its merger is read once more", async (t) => {
+  const s = followUpSetup(t, {
+    posted: [postedBody(SECTIONS)],
+    yaml: PICKUP_YAML,
+    settings: pickupConfig,
+    pull: { number: 5, merged: true, ...mergedBy("alice") },
+  });
+  // The merge came while the review ran: its round wasn't recorded yet.
+  await s.record(HIGH_ONE);
+  assert.equal(await s.merged(), null);
+  await s.record(SECTIONS);
+  assert.deepEqual(
+    s.filed().map((c) => c.body.labels),
+    [
+      [FOLLOW_UP_LABEL, "auto-pickup"],
+      [FOLLOW_UP_LABEL, "auto-pickup"],
+    ],
+  );
+  // Once for the pass, not once per issue.
+  assert.equal(s.calls.filter((c) => c.path === "/repos/org/repo/pulls/5").length, 1);
+  assert.match(s.replies.at(-1)[1], /they are queued for auto-pickup, as the work of @alice/);
+  assert.deepEqual(
+    s.reviews.entry("org/repo", 5).pickups.map((p) => [p.issue, p.by]),
+    [
+      [40, "alice"],
+      [41, "alice"],
+    ],
+  );
 });
