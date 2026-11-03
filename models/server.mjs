@@ -29,6 +29,7 @@ import { pathToFileURL } from "node:url";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drainOnSigterm } from "../lib/drain.mjs";
 import { createLogger } from "../lib/log.mjs";
+import { startMetrics } from "../lib/metrics.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
@@ -338,6 +339,8 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   }
   const { server, config, broker, caller, store, graceMs, ready, endpoints } = started;
   logins = () => [...endpoints.openai.secrets(), ...endpoints.google.secrets()];
+  // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
+  startMetrics({ service: "models", port: config.metricsPort, log });
   const port = Number(env.PORT ?? 8080);
   server.listen(port, () => log(`Models on :${server.address().port}`));
   for (const name of [config.claudeCredential, config.openaiCredential, config.agyCredential]) {

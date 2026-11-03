@@ -13,10 +13,12 @@
 //   POLICY_SERVICE_URL  the policy service: the runs' writes and pushes
 //   GITHUB_URL, GITHUB_API, ALLOWED_REPOS, GRANTS_DIR, DATA_DIR (its git mirrors)
 //   DRAIN_SECONDS       how long a stopping copy lets its calls finish (a push, a clone): 280
+//   METRICS_PORT        GET /metrics alone (../lib/metrics.mjs): none by default
 import { join } from "node:path";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { DRAIN_MS, drainOnSigterm } from "../lib/drain.mjs";
 import { createLogger } from "../lib/log.mjs";
+import { startMetrics } from "../lib/metrics.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
@@ -51,6 +53,8 @@ try {
   process.exit(1);
 }
 const { config, bound, graceMs } = started;
+// Its metrics, on their own port when METRICS_PORT is set.
+startMetrics({ service: "github", port: config.metricsPort, log });
 
 // The broker: its keys (run tokens and the callers' service tokens are checked with them,
 // offline) and this service's own tokens, for the policy service.

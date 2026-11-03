@@ -1021,13 +1021,20 @@ describe("listener", options, () => {
       return { code, output: old.output() };
     };
     // A handover (#506): the next copy started first, waiting for the lease, then this one
-    // stopped (SIGTERM, or SIGKILL: a crash, its lease left to expire). → the old copy's
-    // output and epoch, and the new one's epoch, once it acts.
-    const handOver = async ({ signal = "SIGTERM", between = async () => {} } = {}) => {
+    // stopped (SIGTERM, or SIGKILL: a crash, its lease left to expire), `more` settings for the
+    // next, `waiting(next)` while it waits. → the old copy's output and epoch, and the new one's
+    // epoch, once it acts.
+    const handOver = async ({
+      signal = "SIGTERM",
+      between = async () => {},
+      more = {},
+      waiting = async () => {},
+    } = {}) => {
       const old = listener;
       const epochOf = (out) => Number(/orchestrator: lease taken \(epoch (\d+)\)/.exec(out)?.[1]);
-      const next = start(listenerEnv(settings), { also: others });
+      const next = start(listenerEnv({ ...settings, ...more }), { also: others });
       await next.until("Waiting for the orchestrator's lease");
+      await waiting(next);
       const exited = new Promise((resolve) => old.child.on("exit", resolve));
       const killed = Date.now();
       old.child.kill(signal);
@@ -2924,11 +2931,21 @@ mounts:
     test(`a handover ${how}; a queued comment runs once, a run's end gets one reply, the old epoch is refused`, async (t) => {
       const ctx = await handingOver(t);
       const { dir, github } = ctx;
+      // The next copy's metrics (lib/metrics.mjs): its lease not held while it waits, then held.
+      const leaseHeld = async (copy) => {
+        await copy.until(/Metrics on :\d+\/metrics/);
+        const port = /Metrics on :(\d+)\/metrics/.exec(copy.own())[1];
+        const text = await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
+        return /^deckhand_lease_held\{lease="orchestrator"\} (\d)$/m.exec(text)?.[1];
+      };
       const { output, epoch, next, took } = await ctx.handOver({
         signal,
         // Claude answers issue 12 while the copies hand over.
         between: async () => writeFileSync(join(dir, "go"), ""),
+        more: { METRICS_PORT: "0" },
+        waiting: async (copy) => assert.equal(await leaseHeld(copy), "0"),
       });
+      assert.equal(await leaseHeld(ctx.listener), "1");
       if (signal === "SIGTERM") {
         assert.match(output, /orchestrator: lease released/);
         // Not a lease's life (8 s here, 15 by default): the waiting copy took it at once.

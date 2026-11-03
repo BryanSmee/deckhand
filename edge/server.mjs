@@ -21,6 +21,7 @@
 //   BROKER_SERVICE_URL  its service tokens, and the keys the orchestrator's are checked with
 //   SERVICE_NETWORKS    with Docker, the orchestrator's network to it (orchestrator=<subnet>)
 //   DRAIN_SECONDS       how long a stopping copy lets its requests finish (a live log): 25
+//   METRICS_PORT        GET /metrics alone (../lib/metrics.mjs): none by default
 import { randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import { join } from "node:path";
@@ -30,6 +31,7 @@ import { writeFileAtomic } from "../lib/files.mjs";
 import { createBrokerCaller } from "../lib/broker-client.mjs";
 import { drain } from "../lib/drain.mjs";
 import { createLogger } from "../lib/log.mjs";
+import { leaseMetric, startMetrics } from "../lib/metrics.mjs";
 import { serviceClient } from "../lib/service-client.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -62,11 +64,16 @@ try {
   if (internalPort && internalPort === config.port) {
     throw new ConfigError("INTERNAL_PORT: not PORT's, which the internet reaches");
   }
+  if (config.metricsPort && config.metricsPort === internalPort) {
+    throw new ConfigError("METRICS_PORT: not INTERNAL_PORT's");
+  }
 } catch (error) {
   if (!(error instanceof ConfigError)) throw error;
   log.error(`Edge: ${error.message}`);
   process.exit(1);
 }
+// Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
+const metrics = startMetrics({ service: "edge", port: config.metricsPort, log });
 const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : 25_000;
 const dataDir = config.dataDir;
 
@@ -219,6 +226,7 @@ const poller = activePassive({
   log,
 });
 poller.start();
+leaseMetric(metrics.registry, { "edge/redeliveries": () => poller.active() });
 
 // A rolling update starts the next copy first: this one takes no new connection, lets the
 // requests in flight finish (a live log streams until the browser reconnects to the other),

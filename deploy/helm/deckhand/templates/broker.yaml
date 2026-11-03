@@ -57,6 +57,10 @@ spec:
               readOnly: true
             - name: store
               mountPath: /data
+            # config.yaml, for metrics_port alone.
+            - name: server
+              mountPath: /etc/deckhand
+              readOnly: true
             {{- if .Values.blobs.enabled }}
             {{- include "deckhand.blobsMount" . | nindent 12 }}
             {{- end }}
@@ -72,6 +76,7 @@ spec:
           persistentVolumeClaim:
             claimName: broker-store
           {{- end }}
+        {{- include "deckhand.serverVolume" (list . false) | nindent 8 }}
         {{- if .Values.blobs.enabled }}
         {{- include "deckhand.blobsVolume" . | nindent 8 }}
         {{- end }}

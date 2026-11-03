@@ -3274,7 +3274,11 @@ it again when you change `AGY_VERSION`.
   host's resolvers, so a lookup of a made-up name could carry data out to that domain's DNS
   server.
 - **The proxy is on every run's network**: a sandbox reaches the proxy's port, as every
-  other sandbox does, but not the other sandboxes behind it.
+  other sandbox does, but not the other sandboxes behind it. With metrics on for it
+  (`EGRESS_METRICS_PORT` with Compose, its own setting and off by default,
+  [Metrics](setup.md#metrics)), a sandbox reaches that port too: `GET /metrics` alone, nothing
+  secret, but the proxy's memory, CPU and event loop lag there move with other runs' traffic.
+  The other services' metrics ports are on no run's network.
 - **Allowed hosts are trusted entirely**: anything a sandbox can write to on one is a way
   out: its own repository on GitHub, a bucket or paste service behind `*`.
 - **A research run allows every public host**: everything it holds can leave, so it holds
