@@ -1649,3 +1649,21 @@ test("Kubernetes: a job that asks for root or a capability is refused, no pod ma
   );
   assert.ok(!created.some((o) => o.kind === "Pod"));
 });
+
+// What the runner's metrics count a prune as (../runner/metrics.mjs).
+test("remove: a tag deleted, kept while a pod runs it, failed when the registry refuses", async (t) => {
+  const { images, backend, objects } = setup(t);
+  const main = await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
+  objects.pods.set("sandbox", { spec: { containers: [{ image: main }] } });
+  assert.equal(await backend.remove(main), "kept");
+  objects.pods.delete("sandbox");
+  assert.equal(await backend.remove(main), "deleted");
+  assert.equal(await backend.remove(main), null);
+  const refusing = setup(t, { registry: { deletes: false } });
+  const tag = await refusing.images.imageFor({
+    repo: "org/a",
+    ref: "main",
+    dockerfile: "Dockerfile",
+  });
+  assert.equal(await refusing.backend.remove(tag), "failed");
+});

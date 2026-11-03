@@ -165,6 +165,7 @@ export function createNetworkProbe({
   lookup = (host) => dnsLookup(host, { all: true }),
   resolvConf = () => readFileSync("/etc/resolv.conf", "utf8"),
   gate = createNetworkGate({ config, env, resolvConf, now }), // kube-gate.mjs
+  metrics = null, // the runner's (../../runner/metrics.mjs): each verdict, and how long it took
 }) {
   const apart = services.namespace !== api.namespace;
   // The probe's verdict, for the policies it was made under.
@@ -375,17 +376,20 @@ export function createNetworkProbe({
     const entry = { key };
     entry.verdict = queue.then(async () => {
       const started = now();
+      const took = () => (now() - started) / 1000;
       try {
         const problem = await probe();
         log(
           problem
             ? `Network probe: runs refused, ${problem}`
-            : `Network probe: a sandbox reaches the egress proxy alone (${Math.round((now() - started) / 1000)} s)`,
+            : `Network probe: a sandbox reaches the egress proxy alone (${Math.round(took())} s)`,
         );
+        metrics?.probed(problem ? "reached" : "isolated", took());
         return problem;
       } catch (error) {
         if (kept === entry) kept = null;
         log(`Network probe: couldn't tell, ${error.message}`);
+        metrics?.probed("unknown", took());
         throw error;
       }
     });

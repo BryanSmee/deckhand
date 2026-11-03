@@ -25,6 +25,7 @@ import { policyClient } from "../listener/policy-client.mjs";
 import { createPolicies } from "../listener/policies.mjs";
 import { createBackend } from "../listener/runner/index.mjs";
 import { createLogs } from "./logs.mjs";
+import { runnerMetrics } from "./metrics.mjs";
 import { createRunnerService, loginRefresh } from "./service.mjs";
 
 const env = process.env;
@@ -37,8 +38,21 @@ let config;
 let backend;
 let bound;
 let brokerCaller;
+let metrics;
+let counted;
+// The service and its lease, once made (below): its sandboxes, for the metrics.
+let service = null;
+let lease = null;
 try {
   config = loadConfig(env, readConfigFile(env), { service: "runner" });
+  // Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set; its own
+  // (metrics.mjs) counted from the backend's first call.
+  metrics = startMetrics({ service: "runner", port: config.metricsPort, log });
+  counted = runnerMetrics(metrics.registry, {
+    runner: config.runner,
+    sandboxes: async () => (service ? service.sandboxes() : null),
+    active: () => Boolean(lease?.active()),
+  });
   credentials = blobCredentials(env);
   // Kubernetes' NetworkPolicies and the pods' own service accounts tell callers apart there
   // (#396): SERVICE_NETWORKS=none says so. Anywhere else, a runner without it takes no call.
@@ -57,7 +71,13 @@ try {
   // Each run's inbox and files, copied to the broker service as they change, which serves them
   // to the sandbox (../listener/runner/inbox.mjs `mirror`).
   const { mirror } = createBrokerService({ caller: brokerCaller, log });
-  backend = createBackend({ config, inboxDir: join(config.dataDir, "runs"), mirror, log });
+  backend = createBackend({
+    config,
+    inboxDir: join(config.dataDir, "runs"),
+    mirror,
+    log,
+    metrics: counted,
+  });
 } catch (error) {
   if (
     !(error instanceof ConfigError) &&
@@ -68,9 +88,6 @@ try {
   log.error(error.message);
   process.exit(1);
 }
-
-// Its metrics (../lib/metrics.mjs), on their own port when METRICS_PORT is set.
-const metrics = startMetrics({ service: "runner", port: config.metricsPort, log });
 
 // Blob storage's secret key never goes in it: refused in a value, redacted from a blob.
 const storeUrl = env.STORE_URL || `file://${join(config.dataDir, "store")}`;
@@ -136,19 +153,19 @@ const images = createImages({
   jobs: backend.jobs,
   checkout: fetchCheckout,
   log,
+  metrics: counted,
 });
 
 const holder = `${hostname()}-${process.pid}-${randomBytes(4).toString("hex")}`;
-let service = null;
-const lease = activePassive({
+lease = activePassive({
   store,
   name: "runner",
   holder,
-  onActive: () => service.activate(),
+  onActive: () => (leases.taken(), service.activate()),
   onPassive: () => service.deactivate(),
   log,
 });
-leaseMetric(metrics.registry, { runner: () => lease.active() });
+const leases = leaseMetric(metrics.registry, { runner: () => lease.active() });
 
 // What the operator's policies grant each repository (a container engine, its Dockerfile…),
 // asked of the policy service as the listener asks it: the runner checks every spec and build
@@ -191,6 +208,7 @@ service = createRunnerService({
   bound,
   lease,
   log,
+  metrics: counted,
 });
 
 const port = Number(env.PORT || 8080);

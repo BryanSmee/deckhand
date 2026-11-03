@@ -34,6 +34,7 @@ import { ownImage, plainPath, runOf, specProblems } from "./spec-check.mjs";
 import { buildPlan, buildProblem, validRepo } from "./builds.mjs";
 import { cacheProblem } from "../listener/repo-config.mjs";
 import { LogConflict, validLogId, waitingWarning } from "./logs.mjs";
+import { startFailure } from "./metrics.mjs";
 import { withRequest } from "../lib/log.mjs";
 
 // Who may call what. A route that isn't here is refused to everyone.
@@ -213,6 +214,8 @@ export function createRunnerService({
   blobOf = async () => null,
   // What GET /health says: when it started, its version (../lib/health.mjs).
   health = healthInfo(),
+  // The runner's metrics' hooks (metrics.mjs runnerMetrics()), or none: starts that failed.
+  metrics = null,
 }) {
   const guard = serviceGuard({
     service: "runner",
@@ -239,6 +242,27 @@ export function createRunnerService({
       throw new Refused(502, error.message);
     }
   }
+  // Each running sandbox's container engine (none, sysbox, podman), by its run: from its start's
+  // record in the store, which the other copy wrote when it started it, kept here once read.
+  const engines = new Map(); // run → engine
+  async function engineOf(run) {
+    if (engines.has(run)) return engines.get(run);
+    const known = run ? await store.get(`starts/${run}`) : null;
+    const engine = known?.result?.engine?.backend ?? "none";
+    if (known?.state === "started") engines.set(run, engine);
+    return engine;
+  }
+
+  // The running sandboxes as [{ engine }], for the metrics: the acting copy's alone (null on the
+  // waiting one, which has no samples of them).
+  async function sandboxes() {
+    if (!lease.active() || stopping) return null;
+    const list = (await runner.list()).filter((s) => s.running);
+    const runs = new Set(list.map((s) => s.run));
+    for (const run of engines.keys()) if (!runs.has(run)) engines.delete(run);
+    return Promise.all(list.map(async ({ run }) => ({ engine: await engineOf(run) })));
+  }
+
   async function oursOrRefuse(name) {
     const found = await ours(name);
     if (!found) throw new Refused(404, `${name} isn't a sandbox of this deployment`);
@@ -261,6 +285,7 @@ export function createRunnerService({
     const problems = await checkSpec(spec);
     if (problems.length) {
       log(`${name}: not started: ${problems.join("; ")}`);
+      metrics?.failedToStart("refused");
       throw new Refused(403, `the runner refuses its spec: ${problems.join("; ")}`);
     }
     const key = `starts/${run}`;
@@ -301,9 +326,11 @@ export function createRunnerService({
         },
       });
     } catch (error) {
+      metrics?.failedToStart(startFailure(error));
       await store.delete(key);
       throw error;
     }
+    if (result?.engine) engines.set(run, result.engine.backend);
     await store.set(key, { state: "started", result }, { ttlMs: START_TTL_MS });
     await events.started(run, name);
     return { ...result, existing: false };
@@ -605,6 +632,7 @@ export function createRunnerService({
   return {
     server,
     events,
+    sandboxes,
     // Once this copy acts: what sandboxes did meanwhile goes to the events, the Kubernetes
     // runner probes the cluster's isolation again (kube-probe.mjs), and the closed log segments
     // a copy before it left in the store move to blob storage (logs.mjs).

@@ -15,6 +15,8 @@ import {
 import { legacyRepoImage, repoImage } from "../listener/repo-config.mjs";
 import { createDockerImages } from "../listener/runner/images.mjs";
 import { createDockerJobs } from "../listener/runner/jobs.mjs";
+import { createRegistry } from "../lib/metrics.mjs";
+import { runnerMetrics } from "../runner/metrics.mjs";
 import { buildContext, contextBlob, tempDir, testConfig, withBlobs } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "a", CLAUDE_CODE_VERSION: "9.9.9" });
@@ -26,6 +28,7 @@ function fakeDocker({
   images = new Set(),
   volumes = new Set(),
   fail = {},
+  inUse = new Set(), // tags a container runs: `docker image rm` refuses them
 } = {}) {
   const calls = [];
   const docker = async (args) => {
@@ -48,6 +51,13 @@ function fakeDocker({
         err: "",
       };
     }
+    if (command === "image" && sub === "rm" && inUse.has(args[2])) {
+      return {
+        code: 1,
+        out: "",
+        err: `Error response from daemon: conflict: unable to remove repository reference "${args[2]}" (must force) - container 0123 is using its referenced image`,
+      };
+    }
     if (command === "image" && sub === "rm") images.delete(args[2]);
     if (command === "build") images.add(args[args.indexOf("-t") + 1]);
     if (command === "volume" && sub === "inspect")
@@ -64,13 +74,14 @@ const onDocker = (docker) => ({
   jobs: createDockerJobs({ config, docker }),
 });
 
-function setup(t, options, blob = "blob1") {
+function setup(t, options, blob = "blob1", metrics = null) {
   const fake = fakeDocker(options);
   const checkouts = [];
   const images = withBlobs(
     createImages({
       config,
       ...onDocker(fake.docker),
+      metrics,
       checkout: async (repo, ref) => {
         checkouts.push(ref);
         return buildContext(t, `${blob}@${ref}`);
@@ -353,4 +364,33 @@ test("cache volumes: created once per repo and path, owned by the sandbox's user
   // Another repo, same path: its own volume.
   const [other] = await images.caches("org/b", ["/home/node/.npm"], "img:1");
   assert.notEqual(other.name, cache.name);
+});
+
+// The runner's metrics (../runner/metrics.mjs), counted where images.mjs builds, prunes and
+// installs.
+test("builds, prunes and installs are counted in the runner's metrics", async (t) => {
+  const registry = createRegistry();
+  const metrics = runnerMetrics(registry, { runner: "docker", active: () => true });
+  const old = Array.from({ length: 5 }, (_, k) => `${A}:old${k}`);
+  const { images } = setup(t, { images: new Set(old), inUse: new Set([old[0]]) }, "b", metrics);
+  await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
+  await images.installAgent(claude);
+  const text = await registry.render();
+  const has = (line) => assert.ok(text.includes(`${line}\n`), line);
+  has('deckhand_image_builds_total{runner="docker",result="ok"} 1');
+  has("deckhand_image_build_seconds_count 1");
+  // Five old tags and the new one: three kept by the prune, one in use, two deleted.
+  has('deckhand_image_prunes_total{result="deleted"} 2');
+  has('deckhand_image_prunes_total{result="kept"} 1');
+  has('deckhand_agent_installs_total{agent="claude",result="ok"} 1');
+
+  const failing = setup(t, { fail: { build: "no such file", run: "npm: 403" } }, "b", metrics);
+  await assert.rejects(
+    failing.images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" }),
+  );
+  await assert.rejects(failing.images.installAgent(claude));
+  const after = await registry.render();
+  assert.ok(after.includes('deckhand_image_builds_total{runner="docker",result="error"} 1\n'));
+  assert.ok(after.includes("deckhand_image_build_seconds_count 2\n"));
+  assert.ok(after.includes('deckhand_agent_installs_total{agent="claude",result="error"} 1\n'));
 });

@@ -75,6 +75,8 @@ export function createImages({
   jobs, // its short containers (runner/jobs.mjs)
   checkout, // (repo, ref) → a folder with the repo's files (checkout.mjs)
   log = () => {},
+  metrics = null, // the runner's (../runner/metrics.mjs): builds, prunes and installs counted
+  now = Date.now,
 }) {
   const builds = new Map(); // tag → Promise, so two runs never build the same image
   const installs = new Map(); // "<agent>@<version>" → Promise
@@ -158,15 +160,21 @@ export function createImages({
         error.code = "DOCKERFILE_MOVED";
         throw error;
       }
-      const built = await backend.build({
-        dir,
-        dockerfile,
-        tag,
-        labels: { "deckhand.repo": repo.toLowerCase() },
-        output,
-        hosts,
-        trusted,
-      });
+      const started = now();
+      let built;
+      try {
+        built = await backend.build({
+          dir,
+          dockerfile,
+          tag,
+          labels: { "deckhand.repo": repo.toLowerCase() },
+          output,
+          hosts,
+          trusted,
+        });
+      } finally {
+        metrics?.built(built?.code === 0, (now() - started) / 1000);
+      }
       checked(built, `building ${dockerfile} of ${repo} failed`);
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -187,7 +195,10 @@ export function createImages({
     for (const tag of tags) if (kept.size < KEEP_TAGS) kept.add(tag);
     const keeping = [...kept].map((tag) => `${name}:${tag}`);
     for (const tag of tags) {
-      if (!kept.has(tag)) await backend.remove(`${name}:${tag}`, keeping);
+      if (kept.has(tag)) continue;
+      // "deleted", "kept" (in use) or "failed"; nothing from a backend that doesn't say.
+      const result = await backend.remove(`${name}:${tag}`, keeping);
+      if (result) metrics?.pruned(result);
     }
     // Tags of the name before it had a hash: no run picks them any more, whichever repo built
     // them. None under a registry, which never had them.
@@ -234,9 +245,13 @@ export function createImages({
         // again at the next run, which may have a volume to fill by then.
         if (result?.inSandbox) installs.get(key) === install && installs.delete(key);
         else if (result) checked(result, `installing ${agent.displayName} ${version} failed`);
+        if (!result?.inSandbox) metrics?.installed(agent.name, true);
       });
       // A failure is not kept: the next run tries again.
-      install.catch(() => installs.get(key) === install && installs.delete(key));
+      install.catch(() => {
+        metrics?.installed(agent.name, false);
+        if (installs.get(key) === install) installs.delete(key);
+      });
       installs.set(key, install);
     }
     return installs.get(key);

@@ -493,6 +493,23 @@ export function pendingReason(pod) {
   return null;
 }
 
+// Why a pod Pending past KUBERNETES_PENDING_MINUTES didn't start, as the runner's metrics name
+// it (../../runner/metrics.mjs START_FAILURES), from its status and pendingReason()'s `why`.
+export function pendingFailure(pod, why) {
+  if (why === INSTALLING) return "agent_install";
+  if (why === GATING) return "network_gate";
+  const statuses = [
+    ...(pod.status?.initContainerStatuses ?? []),
+    ...(pod.status?.containerStatuses ?? []),
+  ];
+  if (statuses.some((s) => /ImagePull|ErrImage|InvalidImageName/.test(s.state?.waiting?.reason)))
+    return "image_pull";
+  const unscheduled = (pod.status?.conditions ?? []).some(
+    (c) => c.type === "PodScheduled" && c.status === "False",
+  );
+  return unscheduled ? "unschedulable" : "pending";
+}
+
 // The init container's exit code when it failed (the agent's install), else null.
 export function failedInit(pod) {
   const code = (pod.status?.initContainerStatuses ?? []).find((s) => s.name === INIT_CONTAINER)
@@ -536,6 +553,9 @@ export function createKubernetesRunner({
   sleep = delay,
   mirror = null, // the broker service's copy of the runs' inboxes and files (inbox.mjs)
   watchMs = WATCH_MS,
+  // The runner's (../../runner/metrics.mjs): how long a pod takes to leave Pending, and why one
+  // never did.
+  metrics = null,
   // kube-probe.mjs's, made below unless the tests bring theirs; `probeOptions`: more of its
   // options (the tests' env, DNS lookup, resolv.conf and sleep).
   probe = null,
@@ -553,6 +573,11 @@ export function createKubernetesRunner({
   const inbox = createInbox({ inboxDir, mirror });
   // Runs whose Secret exists before their pod does: relink() leaves them alone.
   const starting = new Set();
+  // When this copy was asked to start each sandbox it started, until its pod leaves Pending:
+  // what its start's duration counts from. A pod another copy started isn't timed.
+  const asked = new Map();
+  // The pods whose failure to start was counted: followed again, they are counted once.
+  const failedPods = new Set();
   let proxy = { at: -Infinity, addresses: [] };
 
   const owner = { "deckhand.owner": labelValue(config.prefix) };
@@ -571,6 +596,7 @@ export function createKubernetesRunner({
   async function start(spec) {
     const { run, name, labels = {}, env: values = {}, tokens, engine, ca, digest } = spec;
     const { volumes = [] } = spec;
+    const askedAt = now();
     if (engine && !kubernetesEngine(config)) {
       throw new Error(
         "the kubernetes runner runs a container engine only with Sysbox's RuntimeClass (KUBERNETES_ENGINE_RUNTIME_CLASS, SANDBOX_ENGINE sysbox or auto)",
@@ -668,6 +694,7 @@ export function createKubernetesRunner({
         stringData: env,
       });
       made.push(`secrets/${secret}`);
+      asked.set(name, askedAt);
     } catch (error) {
       for (const path of made.reverse()) {
         await api.remove(path).catch((e) => log(`Removing ${path}: ${e.message}`));
@@ -730,8 +757,11 @@ export function createKubernetesRunner({
       proxy: apart ? { namespace: services.namespace, selector: proxySvc.selector } : null,
     });
     if (problem) {
-      throw new Error(
-        `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/kubernetes.md)`,
+      throw Object.assign(
+        new Error(
+          `the namespace ${api.namespace} doesn't isolate its sandboxes: ${problem}. Deckhand's NetworkPolicy lets them reach the egress proxy only (see docs/kubernetes.md)`,
+        ),
+        { reason: "not_isolated" },
       );
     }
   }
@@ -757,6 +787,7 @@ export function createKubernetesRunner({
     log,
     now,
     sleep,
+    metrics,
     ...probeOptions,
   });
   async function checkEnforced(policies) {
@@ -764,13 +795,19 @@ export function createKubernetesRunner({
     try {
       problem = await probe.check(policies);
     } catch (error) {
-      throw new Error(
-        `the runner couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${error.message} (see docs/kubernetes.md)`,
+      throw Object.assign(
+        new Error(
+          `the runner couldn't check that the cluster enforces the sandboxes' NetworkPolicies: ${error.message} (see docs/kubernetes.md)`,
+        ),
+        { reason: "isolation_unknown" },
       );
     }
     if (problem) {
-      throw new Error(
-        `the cluster doesn't enforce the sandboxes' NetworkPolicies: ${problem}. The runner probes again when they change, or when it restarts (see docs/kubernetes.md)`,
+      throw Object.assign(
+        new Error(
+          `the cluster doesn't enforce the sandboxes' NetworkPolicies: ${problem}. The runner probes again when they change, or when it restarts (see docs/kubernetes.md)`,
+        ),
+        { reason: "not_isolated" },
       );
     }
   }
@@ -983,11 +1020,20 @@ export function createKubernetesRunner({
   // A failed install in its init container (the agent without a claim) fails the run, with
   // the installer's output in the run's log (`onErr`), as a failed install does on Docker.
   async function started(name, onErr = () => {}) {
+    // Counted once per pod, however often it is followed.
+    const failed = (pod, reason) => {
+      asked.delete(name);
+      const uid = pod.metadata?.uid ?? name;
+      if (failedPods.has(uid)) return;
+      failedPods.add(uid);
+      metrics?.failedToStart(reason);
+    };
     for (;;) {
       const pod = await look(name);
       if (!pod) return false;
       const gated = failedGate(pod);
       if (gated !== null) {
+        failed(pod, "network_gate");
         const said = [];
         await readLog(name, { container: GATE_CONTAINER }, AbortSignal.timeout(WATCH_MS), (line) =>
           said.push(line),
@@ -1000,6 +1046,7 @@ export function createKubernetesRunner({
       }
       const code = failedInit(pod);
       if (code !== null) {
+        failed(pod, "agent_install");
         const agent = pod.metadata?.annotations?.[AGENT_INIT] ?? "its agent";
         await readLog(
           name,
@@ -1012,9 +1059,14 @@ export function createKubernetesRunner({
           `The sandbox couldn't start on the Kubernetes runner: installing its agent (${agent}) in its init container failed (exit ${code}); the installer's output is in the run's log. The operator can check that the install reaches its hosts through the egress proxy, or set KUBERNETES_AGENT_STORAGE_CLASS to install it once per version. Comment again to retry.`,
         );
       }
-      if (pod.status?.phase !== "Pending") return true;
+      if (pod.status?.phase !== "Pending") {
+        if (asked.has(name)) metrics?.started((now() - asked.get(name)) / 1000);
+        asked.delete(name);
+        return true;
+      }
       if (overdue(pod)) {
         const why = await whyPending(name, pod);
+        failed(pod, pendingFailure(pod, why));
         log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
         await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
         // Its gate gives up before this, saying what it still reached; unless the node's clock is
@@ -1086,7 +1138,9 @@ export function createKubernetesRunner({
   const ownedBy = (object) =>
     object?.metadata?.labels?.["deckhand.owner"] === owner["deckhand.owner"];
   async function remove(name, run) {
+    asked.delete(name);
     const found = await api.find(podPath(name));
+    failedPods.delete(found?.metadata?.uid);
     const runOfPod = found?.metadata?.annotations?.["deckhand.run"];
     const pod = ownedBy(found) && (!run || runOfPod === run) ? found : null;
     if (found && !pod) log(`Not removing the pod ${name}: not a sandbox of this deployment's`);
