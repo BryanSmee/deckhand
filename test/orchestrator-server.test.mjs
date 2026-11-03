@@ -407,6 +407,18 @@ async function fakeGitHub(files = {}) {
   };
 }
 
+// The runs' summaries, in the orchestrator's store (runlog.mjs, its file backend's state.json):
+// the first one's, or null.
+function summary(dir) {
+  try {
+    const { keys } = JSON.parse(readFileSync(join(dir, "store", "state.json"), "utf8"));
+    const key = Object.keys(keys).find((k) => k.startsWith("summaries/"));
+    return key ? keys[key].value : null;
+  } catch {
+    return null;
+  }
+}
+
 // The runs' logs, as the runner keeps them (its store's blobs, runner/logs.mjs): their texts, by
 // run id, their segments (`logs/<run>/<n>`) in order. Asked again until `ready(texts)` holds,
 // for one still on its way to the runner.
@@ -1575,11 +1587,7 @@ describe("listener", options, () => {
       /^Claude stopped with an error\.\n\n> The tests still fail\./,
     );
     // On its summary, and said in its log, after its end.
-    const summary = () => {
-      const file = readdirSync(join(dir, "logs")).find((f) => /-\d+\.json$/.test(f));
-      return file && JSON.parse(readFileSync(join(dir, "logs", file), "utf8"));
-    };
-    await until(() => summary()?.exitCode === 3, "the exit code");
+    await until(() => summary(dir)?.exitCode === 3, "the exit code");
     await until(
       () => [...runLogs(dir).values()][0]?.includes("Its sandbox exited with code 3"),
       "its note",
@@ -4725,7 +4733,7 @@ mounts:
 
   test("the dashboard shows a repo's tasks and logs to its own users, once they are known", async (t) => {
     const files = { ".deckhand.yaml": "users: [bob]\n" };
-    const { port, send, listener } = await listen(t, files, (dir, github) => {
+    const { dir, port, send, listener } = await listen(t, files, (dir, github) => {
       mkdirSync(join(dir, "logs"));
       const meta = { type: "listener", key: "org/repo#pr-3", repo: "org/repo", startedAt: 1000 };
       writeFileSync(join(dir, "logs", "org-repo-pr-3-1000.log"), `${JSON.stringify(meta)}\n`);
@@ -4747,6 +4755,12 @@ mounts:
       (await (await get("/api/state", session)).json()).tasks.map((task) => task.key);
     // The repo's users aren't known yet: ALLOWED_USERS decides.
     assert.deepEqual(await keys(), ["org/repo#pr-3"]);
+    // Its summary, made from its log, in the store (#618): none left in logs/.
+    assert.equal(summary(dir)?.id, "org-repo-pr-3-1000");
+    assert.deepEqual(
+      readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".json")),
+      [],
+    );
     const open = await get("/api/runs/org-repo-pr-3-1000/stream", session);
     assert.equal(open.status, 200);
     await open.body.cancel();
@@ -6527,11 +6541,7 @@ mounts:
     writeFileSync(join(dir, "go"), "");
     await ctx.listener.until("done (ok)");
     // Kept in its summary once it ended: the dashboard's after it.
-    const summary = await until(
-      () => readdirSync(join(dir, "logs")).find((f) => /-\d+\.json$/.test(f)),
-      "its summary",
-    );
-    const done = JSON.parse(readFileSync(join(dir, "logs", summary), "utf8"));
+    const done = await until(() => summary(dir), "its summary");
     assert.equal(done.branch, "issue-12-after");
   });
 

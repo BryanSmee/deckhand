@@ -628,8 +628,9 @@ Docker's own pools, so list those first and add yours after them, for example
 (the last one: 4096 networks of 16 addresses).
 
 Each run leaves its log in `logs/<run>.log` on the data volume (the agent's whole output, often
-a few MB), a summary beside it (`logs/<run>.json`, what the dashboard lists after a restart,
-so the orchestrator doesn't read the logs to start), and the broker keeps its screenshots (in blob
+a few MB), a summary in the orchestrator's store (`summaries/<run>`, what the dashboard lists
+after a restart or a handover, so the orchestrator doesn't read the logs to start: [The
+store](#the-store)), and the broker keeps its screenshots (in blob
 storage, or its store without it: [Blob storage](#blob-storage)). At start and then daily, the
 orchestrator removes those of runs older than `LOG_RETENTION_DAYS` (90 days by default), the
 screenshots through the broker, and they leave the dashboard. It keeps a run still going, and the latest run of a
@@ -1402,6 +1403,18 @@ is read with the queue and removed once the queue is written. Nothing to do, but
 - **Going back to an earlier release** loses the runs going then: it looks for their state in
   `logs/`, finds none, and closes their sandboxes' input. Roll back with no run going.
 
+### Upgrading: the runs' summaries in the store (#618)
+
+The dashboard's run history came from the runs' summaries in the orchestrator's volume
+(`logs/<run>.json`). They are in its store now (`summaries/<run>`, [The store](#the-store)), so
+a copy taking over on another node finds them there. Nothing to do: at its first start, the
+orchestrator writes those left in `logs/` to its store, then removes them (`Run summaries: <n>
+moved from /data/logs to the store` in its log). With the file store it takes a while for
+thousands (about 20 s for 3,000), once, before the dashboard lists the runs. A file that isn't a
+summary is logged (`Listing the run of <file>: not a run's summary`) and left in `logs/`, out of
+the history, as it was before; one the store didn't take stays for the next start. The run
+logs left there from before the runner service are moved as before.
+
 ### Upgrading: the paths from before the services are gone (#567)
 
 The orchestrator no longer answers sandboxes: its broker port (8081) and the `listener` name are
@@ -1709,8 +1722,8 @@ Deckhand's services ([services.md](services.md)) keep their state in a store, wh
 the orchestrator its queue, its lease and its fencing epoch, and the state that holds data alone
 (the titles, closed states and pull requests the dashboard shows, the dismissals, the run order,
 the onboarded repositories, the lanes' names, the issues' modes, the rebase attempts, the last
-dry runs, the reviewers requested), one key per item, so that a change writes only what changed
-(the rest of its state in `/data`, for now: #613);
+dry runs, the reviewers requested) and the runs' summaries, one key per item, so that a change
+writes only what changed (the rest of its state in `/data`, for now: #613);
 edge the deliveries it took, the sessions' epochs and the deliveries' stream the orchestrator
 reads.
 
@@ -1760,6 +1773,14 @@ its lease.
 
 On Kubernetes, `deploy/kubernetes/`'s `redis` component runs it this way, one user per service
 ([kubernetes.md](kubernetes.md#several-nodes)).
+
+**What the run history takes in it**: the orchestrator keeps each run's summary in its store
+(`summaries/<run>`, what the dashboard's history is rebuilt from), until `LOG_RETENTION_DAYS`
+(90 by default) removes it with the run's log. A summary is a few KB: the run's details, its
+final answer's first lines and the text of the comments it acted on (more for a long comment).
+So they take about a summary's size times the runs of those days: 50 runs a day for 90 days are
+4,500 summaries, some 20 MB of Redis's memory at 4 KB each. With `0` (forever), they grow with
+every run. With the file store, they are in its `state.json`, written whole at each change.
 
 Secrets never go in the store: the App's key, the signing key and the agents' credentials
 stay in their service's own secret or volume. A write holding one the service knows, a

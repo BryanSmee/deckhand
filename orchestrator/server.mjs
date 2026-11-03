@@ -92,7 +92,7 @@ import { createRepoApi, createRepoList } from "../listener/repos.mjs";
 import { createRestart, LIVE_PREFIX } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
 import { createReviews, stepsGoing } from "../listener/reviews.mjs";
-import { loadRuns, moveLogs, saveSummary } from "../listener/runlog.mjs";
+import { loadRuns, moveLogs, moveSummaries, saveSummary } from "../listener/runlog.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { createRunnerClient } from "../runner/client.mjs";
 import { createServicesHttp } from "../listener/services-http.mjs";
@@ -586,7 +586,8 @@ function publicUrl() {
 const { github, graphql } = createGitHub(() => ctx.app);
 
 // The logs this listener kept before the runner kept them go to it, while it goes on; the runs
-// are listed from their summaries (runlog.mjs).
+// are listed from their summaries in the store, where those a release before #618 kept in
+// logs/ go first (runlog.mjs).
 // The live runs' ids first, from their states in the store (restart.mjs): their logs aren't
 // summarized as ended ones.
 const liveIds = new Set();
@@ -595,7 +596,8 @@ const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds });
 ctx.logsMoving = moved.moving;
 // A log on its way there is read once it arrived (a digest, the dashboard's live view).
 ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
-ctx.runs = loadRuns(logDir, { log });
+await moveSummaries(logDir, store, { log, secrets: storeSecrets() });
+ctx.runs = await loadRuns(store, { log });
 for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 
 // The orchestrator's maps that hold data alone (#615), in the store one key per item
@@ -1248,7 +1250,7 @@ const runEvents = createRunEvents({
         return (file ??= runnerClient.logs.open(id, { size: null }));
       },
       // Once it has one: its end writes it, with this, or not yet.
-      save: () => record.finishedAt && saveSummary(logDir, record, log),
+      save: () => record.finishedAt && saveSummary(store, record, { log, secrets: storeSecrets() }),
     };
   },
   log,

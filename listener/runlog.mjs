@@ -1,7 +1,7 @@
 // Runs and their logs, for the dashboard: each run's log (its first line the listener's, then
 // the agent's raw output), kept by the runner service (#503, ../runner/logs.mjs), its summary
-// once it ended (logs/<run>.json, the orchestrator's), the list rebuilt from the summaries after
-// a restart, and the entries the dashboard shows for each line. The agent's lines are read
+// once it ended (`summaries/<run>` in the orchestrator's store, #618), the list rebuilt from the
+// summaries after a restart, and the entries the dashboard shows for each line. The agent's lines are read
 // through its normalize() (agents/), so a log keeps what the agent wrote.
 import {
   appendFileSync,
@@ -26,6 +26,7 @@ import { kindOf } from "./modes.mjs";
 import { NEEDS_INPUT, replyQuestions } from "./questions.mjs";
 import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import { partEnd, redact } from "../lib/redact.mjs";
+import { storable, values } from "../lib/store.mjs";
 
 // "ok", "needs-input" or "error" for an agent's `result` event (null: no result).
 export function outcome(result) {
@@ -131,30 +132,67 @@ export function phaseOf(current, events) {
 // A duration in minutes, to a tenth: what the dashboard, replies and digests show.
 export const minutes = (ms) => Math.round(ms / 6000) / 10;
 
-// Rebuilds the list after a restart, so the dashboard survives it: from the runs' summaries
-// (logs/<run>.json, the orchestrator's), as the logs are the runner's (#503). A run still live
-// (its state in the store, restart.mjs) has none yet: restoreRuns() lists it, and it gets one
-// when it ends. Newest first. A summary that can't be read is left out, logged: none stops the
-// start. The run states (.live.json) and queues (.queued.json) the release before kept here,
-// which restart.mjs moves to the store, aren't summaries.
-const NOT_SUMMARIES = [".live.json", ".queued.json"];
-export function loadRuns(logDir, { log = console.error } = {}) {
-  return readdirSync(logDir)
-    .filter((f) => f.endsWith(".json") && !NOT_SUMMARIES.some((end) => f.endsWith(end)))
-    .map((file) => {
-      const id = file.slice(0, -5);
-      const saved = readJson(join(logDir, file));
-      if (saved?.id === id) return saved;
-      log(`Listing the run of ${file}: not a run's summary`);
-      return null;
-    })
-    .filter(Boolean)
-    .sort((a, b) => b.startedAt - a.startedAt);
+// The runs' summaries in the orchestrator's store (#618), a key each: what the dashboard lists.
+export const SUMMARIES = "summaries/";
+export const summaryKey = (id) => `${SUMMARIES}${id}`;
+
+// Rebuilds the list at the lease's takeover, so the dashboard survives a handover or a crash:
+// from the runs' summaries in the store, as the logs are the runner's (#503). A run still live
+// (restart.mjs) has none yet: restoreRuns() lists it, and it gets one when it ends. Newest
+// first. A summary that isn't one is left out, logged: none stops the start.
+export async function loadRuns(store, { log = console.error } = {}) {
+  const runs = [];
+  for await (const [key, saved] of values(store, SUMMARIES)) {
+    if (saved?.id === key.slice(SUMMARIES.length)) runs.push(saved);
+    else log(`Listing the run of ${key}: not a run's summary`);
+  }
+  return runs.sort((a, b) => b.startedAt - a.startedAt);
 }
+
+// The summaries a release before #618 kept in logs/<run>.json (and those moveLogs() writes
+// there for the logs it finds): each written to the store, then removed. A key already there
+// wins: a start that stopped before removing the file wrote it, and the run may have changed
+// since. `secrets`: as saveSummary()'s. A file that isn't a summary stays, logged at each start,
+// as loadRuns() left it out; one the store didn't take stays for the next start. The run states
+// (.live.json) and queues (.queued.json) the release before kept beside them, which restart.mjs
+// moves to the store, aren't summaries. → how many moved.
+const NOT_SUMMARIES = [".live.json", ".queued.json"];
+export async function moveSummaries(logDir, store, { log = console.error, secrets = [] } = {}) {
+  const files = readdirSync(logDir).filter(
+    (f) => f.endsWith(".json") && !NOT_SUMMARIES.some((end) => f.endsWith(end)),
+  );
+  let count = 0;
+  async function move(file) {
+    const id = file.slice(0, -5);
+    const path = join(logDir, file);
+    const saved = readJson(path);
+    if (saved?.id !== id) {
+      log(`Listing the run of ${file}: not a run's summary, left in ${logDir}`);
+      return;
+    }
+    try {
+      await store.setIfAbsent(summaryKey(id), storable(saved, secrets));
+      rmSync(path, { force: true });
+      count++;
+    } catch (error) {
+      log(
+        `Run summaries: ${file} not moved to the store (${error.message}), again at the next start`,
+      );
+    }
+  }
+  // A few at a time: Redis answers them together.
+  for (let i = 0; i < files.length; i += MOVE_BATCH) {
+    await Promise.all(files.slice(i, i + MOVE_BATCH).map(move));
+  }
+  if (count) log(`Run summaries: ${count} moved from ${logDir} to the store`);
+  return count;
+}
+const MOVE_BATCH = 50;
 
 // The logs a listener kept itself (logs/<run>.log), before the runner kept them (#503): each
 // summarized now when its run has no summary (a log from before summaries, or of a listener
-// that died mid-run) and isn't live, so that loadRuns() lists it; then sent to the runner
+// that died mid-run) and isn't live, so that loadRuns() lists it (moveSummaries() takes it to
+// the store); then sent to the runner
 // (`logs`: ../runner/client.mjs's) and removed, while the listener goes on: a runner away
 // doesn't keep it from starting. A log whose summary can't be written stays here, as does one
 // the runner doesn't take, and is sent at the next start.
@@ -343,13 +381,15 @@ async function redactedCopy(path) {
 // A wait that keeps no process up: a listener stopping doesn't wait for a retry.
 const unrefSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
 
-export const summaryPath = (logDir, id) => join(logDir, `${id}.json`);
+// Where moveLogs() writes the summary of a log it finds, for moveSummaries() to move.
+const summaryPath = (logDir, id) => join(logDir, `${id}.json`);
 
-// What loadRuns() lists a finished run with. Written whole (lib/files.mjs), so a crash damages no
-// summary.
-export function saveSummary(logDir, record, log = console.error) {
+// What loadRuns() lists a finished run with, in the store: without the operator's `secrets`, a
+// GitHub token or a private key its text may hold (lib/store.mjs storable()), rather than
+// refused whole. A failure is logged: the run stays listed until the next start.
+export async function saveSummary(store, record, { log = console.error, secrets = [] } = {}) {
   try {
-    writeJsonAtomic(summaryPath(logDir, record.id), record);
+    await store.set(summaryKey(record.id), storable(record, secrets));
   } catch (error) {
     log(`${record.key}: saving the summary of ${record.id}: ${error.message}`);
   }

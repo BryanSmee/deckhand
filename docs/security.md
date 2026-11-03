@@ -2182,8 +2182,8 @@ own volume (`models-keys`): whoever reads both has the plans.
 Run logs, which the runner keeps in its own volume ([The runner's data](#the-runners-data)),
 have the operator's credentials, the run's tokens and its GitHub tokens redacted (see
 [The Claude credential](#the-claude-credential)): the orchestrator redacts each line before it
-sends it. Their summaries (`logs/<run>.json`, the orchestrator's) hold what the log's first line
-does, the run's comments included, and its screenshots' folder. Both, and the screenshots (at
+sends it. Their summaries (`summaries/<run>` in the orchestrator's store, a GitHub token or private key
+in their text redacted) hold what the log's first line does, the run's comments included, and its screenshots' folder. Both, and the screenshots (at
 the broker, which removes them when the orchestrator asks), go after `LOG_RETENTION_DAYS` (90
 by default).
 
@@ -2371,7 +2371,7 @@ A run's output can't stop the orchestrator, nor fill a data volume:
   run fails, with a note in its log and a reply saying why. The orchestrator's own lines (a few
   notes) are still written. A restarted orchestrator counts what the log already holds, and
   stops the sandbox again if it still runs.
-- At start, a log without its summary (`logs/<run>.json`) is read whole up to 64 MB, else
+- At start, a log left in the orchestrator's volume without its summary is read whole up to 64 MB, else
   only its first line and its last 4 MB. One that can't be read is left out of the run list,
   and logged: no log keeps the orchestrator from starting.
 

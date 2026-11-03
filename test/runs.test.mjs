@@ -5,6 +5,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
+import { openStore } from "../lib/store.mjs";
 import { createComments } from "../listener/comments.mjs";
 import { RunError } from "../listener/access.mjs";
 import { createRuns, reopenedMode } from "../listener/runs.mjs";
@@ -69,6 +70,8 @@ function setup(
     stopping: false,
     runs: [],
     tasks: new Map(),
+    // The runs' summaries (runlog.mjs saveSummary()).
+    store: openStore("memory:"),
     broker: {
       runOf: () => ({ tokens: new Set(tokens), scrubs }),
       secretsOf: () => [],

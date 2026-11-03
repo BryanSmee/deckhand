@@ -937,7 +937,7 @@ export function createRuns(ctx) {
     const revoked = ctx.broker.revoke(live.id);
     await Promise.race([revoked, new Promise((resolve) => setTimeout(resolve, 5000).unref())]);
     live.record.finishedAt = Date.now();
-    saveSummary(ctx.logDir, live.record, log);
+    await saveSummary(ctx.store, live.record, { log, secrets: ctx.storeSecrets?.() });
     // What it wrote last, at the runner before its state goes, and its last segment closed
     // there after it (../runner/logs.mjs).
     await logSent(live);
