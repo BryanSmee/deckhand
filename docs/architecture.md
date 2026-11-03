@@ -524,8 +524,11 @@ is cold only once closed.
 | a screenshot (`shots/…`)     | broker  | the run's folder's names and sizes (`shots:<token>`) | the file, written once as it is uploaded |
 | a run's inbox, CA, digest    | broker  | all of it: appended to while the run goes on         | none: they go with the run's end         |
 
-So the store holds one open segment per live run at most, however long the runs: the size
-Redis needs no longer grows with the history kept (`LOG_RETENTION_DAYS`). Without `BLOB_URL`,
+So the store holds one open segment per live run at most, however long the runs, and the
+closed one still being copied while a log is written faster than blob storage takes it: the
+size Redis needs no longer grows with the history kept (`LOG_RETENTION_DAYS`). A 500 MB log
+written as fast as the runner takes it, on Redis with Garage, kept 8 MB of it in Redis once its
+moves caught up, 12 MB at most meanwhile (`test/blob-acceptance.test.mjs`, #604). Without `BLOB_URL`,
 the store's own blobs stand in for blob storage (`storeBlobs()`, the same interface), and
 nothing moves: an install that never sets it works as before.
 
