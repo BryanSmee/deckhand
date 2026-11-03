@@ -9,9 +9,11 @@ import { test } from "node:test";
 import { drain } from "../lib/drain.mjs";
 import { issueServiceTokens, serviceGuard, signServiceToken } from "../lib/service-token.mjs";
 import { keyFolder, keyId, publishKey } from "../lib/tokens.mjs";
-import { createPolicies, DEFAULTS_MS } from "../listener/policies.mjs";
+import { createRegistry } from "../lib/metrics.mjs";
+import { createPolicies, DECISIONS, DEFAULTS_MS } from "../listener/policies.mjs";
 import { policyClient } from "../listener/policy-client.mjs";
-import { createEngine, opaErrors } from "../policy-service/engine.mjs";
+import { allowOnly, createEngine, opaErrors } from "../policy-service/engine.mjs";
+import { POLICIES, policyMetrics, resultOf } from "../policy-service/metrics.mjs";
 import { opaBinary, opaServer } from "../policy-service/opa.mjs";
 import {
   createPolicyService,
@@ -898,4 +900,88 @@ test("the capabilities: a service whose operator layer isn't the one read is ask
   mismatches = 2;
   const refused = await listener.capabilityRules("org/repo", "main", { run: {} });
   assert.match(refused.error, /^policy error: other operator policies/);
+});
+
+// A metric's samples in `registry`'s rendering, by their labels' text.
+async function samplesOf(registry, name) {
+  const found = {};
+  for (const line of (await registry.render()).split("\n")) {
+    const match = new RegExp(`^${name}(\\{[^}]*\\})? (\\S+)$`).exec(line);
+    if (match) found[match[1] ?? ""] = Number(match[2]);
+  }
+  return found;
+}
+
+test("its metrics: decisions by policy and result, opa's time on them, each load of the operator's policies", async (t) => {
+  const registry = createRegistry();
+  let operator = new Map([["size.rego", DENY]]);
+  const opa = fakeOpa({
+    answer: (files, doc) => evalResult(doc.pr?.additions > 400 ? ["too big"] : []),
+    checked: (files) =>
+      files["broken.rego"]
+        ? { code: 1, stdout: "", stderr: JSON.stringify({ errors: [{ message: "eof" }] }) }
+        : { code: 0, stdout: "" },
+  });
+  const engine = createEngine({
+    opa,
+    readOperator: () => operator,
+    readBuiltIn: () => allowOnly(),
+    tmp: tempDir(t),
+    metrics: policyMetrics(registry),
+  });
+  t.after(() => engine.stop());
+  const reloads = async (want) => {
+    while (
+      JSON.stringify(await samplesOf(registry, "deckhand_policy_reloads_total")) !==
+      JSON.stringify(want)
+    )
+      await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+  const merge = (additions) =>
+    evaluateOn(engine, { decision: "merge", input: { pr: { additions } } });
+  assert.equal((await merge(10)).error, null);
+  assert.deepEqual((await merge(500)).operator.denies, ["too big"]);
+  assert.match((await evaluateOn(engine, { decision: "no such", input: {} })).error, /no decision/);
+  const capabilities = await engine.evaluateCapabilities({
+    inputs: { a: { mode: "work" } },
+    operatorDigest: engine.operatorDigest(),
+  });
+  assert.ok(capabilities.results);
+  // The first load, checked once; the same files read again aren't another.
+  await reloads({ '{result="ok"}': 1 });
+  // An edit that doesn't compile: said, and every decision refused until it is fixed.
+  operator = new Map([...operator, ["broken.rego", "package deckhand\n"]]);
+  assert.ok((await merge(10)).error);
+  await reloads({ '{result="ok"}': 1, '{result="error"}': 1 });
+  operator = new Map([["size.rego", DENY]]);
+  assert.equal((await merge(10)).error, null);
+  await reloads({ '{result="ok"}': 2, '{result="error"}': 1 });
+
+  assert.deepEqual(await samplesOf(registry, "deckhand_policy_decisions_total"), {
+    '{policy="merge",result="allow"}': 2,
+    '{policy="merge",result="deny"}': 1,
+    // A name no decision has: counted as `other`, the label guard's.
+    '{policy="other",result="error"}': 1,
+    '{policy="capabilities",result="allow"}': 1,
+    '{policy="merge",result="error"}': 1,
+  });
+  // Timed where opa was asked: the merges that got an answer, and the capabilities.
+  const counts = await samplesOf(registry, "deckhand_policy_decision_seconds_count");
+  assert.deepEqual(counts, { '{policy="merge"}': 3, '{policy="capabilities"}': 1 });
+  const under = await samplesOf(registry, "deckhand_policy_decision_seconds_bucket");
+  assert.equal(under['{policy="merge",le="2"}'], 3);
+});
+
+test("its metrics: every decision the listener asks has its policy label", () => {
+  assert.deepEqual(POLICIES, [...DECISIONS, "capabilities"]);
+  assert.equal(resultOf({ error: "x" }), "error");
+  assert.equal(
+    resultOf({ operator: { allow: true, denies: [] }, repo: { allow: null, denies: [] } }),
+    "allow",
+  );
+  assert.equal(resultOf({ operator: { allow: false, denies: [] } }), "deny");
+  assert.equal(
+    resultOf({ operator: { allow: true, denies: [] }, repo: { allow: null, denies: ["no"] } }),
+    "deny",
+  );
 });
