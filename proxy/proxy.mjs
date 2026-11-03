@@ -496,8 +496,12 @@ export function createProxy({
     }
     if (req.url === "/health") return sendJson(res, healthAnswer(health));
     if (req.url === "/ready") {
-      res.writeHead(draining ? 503 : 200, { "content-type": "text/plain" });
-      return res.end(draining ? "draining\n" : "ready\n");
+      // Not before the broker answered it: its relayed calls need its service tokens, and a new
+      // pod's NetworkPolicies may let it out a few seconds after it starts (#391).
+      const waiting = !draining && brokerService?.ready?.() === false;
+      const status = draining ? "draining" : waiting ? "waiting for the broker" : "ready";
+      res.writeHead(draining || waiting ? 503 : 200, { "content-type": "text/plain" });
+      return res.end(`${status}\n`);
     }
     if (req.url === "/deckhand-ca.crt") {
       // Made again when near its end: each run asks for it.

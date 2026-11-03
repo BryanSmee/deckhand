@@ -104,6 +104,22 @@ test("an inbox: the runner's file copied from the offset the broker has, a broke
   assert.equal(await blob(), "one\ntwo\nthree\n");
 });
 
+test("ready: not before the broker answered, its keys read and its service tokens received (#391)", async (t) => {
+  const store = openStore("memory:");
+  const key = testKey();
+  let broker = await service(t, { store, key });
+  const { port } = broker;
+  // A new pod whose calls don't get out yet (k3s applies its NetworkPolicies a moment after it
+  // starts): its /ready waits.
+  await broker.stop();
+  const listener = remote(t, broker);
+  await listener.start();
+  assert.equal(listener.ready(), false);
+  broker = await service(t, { store, key, port });
+  await until(() => listener.ready());
+  assert.equal(listener.keys().has(key.kid), true);
+});
+
 test("the stream: a screenshot said, left at the broker, acknowledged", async (t) => {
   const broker = await service(t);
   const listener = remote(t, broker);

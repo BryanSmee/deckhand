@@ -776,3 +776,29 @@ test("the plans' login files are no secret: their paths are neither fingerprinte
   const text = "reads /data/credentials/agy-auth.json, mounted at /data/credentials:ro.";
   assert.equal(redact(text, prints), text);
 });
+
+test("/ready: out of rotation until the broker answered this copy (#391)", async (t) => {
+  const dir = tempDir(t, "deckhand-models-");
+  const env = { DATA_DIR: dir, ANTHROPIC_API_KEY: KEY };
+  let answered = false;
+  const models = createModels({
+    env,
+    config: loadConfig(env, undefined, { service: "models" }),
+    store: openStore("memory:"),
+    seal: loginSeal(Buffer.alloc(32, 7)),
+    salt: fingerprintSalt(Buffer.alloc(32, 7)),
+    keys: keyFolder(join(dir, "keys")),
+    broker: { keys: () => new Map(), unknownKey: async () => {}, ready: () => answered },
+    caller: createBrokerCaller({ url: "http://127.0.0.1:9" }),
+    bound: networkCallers("proxy=127.0.0.3/32"),
+    fetch: plainFetch,
+  });
+  await new Promise((resolve) => models.server.listen(0, "0.0.0.0", resolve));
+  t.after(() => (models.server.closeAllConnections(), models.server.close()));
+  const ready = async () =>
+    (await fetch(`http://127.0.0.1:${models.server.address().port}/ready`)).status;
+  // A new pod whose calls don't get out yet (k3s's NetworkPolicies, a moment after its start).
+  assert.equal(await ready(), 503);
+  answered = true;
+  assert.equal(await ready(), 200);
+});

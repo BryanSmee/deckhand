@@ -1,0 +1,77 @@
+# GitHub and Anthropic for the end-to-end check (run.sh), in a namespace of their own: each a
+# Deployment of fakes.mjs on 443 (HTTPS, with the certificate run.sh puts in the Secret
+# fakes-tls) and a Service on 443, the URLs the overlay gives the services.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deckhand-e2e
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: github
+  namespace: deckhand-e2e
+spec:
+  selector:
+    matchLabels: { app: fake-github }
+  template:
+    metadata:
+      labels: { app: fake-github }
+    spec:
+      containers:
+        - name: github
+          image: deckhand-e2e-fakes:e2e
+          imagePullPolicy: Never
+          args: [github]
+          ports:
+            - containerPort: 443
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
+      volumes:
+        - { name: tls, secret: { secretName: fakes-tls } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: github
+  namespace: deckhand-e2e
+spec:
+  selector: { app: fake-github }
+  ports:
+    - port: 443
+      targetPort: 443
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: anthropic
+  namespace: deckhand-e2e
+spec:
+  selector:
+    matchLabels: { app: fake-anthropic }
+  template:
+    metadata:
+      labels: { app: fake-anthropic }
+    spec:
+      containers:
+        - name: anthropic
+          image: deckhand-e2e-fakes:e2e
+          imagePullPolicy: Never
+          args: [anthropic]
+          ports:
+            - containerPort: 443
+          volumeMounts:
+            - { name: tls, mountPath: /tls, readOnly: true }
+      volumes:
+        - { name: tls, secret: { secretName: fakes-tls } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: anthropic
+  namespace: deckhand-e2e
+spec:
+  selector: { app: fake-anthropic }
+  ports:
+    - port: 443
+      targetPort: 443

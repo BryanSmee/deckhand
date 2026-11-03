@@ -1309,7 +1309,9 @@ service, the github and models services, edge and the runner, and the orchestrat
 
 The orchestrator's and the runner's check `/health`, which a copy waiting for the lease answers
 too (its `/ready` is 503 until it acts, [Two copies](#two-copies)), and edge's, which has no
-`/ready`; the others' check `/ready`, which turns 503 once a stopping copy drains. Docker
+`/ready`; the others' check `/ready`, which turns 503 once a stopping copy drains (and answers
+503 on the github and models services and the egress proxy until the broker has answered them,
+[services.md](services.md)). Docker
 doesn't restart an unhealthy container by itself: its logs say why.
 
 ## Updating

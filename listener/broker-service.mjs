@@ -353,6 +353,9 @@ export function createBrokerService({
     // The same, for the service tokens it signs (services-http.mjs).
     serviceKeys: () => keys,
     unknownKey,
+    // Whether the broker answered this service: its keys read, and its caller's service tokens
+    // received (lib/broker-client.mjs ready()). A service's /ready waits for it.
+    ready: () => keys.size > 0 && (caller.ready?.() ?? true),
     async start() {
       caller.start();
       await refreshKeys();

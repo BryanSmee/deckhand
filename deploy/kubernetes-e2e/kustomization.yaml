@@ -1,0 +1,74 @@
+# The end-to-end check's overlay (run.sh): the base at this checkout's images (tag e2e, loaded on
+# the nodes, never pulled), GitHub and Anthropic replaced by the fakes (fakes.yaml), and settings
+# that make a run quick. run.sh sets the API server's address once applied, and makes the CA
+# the services trust the fakes' certificate with (the ConfigMap e2e-ca) beforehand.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../kubernetes
+  - fakes.yaml
+
+images:
+  - { name: ghcr.io/bryansmee/deckhand-edge, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-orchestrator, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-runner, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-broker, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-github, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-models, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-policy, newTag: e2e }
+  - { name: ghcr.io/bryansmee/deckhand-egress, newTag: e2e }
+
+configMapGenerator:
+  - name: deckhand-env
+    namespace: deckhand
+    behavior: merge
+    literals:
+      - SANDBOX_IMAGE=ghcr.io/bryansmee/deckhand-sandbox:e2e
+      - GITHUB_URL=https://github.deckhand-e2e.svc.cluster.local
+      - GITHUB_API=https://github.deckhand-e2e.svc.cluster.local/api/v3
+      - ANTHROPIC_BASE_URL=https://anthropic.deckhand-e2e.svc.cluster.local
+      - DEBOUNCE_MS=1000
+  - name: deckhand-server
+    namespace: deckhand
+    behavior: replace
+    files:
+      - config.yaml=server/e2e.yaml
+      - server/default.yaml
+
+patches:
+  # Every namespace this check's, and the broker's ClusterRoleBinding, which run.sh asks before it
+  # touches one, and deletes at the end: never a real install's.
+  - target: { kind: Namespace }
+    patch: |
+      apiVersion: v1
+      kind: Namespace
+      metadata: { name: any, labels: { deckhand.e2e: "true" } }
+  - target: { kind: ClusterRoleBinding }
+    patch: |
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: ClusterRoleBinding
+      metadata: { name: any, labels: { deckhand.e2e: "true" } }
+  # Edge and the github service take GitHub's addresses from their own environment.
+  - target: { kind: Deployment, namespace: deckhand, name: edge|github }
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: GITHUB_URL, value: "https://github.deckhand-e2e.svc.cluster.local" }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: GITHUB_API, value: "https://github.deckhand-e2e.svc.cluster.local/api/v3" }
+  # The services that call GitHub or Anthropic trust the fakes' CA (Node's fetch, and git's).
+  - target: { kind: Deployment, namespace: deckhand, name: edge|github|models }
+    patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: NODE_EXTRA_CA_CERTS, value: /etc/e2e-ca/ca.crt }
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value: { name: GIT_SSL_CAINFO, value: /etc/e2e-ca/ca.crt }
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value: { name: e2e-ca, mountPath: /etc/e2e-ca, readOnly: true }
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value: { name: e2e-ca, configMap: { name: e2e-ca } }

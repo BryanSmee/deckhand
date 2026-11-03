@@ -107,7 +107,11 @@ page (#560), with the same JSON (`lib/health.mjs`):
 and the runner `active` (whether this copy holds its lease), as before; nothing else, ever: the
 answer needs no token. Edge answers it on its internal port (its public `/health` stays a plain
 `ok`), the egress proxy beside `/ready`, the policy service in JSON now (its status unchanged).
-`/ready` is the readiness probe's: `503` once a service drains, or on a copy waiting for its lease.
+`/ready` is the readiness probe's: `503` once a service drains, or on a copy waiting for its lease,
+and on the github and models services and the egress proxy until the broker has answered them
+(the github and models services its keys and their service tokens, the proxy its service tokens): a new pod's calls may not get out for a few seconds after it
+starts (k3s's kube-router applies its NetworkPolicies then), and the calls it took meanwhile would
+fail (#391).
 
 The orchestrator asks each one it has a URL for, at most every 10 s, and the dashboard shows
 what it found in Settings › Server: the diagram above, each service green (`up`), blue
