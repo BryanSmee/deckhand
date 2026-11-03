@@ -9,12 +9,15 @@
 //                               readiness (503 once draining)
 //
 //   the orchestrator's: the live runs (GET /runs, PUT and DELETE /runs/:id), the `runs` stream
-//   (GET /events, POST /events/ack), the screenshots it copies (GET and DELETE /shots/:folder/:name), and a run's
+//   (GET /events, POST /events/ack), the screenshots it kept before the broker did, moved here
+//   at its start (PUT /shots/:folder/:name), those of a run retention removes (DELETE
+//   /shots/:folder), and a run's
 //   first tokens (POST /runs/:id/tokens), with the claims it decided. Each of its calls but a
 //   GET carries its fencing epoch (../lib/fence.mjs, #506): one older than the newest seen is
 //   refused (409), so a copy that lost its lease ends no run and gets no token signed;
 //   the runner's: a run's inbox and files (POST /runs/:id/inbox, PUT /runs/:id/files/:name);
 //   the models service's: whether a run still goes, and its agent's provider (GET /runs/:id);
+//   edge's: a screenshot, which it serves to anyone (GET /shots/:folder/:name, #609);
 //   the sandboxes', through the egress proxy (#511), which vouches for the network or pod they
 //   came from (`x-deckhand-sandbox`, as the listener's egress policy told it) and passes their
 //   run token on in `x-deckhand-run-token`: renewal (POST /run/token), the inbox (GET
@@ -26,6 +29,7 @@ import { readBody, readJsonBody, Refused, sendJson } from "../lib/http.mjs";
 import { createFence } from "../lib/fence.mjs";
 import { healthAnswer, healthInfo } from "../lib/health.mjs";
 import { issueServiceTokens, serviceGuard } from "../lib/service-token.mjs";
+import { IMAGE_TYPES, SHOT_NAME } from "../lib/shots.mjs";
 import { FILES } from "./files.mjs";
 import { runFields, STREAM } from "./runs.mjs";
 
@@ -52,8 +56,12 @@ export const ROUTES = {
   "PUT /runs/:id/files/:name": RUNNER,
   "GET /events": ["orchestrator"],
   "POST /events/ack": ["orchestrator"],
-  "GET /shots/:folder/:name": ["orchestrator"],
+  // Edge serves them (#609). The orchestrator's GET and DELETE of one are the release before's,
+  // which copied them away: kept through this update, its DELETE deleting nothing now.
+  "GET /shots/:folder/:name": ["edge", "orchestrator"],
+  "PUT /shots/:folder/:name": ["orchestrator"],
   "DELETE /shots/:folder/:name": ["orchestrator"],
+  "DELETE /shots/:folder": ["orchestrator"],
   "POST /run/token": SANDBOX,
   "GET /run/inbox": SANDBOX,
   "GET /run/ca": SANDBOX,
@@ -214,14 +222,25 @@ export function createBrokerHandler({
       const acked = await store.ack(STREAM, CONSUMER, Array.isArray(ids) ? ids.map(String) : []);
       return sendJson(res, { acked });
     }
+    const folder = /^\/shots\/([^/]+)$/.exec(path)?.[1];
+    if (req.method === "DELETE" && folder) {
+      return sendJson(res, { deleted: await files.removeShots(decoded(folder)) });
+    }
     const shot = /^\/shots\/([^/]+)\/([^/]+)$/.exec(path);
-    if (shot && (req.method === "GET" || req.method === "DELETE")) {
+    if (shot) {
       const [folder, name] = shot.slice(1).map(decoded);
-      if (req.method === "DELETE")
-        return sendJson(res, { deleted: await files.deleteShot(folder, name) });
-      const data = await files.getShot(folder, name);
-      if (data === null) return sendJson(res, { message: "no such screenshot" }, 404);
-      return res.writeHead(200, { "content-type": "application/octet-stream" }).end(data);
+      if (req.method === "PUT") {
+        const { status, message } = await files.moveShot(req, folder, name);
+        return status === 204 ? res.writeHead(204).end() : sendJson(res, { message }, status);
+      }
+      // The release before's, once it copied one: it stays here, where edge serves it from.
+      if (req.method === "DELETE") return sendJson(res, { deleted: false });
+      if (req.method === "GET") {
+        const data = await files.getShot(folder, name);
+        if (data === null) return sendJson(res, { message: "no such screenshot" }, 404);
+        const type = IMAGE_TYPES[SHOT_NAME.exec(name)[1]];
+        return res.writeHead(200, { "content-type": type }).end(data);
+      }
     }
     sendJson(res, { message: "not found" }, 404);
   }

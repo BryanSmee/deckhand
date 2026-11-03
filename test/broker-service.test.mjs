@@ -6,15 +6,17 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { Agent, request } from "node:http";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import { accountCallers, createCallers } from "../broker/callers.mjs";
 import { createFiles, wholeLines } from "../broker/files.mjs";
 import { RENEW_GRACE_MS } from "../broker/runs.mjs";
 import { createBroker } from "../broker/server.mjs";
 import { createSeal } from "../broker/seal.mjs";
+import { openBlobs } from "../lib/blobs.mjs";
 import { MAX_SHOT, MAX_SHOTS } from "../lib/shots.mjs";
 import { openStore } from "../lib/store.mjs";
 import { TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
-import { assertHealth, resetsUnread, testKey } from "./helpers.mjs";
+import { assertHealth, resetsUnread, tempDir, testKey } from "./helpers.mjs";
 
 // Each caller reaches the broker at an address of its own, as over a network of its own with
 // Docker: the broker's address a call arrives at tells it apart (SERVICE_NETWORKS).
@@ -33,9 +35,10 @@ const FOLDER = "0123456789abcdef01234567";
 const PNG = Buffer.from("89504e470d0a1a0a", "hex");
 
 // `copies` brokers on one store, listening on every loopback address, closed after `t`.
+// `blobs(store)`: their blob storage (lib/blobs.mjs; the store's own blobs by default).
 async function brokers(
   t,
-  { copies = 1, clock = { now: 1_900_000_000_000 }, key = testKey() } = {},
+  { copies = 1, clock = { now: 1_900_000_000_000 }, key = testKey(), blobs = () => undefined } = {},
 ) {
   const store = openStore("memory:", { now: () => clock.now });
   const callers = createCallers({ networks: NETWORKS });
@@ -43,6 +46,7 @@ async function brokers(
   for (let i = 0; i < copies; i++) {
     const broker = createBroker({
       store,
+      blobs: blobs(store),
       key,
       callers,
       now: () => clock.now,
@@ -82,7 +86,8 @@ function call(broker, as, method, path, { body, headers = {} } = {}) {
           } catch {
             // Not JSON.
           }
-          resolve({ status: res.statusCode, text, json, body: Buffer.concat(chunks) });
+          const body = Buffer.concat(chunks);
+          resolve({ status: res.statusCode, headers: res.headers, text, json, body });
         });
       },
     );
@@ -371,19 +376,21 @@ test("the CA and digest: the run's own, put before its sandbox starts", async (t
   assert.equal((await sandboxCall(proxy, "GET", "/run/ca", "", "net-a")).status, 401);
 });
 
-test("screenshots: into the run's folder, images only, capped, then on the stream for the orchestrator", async (t) => {
-  const { copies } = await brokers(t);
+test("screenshots: into the run's folder, images only, capped, said on the stream, served to edge", async (t) => {
+  const { copies, store } = await brokers(t);
   const [broker] = copies;
   const orchestrator = await client(broker, "orchestrator");
   const proxy = await client(broker, "proxy");
+  const edge = await client(broker, "edge");
   const { token } = await started(orchestrator);
   const put = (name, body) =>
     sandboxCall(proxy, "PUT", `/run/shots/${name}`, token, "net-a", { body });
-  assert.equal((await put("page.png", Buffer.concat([PNG, Buffer.from("x")]))).status, 204);
+  const image = Buffer.concat([PNG, Buffer.from("x")]);
+  assert.equal((await put("page.png", image)).status, 204);
   assert.equal((await put("page.gif", PNG)).status, 400);
   assert.equal((await put("fake.png", Buffer.from("GIF89a"))).status, 415);
   assert.ok(MAX_SHOTS >= MAX_SHOT);
-  // The orchestrator reads the stream, copies the screenshot, deletes it here, acknowledges.
+  // The stream says it to the orchestrator, which copies nothing (#609).
   const { events } = (await orchestrator("GET", "/events")).json;
   assert.deepEqual(
     events.map(({ event }) => ({ ...event, at: 0 })),
@@ -392,25 +399,87 @@ test("screenshots: into the run's folder, images only, capped, then on the strea
       { type: "shot", run: "run-a", folder: FOLDER, name: "page.png", size: PNG.length + 1, at: 0 },
     ],
   );
-  const copy = await orchestrator("GET", `/shots/${FOLDER}/page.png`);
-  assert.deepEqual(copy.body, Buffer.concat([PNG, Buffer.from("x")]));
-  assert.equal((await orchestrator("GET", `/shots/${FOLDER}/../app.json`)).status, 400);
+  // Without BLOB_URL, in the store's own blobs.
+  assert.deepEqual(await store.readBlob(`shots/${FOLDER}/page.png`), image);
+  // Edge serves it to anyone; the proxy (a sandbox) can't read it back.
+  const served = await edge("GET", `/shots/${FOLDER}/page.png`);
+  assert.equal(served.status, 200);
+  assert.deepEqual(served.body, image);
+  assert.equal((await edge("GET", `/shots/${FOLDER}/none.png`)).status, 404);
+  assert.equal((await edge("GET", `/shots/${FOLDER}/../app.json`)).status, 400);
   assert.equal((await proxy("GET", `/shots/${FOLDER}/page.png`)).status, 403);
+  // Edge only reads: the orchestrator alone moves and removes them.
+  assert.equal((await edge("DELETE", `/shots/${FOLDER}`)).status, 403);
+  assert.equal((await edge("PUT", `/shots/${FOLDER}/other.png`, { body: PNG })).status, 403);
+  // The orchestrator of the release before deletes each one it copied: nothing is deleted now.
   assert.deepEqual((await orchestrator("DELETE", `/shots/${FOLDER}/page.png`)).json, {
-    deleted: true,
+    deleted: false,
   });
-  assert.equal((await orchestrator("GET", `/shots/${FOLDER}/page.png`)).status, 404);
+  // The run's end leaves them: replies link to them.
+  assert.equal((await orchestrator("DELETE", "/runs/run-a")).status, 200);
+  assert.equal((await edge("GET", `/shots/${FOLDER}/page.png`)).status, 200);
   const acked = await orchestrator("POST", "/events/ack", {
     body: { ids: events.map((e) => e.id) },
   });
   assert.deepEqual(acked.json, { acked: 2 });
-  assert.deepEqual((await orchestrator("GET", "/events")).json, { events: [] });
   // A run without a folder (research) has none.
   const research = await started(orchestrator, "run-r", { sandbox: "net-r", shots: null });
   const refused = await sandboxCall(proxy, "PUT", "/run/shots/page.png", research.token, "net-r", {
     body: PNG,
   });
   assert.equal(refused.status, 403);
+});
+
+test("screenshots: in blob storage, with the store's left from the release before; removed with their run", async (t) => {
+  const dir = tempDir(t);
+  const { copies, store } = await brokers(t, { blobs: () => openBlobs(pathToFileURL(dir).href) });
+  const [broker] = copies;
+  const orchestrator = await client(broker, "orchestrator", { epoch: 2 });
+  const proxy = await client(broker, "proxy");
+  const edge = await client(broker, "edge");
+  const { token } = await started(orchestrator);
+  const image = Buffer.concat([PNG, Buffer.from("new")]);
+  const put = await sandboxCall(proxy, "PUT", "/run/shots/page.png", token, "net-a", {
+    body: image,
+  });
+  assert.equal(put.status, 204);
+  // Written once into blob storage, not the store.
+  const blobs = openBlobs(pathToFileURL(dir).href);
+  assert.deepEqual(await blobs.read(`shots/${FOLDER}/page.png`), image);
+  assert.equal(await store.readBlob(`shots/${FOLDER}/page.png`), null);
+  // One uploaded to the release before, which the orchestrator hadn't copied yet: still served.
+  const legacy = Buffer.concat([PNG, Buffer.from("old")]);
+  await store.putBlob(`shot:${FOLDER}/before.png`, legacy);
+  const sizes = await store.get(`shots:${FOLDER}`);
+  await store.set(`shots:${FOLDER}`, { ...sizes, "before.png": legacy.length });
+  // Moved here by the orchestrator, which kept one itself (moveShots()): checked as an upload.
+  const moved = Buffer.concat([PNG, Buffer.from("kept")]);
+  const move = (name, body) => orchestrator("PUT", `/shots/${FOLDER}/${name}`, { body });
+  assert.equal((await move("kept.png", moved)).status, 204);
+  assert.equal((await move("kept.txt", moved)).status, 400);
+  assert.equal((await move("fake.png", Buffer.from("GIF89a"))).status, 415);
+  assert.equal((await move("big.png", Buffer.alloc(MAX_SHOT + 1))).status, 413);
+  // From a copy that lost the orchestrator's lease (an older epoch): refused, as its other writes.
+  const stale = await client(broker, "orchestrator", { epoch: 1 });
+  assert.equal((await stale("PUT", `/shots/${FOLDER}/other.png`, { body: moved })).status, 409);
+  for (const [name, body] of [
+    ["page.png", image],
+    ["before.png", legacy],
+    ["kept.png", moved],
+  ]) {
+    const served = await edge("GET", `/shots/${FOLDER}/${name}`);
+    assert.deepEqual([served.status, served.headers["content-type"]], [200, "image/png"], name);
+    assert.deepEqual(served.body, body, name);
+  }
+  // Retention: every one of the folder goes, wherever it was.
+  assert.deepEqual((await orchestrator("DELETE", `/shots/${FOLDER}`)).json, { deleted: 3 });
+  for (const name of ["page.png", "before.png", "kept.png"]) {
+    assert.equal((await edge("GET", `/shots/${FOLDER}/${name}`)).status, 404, name);
+  }
+  assert.equal(await blobs.read(`shots/${FOLDER}/page.png`), null);
+  assert.equal(await store.readBlob(`shot:${FOLDER}/before.png`), null);
+  assert.equal(await store.get(`shots:${FOLDER}`), null);
+  assert.deepEqual((await orchestrator("DELETE", `/shots/${FOLDER}`)).json, { deleted: 0 });
 });
 
 test("screenshots: one over the cap is refused unread", { skip: resetsUnread }, async (t) => {
@@ -429,7 +498,7 @@ test("screenshots: one over the cap is refused unread", { skip: resetsUnread }, 
   );
 });
 
-test("screenshots: the run's total is capped, whatever the orchestrator copied away", async (t) => {
+test("screenshots: the run's total is capped", async (t) => {
   const { copies } = await brokers(t);
   const [broker] = copies;
   const orchestrator = await client(broker, "orchestrator");
@@ -442,7 +511,6 @@ test("screenshots: the run's total is capped, whatever the orchestrator copied a
       body: image,
     });
     assert.equal(res.status, 204);
-    await orchestrator("DELETE", `/shots/${FOLDER}/p${i}.png`);
   }
   const over = await sandboxCall(proxy, "PUT", "/run/shots/more.png", token, "net-a", {
     body: PNG,

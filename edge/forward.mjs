@@ -1,4 +1,4 @@
-// The dashboard's API, /status and the screenshots, passed on to the orchestrator (#506) on its
+// The dashboard's API and /status, passed on to the orchestrator (#506) on its
 // services port, under /edge/, with edge's service token and who asks: the signed-in user
 // (USER_HEADER), or a local caller of /status (LOCAL_HEADER). The orchestrator takes those
 // headers from edge alone (its token, on their network). Its answer comes back as it streams

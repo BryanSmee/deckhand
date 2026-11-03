@@ -1,7 +1,7 @@
 // Edge's entry point (#506): the only service the internet reaches. GitHub's webhooks (their HMAC
 // checked, each taken once, put on the stream the orchestrator reads), /setup, sign-in and sessions
-// (MCP clients' too, oauth.mjs), the dashboard's files, and its API, /status and the screenshots,
-// which the orchestrator answers (forward.mjs). It holds the webhook secret, the session key and
+// (MCP clients' too, oauth.mjs), the dashboard's files, its API and /status, which the
+// orchestrator answers (forward.mjs), and the screenshots, which the broker does (shots.mjs). It holds the webhook secret, the session key and
 // the OAuth client's, nothing else: no App key (the github service's), no agent credential (the
 // models service's), no Docker socket (the runner's). Two copies may run side by side on one store,
 // both active: either takes any request, the deliveries are taken once, a sign-out ends the login's
@@ -42,6 +42,7 @@ import { serverInfo } from "../listener/status.mjs";
 import { createEdgeApp } from "./app.mjs";
 import { createForwarder } from "./forward.mjs";
 import { createEdgeHttp, takenDelivery } from "./http.mjs";
+import { createShots } from "./shots.mjs";
 import { createEdgeInternal } from "./internal.mjs";
 import { createOAuth } from "./oauth.mjs";
 
@@ -68,8 +69,8 @@ try {
 const graceMs = Number(env.DRAIN_SECONDS) > 0 ? Number(env.DRAIN_SECONDS) * 1000 : 25_000;
 const dataDir = config.dataDir;
 
-// Its service tokens, for the orchestrator and the github service, from the broker, whose keys
-// the orchestrator's tokens are checked with.
+// Its service tokens, for the orchestrator, the github service and the broker (the screenshots),
+// from the broker, whose keys the orchestrator's tokens are checked with.
 const brokerCaller = createBrokerCaller({
   url: config.brokerServiceUrl,
   service: "edge",
@@ -149,6 +150,9 @@ const orchestrator = createForwarder({
   log,
 });
 
+// The screenshots, from the broker (#609).
+const shots = createShots({ caller: brokerCaller, log });
+
 let stopping = false;
 const http = createEdgeHttp({
   config,
@@ -158,6 +162,7 @@ const http = createEdgeHttp({
   oauth,
   store,
   orchestrator,
+  shots,
   redeliveries,
   dashboardDir: env.DASHBOARD_DIR || fileURLToPath(new URL("../dashboard/dist", import.meta.url)),
   secrets,

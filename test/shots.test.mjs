@@ -1,88 +1,63 @@
-// /shots serves a run's screenshots, from a folder the sandbox writes: only its regular files,
-// never what a link there points to.
+// GET /shots/<folder>/<file>, as edge serves it (edge/shots.mjs, #609): passed on to the broker,
+// which keeps the screenshots, for the names a sandbox may upload only, as images.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { linkSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { createServer } from "node:http";
-import { after, before, test } from "node:test";
-import { createHttp } from "../listener/http.mjs";
-import { needsBash, tempDir } from "./helpers.mjs";
+import { test } from "node:test";
+import { createShots } from "../edge/shots.mjs";
+import { serve } from "./helpers.mjs";
 
 const folder = "0123456789abcdef01234567";
-let base, server;
-const logged = [];
 
-before(async () => {
-  const dataDir = tempDir(null, "deckhand-shots-");
-  const shotsDir = join(dataDir, "shots");
-  const dir = join(shotsDir, folder);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dataDir, "app.json"), '{"privateKey":"secret"}');
-  writeFileSync(join(dir, "page.png"), "PNG");
-  symlinkSync(join(dataDir, "app.json"), join(dir, "absolute.png"));
-  symlinkSync("../../app.json", join(dir, "relative.png"));
-  symlinkSync("page.png", join(dir, "sibling.png"));
-  symlinkSync(dataDir, join(dir, "dir.png"));
-  linkSync(join(dataDir, "app.json"), join(dir, "hard.png"));
-  // Not on Windows, which has no FIFO (its test skips there).
-  if (!needsBash) execFileSync("mkfifo", [join(dir, "fifo.png")]);
-  // The folder itself as a link: the run can't do that, but nothing should follow it either.
-  symlinkSync(dir, join(shotsDir, "fedcba9876543210fedcba98"));
-
-  const ctx = {
-    config: { port: 0 },
-    log: (line) => logged.push(line),
-    skip: () => {},
-    tasks: new Map(),
-    shotsDir,
+// Edge's screenshots over a fake broker: `answer(path)` → { status, body } or a throw.
+async function edge(t, answer) {
+  const asked = [];
+  const logged = [];
+  const caller = {
+    call: async (method, path) => {
+      asked.push(`${method} ${path}`);
+      return answer(path);
+    },
   };
-  // As edge passes them on (../edge/forward.mjs): /shots/ is public, /status a local caller's.
-  const http = createHttp(ctx);
-  server = createServer((req, res) => http.handle(req, res, { local: true }));
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  base = `http://127.0.0.1:${server.address().port}/shots`;
-});
+  const shots = createShots({ caller, log: (line) => logged.push(line) });
+  const { url } = await serve(t, (req, res) => shots.serve(req, res));
+  return { get: (path) => fetch(`${url}/shots/${path}`), asked, logged };
+}
 
-after(() => server.close());
-
-test("serves a run's regular image files", async () => {
-  const res = await fetch(`${base}/${folder}/page.png`);
+test("a screenshot from the broker, as an image of its type, cached for good", async (t) => {
+  const { get, asked } = await edge(t, () => ({ status: 200, body: Buffer.from("PNG") }));
+  const res = await get(`${folder}/page.png`);
   assert.equal(res.status, 200);
   assert.equal(res.headers.get("content-type"), "image/png");
+  assert.equal(res.headers.get("cache-control"), "public, max-age=31536000, immutable");
   assert.equal(await res.text(), "PNG");
+  assert.equal((await get(`${folder}/photo.jpg?v=2`)).headers.get("content-type"), "image/jpeg");
+  assert.deepEqual(asked, [`GET /shots/${folder}/page.png`, `GET /shots/${folder}/photo.jpg`]);
 });
 
-test("a link in a run's folder is a 404, wherever it points", async () => {
-  for (const name of ["absolute.png", "relative.png", "sibling.png", "dir.png", "hard.png"]) {
-    const res = await fetch(`${base}/${folder}/${name}`);
-    assert.equal(res.status, 404, name);
-    assert.doesNotMatch(await res.text(), /secret/, name);
+test("other names are a 404 that never reaches the broker", async (t) => {
+  const { get, asked } = await edge(t, () => ({ status: 200, body: Buffer.from("PNG") }));
+  for (const path of [`${folder}/page.txt`, "nothex/page.png", `${folder}/a/page.png`, folder]) {
+    assert.equal((await get(path)).status, 404, path);
   }
-  const res = await fetch(`${base}/fedcba9876543210fedcba98/page.png`);
-  assert.equal(res.status, 404);
+  assert.deepEqual(asked, []);
 });
 
-// A blocking open would wait for a writer, with the whole orchestrator (a regression hangs here).
-test(
-  "a FIFO in a run's folder is a 404, and doesn't block the orchestrator",
-  { skip: needsBash },
-  async () => {
-    assert.equal((await fetch(`${base}/${folder}/fifo.png`)).status, 404);
-  },
-);
-
-test("missing files and other names are a 404", async () => {
-  for (const path of [`${folder}/none.png`, `${folder}/page.txt`, "nothex/page.png"]) {
-    assert.equal((await fetch(`${base}/${path}`)).status, 404, path);
-  }
-});
-
-// A route that throws (here: this orchestrator has no status) answers 500 and leaves the
-// orchestrator up, its error logged.
-test("an unexpected throw answers 500, and the orchestrator keeps serving", async () => {
-  const res = await fetch(base.replace(/\/shots$/, "/status"));
-  assert.equal(res.status, 500);
-  assert.ok(logged.some((line) => line.startsWith("GET /status: TypeError")));
-  assert.equal((await fetch(`${base}/${folder}/page.png`)).status, 200);
+test("one the broker hasn't is a 404; a broker that fails or is away, not the image", async (t) => {
+  const answers = {
+    [`/shots/${folder}/none.png`]: () => ({ status: 404, body: Buffer.from("{}") }),
+    [`/shots/${folder}/failed.png`]: () => ({ status: 500, body: Buffer.from("secret") }),
+    [`/shots/${folder}/away.png`]: () => {
+      throw new Error("connect ECONNREFUSED");
+    },
+  };
+  const { get, logged } = await edge(t, (path) => answers[path]());
+  assert.equal((await get(`${folder}/none.png`)).status, 404);
+  const failed = await get(`${folder}/failed.png`);
+  assert.equal(failed.status, 502);
+  assert.equal(await failed.text(), "");
+  const away = await get(`${folder}/away.png`);
+  assert.deepEqual([away.status, away.headers.get("retry-after")], [503, "5"]);
+  assert.deepEqual(logged, [
+    "The broker: a screenshot, 500",
+    "The broker: a screenshot (connect ECONNREFUSED)",
+  ]);
 });

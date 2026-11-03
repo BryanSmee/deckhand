@@ -8,9 +8,12 @@
 //     ../sandbox/deckhand-inbox): a long poll that goes to either copy gets every line once;
 //   - the egress proxy's CA and the run's digest, put once before the sandbox starts, fetched
 //     once at its start;
-//   - its screenshots (PUT /run/shots/<file>), each one on the `runs` stream for the
-//     orchestrator, which copies it into the folder GET /shots/<folder>/ serves, then deletes it
-//     here. Their sizes stay counted against the run's cap.
+//   - its screenshots (PUT /run/shots/<file>), written once into blob storage (#609,
+//     ../lib/blobs.mjs: the store's own blobs without BLOB_URL), served from there (GET
+//     /shots/<folder>/<file>, which edge passes on), and each one said on the `runs` stream. A
+//     folder's names and sizes stay in the store (shotsKey()): the run's cap, and what retention
+//     deletes once the orchestrator asks (DELETE /shots/<folder>), as blob storage lists nothing.
+import { storeBlobs } from "../lib/blobs.mjs";
 import { isImage, MAX_SHOT, MAX_SHOTS, readCapped, SHOT_FOLDER, SHOT_NAME } from "../lib/shots.mjs";
 
 // The most one inbox read answers: whole lines only, so a longer one comes alone.
@@ -26,7 +29,11 @@ export const FILES = ["ca", "digest"];
 
 const inboxKey = (id) => `inbox:${id}`;
 const fileKey = (id, name) => `file:${id}:${name}`;
-const shotKey = (folder, name) => `shot:${folder}/${name}`;
+// A screenshot in blob storage; where the release before kept it in the store, until the
+// orchestrator copied it away (one uploaded during the update may still be there).
+const shotKey = (folder, name) => `shots/${folder}/${name}`;
+const legacyShotKey = (folder, name) => `shot:${folder}/${name}`;
+// A folder's names → sizes: kept as long as its screenshots are.
 const sizesKey = (folder) => `shots:${folder}`;
 
 const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref?.());
@@ -40,8 +47,15 @@ export function wholeLines(data) {
   return data.subarray(0, end + 1);
 }
 
-// `store`: lib/store.mjs's; `runs`: runs.mjs's, for the screenshots' events.
-export function createFiles({ store, runs, now = Date.now, sleep = realSleep, ttlMs }) {
+// `store`: lib/store.mjs's; `blobs`: lib/blobs.mjs's, for the screenshots (the store's own
+// blobs by default); `runs`: runs.mjs's, for the screenshots' events.
+export function createFiles({
+  store,
+  blobs = storeBlobs(store),
+  runs,
+  now = Date.now,
+  sleep = realSleep,
+}) {
   // Folder → name → the bytes its upload in flight reserved: counted against MAX_SHOTS. This
   // copy's only: two uploads of one run through two copies at once may pass the cap by one
   // screenshot's size.
@@ -101,12 +115,7 @@ export function createFiles({ store, runs, now = Date.now, sleep = realSleep, tt
       if (!isImage(name, body)) {
         return { status: 415, message: `not a ${SHOT_NAME.exec(name)[1].toUpperCase()} file` };
       }
-      await store.putBlob(shotKey(folder, name), body);
-      for (;;) {
-        const before = await store.get(sizesKey(folder));
-        const after = { ...before, [name]: body.length };
-        if (await store.compareAndSet(sizesKey(folder), before, after, { ttlMs })) break;
-      }
+      await keep(folder, name, body);
       await runs.event("shot", record.id, { folder, name, size: body.length });
     } finally {
       inFlight.delete(name);
@@ -115,17 +124,66 @@ export function createFiles({ store, runs, now = Date.now, sleep = realSleep, tt
     return { status: 204 };
   }
 
-  const shotOk = (folder, name) => SHOT_FOLDER.test(folder) && SHOT_NAME.test(name);
-  const getShot = (folder, name) =>
-    shotOk(folder, name) ? store.readBlob(shotKey(folder, name)) : null;
-  const deleteShot = (folder, name) =>
-    shotOk(folder, name) ? store.deleteBlob(shotKey(folder, name)) : false;
+  // Its name in the folder's sizes first, then the file: a name whose file never came is
+  // deleted all the same, a file the sizes don't name never would be.
+  async function keep(folder, name, body) {
+    for (;;) {
+      const before = await store.get(sizesKey(folder));
+      const after = { ...before, [name]: body.length };
+      if (await store.compareAndSet(sizesKey(folder), before, after)) break;
+    }
+    await blobs.put(shotKey(folder, name), body);
+  }
 
-  // A run's inbox and files, once it ended. Its screenshots wait for the orchestrator.
+  const shotOk = (folder, name) => SHOT_FOLDER.test(folder) && SHOT_NAME.test(name);
+
+  // A screenshot the orchestrator kept before the broker did (PUT /shots/<folder>/<file>, its
+  // move at start): checked as an upload is, but the run's cap, which it passed then.
+  // → { status, message? }.
+  async function moveShot(req, folder, name) {
+    if (!shotOk(folder, name)) return { status: 400, message: "not a screenshot's name" };
+    const body = await readCapped(req, MAX_SHOT);
+    if (body === null) return { status: 413, message: `over ${MAX_SHOT} bytes` };
+    if (!isImage(name, body)) return { status: 415, message: "not an image" };
+    await keep(folder, name, body);
+    return { status: 204 };
+  }
+
+  async function getShot(folder, name) {
+    if (!shotOk(folder, name)) return null;
+    return (
+      (await blobs.read(shotKey(folder, name))) ??
+      (await store.readBlob(legacyShotKey(folder, name)))
+    );
+  }
+
+  // A run's screenshots, once retention removes it (DELETE /shots/<folder>). → how many.
+  async function removeShots(folder) {
+    if (!SHOT_FOLDER.test(folder)) return 0;
+    const names = Object.keys((await store.get(sizesKey(folder))) ?? {});
+    for (const name of names) {
+      await blobs.delete(shotKey(folder, name));
+      await store.deleteBlob(legacyShotKey(folder, name));
+    }
+    await store.delete(sizesKey(folder));
+    return names.length;
+  }
+
+  // A run's inbox and files, once it ended. Its screenshots stay, for the links to them.
   async function remove(id) {
     await store.deleteBlob(inboxKey(id));
     for (const name of FILES) await store.deleteBlob(fileKey(id, name));
   }
 
-  return { appendInbox, pollInbox, putFile, getFile, putShot, getShot, deleteShot, remove };
+  return {
+    appendInbox,
+    pollInbox,
+    putFile,
+    getFile,
+    putShot,
+    moveShot,
+    getShot,
+    removeShots,
+    remove,
+  };
 }

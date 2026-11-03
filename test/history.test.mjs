@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createHistory, pruneRuns } from "../listener/history.mjs";
+import { createHistory, forgottenShots, pruneRuns } from "../listener/history.mjs";
 import { saveSummary } from "../listener/runlog.mjs";
 import { tempDir } from "./helpers.mjs";
 
@@ -10,40 +10,50 @@ const DAY = 24 * 60 * 60 * 1000;
 const NOW = 1000 * DAY;
 
 // A run of `key` that ended `age` days before NOW, with its log (the runner's: `logs`, which
-// removeLog() removes from, or refuses to for an id in `stuck`), summary and screenshots.
+// removeLog() removes from, or refuses to for an id in `stuck`), summary and screenshots (the
+// broker's: `shots`, which removeShots() removes from, or refuses to for a folder in `stuck`).
 function fixture(t) {
   const dir = tempDir(t, "deckhand-history-");
   const logDir = join(dir, "logs");
-  const shotsDir = join(dir, "shots");
   mkdirSync(logDir);
-  mkdirSync(shotsDir);
   const logs = new Set();
+  const shots = new Set();
   const stuck = new Set();
   const removeLog = async (id) => {
     if (stuck.has(id)) throw new Error("the runner service didn't answer");
     return logs.delete(id);
   };
+  const removeShots = async (folder) => {
+    if (stuck.has(folder)) throw new Error("the broker service didn't answer");
+    shots.delete(folder);
+  };
   let n = 0;
   const run = (key, age, extra = {}) => {
     n++;
     const id = `deckhand-${key.replace(/\W/g, "-")}-${n}`;
-    const shots = n.toString(16).padStart(24, "0");
-    mkdirSync(join(shotsDir, shots));
-    writeFileSync(join(shotsDir, shots, "page.png"), "png");
+    const folder = n.toString(16).padStart(24, "0");
+    shots.add(folder);
     logs.add(id);
     const finishedAt = NOW - age * DAY;
-    const record = { id, key, startedAt: finishedAt - 1000, finishedAt, status: "ok", shots };
+    const record = {
+      id,
+      key,
+      startedAt: finishedAt - 1000,
+      finishedAt,
+      status: "ok",
+      shots: folder,
+    };
     saveSummary(logDir, record);
     return { ...record, ...extra };
   };
   const files = (r) => [
     logs.has(r.id),
     existsSync(join(logDir, `${r.id}.json`)),
-    existsSync(join(shotsDir, r.shots)),
+    shots.has(r.shots),
   ];
   const prune = (options) =>
-    pruneRuns({ logDir, shotsDir, now: NOW, needed: () => false, removeLog, ...options });
-  return { logDir, shotsDir, run, files, prune, removeLog, stuck };
+    pruneRuns({ logDir, now: NOW, needed: () => false, removeLog, removeShots, ...options });
+  return { logDir, run, files, prune, removeLog, removeShots, stuck };
 }
 
 test("retention: runs past the limit lose their log, summary and screenshots, and leave the list", async (t) => {
@@ -104,33 +114,48 @@ test("retention: a log the runner doesn't remove keeps its run listed, for the n
   assert.deepEqual([runs, files(newer)], [[], [false, false, false]]);
 });
 
-test("retention: 0 keeps everything; folders of unknown runs go by their age", async (t) => {
-  const { shotsDir, run, files, prune } = fixture(t);
+test("retention: screenshots the broker doesn't remove keep their run listed, for the next try", async (t) => {
+  const { run, files, prune, stuck } = fixture(t);
+  const old = run("org/repo#1", 100);
+  const runs = [old];
+  const byId = new Map([[old.id, old]]);
+  stuck.add(old.shots);
+  assert.deepEqual(await prune({ runs, byId, days: 90 }), []);
+  // Its log went (removing it again is nothing), its summary and screenshots stay.
+  assert.deepEqual(files(old), [false, true, true]);
+  assert.deepEqual(runs, [old]);
+  stuck.clear();
+  await prune({ runs, byId, days: 90 });
+  assert.deepEqual([runs, files(old)], [[], [false, false, false]]);
+});
+
+test("retention: 0 keeps everything", async (t) => {
+  const { run, files, prune } = fixture(t);
   const old = run("org/repo#1", 400);
   const runs = [old];
   const byId = new Map([[old.id, old]]);
   assert.deepEqual(await prune({ runs, byId, days: 0 }), []);
   assert.deepEqual(files(old), [true, true, true]);
-  // From before records named their folder: an old one goes, a recent one and others stay.
-  const orphan = "f".repeat(24);
-  const recent = "e".repeat(24);
-  for (const name of [orphan, recent, "not-a-run"]) mkdirSync(join(shotsDir, name));
-  const past = (NOW - 100 * DAY) / 1000;
-  utimesSync(join(shotsDir, orphan), past, past);
-  utimesSync(join(shotsDir, "not-a-run"), past, past);
-  utimesSync(join(shotsDir, recent), NOW / 1000, NOW / 1000);
-  const kept = run("org/repo#2", 1);
-  utimesSync(join(shotsDir, kept.shots), past, past);
-  await prune({ runs: [kept], byId: new Map(), days: 90 });
-  assert.equal(existsSync(join(shotsDir, orphan)), false);
-  assert.equal(existsSync(join(shotsDir, recent)), true);
-  assert.equal(existsSync(join(shotsDir, "not-a-run")), true);
-  // Its run is kept: its folder too, whatever its age.
-  assert.deepEqual(files(kept), [true, true, true]);
+});
+
+test("the screenshots an older release kept: a folder no run names, past the days, isn't moved", () => {
+  const named = "a".repeat(24);
+  const runs = [
+    { id: "r1", shots: named },
+    { id: "r2", shots: null },
+  ];
+  const old = NOW - 100 * DAY;
+  const forgotten = forgottenShots(runs, 90, NOW);
+  assert.equal(forgotten("f".repeat(24), old), true);
+  assert.equal(forgotten("f".repeat(24), NOW - DAY), false);
+  // Its run is listed: kept, whatever its age.
+  assert.equal(forgotten(named, old), false);
+  // 0: forever.
+  assert.equal(forgottenShots(runs, 0, NOW)("f".repeat(24), old), false);
 });
 
 test("retention: at start, then daily, with what the listener's state still needs", async (t) => {
-  const { logDir, shotsDir, run, removeLog } = fixture(t);
+  const { logDir, run, removeLog, removeShots } = fixture(t);
   const brainstorm = run("org/repo#1", 200);
   const waiting = run("org/repo#2", 200);
   const labelled = run("org/repo#3", 200);
@@ -142,8 +167,8 @@ test("retention: at start, then daily, with what the listener's state still need
     config: { logRetentionDays: 90 },
     log: () => {},
     logDir,
-    shotsDir,
     runLogs: { remove: removeLog },
+    removeShots,
     runs,
     runsById: new Map(runs.map((r) => [r.id, r])),
     tasks: new Map([

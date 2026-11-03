@@ -283,9 +283,9 @@ services:
       # Its state: the runs' summaries, queue and brainstorm state, its store (the queue, the
       # lease). Nothing secret.
       - data:/data
-      # One folder per run, served under /shots/ (through edge), copied there from the broker,
-      # which sandboxes upload them to (#393): the screenshots linked from GitHub, in a volume of
-      # their own (SHOTS_VOLUME).
+      # The screenshots an orchestrator kept before the broker did (#609), one folder per run
+      # (SHOTS_VOLUME): moved to the broker at its start, then removed. Nothing is written there
+      # any more.
       - screenshots:/data/shots
       # Your configuration, one folder you keep in git (server.example/ to start from), read
       # only: config.yaml, your settings, read at start (docs/setup.md#settings); grants/,
