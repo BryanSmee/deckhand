@@ -385,6 +385,14 @@ test("a run's questions in another language: translated headings, title and pick
   });
 });
 
+test("a body of None lines: read in one pass, as any other", () => {
+  // Anyone's edit is read (editedInput()): one recursion per line overflowed the stack.
+  const body = `## Open questions\n\n${"None\n".repeat(20000)}`;
+  assert.equal(hasOpenQuestions(body), false);
+  assert.equal(parseQuestions(questionsSection(body)), null);
+  assert.equal(hasOpenQuestions(`## Open questions\n\n${"None\n\n".repeat(20000)}`), false);
+});
+
 test("a pick in other languages: each form of recommended", () => {
   for (const pick of [
     "recommended",
@@ -445,6 +453,13 @@ test("issue bodies: open questions and None in English and a few other languages
     "None for now.",
     "None yet",
     "None at this time.",
+    // What was settled, its boxes ticked: answers, not questions.
+    "None. Settled:\n\n1. **X**: which?\n   - [x] A\n   - [ ] B",
+    "Rien.",
+    "Nada.",
+    "Não há.",
+    "Kein.",
+    "Nessun dubbio.",
     "Aucune question.",
     "Keine offenen Fragen",
     "Nessuna domanda",

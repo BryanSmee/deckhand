@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import {
+  withoutMarker,
   clock,
   failuresFail,
   fields,
@@ -97,6 +98,13 @@ test("work: messages, tool calls with their output, the result without its marke
   expect(bash.kind === "tool" && bash.outputs).toEqual([{ text: "✖ retries once", error: true }]);
   const last = work.items.at(-1)!;
   expect(last.kind === "result" && last.text).toBe("Which?");
+});
+
+test("withoutMarker: at the start or on a line of its own, never quoted in a sentence", () => {
+  expect(withoutMarker("<!-- needs-input -->\nWhich?")).toBe("Which?");
+  expect(withoutMarker("## Avis\n\n<!-- needs-input -->\nLequel ?")).toBe("## Avis\n\n\nLequel ?");
+  const quoted = "I start with `<!-- needs-input -->` to ask.";
+  expect(withoutMarker(`${quoted}\n<!-- needs-input -->\nWhich?`)).toBe(`${quoted}\n\nWhich?`);
 });
 
 test("a log from before phases is one work section; a live run's current section is its last", () => {

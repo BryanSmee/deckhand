@@ -116,6 +116,11 @@ test("summary: the first sentence of the reply, not its headings", () => {
     "1. Which one?",
   );
   assert.equal(summaryOf({ text: "## Only a heading" }), "Only a heading");
+  // The marker on a line of its own is gone too, after one quoted in a heading.
+  assert.equal(
+    summaryOf({ text: "## Using `<!-- needs-input -->`\n<!-- needs-input -->\n## Avis" }),
+    "Using `<!-- needs-input -->`",
+  );
   assert.equal(summaryOf({ text: "> - Quoted item" }), "Quoted item");
   const long = summaryOf({ text: "x".repeat(300) });
   assert.equal(long.length, 200);

@@ -8,6 +8,15 @@ import type { Entry, Phase, StepStatus } from "./types";
 // Starts the reply of a run that stopped to ask: for the listener, not for reading.
 export const NEEDS_INPUT = "<!-- needs-input -->";
 
+// The reply without the marker where the listener reads one (questions.mjs withoutMarker()): at
+// its start or on a line of its own, not quoted in a sentence.
+export function withoutMarker(text: string): string {
+  return text
+    .replace(/^\s*<!-- needs-input -->/, "")
+    .replace(/^ {0,3}<!-- needs-input -->[ \t]*\r?$/gm, "")
+    .trim();
+}
+
 export interface Step {
   step: number;
   stage: string | null;
@@ -177,7 +186,7 @@ function itemsOf(phase: Phase, entries: Entry[], calls: Calls): Item[] {
     else if (e.kind === "meta") out.push({ id: id(), kind: "note", text: e.text });
     else if (e.kind === "result") {
       for (const call of calls.byEntry.values()) if (!call.outputs.length) calls.ended.add(call);
-      out.push({ id: id(), ...e, text: e.text.replace(NEEDS_INPUT, "").trim() });
+      out.push({ id: id(), ...e, text: withoutMarker(e.text) });
     } else if (e.kind === "step") {
       const known = steps.get(e.step);
       if (known) Object.assign(known, { ...e, output: known.output, at: known.at ?? e.at });
