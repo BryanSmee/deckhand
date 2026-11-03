@@ -5,7 +5,7 @@ import { redact } from "../lib/redact.mjs";
 import { AGENT_AUDIENCE } from "../lib/tokens.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstream.mjs";
-import { statusOf, usageReader } from "./metrics.mjs";
+import { statusOf, usageTap } from "./metrics.mjs";
 
 export { baseOf, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstream.mjs";
 
@@ -156,7 +156,9 @@ export function createApiProxy({
       metrics?.called({ provider, agent, status: "credential" });
       return failRun(run, res, 503, errorShape.unavailable, credentialFailure(what, error));
     }
-    const started = performance.now();
+    // On `clock` when it has one (the tests'), its timers' seam.
+    const elapsed = () => (clock.performance ?? performance).now();
+    const started = elapsed();
     let status = null;
     let reader = null; // what a successful answer says it used, read as it goes on
     const how = await forward(req, res, {
@@ -170,7 +172,7 @@ export function createApiProxy({
       tap: (chunk) => reader?.write(chunk),
       answered: (code, answer, lost) => {
         status = statusOf(code, { lost });
-        if (metrics && code < 300) reader = usageReader(answer["content-type"]);
+        if (metrics && code < 300) reader = usageTap(answer);
         run.apiStatus = code;
         if (code >= 400) run.apiError = `${what} answered ${code}`;
         answered(run, code, headers, answer);
@@ -182,9 +184,9 @@ export function createApiProxy({
       provider,
       agent,
       status,
-      seconds: (performance.now() - started) / 1000,
+      seconds: (elapsed() - started) / 1000,
       cut: how === "cut",
-      used: reader?.end(),
+      used: await reader?.end(),
     });
   }
 

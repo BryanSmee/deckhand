@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { brotliCompressSync, gzipSync } from "node:zlib";
 import { test } from "node:test";
 import { createRegistry } from "../lib/metrics.mjs";
 import { openStore } from "../lib/store.mjs";
@@ -167,7 +168,17 @@ async function counted(t, answer, options = {}) {
   const secret = broker.agentToken(id);
   const call = () =>
     fetch(`${url}/api/call`, { method: "POST", headers: { "x-key": secret }, body: "{}" });
-  return { call, render: () => registry.render() };
+  const render = () => registry.render();
+  // The page once `n` calls are counted: a call is, once its answer was read to its end.
+  const counting = async (n) => {
+    for (;;) {
+      const text = await render();
+      const counts = text.match(/^deckhand_model_calls_total\{.*\} \d+$/gm) ?? [];
+      if (counts.reduce((sum, line) => sum + Number(line.split(" ")[1]), 0) >= n) return text;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+  return { call, render, counting };
 }
 
 const series = (status) =>
@@ -175,7 +186,7 @@ const series = (status) =>
 
 test("a call is counted by its status, its length observed, the tokens its stream says added", async (t) => {
   let status = 200;
-  const { call, render } = await counted(t, (req, res) => {
+  const { call, counting } = await counted(t, (req, res) => {
     res.writeHead(status, { "content-type": "text/event-stream" });
     res.end(
       sse(
@@ -191,7 +202,7 @@ test("a call is counted by its status, its length observed, the tokens its strea
   // A failed answer's tokens aren't counted.
   status = 429;
   await (await call()).text();
-  const text = await render();
+  const text = await counting(4);
   assert.equal(sample(text, series("2xx")), "2");
   assert.equal(sample(text, series("529")), "1");
   assert.equal(sample(text, series("429")), "1");
@@ -238,7 +249,7 @@ test("a stream the provider cuts short is counted as such, with the tokens it sa
 });
 
 test("a provider that can't be reached, or a login that can't be used: counted apart", async (t) => {
-  const { call, render } = await counted(t, (req, res) => res.socket.destroy());
+  const { call, counting } = await counted(t, (req, res) => res.socket.destroy());
   assert.equal((await call()).status, 502);
   const unusable = await counted(t, () => assert.fail("not sent"), {
     authHeaders: async () => {
@@ -246,7 +257,7 @@ test("a provider that can't be reached, or a login that can't be used: counted a
     },
   });
   assert.equal((await unusable.call()).status, 503);
-  assert.equal(sample(await render(), series("unreachable")), "1");
+  assert.equal(sample(await counting(1), series("unreachable")), "1");
   const text = await unusable.render();
   assert.equal(sample(text, series("credential")), "1");
   // Never sent: no length.
@@ -321,4 +332,75 @@ test("without a registry, nothing is counted and nothing throws", () => {
   const metrics = modelMetrics(null);
   metrics.called({ provider: "anthropic", agent: "claude", status: "2xx", seconds: 1 });
   metrics.refreshed("codex")(null);
+});
+
+const tokens = (text, direction) =>
+  sample(text, `deckhand_model_tokens_total{provider="anthropic",direction="${direction}"}`);
+
+test("a compressed answer's tokens are read through its decompressor; an unknown encoding's aren't", async (t) => {
+  const stream = sse(
+    { type: "message_start", message: { usage: { input_tokens: 3, output_tokens: 1 } } },
+    { type: "message_delta", usage: { output_tokens: 4 } },
+  );
+  const whole = JSON.stringify({ type: "message", usage: { input_tokens: 20, output_tokens: 6 } });
+  const answers = [
+    ["text/event-stream", "gzip", gzipSync(stream)],
+    ["application/json", "gzip", gzipSync(whole)],
+    ["application/json", "br", brotliCompressSync(whole)],
+    ["application/json", "compress", Buffer.from("not read")],
+  ];
+  let i = 0;
+  const { call, counting } = await counted(t, (req, res) => {
+    const [type, encoding, body] = answers[i++];
+    res.writeHead(200, { "content-type": type, "content-encoding": encoding });
+    res.end(body);
+  });
+  for (const _ of answers) await (await call()).arrayBuffer().catch(() => null);
+  const text = await counting(answers.length);
+  assert.equal(tokens(text, "input"), "43");
+  assert.equal(tokens(text, "output"), "16");
+});
+
+test("an agent giving up mid-stream isn't a stream cut short; its call is counted", async (t) => {
+  const { call, counting } = await counted(t, (req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(
+      sse({ type: "message_start", message: { usage: { input_tokens: 5, output_tokens: 1 } } }),
+    );
+  });
+  const res = await call();
+  const reader = res.body.getReader();
+  await reader.read();
+  await reader.cancel();
+  const text = await counting(1);
+  assert.equal(sample(text, series("2xx")), "1");
+  assert.equal(
+    sample(text, 'deckhand_model_streams_interrupted_total{provider="anthropic"}'),
+    undefined,
+  );
+  assert.equal(tokens(text, "input"), "5");
+});
+
+test("a call's length on the clock's time: in its bucket", async (t) => {
+  let ms = 0;
+  const clock = {
+    setTimeout: () => ({}),
+    clearTimeout: () => {},
+    performance: { now: () => (ms += 45_000) },
+  };
+  const { call, counting } = await counted(
+    t,
+    (req, res) => res.writeHead(200, { "content-type": "application/json" }).end("{}"),
+    { clock },
+  );
+  await (await call()).text();
+  const text = await counting(1);
+  const bucket = (le) =>
+    sample(text, `deckhand_model_call_duration_seconds_bucket{provider="anthropic",le="${le}"}`);
+  assert.equal(bucket("30"), "0");
+  assert.equal(bucket("60"), "1");
+  assert.equal(
+    sample(text, 'deckhand_model_call_duration_seconds_sum{provider="anthropic"}'),
+    "45",
+  );
 });

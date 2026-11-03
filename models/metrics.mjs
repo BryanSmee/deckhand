@@ -1,8 +1,11 @@
 // The models service's metrics (#657, ../lib/metrics.mjs): the agents' API calls that go through
 // it with the operator's credentials, the tokens their answers say they used, the plans' usage
 // and the refreshes of their logins. Labels are bounded: the provider, the agent, the status's
-// class; never a run, a model or a credential's name.
+// class; never a run or a credential's name, nor a model's but as the name of an Antigravity
+// plan's window (usage.mjs antigravityPolled(): a quota is named after its first model, which may
+// change from one reading to the next, a few series at most).
 import { StringDecoder } from "node:string_decoder";
+import zlib from "node:zlib";
 import { OTHER } from "../lib/metrics.mjs";
 
 // The providers a call goes to (the runs' `provider`), the agents whose calls they are (each
@@ -131,6 +134,45 @@ export function usageReader(contentType = "") {
       if (!skipping) (events ? line : seen)(text + decoder.end());
       text = "";
       return usage;
+    },
+  };
+}
+
+// The decompressors of the encodings an answer may come in: the agent's `accept-encoding` goes
+// on to the provider (upstream.mjs forwarded()), and the answer back as it came.
+const DECODERS = {
+  gzip: zlib.createGunzip,
+  "x-gzip": zlib.createGunzip,
+  deflate: zlib.createInflate,
+  br: zlib.createBrotliDecompress,
+  ...(zlib.createZstdDecompress && { zstd: zlib.createZstdDecompress }),
+};
+
+// usageReader() for an answer with these `headers`, through its decompressor when it is
+// encoded; another encoding (or several) says no usage. → { write(chunk), end() → a promise of
+// usageReader()'s }, what was read by then when the answer was cut short.
+export function usageTap(headers = {}) {
+  const reader = usageReader(headers["content-type"]);
+  const encoding = String(headers["content-encoding"] ?? "identity")
+    .trim()
+    .toLowerCase();
+  if (encoding === "identity" || encoding === "") {
+    return { write: (chunk) => reader.write(chunk), end: async () => reader.end() };
+  }
+  if (!Object.hasOwn(DECODERS, encoding)) return { write() {}, end: async () => null };
+  const decoder = DECODERS[encoding]();
+  decoder.on("data", (chunk) => reader.write(chunk));
+  const ended = new Promise((resolve) => {
+    decoder.on("end", resolve);
+    // Cut short, or garbled: what came before counts.
+    decoder.on("error", resolve);
+  });
+  return {
+    write: (chunk) => decoder.write(chunk),
+    end: async () => {
+      decoder.end();
+      await ended;
+      return reader.end();
     },
   };
 }
