@@ -13,7 +13,7 @@ import { createBroker } from "../broker/server.mjs";
 import { signServiceToken } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { SESSION_COOKIE, SESSION_MS } from "../listener/auth.mjs";
-import { listening, needsSignals, serve, tempDir, testKey } from "./helpers.mjs";
+import { listening, needsSignals, serve, tempDir, testKey, until as waitFor } from "./helpers.mjs";
 
 const SECRET = "webhook-secret";
 const KEY = Buffer.alloc(32, 3);
@@ -237,6 +237,29 @@ test("edge: GET /metrics on its own port, its build, process and lease; nothing 
   // Nor is it on edge's public port.
   const web = await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
   assert.doesNotMatch(web, /deckhand_build_info/);
+});
+
+test("edge's own metrics: a delivery, a dashboard request and a signed-in user counted", async (t) => {
+  const { port, metricsPort } = await startEdge(t);
+  assert.equal((await send(port, { action: "created" }, { id: "m-1" })).status, 202);
+  const state = await fetch(`http://127.0.0.1:${port}/api/state`, {
+    headers: { cookie: session("alice") },
+  });
+  await state.arrayBuffer();
+  const scrape = () => fetch(`http://127.0.0.1:${metricsPort}/metrics`).then((r) => r.text());
+  let text;
+  await waitFor(async () => /deckhand_sessions_active 1$/m.test((text = await scrape())), {
+    what: "alice counted",
+  });
+  assert.match(
+    text,
+    /^deckhand_webhooks_received_total\{event="issue_comment",result="accepted"\} 1$/m,
+  );
+  assert.match(text, /^deckhand_http_requests_total\{route="\/webhook",status="202"\} 1$/m);
+  assert.match(text, /^deckhand_http_requests_total\{route="\/api\/state",status="\d+"\} 1$/m);
+  assert.match(text, /^# TYPE deckhand_sign_ins_total counter$/m);
+  assert.match(text, /^deckhand_log_streams_open 0$/m);
+  assert.match(text, /^deckhand_webhooks_redelivered_total 0$/m);
 });
 
 test("edge refuses a METRICS_PORT on its INTERNAL_PORT, before it listens", async (t) => {

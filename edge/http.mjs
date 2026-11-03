@@ -86,7 +86,8 @@ async function startTaking(store, id, now) {
 // `app`: app.mjs's; `auth`, `setup`: ../listener/auth.mjs's and setup.mjs's; `oauth`: MCP
 // clients' sign-in (oauth.mjs), none: not served; `orchestrator`:
 // forward.mjs's; `shots`: shots.mjs's; `redeliveries`: whether a delivery is one edge asked again (redelivered());
-// `dashboardDir`: the dashboard's build; `stopping()`: true once SIGTERM came.
+// `dashboardDir`: the dashboard's build; `stopping()`: true once SIGTERM came; `metrics`:
+// metrics.mjs edgeMetrics()'s, none: not counted.
 export function createEdgeHttp({
   config,
   app,
@@ -100,13 +101,24 @@ export function createEdgeHttp({
   dashboardDir,
   secrets = () => [],
   stopping = () => false,
+  metrics = null,
   log = () => {},
   now = Date.now,
 }) {
+  const counted = (req, result) => metrics?.webhook(req.headers["x-github-event"], result);
+  // The signed-in user, counted as active.
+  const userOf = async (req) => {
+    const login = await auth.user(req);
+    if (login) metrics?.seen(login);
+    return login;
+  };
+
   // Bodies being read before their signature can be checked: a public port, so capped.
   const unverified = createSlots({ total: MAX_UNVERIFIED, share: PER_SOURCE, graceMs: GRACE_MS });
 
-  const refuse = (res, status, why, text) => {
+  // `result`: what the metrics count it as (metrics.mjs WEBHOOK_RESULTS).
+  const refuse = (req, res, result, status, why, text) => {
+    counted(req, result);
     log(`Rejected a delivery: ${why}`);
     // The body isn't read: the connection isn't reused for another request.
     res.writeHead(status, { connection: "close" });
@@ -117,13 +129,16 @@ export function createEdgeHttp({
   // What can be refused from the headers alone, before reading the body: answered and true.
   function refusedEarly(req, res) {
     // Failed on GitHub's side, where it can be redelivered, rather than lost.
-    if (stopping()) return refuse(res, 503, "stopping", "restarting");
-    if (!app.get()) return refuse(res, 503, "no GitHub App yet (open /setup)", "not set up");
+    if (stopping()) return refuse(req, res, "refused", 503, "stopping", "restarting");
+    if (!app.get()) {
+      return refuse(req, res, "refused", 503, "no GitHub App yet (open /setup)", "not set up");
+    }
     if (!req.headers["x-hub-signature-256"]) {
-      return refuse(res, 401, "no signature (not from this Deckhand's App)", "bad signature");
+      const why = "no signature (not from this Deckhand's App)";
+      return refuse(req, res, "bad_signature", 401, why, "bad signature");
     }
     if (Number(req.headers["content-length"]) > MAX_DELIVERY) {
-      return refuse(res, 413, `over ${MAX_DELIVERY} bytes`, "too large");
+      return refuse(req, res, "too_large", 413, `over ${MAX_DELIVERY} bytes`, "too large");
     }
     return false;
   }
@@ -134,26 +149,32 @@ export function createEdgeHttp({
     const release = unverified.take(source, () =>
       req.destroy(new Error("its place taken by a newer delivery")),
     );
-    if (!release) return refuse(res, 503, `no place to read a delivery from ${source}`, "busy");
+    if (!release) {
+      return refuse(req, res, "busy", 503, `no place to read a delivery from ${source}`, "busy");
+    }
     readDelivery(req, { limit: MAX_DELIVERY, idleMs: IDLE_MS, totalMs: BODY_MS })
       .finally(release)
       .then(
         (body) => accept(req, res, body),
-        (error) => log(`Rejected a delivery: ${error.message}`),
+        (error) => {
+          counted(req, "unread");
+          log(`Rejected a delivery: ${error.message}`);
+        },
       )
       .catch((error) => {
         (log.error ?? log)(`A delivery: ${error.stack ?? error}`);
-        if (!res.headersSent) refuse(res, 503, "not kept", "try again");
+        if (!res.headersSent) refuse(req, res, "failed", 503, "not kept", "try again");
       });
   }
 
   // A delivery read whole: verified, taken once, on the stream, then answered. Not on it (the
   // store away): 503, which GitHub marks failed and the redeliveries ask again.
   async function accept(req, res, body) {
-    if (stopping()) return refuse(res, 503, "stopping", "restarting");
+    if (stopping()) return refuse(req, res, "refused", 503, "stopping", "restarting");
     const secret = app.get()?.webhook_secret;
     if (!secret || !verified(secret, req.headers["x-hub-signature-256"], body)) {
-      return refuse(res, 401, "bad signature (not from this Deckhand's App)", "bad signature");
+      const why = "bad signature (not from this Deckhand's App)";
+      return refuse(req, res, "bad_signature", 401, why, "bad signature");
     }
     const event = req.headers["x-github-event"];
     // A commit's CI changed (github-app.mjs QUIET_EVENTS): no log line, nor a place in the
@@ -165,21 +186,27 @@ export function createEdgeHttp({
     try {
       payload = JSON.parse(body.toString("utf8"));
     } catch {
+      counted(req, "ignored");
       return res.writeHead(202).end();
     }
     if (quiet) {
       // Only what the orchestrator reads of it, for an allowed repo, and one waiting per commit.
       payload = quietPayload(config, event, payload);
-      if (!payload) return res.writeHead(202).end();
+      if (!payload) {
+        counted(req, "ignored");
+        return res.writeHead(202).end();
+      }
       const { full_name } = payload.repository;
       const sha = payload.sha ?? payload.check_suite.head_sha;
       waiting = ciWaitingKey(full_name, sha);
       if (!(await store.setIfAbsent(waiting, { at: now() }, { ttlMs: CI_WAITING_TTL_MS }))) {
+        counted(req, "duplicate");
         return res.writeHead(202).end();
       }
     }
     // Deliveries without a GUID are taken.
     if (id && !(await startTaking(store, id, now))) {
+      counted(req, "duplicate");
       log(`Delivery ${id} again: already handled`);
       return res.writeHead(202).end();
     }
@@ -206,6 +233,7 @@ export function createEdgeHttp({
           log(`Delivery ${id}: its mark (${error.message ?? error}), kept as taking`),
         );
     }
+    counted(req, "accepted");
     if (!quiet) log(`Passed on: ${event} ${payload?.action ?? ""} (${id ?? "no id"})`);
     res.writeHead(202).end();
   }
@@ -265,19 +293,19 @@ export function createEdgeHttp({
     if (req.method === "POST" && path === "/webhook") return webhook(req, res);
     if (path === "/status") {
       if (local(req)) return forward(req, res, { isLocal: true });
-      const user = await auth.user(req);
+      const user = await userOf(req);
       if (!user) return res.writeHead(401).end();
       return forward(req, res, { user });
     }
     if (path.startsWith("/api/")) {
       if (!app.get()) return res.writeHead(503).end();
-      const user = await auth.user(req);
+      const user = await userOf(req);
       // A live log stops once its user signs out (or leaves ALLOWED_USERS), as it did before.
       const still = user ? async () => (await auth.user(req)) === user : null;
       return forward(req, res, { user, still });
     }
     // GitHub only ever POSTs to /webhook; everything a browser asks for is the dashboard.
-    if (req.method === "GET") return serveDashboard(req, res, await auth.user(req));
+    if (req.method === "GET") return serveDashboard(req, res, await userOf(req));
     res.writeHead(404).end();
   }
 
@@ -287,6 +315,7 @@ export function createEdgeHttp({
   const handle = withRequest(
     (req, res) => {
       for (const [name, value] of Object.entries(SECURITY_HEADERS)) res.setHeader(name, value);
+      metrics?.request(req, res);
       route(req, res).catch((error) => {
         (log.error ?? log)(`${req.method} ${req.url.split("?")[0]}: ${error.stack ?? error}`);
         if (!res.headersSent) res.writeHead(error.status === 503 ? 503 : 500);

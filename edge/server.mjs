@@ -47,6 +47,7 @@ import { createForwarder } from "./forward.mjs";
 import { createEdgeHttp, takenDelivery } from "./http.mjs";
 import { createShots } from "./shots.mjs";
 import { createEdgeInternal } from "./internal.mjs";
+import { edgeMetrics } from "./metrics.mjs";
 import { createOAuth } from "./oauth.mjs";
 
 const env = process.env;
@@ -112,6 +113,8 @@ const store = openStore(env.STORE_URL || pathToFileURL(join(dataDir, "store")).h
   password: env.REDIS_PASSWORD,
   secrets,
 });
+// What reaches it from outside (metrics.mjs): its users counted in the store both copies share.
+const counted = edgeMetrics(metrics.registry, { store });
 
 // The github service, as edge: reads, /setup's conversion and the redeliveries, never a write
 // of a run's (../github/service.mjs ROUTES).
@@ -139,6 +142,7 @@ const auth = createAuth({
   publicUrl,
   key: sessionKeyNow,
   store,
+  signedIn: counted.signIn,
   log,
 });
 
@@ -149,12 +153,14 @@ const redeliveries = createRedeliveries({
   store,
   app: appClient,
   handled: (guid) => takenDelivery(store, guid),
+  onRedelivered: counted.redelivered,
   log,
 });
 
 const orchestrator = createForwarder({
   urls: env.ORCHESTRATOR_URL || "http://orchestrator:8083",
   token: () => brokerCaller.header("orchestrator"),
+  stream: counted.stream,
   log,
 });
 
@@ -183,6 +189,7 @@ const http = createEdgeHttp({
   dashboardDir: env.DASHBOARD_DIR || fileURLToPath(new URL("../dashboard/dist", import.meta.url)),
   secrets,
   stopping: () => stopping,
+  metrics: counted,
   log,
 });
 

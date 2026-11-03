@@ -99,6 +99,8 @@ export function createAuth({
   fetch = globalThis.fetch,
   now = Date.now,
   random = () => randomBytes(16).toString("hex"),
+  // Each sign-in's result: allowed, refused, expired or failed (../edge/metrics.mjs).
+  signedIn = () => {},
   log = () => {},
 }) {
   const secure = () => publicUrl().startsWith("https:");
@@ -190,6 +192,7 @@ from edge's logs.</p>`,
     const expected = cookies(req)[STATE_COOKIE] ?? "";
     const clear = [cookie(STATE_COOKIE, "", 0), cookie(NEXT_COOKIE, "", 0)];
     if (!credentials?.client_secret || !expected || !same(state, expected) || !code) {
+      signedIn("expired");
       return authPage(
         res,
         400,
@@ -200,6 +203,7 @@ from edge's logs.</p>`,
     }
     const token = await exchange(credentials, code);
     if (!token) {
+      signedIn("failed");
       return authPage(
         res,
         502,
@@ -210,12 +214,14 @@ from edge's logs.</p>`,
     }
     const me = await whoIs(credentials, token);
     if (!me) {
+      signedIn("failed");
       return authPage(res, 502, "GitHub didn't say who you are", `<p>See edge's logs.</p>`, {
         "set-cookie": clear,
       });
     }
     const login = me.toLowerCase();
     if (!config.users.includes(login)) {
+      signedIn("refused");
       log(`Login: refused ${me}: not in ALLOWED_USERS`);
       return authPage(
         res,
@@ -228,6 +234,7 @@ GitHub and sign in here with another account.</p>`,
         { "set-cookie": clear },
       );
     }
+    signedIn("allowed");
     log(`Login: ${login} signed in to the dashboard`);
     let next = null;
     try {
