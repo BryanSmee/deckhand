@@ -456,7 +456,7 @@ const ctx = {
   models,
   // The runs whose provider failed, another entry of FALLBACKS taking over (runs.mjs fallBack()):
   // the models service's calls say why, the fallback is decided here.
-  fallbacks: metrics.registry.counter(
+  fallbacks: registry.counter(
     "deckhand_model_fallbacks_total",
     "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",
     { labels: ["from", "to"], values: { from: ENTRIES, to: ENTRIES } },
