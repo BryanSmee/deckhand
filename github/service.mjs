@@ -545,7 +545,10 @@ export function createGithubService({
       return sendJson(res, healthAnswer(health, { app: !!app.get() }));
     }
     if (req.method === "GET" && path === "/ready") {
-      return sendJson(res, { ok: !draining, app: !!app.get() }, draining ? 503 : 200);
+      // Out of rotation until the broker answered it too: run tokens and callers can't be checked
+      // before, and a new pod's calls may not get out yet (#391).
+      const ready = !draining && (broker.ready?.() ?? true);
+      return sendJson(res, { ok: ready, app: !!app.get() }, ready ? 200 : 503);
     }
     const caller = await guarded(req);
     if (path.startsWith("/relay/") || path.startsWith("/git/")) return sandboxCall(req, res, path);

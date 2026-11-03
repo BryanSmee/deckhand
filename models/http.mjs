@@ -66,6 +66,9 @@ export function createModelsHandler({
   keys,
   bound,
   draining = () => false,
+  // Whether the broker hasn't answered yet (listener/broker-service.mjs ready()): out of rotation
+  // until it has, as its tokens can't be checked before (#391).
+  waiting = () => false,
   now = Date.now,
   sleep = realSleep,
   // The fingerprints' salt: one for every copy, and the same after a restart (fingerprintSalt()),
@@ -106,7 +109,7 @@ export function createModelsHandler({
     if (req.method === "GET" && url.pathname === "/health")
       return sendJson(res, healthAnswer(health));
     if (req.method === "GET" && url.pathname === "/ready") {
-      const ready = !draining();
+      const ready = !draining() && !waiting();
       return sendJson(res, { ok: ready }, ready ? 200 : 503);
     }
     guard(req);

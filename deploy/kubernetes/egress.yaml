@@ -57,17 +57,17 @@ spec:
               value: "600"
             - name: SERVICE_ACCOUNT_TOKEN_FILE
               value: /var/run/secrets/deckhand/broker-token
-          # Plain HTTP on the proxy's port: 503 once it drains.
+          # Plain HTTP on the proxy's port: 503 once it drains, and until the broker answered it.
           readinessProbe:
             httpGet:
               path: /ready
               port: proxy
             periodSeconds: 5
-          # It answers /ready alone; a stopping copy's 503 restarts nothing, as Kubernetes runs no
-          # liveness probe on a pod that terminates.
+          # Its process answers: restarted after a minute without. Not /ready, which waits for the
+          # broker: a broker away would restart it again and again.
           livenessProbe:
             httpGet:
-              path: /ready
+              path: /health
               port: proxy
             periodSeconds: 10
             failureThreshold: 6

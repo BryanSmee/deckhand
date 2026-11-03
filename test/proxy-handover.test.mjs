@@ -125,3 +125,19 @@ test("DRAIN_SECONDS: 25 s alone, any whole number of seconds", () => {
   assert.equal(drainMs("600"), 600_000);
   assert.throws(() => drainMs("10m"), /DRAIN_SECONDS: expected seconds/);
 });
+
+test("a new proxy is out of rotation until the broker answered it: its relayed calls need its tokens (#391)", async (t) => {
+  let answered = false;
+  const server = createProxy({
+    policy: async () => ({ allowed: true, private: true, sandbox: "net-1" }),
+    brokerService: { url: "http://broker", ready: () => answered },
+  });
+  const port = await listening(server);
+  t.after(() => server.close());
+  // A new pod whose calls don't get out yet (k3s's NetworkPolicies, a moment after its start).
+  const waiting = await through(port, "/ready");
+  assert.equal(waiting.status, 503);
+  assert.equal(await waiting.body(), "waiting for the broker\n");
+  answered = true;
+  assert.equal((await through(port, "/ready")).status, 200);
+});
