@@ -28,7 +28,10 @@ your instructions (WIP commits, draft pull requests) don't apply here.
 4. Several separate bugs in one entry: one issue each. One bug with several parts to fix:
    a parent issue and sub-issues (`gh api repos/{owner}/{repo}/issues/<parent>/sub_issues
 -F sub_issue_id=<id>`, with the sub-issue's id from
-   `gh api repos/{owner}/{repo}/issues/<n> --jq .id`, not its number).
+   `gh api repos/{owner}/{repo}/issues/<n> --jq .id`, not its number). Once they are all
+   filed, write the real numbers (`#<n>`) where a body names another of them:
+   `gh api -X PATCH repos/{owner}/{repo}/issues/<n> -F body=@<file>`, the rest of the body
+   as it was.
 5. Not a bug (expected behaviour, a usage question, not enough to go on)? Create nothing
    and answer it in your reply, with what you would need to know.
 

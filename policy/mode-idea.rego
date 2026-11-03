@@ -15,10 +15,11 @@ allow_capabilities contains c if {
 }
 
 # They file issues, parents with their sub-issues (prompts/idea.md), link those under the parents
-# they filed, and create labels.
+# they filed, edit those (a body naming the other issues it filed, once their numbers are known),
+# and create labels.
 idea_writes := {
   "new_issue": {"create"},
-  "created_issue": {"link"},
+  "created_issue": {"edit", "link"},
   "label": {"create"},
 }
 
