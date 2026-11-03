@@ -79,23 +79,9 @@ export function runnerMetrics(registry, { runner, sandboxes = async () => null, 
     { labels: ["reason"], values: { reason: START_FAILURES } },
   );
 
-  // Absent before the first verdict, and on the waiting copy.
-  let isolated = null;
-  registry.gauge(
-    "deckhand_network_isolated",
-    "1 when the network probe found the sandboxes isolated, 0 when one reached what it mustn't (every run refused); absent before its first verdict.",
-    { collect: () => (isolated === null || !active() ? [] : [[{}, isolated]]) },
-  );
-  const probes = registry.counter(
-    "deckhand_network_probes_total",
-    "Network probes (Kubernetes), by their result: isolated, reached, unknown (couldn't tell).",
-    { labels: ["result"], values: { result: PROBE_RESULTS } },
-  );
-  const probeSeconds = registry.histogram(
-    "deckhand_network_probe_seconds",
-    "How long a network probe took, its pod's start included, in seconds.",
-    { buckets: PROBE_BUCKETS },
-  );
+  // The network probe's (Kubernetes' alone: Docker's runs each have an internal network of
+  // their own, nothing to probe). Its verdict absent before the first, and on the waiting copy.
+  const probe = runner === "kubernetes" ? probeMetrics(registry, active) : null;
 
   const builds = registry.counter(
     "deckhand_image_builds_total",
@@ -121,22 +107,53 @@ export function runnerMetrics(registry, { runner, sandboxes = async () => null, 
     },
   );
 
+  // At 0 from the start, every series a counter may have: a rate needs its first sample.
+  for (const reason of START_FAILURES) failed.inc({ reason }, 0);
+  for (const result of ["ok", "error"]) {
+    builds.inc({ runner, result }, 0);
+    for (const agent of Object.keys(AGENTS)) installs.inc({ agent, result }, 0);
+  }
+  for (const result of PRUNE_RESULTS) prunes.inc({ result }, 0);
+
   return {
     // A sandbox running, `seconds` after its start was asked.
     started: (seconds) => startSeconds.observe({ runner }, seconds),
     failedToStart: (reason) => failed.inc({ reason }),
-    // `result`: PROBE_RESULTS'. Its verdict kept for the gauge, unless it couldn't tell.
-    probed(result, seconds) {
-      probes.inc({ result });
-      probeSeconds.observe(seconds);
-      if (result !== "unknown") isolated = result === "isolated" ? 1 : 0;
-    },
+    // `result`: PROBE_RESULTS'.
+    probed: (result, seconds) => probe?.(result, seconds),
     built(ok, seconds) {
       builds.inc({ runner, result: ok ? "ok" : "error" });
       buildSeconds.observe(seconds);
     },
     pruned: (result) => prunes.inc({ result }),
     installed: (agent, ok) => installs.inc({ agent, result: ok ? "ok" : "error" }),
+  };
+}
+
+// The network probe's metrics → probed(result, seconds), its verdict kept for the gauge unless
+// it couldn't tell.
+function probeMetrics(registry, active) {
+  let isolated = null;
+  registry.gauge(
+    "deckhand_network_isolated",
+    "1 when the network probe found the sandboxes isolated, 0 when one reached what it mustn't (every run refused); absent before its first verdict.",
+    { collect: () => (isolated === null || !active() ? [] : [[{}, isolated]]) },
+  );
+  const probes = registry.counter(
+    "deckhand_network_probes_total",
+    "Network probes, by their result: isolated, reached, unknown (couldn't tell).",
+    { labels: ["result"], values: { result: PROBE_RESULTS } },
+  );
+  const seconds = registry.histogram(
+    "deckhand_network_probe_seconds",
+    "How long a network probe took, its pod's start included, in seconds.",
+    { buckets: PROBE_BUCKETS },
+  );
+  for (const result of PROBE_RESULTS) probes.inc({ result }, 0);
+  return (result, took) => {
+    probes.inc({ result });
+    seconds.observe(took);
+    if (result !== "unknown") isolated = result === "isolated" ? 1 : 0;
   };
 }
 

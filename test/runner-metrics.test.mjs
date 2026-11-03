@@ -64,3 +64,10 @@ test("a label outside its values is folded into other: an unknown agent, a made-
   assert.ok(text.includes('deckhand_agent_installs_total{agent="other",result="ok"} 1\n'));
   assert.ok(text.includes('deckhand_sandboxes_failed_to_start_total{reason="other"} 1\n'));
 });
+
+test("Docker's runner has no network probe's metrics", async () => {
+  const registry = createRegistry();
+  const metrics = runnerMetrics(registry, { runner: "docker", active: () => true });
+  metrics.probed("isolated", 1);
+  assert.ok(!(await registry.render()).includes("deckhand_network"));
+});
