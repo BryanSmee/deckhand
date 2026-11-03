@@ -2428,7 +2428,7 @@ test("metrics: a start timed until its pod leaves Pending, once; another copy's 
   assert.deepEqual(metrics.seen.failed, []);
 });
 
-test("metrics: a pod Pending past the wait counts as failed to start, by why, once", async (t) => {
+test("metrics: a pod Pending past the wait counts as failed to start, by why", async (t) => {
   const metrics = recordedMetrics();
   const cases = {
     unschedulable: {
@@ -2490,4 +2490,49 @@ test("metrics: the network probe's verdicts, and a start it refuses says not_iso
 test("metrics: a namespace without the sandboxes' NetworkPolicy refuses a start as not_isolated", async (t) => {
   const { runner } = setup(t, { policies: [] });
   await assert.rejects(runner.start(spec()), (error) => error.reason === "not_isolated");
+});
+
+test("metrics: a failed gate or install counts once, however often its pod is followed", async (t) => {
+  const cases = { network_gate: "network-gate", agent_install: "agent-install" };
+  for (const [reason, container] of Object.entries(cases)) {
+    const metrics = recordedMetrics();
+    const { runner, objects } = setup(
+      t,
+      { logs: { "dh-org-repo-12-abc": ["said\n"] } },
+      { metrics },
+    );
+    await runner.start(spec({ volumes: [agentVolume, ...spec().volumes.slice(1)] }));
+    objects.pods.get("dh-org-repo-12-abc").status = {
+      phase: "Failed",
+      initContainerStatuses: [{ name: container, state: { terminated: { exitCode: 3 } } }],
+    };
+    const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+    await assert.rejects(follow(), RunError);
+    await assert.rejects(follow(), RunError);
+    assert.deepEqual(metrics.seen.failed, [reason]);
+    assert.deepEqual(metrics.seen.started, []);
+  }
+});
+
+test("metrics: the same name's next pod isn't timed from this copy's older start, nor after a lease taken again", async (t) => {
+  const metrics = recordedMetrics();
+  const { runner, objects } = setup(t, { logs: { "dh-org-repo-12-abc": [] } }, { metrics });
+  const follow = () => runner.follow("dh-org-repo-12-abc", { onOut: () => {}, onErr: () => {} });
+  await runner.start(spec());
+  // Another copy removed it and started the issue's next run under the same name.
+  const pod = objects.pods.get("dh-org-repo-12-abc");
+  objects.pods.set("dh-org-repo-12-abc", {
+    ...pod,
+    metadata: { ...pod.metadata, uid: "another-copy's" },
+    status: { phase: "Running" },
+  });
+  await follow();
+  assert.deepEqual(metrics.seen.started, []);
+  // Taking the lease again forgets what it timed.
+  objects.pods.clear();
+  await runner.start(spec({ run: "dh-org-repo-12-abc-2" }));
+  runner.leased();
+  objects.pods.get("dh-org-repo-12-abc").status = { phase: "Running" };
+  await follow();
+  assert.deepEqual(metrics.seen.started, []);
 });

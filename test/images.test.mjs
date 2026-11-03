@@ -29,6 +29,7 @@ function fakeDocker({
   volumes = new Set(),
   fail = {},
   inUse = new Set(), // tags a container runs: `docker image rm` refuses them
+  unremovable = new Set(), // tags `docker image rm` fails on otherwise
 } = {}) {
   const calls = [];
   const docker = async (args) => {
@@ -57,6 +58,9 @@ function fakeDocker({
         out: "",
         err: `Error response from daemon: conflict: unable to remove repository reference "${args[2]}" (must force) - container 0123 is using its referenced image`,
       };
+    }
+    if (command === "image" && sub === "rm" && unremovable.has(args[2])) {
+      return { code: 1, out: "", err: "Error response from daemon: layer store busy" };
     }
     if (command === "image" && sub === "rm") images.delete(args[2]);
     if (command === "build") images.add(args[args.indexOf("-t") + 1]);
@@ -372,16 +376,23 @@ test("builds, prunes and installs are counted in the runner's metrics", async (t
   const registry = createRegistry();
   const metrics = runnerMetrics(registry, { runner: "docker", active: () => true });
   const old = Array.from({ length: 5 }, (_, k) => `${A}:old${k}`);
-  const { images } = setup(t, { images: new Set(old), inUse: new Set([old[0]]) }, "b", metrics);
+  const { images } = setup(
+    t,
+    { images: new Set(old), inUse: new Set([old[0]]), unremovable: new Set([old[1]]) },
+    "b",
+    metrics,
+  );
   await images.imageFor({ repo: "org/a", ref: "main", dockerfile: "Dockerfile" });
   await images.installAgent(claude);
   const text = await registry.render();
   const has = (line) => assert.ok(text.includes(`${line}\n`), line);
   has('deckhand_image_builds_total{runner="docker",result="ok"} 1');
   has("deckhand_image_build_seconds_count 1");
-  // Five old tags and the new one: three kept by the prune, one in use, two deleted.
-  has('deckhand_image_prunes_total{result="deleted"} 2');
+  // Five old tags and the new one: three kept by the prune, one in use, one Docker failed on,
+  // one deleted.
+  has('deckhand_image_prunes_total{result="deleted"} 1');
   has('deckhand_image_prunes_total{result="kept"} 1');
+  has('deckhand_image_prunes_total{result="failed"} 1');
   has('deckhand_agent_installs_total{agent="claude",result="ok"} 1');
 
   const failing = setup(t, { fail: { build: "no such file", run: "npm: 403" } }, "b", metrics);

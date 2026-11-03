@@ -573,9 +573,11 @@ export function createKubernetesRunner({
   const inbox = createInbox({ inboxDir, mirror });
   // Runs whose Secret exists before their pod does: relink() leaves them alone.
   const starting = new Set();
-  // When this copy was asked to start each sandbox it started, until its pod leaves Pending:
-  // what its start's duration counts from. A pod another copy started isn't timed.
-  const asked = new Map();
+  // When this copy was asked to start each sandbox it started, and its pod's uid, until that
+  // pod leaves Pending: what its start's duration counts from. A pod another copy started isn't
+  // timed: the same name's next pod (the issue's next run) has another uid, and the map is
+  // cleared each time this copy takes the lease again.
+  const asked = new Map(); // name → { at, uid }
   // The pods whose failure to start was counted: followed again, they are counted once.
   const failedPods = new Set();
   let proxy = { at: -Infinity, addresses: [] };
@@ -694,7 +696,7 @@ export function createKubernetesRunner({
         stringData: env,
       });
       made.push(`secrets/${secret}`);
-      asked.set(name, askedAt);
+      asked.set(name, { at: askedAt, uid: pod?.metadata?.uid });
     } catch (error) {
       for (const path of made.reverse()) {
         await api.remove(path).catch((e) => log(`Removing ${path}: ${e.message}`));
@@ -1060,13 +1062,16 @@ export function createKubernetesRunner({
         );
       }
       if (pod.status?.phase !== "Pending") {
-        if (asked.has(name)) metrics?.started((now() - asked.get(name)) / 1000);
+        const mine = asked.get(name);
+        if (mine && mine.uid === pod.metadata?.uid) metrics?.started((now() - mine.at) / 1000);
         asked.delete(name);
         return true;
       }
       if (overdue(pod)) {
         const why = await whyPending(name, pod);
         failed(pod, pendingFailure(pod, why));
+        // Removed below: never followed again.
+        failedPods.delete(pod.metadata?.uid ?? name);
         log(`${name}: Pending for ${minutes(pendingMs)} min (${why}): removing it`);
         await kill(name).catch((error) => log(`Removing ${name}: ${error.message}`));
         // Its gate gives up before this, saying what it still reached; unless the node's clock is
@@ -1313,7 +1318,11 @@ export function createKubernetesRunner({
     relink,
     proxyAddresses,
     // The runner service took its lease: the network probe runs again (kube-probe.mjs).
-    leased: () => probe.reset(),
+    // The starts it timed are forgotten: another copy may have started those names' pods since.
+    leased: () => {
+      asked.clear();
+      probe.reset();
+    },
     // The pod at that address is the sandbox: no other container of a run has one of its own.
     locate: async (ip) => {
       const sandbox = await sandboxOf(ip);

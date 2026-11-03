@@ -254,7 +254,9 @@ export function createRunnerService({
   }
 
   // The running sandboxes as [{ engine }], for the metrics: the acting copy's alone (null on the
-  // waiting one, which has no samples of them).
+  // waiting one, which has no samples of them). Each scrape lists them (a `docker ps`, a pod list
+  // on Kubernetes) and reads the store once per run not seen before: fine every 15 s or so, not
+  // for a scraper asking every second.
   async function sandboxes() {
     if (!lease.active() || stopping) return null;
     const list = (await runner.list()).filter((s) => s.running);
