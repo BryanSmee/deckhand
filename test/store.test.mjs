@@ -17,7 +17,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import { sealWith } from "../lib/seal.mjs";
-import { nextEpoch, openStore, storable, values } from "../lib/store.mjs";
+import { countKeys, nextEpoch, openStore, storable, values } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { writeJsonAtomic } from "../lib/files.mjs";
 import { isRoot, needsModes, needsPosixRename, tempDir } from "./helpers.mjs";
@@ -570,6 +570,17 @@ test("a sealed value is never refused for a token's shape, and one sealed in bas
     .join(".");
   assert.equal(open(urlSafe), "x".repeat(600));
   assert.equal(open(sealed), "x".repeat(600));
+});
+
+test("countKeys(): a key listed again on a later page counted once", async () => {
+  const pages = [
+    { keys: ["a", "b"], cursor: "1" },
+    { keys: [], cursor: "2" },
+    { keys: ["a", "c"], cursor: null },
+  ];
+  const store = { keys: async (prefix, { cursor }) => pages[cursor === null ? 0 : Number(cursor)] };
+  assert.equal(await countKeys(store, "p/"), 3);
+  assert.equal(await countKeys(openStore("memory:"), "p/"), 0);
 });
 
 test("values(): a key listed again on a later page comes once, one gone before its get() not at all", async () => {

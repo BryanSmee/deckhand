@@ -1414,6 +1414,24 @@ it answered: add the copies up.
 | `deckhand_policy_decision_seconds` | `policy`           | how long opa took on a decision, once its set was loaded: cut at 2 s, so the top buckets are the ones to watch                                                                                                                                                                                                                                                                   |
 | `deckhand_policy_reloads_total`    | `result`           | loads of the operator's policies (the first a decision reads, then each change to `policy/` in the grants folder): `ok`, or `error` (they can't be read or don't compile), checked with an `opa check` of their own when `METRICS_PORT` is set. There is no last good set to fall back on: until they are fixed, every decision is refused, as [security.md](security.md) has it |
 
+### Edge's
+
+What reaches Deckhand from outside (`edge/metrics.mjs`). Each copy counts its own requests:
+add the copies up.
+
+| Metric                                   | Labels            | What                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `deckhand_webhooks_received_total`       | `event`, `result` | GitHub's deliveries. `result`: `accepted`, `duplicate` (taken already, by this copy or the other), `ignored` (not JSON, CI of a repo not allowed), `bad_signature`, `refused` (no App yet, or stopping), `too_large`, `busy`, `unread` (cut short, too slow), `failed` (the store away)                                                |
+| `deckhand_webhooks_redelivered_total`    |                   | failed deliveries edge asked GitHub to send again, on the copy holding the poller's lease                                                                                                                                                                                                                                              |
+| `deckhand_http_requests_total`           | `route`, `status` | requests on the public port: the dashboard's pages, files and API, sign-in, `/webhook`, `/status`… `route` is its pattern (`/api/runs/:id/stream`), never the path; `other` for one edge doesn't serve. `status` is its class (`2xx`, `4xx`…), as anyone can get a 401 or a 400 on any route; `none`: the client left before an answer |
+| `deckhand_http_request_duration_seconds` | `route`           | how long they took, to the answer's end: a live log's whole life                                                                                                                                                                                                                                                                       |
+| `deckhand_sign_ins_total`                | `result`          | `allowed`, `refused` (not in `ALLOWED_USERS`), `expired` (back from GitHub without its state), `cancelled` (Cancel on GitHub's page), `failed` (GitHub refused the code, didn't say who it was, or didn't answer)                                                                                                                      |
+| `deckhand_sessions_active`               |                   | users signed in who used the dashboard in the last 15 minutes, on either copy: both say the same (take the max, not the sum)                                                                                                                                                                                                           |
+| `deckhand_log_streams_open`              |                   | runs' live logs this copy streams to a browser                                                                                                                                                                                                                                                                                         |
+
+`event` is one of the events GitHub sends the App, `other` for any other name: the header comes
+before the signature is checked, so what the internet writes there never makes a series.
+
 ## Health checks
 
 Every service in `compose.yaml` has a health check, which calls its own `/ready` (or `/health`)

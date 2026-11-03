@@ -196,6 +196,24 @@ test("past the cap of series, new ones go to one other series, logged once", asy
   assert.match(lines[0], /over 3 series/);
 });
 
+test("a metric's own cap: its series kept past the registry's, up to it", async () => {
+  const { registry, lines } = recorded({ maxSeries: 3 });
+  const calls = registry.counter("deckhand_own_total", "Calls.", {
+    labels: ["route"],
+    maxSeries: 5,
+  });
+  for (let i = 0; i < 6; i++) calls.inc({ route: `/r${i}` });
+  assert.deepEqual(samples(await registry.render()), [
+    'deckhand_own_total{route="/r0"} 1',
+    'deckhand_own_total{route="/r1"} 1',
+    'deckhand_own_total{route="/r2"} 1',
+    'deckhand_own_total{route="/r3"} 1',
+    'deckhand_own_total{route="/r4"} 1',
+    'deckhand_own_total{route="other"} 1',
+  ]);
+  assert.match(lines[0], /over 5 series/);
+});
+
 test("an undeclared label is dropped and a missing one empty, each logged once", async () => {
   const { registry, lines } = recorded();
   const gauge = registry.gauge("deckhand_g", "G.", { labels: ["a"] });

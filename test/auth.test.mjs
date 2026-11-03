@@ -14,7 +14,7 @@ import { assertMode, serve, tempDir, testConfig } from "./helpers.mjs";
 const credentials = { client_id: "Iv1.x", client_secret: "cs" };
 
 // An auth handler behind a server, with GitHub answering that the browser is `login`.
-async function serveAuth(t, { login = "Alice", app = { credentials }, store } = {}) {
+async function serveAuth(t, { login = "Alice", app = { credentials }, store, signedIn } = {}) {
   const config = testConfig({
     GITHUB_URL: "https://gh.test",
     GITHUB_API: "https://api.gh.test",
@@ -24,6 +24,7 @@ async function serveAuth(t, { login = "Alice", app = { credentials }, store } = 
     calls.push({ url, method: init.method ?? "GET", init });
     if (url === "https://gh.test/login/oauth/access_token") {
       const { code } = JSON.parse(init.body);
+      if (code === "unreachable") throw new Error("connection reset");
       return Response.json(
         code === "good" ? { access_token: "user-token" } : { error: "bad_verification_code" },
       );
@@ -41,6 +42,7 @@ async function serveAuth(t, { login = "Alice", app = { credentials }, store } = 
     fetch,
     now: () => clock,
     random: () => "state1",
+    signedIn,
   });
   const { url: base } = await serve(t, (req, res) => {
     if (auth.handle(req, res)) return;
@@ -216,4 +218,24 @@ test("the session key is created once, owner-only, and kept", (t) => {
   assert.equal(key.length, 32);
   assertMode(join(dir, "session.key"), 0o600);
   assert.deepEqual(sessionKey(dir), key);
+});
+
+test("each sign-in's result is counted: allowed, refused, expired, cancelled, failed", async (t) => {
+  const results = [];
+  const signedIn = (result) => results.push(result);
+  const s = await serveAuth(t, { signedIn });
+  await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
+  await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=other");
+  await s.get("/auth/callback?code=nope&state=state1", "deckhand_oauth_state=state1");
+  // Cancel on GitHub's page: back with its state and an error, no code.
+  await s.get("/auth/callback?error=access_denied&state=state1", "deckhand_oauth_state=state1");
+  // GitHub away: 500, and failed all the same.
+  const away = await s.get(
+    "/auth/callback?code=unreachable&state=state1",
+    "deckhand_oauth_state=state1",
+  );
+  assert.equal(away.status, 500);
+  const refused = await serveAuth(t, { login: "mallory", signedIn });
+  await refused.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
+  assert.deepEqual(results, ["allowed", "expired", "failed", "cancelled", "failed", "refused"]);
 });

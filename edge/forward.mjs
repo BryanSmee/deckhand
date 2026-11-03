@@ -25,7 +25,15 @@ const WAIT_MS = 15_000;
 const STILL_MS = 1000;
 
 // `urls`: ORCHESTRATOR_URL; `token()`: edge's Authorization header for the orchestrator.
-export function createForwarder({ urls, token, fetch = globalThis.fetch, waitMs = WAIT_MS, log }) {
+// `stream()`: called as a live log starts streaming, → what its end calls (metrics.mjs's).
+export function createForwarder({
+  urls,
+  token,
+  fetch = globalThis.fetch,
+  waitMs = WAIT_MS,
+  stream = () => () => {},
+  log,
+}) {
   const client = serviceClient({ service: "orchestrator", urls, token, fetch, waitMs, log });
 
   // `body`: the request's, read already (a Buffer), or none. `still()`: whether its user is
@@ -66,6 +74,10 @@ export function createForwarder({ urls, token, fetch = globalThis.fetch, waitMs 
     }
     res.writeHead(answer.status, back);
     if (!answer.body) return res.end();
+    // Not when the browser left already: its close came, and won't again.
+    if (back["content-type"]?.startsWith("text/event-stream") && !res.destroyed) {
+      res.once("close", stream());
+    }
     if (still && back["content-type"]?.startsWith("text/event-stream")) {
       const checking = setInterval(async () => {
         if (await Promise.resolve(still()).catch(() => false)) return;

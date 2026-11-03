@@ -208,3 +208,25 @@ test("a redelivery request that fails outright doesn't lose the others asked in 
   assert.equal(await next.scan(), 1);
   assert.deepEqual(github.redelivered(), ["1", "2", "2"]);
 });
+
+test("each redelivery GitHub agreed to is counted, not those it refused", async () => {
+  let refuse = true;
+  const github = fakeApp(
+    { "": [delivery(2, "lost", 2, 0), delivery(1, "lost-too", 3, 502)] },
+    {
+      attempt: (path) => new Response(null, { status: refuse && path.includes("/2/") ? 500 : 202 }),
+    },
+  );
+  let counted = 0;
+  const redeliveries = createRedeliveries({
+    store: openStore("memory:"),
+    app: github.app,
+    onRedelivered: () => counted++,
+    now: () => NOW,
+  });
+  assert.equal(await redeliveries.scan(), 1);
+  assert.equal(counted, 1);
+  refuse = false;
+  assert.equal(await redeliveries.scan(), 1);
+  assert.equal(counted, 2);
+});
