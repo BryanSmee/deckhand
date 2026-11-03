@@ -249,3 +249,63 @@ test("forward's transform: the answer read whole and sent as it returns it; past
   const big = await through({ transform: () => Buffer.from("no"), maxTransform: 4 });
   assert.equal(await (await fetch(big.url)).text(), '{"a":"bcd"}');
 });
+
+test("forward() says how the answer ended: done, cut short by the provider or idle, the client gone, unreachable", async (t) => {
+  // A provider sending one event, then: the rest (`end`), its socket cut (`cut`), or nothing.
+  let then = "end";
+  const { url: provider } = await serve(t, (req, res) => {
+    req.resume();
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write("data: first\n\n");
+    if (then === "end") res.end("data: last\n\n");
+    if (then === "cut") setTimeout(() => res.socket.destroy(), 10);
+  });
+  const { url: nowhere } = await serve(t, (req, res) => res.socket.destroy());
+  let clock = globalThis;
+  let target = provider;
+  const ended = [];
+  const { url } = await serve(t, async (req, res) => {
+    ended.push(
+      await forward(req, res, {
+        target: new URL(target),
+        headers: {},
+        unreachable: () => res.writeHead(502).end(),
+        log: () => {},
+        what: "test",
+        clock,
+      }),
+    );
+  });
+  const until = async (n) => {
+    while (ended.length < n) await new Promise((resolve) => setTimeout(resolve, 5));
+  };
+
+  assert.equal(await (await fetch(url)).text(), "data: first\n\ndata: last\n\n");
+  await until(1);
+  then = "cut";
+  await assert.rejects((await fetch(url)).text());
+  await until(2);
+  // The agent gives up mid-stream (an interrupt, its run's end).
+  then = "hold";
+  const aborting = new AbortController();
+  const res = await fetch(url, { signal: aborting.signal });
+  const reader = res.body.getReader();
+  await reader.read();
+  aborting.abort();
+  await until(3);
+  // No byte for the idle time, once answering.
+  clock = fakeClock();
+  const idle = await fetch(url);
+  const idleReader = idle.body.getReader();
+  await idleReader.read();
+  clock.fire();
+  await assert.rejects(async () => {
+    while (!(await idleReader.read()).done);
+  });
+  await until(4);
+  target = nowhere;
+  clock = globalThis;
+  assert.equal((await fetch(url)).status, 502);
+  await until(5);
+  assert.deepEqual(ended, ["done", "cut", "gone", "cut", "unreachable"]);
+});

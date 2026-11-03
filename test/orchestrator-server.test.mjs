@@ -39,6 +39,7 @@ import {
   SANDBOX_HEADER,
 } from "../lib/broker-client.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
+import { createRegistry } from "../lib/metrics.mjs";
 import { createProxy, egressPolicy, relayTarget } from "../proxy/proxy.mjs";
 import { networkCallers } from "../lib/service-token.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
@@ -545,7 +546,7 @@ function start(env, { script = "orchestrator/server.mjs", also = () => "" } = {}
 // credentials among them, as the listener's; its service tokens from the broker service, its
 // login refreshes at the runner. Settings it can't start with: an answer of which credentials it
 // holds alone, so that the listener says what is wrong with its own. → { handle, stop }.
-function startModels(settings, { dir, runnerUrl, log }) {
+function startModels(settings, { dir, runnerUrl, registry, log }) {
   const env = withCredentialFiles(settings);
   const names = { names: credentialNames(env) };
   const alone = {
@@ -577,6 +578,7 @@ function startModels(settings, { dir, runnerUrl, log }) {
     caller,
     refresh: runner.refreshLogin,
     bound: networkCallers("proxy+orchestrator=127.0.0.0/8"),
+    registry,
     log,
   });
   models.ready();
@@ -939,9 +941,12 @@ describe("listener", options, () => {
       MODELS_SERVICE_URL: `http://127.0.0.1:${modelsServer.address().port}`,
       ...more,
     };
+    // Its metrics (models/metrics.mjs), which a test reads (modelsMetrics()).
+    const modelsRegistry = createRegistry();
     models = startModels(settings, {
       dir,
       runnerUrl: settings.RUNNER_URL,
+      registry: modelsRegistry,
       log: (line) => (modelsOut += `${line}\n`),
     });
     // The listener holds none of them (the models service does): those in `settings` go there.
@@ -1081,6 +1086,7 @@ describe("listener", options, () => {
       handOver,
       serviceToken,
       githubService,
+      modelsMetrics: () => modelsRegistry.render(),
       urls: {
         github: githubService.url,
         runner: settings.RUNNER_URL,
@@ -1485,7 +1491,7 @@ describe("listener", options, () => {
 
   // A Claude credential, an OpenRouter key and an OpenAI key, with FALLBACKS; `failing`: the
   // entries whose provider fails.
-  function falling(t, fallbacks, failing) {
+  function falling(t, fallbacks, failing, more = {}) {
     return listen(
       t,
       (dir) => (writeFileSync(join(dir, "failing"), failing.join("\n") + "\n"), {}),
@@ -1497,6 +1503,7 @@ describe("listener", options, () => {
         OPENAI_API_KEY: "sk-proj-operator",
         OPENAI_BASE_URL: `${github.url}/v1`,
         FALLBACKS: fallbacks,
+        ...more,
       }),
     );
   }
@@ -1505,9 +1512,12 @@ describe("listener", options, () => {
   const messages = (dir) => exists(join(dir, "messages"))?.split("----\n").slice(0, -1) ?? [];
 
   test("a provider error: the run goes on with the same agent on the next provider, one reply naming it", async (t) => {
-    const { dir, github, send, listener } = await falling(t, "claude@openrouter, codex", [
-      "claude@anthropic",
-    ]);
+    const { dir, github, send, listener, modelsMetrics } = await falling(
+      t,
+      "claude@openrouter, codex",
+      ["claude@anthropic"],
+      { METRICS_PORT: "0" },
+    );
     await send(comment("alice", "Deckhand\nFix the login"));
     await until(() => replies(github).length === 1, "the reply");
     await settled(github, [99]);
@@ -1532,6 +1542,23 @@ describe("listener", options, () => {
     assert.match(
       listener.output(),
       /Claude \(anthropic, plan\)'s provider failed: overloaded \(529\)\. Falling back to Claude \(openrouter\)/,
+    );
+    // The fallback, counted by the orchestrator; each run's call by the models service (the fake
+    // agent's 529 is its output's: its call got a 200).
+    const port = /Metrics on :(\d+)\/metrics/.exec(listener.own())[1];
+    const text = await (await fetch(`http://127.0.0.1:${port}/metrics`)).text();
+    assert.match(
+      text,
+      /^deckhand_model_fallbacks_total\{from="claude@anthropic:plan",to="claude@openrouter"\} 1$/m,
+    );
+    const calls = await modelsMetrics();
+    assert.match(
+      calls,
+      /^deckhand_model_calls_total\{provider="anthropic",agent="claude",status="2xx"\} 1$/m,
+    );
+    assert.match(
+      calls,
+      /^deckhand_model_calls_total\{provider="openrouter",agent="claude",status="2xx"\} 1$/m,
     );
   });
 

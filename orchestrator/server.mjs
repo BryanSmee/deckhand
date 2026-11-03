@@ -25,7 +25,7 @@ import { fingerprint, fingerprintRedactor } from "../lib/fingerprints.mjs";
 import { join } from "node:path";
 import { createAnalysis } from "../listener/analysis.mjs";
 import { planWarning } from "../listener/agents/credentials.mjs";
-import { AGENT_SECRETS } from "../listener/agents/index.mjs";
+import { AGENT_SECRETS, ENTRIES } from "../listener/agents/index.mjs";
 import { createModelsService } from "../listener/models-service.mjs";
 import { createBroker } from "../listener/broker.mjs";
 import { createBrokerService } from "../listener/broker-service.mjs";
@@ -439,6 +439,13 @@ const ctx = {
   store,
   // The models service: the agents' credentials' fingerprints, a run's API state at its end.
   models,
+  // The runs whose provider failed, another entry of FALLBACKS taking over (runs.mjs fallBack()):
+  // the models service's calls say why, the fallback is decided here.
+  fallbacks: metrics.registry.counter(
+    "deckhand_model_fallbacks_total",
+    "Runs whose provider failed, put back for the next entry of FALLBACKS (from, to: agent@provider[:credential]).",
+    { labels: ["from", "to"], values: { from: ENTRIES, to: ENTRIES } },
+  ),
   storeSecrets: () => operatorSecrets(ctx),
 };
 storeSecrets = () => operatorSecrets(ctx);
