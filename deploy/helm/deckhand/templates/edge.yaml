@@ -23,7 +23,7 @@ spec:
       serviceAccountName: deckhand-edge
       enableServiceLinks: false
       automountServiceAccountToken: false
-      terminationGracePeriodSeconds: 30
+      terminationGracePeriodSeconds: 40
       {{- include "deckhand.podSecurityContext" false | nindent 6 }}
       {{- if not $redis }}
       {{- include "deckhand.sameNode" "deckhand-edge" | nindent 6 }}
@@ -37,6 +37,8 @@ spec:
             - name: internal
               containerPort: 8083
           env:
+            - name: DRAIN_SECONDS
+              value: "25"
             - name: SERVICE_NETWORKS
               value: none
             - name: SERVICE_ACCOUNT_TOKEN_FILE
@@ -50,6 +52,10 @@ spec:
               value: file:///data/store
             {{- end }}
           {{- include "deckhand.probes" (list "http" "/health" "/health") | nindent 10 }}
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
           {{- include "deckhand.containerSecurityContext" . | nindent 10 }}
           volumeMounts:
             - name: data

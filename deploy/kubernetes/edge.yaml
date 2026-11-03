@@ -29,9 +29,9 @@ spec:
       # No <SERVICE>_PORT variables: the policy Service's would read as POLICY_PORT, a setting.
       enableServiceLinks: false
       automountServiceAccountToken: false
-      # Its drain (DRAIN_SECONDS, 25 s: a live log until the browser reconnects), as compose's
-      # stop_grace_period.
-      terminationGracePeriodSeconds: 30
+      # The preStop pause (10 s), then its drain (DRAIN_SECONDS, 25 s: a live log until the
+      # browser reconnects).
+      terminationGracePeriodSeconds: 40
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -56,6 +56,10 @@ spec:
             - name: internal
               containerPort: 8083
           env:
+            # Its default, written here so test/kubernetes-manifests.test.mjs holds it to the
+            # grace period above.
+            - name: DRAIN_SECONDS
+              value: "25"
             # The orchestrator's service token tells it apart, and this Deployment's
             # NetworkPolicy lets only its pods reach 8083.
             - name: SERVICE_NETWORKS
@@ -80,6 +84,14 @@ spec:
               port: http
             periodSeconds: 10
             failureThreshold: 6
+          # GitHub and browsers don't try a refused connection again, nor a 503: the old copy keeps
+          # taking them until the ingress no longer sends it any (removing a pod from a Service's
+          # endpoints reaches the ingress a few seconds after the pod starts terminating), and
+          # only then gets SIGTERM.
+          lifecycle:
+            preStop:
+              exec:
+                command: [sleep, "10"]
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

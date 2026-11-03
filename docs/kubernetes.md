@@ -11,13 +11,13 @@ the agents): this page is what differs on a cluster.
 
 | Service      | Copies                           | Readiness | Grace (s) | Volumes                                         | Secrets                                          |
 | ------------ | -------------------------------- | --------- | --------- | ----------------------------------------------- | ------------------------------------------------ |
-| edge         | 2, both active                   | `/health` | 30        | `edge-data` (its store)                         | `deckhand-edge`                                  |
+| edge         | 2, both active                   | `/health` | 40        | `edge-data` (its store)                         | `deckhand-edge`                                  |
 | orchestrator | 2, active/passive                | `/health` | 300       | `orchestrator-data`, `orchestrator-screenshots` | none                                             |
 | runner       | 2, active/passive                | `/health` | 300       | `runner-data` (its store, the runs' inboxes)    | none (its ServiceAccount's API token)            |
-| broker       | 2, both active                   | `/ready`  | 35        | `broker-store`                                  | `deckhand-broker-key`                            |
+| broker       | 2, both active                   | `/ready`  | 45        | `broker-store`                                  | `deckhand-broker-key`                            |
 | github       | 2, both active                   | `/ready`  | 300       | `github-data` (its store, the git mirrors)      | `deckhand-github`                                |
 | models       | 2, both active                   | `/ready`  | 630       | `models-store`                                  | `deckhand-models`, `-models-key`, `-credentials` |
-| policy       | 2, both active                   | `/ready`  | 30        | none                                            | none                                             |
+| policy       | 2, both active                   | `/ready`  | 40        | none                                            | none                                             |
 | egress proxy | 1, and a second during an update | `/ready`  | 630       | `egress-cache` (its cache, its CA)              | none                                             |
 
 ## Requirements
