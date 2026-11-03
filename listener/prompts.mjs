@@ -220,7 +220,7 @@ ${modeInstructions.onboarding}
 - Hosts the operator grants this repository (\`grants/default.yaml\` and \`grants/${repo.toLowerCase()}.yaml\`): ${none(grant.hosts)}; any other is refused until the operator adds it there (\`.deckhand.yaml\` has no \`hosts\`)
 - Host mount roots granted to this repository: ${roots.length ? none(roots) : "none: a \`mounts\` entry would be refused until the operator grants a root"}
 - \`docker\` in \`.deckhand.yaml\`: ${grant.allowDocker ? (config.engine ? "allowed: its work runs get a container engine" : "granted, but the operator hasn't set up a container engine (SANDBOX_ENGINE): runs start without one") : "not granted: \`docker\` stops runs until the operator's policies grant this repository \`docker\`"}
-- Pushes that change \`.github/workflows/\`: ${grant.allowWorkflows ? "allowed: the operator grants this repository \`workflows\`; Deckhand refuses a changed workflow without a top-level \`permissions:\` of \`read\` or \`none\` scopes only, or that mentions \`secrets\`" : "not granted: GitHub refuses them until the operator's policies grant this repository \`workflows\`"}
+- Pushes that change \`.github/workflows/\`: ${grant.allowWorkflows ? "allowed: the operator grants this repository \`workflows\`; Deckhand refuses a changed workflow without a top-level \`permissions:\` of \`read\` or \`none\` scopes only, or that mentions \`secrets\`" + (grant.allowWorkflowSecrets ? "; with \`workflow_secrets\` granted too, one whose \`on:\` is only \`schedule\` and \`push\` with \`branches:\` naming the default branch alone may use secrets, \`environment:\` and \`write\` scopes, and its pull request is never merged automatically" : "") : "not granted: GitHub refuses them until the operator's policies grant this repository \`workflows\`"}
 - \`dockerfile\` in \`.deckhand.yaml\`: ${grant.allowDockerfile ? `allowed${grant.allowBranchDockerImages ? ", from pull requests' own branches too" : ""}` : "not granted: a \`dockerfile\` stops runs until the operator's policies grant this repository \`dockerfile\`"}
 - Models: work \`${settings.model}\` (${settings.effort} effort), brainstorms \`${settings.brainstormModel}\` (${settings.brainstormEffort})
 
@@ -330,13 +330,19 @@ function issueBranches(n, branches) {
   return `\`issue-${n}-…\`${extra}`;
 }
 
+// What `workflow_secrets` lifts (workflow-check.mjs), said after workflowsNote()'s rules.
+const SECRETS_NOTE =
+  "\nThe operator grants `workflow_secrets` too: a workflow GitHub only runs from the default\nbranch's copy may use `secrets`, `environment:` and `write` scopes. Its `on:` has nothing but\n`schedule` and `push` with `branches:` naming the default branch alone, exactly (no pattern,\n`branches-ignore`, `tags` or `tags-ignore`; `paths` is fine); not `workflow_dispatch`,\n`pull_request` or `workflow_call`, so a workflow it calls keeps the rules above and can't use secrets:\nuse them in the lifted workflow's own jobs. A pull request\nchanging a workflow is never merged automatically.";
+
 // Whether the run's pushes may change workflow files (git-gateway.mjs), so a run that can't
 // says so rather than retrying GitHub's refusal. Nothing for a run that can't push at all (a
 // fork's pull request): prPush() already says so.
 function workflowsNote(task, grant, branches) {
   if (task.kind === "pr" && !branches.length) return "";
   return grant?.allowWorkflows
-    ? 'Pushes may add or change files under `.github/workflows/` (the operator grants `workflows`),\nbut Deckhand refuses a changed workflow unless it has a top-level `permissions:` (`read-all`, `{}`,\nor scopes set to `read` or `none`), no `write` scope in any job, and doesn\'t mention `secrets`\nanywhere or call a reusable workflow from another repository, and no job has an\n`environment:`; it reads a strict YAML subset (no anchors, aliases, tags, merge keys, duplicate keys or\nmulti-line quoted scalars). It checks the branch merged with the default branch too: rebase on it\nfirst. Ask the maintainer for what a workflow would need beyond that when the task needs it\n(see "Stopping to ask" in your instructions; say in the pull request what it needs too).'
+    ? "Pushes may add or change files under `.github/workflows/` (the operator grants `workflows`),\nbut Deckhand refuses a changed workflow unless it has a top-level `permissions:` (`read-all`, `{}`,\nor scopes set to `read` or `none`), no `write` scope in any job, and doesn't mention `secrets`\nanywhere or call a reusable workflow from another repository, and no job has an\n`environment:`; it reads a strict YAML subset (no anchors, aliases, tags, merge keys, duplicate keys or\nmulti-line quoted scalars). It checks the branch merged with the default branch too: rebase on it\nfirst." +
+        (grant.allowWorkflowSecrets ? SECRETS_NOTE : "") +
+        ' Ask the maintainer for what a workflow would need beyond that when the task needs it\n(see "Stopping to ask" in your instructions; say in the pull request what it needs too).'
     : 'GitHub refuses pushes that add or change files under `.github/workflows/` (the operator\ndoesn\'t grant `workflows`): leave them out, and ask the maintainer for them when the task needs\nthem (see "Stopping to ask" in your instructions; say in the pull request what they need too).';
 }
 

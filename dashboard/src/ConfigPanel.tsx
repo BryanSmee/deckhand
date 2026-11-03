@@ -679,6 +679,7 @@ function GrantCard({ grant }: { grant: Grant }) {
     ["docker", grant.allowDocker],
     ["research", grant.allowResearch],
     ["workflows", grant.allowWorkflows],
+    ["workflow_secrets", grant.allowWorkflowSecrets],
     ["auto_merge", grant.allowAutoMerge],
   ];
   const policies = grant.grantFiles.length

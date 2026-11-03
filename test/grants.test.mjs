@@ -67,6 +67,7 @@ const NOTHING = {
   allowDocker: false,
   allowResearch: false,
   allowWorkflows: false,
+  allowWorkflowSecrets: false,
   allowAutoMerge: false,
   grantFiles: [],
   mounts: [],
@@ -95,6 +96,7 @@ mounts:
     allowDocker: false,
     allowResearch: false,
     allowWorkflows: false,
+    allowWorkflowSecrets: false,
     allowAutoMerge: false,
     grantFiles: [],
     allowProjects: [],
@@ -630,6 +632,7 @@ test("the yes-or-no grants: the operator's policies', each a field of the grant 
     "docker",
     "dockerfile",
     "research",
+    "workflow_secrets",
     "workflows",
   ]);
   assert.deepEqual(grantFields(new Set()), NO_GRANTS);
@@ -654,6 +657,7 @@ test("the yes-or-no grants: the operator's policies', each a field of the grant 
     "auto_merge",
     "auto_merge_public",
     "docker",
+    "workflow_secrets",
     "workflows",
   ]);
   assert.match(ANY_REPO, /^[^\w]+\/[^\w]+$/);

@@ -15,7 +15,9 @@ package deckhand
 # Granted one repository at a time only: list each input.repo.name (a rule that also matches
 # "*/*" or "<owner>/*", as one for every repository or an owner's prefix does, gives them to none;
 # a check at best, other wide rules aren't caught): `docker` (a container engine next to its
-# sandboxes), `workflows` (its pushes may change .github/workflows/) and `auto_merge` (UNSAFE:
+# sandboxes), `workflows` (its pushes may change .github/workflows/), `workflow_secrets` (with
+# `workflows`, its workflows that only run from the default branch may use secrets) and
+# `auto_merge` (UNSAFE:
 # `review.merge` merges Deckhand's pull requests with no human reading them; `auto_merge_public`
 # on a public repository too). `branch_docker_images`: its pull requests' runs build their
 # branch's Dockerfile.

@@ -184,8 +184,8 @@ const realSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref
 // ../listener/broker-service.mjs gives them ({ keys(), serviceKeys(), unknownKey() }); `bound`:
 // the callers' networks (../lib/service-token.mjs networkCallers()), or null on Kubernetes;
 // `policies`: ../listener/policies.mjs's, for the runs' writes and pushes; `grants`: { projects(repo),
-// workflows(repo) }: the projects the operator grants a repo's runs (allow_projects), and whether
-// it grants `workflows`.
+// workflows(repo), workflowSecrets(repo) }: the projects the operator grants a repo's runs
+// (allow_projects), and whether it grants `workflows` and `workflow_secrets`.
 export function createGithubService({
   config,
   store,
@@ -193,7 +193,7 @@ export function createGithubService({
   broker,
   bound,
   policies,
-  grants = { projects: () => [], workflows: () => false },
+  grants = { projects: () => [], workflows: () => false, workflowSecrets: () => false },
   mirrorDir,
   fetch = globalThis.fetch,
   now = Date.now,
@@ -323,6 +323,7 @@ export function createGithubService({
     app: () => app.get(),
     policies,
     allowWorkflows: grants.workflows,
+    allowWorkflowSecrets: grants.workflowSecrets,
     forks: forkChecks,
     githubUrl: config.githubUrl,
     mirrorDir,

@@ -844,6 +844,8 @@ test(
       research: (g) => used(g, "research", "internet"),
       // The git gateway's: a push changing .github/workflows/ (git-gateway.test.mjs).
       workflows: (g) => g.allowWorkflows === true,
+      // Its workflows only the default branch runs may use secrets (git-gateway.test.mjs).
+      workflow_secrets: (g) => g.allowWorkflowSecrets === true,
       auto_merge: (g) => !autoMergeProblems(g, merge, true).length,
       auto_merge_public: (g) => !autoMergeProblems(g, merge, false).length,
     };
