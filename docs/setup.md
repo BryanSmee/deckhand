@@ -1410,8 +1410,9 @@ The dashboard's run history came from the runs' summaries in the orchestrator's 
 a copy taking over on another node finds them there. Nothing to do: at its first start, the
 orchestrator writes those left in `logs/` to its store, then removes them (`Run summaries: <n>
 moved from /data/logs to the store` in its log), before the dashboard lists the runs: about a
-second for 4,500 with the file store or Redis. A file that isn't a summary is logged (`Listing the run of <file>: not a run's summary`) and left in `logs/`, out of
-the history, as it was before; one the store didn't take stays for the next start, and so does a summary the store
+second for 4,500 with the file store or Redis. A file that isn't a summary is logged (`Listing
+the run of <file>: not a run's summary`) and left in `logs/`, out of the history, as it was
+before; one the store didn't take stays for the next start, and so does a summary the store
 refuses at a run's end (`logs/<run>.summary.json`, moved at the next start). The run logs left
 there from before the runner service are moved as before.
 
