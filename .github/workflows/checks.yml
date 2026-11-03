@@ -176,7 +176,7 @@ jobs:
       - name: Render and validate
         run: |
           set -o pipefail
-          for combination in "" redis buildkit engine "redis buildkit" "redis buildkit engine"; do
+          for combination in "" redis buildkit engine blobs "redis buildkit" "redis buildkit engine blobs"; do
             overlay=$(mktemp -d -p "$RUNNER_TEMP")
             base=$(realpath --relative-to="$overlay" "$GITHUB_WORKSPACE/deploy/kubernetes")
             printf 'resources: [%s]\n' "$base" > "$overlay/kustomization.yaml"
@@ -196,12 +196,12 @@ jobs:
           chart=deploy/helm/deckhand
           helm lint --strict "$chart"
           for values in "" "store=redis" "buildkit.enabled=true" "engine.enabled=true" \
-            "store=redis,buildkit.enabled=true,engine.enabled=true"; do
+            "blobs.enabled=true" "store=redis,buildkit.enabled=true,engine.enabled=true,blobs.enabled=true"; do
             echo "chart${values:+ with $values}:"
             helm template deckhand "$chart" ${values:+--set "$values"} | kubeconform -strict -summary
           done
           echo "chart with every value:"
-          helm template deckhand "$chart" --set store=redis,buildkit.enabled=true,engine.enabled=true \
+          helm template deckhand "$chart" --set store=redis,buildkit.enabled=true,engine.enabled=true,blobs.enabled=true \
             --set image.tag=v1.2.3,persistence.storageClass=ssd,sandboxes.storageClass=ssd \
             --set registry.url=registry.example.com/deckhand,ingress.enabled=true \
             --set ingress.host=deckhand.example.com,ingress.tlsSecretName=deckhand-tls \

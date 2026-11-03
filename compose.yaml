@@ -334,7 +334,8 @@ services:
       SERVICE_KEYS_DIR: /service-keys
       # Blob storage (docs/setup.md, Blob storage): none by default, the blobs in its store.
       # s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, with its key pair, which only the
-      # runner and the broker get.
+      # runner and the broker get (and Garage, below, with the `garage` profile:
+      # s3://deckhand?endpoint=http://garage:3900&region=garage).
       BLOB_URL: ${BLOB_URL:-}
       BLOB_ACCESS_KEY_ID: ${BLOB_ACCESS_KEY_ID:-}
       BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-}
@@ -362,6 +363,13 @@ services:
       - broker-runner
       - broker-models
       - broker-github
+      # Garage's, with the `garage` profile (below): internal, the two of them alone.
+      - blobs-broker
+    # Garage, with the `garage` profile: its bucket is checked as the broker starts.
+    depends_on:
+      garage:
+        condition: service_healthy
+        required: false
     read_only: true
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
@@ -383,11 +391,16 @@ services:
     # The orchestrator's, the models service's (the Antigravity login's refresh), its own to the
     # broker service (its tokens, the runs' inboxes and files), to the github service (the repos'
     # tarballs), and to the policy service (what the operator's policies grant a repository).
-    networks: [runner, runner-models, broker-runner, github-runner, policy-runner]
-    # The broker's public keys, which it checks its callers' service tokens with.
+    # Garage's (blobs-runner), with the `garage` profile.
+    networks: [runner, runner-models, broker-runner, github-runner, policy-runner, blobs-runner]
+    # The broker's public keys, which it checks its callers' service tokens with; Garage, with the
+    # `garage` profile, whose bucket it checks as it starts.
     depends_on:
       broker:
         condition: service_healthy
+      garage:
+        condition: service_healthy
+        required: false
     environment:
       # Its log lines: text, as `docker compose logs` reads them, or json for a collector
       # (docs/setup.md, Logs); debug, info, warn or error and above (LOG_LEVEL, info).
@@ -446,7 +459,8 @@ services:
       SERVICE_KEYS_DIR: /service-keys
       # Blob storage (docs/setup.md, Blob storage): none by default, the blobs in its store.
       # s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, with its key pair, which only the
-      # runner and the broker get.
+      # runner and the broker get (and Garage, below, with the `garage` profile:
+      # s3://deckhand?endpoint=http://garage:3900&region=garage).
       BLOB_URL: ${BLOB_URL:-}
       BLOB_ACCESS_KEY_ID: ${BLOB_ACCESS_KEY_ID:-}
       BLOB_SECRET_ACCESS_KEY: ${BLOB_SECRET_ACCESS_KEY:-}
@@ -735,6 +749,38 @@ services:
     cap_drop: [ALL]
     security_opt: ["no-new-privileges:true"]
 
+  # Blob storage to try it with (docs/setup.md, Blob storage), with the `garage` profile alone:
+  # Garage on one node, its bucket (deckhand) and its key made as it starts, from the runner's and
+  # the broker's key pair (BLOB_ACCESS_KEY_ID, BLOB_SECRET_ACCESS_KEY in .env, with
+  # BLOB_URL=s3://deckhand?endpoint=http://garage:3900&region=garage). Reached by the runner and
+  # the broker alone, each over an internal network of its own; no way out, no published port.
+  # Its data stays in the garage volume. Several nodes, or another server: docs/setup.md.
+  garage:
+    profiles: [garage]
+    image: dxflrs/garage:v2.3.0
+    restart: unless-stopped
+    command: ["/garage", "server", "--single-node", "--default-bucket"]
+    environment:
+      GARAGE_DEFAULT_BUCKET: deckhand
+      GARAGE_DEFAULT_ACCESS_KEY: ${BLOB_ACCESS_KEY_ID:-}
+      GARAGE_DEFAULT_SECRET_KEY: ${BLOB_SECRET_ACCESS_KEY:-}
+    configs:
+      - source: garage
+        target: /etc/garage.toml
+    volumes:
+      - garage:/var/lib/garage
+    networks: [blobs-runner, blobs-broker]
+    healthcheck:
+      test: ["CMD", "/garage", "status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 1m
+      start_interval: 1s
+    logging: *logging
+    # Not read_only: compose writes its configuration (below) into the container.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+
   # Pulls or builds the base image sandboxes run from (repo images build FROM it, and a new
   # base rebuilds them on their next run), then exits: the orchestrator starts them itself.
   sandbox:
@@ -881,6 +927,29 @@ networks:
     ipam:
       config:
         - subnet: ${RUNNER_SUBNET:-10.231.250.48/28}
+  # Garage's (the `garage` profile) to the runner and to the broker, one each: internal, so neither
+  # has a way out through it, and the broker's calls from the runner never arrive there.
+  blobs-runner:
+    internal: true
+  blobs-broker:
+    internal: true
+
+# Garage's configuration (the `garage` profile): one node, its RPC on its own loopback alone, so
+# its secret guards nothing another container could reach; S3 on 3900, region `garage`.
+configs:
+  garage:
+    content: |
+      metadata_dir = "/var/lib/garage/meta"
+      data_dir = "/var/lib/garage/data"
+      db_engine = "sqlite"
+      replication_factor = 1
+      rpc_bind_addr = "127.0.0.1:3901"
+      rpc_public_addr = "127.0.0.1:3901"
+      rpc_secret = "0000000000000000000000000000000000000000000000000000000000000000"
+
+      [s3_api]
+      s3_region = "garage"
+      api_bind_addr = "[::]:3900"
 
 volumes:
   # The orchestrator's.
@@ -901,3 +970,5 @@ volumes:
   # The broker's public keys: the broker service writes them, the policy service, the runner and
   # the models service read them.
   service-keys:
+  # Garage's metadata and objects (the `garage` profile).
+  garage:

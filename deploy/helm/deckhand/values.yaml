@@ -115,6 +115,23 @@ engine:
   # KUBERNETES_ENGINE_RUNTIME_CLASS: the RuntimeClass Sysbox's install makes.
   runtimeClass: sysbox-runc
 
+# Blob storage (docs/kubernetes.md#blob-storage, docs/setup.md#blob-storage): the blobs component,
+# BLOB_URL and its key pair for the runner and the broker alone, and their way to it. The Secret
+# (keys access-key-id and secret-access-key) you make beforehand. The placeholders reach
+# nothing: neither service starts until url, to and ports are yours.
+blobs:
+  enabled: false
+  # BLOB_URL: s3://<bucket>[/<prefix>]?endpoint=https://…&region=…, or file:///<folder>.
+  url: s3://deckhand?endpoint=https://blobs.invalid
+  secretName: deckhand-blobs
+  # Where it is, as a NetworkPolicy's peers: its addresses (ipBlock), or its pods when it runs
+  # in the cluster (podSelector, with a namespaceSelector from another namespace).
+  to:
+    - ipBlock:
+        cidr: 192.0.2.2/32
+  # Its port: 443 for a hosted service over HTTPS, 3900 for Garage's.
+  ports: [443]
+
 # Your ingress, to edge's port 8080 alone: GitHub's webhooks and the dashboard, over HTTPS.
 ingress:
   enabled: false

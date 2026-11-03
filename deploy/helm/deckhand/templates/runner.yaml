@@ -50,6 +50,9 @@ spec:
             {{- if $redis }}
             {{- include "deckhand.redisStore" "runner" | nindent 12 }}
             {{- end }}
+            {{- if .Values.blobs.enabled }}
+            {{- include "deckhand.blobsEnv" . | nindent 12 }}
+            {{- end }}
           {{- include "deckhand.probes" (list "http" "/health" "/health") | nindent 10 }}
           # Its /tmp is a tmpfs, charged to this pod (docs/kubernetes.md, Temporary files).
           resources:
@@ -72,6 +75,9 @@ spec:
             - name: broker-token
               mountPath: /var/run/secrets/deckhand
               readOnly: true
+            {{- if .Values.blobs.enabled }}
+            {{- include "deckhand.blobsMount" . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -85,6 +91,9 @@ spec:
           configMap:
             name: deckhand-service-keys
         {{- include "deckhand.brokerTokenVolume" . | nindent 8 }}
+        {{- if .Values.blobs.enabled }}
+        {{- include "deckhand.blobsVolume" . | nindent 8 }}
+        {{- end }}
 ---
 {{ include "deckhand.claim" (list . "runner-data" ($redis | ternary "ReadWriteMany" "ReadWriteOnce")) }}
 ---
