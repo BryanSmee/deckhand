@@ -23,6 +23,7 @@ import {
 } from "../policy-service/service.mjs";
 import {
   assertHealth,
+  samplesOf,
   evalResult,
   fakeOpa,
   hasOpa,
@@ -901,16 +902,6 @@ test("the capabilities: a service whose operator layer isn't the one read is ask
   const refused = await listener.capabilityRules("org/repo", "main", { run: {} });
   assert.match(refused.error, /^policy error: other operator policies/);
 });
-
-// A metric's samples in `registry`'s rendering, by their labels' text.
-async function samplesOf(registry, name) {
-  const found = {};
-  for (const line of (await registry.render()).split("\n")) {
-    const match = new RegExp(`^${name}(\\{[^}]*\\})? (\\S+)$`).exec(line);
-    if (match) found[match[1] ?? ""] = Number(match[2]);
-  }
-  return found;
-}
 
 test("its metrics: decisions by policy and result, opa's time on them, each load of the operator's policies", async (t) => {
   const registry = createRegistry();

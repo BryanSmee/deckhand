@@ -260,8 +260,11 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
       });
     } catch (error) {
       if (!(error instanceof TokenError)) throw error;
-      const reason = error.message === "expired" ? "expired" : "invalid";
-      return { status: 401, message: `this run token is refused: ${error.message}`, reason };
+      return {
+        status: 401,
+        message: `this run token is refused: ${error.message}`,
+        reason: error.code,
+      };
     }
     // A token outlives nothing: a run that ended has none that works.
     const record = await store.get(runKey(claims.jti));
@@ -359,9 +362,14 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
 
   const get = (id) => store.get(runKey(id));
 
-  // How many runs it holds, as its index says (one whose record expired is dropped from it at the
-  // next list()): what deckhand_runs_live reads at each scrape, without reading every record.
-  const live = async () => Object.keys((await store.get(INDEX)) ?? {}).length;
+  // How many runs it holds: those of its index whose record is still there (one that expired stays
+  // in the index until the next list(), which the orchestrator may not call for long). What
+  // deckhand_runs_live reads at each scrape: one read per live run, as many as the runs' slots.
+  async function live() {
+    const ids = Object.keys((await store.get(INDEX)) ?? {});
+    const found = await Promise.all(ids.map((id) => get(id)));
+    return found.filter(Boolean).length;
+  }
 
   // The run's tokens still valid, in clear (POST /runs/:id/secrets): { agentToken, tokens }, the
   // newest run token last, or null for a run that isn't live. The orchestrator's alone, for its

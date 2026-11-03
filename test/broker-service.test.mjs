@@ -17,8 +17,9 @@ import { openBlobs } from "../lib/blobs.mjs";
 import { createRegistry } from "../lib/metrics.mjs";
 import { MAX_SHOT, MAX_SHOTS } from "../lib/shots.mjs";
 import { openStore } from "../lib/store.mjs";
+import { SERVICE_TOKEN_TTL_MS } from "../lib/service-token.mjs";
 import { TOKEN_VERSION, verifyToken } from "../lib/tokens.mjs";
-import { assertHealth, resetsUnread, tempDir, testKey } from "./helpers.mjs";
+import { assertHealth, resetsUnread, samplesOf, tempDir, testKey } from "./helpers.mjs";
 
 // Each caller reaches the broker at an address of its own, as over a network of its own with
 // Docker: the broker's address a call arrives at tells it apart (SERVICE_NETWORKS).
@@ -864,16 +865,6 @@ test("a token presented to a broker that lost the run's record: sealed with the 
   ]);
 });
 
-// A metric's samples in `registry`'s rendering, by their labels' text: { '{kind="run"}': 2 }.
-async function samplesOf(registry, name) {
-  const found = {};
-  for (const line of (await registry.render()).split("\n")) {
-    const match = new RegExp(`^${name}(\\{[^}]*\\})? (\\S+)$`).exec(line);
-    if (match) found[match[1] ?? ""] = Number(match[2]);
-  }
-  return found;
-}
-
 test("its metrics: the tokens signed, renewed and refused, the live runs, the inbox polls open", async (t) => {
   const registry = createRegistry();
   const { copies, clock } = await brokers(t, { registry });
@@ -898,8 +889,14 @@ test("its metrics: the tokens signed, renewed and refused, the live runs, the in
   });
   assert.equal(stranger.status, 403);
   assert.equal((await call(broker, "orchestrator", "GET", "/runs")).status, 401);
-  // An endpoint the caller may not call.
+  // An endpoint the caller may not call; a token from another service's network.
   assert.equal((await proxy("GET", "/runs")).status, 403);
+  const proxyToken = await tokenOf(broker, "proxy");
+  const replayed = await call(broker, "orchestrator", "GET", "/runs", {
+    headers: { authorization: `Bearer ${proxyToken}` },
+  });
+  assert.equal(replayed.status, 403);
+
   assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 1 });
 
   // A long poll open while it waits for a line.
@@ -919,6 +916,18 @@ test("its metrics: the tokens signed, renewed and refused, the live runs, the in
   // Past its renewal's grace: expired, before anything else is read of it.
   clock.now += RENEW_GRACE_MS + 60 * 60_000;
   assert.equal((await renewOn(proxy, renewed.token)).status, 401);
+  // A service token past its life.
+  const old = await tokenOf(broker, "orchestrator");
+  clock.now += SERVICE_TOKEN_TTL_MS + 1000;
+  const expired = await call(broker, "orchestrator", "GET", "/runs", {
+    headers: { authorization: `Bearer ${old}` },
+  });
+  assert.deepEqual([expired.status, expired.json.message], [401, "service token: expired"]);
+  // A run whose record expired, its end never said: no longer counted, listed or not.
+  await started(orchestrator, "run-b");
+  assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 1 });
+  clock.now += RECORD_TTL_MS + 1000;
+  assert.deepEqual(await samplesOf(registry, "deckhand_runs_live"), { "": 0 });
 
   assert.deepEqual(await samplesOf(registry, "deckhand_token_renewals_total"), {
     '{result="again"}': 1,
@@ -926,16 +935,16 @@ test("its metrics: the tokens signed, renewed and refused, the live runs, the in
     '{result="refused"}': 4,
   });
   const issued = await samplesOf(registry, "deckhand_tokens_issued_total");
-  // Two run tokens (the first, one renewal) and one agent token; a service token per call.
-  assert.equal(issued['{kind="run"}'], 2);
-  assert.equal(issued['{kind="agent"}'], 1);
+  // Three run tokens (two starts, one renewal) and two agent tokens; a service token per call.
+  assert.equal(issued['{kind="run"}'], 3);
+  assert.equal(issued['{kind="agent"}'], 2);
   assert.ok(issued['{kind="service"}'] >= 5);
   assert.deepEqual(await samplesOf(registry, "deckhand_tokens_refused_total"), {
     '{reason="wrong_sandbox"}': 1,
     '{reason="invalid"}': 2,
-    '{reason="unknown_caller"}': 1,
+    '{reason="unknown_caller"}': 2,
     '{reason="not_allowed"}': 1,
     '{reason="run_over"}': 2,
-    '{reason="expired"}': 1,
+    '{reason="expired"}': 2,
   });
 });

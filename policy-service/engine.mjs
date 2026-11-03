@@ -39,7 +39,7 @@ import {
   UNION_DIR,
   UNION_FILE,
 } from "../lib/policy-files.mjs";
-import { resultOf } from "./metrics.mjs";
+import { NO_METRICS, resultOf } from "./metrics.mjs";
 import { opaBinary } from "./opa.mjs";
 
 // Where they were first: the tests import them from here.
@@ -261,7 +261,7 @@ function filesOf(entries, what) {
 // operator's folder (GRANTS_DIR); `readOperator()`: its policies (operatorPolicies());
 // `readBuiltIn()`: Deckhand's own (builtInPolicies()), read once; `tmp`: where each set is staged
 // while its server runs; `maxServers`: the servers kept; `metrics`: metrics.mjs policyMetrics()'s
-// hooks, none by default.
+// hooks, NO_METRICS by default (nobody scrapes: no load is checked for them).
 export function createEngine({
   opa = opaBinary(),
   grantsDir = null,
@@ -271,7 +271,7 @@ export function createEngine({
   maxServers = MAX_SERVERS,
   timeoutMs = TIMEOUT_MS,
   log = () => {},
-  metrics = null,
+  metrics = NO_METRICS,
 }) {
   // restrictedCapabilities() of the binary, once it answered.
   let capabilities = null;
@@ -457,9 +457,10 @@ export function createEngine({
   let loaded = null;
   // A load of the operator's layer (`own`, operatorFiles()'s) counted when it isn't the last one
   // read: the first, then each change. Whether it compiles is checked apart, with no decision
-  // waiting on it (that one's set is checked as it starts); only with metrics to count it.
+  // waiting on it (that one's set is checked as it starts, with the repo's files maybe): an
+  // `opa check` per change of the operator's files, only when something counts it.
   function counted(own) {
-    if (!metrics) return;
+    if (metrics === NO_METRICS) return;
     const key = own.error ?? layerDigest(own.files);
     if (key === loaded) return;
     loaded = key;
@@ -510,7 +511,7 @@ export function createEngine({
   async function evaluate(asked) {
     const timing = { seconds: null };
     const said = await decide(asked, timing);
-    metrics?.decision(String(asked.decision), resultOf(said), timing.seconds);
+    metrics.decision(String(asked.decision), resultOf(said), timing.seconds);
     return said;
   }
 
@@ -603,7 +604,7 @@ export function createEngine({
   async function evaluateCapabilities(asked) {
     const timing = { seconds: null };
     const said = await capabilitiesOf(asked, timing);
-    metrics?.decision("capabilities", said.error ? "error" : "allow", timing.seconds);
+    metrics.decision("capabilities", said.error ? "error" : "allow", timing.seconds);
     return said;
   }
 

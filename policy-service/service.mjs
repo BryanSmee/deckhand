@@ -16,7 +16,7 @@ import { networkCallers, serviceGuard } from "../lib/service-token.mjs";
 import { keyFolder } from "../lib/tokens.mjs";
 import { readSomeSettings } from "../lib/settings.mjs";
 import { createEngine } from "./engine.mjs";
-import { policyMetrics } from "./metrics.mjs";
+import { NO_METRICS, policyMetrics } from "./metrics.mjs";
 import { createLogger, withRequest } from "../lib/log.mjs";
 import { METRICS_PORT_SETTING, startMetrics } from "../lib/metrics.mjs";
 
@@ -126,7 +126,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   const { registry } = startMetrics({ service: "policy", port: settings.METRICS_PORT, log });
   const keysDir = env.SERVICE_KEYS_DIR || "/keys";
   const grantsDir = settings.GRANTS_DIR;
-  const engine = createEngine({ grantsDir, log, metrics: policyMetrics(registry) });
+  // Without a port nobody reads them: no `opa check` of the operator's policies for them.
+  const metrics = settings.METRICS_PORT == null ? NO_METRICS : policyMetrics(registry);
+  const engine = createEngine({ grantsDir, log, metrics });
   // Where the network tells its callers apart (one network per caller, SERVICE_NETWORKS); none
   // set, null: with Docker Compose its one network is the listener's, the only caller there.
   const bound = env.SERVICE_NETWORKS ? networkCallers(env.SERVICE_NETWORKS) : null;
