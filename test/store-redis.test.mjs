@@ -5,11 +5,13 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:net";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { test } from "node:test";
+import { after, test } from "node:test";
 import { encode, parseRedisUrl, RedisError, redisClient, replyParser } from "../lib/resp.mjs";
-import { openStore } from "../lib/store.mjs";
+import { openStore, values } from "../lib/store.mjs";
 import { redisStore } from "../lib/store-redis.mjs";
 import { asidePort, listening, until } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
@@ -285,8 +287,42 @@ async function realRedis() {
   throw new Error("redis-server didn't start");
 }
 
+// docs/setup.md's user, its keys under `deckhand-test:` rather than `deckhand:`: the stores the
+// tests open call Redis as it, so a command the store sends that its ACL lacks fails them
+// (NOPERM). Removed once the file's tests are done. → a URL signing in as it.
+async function setupUser(url) {
+  const line = /^user deckhand on (.*)$/m.exec(
+    readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8"),
+  )[1];
+  const name = `deckhand-test-${randomUUID()}`;
+  const password = randomUUID();
+  // Its password, `<a long random password>`, one of the tests'.
+  const rules = line
+    .replace(/>(<[^>]*>|\S+)/, `>${password}`)
+    .split(" ")
+    .map((rule) => (rule === "~deckhand:*" ? "~deckhand-test:*" : rule));
+  assert.ok(rules.includes("~deckhand-test:*"), line);
+  const admin = redisClient(url);
+  try {
+    await admin.call("ACL", "SETUSER", name, "reset", "on", ...rules);
+  } finally {
+    await admin.close();
+  }
+  after(async () => {
+    const client = redisClient(url);
+    await client.call("ACL", "DELUSER", name);
+    await client.close();
+  });
+  const signed = new URL(url);
+  signed.username = name;
+  signed.password = password;
+  return signed.href;
+}
+
 const redisUrl = await realRedis();
 const skip = redisUrl ? false : "no Redis: set TEST_REDIS_URL, or put redis-server on the PATH";
+// The stores' (docs/setup.md's ACL); redisUrl's is the tests' own, to look at what they wrote.
+const storeUrl = redisUrl && (await setupUser(redisUrl));
 
 // Each test its own prefix, its keys deleted after it: a Redis shared with others keeps theirs.
 function freshPrefix(t) {
@@ -306,7 +342,7 @@ function freshPrefix(t) {
 
 if (redisUrl) {
   storeContract("redis", (t, clock) =>
-    redisStore({ url: redisUrl, prefix: freshPrefix(t), now: clock.now }),
+    redisStore({ url: storeUrl, prefix: freshPrefix(t), now: clock.now }),
   );
 } else {
   test("redis: the shared suite", { skip }, () => {});
@@ -317,8 +353,8 @@ test(
   { skip },
   async (t) => {
     const prefix = freshPrefix(t);
-    const a = redisStore({ url: redisUrl, prefix });
-    const b = redisStore({ url: redisUrl, prefix });
+    const a = redisStore({ url: storeUrl, prefix });
+    const b = redisStore({ url: storeUrl, prefix });
     t.after(() => Promise.all([a.close(), b.close()]));
 
     const first = await a.acquire("orchestrator", "copy-a", { ttlMs: 10_000 });
@@ -359,7 +395,7 @@ test(
   "redis: events trimmed away while pending are skipped, the rest still read",
   { skip },
   async (t) => {
-    const store = redisStore({ url: redisUrl, prefix: freshPrefix(t) });
+    const store = redisStore({ url: storeUrl, prefix: freshPrefix(t) });
     t.after(() => store.close());
     for (let n = 1; n <= 3; n++) await store.append("progress", { n });
     assert.equal((await store.read("progress", "edge")).length, 3);
@@ -376,7 +412,7 @@ test(
   { skip },
   async (t) => {
     const prefix = freshPrefix(t);
-    const store = redisStore({ url: redisUrl, prefix });
+    const store = redisStore({ url: storeUrl, prefix });
     const client = redisClient(redisUrl);
     t.after(() => Promise.all([store.close(), client.close()]));
     const key = `${prefix}l:orchestrator`;
@@ -395,7 +431,7 @@ test(
 );
 
 test("redis: blobs are bytes", { skip }, async (t) => {
-  const store = redisStore({ url: redisUrl, prefix: freshPrefix(t) });
+  const store = redisStore({ url: storeUrl, prefix: freshPrefix(t) });
   t.after(() => store.close());
   const bytes = Buffer.from([0, 1, 0xff, 0x0d, 0x0a, 0x80]);
   await store.putBlob("shot.png", bytes);
@@ -408,7 +444,7 @@ test("redis: a known secret is never written to it", { skip }, async (t) => {
   const prefix = freshPrefix(t);
   const appKey = `-----BEGIN RSA PRIVATE KEY-----\nMIIEow${"A".repeat(64)}\n-----END RSA PRIVATE KEY-----`;
   const signingKey = "sk-signing-0123456789abcdef0123456789";
-  const store = openStore(`${redisUrl}?prefix=${prefix}`, { secrets: () => [signingKey] });
+  const store = openStore(`${storeUrl}?prefix=${prefix}`, { secrets: () => [signingKey] });
   t.after(() => store.close());
   await assert.rejects(store.set("app", { key: appKey }), /a secret can't go in the store/);
   await assert.rejects(store.append("runs", { token: signingKey }), /a secret/);
@@ -419,3 +455,25 @@ test("redis: a known secret is never written to it", { skip }, async (t) => {
   assert.deepEqual(keys.map(String), [`${prefix}b:log`]);
   assert.equal(String(await client.call("GET", `${prefix}b:log`)), "signed with [redacted]\n");
 });
+
+test(
+  "redis: two stores with different prefixes don't list each other's keys",
+  { skip },
+  async (t) => {
+    const a = redisStore({ url: storeUrl, prefix: freshPrefix(t) });
+    const b = redisStore({ url: storeUrl, prefix: freshPrefix(t) });
+    t.after(() => Promise.all([a.close(), b.close()]));
+    await a.set("waits/1", "a");
+    await a.set("waits/2", "a");
+    await b.set("waits/1", "b");
+    const all = async (store) => new Map(await Array.fromAsync(values(store, "")));
+    assert.deepEqual(
+      await all(a),
+      new Map([
+        ["waits/1", "a"],
+        ["waits/2", "a"],
+      ]),
+    );
+    assert.deepEqual(await all(b), new Map([["waits/1", "b"]]));
+  },
+);

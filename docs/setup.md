@@ -1698,11 +1698,14 @@ maxmemory-policy noeviction
 # only (those its scripts call included: Redis checks them too). REDIS_PASSWORD, with
 # redis://deckhand@redis:6379 as STORE_URL.
 user default off
-user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
+user deckhand on ><a long random password> ~deckhand:* resetchannels -@all +evalsha +eval +time +exists +scan +hmget +hset +del +pexpireat +incr +xadd +xgroup|create +xreadgroup +xack +xdel +xinfo|groups +getrange +strlen +set +append +select +ping +quit
 ```
 
 The user's key pattern follows the prefix: with `?prefix=team-a:`, it is `~team-a:*`, else
-every call is refused with `NOPERM`. `requirepass <a long random password>` (the `default`
+every call is refused with `NOPERM`. `+scan` lists a prefix's keys (a map kept one key per
+item, read back whole when a copy takes over): Redis's ACL doesn't hold `SCAN` to the key
+pattern, so a user can list the names of other users' keys (never read their values). Give a
+deployment that mustn't see another's key names a Redis of its own. `requirepass <a long random password>` (the `default`
 user) works too, but leaves it every
 command, `FLUSHALL` and `CONFIG` included. A call Redis doesn't answer within 5 seconds fails,
 and the next one connects again: a copy that loses Redis learns in time that it can't renew
