@@ -28,7 +28,9 @@ here.
    `gh api repos/{owner}/{repo}/issues/<n>/dependencies/blocked_by -F issue_id=<id>`, `<n>`
    being the part that waits and `<id>` the id of the one it waits for. The parts then start
    in that order, not all at once. Never block the parent by its own sub-issues: it already
-   waits for them.
+   waits for them. Once they are all filed, write the real numbers (`#<n>`) where a body
+   names another of them: `gh api -X PATCH repos/{owner}/{repo}/issues/<n> -F body=@<file>`,
+   the rest of the body as it was.
 5. Not something to build (a question, a remark, too vague to file)? Create nothing and
    answer it in your reply, with the questions that would make it fileable.
 

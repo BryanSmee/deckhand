@@ -297,7 +297,7 @@ const OLD_BRAINSTORM = {
 };
 const OLD_INBOX = {
   own_issue: ["comment"],
-  created_issue: ["link"],
+  created_issue: ["edit", "link"],
   new_issue: ["create"],
   label: ["create"],
 };
@@ -330,7 +330,7 @@ function oldDenied({ mode, action, actions, target, change }) {
     }
   }
   if (mode === "idea" || mode === "bug") {
-    if (!["create", "link"].includes(action)) return true;
+    if (!["create", "edit", "link"].includes(action)) return true;
     if (kind === "new_issue" && !change.labels_added.includes(mode)) return true;
   }
   if (actions.includes("assign")) return true;
@@ -2711,6 +2711,8 @@ test(
     assert.deepEqual(await ask("idea", "create", "new_issue", ["idea", "ui"]), []);
     assert.deepEqual(await ask("bug", "create", "label", ["bug"]), []);
     assert.deepEqual(await ask("bug", "link", "created_issue"), []);
+    assert.deepEqual(await ask("idea", "edit", "created_issue"), []);
+    assert.deepEqual(await ask("bug", "edit", "own_issue"), none("edit", "own_issue", "bug"));
     assert.deepEqual(await ask("bug", "link", "other_issue"), none("link", "other_issue", "bug"));
     assert.deepEqual(await ask("idea", "create", "new_issue", ["ui"]), [
       "idea entries' issues carry the idea label",
