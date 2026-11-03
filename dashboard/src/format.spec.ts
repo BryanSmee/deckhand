@@ -11,6 +11,8 @@ import {
   plural,
   repoCounts,
   repoTabs,
+  reservedText,
+  runningText,
   sameRepo,
   runKindName,
   runName,
@@ -293,4 +295,28 @@ test("dayTime: today, yesterday, then the date", () => {
   expect(dayTime(at(14, 14, 31), now)).toBe(`today ${time(at(14, 14, 31))}`);
   expect(dayTime(at(13, 18, 40), now)).toBe(`yesterday ${time(at(13, 18, 40))}`);
   expect(dayTime(at(12, 9, 30), now)).toMatch(/^Oct 12, /);
+});
+
+describe("run slots", () => {
+  test("the run count is the same with or without auto-pickup", () => {
+    expect(runningText({ running: 2, maxParallel: 4 })).toBe("2 of 4 running");
+    const auto = makeState({ running: 3, maxParallel: 4, autoPickup: { slots: 1, running: 1 } });
+    expect(runningText(auto)).toBe("3 of 4 running");
+  });
+
+  test("the reserved slots say how many auto-picked runs hold them", () => {
+    expect(reservedText({})).toBeNull();
+    expect(reservedText({ autoPickup: { slots: 1, running: 0 } })).toBe(
+      "1 auto-pickup slot (free)",
+    );
+    expect(reservedText({ autoPickup: { slots: 2, running: 1 } })).toBe(
+      "2 auto-pickup slots (1 in use)",
+    );
+    expect(reservedText({ autoPickup: { slots: 2, running: 1, taken: 2 } })).toBe(
+      "2 auto-pickup slots (1 in use, 1 held between runs)",
+    );
+    expect(reservedText({ autoPickup: { slots: 1, running: 0, taken: 1 } })).toBe(
+      "1 auto-pickup slot (1 held between runs)",
+    );
+  });
 });

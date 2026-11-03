@@ -333,26 +333,24 @@ export const shortRepo = (repo: string) => repo.slice(repo.indexOf("/") + 1);
 // "1 run", "3 runs"; `many` when adding an s won't do ("replies").
 export const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-// The top bar's run count: "2 of 3 running", or, with slots reserved for auto-pickup, the runs
-// that hold them apart: "2 + 1 auto of 3 running".
+// The top bar's run count: "2 of 3 running". Auto-pickup's share is reservedText()'s.
 export function runningText({
   running,
   maxParallel,
-  autoPickup,
-}: Pick<State, "running" | "maxParallel" | "autoPickup">): string {
-  if (!autoPickup) return `${running} of ${maxParallel} running`;
-  return `${running - autoPickup.running} + ${autoPickup.running} auto of ${maxParallel} running`;
+}: Pick<State, "running" | "maxParallel">): string {
+  return `${running} of ${maxParallel} running`;
 }
 
-// What the run count leaves out of auto-pickup: its reserved slots, and how many of them picks
-// hold while they aren't running (asking, between two loop steps: the sweep picks nothing for
-// them), or nothing when it is off.
+// Auto-pickup's reserved slots and how they are used: "1 auto-pickup slot (1 in use)", "… (free)",
+// with how many of them picks hold while they aren't running (asking, between two loop steps:
+// the sweep picks nothing for them); null when it is off.
 export function reservedText(state: Pick<State, "autoPickup">): string | null {
   const slots = state.autoPickup?.slots;
   if (!slots) return null;
-  const text = `${plural(slots, "slot")} for auto-pickup`;
+  const running = state.autoPickup?.running ?? 0;
   const held = heldText(state);
-  return held ? `${text} (${held})` : text;
+  const use = [running > 0 && `${running} in use`, held].filter(Boolean);
+  return `${plural(slots, "auto-pickup slot")} (${use.length ? use.join(", ") : "free"})`;
 }
 
 // "1 held between runs": the reserved slots picks hold while not running, or null.

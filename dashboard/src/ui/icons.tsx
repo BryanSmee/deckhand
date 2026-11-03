@@ -223,6 +223,8 @@ export const Warning = stroke(
     <path d="M12 10v4M12 17h.01" />
   </>,
 );
+// Auto-pickup: a bolt, apart from Play's triangle.
+export const Auto = stroke(1.8, <path d="M13 2L4 14h7l-1 8 9-12h-7z" />);
 export const Play = filled(<path d="M7 5l12 7-12 7z" />);
 export const Stop = filled(<rect x="5" y="5" width="14" height="14" rx="2" />);
 export const More = filled(
