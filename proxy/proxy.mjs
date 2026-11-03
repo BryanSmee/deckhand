@@ -248,7 +248,7 @@ export function createProxy({
     const ip = (socket.remoteAddress ?? "").replace(/^::ffff:/, "");
     const done = metrics.policyTimer();
     const answer = await policy(ip, host, { ...options, ...asEngine });
-    done();
+    done(answer.reason === "policy_error");
     return { source: engine ? "engine" : "unknown", ...answer, ip };
   }
 

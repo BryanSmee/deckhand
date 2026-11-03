@@ -86,7 +86,9 @@ export function createEgressHttp(ctx) {
     const where = await taskWhere(ctx, ip, { engine: viaEngine });
     const task = where?.task ?? null;
     // Not a sandbox: the runner's builder or an agent's install pod, or nothing.
-    // The engines' port is a run's engine's only.
+    // The engines' port is a run's engine's only. Asked before a service's name is answered
+    // too, for its `source` alone: a call to the runner only for an address no run has, which
+    // only a build or an install pod would ask about.
     const other = task || viaEngine ? null : await ctx.images.egressFor?.(ip, host);
     const source = sourceOf(where, other);
     // A service's name (#511): the proxy forwards its plain HTTP (`forward=1`) for the runs'

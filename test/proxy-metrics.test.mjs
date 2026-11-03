@@ -5,9 +5,11 @@ import assert from "node:assert/strict";
 import { request } from "node:http";
 import { connect } from "node:net";
 import { test } from "node:test";
+import { connect as tlsConnect } from "node:tls";
 import { createRegistry } from "../lib/metrics.mjs";
 import { SANDBOX_URLS } from "../lib/services.mjs";
 import { createCache } from "../proxy/cache.mjs";
+import { createAuthority } from "../proxy/authority.mjs";
 import { egressMetrics } from "../proxy/metrics.mjs";
 import { createProxy } from "../proxy/proxy.mjs";
 import { closedPort, listening, serve, tempDir, until } from "./helpers.mjs";
@@ -19,10 +21,15 @@ async function sample(registry, name, labels = "") {
   return line === undefined ? undefined : Number(line.slice(line.lastIndexOf(" ") + 1));
 }
 
-// An upstream, and a proxy with its metrics whose policy answers `answers[host]` (default:
-// allowed, a sandbox's), every name resolving to the upstream but `nowhere.test`.
-async function setup(t, { answers = {}, cache = null, engine = false, ...options } = {}) {
+// An upstream (`upstream(req, res)`, its answers: a 200 by default), and a proxy with its
+// metrics whose policy answers `answers[host]` (default: allowed, a sandbox's), every name
+// resolving to the upstream but `nowhere.test`.
+async function setup(
+  t,
+  { answers = {}, cache = null, engine = false, upstream = null, ...options } = {},
+) {
   const { port: upstreamPort } = await serve(t, (req, res) => {
+    if (upstream) return upstream(req, res);
     res.writeHead(200, { "content-type": "text/plain", "cache-control": "max-age=60" });
     res.end(`body of ${req.url}`);
   });
@@ -91,6 +98,8 @@ test("connections: allowed or refused, by source and reason, never the host", as
       // The policy's own reason, outside the declared ones: folded into "other".
       "odd.test": { allowed: false, source: "sandbox", reason: "a new one" },
       "private.test": { allowed: true, private: false, source: "engine" },
+      // The orchestrator didn't answer.
+      "down.test": { allowed: false, reason: "policy_error" },
     },
     // An address the check refuses: private.test's.
     lookup: async (host) => {
@@ -102,7 +111,14 @@ test("connections: allowed or refused, by source and reason, never the host", as
   assert.match(head, /^HTTP\/1\.1 200/);
   socket.destroy();
   assert.equal((await viaProxy(proxyPort, `http://ok.test:${upstreamPort}/a`)).status, 200);
-  for (const host of ["evil.test", "built.test", "old.test", "odd.test", "private.test"]) {
+  for (const host of [
+    "evil.test",
+    "built.test",
+    "old.test",
+    "odd.test",
+    "private.test",
+    "down.test",
+  ]) {
     assert.equal((await viaProxy(proxyPort, `http://${host}:${upstreamPort}/`)).status, 403);
   }
   assert.equal((await viaProxy(proxyPort, `http://nowhere.test:${upstreamPort}/`)).status, 502);
@@ -116,7 +132,11 @@ test("connections: allowed or refused, by source and reason, never the host", as
   assert.equal(await count('{source="engine",decision="denied",reason="private_address"}'), 1);
   assert.equal(await count('{source="sandbox",decision="denied",reason="unresolved"}'), 1);
   // Every connection asked the policy once, timed.
-  assert.equal(await sample(registry, "deckhand_egress_policy_duration_seconds_count"), 8);
+  assert.equal(await count('{source="unknown",decision="denied",reason="policy_error"}'), 1);
+  const timed = (result) =>
+    sample(registry, "deckhand_egress_policy_duration_seconds_count", `{result="${result}"}`);
+  assert.equal(await timed("answered"), 8);
+  assert.equal(await timed("failed"), 1);
   assert.doesNotMatch(await registry.render(), /evil\.test|ok\.test/);
 });
 
@@ -206,4 +226,97 @@ test("the runs' calls to the services: by service and status, or unreachable", a
   assert.equal(await calls('{target="broker",status="unreachable"}'), 1);
   const allowed = '{source="sandbox",decision="allowed",reason="granted"}';
   assert.equal(await sample(registry, CONNECTIONS, allowed), 4);
+});
+
+test("a relayed host with no CA or no service, or over plain HTTP: refused, no_relay", async (t) => {
+  const { registry, proxyPort, upstreamPort } = await setup(t, {
+    answers: {
+      "github.test": { allowed: true, relay: true, service: "github", source: "sandbox" },
+    },
+  });
+  // A CONNECT: no CA to decrypt it with, nor a github service to send it to.
+  const { socket, head } = await tunnel(proxyPort, "github.test:443");
+  socket.destroy();
+  assert.match(head, /^HTTP\/1\.1 403/);
+  // Plain HTTP: relayed over HTTPS only.
+  assert.equal((await viaProxy(proxyPort, `http://github.test:${upstreamPort}/`)).status, 403);
+  const labels = '{source="sandbox",decision="denied",reason="no_relay"}';
+  assert.equal(await sample(registry, CONNECTIONS, labels), 2);
+});
+
+test("the cache: a kept answer the host says hasn't changed, revalidated", async (t) => {
+  const cache = createCache({ dir: tempDir(t, "deckhand-egress-metrics-"), max: 1024 * 1024 });
+  const { registry, proxyPort, upstreamPort } = await setup(t, {
+    cache,
+    answers: { "cached.test": { allowed: true, private: true, cache: true, source: "sandbox" } },
+    upstream: (req, res) => {
+      if (req.headers["if-none-match"] === '"v1"') return res.writeHead(304).end();
+      res.writeHead(200, { etag: '"v1"', "cache-control": "max-age=60" });
+      res.end("v1");
+    },
+  });
+  const result = (name) =>
+    sample(registry, "deckhand_egress_cache_requests_total", `{result="${name}"}`);
+  const url = `http://cached.test:${upstreamPort}/pkg.deb`;
+  assert.equal((await viaProxy(proxyPort, url)).body, "v1");
+  await until(async () => (await result("stored")) === 1, { what: "the download stored" });
+  // The client wants it checked: the host answers 304, the kept copy is served.
+  assert.equal((await viaProxy(proxyPort, url, { "cache-control": "no-cache" })).body, "v1");
+  assert.deepEqual(await Promise.all(["miss", "revalidated", "hit"].map(result)), [
+    1,
+    1,
+    undefined,
+  ]);
+});
+
+test("a relayed host's calls inside a decrypted tunnel: counted by service and status", async (t) => {
+  const authority = createAuthority({ dir: tempDir(t, "deckhand-egress-metrics-ca-") });
+  await authority.ready();
+  const github = await serve(t, (req, res) => res.writeHead(201).end("made"));
+  const { registry, proxyPort } = await setup(t, {
+    answers: {
+      "github.test": {
+        allowed: true,
+        decrypt: true,
+        relay: true,
+        service: "github",
+        sandbox: "net-1",
+        source: "sandbox",
+      },
+    },
+    authority,
+    githubService: { url: github.url, header: async () => "Bearer proxy" },
+  });
+  const { socket: raw, head } = await tunnel(proxyPort, "github.test:443");
+  assert.match(head, /^HTTP\/1\.1 200/);
+  const socket = tlsConnect({
+    socket: raw,
+    servername: "github.test",
+    ca: authority.certificate(),
+  });
+  await new Promise((resolve, reject) => {
+    socket.once("secureConnect", resolve);
+    socket.once("error", reject);
+  });
+  const status = await new Promise((resolve, reject) => {
+    const req = request(
+      {
+        createConnection: () => socket,
+        method: "POST",
+        path: "/repos/o/r/issues",
+        headers: { host: "github.test", connection: "close" },
+      },
+      (res) => {
+        res.resume();
+        res.on("end", () => resolve(res.statusCode));
+      },
+    );
+    req.on("error", reject);
+    req.end();
+  });
+  assert.equal(status, 201);
+  const calls = (labels) => sample(registry, "deckhand_egress_gateway_calls_total", labels);
+  assert.equal(await calls('{target="github",status="201"}'), 1);
+  const allowed = '{source="sandbox",decision="allowed",reason="granted"}';
+  assert.equal(await sample(registry, CONNECTIONS, allowed), 1);
 });

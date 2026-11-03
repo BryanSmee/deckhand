@@ -3,6 +3,7 @@
 // time, the cache, and the runs' calls passed on to the services. Labelled by who made it and
 // why it was refused, as the policy says (../listener/egress-http.mjs), never by host or run:
 // those stay in the log lines.
+import { performance } from "node:perf_hooks";
 import { createRegistry } from "../lib/metrics.mjs";
 
 // Who made a connection: the policy's answer says (`source`); "unknown" when it didn't answer.
@@ -94,9 +95,12 @@ export function egressMetrics(registry = createRegistry(), { cache = null } = {}
     },
   );
 
+  // "failed": no answer (policy_error), and a wait for a restarting orchestrator counts in its
+  // time, up to 5 minutes (wait.mjs): those aren't slow answers.
   const policy = registry.histogram(
     "deckhand_egress_policy_duration_seconds",
-    "How long the orchestrator's egress policy took to answer, in seconds.",
+    "How long the orchestrator's egress policy took, in seconds: answered, or failed (waits for a restarting orchestrator included).",
+    { labels: ["result"], values: { result: ["answered", "failed"] } },
   );
 
   const cacheRequests = registry.counter(
@@ -126,8 +130,16 @@ export function egressMetrics(registry = createRegistry(), { cache = null } = {}
       connections.inc({ source, decision, reason: allowed ? "granted" : reason });
       track(socket, source);
     },
-    // A policy call's timer: the function returned observes its duration.
-    policyTimer: () => policy.startTimer(),
+    // A policy call's timer: the function returned observes its duration, with whether it
+    // `failed`.
+    policyTimer() {
+      const start = performance.now();
+      return (failed) =>
+        policy.observe(
+          { result: failed ? "failed" : "answered" },
+          (performance.now() - start) / 1000,
+        );
+    },
     cache: (result) => cacheRequests.inc({ result }),
     gateway: (target, status) => gateway.inc({ target, status }),
   };
