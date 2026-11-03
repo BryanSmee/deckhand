@@ -407,16 +407,32 @@ async function fakeGitHub(files = {}) {
   };
 }
 
-// The runs' summaries, in the orchestrator's store (runlog.mjs, its file backend's state.json):
-// the first one's, or null.
+// The runs' summaries, in the orchestrator's store (runlog.mjs: its file backend keeps them a
+// file each, keys/): the first one's, or null.
 function summary(dir) {
   try {
-    const { keys } = JSON.parse(readFileSync(join(dir, "store", "state.json"), "utf8"));
-    const key = Object.keys(keys).find((k) => k.startsWith("summaries/"));
-    return key ? keys[key].value : null;
+    const folder = join(dir, "store", "keys");
+    const file = readdirSync(folder).find((f) => f.startsWith("summaries%2F"));
+    return file ? JSON.parse(readFileSync(join(folder, file), "utf8")).value : null;
   } catch {
     return null;
   }
+}
+
+// The dashboard's API at edge's `port`, as alice (in ALLOWED_USERS), signed in: path → its JSON.
+async function dashboardApi(port) {
+  const base = `http://127.0.0.1:${port}`;
+  const get = (path, cookie) =>
+    fetch(base + path, { redirect: "manual", headers: cookie ? { cookie } : {} });
+  const login = await get("/auth/login");
+  const to = new URL(login.headers.get("location"));
+  const state = login.headers.getSetCookie()[0].split(";")[0];
+  const back = await get(`/auth/callback?code=c&state=${to.searchParams.get("state")}`, state);
+  const session = back.headers
+    .getSetCookie()
+    .find((c) => c.startsWith("deckhand_session="))
+    .split(";")[0];
+  return async (path) => (await get(path, session)).json();
 }
 
 // The runs' logs, as the runner keeps them (its store's blobs, runner/logs.mjs): their texts, by
@@ -2851,7 +2867,12 @@ mounts:
   // issue 13 queued behind it (one run at a time), the next copy waiting for the lease.
   async function handingOver(t) {
     // A lease far longer than a handover: taking it at once shows it was released.
-    const ctx = await holding(t, "Deckhand", () => ({ MAX_PARALLEL: "1", LEASE_SECONDS: "8" }));
+    // GITHUB_URL: the dashboard's sign-in, through the fake GitHub.
+    const ctx = await holding(t, "Deckhand", (dir, github) => ({
+      MAX_PARALLEL: "1",
+      LEASE_SECONDS: "8",
+      GITHUB_URL: github.url,
+    }));
     const queued = comment("alice");
     queued.issue = { number: 13 };
     queued.comment = { ...queued.comment, id: 130 };
@@ -2927,6 +2948,18 @@ mounts:
       assert.equal(runs.length, 1, ctx.listener.output());
       // The copy that stopped could no longer act, had it gone on.
       await staleEverywhere(ctx, epoch);
+      // The dashboard's history, from the store alone (#618): the same after another handover.
+      const api = await dashboardApi(ctx.port);
+      const history = async () =>
+        (await api("/api/state")).tasks.flatMap((task) => task.runs.map((r) => [r.id, r.status]));
+      const before = await history();
+      assert.equal(before.length, 2);
+      await ctx.handOver({ signal });
+      assert.deepEqual(await history(), before);
+      assert.deepEqual(
+        readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".json")),
+        [],
+      );
     });
   }
 

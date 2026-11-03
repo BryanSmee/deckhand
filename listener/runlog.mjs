@@ -152,18 +152,24 @@ export async function loadRuns(store, { log = console.error } = {}) {
 // The summaries a release before #618 kept in logs/<run>.json (and those moveLogs() writes
 // there for the logs it finds): each written to the store, then removed. A key already there
 // wins: a start that stopped before removing the file wrote it, and the run may have changed
-// since. `secrets`: as saveSummary()'s. A file that isn't a summary stays, logged at each start,
-// as loadRuns() left it out; one the store didn't take stays for the next start. The run states
-// (.live.json) and queues (.queued.json) the release before kept beside them, which restart.mjs
-// moves to the store, aren't summaries. → how many moved.
-const NOT_SUMMARIES = [".live.json", ".queued.json"];
+// since. Those saveSummary() kept there when the store failed (<run>.summary.json) are newer
+// than the store's, and go after them, over it. `secrets`: as saveSummary()'s. A file that isn't
+// a summary stays, logged at each start, as loadRuns() left it out; one the store didn't take
+// stays for the next start. The run states (.live.json) and queues (.queued.json) the release
+// before kept beside them, which restart.mjs moves to the store, aren't summaries. → how many
+// moved.
+// Where saveSummary() keeps a summary the store didn't take.
+const KEPT = ".summary.json";
+const NOT_SUMMARIES = [".live.json", ".queued.json", KEPT];
 export async function moveSummaries(logDir, store, { log = console.error, secrets = [] } = {}) {
-  const files = readdirSync(logDir).filter(
+  const all = readdirSync(logDir);
+  const older = all.filter(
     (f) => f.endsWith(".json") && !NOT_SUMMARIES.some((end) => f.endsWith(end)),
   );
+  const kept = all.filter((f) => f.endsWith(KEPT));
   let count = 0;
-  async function move(file) {
-    const id = file.slice(0, -5);
+  const move = (newer) => async (file) => {
+    const id = file.slice(0, -(newer ? KEPT : ".json").length);
     const path = join(logDir, file);
     const saved = readJson(path);
     if (saved?.id !== id) {
@@ -171,7 +177,9 @@ export async function moveSummaries(logDir, store, { log = console.error, secret
       return;
     }
     try {
-      await store.setIfAbsent(summaryKey(id), storable(saved, secrets));
+      const value = storable(saved, secrets);
+      if (newer) await store.set(summaryKey(id), value);
+      else await store.setIfAbsent(summaryKey(id), value);
       rmSync(path, { force: true });
       count++;
     } catch (error) {
@@ -179,10 +187,15 @@ export async function moveSummaries(logDir, store, { log = console.error, secret
         `Run summaries: ${file} not moved to the store (${error.message}), again at the next start`,
       );
     }
-  }
+  };
   // A few at a time: Redis answers them together.
-  for (let i = 0; i < files.length; i += MOVE_BATCH) {
-    await Promise.all(files.slice(i, i + MOVE_BATCH).map(move));
+  for (const [files, newer] of [
+    [older, false],
+    [kept, true],
+  ]) {
+    for (let i = 0; i < files.length; i += MOVE_BATCH) {
+      await Promise.all(files.slice(i, i + MOVE_BATCH).map(move(newer)));
+    }
   }
   if (count) log(`Run summaries: ${count} moved from ${logDir} to the store`);
   return count;
@@ -383,16 +396,34 @@ const unrefSleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms).unre
 
 // Where moveLogs() writes the summary of a log it finds, for moveSummaries() to move.
 const summaryPath = (logDir, id) => join(logDir, `${id}.json`);
+const keptPath = (logDir, id) => join(logDir, `${id}${KEPT}`);
 
 // What loadRuns() lists a finished run with, in the store: without the operator's `secrets`, a
 // GitHub token or a private key its text may hold (lib/store.mjs storable()), rather than
-// refused whole. A failure is logged: the run stays listed until the next start.
-export async function saveSummary(store, record, { log = console.error, secrets = [] } = {}) {
+// refused whole. A store that fails (Redis away a moment) leaves it in `logDir`, for
+// moveSummaries() at the next start: the run's live state goes after this, and the run would be
+// listed nowhere then. Its next save there removes it. → whether the store took it.
+export async function saveSummary(
+  store,
+  record,
+  { log = console.error, secrets = [], logDir = null } = {},
+) {
+  const value = storable(record, secrets);
   try {
-    await store.set(summaryKey(record.id), storable(record, secrets));
+    await store.set(summaryKey(record.id), value);
+    if (logDir) rmSync(keptPath(logDir, record.id), { force: true });
+    return true;
   } catch (error) {
     log(`${record.key}: saving the summary of ${record.id}: ${error.message}`);
   }
+  if (!logDir) return false;
+  try {
+    writeJsonAtomic(keptPath(logDir, record.id), value);
+    log(`${record.key}: the summary of ${record.id} kept in ${logDir}, for the next start`);
+  } catch (error) {
+    log(`${record.key}: keeping the summary of ${record.id}: ${error.message}`);
+  }
+  return false;
 }
 
 // What the dashboard lists for a run (runs.mjs): `title` its task's as known, `agent` the

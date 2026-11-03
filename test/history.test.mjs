@@ -134,6 +134,27 @@ test("retention: screenshots the broker doesn't remove keep their run listed, fo
   assert.deepEqual([runs, await files(old)], [[], [false, false, false]]);
 });
 
+test("retention: a summary the store doesn't delete keeps its run listed, for the next try", async () => {
+  const { store, run, files, prune } = fixture();
+  const old = run("org/repo#1", 100);
+  const runs = [old];
+  const byId = new Map([[old.id, old]]);
+  const failing = {
+    ...store,
+    delete: async () => {
+      throw new Error("the store is away");
+    },
+  };
+  const logs = [];
+  const log = (line) => logs.push(line);
+  assert.deepEqual(await prune({ runs, byId, days: 90, store: failing, log }), []);
+  assert.deepEqual(await files(old), [false, true, false]);
+  assert.deepEqual([runs, [...byId.keys()]], [[old], [old.id]]);
+  assert.match(logs.join("\n"), /removing the summary of .*: the store is away/);
+  await prune({ runs, byId, days: 90 });
+  assert.deepEqual([runs, await files(old)], [[], [false, false, false]]);
+});
+
 test("retention: 0 keeps everything", async (t) => {
   const { run, files, prune } = fixture();
   const old = run("org/repo#1", 400);

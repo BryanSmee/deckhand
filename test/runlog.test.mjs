@@ -754,6 +754,41 @@ test("moveSummaries: one the store refuses stays in logs/, for the next start", 
   );
 });
 
+test("saveSummary: one the store doesn't take is kept in logs/, moved over the store's at the next start", async (t) => {
+  const dir = tempDir(t);
+  const store = openStore("memory:");
+  const id = "deckhand-org-repo-7-1000";
+  const record = { id, key: "org/repo#7", startedAt: 1, finishedAt: 2, status: "ok" };
+  assert.equal(await saveSummary(store, record, { logDir: dir }), true);
+  // Its exit code, said later, while the store is away: kept here.
+  let away = true;
+  const flaky = {
+    ...store,
+    set: async (...args) => {
+      if (away) throw new Error("the store is away");
+      return store.set(...args);
+    },
+  };
+  const logs = [];
+  const log = (l) => logs.push(l);
+  record.exitCode = 137;
+  assert.equal(await saveSummary(flaky, record, { log, logDir: dir }), false);
+  assert.deepEqual(readdirSync(dir), [`${id}.summary.json`]);
+  assert.match(logs.join("\n"), /kept in .*, for the next start/);
+  // The next start: it goes over the store's older one, and the file goes.
+  away = false;
+  assert.equal(await moveSummaries(dir, flaky, { log }), 1);
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal((await loadRuns(store))[0].exitCode, 137);
+  // A save the store took removes what one before kept here.
+  away = true;
+  await saveSummary(flaky, record, { log, logDir: dir });
+  away = false;
+  await saveSummary(flaky, { ...record, status: "error" }, { log, logDir: dir });
+  assert.deepEqual(readdirSync(dir), []);
+  assert.equal((await loadRuns(store))[0].status, "error");
+});
+
 test("loadRuns: a key that isn't a run's summary is left out, logged", async () => {
   const store = openStore("memory:");
   await saveSummary(store, { id: "deckhand-org-repo-4-1000", key: "org/repo#4", startedAt: 1 });

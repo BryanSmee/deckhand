@@ -4,8 +4,8 @@
 // a task that is queued, brainstorming, waiting or waiting for input (the next run reads it:
 // its agent, its summary, the dashboard's Rerun). That's the orchestrator's to tell, so it
 // decides here; the log is the runner's (#503) and the screenshots the broker's (#609), which
-// remove them when asked: a run whose log or screenshots weren't removed stays listed, for the
-// next day's try.
+// remove them when asked: a run whose log, screenshots or summary weren't removed stays listed,
+// for the next day's try.
 import { SHOT_FOLDER } from "../lib/shots.mjs";
 import { summaryKey } from "./runlog.mjs";
 
@@ -61,6 +61,8 @@ export async function pruneRuns({
       await store.delete(summaryKey(run.id));
     } catch (error) {
       log(`${run.key}: removing the summary of ${run.id}: ${error.message}`);
+      kept.push(run);
+      continue;
     }
     byId.delete(run.id);
     removed.push(run);
