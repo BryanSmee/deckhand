@@ -114,6 +114,8 @@ review:
   # request: [alice] # reviewers asked on Deckhand's pull request once it is ready, and again
   #                  # after a fix pushed (see Reviewers below); allowed users only
   # follow_ups: false # don't file the reviews' follow-ups as issues after a merge (on by default)
+  # follow_ups_auto_pickup: true # the follow-ups filed get the auto-pickup label too, for
+  #                              # whoever merged the pull request (see Auto-pickup below)
 
 # Where ideas, bug reports and questions go (see Inboxes below).
 inbox:
@@ -172,6 +174,7 @@ projects:
 | `review.ci_wait`                        | `30`                                    | minutes the review waits for the GitHub Actions runs still going before it starts anyway, `0` to `1440`                                         |
 | `review.ci_fix`                         | `1`                                     | CI fix runs per pull request, with `review.fix`, `0` to the operator's `MAX_FIX_ROUNDS` (see CI before the review)                              |
 | `review.follow_ups`                     | `true`                                  | `false`: the reviews' follow-ups aren't filed as issues once a pull request is merged (see Reviews)                                             |
+| `review.follow_ups_auto_pickup`         | `false`                                 | `true`: the follow-ups filed after an allowed user's merge are auto-picked, as that user's work (see Auto-pickup)                               |
 | `inbox.ideas`, `inbox.bugs`             | none                                    | issue numbers whose comments are ideas or bug reports to file (see Inboxes)                                                                     |
 | `inbox.discussions`                     | none                                    | GitHub Discussions category whose discussions Claude answers (see Inboxes)                                                                      |
 | `conflicts.check_minutes`               | none: off                               | minutes between conflict checks, and one soon after a merge; at least `CONFLICT_CHECK_MINUTES` (see Conflicts)                                  |
@@ -520,6 +523,8 @@ token only reads, and Deckhand posts the review.
   off (the review's prompt, its Follow-ups section and the fix run's message say they are left
   to the maintainer): the repository's config is read again from the default branch at the merge, and a
   `review` block that is gone, or a config with errors, files nothing either.
+  **`follow_ups_auto_pickup: true`** labels the issues it files for auto-pickup too, for
+  whoever merged the pull request (see [Auto-pickup](#auto-pickup)).
 - **Comments**: remarks that aren't defects (a naming choice, a question, a suggestion, a
   nit), each marked **blocking** or **note**. A note never blocks nor caps the rating; the fix
   run applies it only when it is cheap and in scope, and a note alone never starts one. Nits
@@ -679,7 +684,8 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
   run, so `fix: 3` can cost up to four reviews and three work runs per pull request.
 
 `on`, `instructions`, `agent`, `model`, `effort`, `fix`, `merge`, `merge_method`,
-`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix`, `request` and `follow_ups` are its only
+`max_allowed_severity`, `merge_wait`, `ci`, `ci_wait`, `ci_fix`, `request`, `follow_ups` and
+`follow_ups_auto_pickup` are its only
 keys: any other, or a bad value, is an error.
 
 #### Reviewers
@@ -1917,3 +1923,26 @@ Once picked, the App comments who the run is for (and edits the comment when the
 start), then the label comes off. A run that fails or is stopped isn't picked again until
 someone adds the label back. A `deny_run` rule sees these runs with `trigger: "auto-pickup"`
 and the labeller as `sender` ([The run input](#the-run-input)).
+
+### Deckhand's own follow-ups
+
+A label the App's bot added starts nothing (a run's writes go out as the App, and a run may
+have read anyone's comment), with one exception: **`review.follow_ups_auto_pickup: true`**
+(off by default, with `auto_pickup: true` and the operator's slots; without them, a warning).
+The follow-ups Deckhand files once a pull request is merged (see Reviews) then get the
+`AUTO_PICKUP_LABEL` along with `follow-up`, and are picked like any labelled issue, as the work
+of **the person who merged the pull request**: they saw the follow-ups in its review.
+
+- Only a merge by an allowed user counts. A pull request Deckhand merged itself
+  (`review.merge`), or one a bot or someone outside `users` merged, files its follow-ups
+  without the label, and the follow-ups comment on the pull request says why. The merger must
+  still be in `users` when the issue is picked.
+- Only the issues filed in that pass: a follow-up an issue already had is linked, not
+  labelled. A review recorded after the merge files its own the same way.
+- Deckhand keeps a record of each issue it labelled (who merged, the label's time), and the
+  App's `labeled` event counts only when it matches one. Any other labelling by the App's bot
+  is refused, with the usual "Not picked automatically" comment.
+- Everything else holds as for a person's label: an issue edited after it was filed by anyone
+  but an allowed user waits for the label to be added again, and needs-input, "blocked by",
+  live runs and `max_parallel` all apply. The App's comment says the label was added by
+  Deckhand for a follow-up of the pull request, merged by whoever the run is for.

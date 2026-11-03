@@ -7,6 +7,7 @@ import {
   labelAdded,
   labeller,
   labellerRefusal,
+  vouchedLabeller,
   pulledIssues,
 } from "../listener/auto-pickup.mjs";
 import { ConfigError, loadConfig } from "../listener/config.mjs";
@@ -64,6 +65,7 @@ function setup({
   refuse = false,
   load,
   release,
+  followUpPick,
 } = {}) {
   const config = testConfig({
     ALLOWED_USERS: "alice,bob,carol",
@@ -159,6 +161,7 @@ function setup({
     taken: () => taken,
     release,
     load,
+    followUpPick,
     log: (line) => p.logs.push(line),
     every: () => null,
     later,
@@ -1072,4 +1075,120 @@ test("picks.mjs prune(): an entry whose run is no longer its task's last goes", 
     [read.ended("org/app#1", "run-1"), read.ended("org/app#2", "run-2")],
     [false, true],
   );
+});
+
+test("a follow-up the App labelled for its merger (#677): picked as theirs; the App's other labellings refused", async () => {
+  const at = "2026-02-01T00:00:00Z";
+  const asked = [];
+  // The reviews' records: #1 for bob, #3 for mallory, #4 for alice, #5 for renovate's labelling.
+  const records = { 1: "bob", 3: "mallory", 4: "alice", 5: "alice" };
+  const { pickup, p } = setup({
+    env: { MAX_PARALLEL: "5", AUTO_PICKUP_SLOTS: "4" },
+    repos: { "org/a": { issues: [1, 2, 3, 4, 5].map((n) => issue(n, n)) } },
+    events: {
+      "org/a#1": [labelled(BOT, "Bot", at)],
+      // A run's write: no record.
+      "org/a#2": [labelled(BOT, "Bot", at)],
+      "org/a#3": [labelled(BOT, "Bot", at)],
+      "org/a#4": [labelled(BOT, "Bot", at)],
+      // Another bot's labelling: never the reviews' to vouch for.
+      "org/a#5": [labelled("renovate[bot]", "Bot", at)],
+    },
+    // Edited after it was filed by someone not allowed.
+    edits: { "org/a#4": [["2026-03-01T00:00:00Z", "mallory"]] },
+    followUpPick: (repo, number, when) => {
+      asked.push([repo, number, when]);
+      return records[number] && number !== 2 ? { by: records[number], pr: 9 } : null;
+    },
+  });
+  assert.deepEqual(await pickup.sweep(), ["org/a#1"]);
+  // Asked for the App's labellings only, with the label's time.
+  assert.deepEqual(
+    asked.map(([repo, n, when]) => [repo, n, when === Date.parse(at)]),
+    [
+      ["org/a", 1, true],
+      ["org/a", 2, true],
+      ["org/a", 3, true],
+      ["org/a", 4, true],
+    ],
+  );
+  const [item] = p.accepted;
+  assert.equal(item.number, 1);
+  assert.equal(item.author, "bob");
+  assert.equal(runTrigger(item), "auto-pickup");
+  assert.deepEqual(p.removed, ["org/a#1"]);
+  const picked = p.comments.find(([key]) => key === "org/a#1")[1];
+  assert.match(
+    picked,
+    /^Picked automatically: the `auto-pickup` label was added by Deckhand for a follow-up of #9, merged by @bob, who the run is for\./,
+  );
+  assert.deepEqual(
+    p.logs.filter((l) => l.includes("skipped")),
+    [
+      `Auto-pickup: org/a#2: skipped, the label was added by a bot (${BOT})`,
+      "Auto-pickup: org/a#3: skipped, the label was added by Deckhand for a follow-up of #9, merged by mallory, who isn't an allowed user",
+      "Auto-pickup: org/a#4: skipped, its description was edited by mallory after the label was added",
+      "Auto-pickup: org/a#5: skipped, the label was added by a bot (renovate[bot])",
+    ],
+  );
+  // The App's labelling without a record says so on the issue, as any bot's.
+  assert.match(
+    p.comments.find(([key]) => key === "org/a#2")[1],
+    /^Not picked automatically: the label was added by a bot \(deckhand\[bot\]\)\./,
+  );
+});
+
+test("a follow-up's merger no longer in the repo's users: refused, as a person's label", async () => {
+  const { pickup, p } = setup({
+    repos: { "org/a": { issues: [issue(1, 1)], settings: "auto_pickup: true\nusers: [alice]" } },
+    events: { "org/a#1": [labelled(BOT, "Bot")] },
+    followUpPick: () => ({ by: "bob", pr: 9 }),
+  });
+  assert.deepEqual(await pickup.sweep(), []);
+  assert.deepEqual(p.accepted, []);
+  assert.match(p.comments[0][1], /merged by bob, who isn't an allowed user/);
+});
+
+test("vouchedLabeller(): only the App's labelling, only with a record", () => {
+  const config = { bot: BOT };
+  const pick = () => ({ by: "alice", pr: 3 });
+  const app = { login: "Deckhand[bot]", bot: true, at: 5 };
+  assert.deepEqual(vouchedLabeller(app, config, pick, "org/a", 1), {
+    login: "alice",
+    bot: false,
+    at: 5,
+    pr: 3,
+  });
+  assert.equal(
+    vouchedLabeller(app, config, () => null, "org/a", 1),
+    app,
+  );
+  const other = { login: "renovate[bot]", bot: true, at: 5 };
+  assert.equal(vouchedLabeller(other, config, pick, "org/a", 1), other);
+  const person = { login: "bob", bot: false, at: 5 };
+  assert.equal(vouchedLabeller(person, config, pick, "org/a", 1), person);
+  // Before /setup, no App to vouch for.
+  assert.equal(vouchedLabeller(app, {}, pick, "org/a", 1), app);
+});
+
+test("review.follow_ups_auto_pickup: a boolean, warned without auto_pickup or the operator's slots", () => {
+  const slots = testConfig({ MAX_PARALLEL: "3", AUTO_PICKUP_SLOTS: "1" });
+  const on = "review:\n  follow_ups_auto_pickup: true\n";
+  let read = parseRepoConfig(`auto_pickup: true\n${on}`, slots);
+  assert.deepEqual([read.errors, read.warnings], [[], []]);
+  assert.equal(read.settings.review.followUpsAutoPickup, true);
+  assert.equal(parseRepoConfig("review: true", slots).settings.review.followUpsAutoPickup, false);
+  // Whatever the keys' order.
+  read = parseRepoConfig(`${on}auto_pickup: false\n`, slots);
+  assert.deepEqual(read.warnings, [
+    "review.follow_ups_auto_pickup: needs `auto_pickup: true`, ignored",
+  ]);
+  read = parseRepoConfig(on, testConfig());
+  assert.ok(
+    read.warnings.includes(
+      "review.follow_ups_auto_pickup: the operator reserves no slots for it (AUTO_PICKUP_SLOTS), ignored",
+    ),
+  );
+  read = parseRepoConfig("review:\n  follow_ups_auto_pickup: yes please\n", slots);
+  assert.deepEqual(read.errors, ["review.follow_ups_auto_pickup: expected true or false"]);
 });

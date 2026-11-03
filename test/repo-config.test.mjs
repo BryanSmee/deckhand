@@ -680,11 +680,11 @@ review:
     "review.instructions: expected a path in the repository (relative, no ..)",
     "review.effort: expected one of low, medium, high, xhigh, max",
     "review.agent: the operator hasn't configured codex (configured: claude)",
-    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request, follow_ups)",
+    "review.hosts: unknown key (expected on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request, follow_ups, follow_ups_auto_pickup)",
   ]);
   assert.equal(bad.settings.review, null);
   assert.deepEqual(parseRepoConfig("review: [on]\n", config).errors, [
-    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request, follow_ups",
+    "review: expected true, or on, instructions, agent, model, effort, fix, merge, merge_method, max_allowed_severity, merge_wait, ci, ci_wait, ci_fix, request, follow_ups, follow_ups_auto_pickup",
   ]);
 });
 

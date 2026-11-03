@@ -14,6 +14,12 @@
 // vouches for the issue as it was then: a title or description edited since, by anyone but an
 // allowed user, holds it until someone adds the label again (editedSince()). An issue its
 // labelling holds keeps the label, and the App's comment says why, once (tell()).
+//
+// One labelling by the App counts (#677): a follow-up Deckhand filed with the label once its
+// pull request was merged (reviews.mjs fileFollowUps(), `review.follow_ups_auto_pickup`), whose
+// record in the reviews' store vouches for it (followUpPick(): that issue, at that time). Its
+// run is the work of who merged the pull request, an allowed user still. Any other labelling
+// by the App is a run's write, which may come from anyone's comment: refused as a bot's.
 import { hasLabel, headInRepo, issueItem, linkedIssue, MARKER, taskKey } from "./events.mjs";
 import { graphql, paginate } from "./github.mjs";
 import { CONFIG_FILE } from "./repo-config.mjs";
@@ -113,13 +119,30 @@ async function lastEdits(github, repo, number) {
 
 // Why the person who added the label may not start the run, or null. `users`: the repo's
 // (already within ALLOWED_USERS).
+// `by.pr`: a follow-up of that pull request, labelled by Deckhand for its merger, `by.login`.
 export function labellerRefusal(by, config, users) {
   if (by.bot) return `the label was added by a bot (${by.login})`;
   if (!allowed({ login: by.login }, config, users)) {
-    return `the label was added by ${by.login}, who isn't an allowed user`;
+    return by.pr
+      ? `the label was added by Deckhand for a follow-up of #${by.pr}, merged by ${by.login}, who isn't an allowed user`
+      : `the label was added by ${by.login}, who isn't an allowed user`;
   }
   return null;
 }
+
+// The labelling `by` ({ login, bot, at }), for whom it vouches: a follow-up's labelling by the
+// App that `followUpPick(repo, number, at)` (reviews.mjs) has a record of becomes its merger's
+// ({ login, bot: false, at, pr }); any other stays as it is.
+export function vouchedLabeller(by, config, followUpPick, repo, number) {
+  if (!by?.bot || !config.bot || lower(by.login) !== lower(config.bot)) return by;
+  const record = followUpPick(repo, number, by.at);
+  return record ? { login: record.by, bot: false, at: by.at, pr: record.pr } : by;
+}
+
+// Who added the label, in the App's comments (`at`: "@", a mention) and the log: `by`, or
+// Deckhand for `by` who merged `pr`.
+const addedBy = ({ by, pr }, at = "@") =>
+  pr ? `by Deckhand for a follow-up of #${pr}, merged by ${at}${by}` : `by ${at}${by}`;
 
 // The issue numbers Deckhand's open pull requests are for: those the App opened, from a branch
 // of the repo, saying which issue they close, or on its `issue-<n>-…` branch.
@@ -143,7 +166,8 @@ export function pulledIssues(pulls, repo, bot) {
 // `taken()`: how many reserved slots auto-picked tasks hold, running or queued (tasks.mjs
 // pickedCount()); `release()`: right before the first issue a sweep starts, the picks that hold
 // none of them end for good (tasks.mjs releasePicks()). `load(repo)`: how many of the repo's
-// tasks are running or queued (tasks.mjs repoLoad()).
+// tasks are running or queued (tasks.mjs repoLoad()). `followUpPick(repo, number, at)`: the
+// record of a follow-up the App labelled (reviews.mjs), or null.
 export function createAutoPickup({
   config,
   github,
@@ -155,6 +179,7 @@ export function createAutoPickup({
   taken,
   release = () => {},
   load = () => 0,
+  followUpPick = () => null,
   log = () => {},
   every = (fn, ms) => setInterval(fn, ms),
   later = (fn, ms) => setTimeout(fn, ms),
@@ -321,9 +346,10 @@ export function createAutoPickup({
       (p) => github(repo, "GET", p),
       `/repos/${repo}/issues/${n}/events`,
     );
-    const by = labeller(events, label);
     // Its latest labelling not in its events yet: not held (nor told), read again next sweep.
-    if (!by) return "who added the label isn't in its events yet";
+    const found = labeller(events, label);
+    if (!found) return "who added the label isn't in its events yet";
+    const by = vouchedLabeller(found, config, followUpPick, repo, n);
     let why = labellerRefusal(by, config, settings.users);
     if (!why) {
       const edited = editedSince(
@@ -344,6 +370,7 @@ export function createAutoPickup({
       return "its label couldn't be taken off when it was picked: take it off and add it again to retry";
     }
     candidate.by = by.login;
+    candidate.pr = by.pr ?? null;
     candidate.at = by.at;
     candidate.settings = settings;
     return null;
@@ -381,10 +408,11 @@ export function createAutoPickup({
   // label comes off right before the run is queued, so a failed or stopped run isn't picked
   // again and again; what doesn't start (the label gone meanwhile, the policies, an error)
   // says so in the comment, as work.mjs started() does, and a person adds the label back.
-  async function start({ repo, base, issue, by, at, settings }) {
+  async function start({ repo, base, issue, by, pr, at, settings }) {
     const n = issue.number;
     const key = taskKey(repo, n);
-    const text = `Picked automatically: the \`${label}\` label was added by @${by}, who the run is for. The label is off now: add it again to pick this issue once more.`;
+    const who = { by, pr };
+    const text = `Picked automatically: the \`${label}\` label was added ${addedBy(who)}, who the run is for. The label is off now: add it again to pick this issue once more.`;
     // Started by a person while its checks were read (a comment, the dashboard): theirs alone.
     if (live()(key)) {
       log(`Auto-pickup: ${key}: not picked, it started meanwhile`);
@@ -403,7 +431,7 @@ export function createAutoPickup({
       await notStarted(
         repo,
         posted.id,
-        by,
+        who,
         gone ? "the label was taken off meanwhile" : "the label couldn't be taken off",
         gone ? undefined : "Take the label off and add it again to retry.",
       );
@@ -429,18 +457,18 @@ export function createAutoPickup({
     }
     if (!mode) {
       const why = item.refused ? "the policies refuse it" : "it couldn't be queued";
-      await notStarted(repo, posted.id, by, why);
+      await notStarted(repo, posted.id, who, why);
     }
     if (failed) throw failed;
     log(
-      `Auto-pickup: ${key}: ${mode ? "started" : `not started${item.refused ? ", refused by the policies" : ""}`} (label added by ${by})`,
+      `Auto-pickup: ${key}: ${mode ? "started" : `not started${item.refused ? ", refused by the policies" : ""}`} (label added ${addedBy(who, "")})`,
     );
     return !!mode;
   }
 
   // The App's comment, edited to say nothing started.
-  async function notStarted(repo, id, by, why, retry = "Add the label again to retry.") {
-    const body = `Picked automatically (the \`${label}\` label, added by @${by}): not started, ${why}. ${retry}\n\n${MARKER}`;
+  async function notStarted(repo, id, who, why, retry = "Add the label again to retry.") {
+    const body = `Picked automatically (the \`${label}\` label, added ${addedBy(who)}): not started, ${why}. ${retry}\n\n${MARKER}`;
     const path = `/repos/${repo}/issues/comments/${id}`;
     const res = await github(repo, "PATCH", path, { body }).catch((error) => ({
       ok: false,
