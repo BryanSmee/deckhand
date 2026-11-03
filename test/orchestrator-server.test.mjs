@@ -430,10 +430,24 @@ function runLogs(dir) {
   return texts;
 }
 
+// The live runs' states the orchestrator saved (restart.mjs saveLive()), in its store (#617):
+// `runs/<id>` in its file backend's state.json.
+function liveStates(dir) {
+  let saved;
+  try {
+    saved = JSON.parse(readFileSync(join(dir, "store", "state.json"), "utf8"));
+  } catch {
+    return [];
+  }
+  return Object.entries(saved.keys ?? {})
+    .filter(([key]) => key.startsWith("runs/"))
+    .map(([, entry]) => entry.value);
+}
+
 // The one run's log of a test with a single run, once it is all at the runner: its live state
 // goes after its last write is sent (runs.mjs teardown()).
 async function onlyLog(dir) {
-  const live = () => readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json"));
+  const live = () => liveStates(dir).length > 0;
   for (let tries = 0; live() || !runLogs(dir).size; tries++) {
     if (tries > 500) throw new Error("timed out waiting for the run's log at the runner");
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -1156,20 +1170,19 @@ describe("listener", options, () => {
     assert.equal(call.auth, `Bearer ${credential}`);
     assert.deepEqual(JSON.parse(readFileSync(join(dir, "anthropic-answer"), "utf8")), { id: 1 });
 
-    // Neither secret is posted, nor stored in the run's log. The run's saved state keeps its
-    // secret until the run is cleaned up, just after "done": wait for that first.
+    // Neither secret is posted, nor stored in the run's log, nor its agent token in the
+    // orchestrator's store, its saved state among the rest (#617). That state goes once the run
+    // is cleaned up, just after "done": wait for that first.
     const body = JSON.parse(reply.body).body;
     assert.match(body, /^Leaked \[redacted\] and \[redacted\]\./);
     assert.ok(!body.includes(secret) && !body.includes(credential));
     assert.ok(!body.includes(agentToken));
-    await until(
-      () => !readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json")),
-      "the run's state to go",
-    );
-    // Its summary and its log, the runner's.
+    await until(() => !liveStates(dir).length, "the run's state to go");
+    // Its summary and its log, the runner's, and the orchestrator's store.
     const kept = readdirSync(join(dir, "logs")).map((f) =>
       readFileSync(join(dir, "logs", f), "utf8"),
     );
+    kept.push(readFileSync(join(dir, "store", "state.json"), "utf8"));
     for (const log of [...kept, ...runLogs(dir).values()]) {
       assert.ok(!log.includes(secret) && !log.includes(credential));
       assert.ok(!log.includes(agentToken));
@@ -2296,11 +2309,7 @@ mounts:
     const { dir, github } = ctx;
     await ctx.send(comment("alice"));
     // Its answer read and its inbox closed, the sandbox still running.
-    const logs = join(dir, "logs");
-    const answered = () =>
-      readdirSync(logs)
-        .filter((f) => f.endsWith(".live.json"))
-        .some((f) => /"answered": true/.test(readFileSync(join(logs, f), "utf8")));
+    const answered = () => liveStates(dir).some((saved) => saved.answered === true);
     await until(answered, "the answer");
     await ctx.restart();
     await ctx.listener.until("picked up");
@@ -2724,10 +2733,7 @@ mounts:
     // The sandbox, its inbox and the run's saved state are gone, once the run is torn down.
     await until(() => !readdirSync(join(dir, "containers")).length, "the sandbox's removal");
     assert.deepEqual(readdirSync(join(dir, "runs")), []);
-    assert.deepEqual(
-      readdirSync(join(dir, "logs")).filter((f) => f.endsWith(".live.json")),
-      [],
-    );
+    assert.deepEqual(liveStates(dir), []);
     // Its state was written whole each time (lib/files.mjs).
     assert.deepEqual(leftovers(dir), []);
   });
@@ -6439,13 +6445,11 @@ mounts:
 
   // The branches a running run may push, from its saved state.
   async function savedBranches(dir) {
-    const live = await until(
-      () => readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json")),
-      "the run's saved state",
-    );
-    // The run's secret is in it: the owner's only.
-    assert.equal(statSync(join(dir, "logs", live)).mode & 0o777, 0o600);
-    return JSON.parse(readFileSync(join(dir, "logs", live), "utf8")).branches;
+    const live = await until(() => liveStates(dir)[0], "the run's saved state");
+    // Its tokens aren't in it (#617).
+    assert.equal(live.agentToken, undefined);
+    assert.equal(live.runTokens, undefined);
+    return live.branches;
   }
 
   test("a run on an issue pushes issue-<n>-* only, before and after a restart", async (t) => {
@@ -6473,10 +6477,7 @@ mounts:
       await pushProbe(proxyPort, secret, `refs/heads/issue-12-${round}`);
       assert.equal(forwarded(), round === "before" ? 1 : 2);
       // GitHub took it: the run's last push, on its saved record.
-      const record = () => {
-        const live = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json"));
-        return JSON.parse(readFileSync(join(dir, "logs", live), "utf8")).record;
-      };
+      const record = () => liveStates(dir)[0].record;
       await until(() => record().branch === `issue-12-${round}`, "the push");
       assert.ok(record().lastPushAt > 0);
       if (round === "before") {
@@ -6600,11 +6601,10 @@ mounts:
     // The network its tokens are bound to, from its saved state: what the egress policy finds
     // its sandbox and its engine by (broker-http.mjs taskWhere()).
     const savedSandbox = async () => {
-      const state = await until(() => {
-        const live = readdirSync(join(dir, "logs")).find((f) => f.endsWith(".live.json"));
-        const saved = live && JSON.parse(readFileSync(join(dir, "logs", live), "utf8"));
-        return saved?.sandbox ? saved : null;
-      }, "the run's saved state, after its start");
+      const state = await until(
+        () => liveStates(dir).find((saved) => saved?.sandbox) ?? null,
+        "the run's saved state, after its start",
+      );
       return state;
     };
     await ctx.send(comment("alice"));
@@ -6635,10 +6635,7 @@ mounts:
     // A fork's pull request: no engine.
     rmSync(join(dir, "engine-args"));
     rmSync(join(dir, "go"));
-    await until(
-      () => !readdirSync(join(dir, "logs")).some((f) => f.endsWith(".live.json")),
-      "the first run's saved state removed",
-    );
+    await until(() => !liveStates(dir).length, "the first run's saved state removed");
     const payload = comment("alice");
     payload.issue = { number: 41, pull_request: {} };
     await ctx.send(payload);

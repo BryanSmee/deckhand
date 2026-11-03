@@ -1,7 +1,6 @@
 // Runs: one sandbox per run, started, followed and removed through the runner
 // (runner/docker.mjs). They run detached, so they outlive a listener restart: the next
 // listener picks them up (restart.mjs). Each run's reply, reactions and label once it is over.
-import { rmSync } from "node:fs";
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
 import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
@@ -186,9 +185,6 @@ export function createRuns(ctx) {
       record,
       // Its log, the runner's (../runner/client.mjs openRemote()): written at once, sent in order.
       logFile: ctx.runLogs.open(id),
-      // Its agent's token, saved with it for redaction (restart.mjs): the broker's are gone
-      // after a restart.
-      agentToken: null,
       // The ID of its network (or pod), once its sandbox has one: what the egress policy and its
       // anonymous GitHub calls find it by (egress-http.mjs sandboxOfTask()).
       sandbox: null,
@@ -951,15 +947,9 @@ export function createRuns(ctx) {
     clearTimeout(live.soon);
     await live.saving;
     // What it puts back in the queue (unanswered comments, a fallback's) is saved before its
-    // own state goes: a listener killed between the two finds them in both, and the run's win.
-    // When the queue couldn't be written, what the task has queued goes in a file of its own
-    // until a write of the queue succeeds (restart.mjs keepQueued()): the run is over, and the
-    // next listener must not take it for one going. Its state is kept only when even that file
-    // can't be written.
-    if ((await ctx.saveQueue?.()) === false && ctx.keepQueued?.(task, live) === false) {
-      log(`${live.key}: its state is kept until the queue is saved with what it put back`);
-      ctx.removeOnceSaved?.(ctx.livePath(live.id));
-    } else rmSync(ctx.livePath(live.id), { force: true });
+    // own state goes, tried again until it is (restart.mjs removeLive()): a listener killed
+    // between the two finds them in both, and the run's win.
+    await ctx.removeLive(task);
     task.live = null;
     task.running = false;
     ctx.running--;

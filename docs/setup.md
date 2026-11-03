@@ -1387,6 +1387,21 @@ Going back to an earlier release: it doesn't read the store's items, and starts 
 files (the titles are asked of GitHub again, the run order and the lanes' names are lost; from
 before #616, the waits, the review loops' counts and the brainstorms too).
 
+### Upgrading: a live run's state in the store (#617)
+
+The orchestrator keeps each running run's state in its store (`runs/<id>`), no longer in
+`logs/<run>.live.json` in its `data` volume, and never with the run's tokens: a copy taking over
+asks the broker for them (`POST /runs/:id/secrets`). At its first start, the orchestrator moves
+each `logs/<run>.live.json` left there to the store, tells the broker the tokens it held, and
+removes it; a `logs/<run>.queued.json` (a task's queue a run's end couldn't write to the store)
+is read with the queue and removed once the queue is written. Nothing to do, but:
+
+- **Update the broker with the orchestrator** (the same release, as compose and the manifests
+  do). An older broker refuses that call: the orchestrator asks again until it answers, and the
+  restored runs' output is redacted of their tokens by their shape meanwhile.
+- **Going back to an earlier release** loses the runs going then: it looks for their state in
+  `logs/`, finds none, and closes their sandboxes' input. Roll back with no run going.
+
 ### Upgrading: the paths from before the services are gone (#567)
 
 The orchestrator no longer answers sandboxes: its broker port (8081) and the `listener` name are

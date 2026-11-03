@@ -694,6 +694,11 @@ test("runs: a live run gets no summary from its log, the one written when it end
   // restoreRuns() lists it.
   assert.deepEqual(await started(dir), []);
   assert.equal(existsSync(join(dir, `${id}.json`)), false);
+  // Its state in the store (#617), no file: the same.
+  rmSync(join(dir, `${id}.live.json`));
+  writeFileSync(logPath, line({ type: "listener", key: "org/repo#7", startedAt: 1000 }));
+  assert.deepEqual(await started(dir, { live: new Set([id]) }), []);
+  assert.equal(existsSync(join(dir, `${id}.json`)), false);
   const record = { id, key: "org/repo#7", startedAt: 1000, finishedAt: 5000 };
   saveSummary(dir, { ...record, status: "ok", summary: "Done.", shots: "a".repeat(24) });
   const [run] = loadRuns(dir);

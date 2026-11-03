@@ -7,8 +7,10 @@
 // them, so a run ended through one can't renew through the other, and a copy that starts
 // carries on with the runs the last one knew. A record holds what the run's tokens claim, the
 // network or pod they are bound to (`sandbox`), and the hashes of its tokens still valid, never
-// a token: the last one signed is kept sealed (seal.mjs), for a renewal asked again within a
-// minute. What changes during a run (its pushes, its writes, the installation tokens it got)
+// a token in clear: each one it signed is kept sealed (seal.mjs) beside its hash, its agent's
+// token too (`agent`), and the last one signed (`last`), for a renewal asked again within a
+// minute. The orchestrator asks for them when it takes over a run (secrets()), to redact its
+// output: it keeps them in memory only (#617). What changes during a run (its pushes, its writes, the installation tokens it got)
 // is the services' that see it, by the run's id, the tokens' `jti`.
 //
 // Each change goes on the `runs` stream (started, renewed, a screenshot, ended), which the
@@ -103,6 +105,10 @@ export function issuedFields(list) {
     .slice(-20);
 }
 
+// The most run tokens a record keeps: a renewal drops those that expired, a sandbox renews
+// every few minutes at most (RENEW_MIN_MS), so a record holds far fewer.
+const ISSUED_MAX = 200;
+
 // `store`: lib/store.mjs's. `key`: { privateKey, publicKey, kid }.
 // `expired(id)`: a run whose record expired (its end never reached the broker), for its files.
 export function createRuns({ store, key, now = Date.now, expired = async () => {} }) {
@@ -148,23 +154,70 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
   // `issued`: the hashes of the run tokens its sandbox was handed ({ hash, exp }), as the
   // orchestrator saved them: a record the broker doesn't have yet starts with them, so that
   // past its expiry only the newest of them renews, as the listener that signed them ruled.
-  async function put(id, fields, issued = []) {
+  // `tokens`: the run's tokens themselves, which an orchestrator of the release before kept in
+  // its files (#617), moved here: only those this broker signed for this run are kept, sealed.
+  async function put(id, fields, issued = [], tokens = []) {
     // What the orchestrator doesn't know leaves what the broker has.
     const known = Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== null));
+    const own = ownTokens(id, tokens);
     const record = await update(
       runKey(id),
-      (old) => ({
-        presented: null,
-        last: null,
-        ...old,
-        issued: old?.issued?.length ? old.issued : issuedFields(issued),
-        ...known,
-        id,
-      }),
+      (old) =>
+        withTokens(
+          {
+            presented: null,
+            last: null,
+            ...old,
+            issued: old?.issued?.length ? old.issued : issuedFields(issued),
+            ...known,
+            id,
+          },
+          own,
+        ),
       { ttlMs: RECORD_TTL_MS },
     );
     await index((ids) => (ids[id] ? undefined : { ...ids, [id]: true }));
     return record;
+  }
+
+  // Of `tokens`, those this broker signed for run `id`, by audience: { run: [{ token, exp }],
+  // agent }. Up to RENEW_GRACE_MS past their expiry: one a sandbox may still renew, or print.
+  function ownTokens(id, tokens) {
+    const own = { run: [], agent: null };
+    for (const token of (Array.isArray(tokens) ? tokens : []).slice(0, ISSUED_MAX)) {
+      for (const audience of [RUN_AUDIENCE, AGENT_AUDIENCE]) {
+        let claims;
+        try {
+          claims = verifyToken(token, {
+            keys: runKeys(),
+            audience,
+            now: now(),
+            graceMs: RENEW_GRACE_MS,
+          });
+        } catch {
+          continue;
+        }
+        if (claims.jti !== id) continue;
+        if (audience === AGENT_AUDIENCE) own.agent = token;
+        else own.run.push({ token, exp: claims.exp * 1000 });
+      }
+    }
+    return own;
+  }
+
+  // `record` with `own` (ownTokens()) sealed in it: each run token beside its hash (added, the
+  // oldest first, when it has none), its agent's token unless it has one.
+  function withTokens(record, own) {
+    if (!own.run.length && !own.agent) return record;
+    let issued = [...record.issued];
+    for (const { token, exp } of own.run) {
+      const h = hash(token);
+      const found = issued.find((t) => t.hash === h);
+      if (found?.sealed) continue;
+      if (found) issued = issued.map((t) => (t === found ? { ...t, sealed: seal.seal(token) } : t));
+      else issued = [{ hash: h, exp, at: 0, sealed: seal.seal(token) }, ...issued];
+    }
+    return { ...record, issued, agent: record.agent ?? (own.agent && seal.seal(own.agent)) };
   }
 
   // The run's first tokens (POST /runs/:id/tokens), once its sandbox's network (or pod) is known:
@@ -176,8 +229,10 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
     const record = { ...fields, id, issued: [], presented: null, last: null };
     const agentToken = sign(record, AGENT_AUDIENCE, AGENT_TOKEN_TTL_MS);
     const token = sign(record, RUN_AUDIENCE, TOKEN_TTL_MS);
-    record.issued = [{ hash: hash(token), exp: now() + TOKEN_TTL_MS, at: now() }];
-    record.last = seal.seal(token);
+    const sealed = seal.seal(token);
+    record.issued = [{ hash: hash(token), exp: now() + TOKEN_TTL_MS, at: now(), sealed }];
+    record.last = sealed;
+    record.agent = seal.seal(agentToken);
     await store.set(runKey(id), record, { ttlMs: RECORD_TTL_MS });
     await index((ids) => (ids[id] ? undefined : { ...ids, [id]: true }));
     await event("started", id);
@@ -259,11 +314,11 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
         }
         const fresh = sign(run, RUN_AUDIENCE, TOKEN_TTL_MS);
         const valid = (t) => t.exp > now() || t.hash === run.presented;
+        run.last = seal.seal(fresh);
         run.issued = [
           ...run.issued.filter(valid),
-          { hash: hash(fresh), exp: now() + TOKEN_TTL_MS, at: now() },
-        ];
-        run.last = seal.seal(fresh);
+          { hash: hash(fresh), exp: now() + TOKEN_TTL_MS, at: now(), sealed: run.last },
+        ].slice(-ISSUED_MAX);
         answer = { token: fresh, renewed: true };
         return run;
       },
@@ -288,6 +343,22 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
   }
 
   const get = (id) => store.get(runKey(id));
+
+  // The run's tokens still valid, in clear (POST /runs/:id/secrets): { agentToken, tokens }, the
+  // newest run token last, or null for a run that isn't live. The orchestrator's alone, for its
+  // output's redaction once it took the run over (#617). A record of the release before has its
+  // last one only, and no agent token.
+  async function secrets(id) {
+    const record = await get(id);
+    if (!record) return null;
+    const tokens = (record.issued ?? []).map((t) => t.sealed && seal.open(t.sealed));
+    const last = record.last && seal.open(record.last);
+    if (last && !tokens.includes(last)) tokens.push(last);
+    return {
+      agentToken: (record.agent && seal.open(record.agent)) || null,
+      tokens: tokens.filter(Boolean),
+    };
+  }
 
   // The live runs' ids (GET /runs): those whose record expired are dropped from the list.
   async function list() {
@@ -320,6 +391,7 @@ export function createRuns({ store, key, now = Date.now, expired = async () => {
     renew,
     end,
     get,
+    secrets,
     list,
     event,
     publicKeys,
