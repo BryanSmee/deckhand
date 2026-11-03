@@ -332,7 +332,7 @@ function issueBranches(n, branches) {
 
 // What `workflow_secrets` lifts (workflow-check.mjs), said after workflowsNote()'s rules.
 const SECRETS_NOTE =
-  "\nThe operator grants `workflow_secrets` too: a workflow GitHub only runs from the default\nbranch's copy may use `secrets`, `environment:` and `write` scopes. Its `on:` has nothing but\n`schedule` and `push` with `branches:` naming the default branch alone, exactly (no pattern,\n`branches-ignore`, `tags` or `tags-ignore`; `paths` is fine); not `workflow_dispatch`,\n`pull_request` or `workflow_call`, so a workflow it calls keeps the rules above. A pull request\nchanging a workflow is never merged automatically.";
+  "\nThe operator grants `workflow_secrets` too: a workflow GitHub only runs from the default\nbranch's copy may use `secrets`, `environment:` and `write` scopes. Its `on:` has nothing but\n`schedule` and `push` with `branches:` naming the default branch alone, exactly (no pattern,\n`branches-ignore`, `tags` or `tags-ignore`; `paths` is fine); not `workflow_dispatch`,\n`pull_request` or `workflow_call`, so a workflow it calls keeps the rules above and can't use secrets:\nuse them in the lifted workflow's own jobs. A pull request\nchanging a workflow is never merged automatically.";
 
 // Whether the run's pushes may change workflow files (git-gateway.mjs), so a run that can't
 // says so rather than retrying GitHub's refusal. Nothing for a run that can't push at all (a

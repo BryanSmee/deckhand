@@ -262,8 +262,10 @@ did something (the "pwn request" pattern), out of scope here; `workflow_dispatch
 of whatever ref it is given, so anyone with write access could dispatch a run's branch
 (`gh workflow run --ref issue-…`), which is only checked at its tip: not allowed in this first
 version. A reusable workflow it calls (`uses: ./.github/workflows/x.yml`) has
-`on: workflow_call`, so it keeps the strict rules; pass it secrets with `secrets: inherit` from
-the caller rather than naming them in it. Everything else holds as above: the YAML subset,
+`on: workflow_call`, so it keeps the strict rules and can't use secrets in this version (inherited
+ones too are only read through `secrets.X`): a lifted workflow uses its secrets in its own jobs.
+Triggers and `push` filters are compared exactly, case and all: a spelling GitHub might read
+differently (`Push`, `brancheſ`) keeps the strict rules. Everything else holds as above: the YAML subset,
 symlinks, workflows from elsewhere, non-ASCII expressions, the merges with the pull requests'
 bases (none of the lifted workflow's triggers runs such a merge).
 

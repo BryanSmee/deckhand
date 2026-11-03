@@ -356,6 +356,12 @@ test("workflow_secrets: any other trigger, or a push not filtered to the default
     ["  push:\n    branches: [main]\n    tags-ignore: [x]", /\(it has `tags-ignore`\)/],
     ["  push:\n    branches-ignore: [dev]", /\(it has `branches-ignore`\)/],
     ["  push:\n    branches: [main]\n    branches-ignore: [dev]", /\(it has `branches-ignore`\)/],
+    // Names and keys exactly as GitHub documents them: another spelling lifts nothing.
+    ["  Push:\n    branches: [main]", /runs on `Push`/],
+    ["  SCHEDULE:\n    - cron: '0 3 * * *'", /runs on `SCHEDULE`/],
+    ["  ſchedule:\n    - cron: '0 3 * * *'", /runs on `ſchedule`/],
+    ["  push:\n    Branches: [main]", /\(it has `Branches`\)/],
+    ["  push:\n    brancheſ: [main]", /\(it has `brancheſ`\)/],
   ];
   for (const [triggers, why] of cases) {
     const { problems, relaxed: lifted } = relaxed(deploy(triggers));

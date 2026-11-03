@@ -214,8 +214,9 @@ function oneLine(text, max = 1000) {
 }
 
 // Why the workflow files of a push can't go through, by ref (git-mirror.mjs check()'s
-// findings, { ref, path, problems }): empty when they all pass.
-export function workflowRefusals(found) {
+// findings, { ref, path, problems }): empty when they all pass. `secrets`: the repo is granted
+// `workflow_secrets`, which the message names then.
+export function workflowRefusals(found, secrets = false) {
   const byRef = new Map();
   for (const { ref, path, problems } of found) {
     byRef.set(ref, [...(byRef.get(ref) ?? []), `${path}: ${problems.join(", ")}`]);
@@ -224,7 +225,7 @@ export function workflowRefusals(found) {
     [...byRef].map(([ref, files]) => [
       ref,
       oneLine(
-        `workflow files a sandbox pushes must cap their token at read and name no secret, unless \`workflow_secrets\` covers them: ${files.join("; ")}`,
+        `workflow files a sandbox pushes must cap their token at read and name no secret${secrets ? ", unless \`workflow_secrets\` covers them" : ""}: ${files.join("; ")}`,
       ),
     ]),
   );
@@ -569,7 +570,7 @@ export function createGitGateway({
       updates.push({ ...update, bases });
     }
     const secrets = await secretsGranted(pushed.repo);
-    return workflowRefusals(await mirrors.check({ ...pushed, base, updates, secrets }));
+    return workflowRefusals(await mirrors.check({ ...pushed, base, updates, secrets }), secrets);
   }
 
   // The bases of the open pull requests from `ref`, a branch: GitHub runs their workflows from
@@ -599,7 +600,12 @@ export function createGitGateway({
     const { token } = await github.repoToken(repo, { contents: "read" });
     const secrets = await secretsGranted(repo);
     const found = await mirrors.checkBranch({ repo, token, base, branch, into, secrets });
-    return workflowRefusals(found.map((f) => ({ ...f, ref: branch }))).get(branch) ?? null;
+    return (
+      workflowRefusals(
+        found.map((f) => ({ ...f, ref: branch })),
+        secrets,
+      ).get(branch) ?? null
+    );
   }
 
   // Whether the repo is granted `workflows` now; not when that can't be decided.

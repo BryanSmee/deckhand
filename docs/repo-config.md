@@ -248,7 +248,8 @@ permissions:
 Any other trigger (`pull_request`, `workflow_dispatch`, `workflow_call`, `workflow_run`…), an
 unfiltered `push`, a pattern or another branch in `branches:`, or `branches-ignore`, `tags`
 or `tags-ignore` keeps the rules above, and the refusal names it. A workflow it calls keeps them
-too (its `on:` is `workflow_call`): give it secrets with `secrets: inherit`. A pull request that
+too (its `on:` is `workflow_call`), so it can't use secrets in this version: use them in the
+lifted workflow's own jobs. Names are compared exactly (`push`, not `Push`). A pull request that
 changes a workflow is never merged automatically (`review.merge`). See [GitHub Actions on
 Deckhand's branches](security.md#github-actions-on-deckhands-branches).
 

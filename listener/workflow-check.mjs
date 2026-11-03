@@ -2,7 +2,7 @@
 // `workflows` changes (git-gateway.mjs): a workflow a sandbox wrote must cap its token
 // at read and name no secret, since GitHub runs a branch's own workflows on push and
 // pull_request. With `workflow_secrets` too, one GitHub only ever runs from the default
-// branch's copy (defaultBranchOnly()) may use secrets, environments and write scopes: that
+// branch's copy (notDefaultBranchOnly()) may use secrets, environments and write scopes: that
 // copy only gets there through a merge a person reviewed.
 //
 // The listener has no dependencies, so it reads them with its own parser. Not lib/yaml.mjs's: a
@@ -423,7 +423,7 @@ function permissionProblems(value, where, write = false) {
   return problems;
 }
 
-// The triggers that run only the default branch's copy of a workflow (defaultBranchOnly()):
+// The triggers that run only the default branch's copy of a workflow (notDefaultBranchOnly()):
 // `schedule`, and `push` filtered to that branch alone. Not `workflow_dispatch` (#700): anyone
 // with write access can dispatch a Deckhand branch's copy.
 const DEFAULT_BRANCH_TRIGGERS = new Set(["schedule", "push"]);
@@ -437,21 +437,23 @@ const PUSH_FILTERS = new Set(["branches", "paths", "paths-ignore"]);
 // alone, exactly (no pattern, no `branches-ignore`, `tags` or `tags-ignore`; `paths` filters
 // are fine). Anything else, a `pull_request`, `workflow_call`, `workflow_dispatch` or an
 // unfiltered `push`, runs a branch's copy, or the default branch's for an outsider (a "pwn
-// request"): the strict rules stay.
+// request"): the strict rules stay. Names and keys compared exactly, unlike field(): folding
+// makes the other checks stricter, here it would lift the rules for a spelling (`Push`,
+// `brancheſ`) GitHub might read otherwise.
 export function notDefaultBranchOnly(doc, base) {
-  const on = doc instanceof Map ? field(doc, "on") : undefined;
+  const on = doc instanceof Map ? doc.get("on") : undefined;
   if (!(on instanceof Map) || !on.size) return "its `on:` isn't a mapping of triggers";
   for (const [trigger, value] of on) {
-    const name = fold(trigger);
-    if (!DEFAULT_BRANCH_TRIGGERS.has(name))
+    if (!DEFAULT_BRANCH_TRIGGERS.has(trigger)) {
       return `it runs on \`${trigger}\`, not only from ${base}`;
-    if (name !== "push") continue;
+    }
+    if (trigger !== "push") continue;
     const only = `its \`push\` isn't filtered to \`branches: [${base}]\` alone`;
     if (!(value instanceof Map)) return only;
     for (const key of value.keys()) {
-      if (!PUSH_FILTERS.has(fold(key))) return `${only} (it has \`${key}\`)`;
+      if (!PUSH_FILTERS.has(key)) return `${only} (it has \`${key}\`)`;
     }
-    const branches = field(value, "branches");
+    const branches = value.get("branches");
     const names = typeof branches === "string" ? [branches] : branches;
     if (!Array.isArray(names) || !names.length) return only;
     for (const branch of names) {
@@ -486,8 +488,8 @@ export function workflowProblems(text) {
 // workflow only that branch's copy of runs (notDefaultBranchOnly()) may then name secrets,
 // deploy to an environment and ask for write scopes; `relaxed` says it needed to. The rest
 // holds whatever its triggers: the YAML subset, a top-level `permissions:`, no workflow from
-// elsewhere, ASCII expressions. Its callees have `on: workflow_call`: the strict rules.
-// `strict`: why the strict rules applied, when they refused something it would have relaxed.
+// elsewhere, ASCII expressions. Its callees have `on: workflow_call`: the strict rules, so
+// they can't use secrets.
 export function inspectWorkflow(text, { secretsOn = null } = {}) {
   const calls = [];
   const secrets = new Set();
@@ -511,10 +513,16 @@ export function inspectWorkflow(text, { secretsOn = null } = {}) {
   // Each rule's problems twice: as they are, and with what `workflow_secrets` lifts lifted.
   const problems = [];
   const relaxed = [];
+  // Whether a problem of the strict rules isn't one of the relaxed ones: something to lift.
+  let lifted = false;
   const both = (...found) => (problems.push(...found), relaxed.push(...found));
+  const strictOnly = (...found) => (problems.push(...found), (lifted = true));
   const permissions = (value, where) => {
-    problems.push(...permissionProblems(value, where));
-    relaxed.push(...permissionProblems(value, where, true));
+    const strict = permissionProblems(value, where);
+    const loose = permissionProblems(value, where, true);
+    problems.push(...strict);
+    relaxed.push(...loose);
+    if (strict.length > loose.length) lifted = true;
   };
   const top = field(doc, "permissions");
   if (top === undefined) {
@@ -532,7 +540,7 @@ export function inspectWorkflow(text, { secretsOn = null } = {}) {
       // and a job deploying to one creates a deployment, which may start the `on: deployment`
       // workflows of the deployed commit: the maintainers' copies, with their secrets.
       if (field(job, "environment") !== undefined) {
-        problems.push(`\`jobs.${id}.environment\`: deploying to an environment is not allowed`);
+        strictOnly(`\`jobs.${id}.environment\`: deploying to an environment is not allowed`);
       }
       const uses = field(job, "uses");
       if (uses === undefined) continue;
@@ -546,14 +554,14 @@ export function inspectWorkflow(text, { secretsOn = null } = {}) {
       }
     }
   }
-  if (secrets.size) problems.push(`mentions \`secrets\` (line ${[...secrets].join(", ")})`);
+  if (secrets.size) strictOnly(`mentions \`secrets\` (line ${[...secrets].join(", ")})`);
   if (expressions.size) {
     both(`non-ASCII characters in a \`\${{ }}\` expression (line ${[...expressions].join(", ")})`);
   }
-  if (relaxed.length === problems.length || secretsOn === null) return { problems, calls };
+  if (!lifted || secretsOn === null) return { problems, calls };
   const strict = notDefaultBranchOnly(doc, secretsOn);
   if (strict === null) return { problems: relaxed, calls, relaxed: true };
   // Said last: why `workflow_secrets` lifts none of them.
   problems.push(`\`workflow_secrets\` doesn't apply, as ${strict}`);
-  return { problems, calls, strict };
+  return { problems, calls };
 }

@@ -1336,6 +1336,7 @@ test("the `workflow_secrets` grant: a workflow only the default branch runs may 
   assert.equal(pr.ok, false);
   assert.match(pr.stderr, /mentions `secrets`/);
   assert.match(pr.stderr, /`workflow_secrets` doesn't apply, as it runs on `pull_request`/);
+  assert.match(pr.stderr, /name no secret, unless `workflow_secrets` covers them: /);
   // A callee with secrets (`on: workflow_call`) keeps the strict rules.
   commit({
     ".github/workflows/deploy.yml": DEPLOY.replace(
@@ -1356,7 +1357,7 @@ test("the `workflow_secrets` grant: a workflow only the default branch runs may 
   const strict = await git(work, "push", remote(), "HEAD:refs/heads/issue-1-deploy");
   assert.equal(strict.ok, false);
   assert.match(strict.stderr, /`permissions\.contents` must be read or none/);
-  assert.doesNotMatch(strict.stderr, /doesn't apply/);
+  assert.doesNotMatch(strict.stderr, /doesn't apply|unless `workflow_secrets`/);
 });
 
 test("the `workflow_secrets` grant: nothing without `workflows`", async (t) => {
