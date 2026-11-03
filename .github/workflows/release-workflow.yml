@@ -2,9 +2,9 @@ name: Release
 
 # A commit on main gets its `edge` images once Checks passed on it, never before: a red main
 # (two pull requests green apart and broken together) would otherwise reach the deployments that
-# follow `edge`. Checks cancels its run on main when a newer push comes, so only the newest
-# commit that passed is published. A release tag (v*) is published as it is pushed: it names a
-# commit of main, cut by hand.
+# follow `edge`. Only main's newest commit is published: Checks run again on an older one
+# (a flaky test's rerun) would move `edge` back over a newer commit, whose own Checks publish it.
+# A release tag (v*) is published as it is pushed: it names a commit of main, cut by hand.
 on:
   workflow_run:
     workflows: [Checks]
@@ -13,8 +13,20 @@ on:
   push:
     tags: ["v*"]
 
+# On main, a publish cancels the one in progress (a newer commit wins); a tag's never is. Every
+# Checks run that completes on a branch named main starts a Release run, failed, cancelled or a
+# fork's: concurrency applies before the job's `if` (below, the same condition), so those get a
+# group of their own, their run's, and only the runs that will publish share one. Otherwise a
+# failed run's Release would cancel the publish of the commit before it, which passed.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: >-
+    ${{ github.workflow }}-${{ github.ref }}-${{
+      (github.event_name == 'push' ||
+       (github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_repository.full_name == github.repository &&
+        github.event.workflow_run.head_sha == github.sha))
+      && 'publish' || github.run_id }}
   cancel-in-progress: ${{ github.ref_type == 'branch' }}
 
 permissions:
@@ -23,13 +35,15 @@ permissions:
 
 jobs:
   images:
-    # Checks passed on a push to this repository's main: `branches` alone also matches a fork's
-    # pull request from a branch named main, whose code must never be built with this token.
+    # Checks passed on a push to this repository's main (`branches` alone also matches a fork's
+    # pull request from a branch named main, whose code must never be built with this token), on
+    # main's newest commit (a workflow_run's github.sha): the concurrency group above, the same.
     if: >-
       github.event_name == 'push' ||
       (github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.event == 'push' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+       github.event.workflow_run.head_repository.full_name == github.repository &&
+       github.event.workflow_run.head_sha == github.sha)
     runs-on: [self-hosted, Linux]
     strategy:
       fail-fast: false
@@ -57,8 +71,7 @@ jobs:
             dockerfile: engine/Dockerfile
           - image: deckhand-engine-podman
             dockerfile: engine/podman/Dockerfile
-    # The commit Checks passed on: a workflow_run's own github.sha is main's newest, which may be
-    # another.
+    # The commit Checks passed on, main's newest (the `if` above): named once, from the event.
     env:
       COMMIT: ${{ github.event.workflow_run.head_sha || github.sha }}
     steps:
