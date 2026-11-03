@@ -288,7 +288,7 @@ export function storeContract(name, open) {
 
   test(`${name}: keys by prefix: a few, none, and only the prefix's`, async (t) => {
     const { store } = await setup(t);
-    assert.deepEqual(await store.keys("waits/"), { keys: [], cursor: null });
+    assert.deepEqual((await listed(store, "waits/")).keys, []);
     for (const key of ["waits/a#1", "waits/a#2", "waits/b#1", "waitsx", "runs/1", "wait"]) {
       await store.set(key, { key });
     }
@@ -319,7 +319,7 @@ export function storeContract(name, open) {
     for (const key of before) await store.set(key, 1);
     const deleted = range(30, (i) => `m/${i * 10}`);
     const added = range(30, (i) => `m/new-${i}`);
-    const { keys } = await listed(store, "m/", {
+    const { keys, pages } = await listed(store, "m/", {
       count: 50,
       between: async (page) => {
         if (page !== 1) return;
@@ -327,6 +327,7 @@ export function storeContract(name, open) {
         for (const key of added) await store.set(key, 1);
       },
     });
+    assert.ok(pages > 1, `${pages} page(s): nothing changed between them`);
     const listedKeys = new Set(keys);
     for (const key of before.filter((k) => !deleted.includes(k))) {
       assert.ok(listedKeys.has(key), `${key} wasn't listed`);

@@ -151,31 +151,49 @@ function storeCommands() {
     found.add(["XGROUP", "XINFO"].includes(command) ? `${command}|${sub}` : command);
   }
   // From Node: call("EVALSHA", …), ["SELECT", …].
-  for (const [, command] of text.matchAll(/(?:call\(|\[)"([A-Z]+)"/g)) found.add(command);
+  for (const [, command] of text.matchAll(/(?:call\(|\[)\s*"([A-Z]+)"/g)) found.add(command);
   found.delete("AUTH"); // always allowed
   return [...found].map((c) => c.toLowerCase());
 }
 const allows = (acl, command) =>
   acl.includes(` +${command} `) || acl.includes(` +${command.split("|")[0]} `);
 
+// The services whose stores list their keys (keys(): SCAN, which Redis doesn't hold to a user's
+// key pattern): the others' users go without it.
+const SCANS = ["orchestrator"];
+
 test("components/redis and setup.md: each user's ACL allows every command the store sends", () => {
   const commands = storeCommands();
-  assert.ok(commands.includes("xdel") && commands.includes("xinfo|groups"), commands.join(" "));
-  const lines = [
-    /echo "(user \$service on .*)" >>/.exec(
-      readFileSync(join(root, "components/redis/redis.yaml"), "utf8"),
-    )[1],
+  assert.ok(
+    ["xdel", "xinfo|groups", "scan"].every((c) => commands.includes(c)),
+    commands.join(" "),
+  );
+  const script = readFileSync(join(root, "components/redis/redis.yaml"), "utf8");
+  const line = /echo "(user \$service on .*)" >>/.exec(script)[1];
+  const services = /for service in ([a-z ]+); do/.exec(script)[1].split(" ");
+  const scans = /case \$service in ([a-z|]+)\) scan=" \+scan" ;; \*\) scan="" ;; esac/
+    .exec(script)[1]
+    .split("|");
+  assert.deepEqual(scans, SCANS);
+  // Each service's user, as the script writes it.
+  const acls = services.map((service) => [
+    service,
+    line.replace("$scan", SCANS.includes(service) ? " +scan" : ""),
+  ]);
+  acls.push([
+    "setup.md",
     /^(user deckhand on .*)$/m.exec(
       readFileSync(join(import.meta.dirname, "..", "docs", "setup.md"), "utf8"),
     )[1],
-  ];
-  for (const line of lines) {
-    const acl = `${line} `;
+  ]);
+  for (const [who, acl] of acls) {
+    const scan = who === "setup.md" || SCANS.includes(who);
     assert.deepEqual(
-      commands.filter((c) => !allows(acl, c)),
+      commands.filter((c) => (scan || c !== "scan") && !allows(`${acl} `, c)),
       [],
-      line.slice(0, 40),
+      who,
     );
+    assert.equal(allows(`${acl} `, "scan"), scan, `${who}: +scan`);
   }
 });
 

@@ -15,7 +15,7 @@ import { test } from "node:test";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
 import { sealWith } from "../lib/seal.mjs";
-import { nextEpoch, openStore, storable } from "../lib/store.mjs";
+import { nextEpoch, openStore, storable, values } from "../lib/store.mjs";
 import { fileStore } from "../lib/store-file.mjs";
 import { isRoot, needsModes, needsPosixRename, tempDir } from "./helpers.mjs";
 import { storeContract } from "./store-contract.mjs";
@@ -447,4 +447,31 @@ test("a sealed value is never refused for a token's shape, and one sealed in bas
     .join(".");
   assert.equal(open(urlSafe), "x".repeat(600));
   assert.equal(open(sealed), "x".repeat(600));
+});
+
+test("values(): a key listed again on a later page comes once, one gone before its get() not at all", async () => {
+  // Pages as Redis's SCAN may give them: "a" on two of them, an empty one before the last.
+  const pages = [
+    { keys: ["a", "b"], cursor: "1" },
+    { keys: [], cursor: "2" },
+    { keys: ["a", "c", "gone"], cursor: null },
+  ];
+  const asked = [];
+  const store = {
+    keys: async (prefix, { cursor }) => {
+      asked.push([prefix, cursor]);
+      return pages[cursor === null ? 0 : Number(cursor)];
+    },
+    get: async (key) => (key === "gone" ? null : `value of ${key}`),
+  };
+  assert.deepEqual(await Array.fromAsync(values(store, "p/")), [
+    ["a", "value of a"],
+    ["b", "value of b"],
+    ["c", "value of c"],
+  ]);
+  assert.deepEqual(asked, [
+    ["p/", null],
+    ["p/", "1"],
+    ["p/", "2"],
+  ]);
 });
