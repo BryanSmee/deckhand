@@ -390,6 +390,9 @@ function skip(reason) {
 const ctx = {
   // The version the images were built from, its repository and when this listener started.
   server,
+  // Whether this copy still holds the lease: writes ordered after the queue's stop trying when
+  // it is lost (restart.mjs queueWritten()).
+  held: () => leaseHeld,
   // How it is set up (engine, egress proxy, grants, who may sign in): GET api/server.
   serverSetup: () => serverSetup(config),
   // The services' health, each one's GET /health (GET api/health: the status page).
@@ -595,7 +598,12 @@ for (const run of ctx.runs) ctx.runsById.set(run.id, run);
 // (lib/store-map.mjs), read back now that this copy holds the lease, before anything is
 // restored: what a release before kept in the data volume (`<name>.json`) is moved there
 // first. Each change writes its own key, tried again while the store is away (/ready says how
-// many wait), until written or the lease is lost.
+// many wait), until written or the lease is lost. The maps behind timers and comments (#616)
+// too: `waits`, `inputs`, `reviews`, `brainstorms`, `decisions` and `picks`, their deadlines
+// data the modules arm again from (brainstorms.mjs, reviews.mjs tick(), waits.mjs check()), the
+// comments they hold written without a secret (storable()); where one change writes such a map
+// and the queue, the two writes go in the order that leaves a comment somewhere after a crash
+// between them (waits.mjs releasing() and hold(), brainstorms.mjs end()).
 maps = await persist("Reading the orchestrator's maps from the store", () =>
   storeMaps(
     store,
@@ -611,6 +619,12 @@ maps = await persist("Reading the orchestrator's maps from the store", () =>
       conflicts: {},
       "dry-runs": {},
       requested: {},
+      waits: {},
+      inputs: {},
+      reviews: {},
+      brainstorms: {},
+      decisions: {},
+      picks: {},
     },
     {
       dir: config.dataDir,
@@ -646,7 +660,7 @@ const dismissals = createDismissals({ dismissed: maps.maps.dismissed });
 
 // Auto-picked work that is over: its issue closed, its pull request merged or closed, or the
 // sweep gave its slot to the next issue (picks.mjs, tasks.mjs releasePicks()).
-const picks = createPicks({ path: join(config.dataDir, "picks.json") });
+const picks = createPicks({ ended: maps.maps.picks });
 
 // Open issues labelled needs-input: from webhooks, and looked up once per start (inputs.mjs).
 // One the listing no longer has is asked about on its own: a listing read page by page can
@@ -654,7 +668,7 @@ const picks = createPicks({ path: join(config.dataDir, "picks.json") });
 // off meanwhile, it sets its run's questions aside, as the delivery would. Its `updated_at` is
 // when, at the latest: a run that asked since still waits.
 const inputs = createInputs({
-  path: join(config.dataDir, "inputs.json"),
+  inputs: maps.maps.inputs,
   log,
   listLabelled: (repo) => listLabelled(github, repo, config.needsInputLabel),
   dropped: (repo, number) => {
@@ -801,7 +815,8 @@ const taskBusy = (key) => busyTask(ctx.tasks, key);
 
 Object.assign(ctx, {
   brainstorms: createBrainstorms({
-    path: join(config.dataDir, "brainstorms.json"),
+    brainstorms: maps.maps.brainstorms,
+    queueSaved: () => ctx.queueWritten(),
     idleMs: config.brainstormIdleMs,
     // A reply still on its way: posting it arms the timer again.
     busy: taskBusy,
@@ -832,7 +847,7 @@ ctx.conflicts = createConflicts({
 // `auto_merge` grant, a clean review the merge (`review.merge`).
 // Each task's last policy decisions and dry run, for its page (decisions.mjs).
 ctx.decisions = createDecisions({
-  path: join(config.dataDir, "decisions.json"),
+  decisions: maps.maps.decisions,
   dryRuns: maps.maps["dry-runs"],
   secrets: () => operatorSecrets(ctx),
 });
@@ -847,7 +862,7 @@ ctx.linkedBranches = createLinkedBranches({
   log,
 });
 ctx.reviews = createReviews({
-  path: join(config.dataDir, "reviews.json"),
+  reviewed: maps.maps.reviews,
   config,
   repoSettings,
   accept: (item) => ctx.accept(item),
@@ -909,7 +924,8 @@ ctx.projects = createProjects({
 });
 // Comments that wait for other issues to be done ("/after #12").
 ctx.waits = createWaits({
-  path: join(config.dataDir, "waits.json"),
+  waits: maps.maps.waits,
+  queueSaved: () => ctx.queueWritten(),
   github,
   reply: ctx.reply,
   received: ctx.received,
@@ -1076,6 +1092,16 @@ if (ctx.app) {
 // delivered to them).
 const restored = await ctx.restoreRuns();
 await ctx.loadQueue();
+// A wait whose comment is queued or running now was released by a copy stopped before it was
+// deleted from the store (waits.mjs releasing()): its comment goes on, the wait goes.
+ctx.waits.dedupe(
+  new Set(
+    [...ctx.tasks.values()]
+      .flatMap((t) => [...t.pending, ...(t.live?.handled ?? [])])
+      .map((item) => item.queueId)
+      .filter(Boolean),
+  ),
+);
 // A fix loop's step whose run neither came back nor waits in the queue: no longer on its way.
 ctx.reviews.forgetSteps(stepsGoing(ctx.tasks));
 // The keys of comments dropped as the queue came back (their author no longer allowed) stay in

@@ -2,19 +2,16 @@
 // last run then: the issue closed, its pull request merged or closed, or the sweep gave its slot
 // away (tasks.mjs releasePicks()). What is queued on the task after that doesn't follow the
 // pick (tasks.mjs followsPick()), the issue reopened too, while that run is still the task's
-// last. A new run replaces nothing here: it isn't picked, so nothing follows it. Kept in
-// picks.json, one entry per picked task.
+// last. A new run replaces nothing here: it isn't picked, so nothing follows it. Kept in the
+// orchestrator's store (`picks`, lib/store-map.mjs), one entry per picked task.
 import { taskId } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
-export function createPicks({ path } = {}) {
-  const ended = persistentMap(path);
-
+// `ended`: the Map they are kept in (storeMap()'s).
+export function createPicks({ ended = new Map() } = {}) {
   // Task `key`'s picked work over, its last run `runId`.
   function end(key, runId) {
     if (ended.get(taskId(key)) === runId) return;
     ended.set(taskId(key), runId);
-    ended.save();
   }
 
   // At start: entries whose run is no longer its task's last (`runs`, newest first) can't match
@@ -22,13 +19,7 @@ export function createPicks({ path } = {}) {
   function prune(runs) {
     const last = new Map();
     for (const r of runs) if (!last.has(taskId(r.key))) last.set(taskId(r.key), r.id);
-    let changed = false;
-    for (const [key, runId] of [...ended]) {
-      if (last.get(key) === runId) continue;
-      ended.delete(key);
-      changed = true;
-    }
-    if (changed) ended.save();
+    for (const [key, runId] of [...ended]) if (last.get(key) !== runId) ended.delete(key);
   }
 
   return { end, ended: (key, runId) => ended.get(taskId(key)) === runId, prune };

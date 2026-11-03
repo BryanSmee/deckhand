@@ -508,8 +508,8 @@ token only reads, and Deckhand posts the review.
   came from, then lists them in one comment on the pull request. The same title in several
   reviews of the pull request is filed once, and one an issue labelled `follow-up` already has
   is linked instead; each merge files its follow-ups once, across redeliveries and restarts
-  (`reviews.json`), from its reviews and from those GitHub refused, posted as plain
-  comments (only the comments Deckhand posted them as, recorded in `reviews.json`). Only a
+  (the orchestrator's store, `reviews`), from its reviews and from those GitHub refused, posted as plain
+  comments (only the comments Deckhand posted them as, recorded in the orchestrator's store, `reviews`). Only a
   bullet with its title in bold is a follow-up, and not one that says there is none: `None.`,
   `- No follow-ups.` or `- **None found**` files nothing. An item under the wrong heading is
   never filed, but posted under Comments: a blocking comment there (`- **blocking** …`, in
@@ -622,7 +622,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
 
   **Bounded**: `n` fix runs and `n` reviews after them at most per pull request (`fix: true`
   without `merge`: one fix run, no review after it), each counted
-  in `reviews.json` before it is queued, across restarts: the fix's push doesn't start a
+  in the orchestrator's store (`reviews`) before it is queued, across restarts: the fix's push doesn't start a
   review by itself (only turning ready does, and Deckhand's review of it), and a later
   review (`/mode review`) starts no fix past the count. Other pull requests' reviews, and
   reviews that only comment, start nothing. To act again, comment with the trigger, or use
@@ -641,7 +641,7 @@ review` gets the "unknown mode" reply. `review: true` (or a block without `on`, 
     grants one round more, never a new loop. The App comments "Fix round 4 from the dashboard
     by @you: 2 high findings left" (edited to say so if it is refused after that), and the
     fix's push is reviewed like any round's, even with `fix: true` and no `merge`; with
-    `merge`, that review decides the auto-merge again. The round is counted in `reviews.json`
+    `merge`, that review decides the auto-merge again. The round is counted in the orchestrator's store (`reviews`)
     before the run is queued: a second click or a restart starts no second one. Only on
     Deckhand's own open pull request linked to its issue, with nothing running or queued, no
     needs-input label, the loop not going on (no review, CI or checks awaited), and GitHub's
@@ -761,7 +761,7 @@ pull request's head commit (other checks and commit statuses aren't read, as for
   stopped (once the maintainer answered, say): ready again at the same commit, the CI step
   runs again.
 - **Bounded**: `ci_fix` CI fix runs per pull request (1 by default, `0` to the operator's
-  `MAX_FIX_ROUNDS`), each counted in `reviews.json` before it is queued, apart from `fix`'s
+  `MAX_FIX_ROUNDS`), each counted in the orchestrator's store (`reviews`) before it is queued, apart from `fix`'s
   rounds: a CI fix never uses up a round the review's findings need. They count across the
   pull request's commits: when none is left and CI fails, the comment says so ("No CI fix run
   left") and the review starts anyway, told CI failed, so the
@@ -805,7 +805,7 @@ nothing blocking. It takes both sides:
 5. Anything else leaves the pull request to the maintainer, with a comment saying why: a review
    that still blocks, a fix run that failed or pushed nothing, a gate that refuses, a GitHub
    call that fails, a merge GitHub refuses. **Bounded**: at most `fix`'s number of fix runs
-   and a review after each, and one merge decision per pull request, kept in `reviews.json`
+   and a review after each, and one merge decision per pull request, kept in the orchestrator's store (`reviews`)
    across restarts.
 
 **`max_allowed_severity: medium`** lets every automatic review in the fix loop, and the one
@@ -845,7 +845,7 @@ Follow-ups and notes never block a merge.
 **Checks still running.** The review's push (or the fix run's) starts CI at the same time as
 the review, so CI longer than the review is still going when it ends. When Actions runs still
 going are all that stands in the way (`mergeable_state` `clean`, `unstable`, `blocked` or
-still `unknown`), nothing is posted: the pull request waits, in `reviews.json` (across
+still `unknown`), nothing is posted: the pull request waits, in the orchestrator's store, `reviews` (across
 restarts), and the gates are asked again each time an Actions run completes on the reviewed
 commit (the App's `workflow_run` deliveries), and every 5 minutes for a lost delivery. They
 merge it once every run passed and it is `clean`, or refuse it as above. After `merge_wait`

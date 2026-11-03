@@ -2141,18 +2141,20 @@ service's). The files holding secrets are the owner's only (`0600`):
 **The orchestrator's volume** (`data`) holds nothing that signs deliveries or sessions; whoever reads it reads the queue and what the runs did, and a running run's
 agent token. The files holding one are the owner's only (`0600`):
 
-| File                     | What                                                                                                              |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------- |
-| `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over)                                                 |
-| `store/state.json`       | the store's keys: the queued comments, with their authors; its lease and fencing epoch; the deliveries it handled |
-| `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes                                                     |
-| `waits.json`             | comments waiting for other issues (`/after`), with their authors                                                  |
+| File                     | What                                                                                                                                                            |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `logs/<run>.live.json`   | a running run's state, with its agent token (gone once it's over)                                                                                               |
+| `store/state.json`       | the store's keys: the queued comments and those waiting for other issues (`/after`), with their authors; its lease and fencing epoch; the deliveries it handled |
+| `logs/<run>.queued.json` | a task's queued comments, kept while the store refused writes                                                                                                   |
 
 **The store** (`STORE_URL`: a folder by default, Redis #509) never holds a secret. Each
 service's refuses a value or an event holding one it knows, a GitHub token or a private key
 (`lib/store.mjs` `withoutSecrets()`): edge's refuses its webhook secret, OAuth client secret and
-session key. What people wrote (a delivery's payload, a queued comment) is kept with them
-redacted (`storable()`), rather than refused whole. The file backend (`lib/store-file.mjs`) may
+session key. What people wrote (a delivery's payload, a queued comment, one waiting for other
+issues) is kept with them redacted (`storable()`), rather than refused whole. A comment that
+waits (`/after`) was in a file of its own, `waits.json`, the owner's only (`0600`); in the store
+(#616), what keeps it is the store's own access: its folder, `state.json` the owner's only, or
+Redis's user and network (docs/setup.md, The store). The file backend (`lib/store-file.mjs`) may
 be shared by several processes on one node: two copies of a service on one volume
 (`docker compose up -d --scale orchestrator=2`, or edge), or one starting while the last
 drains. Each call holds the folder's lock (`state.lock`, taken over once 10 seconds stale, one process at a time), reads
@@ -2241,7 +2243,7 @@ comment saying who asked before its run is queued. Review queues what `/mode rev
 Fix reads the App's latest review back from GitHub and goes through the fix loop's own checks
 (`startFix()`: Deckhand's own pull request linked to its issue, ready for review, no
 needs-input label, the loop not going on, the `deny_fix` policies), one fix run per click,
-counted in `reviews.json` before it is queued.
+counted in the store's `reviews` before it is queued.
 
 Its Dismiss (`POST /api/repos/<owner>/<repo>/dismiss { runId }`) passes the repository's half
 of these checks (same origin, the user in `ALLOWED_USERS` and the repo's `users`, a config
@@ -2474,7 +2476,7 @@ only). It widens nothing, so it needs no grant: a review is a light run with a r
   review's calls for comments, reviews and review comments, REST and GraphQL alike, and the
   web host's pages. What an outsider can still put in front of it is the pull request's own
   description and diff, which it reviews.
-- **No loops**: each pull request's head commit is reviewed by itself once (`reviews.json`),
+- **No loops**: each pull request's head commit is reviewed by itself once (the store's `reviews`),
   and the App's review is a bot's `pull_request_review`, which starts nothing. Acting on a
   review is the maintainer's call, with a trigger comment, unless the repo sets `review.fix`
   (below), whose loop is bounded.
@@ -2490,7 +2492,7 @@ runs (`true`: one, whose push is reviewed only with `review.merge`), capped by t
 `MAX_FIX_ROUNDS` (5 by default). It is a normal
 work run, with the same token, push rules, secrets and mounts, so the key needs no grant. The
 loop is bounded: N fix runs and N reviews after them at most per pull request, each counted
-in `reviews.json` before it is queued, kept across restarts, so a redelivered webhook or a
+in the store's `reviews` before it is queued, kept across restarts, so a redelivered webhook or a
 restart starts no extra one. It stops at a review with nothing above
 `review.max_allowed_severity`, when the rounds run out, at a fix that failed or pushed
 nothing, a policy's refusal (`deny_fix`, `deny_review`), a run going or queued on the issue,
@@ -2549,10 +2551,10 @@ title says; a prompt injection in the reviewed diff could have shaped it.
 
 Only the App's own reviews are read back: GitHub reviews by the App's login, with its marker, whose body opens with a review's verdict line (a
 sandbox's token can't post a review), and a review GitHub refused, posted as a plain comment,
-only from the comment whose id its round kept when the orchestrator posted it (`reviews.json`):
+only from the comment whose id its round kept when the orchestrator posted it (the store's `reviews`):
 the App's other comments, a run's reply among them, are never read for follow-ups. They are
 read only after a merge (a pull request closed without one files none), and
-once per pull request (`reviews.json`): a redelivered webhook or a restart files nothing twice.
+once per pull request (the store's `reviews`): a redelivered webhook or a restart files nothing twice.
 A review posted after the merge's delivery (it was still running) files its own follow-ups once
 it is recorded, linking those an issue already has.
 A merge files at most 10, the rest listed by title (as code) in its comment, and only bullets
@@ -2630,7 +2632,7 @@ branch, the last check of everything above. With it on:
   one completed, but that delivery only says when to ask: the gates are all read again, and a
   push meanwhile still refuses it.
 - **No loop**: `review.fix`'s fix runs and one review after each at most (bounded by the
-  operator's `MAX_FIX_ROUNDS`), one merge decision per pull request (`reviews.json`). Every refusal is a comment on the pull request, every merge too,
+  operator's `MAX_FIX_ROUNDS`), one merge decision per pull request (the store's `reviews`). Every refusal is a comment on the pull request, every merge too,
   and the dashboard marks each auto-merged task "Merged by Deckhand", so they can be found and
   read afterwards.
 
@@ -2767,7 +2769,7 @@ namespace of its own:
   already shows that user about the pull request. Your policies' file names and compile
   errors (redacted) appear in the reply and the config panel, not their text.
 - **A decision's input is kept redacted**: the newest 3 decisions of a task keep the input
-  their rules saw in `decisions.json`, each string redacted like the messages, the whole cut to
+  their rules saw in the store's `decisions`, each string redacted like the messages, the whole cut to
   8 KB, for the task's page on the dashboard.
 
 ## Capabilities

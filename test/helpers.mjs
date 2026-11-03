@@ -26,6 +26,7 @@ import { createBroker } from "../listener/broker.mjs";
 import { serviceGuard } from "../lib/service-token.mjs";
 import { openStore } from "../lib/store.mjs";
 import { storeMap } from "../lib/store-map.mjs";
+import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 import {
   AGENT_AUDIENCE,
   isToken,
@@ -285,6 +286,28 @@ export function mapStore(store = openStore("memory:")) {
     settled,
     again: async (name, options) => (await settled(), map(name, options)),
   };
+}
+
+// A Map kept whole in the JSON file `path` at each change, read back from it when made again:
+// the unit tests' restarts of a module that takes a storeMap() (lib/store-map.mjs), without its
+// writes in the background, its values copied as the store copies them. The tests read and seed
+// that file as they would the state; mapStore() is the store itself.
+export function fileMap(path) {
+  const map = new Map(Object.entries(readJson(path, {}) ?? {}));
+  const own = { set: map.set.bind(map), delete: map.delete.bind(map) };
+  const save = () => writeJsonAtomic(path, Object.fromEntries(map));
+  return Object.assign(map, {
+    set(key, value) {
+      own.set(key, value);
+      save();
+      return map;
+    },
+    delete(key) {
+      const had = own.delete(key);
+      if (had) save();
+      return had;
+    },
+  });
 }
 
 // Whether the tests run as root, who writes anywhere: a test whose subject is "a user can't

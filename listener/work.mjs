@@ -144,7 +144,7 @@ export function checkAction(body) {
 // also fills (seedInputs()).
 // `runOf(id)`: a run's record (runs.mjs, with the comments it ran on), or null.
 // `cancel(key, user)`: stops the task's run or drops its queued comments (runs.mjs cancel()):
-// "running", "queued", "following" or null. `queuedTask(key)`, `unqueue(key, user)`: a task
+// "running", "queued", "following" or null. `queuedTask(key)`, `unqueue(key, user, until)`: a task
 // waiting for a slot whose newest comment that starts a run can wait for another issue
 // instead, with its author's queued comments, and taking it out of the queue for that
 // (runs.mjs). `analysis`: run digests (analysis.mjs createAnalysis()).
@@ -698,14 +698,22 @@ export function createWorkApi({
     }
     const wanted = modeOf(held);
     known(wanted);
-    // No await from queuedTask() above: unqueue() holds that same comment.
-    const { item, dropped } = unqueue(key, user) ?? {};
+    // No await from queuedTask() above: unqueue() holds that same comment. One pair: the wait in
+    // the store first, then the queue without its comments (`saved`, restart.mjs park()), so an
+    // orchestrator killed in between leaves them in both, to the wait (loadQueue()).
+    let saved;
+    const until = new Promise((resolve) => (saved = resolve));
+    const { item, dropped, unqueued } = unqueue(key, user, until) ?? {};
     if (!item) refuse(409, `#${number} is running or queued: it can't be moved now.`);
     // A mode picked starts as a trigger comment with that mode would: a `/mode` comment alone
     // has no trigger, and with work picked, no mode line either.
     if (mode) Object.assign(item, { trigger: "work", modeLine: mode === "work" ? null : mode });
     if (answers) item.text = [item.text, answers].filter(Boolean).join("\n\n---\n\n");
-    await waits.hold(item, [after], { eyes: true });
+    try {
+      await waits.hold(item, [after], { eyes: true, unqueued });
+    } finally {
+      saved(waits.written(key));
+    }
     // It waits already: a failed comment doesn't make it fail.
     const also = answers ? `\n\n${answers}` : "";
     const others = dropped

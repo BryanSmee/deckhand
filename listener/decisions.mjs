@@ -2,32 +2,30 @@
 // operator's and the repo's policies (policies.mjs) said of its pull request's review, fix run
 // and auto-merge (reviews.mjs), by task key ("org/repo#12", the issue a pull request closes,
 // else "org/repo#pr-3"). Only decisions a policy was asked for: none anywhere, nothing kept.
-// Kept in decisions.json, so a refused merge still shows after a restart. Its last `/mode
-// policy` dry run too (issue #324), kept apart, in the store (lib/store-map.mjs: `dry-runs`): a
-// dry run is no decision.
+// Kept in the orchestrator's store (lib/store-map.mjs: `decisions`), so a refused merge still
+// shows after a restart or a handover. Its last `/mode policy` dry run too (issue #324), kept
+// apart (`dry-runs`): a dry run is no decision.
 import { redact } from "../lib/redact.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 // A task's newest decisions, and how long a task's are kept after its last one.
 export const MAX_DECISIONS = 10;
 const KEEP_MS = 90 * 24 * 3600_000;
 
 // The newest decisions that keep the input their rules saw, and its size at most (JSON
-// characters): with 10 decisions a task, decisions.json stays small.
+// characters): with 10 decisions a task, each task's item in the store stays small.
 export const MAX_INPUTS = 3;
 export const MAX_INPUT = 8 * 1024;
 
 // `now`: the clock, for forgetting old tasks; `secrets()`: what redaction hides of an input
-// (secrets.mjs); `dryRuns`: the Map the last dry runs are kept in (storeMap()'s).
+// (secrets.mjs); `decisions` and `dryRuns`: the Maps they and the last dry runs are kept in
+// (storeMap()'s).
 export function createDecisions({
-  path,
+  decisions = new Map(),
   dryRuns = new Map(),
   now = Date.now,
   secrets = () => [],
 } = {}) {
-  const decisions = persistentMap(path);
-
   // `entry`: { decision, rule, denied, messages, pr, gates, layers, input }, the newest first
   // (`layers`: what each policy layer said, policies.mjs evaluated()). Its input redacted and
   // capped (keptInput()); the older ones lose theirs past MAX_INPUTS.
@@ -37,7 +35,6 @@ export function createDecisions({
     const { input, ...rest } = entry;
     const kept = input === undefined ? rest : { ...rest, ...keptInput(input, secrets()) };
     decisions.set(key, trim([{ at: now(), ...kept }, ...before]));
-    decisions.save();
   }
 
   // `/mode policy` on the task's pull request: { by, url, denials }, `url` its reply's. The
@@ -70,7 +67,7 @@ export function createDecisions({
   // later dry run kept.
   function respell(spelled) {
     const merge = (a, b) => trim([...a, ...b].sort((x, y) => (y.at ?? 0) - (x.at ?? 0)));
-    if (respellMap(decisions, spelled, undefined, merge)) decisions.save();
+    respellMap(decisions, spelled, undefined, merge);
     const later = (a, b) => ((a.at ?? 0) >= (b.at ?? 0) ? a : b);
     respellMap(dryRuns, spelled, undefined, later);
   }

@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import {
   SOON_MS,
@@ -15,7 +14,7 @@ import { parseRepoConfig, startable } from "../listener/repo-config.mjs";
 import { runTrigger } from "../listener/run-policy.mjs";
 import { createPicks, endPicks } from "../listener/picks.mjs";
 import { createTasks, newTask, pickedTask } from "../listener/tasks.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { mapStore, testConfig } from "./helpers.mjs";
 
 const BOT = "deckhand[bot]";
 
@@ -943,12 +942,12 @@ test("once the picked work is done, its loop over, or another run came last, wha
   }
   // Closed, then reopened with no run between, its pull request reopened in its loop: the close
   // ended the pick for good.
-  const path = join(tempDir(t), "picks.json");
-  const picks = createPicks({ path });
+  const maps = mapStore();
+  const picks = createPicks({ ended: await maps.map("picks") });
   const runs = [pickedRun(1)];
   endPicks(picks, runs, ["Org/App#1", "org/app#pr-5"]);
   // Read back as after a restart.
-  const reopened = pickTasks(looping({ picks: createPicks({ path }) }));
+  const reopened = pickTasks(looping({ picks: createPicks({ ended: await maps.again("picks") }) }));
   assert.equal((await reopened.review(1)).autoPickup, undefined);
   // A run after the close (a new pick): the end was the earlier run's.
   const again = pickTasks(looping({ runs: [pickedRun(1, { id: "run-9" }), ...runs], picks }));
@@ -1009,7 +1008,7 @@ test("between two loop steps of an auto-picked issue, nothing queued, its slot s
 });
 
 test("a slot the sweep counted free is given up for good: the loop its draft starts later runs in a standard slot", async (t) => {
-  const picks = createPicks({ path: join(tempDir(t), "picks.json") });
+  const picks = createPicks();
   const draft = { "org/app#1": { number: 5, state: "draft" } };
   const reviews = {};
   const p = pickTasks({ runs: [pickedRun(1)], pulls: draft, reviews, picks });
@@ -1051,7 +1050,7 @@ test("a slot the sweep counted free is given up for good: the loop its draft sta
 });
 
 test("releasePicks(): a pick still holding its slot (queued, running, its loop going) is kept", async (t) => {
-  const picks = createPicks({ path: join(tempDir(t), "picks.json") });
+  const picks = createPicks();
   const runs = [pickedRun(1), pickedRun(2), pickedRun(3, { status: "needs-input" }), pickedRun(4)];
   const p = pickTasks(looping({ runs, picks }));
   // #1's loop waits for CI; #2 has its picked item queued; #3 waits for an answer; #4 left
@@ -1064,13 +1063,13 @@ test("releasePicks(): a pick still holding its slot (queued, running, its loop g
   );
 });
 
-test("picks.mjs prune(): an entry whose run is no longer its task's last goes", (t) => {
-  const path = join(tempDir(t), "picks.json");
-  const picks = createPicks({ path });
+test("picks.mjs prune(): an entry whose run is no longer its task's last goes", async () => {
+  const maps = mapStore();
+  const picks = createPicks({ ended: await maps.map("picks") });
   picks.end("Org/App#1", "run-1");
   picks.end("org/app#2", "run-2");
   picks.prune([pickedRun(1, { id: "run-7" }), pickedRun(1), pickedRun(2)]);
-  const read = createPicks({ path });
+  const read = createPicks({ ended: await maps.again("picks") });
   assert.deepEqual(
     [read.ended("org/app#1", "run-1"), read.ended("org/app#2", "run-2")],
     [false, true],

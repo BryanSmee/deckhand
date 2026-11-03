@@ -693,13 +693,18 @@ export function createRuns(ctx) {
   // commentsText()). The wait has one author, whom the run's checks see (tasks.mjs
   // noLongerAllowed()): another author's comments aren't folded in, but dropped (`dropped`, how
   // many). The others lose their 👀. `by`: who moved it. Null when queuedTask() has no item.
-  function unqueue(key, by) {
+  // `until`: once the wait is in the store, the queue's writes have them till then
+  // (restart.mjs park()); `unqueued`, their queueIds, go with the wait (waits.mjs hold()).
+  function unqueue(key, by, until = null) {
     const task = ctx.tasks.get(key);
     const held = queuedTask(key)?.item;
     if (!held) return null;
     const own = task.pending.filter((i) => i === held || sameAuthor(i, held));
     const texts = own.map((i) => i.text).filter(Boolean);
     const dropped = task.pending.length - own.length;
+    const unqueued = task.pending.map((i) => i.queueId).filter(Boolean);
+    // Before dropPending() writes the queue.
+    if (until) ctx.park?.(task, [...task.pending], until);
     dropPending(task, key, held);
     log(
       `${key}: taken out of the queue by ${by}, to wait (${dropped} comment(s) by others dropped)`,
@@ -708,7 +713,7 @@ export function createRuns(ctx) {
     // auto-pickup slot then.
     const item = { ...held, text: texts.join("\n\n---\n\n") };
     for (const k of ["mode", "queuedAt", "queueId", "autoPickup"]) delete item[k];
-    return { item, dropped };
+    return { item, dropped, unqueued };
   }
 
   // GitHub's logins regardless of case; none known (the listener's own items) isn't anyone's.
