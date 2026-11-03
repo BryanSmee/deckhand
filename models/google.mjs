@@ -50,6 +50,8 @@ export function createGoogleRelay({
   credential = null, // the operator's GEMINI_API_KEY
   upstream = GEMINI_URL, // GEMINI_BASE_URL, if any (or host => url in tests)
   login = null, // without a key: antigravity-login.mjs's, from AGY_AUTH_FILE
+  // metrics.mjs modelMetrics()'s: what counts the calls.
+  metrics = null,
   log = () => {},
 }) {
   const plan = !credential && login;
@@ -60,6 +62,8 @@ export function createGoogleRelay({
 
   const gemini = createApiProxy({
     runs,
+    agent: "antigravity",
+    metrics,
     pathRe: GEMINI_PATH,
     routes: GEMINI_ROUTES,
     errorShape: ERRORS,
@@ -84,6 +88,8 @@ export function createGoogleRelay({
       const prefix = `/relay/${host}/`;
       const { handle } = createApiProxy({
         runs,
+        agent: "antigravity",
+        metrics,
         pathRe: new RegExp(`^${prefix.replaceAll(".", "\\.")}(${path})$`),
         routes: [[method, /^/]],
         errorShape: ERRORS,

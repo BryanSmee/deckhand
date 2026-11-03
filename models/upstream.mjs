@@ -5,6 +5,7 @@ import { redact } from "../lib/redact.mjs";
 import { AGENT_AUDIENCE } from "../lib/tokens.mjs";
 import { sendJson } from "../lib/http.mjs";
 import { forward, forwarded, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstream.mjs";
+import { statusOf, usageReader } from "./metrics.mjs";
 
 export { baseOf, IDLE_MS, MAX_IN_FLIGHT } from "../lib/upstream.mjs";
 
@@ -68,6 +69,8 @@ export function credentialFailure(what, error) {
 //   secrets      () → the credential's values, redacted from that log line
 //   answered     (run, status, headers, answer): the provider's status, once it answers, with
 //                the request's headers and the answer's
+//   agent        whose calls they are (metrics.mjs AGENTS), and `metrics` what counts them
+//                (metrics.mjs modelMetrics()'s): each call, its length, its tokens
 export function createApiProxy({
   runs, // runs.mjs: the run an agent token belongs to
   pathRe,
@@ -79,6 +82,8 @@ export function createApiProxy({
   drop,
   authHeaders,
   answered = () => {},
+  agent,
+  metrics = null,
   secrets = () => [],
   log = () => {},
   maxInFlight = MAX_IN_FLIGHT,
@@ -142,14 +147,19 @@ export function createApiProxy({
 
   async function proxied(req, res, run, target, what) {
     const headers = forwarded(req.headers, drop);
+    const provider = run.provider;
     try {
       Object.assign(headers, await authHeaders(run));
     } catch (error) {
       log(redact(`${what}: ${error.message}`, secrets()));
       run.apiStatus = error.status ?? 502;
+      metrics?.called({ provider, agent, status: "credential" });
       return failRun(run, res, 503, errorShape.unavailable, credentialFailure(what, error));
     }
-    await forward(req, res, {
+    const started = performance.now();
+    let status = null;
+    let reader = null; // what a successful answer says it used, read as it goes on
+    const how = await forward(req, res, {
       target,
       headers,
       unreachable: () => failRun(run, res, 502, errorShape.unavailable, `${what} can't be reached`),
@@ -157,11 +167,24 @@ export function createApiProxy({
       what,
       idleMs,
       clock,
-      answered: (status, answer) => {
-        run.apiStatus = status;
-        if (status >= 400) run.apiError = `${what} answered ${status}`;
-        answered(run, status, headers, answer);
+      tap: (chunk) => reader?.write(chunk),
+      answered: (code, answer, lost) => {
+        status = statusOf(code, { lost });
+        if (metrics && code < 300) reader = usageReader(answer["content-type"]);
+        run.apiStatus = code;
+        if (code >= 400) run.apiError = `${what} answered ${code}`;
+        answered(run, code, headers, answer);
       },
+    });
+    // The agent gave up before an answer: no call of the provider's to count.
+    if (status === null) return;
+    metrics?.called({
+      provider,
+      agent,
+      status,
+      seconds: (performance.now() - started) / 1000,
+      cut: how === "cut",
+      used: reader?.end(),
     });
   }
 

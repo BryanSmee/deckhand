@@ -3,7 +3,7 @@
 // listener picks them up (restart.mjs). Each run's reply, reactions and label once it is over.
 import { engineNote, recheckMounts, RunError, validateRun } from "./access.mjs";
 import { agentFor } from "./agents/index.mjs";
-import { authOf, entryLabel, nextFallback, resolveEntry } from "./agents/select.mjs";
+import { authOf, entryLabel, nextFallback, resolved, resolveEntry } from "./agents/select.mjs";
 import { ReplyError } from "./comments.mjs";
 import { commentsText, dashboardLink, taskKey } from "./events.mjs";
 import { nextStep, replyFooter } from "./footer.mjs";
@@ -855,6 +855,7 @@ export function createRuns(ctx) {
     const result = (live.result?.text ?? "").slice(0, 4000);
     fallback.summary = `${entryLabel(fallback.from)}'s provider failed: ${fallback.reason}. Falling back to ${entryLabel(fallback.entry)}`;
     log(`${live.key}: ${fallback.summary}`);
+    ctx.fallbacks?.inc({ from: fallback.from, to: resolved(config, fallback.entry) });
     writeEvent(live.logFile, "note", { message: fallback.summary });
     const { summary: _, ...marker } = fallback;
     for (const item of live.handled) item.fallback = { ...marker, result };

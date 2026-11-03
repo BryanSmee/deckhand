@@ -59,6 +59,8 @@ export function createAntigravityLogin({
   holder,
   now = Date.now,
   sleep,
+  // (error) → counts a refresh this copy did, an error when it failed (metrics.mjs refreshed()).
+  refreshed,
   log = () => {},
 }) {
   function due(json) {
@@ -108,6 +110,7 @@ export function createAntigravityLogin({
     now,
     ...(holder && { holder }),
     ...(sleep && { sleep }),
+    ...(refreshed && { refreshed }),
     due,
     refresh,
     headersOf: (json) => ({ authorization: `Bearer ${json.token.access_token}` }),

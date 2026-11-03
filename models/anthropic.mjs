@@ -55,6 +55,8 @@ export function createAnthropicProxy({
   providers = {},
   // usage.mjs's: the plan's answers' rate limit headers, for the dashboard's bars.
   usage = null,
+  // metrics.mjs modelMetrics()'s: what counts the calls.
+  metrics = null,
   log = () => {},
 }) {
   const own = { name, credential, upstream };
@@ -76,6 +78,8 @@ export function createAnthropicProxy({
 
   return createApiProxy({
     runs,
+    agent: "claude",
+    metrics,
     pathRe: API_PATH,
     routes: ROUTES,
     errorShape: ERRORS,

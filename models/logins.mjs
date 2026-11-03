@@ -220,10 +220,28 @@ export function sharedLogin({
 // with what differs between plans. `due(login)`: whether it needs a refresh now;
 // `refresh(login, { until })` → the new login, before `until` (the lease's end,
 // sharedLogin()); `headersOf(login)`: the headers that make a call the plan's;
-// `accessOf(login)`: its access token; `secretsOf(login)`: its tokens. → { headers, current,
-// refused, secrets }.
-export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...options }) {
+// `accessOf(login)`: its access token; `secretsOf(login)`: its tokens; `refreshed(error)`: each
+// refresh this copy did, once over (its metrics), the error when it failed. → { headers,
+// current, refused, secrets }.
+export function planLogin({
+  due,
+  refresh,
+  headersOf,
+  accessOf,
+  secretsOf,
+  refreshed = () => {},
+  ...options
+}) {
   const shared = sharedLogin(options);
+  // Counted where it runs: in the copy holding the lease, once for every copy.
+  const counted = (login, options) =>
+    refresh(login, options).then(
+      (next) => (refreshed(null), next),
+      (error) => {
+        refreshed(error);
+        throw error;
+      },
+    );
   let last = null; // the login as last used, for refused() and secrets()
   let stale = null; // an access token the upstream refused: refreshed on the next call
   // One refresh at a time in this copy too: every caller awaits it.
@@ -239,7 +257,7 @@ export function planLogin({ due, refresh, headersOf, accessOf, secretsOf, ...opt
   async function headers() {
     let saved = usable(await shared.load());
     if (accessOf(saved.login) === stale || due(saved.login)) {
-      refreshing ??= shared.refresh(saved, refresh).finally(() => (refreshing = null));
+      refreshing ??= shared.refresh(saved, counted).finally(() => (refreshing = null));
       saved = usable(await refreshing);
       stale = null;
     }
