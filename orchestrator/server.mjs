@@ -48,7 +48,7 @@ import {
 import { activePassive } from "../lib/active.mjs";
 import { drain } from "../lib/drain.mjs";
 import { pathToFileURL } from "node:url";
-import { openStore } from "../lib/store.mjs";
+import { openStore, values } from "../lib/store.mjs";
 import { storeMaps } from "../lib/store-map.mjs";
 import { readJson } from "../lib/files.mjs";
 import { createLogger, deliveryContext, withLogContext } from "../lib/log.mjs";
@@ -89,7 +89,7 @@ import { createRepoCheck } from "../listener/repo-check.mjs";
 import { readRepoFile } from "../listener/repo-config.mjs";
 import { createRepoSettings } from "../listener/repo-settings.mjs";
 import { createRepoApi, createRepoList } from "../listener/repos.mjs";
-import { createRestart } from "../listener/restart.mjs";
+import { createRestart, LIVE_PREFIX } from "../listener/restart.mjs";
 import { createReviewers, openerOf } from "../listener/reviewers.mjs";
 import { createReviews, stepsGoing } from "../listener/reviews.mjs";
 import { loadRuns, moveLogs, saveSummary } from "../listener/runlog.mjs";
@@ -587,7 +587,11 @@ const { github, graphql } = createGitHub(() => ctx.app);
 
 // The logs this listener kept before the runner kept them go to it, while it goes on; the runs
 // are listed from their summaries (runlog.mjs).
-const moved = moveLogs(logDir, runnerClient.logs, { log });
+// The live runs' ids first, from their states in the store (restart.mjs): their logs aren't
+// summarized as ended ones.
+const liveIds = new Set();
+for await (const [key] of values(store, LIVE_PREFIX)) liveIds.add(key.slice(LIVE_PREFIX.length));
+const moved = moveLogs(logDir, runnerClient.logs, { log, live: liveIds });
 ctx.logsMoving = moved.moving;
 // A log on its way there is read once it arrived (a digest, the dashboard's live view).
 ctx.logMoved = (id) => moved.moving.get(id) ?? Promise.resolve();
@@ -1160,8 +1164,11 @@ function reconcileRuns() {
 }
 const reconciling = setInterval(reconcileRuns, RECONCILE_MS);
 reconciling.unref();
-// Its stream: the runs' events (the broker keeps their screenshots, #609).
-brokerService.consume();
+// Its stream: the runs' events (the broker keeps their screenshots, #609). A run token renewed:
+// the run's tokens asked again, for its output's redaction (#617).
+brokerService.consume({
+  handlers: { renewed: async ({ run }) => ctx.broker.runOf(run) && ctx.broker.recall(run) },
+});
 // The screenshots this orchestrator kept before the broker did go to it, while it goes on: asked
 // until the broker takes them (a reply posted before links to them still). A folder no run
 // names, past the run history's days, is removed instead, as retention removed those; a younger

@@ -12,7 +12,8 @@
 //   (GET /events, POST /events/ack), the screenshots it kept before the broker did, moved here
 //   at its start (PUT /shots/:folder/:name), those the broker of the release before kept (POST
 //   /shots/:folder/:name), those of a run retention removes (DELETE /shots/:folder), and a run's
-//   first tokens (POST /runs/:id/tokens), with the claims it decided. Each of its calls but a
+//   first tokens (POST /runs/:id/tokens), with the claims it decided, and a live run's tokens, to
+//   redact its output once it took it over (POST /runs/:id/secrets, #617). Each of its calls but a
 //   GET carries its fencing epoch (../lib/fence.mjs, #506): one older than the newest seen is
 //   refused (409), so a copy that lost its lease ends no run and gets no token signed;
 //   the runner's: a run's inbox and files (POST /runs/:id/inbox, PUT /runs/:id/files/:name);
@@ -53,6 +54,9 @@ export const ROUTES = {
   // A run's first tokens take every claim from the caller (repo, mode, branches): the
   // orchestrator decides them, the runner asks it (#503), so it can't choose what they allow.
   "POST /runs/:id/tokens": ["orchestrator"],
+  // A live run's tokens, in clear: the orchestrator's alone, fenced as its other writes are (a
+  // copy that lost its lease gets none), though nothing changes.
+  "POST /runs/:id/secrets": ["orchestrator"],
   "POST /runs/:id/inbox": RUNNER,
   "PUT /runs/:id/files/:name": RUNNER,
   "GET /events": ["orchestrator"],
@@ -212,7 +216,7 @@ export function createBrokerHandler({
     }
     if (req.method === "PUT" && run && path === `/runs/${id}`) {
       const body = await readJsonBody(req, BODY_MAX);
-      await runs.put(run, runFields(body), body?.issued);
+      await runs.put(run, runFields(body), body?.issued, body?.tokens);
       return res.writeHead(204).end();
     }
     if (req.method === "DELETE" && run && path === `/runs/${id}`) {
@@ -225,6 +229,11 @@ export function createBrokerHandler({
       const issued = await runs.issue(run, runFields(body));
       if (!issued.token) return sendJson(res, { message: issued.message }, issued.status);
       return sendJson(res, issued);
+    }
+    if (req.method === "POST" && run && path === `/runs/${id}/secrets`) {
+      const found = await runs.secrets(run);
+      if (!found) return sendJson(res, { message: "unknown or finished run" }, 404);
+      return sendJson(res, found);
     }
     if (req.method === "POST" && run && path === `/runs/${id}/inbox`) {
       const offset = Number(url.searchParams.get("offset"));
