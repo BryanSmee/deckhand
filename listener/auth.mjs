@@ -192,7 +192,10 @@ from edge's logs.</p>`,
     const expected = cookies(req)[STATE_COOKIE] ?? "";
     const clear = [cookie(STATE_COOKIE, "", 0), cookie(NEXT_COOKIE, "", 0)];
     if (!credentials?.client_secret || !expected || !same(state, expected) || !code) {
-      signedIn("expired");
+      // Not an expiry: no App to finish with, or GitHub sent an error back (Cancel on its page).
+      if (!credentials?.client_secret) signedIn("failed");
+      else if (url.searchParams.has("error")) signedIn("cancelled");
+      else signedIn("expired");
       return authPage(
         res,
         400,

@@ -255,8 +255,8 @@ test("edge's own metrics: a delivery, a dashboard request and a signed-in user c
     text,
     /^deckhand_webhooks_received_total\{event="issue_comment",result="accepted"\} 1$/m,
   );
-  assert.match(text, /^deckhand_http_requests_total\{route="\/webhook",status="202"\} 1$/m);
-  assert.match(text, /^deckhand_http_requests_total\{route="\/api\/state",status="\d+"\} 1$/m);
+  assert.match(text, /^deckhand_http_requests_total\{route="\/webhook",status="2xx"\} 1$/m);
+  assert.match(text, /^deckhand_http_requests_total\{route="\/api\/state",status="\dxx"\} 1$/m);
   assert.match(text, /^# TYPE deckhand_sign_ins_total counter$/m);
   assert.match(text, /^deckhand_log_streams_open 0$/m);
   assert.match(text, /^deckhand_webhooks_redelivered_total 0$/m);

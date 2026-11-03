@@ -2,6 +2,7 @@
 // pattern and never by path, the users active on either copy, the live logs open.
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { writeFileSync } from "node:fs";
 import { request } from "node:http";
 import { join } from "node:path";
@@ -11,7 +12,7 @@ import { openStore } from "../lib/store.mjs";
 import { createEdgeApp } from "../edge/app.mjs";
 import { createForwarder } from "../edge/forward.mjs";
 import { createEdgeHttp } from "../edge/http.mjs";
-import { ACTIVE_MS, edgeMetrics, routeOf } from "../edge/metrics.mjs";
+import { ACTIVE_MS, edgeMetrics, ROUTE_PATTERNS, routeOf } from "../edge/metrics.mjs";
 import { createRedeliveries } from "../listener/redeliveries.mjs";
 import { serve, tempDir, testConfig, until } from "./helpers.mjs";
 
@@ -119,10 +120,10 @@ test("requests: counted and timed by route and status, the path itself never a l
   // Counted as its answer ends: the client may read it a moment before.
   const requests = (route, status) =>
     value(edge.registry, `deckhand_http_requests_total{route="${route}",status="${status}"}`);
-  await until(async () => (await requests("other", "404")) === 1);
-  assert.equal(await requests("/health", "200"), 1);
-  assert.equal(await requests("/api/runs/:id/stream", "200"), 1);
-  assert.equal(await requests("/api/repos/:owner/:repo/work", "200"), 1);
+  await until(async () => (await requests("other", "4xx")) === 1);
+  assert.equal(await requests("/health", "2xx"), 1);
+  assert.equal(await requests("/api/runs/:id/stream", "2xx"), 1);
+  assert.equal(await requests("/api/repos/:owner/:repo/work", "2xx"), 1);
   const page = await edge.registry.render();
   assert.match(page, /deckhand_http_request_duration_seconds_count\{route="\/health"\} 1/);
   assert.match(
@@ -256,17 +257,80 @@ test("CI deliveries: another repo's ignored, a commit already waiting a duplicat
   assert.equal(await count(edge.registry, event, "duplicate"), 1);
 });
 
-test("requests: a status edge doesn't usually answer with is other, its route kept", async (t) => {
+// A request as metrics.request() sees it, answered with `status` (none: the client left first).
+function answered(metrics, path, status) {
+  const res = new EventEmitter();
+  res.headersSent = status !== null;
+  res.statusCode = status ?? 200;
+  metrics.request({ url: path }, res);
+  res.emit("close");
+}
+
+test("requests: whatever routes and statuses anyone sends, a signed-in 200 keeps its own series", () => {
+  const warnings = [];
+  const registry = createRegistry({ log: (line) => warnings.push(line) });
+  const metrics = edgeMetrics(registry, { store: openStore("memory:") });
+  // A path for each pattern, and one edge doesn't serve.
+  const paths = ROUTE_PATTERNS.filter((route) => route !== "other")
+    .map((route) =>
+      route
+        .replace(":owner", "o")
+        .replace(":repo", "r")
+        .replace(":number", "1")
+        .replace(/:(id|file)/, "x.js")
+        .replace(":folder", "f"),
+    )
+    .concat("/nowhere/at/all");
+  // Every class on every route, past the 200 series a metric keeps by default, but a signed-in
+  // 200 on /api/state; and a status outside the classes.
+  for (const path of paths) {
+    for (const status of [101, 200, 302, 401, 503, null, 600]) {
+      if (path !== "/api/state" || status !== 200) answered(metrics, path, status);
+    }
+  }
+  answered(metrics, "/api/state", 200);
+  return value(registry, 'deckhand_http_requests_total{route="/api/state",status="2xx"}').then(
+    async (count) => {
+      assert.equal(count, 1);
+      assert.equal(
+        await value(registry, 'deckhand_http_requests_total{route="/api/state",status="other"}'),
+        1,
+      );
+      assert.ok(!warnings.some((line) => /series/.test(line)), warnings.join("\n"));
+    },
+  );
+});
+
+test("live logs: one whose browser left before the orchestrator answered is never counted open", async (t) => {
   const registry = createRegistry();
   const metrics = edgeMetrics(registry, { store: openStore("memory:") });
-  const { url } = await serve(t, (req, res) => {
-    metrics.request(req, res);
-    res.writeHead(599).end();
+  let left;
+  const gone = new Promise((resolve) => (left = resolve));
+  // The orchestrator answers once the browser has left: a stream all the same.
+  const fetch = (url, init) =>
+    new Promise((resolve) =>
+      init.signal.addEventListener("abort", () => {
+        left();
+        const body = new ReadableStream({ start: (c) => c.close() });
+        resolve(new Response(body, { headers: { "content-type": "text/event-stream" } }));
+      }),
+    );
+  const forwarder = createForwarder({
+    urls: "http://orchestrator.test",
+    token: () => "Bearer x",
+    fetch,
+    stream: metrics.stream,
+    log: () => {},
   });
-  await (await fetch(`${url}/api/state`)).arrayBuffer();
-  await until(
-    async () =>
-      (await value(registry, 'deckhand_http_requests_total{route="/api/state",status="other"}')) ===
-      1,
-  );
+  let forwarded;
+  const { url } = await serve(t, (req, res) => {
+    forwarded = forwarder.forward(req, res, { user: "alice" });
+  });
+  const browser = new AbortController();
+  globalThis.fetch(`${url}/api/runs/r1/stream`, { signal: browser.signal }).catch(() => {});
+  await until(() => forwarded !== undefined);
+  browser.abort();
+  await gone;
+  await forwarded;
+  assert.equal(await value(registry, "deckhand_log_streams_open"), 0);
 });

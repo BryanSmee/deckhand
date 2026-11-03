@@ -118,20 +118,18 @@ export function routeOf(path) {
   return found ? found[0] : OTHER;
 }
 
-// The statuses edge and the orchestrator answer with; `none`: the client left before an answer.
-// Any other is `other`, so that route × status stays far under the cap on series.
-export const STATUSES = [
-  ...[200, 201, 202, 204, 301, 302, 303, 304, 307, 308],
-  ...[400, 401, 403, 404, 405, 409, 410, 413, 415, 422, 429],
-  ...[500, 501, 502, 503, 504],
-  "none",
-];
+// A status as its class (`4xx`), `none` when the client left before an answer. Anyone can get a
+// 400, 401 or 503 on any route without a session: exact statuses would make route × status a
+// bound only the cap on series holds, and past it a signed-in user's 200 would be `other`.
+export const STATUS_CLASSES = ["1xx", "2xx", "3xx", "4xx", "5xx", "none"];
+export const statusClass = (res) => (res.headersSent ? `${String(res.statusCode)[0]}xx` : "none");
 
 export const SIGN_IN_RESULTS = [
   "allowed", // a session cookie given
   "refused", // signed in on GitHub as someone not in ALLOWED_USERS
   "expired", // back from GitHub without its state (a sign-in left too long, another browser)
-  "failed", // GitHub refused the code, didn't say who it was, or didn't answer
+  "cancelled", // GitHub sent an error back: Cancel on its authorize page
+  "failed", // GitHub refused the code, didn't say who it was, or didn't answer; or no App yet
 ];
 
 // A user counts as active this long after their last request with a session.
@@ -159,8 +157,13 @@ export function edgeMetrics(registry, { store, now = Date.now }) {
   );
   const requests = registry.counter(
     "deckhand_http_requests_total",
-    "Requests on the public port, by route (its pattern) and status.",
-    { labels: ["route", "status"], values: { route: ROUTE_PATTERNS, status: STATUSES } },
+    "Requests on the public port, by route (its pattern) and status class (2xx…, none).",
+    {
+      labels: ["route", "status"],
+      values: { route: ROUTE_PATTERNS, status: STATUS_CLASSES },
+      // Every declared pair: the cap is never what bounds it.
+      maxSeries: ROUTE_PATTERNS.length * (STATUS_CLASSES.length + 1),
+    },
   );
   const durations = registry.histogram(
     "deckhand_http_request_duration_seconds",
@@ -196,7 +199,7 @@ export function edgeMetrics(registry, { store, now = Date.now }) {
       const done = durations.startTimer({ route });
       res.once("close", () => {
         done();
-        requests.inc({ route, status: res.headersSent ? String(res.statusCode) : "none" });
+        requests.inc({ route, status: statusClass(res) });
       });
     },
     signIn: (result) => signIns.inc({ result }),

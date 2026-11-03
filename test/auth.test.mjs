@@ -220,13 +220,15 @@ test("the session key is created once, owner-only, and kept", (t) => {
   assert.deepEqual(sessionKey(dir), key);
 });
 
-test("each sign-in's result is counted: allowed, refused, expired, failed", async (t) => {
+test("each sign-in's result is counted: allowed, refused, expired, cancelled, failed", async (t) => {
   const results = [];
   const signedIn = (result) => results.push(result);
   const s = await serveAuth(t, { signedIn });
   await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
   await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=other");
   await s.get("/auth/callback?code=nope&state=state1", "deckhand_oauth_state=state1");
+  // Cancel on GitHub's page: back with its state and an error, no code.
+  await s.get("/auth/callback?error=access_denied&state=state1", "deckhand_oauth_state=state1");
   // GitHub away: 500, and failed all the same.
   const away = await s.get(
     "/auth/callback?code=unreachable&state=state1",
@@ -235,5 +237,5 @@ test("each sign-in's result is counted: allowed, refused, expired, failed", asyn
   assert.equal(away.status, 500);
   const refused = await serveAuth(t, { login: "mallory", signedIn });
   await refused.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
-  assert.deepEqual(results, ["allowed", "expired", "failed", "failed", "refused"]);
+  assert.deepEqual(results, ["allowed", "expired", "failed", "cancelled", "failed", "refused"]);
 });
