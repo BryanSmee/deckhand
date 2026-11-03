@@ -14,6 +14,18 @@
   background: var(--run-solid);
 }
 
+/* Auto-pickup's reserved slots: dashed while free or borrowed by a standard run, filled in its
+   own tone while an auto-picked run holds them. */
+.meter > .reserved {
+  box-sizing: border-box;
+  border: 1px dashed var(--auto-solid);
+}
+
+.meter > .auto {
+  border-style: solid;
+  background: var(--auto-solid);
+}
+
 .large > span {
   height: 8px;
   border-radius: 4px;
@@ -63,4 +75,53 @@
 
 .bar.rail > span {
   width: 100%;
+}
+
+/* Many slots with auto-pickup's: the reserved zone at the end, outlined, the standard runs'
+   fill from the start and the auto-picked runs' from the zone's far edge. */
+.bar.zoned {
+  position: relative;
+}
+
+.bar.zoned > span {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+}
+
+.bar.zoned > .fill {
+  left: 0;
+}
+
+.bar.zoned > .zone,
+.bar.zoned > .autoFill {
+  right: 0;
+}
+
+.bar.meter > .zone {
+  box-sizing: border-box;
+  border: 1px dashed var(--auto-solid);
+  border-radius: inherit;
+  background: none;
+}
+
+.bar.meter > .autoFill {
+  background: var(--auto-solid);
+}
+
+/* Upright, the standard fill grows bottom-up: the reserved zone is on top. */
+.bar.rail.zoned > span {
+  top: auto;
+  left: 0;
+  right: 0;
+}
+
+.bar.rail.zoned > .fill {
+  bottom: 0;
+}
+
+.bar.rail.zoned > .zone,
+.bar.rail.zoned > .autoFill {
+  top: 0;
+  bottom: auto;
 }

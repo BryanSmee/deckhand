@@ -1,0 +1,5 @@
+.mark {
+  display: inline-flex;
+  vertical-align: -2px;
+  color: var(--auto);
+}

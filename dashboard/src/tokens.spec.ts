@@ -53,7 +53,7 @@ const contrast = (a: string, b: string) => {
 };
 
 const SURFACES = ["bg", "surface", "surface-2", "surface-3"];
-const TONES = ["run", "input", "ready", "done", "err", "idle"];
+const TONES = ["run", "auto", "input", "ready", "done", "err", "idle"];
 const PAIRS: [string, string][] = [
   ...["text", "text-2", "text-3"].flatMap((fg) => SURFACES.map((bg): [string, string] => [fg, bg])),
   ["on-primary", "primary"],
@@ -101,6 +101,20 @@ test.each([
     .map(([fg, bg]) => ({ fg, bg, ratio: contrast(all[fg], all[bg]) }))
     .filter((p) => !(p.ratio >= 4.5))
     .map((p) => `${p.fg} on ${p.bg}: ${p.ratio.toFixed(2)}`);
+  expect(low).toEqual([]);
+});
+
+// The meter's fills (ui/Meter.tsx): a graphic, so WCAG's 3:1 for non-text, on the page and on
+// an empty segment.
+test.each([
+  ["light", light],
+  ["dark", dark],
+])("the meter's fills read at 3:1 or more in the %s theme", (_, colours) => {
+  const low = ["run-solid", "auto-solid"]
+    .flatMap((fill) => ["bg", "surface", "surface-3"].map((bg) => ({ fill, bg })))
+    .map(({ fill, bg }) => ({ fill, bg, ratio: contrast(colours[fill], colours[bg]) }))
+    .filter((p) => !(p.ratio >= 3))
+    .map((p) => `${p.fill} on ${p.bg}: ${p.ratio.toFixed(2)}`);
   expect(low).toEqual([]);
 });
 

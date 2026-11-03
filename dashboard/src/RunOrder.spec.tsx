@@ -62,6 +62,20 @@ const cards = (list: HTMLElement) =>
     .getAllByRole("listitem")
     .map((li) => li.querySelector("[class*=ref]")?.textContent);
 
+test("an auto-picked card's meta line leads with its mark, not a word", () => {
+  history.replaceState(null, "", "#/acme/app/board");
+  const line = [queued(41, 1, { autoPickup: true }), queued(42, 2)];
+  render(<Dashboard state={makeState({}, line)} error={null} />);
+  fireEvent.click(screen.getByRole("tab", { name: /^Queued/ }));
+  const list = screen.getByRole("list", { name: "Tasks waiting for a slot, in run order" });
+  const meta = within(list).getByText("1st in line");
+  expect(within(meta).getByRole("img", { name: "Auto-pickup" }).getAttribute("title")).toBe(
+    "Auto-pickup",
+  );
+  expect(within(within(list).getByText("2nd in line")).queryByRole("img")).toBeNull();
+  expect(within(list).queryByText(/auto-pickup/)).toBeNull();
+});
+
 test("the Queued tab lists the repo's queued tasks in run order, with their place", () => {
   const list = open();
   expect(cards(list)).toEqual(["#44", "#41", "#42", "#43"]);

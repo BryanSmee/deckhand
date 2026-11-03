@@ -115,6 +115,11 @@
   margin-left: 4px;
 }
 
+/* An auto-picked task's mark, after its number. */
+.auto {
+  margin-left: 4px;
+}
+
 .left {
   grid-column: 2 / 4;
 }

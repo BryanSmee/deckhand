@@ -35,6 +35,7 @@ import {
 } from "./graphModel";
 import { typesOf, useDropZone } from "./hooks";
 import type { OrderMove, Task, WorkAction } from "./types";
+import { AutoMark } from "./ui/AutoMark";
 import { Button, IconButton } from "./ui/Button";
 import { Field } from "./ui/Field";
 import * as Icon from "./ui/icons";
@@ -74,6 +75,8 @@ interface Row {
   href?: string;
   // The line under its title: its sub-issues, what it waits for, its state.
   meta: string;
+  // Picked by auto-pickup: its mark leads the meta line.
+  auto?: boolean;
   // Its drag, if it has one: the card's payload.
   drag?: (e: DragEvent) => void;
   // A Queued card: dropped above or below another, it moves there in the run order.
@@ -318,14 +321,14 @@ export function WorkQueue({
   const queuedRows: Row[] = line.map((t) => {
     const mode = t.mode && t.mode !== "work" ? t.mode : null;
     const first = t.startsFirst ? "starts first" : null;
-    const auto = t.autoPickup ? "auto-pickup" : null;
     const can = !blocked && !moving && (reorderable(t) || unqueueable(t));
     return {
       key: t.key,
       number: t.number!,
       title: t.title,
       href: taskUrl(t),
-      meta: [`${ordinal(t.position!)} in line`, mode, first, auto].filter(Boolean).join(" · "),
+      meta: [`${ordinal(t.position!)} in line`, mode, first].filter(Boolean).join(" · "),
+      auto: t.autoPickup,
       queued: true,
       drag: can ? queuedDrag(t.key, t.number!) : undefined,
       actions: queuedActions(t),
@@ -572,7 +575,12 @@ export function WorkQueue({
             <span class={styles.ref}>#{row.number}</span> <span title={name}>{name}</span>
           </span>
         )}
-        {row.meta && <span class={styles.meta}>{row.meta}</span>}
+        {(row.meta || row.auto) && (
+          <span class={styles.meta}>
+            {row.auto && <AutoMark class={styles.auto} />}
+            {row.meta}
+          </span>
+        )}
       </div>
     );
     if (touch) {
