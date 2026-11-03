@@ -3,6 +3,25 @@
 // too, where it finds no test.
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { values } from "../lib/store.mjs";
+
+// Every key keys() lists under `prefix`, page after page, and how many pages it took. `between`:
+// called after each page but the last.
+async function listed(store, prefix, { count, between } = {}) {
+  const all = new Set();
+  let cursor = null;
+  let pages = 0;
+  do {
+    const page = await store.keys(prefix, { cursor, count });
+    assert.ok(Array.isArray(page.keys));
+    for (const key of page.keys) all.add(key);
+    cursor = page.cursor;
+    pages++;
+    if (cursor !== null) await between?.(pages);
+  } while (cursor !== null);
+  return { keys: [...all].sort(), pages };
+}
+const range = (n, name) => Array.from({ length: n }, (_, i) => name(i));
 
 // `open(t, clock)` → a store whose clock is `clock.now()`.
 export function storeContract(name, open) {
@@ -265,5 +284,92 @@ export function storeContract(name, open) {
     await assert.rejects(store.renew("l", "a", lease.epoch, {}), TypeError);
     // Still a's.
     assert.equal(await store.acquire("l", "b", { ttlMs: 1000 }), null);
+  });
+
+  test(`${name}: keys by prefix: a few, none, and only the prefix's`, async (t) => {
+    const { store } = await setup(t);
+    assert.deepEqual((await listed(store, "waits/")).keys, []);
+    for (const key of ["waits/a#1", "waits/a#2", "waits/b#1", "waitsx", "runs/1", "wait"]) {
+      await store.set(key, { key });
+    }
+    assert.deepEqual((await listed(store, "waits/")).keys, ["waits/a#1", "waits/a#2", "waits/b#1"]);
+    assert.deepEqual((await listed(store, "waits/a#")).keys, ["waits/a#1", "waits/a#2"]);
+    assert.deepEqual((await listed(store, "nothing/")).keys, []);
+    // Every key, with an empty prefix.
+    assert.equal((await listed(store, "")).keys.length, 6);
+    await assert.rejects(store.keys(undefined), TypeError);
+    await assert.rejects(store.keys("waits/", { count: 0 }), TypeError);
+  });
+
+  test(`${name}: keys by prefix: thousands, several pages`, async (t) => {
+    const { store } = await setup(t);
+    const all = range(2000, (i) => `runs/${String(i).padStart(4, "0")}`);
+    for (let i = 0; i < all.length; i += 100) {
+      await Promise.all(all.slice(i, i + 100).map((key) => store.set(key, 1)));
+    }
+    await store.set("other/1", 1);
+    const { keys, pages } = await listed(store, "runs/", { count: 100 });
+    assert.deepEqual(keys, all);
+    assert.ok(pages > 1, `${pages} page(s)`);
+  });
+
+  test(`${name}: keys by prefix: a key there throughout is listed whatever changes between pages`, async (t) => {
+    const { store } = await setup(t);
+    const before = range(300, (i) => `m/${i}`);
+    for (const key of before) await store.set(key, 1);
+    const deleted = range(30, (i) => `m/${i * 10}`);
+    const added = range(30, (i) => `m/new-${i}`);
+    const { keys, pages } = await listed(store, "m/", {
+      count: 50,
+      between: async (page) => {
+        if (page !== 1) return;
+        for (const key of deleted) await store.delete(key);
+        for (const key of added) await store.set(key, 1);
+      },
+    });
+    assert.ok(pages > 1, `${pages} page(s): nothing changed between them`);
+    const listedKeys = new Set(keys);
+    for (const key of before.filter((k) => !deleted.includes(k))) {
+      assert.ok(listedKeys.has(key), `${key} wasn't listed`);
+    }
+    for (const key of keys) assert.ok(before.includes(key) || added.includes(key), key);
+  });
+
+  test(`${name}: keys by prefix: expired keys aren't listed`, async (t) => {
+    const { store, clock } = await setup(t);
+    await store.set("s/short", 1, { ttlMs: 1000 });
+    await store.set("s/long", 2, { ttlMs: 5000 });
+    await store.set("s/kept", 3);
+    assert.deepEqual((await listed(store, "s/")).keys, ["s/kept", "s/long", "s/short"]);
+    clock.at += 1000;
+    assert.deepEqual((await listed(store, "s/")).keys, ["s/kept", "s/long"]);
+    assert.deepEqual(
+      new Map(await Array.fromAsync(values(store, "s/"))),
+      new Map([
+        ["s/kept", 3],
+        ["s/long", 2],
+      ]),
+    );
+  });
+
+  test(`${name}: keys by prefix: *, ?, [ and \\ in it are themselves`, async (t) => {
+    const { store } = await setup(t);
+    const keys = ["a*/1", "ab/1", "q?/1", "qx/1", "r[x]/1", "rx/1", "r[/1", "b\\x/1", "bx/1"];
+    for (const key of keys) await store.set(key, 1);
+    assert.deepEqual((await listed(store, "a*")).keys, ["a*/1"]);
+    assert.deepEqual((await listed(store, "q?")).keys, ["q?/1"]);
+    assert.deepEqual((await listed(store, "r[x]")).keys, ["r[x]/1"]);
+    assert.deepEqual((await listed(store, "r[")).keys, ["r[/1", "r[x]/1"]);
+    assert.deepEqual((await listed(store, "b\\")).keys, ["b\\x/1"]);
+  });
+
+  test(`${name}: values(): each key once with its value, over several pages`, async (t) => {
+    const { store } = await setup(t);
+    const all = range(250, (i) => `v/${i}`);
+    for (const key of all) await store.set(key, { key });
+    await store.set("w/1", 1);
+    const found = await Array.fromAsync(values(store, "v/", { count: 20 }));
+    assert.equal(found.length, all.length);
+    assert.deepEqual(new Map(found), new Map(all.map((key) => [key, { key }])));
   });
 }
