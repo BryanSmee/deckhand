@@ -18,6 +18,18 @@ export const NEEDS_INPUT = "<!-- needs-input -->";
 const HEADING = /^ {0,3}(#{1,6})\s+(.*?)(?:\s+#+)?\s*$/;
 const FENCE = /^ {0,3}(```|~~~)/;
 
+// The listener reads these words in English, as the prompt asks a run to keep them whatever
+// language it writes in (../prompts/sandbox.md), and in a few common translations too: a
+// hand-written issue, or a run that translated them anyway (issue #705). French, Spanish,
+// German, Portuguese and Italian.
+const OPEN_QUESTIONS =
+  /^(?:open questions|questions ouvertes|questions en suspens|preguntas abiertas|preguntas pendientes|offene fragen|perguntas abertas|perguntas em aberto|quest[õo]es em aberto|domande aperte)\s*:?$/iu;
+// "None" first in the section: it asks nothing.
+const NONE =
+  /^(?:none|n\/a|no (?:open )?questions|aucune?|néant|pas de questions?|ningun[oa]|sin preguntas|keine|nenhuma?|sem perguntas|nessun[oa])(?![\p{L}\p{N}])/u;
+// The pick of an option.
+const PICK = "recommended|recommandée?|recomendad[oa]|empfohlen|raccomandat[oa]|consigliat[oa]";
+
 // The text of the body's "Open questions" section, up to the next heading of the same level
 // or above, trimmed; null without one.
 export function questionsSection(body) {
@@ -30,7 +42,7 @@ export function questionsSection(body) {
     if (lines) {
       if (heading && heading[1].length <= level) break;
       lines.push(line);
-    } else if (heading && /^open questions:?$/i.test(heading[2].replace(/[*_]/g, "").trim())) {
+    } else if (heading && OPEN_QUESTIONS.test(heading[2].replace(/[*_]/g, "").trim())) {
       level = heading[1].length;
       lines = [];
     }
@@ -53,7 +65,7 @@ function asks(text) {
     .replace(/[*_`>]/g, "")
     .trim()
     .toLowerCase();
-  return !/^(none|n\/a|no (open )?questions)\b/.test(first);
+  return !NONE.test(first);
 }
 
 // At most one space before it: deeper, it is nested under a question.
@@ -65,10 +77,14 @@ const OPTION = /^\s+[-*+]\s+\[([ xX])\]\s+(.*)$/;
 const LIST = /^\s*(?:[-*+]|\d{1,9}[.)])(?:\s|$)/;
 const BULLET = /^\s+[-*+]\s+(\S.*)$/;
 const BOX = /^\[[^\]]{0,3}\](?!\()/;
-const TITLE = /^\*\*([^*]+?)(?::\*\*|\*\*:)\s*(.*)$/;
+// A space may come before the colon, as French puts one (`**Titre** :`).
+const TITLE = /^\*\*([^*]+?)(?:\s*:\*\*|\*\*\s*:)\s*(.*)$/;
 // `(recommended)` ending an option, or with its reason: `(recommended: …)`, `(recommended, …)`,
 // `(recommended - …)`. The reason stays in the label, in parentheses.
-const RECOMMENDED = /\s*\(\s*recommended\s*(?:(?:[:,;]|\s[-–—])\s*(.*?))?\s*\)\s*$/i;
+const RECOMMENDED = new RegExp(
+  `\\s*\\(\\s*(?:${PICK})\\s*(?:(?:[:,;]|\\s[-–—])\\s*(.*?))?\\s*\\)\\s*$`,
+  "iu",
+);
 
 // An "Open questions" section (or a run's questions) → { items, raw }, null when it asks
 // nothing ("None"). `items`: [{ title, text, options: [{ label, recommended, checked }] }]
@@ -156,9 +172,27 @@ function question(line) {
   return { title: titled?.[2].trim() ? title : null, text, options: [] };
 }
 
-// The questions of a run's reply that starts with NEEDS_INPUT: its "Open questions" section
-// when it has one (under "Needs your input", as the prompt's wording invites), else what
-// follows its "Needs your input" heading, up to the next heading. Null when it asks nothing.
+// Whether a run's reply stopped to ask: NEEDS_INPUT starts it, or a line of its own before
+// its first question (a run that put a translated heading or a sentence first, issue #705).
+// Not in a code block, nor quoted in a sentence: a reply that explains the marker asks nothing.
+export function asksInput(text) {
+  const reply = (text ?? "").trimStart();
+  if (reply.startsWith(NEEDS_INPUT)) return true;
+  let fenced = false;
+  for (const line of reply.split(/\r?\n/)) {
+    if (FENCE.test(line)) fenced = !fenced;
+    if (fenced) continue;
+    if (line.trim().startsWith(NEEDS_INPUT)) return true;
+    if (ITEM.test(line)) return false;
+  }
+  return false;
+}
+
+// The questions of a run's reply that has NEEDS_INPUT: its "Open questions" section when it
+// has one (under "Needs your input", as the prompt's wording invites), else what follows its
+// "Needs your input" heading, up to the next heading. When that is no list of questions (an
+// intro under translated headings), the first part between headings whose questions have
+// options. Null when it asks nothing.
 export function replyQuestions(text) {
   const reply = text ?? "";
   const at = reply.indexOf(NEEDS_INPUT);
@@ -166,18 +200,21 @@ export function replyQuestions(text) {
   const after = reply.slice(at + NEEDS_INPUT.length);
   const titled = questionsSection(after);
   if (titled !== null) return parseQuestions(titled);
-  const lines = after.split(/\r?\n/);
-  const section = [];
+  const parts = [];
+  let part = null;
   let fenced = false;
-  let started = false;
-  for (const line of lines) {
+  for (const line of after.split(/\r?\n/)) {
     if (FENCE.test(line)) fenced = !fenced;
     const heading = !fenced && HEADING.test(line);
-    if (heading && started) break;
-    if (heading || line.trim()) started = true;
-    if (!heading) section.push(line);
+    if (heading) part = null;
+    else if (part || line.trim()) {
+      if (!part) parts.push((part = []));
+      part.push(line);
+    }
   }
-  return parseQuestions(section.join("\n"));
+  const [first, ...rest] = parts.map((p) => parseQuestions(p.join("\n")));
+  if (!first || first.items) return first ?? null;
+  return rest.find((q) => q?.items?.some((i) => i.options.length)) ?? first;
 }
 
 // An `issues`, `issue_comment` or `pull_request` delivery → what it changes for the label, or

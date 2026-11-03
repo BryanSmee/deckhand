@@ -176,7 +176,8 @@ posted: <status>". An orchestrator restarting before then posts it again (`live.
 false).
 
 A run that stops to ask (its final message starts with `<!-- needs-input -->`, see
-`prompts/sandbox.md`) shows as `needs-input` on the dashboard and labels the issue or pull
+`prompts/sandbox.md`, or has it on a line of its own before its first question: a run that put a
+translated heading first, `asksInput()`) shows as `needs-input` on the dashboard and labels the issue or pull
 request `NEEDS_INPUT_LABEL` (default `needs-input`) until the next run starts. A run asks too
 when its work is done but a step only the maintainer can take still blocks the merge (a write
 Deckhand refused, a file it may not edit, a secret to add; issue #551): its pull request stays
@@ -267,7 +268,12 @@ questions so the graph doesn't open the form when it is off.
 
 The questions themselves have one format, set once in `prompts/sandbox.md` (the other prompts
 point to it): numbered, an optional `**Title**:` (a question all title is its text), options
-as an indented task list with one `(recommended)` or `(recommended: reason)`.
+as an indented task list with one `(recommended)` or `(recommended: reason)`. Whatever language
+a run writes in, the prompt keeps the parts the listener reads in English (the marker, the
+`Open questions` heading, `None`, `(recommended)`); the parser also reads a few translations
+of them (French, Spanish, German, Portuguese, Italian: hand-written issues, or a run that
+translated them anyway, issue #705), and a reply's questions under headings it doesn't know
+are the first list with options after the marker.
 `parseQuestions()` (`questions.mjs`) reads them, all or nothing: a section in another shape
 comes as its markdown only (`items: null`). A task waiting for input carries
 them in `api/state` (`questions`): from the reply of its last run when that run stopped to ask

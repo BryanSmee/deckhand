@@ -314,6 +314,89 @@ test("a run's questions: after its needs-input heading, up to the next heading",
   assert.equal(replyQuestions(null), null);
 });
 
+test("a run's questions in another language: translated headings, title and pick", () => {
+  // Issue #705: a run writing in French translated what the prompt asks it to keep.
+  const reply = [
+    "<!-- needs-input -->",
+    "## Besoin de votre avis",
+    "",
+    "### Questions ouvertes",
+    "",
+    "1. **Schéma** : supprimer l'ancienne colonne ?",
+    "   - [ ] Oui, migrer les lignes d'abord (recommandé : plus sûr)",
+    "   - [ ] Non, garder les deux",
+    "",
+    "### Ce que j'ai vérifié",
+    "",
+    "Les migrations.",
+  ].join("\n");
+  const items = [
+    {
+      title: "Schéma",
+      text: "supprimer l'ancienne colonne ?",
+      options: [
+        { label: "Oui, migrer les lignes d'abord (plus sûr)", recommended: true, checked: false },
+        { label: "Non, garder les deux", recommended: false, checked: false },
+      ],
+    },
+  ];
+  assert.deepEqual(replyQuestions(reply).items, items);
+  // Headings the listener doesn't know: the first part whose questions have options, after an
+  // intro under the reply's own heading.
+  const other = reply
+    .replace("### Questions ouvertes", "Il me faut votre avis.\n\n### Questions")
+    .replace("Les migrations.", "1. Les migrations.");
+  assert.deepEqual(replyQuestions(other).items, items);
+  // Questions without options right under the first heading are still the questions.
+  assert.deepEqual(
+    replyQuestions("<!-- needs-input -->\n## Avis\n1. A ?\n## Vérifié\n2. B ?").items,
+    [free("A ?")],
+  );
+  // "None" translated: nothing asked, whatever follows.
+  assert.equal(
+    replyQuestions("<!-- needs-input -->\n## Avis\n\nAucune.\n\n## Suite\n1. A ?\n   - [ ] Oui"),
+    null,
+  );
+  // An English pick with a space before the title's colon, and inside the bold.
+  assert.deepEqual(parseQuestions("1. **Name :** which one?\n   - [ ] A (Recommended)").items[0], {
+    title: "Name",
+    text: "which one?",
+    options: [{ label: "A", recommended: true, checked: false }],
+  });
+});
+
+test("issue bodies: open questions and None in English and a few other languages", () => {
+  const asked = (heading) => `## Problem\n\nX.\n\n## ${heading}\n\n1. **Titre** : lequel ?\n`;
+  for (const heading of [
+    "Open questions",
+    "Questions ouvertes",
+    "Preguntas abiertas",
+    "Offene Fragen",
+    "Perguntas em aberto",
+    "Domande aperte",
+    "Questions ouvertes :",
+  ]) {
+    assert.equal(hasOpenQuestions(asked(heading)), true, heading);
+    assert.equal(parseQuestions(questionsSection(asked(heading))).items[0].title, "Titre");
+  }
+  assert.equal(hasOpenQuestions(asked("Questions")), false);
+  const none = (heading, text) => `## ${heading}\n\n${text}\n\nFrom the inbox: x`;
+  for (const [heading, text] of [
+    ["Open questions", "None."],
+    ["Open questions", "Aucune."],
+    ["Questions ouvertes", "Aucune"],
+    ["Preguntas abiertas", "Ninguna."],
+    ["Offene Fragen", "Keine."],
+    ["Perguntas abertas", "Nenhuma."],
+    ["Domande aperte", "Nessuna."],
+    ["Questions ouvertes", "Néant."],
+  ]) {
+    assert.equal(hasOpenQuestions(none(heading, text)), false, `${heading}: ${text}`);
+  }
+  // A word that only starts like one asks.
+  assert.equal(hasOpenQuestions(none("Open questions", "Nonexistent users: refuse them?")), true);
+});
+
 test("a run done but for a step only the maintainer can take asks it as a question", () => {
   // Issue #551: the pull request is ready, one blocker is left, asked rather than listed.
   const reply = [

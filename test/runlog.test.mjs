@@ -85,6 +85,21 @@ test("outcome: ok, needs-input or error", () => {
     outcome({ ok: true, text: "\n<!-- needs-input -->\n## Needs your input" }),
     "needs-input",
   );
+  // Issue #705: after a translated heading or a sentence, on a line of its own, it still asks.
+  for (const text of [
+    "## Besoin de votre avis\n\n<!-- needs-input -->\n\n1. Lequel ?",
+    "Il me faut votre avis.\n<!-- needs-input -->\n1. Lequel ?",
+  ]) {
+    assert.equal(outcome({ ok: true, text }), "needs-input", text);
+  }
+  // Not quoted in a sentence, in a code block, or after the first question.
+  for (const text of [
+    "Done. A run asks with `<!-- needs-input -->` first.",
+    "Done.\n```\n<!-- needs-input -->\n```",
+    "Done.\n1. Fixed it.\n<!-- needs-input -->",
+  ]) {
+    assert.equal(outcome({ ok: true, text }), "ok", text);
+  }
 });
 
 test("summary: the first sentence of the reply, not its headings", () => {

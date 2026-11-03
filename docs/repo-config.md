@@ -1895,7 +1895,9 @@ marked `truncated`).
 
 ## Open questions
 
-An issue whose body has an `## Open questions` section that asks something is labelled
+An issue whose body has an `## Open questions` section (or `Questions ouvertes`,
+`Preguntas abiertas`, `Offene Fragen`, `Perguntas abertas`, `Domande aperte`) that asks
+something (its first paragraph isn't "None", or a translation of it) is labelled
 `NEEDS_INPUT_LABEL` (default `needs-input`), and an allowed user's comment takes the label
 off: they answered. Ticking the boxes in the section answers too: once every question has an
 option ticked (`- [x]`), the label comes off as for a comment, and unticking them puts it

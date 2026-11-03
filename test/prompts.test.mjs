@@ -172,6 +172,27 @@ test("prompts: onboarding and the sandbox's rules point to Deckhand's own source
   assert.match(rules, /`\/usr\/local\/share\/deckhand\/src`/);
 });
 
+test("prompts: what the listener reads stays in English, whatever the run's language", () => {
+  // Issue #705: a run writing in another language translated the marker's heading and "None".
+  const read = (name) => readFileSync(new URL(`../prompts/${name}`, import.meta.url), "utf8");
+  assert.match(
+    read("sandbox.md"),
+    /Whatever language you write in, the parts the listener reads stay in English, exactly as\n {2}written here: the `<!-- needs-input -->` line, first in your message; the `Open questions`\n {2}heading; `None`; `\(recommended\)`\. Translate the rest\./,
+  );
+  for (const name of ["idea.md", "bug.md"]) {
+    assert.match(
+      read(name),
+      /"None" alone \(that heading and "None" in English, whatever\n\s+the language\)/,
+    );
+  }
+  assert.match(
+    read("brainstorm.md"),
+    /that heading and "None" in English,\n\s+whatever the language/,
+  );
+  assert.match(read("brainstorm.md"), /"None" alone, both in English/);
+  assert.match(read("discussion.md"), /"None" alone, both in English/);
+});
+
 test("prompts: the sandbox's rules ask about a blocker left after the work, the pull request ready", () => {
   const rules = readFileSync(new URL("../prompts/sandbox.md", import.meta.url), "utf8");
   assert.match(rules, /Stop and ask after the work too, when it is done but something only the/);
