@@ -6,7 +6,8 @@
 // head resets it to `none` until something reports; the last one known stays once it is merged or
 // closed. `pull_request` webhooks keep it current (events.mjs pullRequest()), and the listener's
 // own record of the runs' changes (github-pulls.mjs); tasks older than that are looked up once per
-// listener start, from the repo's recent pull requests. Kept in pulls.json, so a restart neither
+// listener start, from the repo's recent pull requests. Kept in the store (lib/store-map.mjs:
+// `pulls`), so a restart neither
 // forgets nor asks again. The open ones are asked about again at start and from the dashboard's
 // Sync (resync()): a lost delivery would leave one a draft forever.
 import {
@@ -19,7 +20,6 @@ import {
   sameRepo,
 } from "./events.mjs";
 import { respellMap, sameTask } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
 const open = (pr) => pr?.state === "draft" || pr?.state === "ready";
 // How many open pull requests' CI resync() reads at once (three GitHub calls each).
@@ -28,14 +28,14 @@ const CI_AT_ONCE = 4;
 // `listPulls(repo)`: the repo's recent pull requests, as GET /repos/{repo}/pulls has them;
 // `getPull(repo, number)`: one of them, or null.
 // `readCi(repo, sha)`: a commit's CI as GitHub has it now (ci.mjs commitCi()), or null.
+// `pulls`: the Map they are kept in (storeMap()'s).
 export function createPulls({
-  path,
+  pulls = new Map(),
   listPulls,
   getPull = async () => null,
   readCi = async () => null,
   log = () => {},
 }) {
-  const pulls = persistentMap(path);
   // The tasks whose CI is being read (`key` → whether to read it once more after): deliveries
   // come by the dozen for one commit, and one read answers them all.
   const reading = new Map();
@@ -93,7 +93,6 @@ export function createPulls({
       ...(updatedAt && { updatedAt }),
       ...(ci && { ci }),
     });
-    pulls.save();
     // Moved to a new head: its CI read now, as the delivery that said it changed may have been
     // handled before this one, and found no pull request at that commit.
     if (head && before?.ci?.sha !== head && open(pr)) {
@@ -124,7 +123,6 @@ export function createPulls({
       .filter((t) => t.repo && t.kind !== "discussion" && !listed.has(t.repo));
     if (fetching || (!missing.length && !unsized(unique).length)) return fetching;
     fetching = (async () => {
-      let changed = false;
       // The open ones found, whose CI is read after: no delivery may come for a CI already done.
       const opened = [];
       for (const repo of new Set(missing.map((t) => t.repo))) {
@@ -147,7 +145,6 @@ export function createPulls({
             readyAt: null,
             ...(pr.head?.sha && { head: pr.head.sha }),
           });
-          changed = true;
           if (pr.head?.sha && open(pulls.get(t.key))) opened.push(t.key);
         }
       }
@@ -166,9 +163,7 @@ export function createPulls({
         const now = pulls.get(key);
         if (!Object.keys(size).length || !sameBesidesCi(now, pr)) continue;
         pulls.set(key, { ...now, ...size });
-        changed = true;
       }
-      if (changed) pulls.save();
       if (opened.length) catchUp(opened);
     })()
       // Nobody awaits it (http.mjs state()): a failure is logged, never thrown.
@@ -196,7 +191,6 @@ export function createPulls({
         if (repo) byRepo.set(repo, [...(byRepo.get(repo) ?? []), [key, pr]]);
       }
       let changed = 0;
-      let dirty = false;
       for (const [repo, entries] of byRepo) {
         const list = await listPulls(repo).catch((error) => {
           log(`Pull requests of ${repo}: ${error.message ?? error}`);
@@ -239,14 +233,12 @@ export function createPulls({
               }),
             ...(moved && { ci: { sha: head, state: "none", runs: [] } }),
           });
-          dirty = true;
           // A size alone isn't what the dashboard's Sync reports.
           if (state === pr.state) continue;
           log(`${key}: pull request #${pr.number} ${state} (was ${pr.state})`);
           changed++;
         }
       }
-      if (dirty) pulls.save();
       // What CI deliveries lost meanwhile (the listener down, a delivery that failed): read
       // again for the open pull requests whose CI isn't settled for their head, after, so the
       // dashboard's Sync doesn't wait for them.
@@ -325,7 +317,6 @@ export function createPulls({
           const now = pulls.get(key);
           if (now?.head === pr.head && !now.ciFailed) {
             pulls.set(key, { ...now, ciFailed: true });
-            pulls.save();
           }
           continue;
         }
@@ -335,7 +326,6 @@ export function createPulls({
         if (JSON.stringify(now.ci) === JSON.stringify(ci) && !now.ciFailed) continue;
         const { ciFailed, ...rest } = now;
         pulls.set(key, { ...rest, ci });
-        pulls.save();
         if (now.ci?.state !== ci.state) log(`${key}: CI of #${now.number} ${ci.state}`);
       } while (entry.again);
     })().finally(() => reading.delete(key));
@@ -345,7 +335,7 @@ export function createPulls({
   // Rekeyed with spelled() (restart.mjs unifySpellings()): the conflict watcher would start
   // runs under a key the rest of the state no longer has. Both spellings of one task: merged.
   function respell(spelled) {
-    if (respellMap(pulls, spelled, undefined, mergePulls)) pulls.save();
+    respellMap(pulls, spelled, undefined, mergePulls);
   }
 
   return {

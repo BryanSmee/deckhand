@@ -1,10 +1,11 @@
 // What the listener writes on GitHub for a run: its reply (a comment, or in a discussion's
 // thread), the reactions on the comments it handled, and the needs-input label.
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { hasLabel, MARKER } from "./events.mjs";
 import { getJson } from "./github.mjs";
 import { reactionSubject } from "./github-writes.mjs";
-import { persistentMap } from "../lib/files.mjs";
+import { readJson } from "../lib/files.mjs";
 
 // GitHub's reactions have no ✅: 🚀 reads as "shipped" and isn't mistaken for a manual 👍.
 // A wrap-up ("/stop") and a cancelled run's comments only lose their 👀; a `/cancel` gets 👍.
@@ -30,7 +31,7 @@ export const REACTION_ENUM = {
   eyes: "EYES",
 };
 
-// The most reactions of the listener's kept in reactions.json (claim()), its newest: a run's
+// The most reactions of the listener's kept without the github service (claim()), its newest: a run's
 // reaction removed then is one the listener added before that many others.
 const MAX_CLAIMED = 5000;
 
@@ -136,8 +137,9 @@ export function createComments({
   graphql,
   log,
   // The github service's record of them (../github/client.mjs claim()), which its gateway reads:
-  // (repo, subject, content, held) → a promise. None: reactions.json alone (the tests').
+  // (repo, subject, content, held) → a promise. None: `claims` alone (the tests').
   shared = null,
+  claims = new Map(),
   delays = RETRY_DELAYS,
   sleep = wait,
 }) {
@@ -146,14 +148,15 @@ export function createComments({
   // A run's reactions are the same bot's: GitHub keeps one per user and content, so where the
   // run's came first, the listener's POST answers with it, and the run never removes these
   // (github-writes.mjs listenerReacted). Kept by the github service, whose gateway reads them
-  // (`shared`); those a listener from before it saved in reactions.json go there at start.
-  const claims = persistentMap(config.dataDir ? join(config.dataDir, "reactions.json") : null);
-  if (shared && claims.size) {
-    const all = [...claims.keys()];
+  // (`shared`); those a listener from before it saved in reactions.json go there at start, and
+  // the file goes once they are there.
+  const legacy = config.dataDir ? join(config.dataDir, "reactions.json") : null;
+  if (shared && legacy) {
+    const all = Object.keys(readJson(legacy, {}) ?? {});
     Promise.all(all.map((key) => shared(...key.split(" "), true)))
       .then(() => {
-        for (const key of all) claims.delete(key);
-        claims.save();
+        rmSync(legacy, { force: true });
+        if (!all.length) return;
         log(
           `The listener's ${all.length} reaction(s) from reactions.json: the github service has them`,
         );
@@ -183,11 +186,6 @@ export function createComments({
     claims.delete(key);
     if (held) claims.set(key, Date.now());
     while (claims.size > MAX_CLAIMED) claims.delete(claims.keys().next().value);
-    try {
-      claims.save();
-    } catch (error) {
-      log(`Saving the listener's reactions: ${error.message ?? error}`);
-    }
     return true;
   }
   // Whether the listener added reaction `content` on `subject` (reactionSubject()'s) of `repo`.

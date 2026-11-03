@@ -8,7 +8,6 @@ import { issueItem, linkedIssue, headInRepo } from "./events.mjs";
 import { capabilityNameWarnings } from "./capabilities.mjs";
 import { POLICY_DIR } from "./policies.mjs";
 import { CONFIG_FILE, parseRepoConfig, readRepoFile } from "./repo-config.mjs";
-import { readJson, writeJsonAtomic } from "../lib/files.mjs";
 
 export const ONBOARDING_LABEL = "deckhand-onboarding";
 const ONBOARDING_TITLE = "Set up Deckhand for this repository";
@@ -71,18 +70,16 @@ export function triggerWord(trigger) {
   return trigger.charAt(0).toUpperCase() + trigger.slice(1);
 }
 
-// onboarding.json: repo → { issue, at }. A repo is recorded once its issue exists (or a
-// "/mode onboarding" started one), so a reinstall or a restart opens no second issue.
-export function createOnboardingStore(path) {
-  const repos = readJson(path, {});
-  const save = () => writeJsonAtomic(path, repos);
+// `repos`: the Map they are kept in (storeMap()'s `onboarding`), lowercase repo → { issue, at }.
+// A repo is recorded once its issue exists (or a "/mode onboarding" started one), so a
+// reinstall or a restart opens no second issue.
+export function createOnboardingStore(repos = new Map()) {
   return {
-    get: (repo) => repos[repo.toLowerCase()] ?? null,
+    get: (repo) => repos.get(repo.toLowerCase()) ?? null,
     // Whether `number` is the repo's onboarding issue.
-    isIssue: (repo, number) => repos[repo.toLowerCase()]?.issue === number,
+    isIssue: (repo, number) => repos.get(repo.toLowerCase())?.issue === number,
     record(repo, issue, at = Date.now()) {
-      repos[repo.toLowerCase()] = { issue, at };
-      save();
+      repos.set(repo.toLowerCase(), { issue, at });
     },
   };
 }

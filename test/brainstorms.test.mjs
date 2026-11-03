@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { mock, test } from "node:test";
 import { createBrainstorms, createIssueModes, REPLY_GRACE_MS } from "../listener/brainstorms.mjs";
-import { tempDir } from "./helpers.mjs";
+import { mapStore, tempDir } from "./helpers.mjs";
 
 const saved = (path) => JSON.parse(readFileSync(path, "utf8"));
 
@@ -61,17 +61,17 @@ test("brainstorms: a restarted listener arms the idle timer of active ones", (t)
   }
 });
 
-test("issue modes: kept across a restart, removed with null", (t) => {
-  const path = join(tempDir(t), "modes.json");
-  const modes = createIssueModes(path);
+test("issue modes: kept across a restart, removed with null", async () => {
+  const maps = mapStore();
+  const modes = createIssueModes(await maps.map("modes"));
   assert.equal(modes.has("org/repo#1"), false);
   modes.set("org/repo#1", "review");
-  assert.equal(createIssueModes(path).get("org/repo#1"), "review");
+  assert.equal(createIssueModes(await maps.again("modes")).get("org/repo#1"), "review");
   modes.set("org/repo#1", null);
-  assert.equal(createIssueModes(path).has("org/repo#1"), false);
+  assert.equal(createIssueModes(await maps.again("modes")).has("org/repo#1"), false);
 });
 
-test("respell: brainstorms and modes saved under another spelling move, timers and all", (t) => {
+test("respell: brainstorms and modes saved under another spelling move, timers and all", async (t) => {
   t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
   const dir = tempDir(t);
   const spelled = (repo) => (repo.toLowerCase() === "org/repo" ? "Org/repo" : repo);
@@ -90,9 +90,10 @@ test("respell: brainstorms and modes saved under another spelling move, timers a
   assert.equal(brainstorms.get("Org/repo#12").status, "idle");
   assert.deepEqual(Object.keys(saved(join(dir, "brainstorms.json"))), ["Org/repo#12"]);
 
-  const modes = createIssueModes(join(dir, "modes.json"));
+  const maps = mapStore();
+  const modes = createIssueModes(await maps.map("modes"));
   modes.set("org/repo#3", "audit");
   modes.respell(spelled);
   assert.deepEqual(modes.keys(), ["Org/repo#3"]);
-  assert.deepEqual(saved(join(dir, "modes.json")), { "Org/repo#3": "audit" });
+  assert.deepEqual(Object.fromEntries(await maps.again("modes")), { "Org/repo#3": "audit" });
 });

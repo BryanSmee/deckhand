@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { join } from "node:path";
 import { test } from "node:test";
 import {
   branchConfigReport,
@@ -9,7 +8,7 @@ import {
   onboardingBody,
   onboardingTargets,
 } from "../listener/onboarding.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { mapStore, testConfig } from "./helpers.mjs";
 
 const config = testConfig({ ALLOWED_USERS: "alice,bob", ALLOWED_REPOS: "org/app,org/lib" });
 
@@ -72,12 +71,12 @@ test("installation deliveries: an unknown installer, other actions, ONBOARDING=o
   assert.match(skipped.reasons[0], /ONBOARDING=off/);
 });
 
-test("onboarding.json: the onboarded repos are kept across a restart", (t) => {
-  const path = join(tempDir(t), "onboarding.json");
-  const store = createOnboardingStore(path);
+test("onboarding: the onboarded repos are kept across a restart", async () => {
+  const maps = mapStore();
+  const store = createOnboardingStore(await maps.map("onboarding"));
   assert.equal(store.get("org/app"), null);
   store.record("Org/App", 4, 1000);
-  const again = createOnboardingStore(path);
+  const again = createOnboardingStore(await maps.again("onboarding"));
   assert.deepEqual(again.get("org/app"), { issue: 4, at: 1000 });
   assert.equal(again.isIssue("org/app", 4), true);
   assert.equal(again.isIssue("org/app", 5), false);
@@ -100,7 +99,7 @@ const file = (text) => [
   { type: "file", sha: "x", content: Buffer.from(text).toString("base64") },
 ];
 
-function onboardingWith(t, routes, store = createOnboardingStore(join(tempDir(t), "o.json"))) {
+function onboardingWith(t, routes, store = createOnboardingStore()) {
   const { request, calls } = fakeRequest({
     "GET /repos/org/app": [200, { default_branch: "trunk", has_issues: true }],
     "POST /repos/org/app/labels": [201, {}],

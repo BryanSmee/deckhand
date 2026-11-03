@@ -2,25 +2,43 @@
 // places queued tasks from the dashboard (POST …/order, work.mjs); tasks.mjs queueOrder()
 // starts the placed ones first, in this order, then the others in the order they were queued.
 // Brainstorms (light runs) still go before all of them. A key leaves once its task starts a
-// run or its queued comments are dropped (runs.mjs). Kept in order.json by lowercase task key
-// (one entry whatever the spelling of its repo, spelling.mjs), in order: its keys are never
-// numbers, so JSON keeps them as they were set.
+// run or its queued comments are dropped (runs.mjs). Kept in the store (lib/store-map.mjs:
+// `order`) by lowercase task key (one entry whatever the spelling of its repo, spelling.mjs),
+// each with its place as a number (`rank`): a task moved changes its own alone, between its
+// neighbours'.
 import { respelled, taskId } from "./spelling.mjs";
-import { persistentMap } from "../lib/files.mjs";
 
-export function createOrder({ path } = {}) {
-  // taskId(key) → { key }: `key` as last spelled.
-  const order = persistentMap(path);
+// A file from before the store had its entries in order, without ranks: storeMap()'s `moved`.
+export const ranked = (entries) => entries.map(([id, entry], i) => [id, { ...entry, rank: i }]);
 
-  // Writes `keys` as the whole order, if it changed.
+// `order`: the Map it is kept in (storeMap()'s), taskId(key) → { key, rank }: `key` as last
+// spelled. Its own order is no task's: the ranks are.
+export function createOrder({ order = new Map() } = {}) {
+  const sorted = () => [...order].sort(([, a], [, b]) => a.rank - b.rank);
+
+  // Writes `keys` as the whole order, if it changed: the entries that keep their place keep
+  // their rank (the longest run of them still in order), the others get one between their
+  // neighbours'. None left between two (one moved there again and again): every rank anew.
   function write(keys) {
     const ids = keys.map(taskId);
-    const now = [...order.keys()];
+    const now = sorted().map(([id]) => id);
     if (ids.length === now.length && ids.every((id, i) => now[i] === id)) return;
     const was = new Map(order);
-    order.clear();
-    for (const key of keys) order.set(taskId(key), { key: was.get(taskId(key))?.key ?? key });
-    order.save();
+    const kept = inOrder(ids.map((id) => was.get(id)?.rank));
+    const ranks = ids.map((id, i) => (kept.has(i) ? was.get(id).rank : null));
+    for (let i = 0; i < ranks.length; i++) {
+      if (ranks[i] !== null) continue;
+      const low = i ? ranks[i - 1] : null;
+      const high = ranks.slice(i + 1).find((rank) => rank !== null) ?? null;
+      if (low === null) ranks[i] = (high ?? 1) - 1;
+      else ranks[i] = high === null ? low + 1 : (low + high) / 2;
+    }
+    const tight = ranks.some((rank, i) => i && rank <= ranks[i - 1]);
+    for (const id of now) if (!ids.includes(id)) order.delete(id);
+    for (const [i, id] of ids.entries()) {
+      const entry = { key: was.get(id)?.key ?? keys[i], rank: tight ? i : ranks[i] };
+      if (JSON.stringify(was.get(id)) !== JSON.stringify(entry)) order.set(id, entry);
+    }
   }
 
   // Task `key` goes right before `before` or right after `after` (keys), first (`first`) or
@@ -39,29 +57,30 @@ export function createOrder({ path } = {}) {
 
   // Its run started, or its queued comments were dropped.
   function drop(key) {
-    if (order.delete(taskId(key))) order.save();
+    order.delete(taskId(key));
   }
 
   // Only the keys of `queued` (the tasks with comments waiting for a run) stay.
   function keep(queued) {
     const ids = new Set(queued.map(taskId));
-    write([...order.values()].map((e) => e.key).filter((key) => ids.has(taskId(key))));
+    write(keys().filter((key) => ids.has(taskId(key))));
+  }
+
+  // The placed tasks' keys, in order.
+  function keys() {
+    return sorted().map(([, entry]) => entry.key);
   }
 
   // taskId → its place (0 first), for the placed tasks.
   function ranks() {
-    return new Map([...order.keys()].map((id, i) => [id, i]));
+    return new Map(sorted().map(([id], i) => [id, i]));
   }
 
   function respell(spelled) {
-    let changed = false;
-    for (const entry of order.values()) {
+    for (const [id, entry] of order) {
       const key = respelled(entry.key, spelled);
-      if (key === entry.key) continue;
-      entry.key = key;
-      changed = true;
+      if (key !== entry.key) order.set(id, { ...entry, key });
     }
-    if (changed) order.save();
   }
 
   return {
@@ -70,6 +89,25 @@ export function createOrder({ path } = {}) {
     keep,
     ranks,
     respell,
-    keys: () => [...order.values()].map((e) => e.key),
+    keys,
   };
+}
+
+// The indices of the longest run of `ranks` that increases (undefined: none, never in it).
+function inOrder(ranks) {
+  const best = ranks.map(() => ({ length: 0, from: -1 }));
+  let end = -1;
+  for (const [i, rank] of ranks.entries()) {
+    if (rank === undefined) continue;
+    best[i] = { length: 1, from: -1 };
+    for (let j = 0; j < i; j++) {
+      if (ranks[j] !== undefined && ranks[j] < rank && best[j].length + 1 > best[i].length) {
+        best[i] = { length: best[j].length + 1, from: j };
+      }
+    }
+    if (end < 0 || best[i].length > best[end].length) end = i;
+  }
+  const kept = new Set();
+  for (let i = end; i >= 0; i = best[i].from) kept.add(i);
+  return kept;
 }

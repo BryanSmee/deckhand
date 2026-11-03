@@ -1,26 +1,28 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createOrder } from "../listener/order.mjs";
+import { createOrder, ranked } from "../listener/order.mjs";
 import { newTask, createTasks } from "../listener/tasks.mjs";
-import { tempDir, testConfig } from "./helpers.mjs";
+import { mapStore, tempDir, testConfig } from "./helpers.mjs";
 
-test("move: the queue as it starts now, with the task moved; it survives a restart", (t) => {
-  const path = join(tempDir(t), "order.json");
-  const order = createOrder({ path });
+test("move: the queue as it starts now, with the task moved; it survives a restart", async () => {
+  const maps = mapStore();
+  const again = async () => createOrder({ order: await maps.again("order") });
+  const order = createOrder({ order: await maps.map("order") });
   const queue = ["org/app#1", "org/app#2", "org/app#3"];
   order.move("org/app#3", { first: true }, queue);
   assert.deepEqual(order.keys(), ["org/app#3", "org/app#1", "org/app#2"]);
   // Down one: before the one after next, all of them placed already.
   order.move("org/app#1", { before: null }, order.keys());
-  assert.deepEqual(createOrder({ path }).keys(), ["org/app#3", "org/app#2", "org/app#1"]);
+  assert.deepEqual((await again()).keys(), ["org/app#3", "org/app#2", "org/app#1"]);
   // Right after another, whatever its spelling: the end of the line stays where it was.
   order.move("org/app#3", { after: "Org/App#2" }, order.keys());
   assert.deepEqual(order.keys(), ["org/app#2", "org/app#3", "org/app#1"]);
   order.move("org/app#3", { first: true }, order.keys());
   // Before another, whatever its spelling.
   order.move("org/app#1", { before: "Org/App#2" }, order.keys());
-  assert.deepEqual(createOrder({ path }).keys(), ["org/app#3", "org/app#1", "org/app#2"]);
+  assert.deepEqual((await again()).keys(), ["org/app#3", "org/app#1", "org/app#2"]);
   assert.deepEqual(
     [...order.ranks()],
     [
@@ -31,17 +33,56 @@ test("move: the queue as it starts now, with the task moved; it survives a resta
   );
 });
 
-test("drop and keep: a task that started or whose comments went leaves; respell", (t) => {
-  const path = join(tempDir(t), "order.json");
-  const order = createOrder({ path });
+test("drop and keep: a task that started or whose comments went leaves; respell", async () => {
+  const maps = mapStore();
+  const again = async () => createOrder({ order: await maps.again("order") });
+  const order = createOrder({ order: await maps.map("order") });
   order.move("Org/App#2", { first: true }, ["org/app#1", "Org/App#2", "org/app#3"]);
   order.drop("org/app#1");
   assert.deepEqual(order.keys(), ["Org/App#2", "org/app#3"]);
   order.keep(["org/app#3", "org/app#9"]);
-  assert.deepEqual(createOrder({ path }).keys(), ["org/app#3"]);
+  assert.deepEqual((await again()).keys(), ["org/app#3"]);
   order.move("Org/App#2", { first: true }, ["org/app#3", "Org/App#2"]);
   order.respell((repo) => repo.toLowerCase());
-  assert.deepEqual(createOrder({ path }).keys(), ["org/app#2", "org/app#3"]);
+  assert.deepEqual((await again()).keys(), ["org/app#2", "org/app#3"]);
+});
+
+test("move: a task moved writes its own rank alone, between its neighbours'", async () => {
+  const maps = mapStore();
+  const map = await maps.map("order");
+  const order = createOrder({ order: map });
+  const queue = Array.from({ length: 20 }, (_, i) => `org/app#${i + 1}`);
+  order.move("org/app#1", {}, queue);
+  await maps.settled();
+  const writes = [];
+  const set = map.set;
+  map.set = (key, value) => (writes.push(key), set(key, value));
+  for (let i = 0; i < 5; i++) order.move("org/app#20", { first: true }, order.keys());
+  order.move("org/app#20", { after: "org/app#10" }, order.keys());
+  assert.deepEqual(writes, ["org/app#20", "org/app#20"]);
+  const keys = order.keys();
+  assert.equal(keys.indexOf("org/app#20"), keys.indexOf("org/app#10") + 1);
+  // Moved between the same two again and again: once no number is left between them, every
+  // rank anew, the order as it should be.
+  for (let i = 0; i < 80; i++) {
+    order.move(i % 2 ? "org/app#3" : "org/app#4", { after: "org/app#2" }, order.keys());
+  }
+  const now = order.keys();
+  assert.equal(now.length, 20);
+  assert.deepEqual(now.slice(0, 4), ["org/app#2", "org/app#3", "org/app#4", "org/app#5"]);
+  assert.deepEqual(createOrder({ order: await maps.again("order") }).keys(), now);
+});
+
+test("order.json from the release before: moved to the store in its order", async (t) => {
+  const dir = tempDir(t);
+  const file = join(dir, "order.json");
+  // In order, as JSON keeps its non-numeric keys.
+  writeFileSync(
+    file,
+    JSON.stringify({ "org/app#3": { key: "org/app#3" }, "org/app#1": { key: "Org/App#1" } }),
+  );
+  const order = createOrder({ order: await mapStore().map("order", { file, moved: ranked }) });
+  assert.deepEqual(order.keys(), ["org/app#3", "Org/App#1"]);
 });
 
 // Tasks as tasks.mjs keeps them, each ready with one comment queued at `at`, and a scheduler
