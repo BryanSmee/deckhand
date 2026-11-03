@@ -59,10 +59,12 @@ const askedKey = (guid) => `redeliveries/asked/${guid}`;
 
 // `app()`: the GitHub App (github-app.mjs, its `asApp`), null before /setup. `handled(guid)`:
 // whether edge took that delivery already (may be a promise). `store`: edge's.
+// `onRedelivered()`: called for each delivery GitHub agreed to send again (../edge/metrics.mjs).
 export function createRedeliveries({
   store = openStore("memory:"),
   app,
   handled = () => false,
+  onRedelivered = () => {},
   log = () => {},
   now = Date.now,
   checkMs = CHECK_MS,
@@ -118,6 +120,7 @@ export function createRedeliveries({
           continue;
         }
         count++;
+        onRedelivered();
         const what = [d.event, d.action].filter(Boolean).join(" ");
         log(`Redelivered ${d.guid} (${what}, ${d.delivered_at}: ${d.status_code || d.status})`);
       }
