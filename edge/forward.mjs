@@ -74,7 +74,10 @@ export function createForwarder({
     }
     res.writeHead(answer.status, back);
     if (!answer.body) return res.end();
-    if (back["content-type"]?.startsWith("text/event-stream")) res.once("close", stream());
+    // Not when the browser left already: its close came, and won't again.
+    if (back["content-type"]?.startsWith("text/event-stream") && !res.destroyed) {
+      res.once("close", stream());
+    }
     if (still && back["content-type"]?.startsWith("text/event-stream")) {
       const checking = setInterval(async () => {
         if (await Promise.resolve(still()).catch(() => false)) return;

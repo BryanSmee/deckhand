@@ -201,7 +201,12 @@ from edge's logs.</p>`,
         { "set-cookie": clear },
       );
     }
-    const token = await exchange(credentials, code);
+    // GitHub away (a reset, a timeout): failed too, then answered 500 by handle().
+    const failed = (error) => {
+      signedIn("failed");
+      throw error;
+    };
+    const token = await exchange(credentials, code).catch(failed);
     if (!token) {
       signedIn("failed");
       return authPage(
@@ -212,7 +217,7 @@ from edge's logs.</p>`,
         { "set-cookie": clear },
       );
     }
-    const me = await whoIs(credentials, token);
+    const me = await whoIs(credentials, token).catch(failed);
     if (!me) {
       signedIn("failed");
       return authPage(res, 502, "GitHub didn't say who you are", `<p>See edge's logs.</p>`, {

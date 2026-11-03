@@ -24,6 +24,7 @@ async function serveAuth(t, { login = "Alice", app = { credentials }, store, sig
     calls.push({ url, method: init.method ?? "GET", init });
     if (url === "https://gh.test/login/oauth/access_token") {
       const { code } = JSON.parse(init.body);
+      if (code === "unreachable") throw new Error("connection reset");
       return Response.json(
         code === "good" ? { access_token: "user-token" } : { error: "bad_verification_code" },
       );
@@ -226,7 +227,13 @@ test("each sign-in's result is counted: allowed, refused, expired, failed", asyn
   await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
   await s.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=other");
   await s.get("/auth/callback?code=nope&state=state1", "deckhand_oauth_state=state1");
+  // GitHub away: 500, and failed all the same.
+  const away = await s.get(
+    "/auth/callback?code=unreachable&state=state1",
+    "deckhand_oauth_state=state1",
+  );
+  assert.equal(away.status, 500);
   const refused = await serveAuth(t, { login: "mallory", signedIn });
   await refused.get("/auth/callback?code=good&state=state1", "deckhand_oauth_state=state1");
-  assert.deepEqual(results, ["allowed", "expired", "failed", "refused"]);
+  assert.deepEqual(results, ["allowed", "expired", "failed", "failed", "refused"]);
 });
