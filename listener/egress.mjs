@@ -84,6 +84,7 @@ export function matchHost(host, patterns) {
 // proxy decrypts and hands to the listener's GitHub gateway, which puts a token in place of the
 // run's (github-gateway.mjs), or to the models service, the operator's credential
 // (../models/google.mjs); never cached. `blocked` (the agent's too): refused whatever the grants say.
+// A refusal says why (`reason`), for the proxy's metrics: "blocked", or "not_granted".
 export function egressPolicy(
   host,
   hosts,
@@ -93,7 +94,14 @@ export function egressPolicy(
   { decrypt = true, relayed = [], blocked = [] } = {},
 ) {
   if (matchHost(host, blocked) !== null) {
-    return { allowed: false, private: false, cache: false, decrypt: false, relay: false };
+    return {
+      allowed: false,
+      private: false,
+      cache: false,
+      decrypt: false,
+      relay: false,
+      reason: "blocked",
+    };
   }
   const allowed = matchHost(host, hosts) !== null;
   const named = matchHost(host, trusted ?? []);
@@ -109,6 +117,7 @@ export function egressPolicy(
     cache,
     decrypt: (cache || relay) && decrypt,
     relay,
+    ...(!allowed && { reason: "not_granted" }),
   };
 }
 

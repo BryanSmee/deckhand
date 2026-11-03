@@ -290,6 +290,7 @@ export function createCache({
       return ready;
     },
     limit,
+    max,
     // Bytes on disk: kept, and being written.
     get size() {
       return total + pending;

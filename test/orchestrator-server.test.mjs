@@ -2030,6 +2030,7 @@ caches:
       decrypt: true,
       relay: true,
       service: "github",
+      source: "sandbox",
     });
     assert.match(sandbox, /^id-deckhand-org-repo-12-/);
     // A work run that isn't a fork's: every *.githubusercontent.com host relayed, as GitHub's CDN
@@ -2118,6 +2119,8 @@ mounts:
       cache: false,
       decrypt: false,
       relay: false,
+      reason: "no_run",
+      source: "none",
     });
     release();
   });
@@ -4367,6 +4370,7 @@ allow_capabilities contains "read:pulls"
       cache: false,
       decrypt: false,
       relay: false,
+      source: "sandbox",
     });
     assert.equal(answers["registry.npmjs.org"].private, false);
     assert.equal(answers["github.com"].private, true);

@@ -131,7 +131,10 @@ test("the policy waits for the listener rather than refusing every host", async 
   await new Promise((resolve) => server.close(resolve));
   const later = fakeClock();
   const gone = egressPolicy(`http://127.0.0.1:${port}/egress`, 5000, later);
-  assert.deepEqual(await gone("10.0.0.2", "api.github.com"), { allowed: false });
+  assert.deepEqual(await gone("10.0.0.2", "api.github.com"), {
+    allowed: false,
+    reason: "policy_error",
+  });
   assert.equal(later.t, LISTENER_WAIT_MS);
 });
 
@@ -140,7 +143,10 @@ test("a client that left stops the policy's wait: no question for nobody", async
   const url = `http://127.0.0.1:${port}/egress`;
   const clock = fakeClock();
   const policy = egressPolicy(url, 5000, clock);
-  assert.deepEqual(await policy("10.0.0.2", "x.test", { gone: () => true }), { allowed: false });
+  assert.deepEqual(await policy("10.0.0.2", "x.test", { gone: () => true }), {
+    allowed: false,
+    reason: "policy_error",
+  });
   assert.equal(clock.t, 0);
 
   // Through the proxy: a CONNECT whose client hangs up while the listener is down.

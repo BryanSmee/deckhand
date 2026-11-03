@@ -141,6 +141,7 @@ test("private addresses only for hosts the operator named, default.yaml's too, n
     cache: false,
     decrypt: false,
     relay: false,
+    reason: "not_granted",
   });
   // A run saved before `trusted` was: nothing private.
   assert.deepEqual(egressPolicy("github.com", ["github.com"], undefined), {
@@ -230,6 +231,7 @@ test("relay: an agent's relayed hosts, decrypted and handed to the listener, nev
     cache: false,
     decrypt: false,
     relay: false,
+    reason: "blocked",
   });
   // The feature flags, the avatar (#224), and every other host: a tunnel as before.
   const tunnels = ["antigravity-unleash.goog", "lh3.googleusercontent.com", "github.com"];

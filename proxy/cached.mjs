@@ -7,7 +7,9 @@ const VALIDATORS = ["if-none-match", "if-modified-since", "if-match", "if-unmodi
 
 // → cached(req, res, to, use), `use` being requestUse()'s ("use" or "revalidate"). `send`
 // and `unreachable` are the proxy's: a request on to the host, and the answer when it fails.
-export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
+// `count(result)`: what the cache did with each request, for the proxy's metrics (metrics.mjs
+// CACHE_RESULTS).
+export function createCachedPath({ cache, send, unreachable, now = Date.now, count = () => {} }) {
   async function cached(req, res, to, use) {
     const key = cache.key(to.url.href, req.headers["accept-encoding"], req.headers.accept);
     let entry = await cache.get(key);
@@ -51,6 +53,7 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
 
   // The host's answer to the client, and to disk as it comes when it may be kept.
   function download(req, res, key, to, answer) {
+    count("miss");
     const keep = storable(answer.statusCode, answer.headers, cache.limit, req);
     // What was kept is no longer what the host answers.
     if (!keep && cache.has(key)) cache.remove(key);
@@ -63,7 +66,7 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
     answer.on("data", (chunk) => writer?.write(chunk));
     answer.on("end", () => {
       ended = true;
-      writer?.commit(answer.headers["content-length"]);
+      writer?.commit(answer.headers["content-length"]).then((kept) => kept && count("stored"));
     });
     answer.on("error", () => writer?.abort());
     // A client gone mid-download: the rest isn't fetched, nothing is kept.
@@ -76,6 +79,7 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
   }
 
   function passThrough(req, res, to) {
+    count("bypassed");
     const upstream = send(to, req.method, to.headers, (answer) => {
       res.writeHead(answer.statusCode, answer.headers);
       answer.pipe(res);
@@ -86,6 +90,7 @@ export function createCachedPath({ cache, send, unreachable, now = Date.now }) {
 
   // A kept answer, or a 304 when it matches the client's own validators.
   function serve(req, res, key, { meta, file }, how) {
+    count(how);
     cache.touch(key, meta);
     const headers = { ...meta.headers, "x-deckhand-cache": how };
     if (notModified(req, meta.headers)) {

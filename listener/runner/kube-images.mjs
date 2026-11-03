@@ -859,14 +859,19 @@ export function createKubernetesImages({
   // The egress proxy's answer for a caller that isn't a sandbox (egress-http.mjs), or null:
   // the BuildKit daemon while builds run (their hosts), an install pod (its agent's install
   // hosts). Tunnelled only, never decrypted, cached or relayed: neither trusts Deckhand's CA,
-  // and neither gets a token.
+  // and neither gets a token. `source`: which of them, for the proxy's metrics.
   async function egressFor(ip, host) {
     const install = (await installAddresses()).get(ip);
-    if (install) return egressPolicy(host, install, [], [], [], { decrypt: false });
+    if (install) {
+      return { ...egressPolicy(host, install, [], [], [], { decrypt: false }), source: "install" };
+    }
     if (!(await builderAddresses()).includes(ip)) return null;
-    if (!running.count)
-      return { allowed: false, private: false, cache: false, decrypt: false, relay: false };
-    return egressPolicy(host, running.hosts, running.trusted, [], [], { decrypt: false });
+    if (!running.count) {
+      const none = { allowed: false, private: false, cache: false, decrypt: false, relay: false };
+      return { ...none, reason: "no_build", source: "build" };
+    }
+    const answer = egressPolicy(host, running.hosts, running.trusted, [], [], { decrypt: false });
+    return { ...answer, source: "build" };
   }
 
   return {
